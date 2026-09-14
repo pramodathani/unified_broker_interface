@@ -416,6 +416,8 @@ class BrokerMappingAdapter:
         """
         Build the per-broker mapping fields for a raw row under one segment.
 
+        A tick size of zero or below is stored as None, because no instrument moves in steps of nothing, and brokers send 0 or -1 where they have no tick for a row.
+
         Args:
             raw_row (dict): One raw row from the broker's instrument table.
             segment_configuration (dict): The segment configuration whose broker field mapping applies.
@@ -426,6 +428,10 @@ class BrokerMappingAdapter:
         broker_field_specifications = segment_configuration["broker_fields"]
         lot_size = self._field(raw_row, broker_field_specifications["lot_size"])
         tick_size = self._field(raw_row, broker_field_specifications["tick_size"])
+        if tick_size is None or pd.isna(tick_size) or float(tick_size) <= 0:
+            tick_size = None
+        else:
+            tick_size = float(tick_size)
         order_symbol_specification = broker_field_specifications.get("order_symbol")
         if order_symbol_specification is None:
             order_symbol = None
@@ -438,7 +444,7 @@ class BrokerMappingAdapter:
             "broker_symbol": self._field(raw_row, broker_field_specifications["broker_symbol"]),
             "order_symbol": None if order_symbol is None else str(order_symbol).strip(),
             "lot_size": None if lot_size is None or pd.isna(lot_size) else float(lot_size),
-            "tick_size": None if tick_size is None or pd.isna(tick_size) else float(tick_size),
+            "tick_size": tick_size,
         }
 
     def uncategorised_exchange(self, raw_row):

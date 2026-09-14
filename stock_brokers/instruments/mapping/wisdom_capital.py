@@ -161,6 +161,10 @@ NULL_LOT_AND_TICK_SEGMENTS = (
     "nse_fixed_income_indices",
 )
 
+NULL_TICK_SEGMENTS = (
+    "bse_equity_indices",
+)
+
 
 def isin_is_fund(raw_row):
     """
@@ -388,6 +392,8 @@ class WisdomCapitalMappingAdapter(BrokerMappingAdapter):
         """
         Build the per-broker mapping fields, forcing the sizes to nothing on the segments whose rows are not directly tradeable.
 
+        The BSE equity indices carry a tick of 1 on every row whatever the index's real tick, so their tick is dropped and their lot size kept.
+
         Args:
             raw_row (dict): One raw row from wisdom_capital.instruments.
             segment_configuration (dict): The segment configuration whose broker field mapping applies.
@@ -400,6 +406,8 @@ class WisdomCapitalMappingAdapter(BrokerMappingAdapter):
         is_rate_underlying = segment == "nse_fixed_income" and raw_row.get("exchangesegment") == "NSECD"
         if segment in NULL_LOT_AND_TICK_SEGMENTS or is_rate_underlying:
             broker_fields["lot_size"] = None
+            broker_fields["tick_size"] = None
+        if segment in NULL_TICK_SEGMENTS:
             broker_fields["tick_size"] = None
         return broker_fields
 

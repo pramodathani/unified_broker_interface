@@ -175,6 +175,11 @@ NULL_LOT_AND_TICK_SEGMENTS = (
     "bse_fixed_income_indices",
 )
 
+NULL_TICK_SEGMENTS = (
+    "nse_equity_indices",
+    "bse_equity_indices",
+)
+
 MONTH_NAMES = "JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC"
 FUTURE_PATTERN = re.compile(rf"^[A-Z0-9]+\d{{2}}(?:(?:{MONTH_NAMES})|[1-9OND]\d{{2}})FUT$")
 OPTION_PATTERN = re.compile(rf"^[A-Z0-9]+\d{{2}}(?:(?:{MONTH_NAMES})|[1-9OND]\d{{2}})\d+(?:\.\d+)?(?:CE|PE)$")
@@ -665,7 +670,7 @@ class StoxkartMappingAdapter(BrokerMappingAdapter):
         """
         Build the per-broker mapping fields, applying Stoxkart's per-segment lot and tick handling.
 
-        The NSE cash half of ``nse_fixed_income`` carries real sizes with the tick in hundredths, while the NSECD rate-underlying half and the currency and rate index segments carry no meaningful sizes at all.
+        The NSE cash half of ``nse_fixed_income`` carries real sizes with the tick in hundredths, while the NSECD rate-underlying half and the currency and rate index segments carry no meaningful sizes at all. The NSE and BSE equity indices carry a tick of 1 on every row whatever the index's real tick, so their tick is dropped.
 
         Args:
             raw_row (dict): One raw row from stoxkart.instruments.
@@ -687,6 +692,8 @@ class StoxkartMappingAdapter(BrokerMappingAdapter):
 
         if segment in NULL_LOT_AND_TICK_SEGMENTS:
             broker_fields["lot_size"] = None
+            broker_fields["tick_size"] = None
+        if segment in NULL_TICK_SEGMENTS:
             broker_fields["tick_size"] = None
         return broker_fields
 

@@ -641,7 +641,9 @@ segments:
       token: token
       broker_symbol: symbol_description
       lot_size: lot_size
-      tick_size: tick_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
 
   - segment: ncdex_commodity_indices
     exchange: ncdex
@@ -653,7 +655,9 @@ segments:
       token: token
       broker_symbol: symbol_description
       lot_size: lot_size
-      tick_size: tick_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
 
   - segment: mcx_commodity_index_futures
     exchange: mcx

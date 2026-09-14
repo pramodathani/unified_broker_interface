@@ -28,13 +28,14 @@ wrong for four-decimal currency pairs. `bin/fyers/quotes` divides by 10 to the p
 multiplier it reads from each snapshot, but `bin/unified/quotes` and `stock_brokers/instruments/ticks/fyers.py`
 leave Fyers currency derivatives out until that scaling is confirmed on a live currency pair.
 
-**Tick sizes of indices and uncategorised rows are not in one unit.** The mapping converts paise to rupees
-only in tradeable segments. In the index segments Dhan and Fyers send rupees, Stoxkart and Wisdom
-Capital send 1.0, Kotak sends -1 and Zerodha sends 0; the uncategorised catch-alls mix paise, rupees and
-Stoxkart's ten-million scaling within a single broker, so one conversion per segment would be wrong for
-some rows. They were left as sent, and the order price check reads only brokers that send rupees. A few tradeable instruments also disagree by a factor other
-than 100 (about 25 of 300,000 on 2026-09-13, mostly Stoxkart equities at 20 or 500 times Zerodha's), which
-looks like stale broker files rather than a unit problem.
+**Tick sizes of uncategorised rows are not in one unit.** The uncategorised catch-alls mix paise, rupees
+and Stoxkart's ten-million scaling within a single broker, so one conversion per segment would be wrong
+for some rows. They are left as sent, and the order price check does not check an uncategorised
+instrument's price. A few tradeable instruments also disagree by a factor other than 100 (about 25 of
+300,000 on 2026-09-13, mostly Stoxkart equities at 20 or 500 times Zerodha's), which looks like stale
+broker files rather than a unit problem. Index ticks were brought into rupees on 2026-09-14, as the
+[mapping guide](../guides/instrument-mapping.md) describes, but Dhan's and Fyers' figures still disagree
+for a few indices, such as INDIA VIX (0.05 and 0.01), and `/details` answers a null `tick_size` for them.
 
 **Most unified tick normalizers are unconfirmed live.** Only Zerodha is verified, and Dhan agrees with it
 on stored in-session MCX ticks but has no in-session NSE ticks stored. What Kotak, Flattrade, Shoonya,

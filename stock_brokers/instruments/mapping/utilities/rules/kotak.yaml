@@ -539,7 +539,9 @@ segments:
       order_symbol: ptrdsymbol
       broker_symbol: ptrdsymbol
       lot_size: llotsize
-      tick_size: dticksize
+      tick_size:
+        column: dticksize
+        transform: divide_by_100
 
   - segment: mcx_commodity_index_futures
     exchange: mcx

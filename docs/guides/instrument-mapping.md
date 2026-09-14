@@ -110,9 +110,23 @@ onto the unified ones, optionally through a named transform from `TRANSFORMS` in
 `tick_size` is stored in rupees in every tradeable segment. Dhan, Kotak, Stoxkart and INDmoney publish
 it in paise throughout their files, and Groww does for its commodity segments, so those segments carry
 `divide_by_100`; Kotak's and Stoxkart's currency and rate derivatives are scaled by ten million instead.
-Index segments and the uncategorised catch-alls are left as each broker sends them, because their rows
-mix units within one broker. `lot_size` is never converted: it stays each broker's own figure, which on
-MCX means three different things, as the [REST API guide](rest-api.md#instruments) describes.
+
+Index tick sizes are in rupees too, although no index can be traded:
+
+| Index segment | Kept as sent | Converted from paise | Dropped |
+| --- | --- | --- | --- |
+| `nse_equity_indices` | Dhan, Fyers | none | Stoxkart, whose tick is 1 on every row |
+| `bse_equity_indices` | Dhan, Fyers | none | Stoxkart and Wisdom Capital, whose tick is 1 on every row |
+| `mcx_commodity_indices` | Wisdom Capital | Kotak, Stoxkart | none |
+| `ncdex_commodity_indices` | none | Stoxkart | none |
+
+Stored prices back this up. NSE index prices are whole multiples of 0.05, which is Dhan's and Fyers' tick,
+and most BSE index prices are not, matching their 0.01. A tick of zero or below, which Zerodha, Shoonya and
+Kotak send for indices, is stored as null in every segment by `to_broker_fields` in `base.py`.
+
+The uncategorised catch-alls are left as each broker sends them, because their rows mix units within one
+broker. `lot_size` is never converted: it stays each broker's own figure, which on MCX means three
+different things, as the [REST API guide](rest-api.md#instruments) describes.
 
 Python is written only where equality rules cannot express a broker's quirks. Zerodha is the
 extreme case: all 34 of its segments carry `rules: []` and it classifies entirely in code.
