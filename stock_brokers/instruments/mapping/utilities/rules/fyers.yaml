@@ -1,0 +1,640 @@
+broker: fyers
+raw_table: fyers.instruments
+
+segments:
+  - segment: nse_fixed_income
+    exchange: nse
+    shape: security
+    rules:
+      - match:
+          exchange: '10'
+          segment: '10'
+          exchange_instrument_type:
+            - '2'
+            - '5'
+            - '6'
+            - '7'
+    identity:
+      symbol: isin
+    broker_fields:
+      token: fytoken
+      order_symbol: symbol_ticker
+      broker_symbol: symbol_details
+      lot_size: minimum_lot_size
+      tick_size: tick_size
+
+  - segment: bse_fixed_income
+    exchange: bse
+    shape: security
+    rules:
+      - match:
+          exchange: '12'
+          segment: '10'
+          exchange_instrument_type: '50'
+    identity:
+      symbol: isin
+    broker_fields:
+      token: fytoken
+      order_symbol: symbol_ticker
+      broker_symbol: symbol_details
+      lot_size: minimum_lot_size
+      tick_size: tick_size
+
+  - segment: nse_fixed_income_futures
+    exchange: nse
+    shape: future
+    rules:
+      - match:
+          exchange: '10'
+          segment: '12'
+          exchange_instrument_type:
+            - '17'
+            - '18'
+    identity:
+      underlying_symbol: underlying_symbol
+      expiry_date:
+        column: expiry_date
+        transform: unix_epoch_date
+    broker_fields:
+      token: fytoken
+      order_symbol: symbol_ticker
+      broker_symbol: symbol_details
+      lot_size: minimum_lot_size
+      tick_size: tick_size
+
+  - segment: nse_fixed_income_index_futures
+    exchange: nse
+    shape: future
+    rules:
+      - match:
+          exchange: '10'
+          segment: '12'
+          exchange_instrument_type: '18'
+          underlying_symbol: ONMIBOR
+    identity:
+      underlying_symbol: underlying_symbol
+      expiry_date:
+        column: expiry_date
+        transform: unix_epoch_date
+    broker_fields:
+      token: fytoken
+      order_symbol: symbol_ticker
+      broker_symbol: symbol_details
+      lot_size: minimum_lot_size
+      tick_size: tick_size
+
+  - segment: nse_equities
+    exchange: nse
+    shape: security
+    rules:
+      - match:
+          exchange: '10'
+          segment: '10'
+          exchange_instrument_type:
+            - '0'
+            - '3'
+    identity:
+      symbol: symbol_ticker
+    broker_fields:
+      token: fytoken
+      order_symbol: symbol_ticker
+      broker_symbol: symbol_details
+      lot_size: minimum_lot_size
+      tick_size: tick_size
+
+  - segment: bse_equities
+    exchange: bse
+    shape: security
+    rules:
+      - match:
+          exchange: '12'
+          segment: '10'
+          exchange_instrument_type: '0'
+    identity:
+      symbol: underlying_symbol
+    broker_fields:
+      token: fytoken
+      order_symbol: symbol_ticker
+      broker_symbol: symbol_details
+      lot_size: minimum_lot_size
+      tick_size: tick_size
+
+  - segment: nse_equity_futures
+    exchange: nse
+    shape: future
+    rules:
+      - match:
+          exchange: '10'
+          segment: '11'
+          exchange_instrument_type: '13'
+    identity:
+      underlying_symbol: underlying_symbol
+      expiry_date:
+        column: expiry_date
+        transform: unix_epoch_date
+    broker_fields:
+      token: fytoken
+      order_symbol: symbol_ticker
+      broker_symbol: symbol_details
+      lot_size: minimum_lot_size
+      tick_size: tick_size
+
+  - segment: bse_equity_futures
+    exchange: bse
+    shape: future
+    rules:
+      - match:
+          exchange: '12'
+          segment: '11'
+          exchange_instrument_type: '13'
+    identity:
+      underlying_symbol: underlying_symbol
+      expiry_date:
+        column: expiry_date
+        transform: unix_epoch_date
+    broker_fields:
+      token: fytoken
+      order_symbol: symbol_ticker
+      broker_symbol:
+        column: symbol_ticker
+        transform: strip_exchange_prefix
+      lot_size: minimum_lot_size
+      tick_size: tick_size
+
+  - segment: nse_equity_options
+    exchange: nse
+    shape: option
+    rules:
+      - match:
+          exchange: '10'
+          segment: '11'
+          exchange_instrument_type: '15'
+    identity:
+      underlying_symbol: underlying_symbol
+      expiry_date:
+        column: expiry_date
+        transform: unix_epoch_date
+      strike_price: strike_price
+      option_type: option_type
+    broker_fields:
+      token: fytoken
+      order_symbol: symbol_ticker
+      broker_symbol: symbol_details
+      lot_size: minimum_lot_size
+      tick_size: tick_size
+
+  - segment: bse_equity_options
+    exchange: bse
+    shape: option
+    rules:
+      - match:
+          exchange: '12'
+          segment: '11'
+          exchange_instrument_type: '15'
+    identity:
+      underlying_symbol: underlying_symbol
+      expiry_date:
+        column: expiry_date
+        transform: unix_epoch_date
+      strike_price: strike_price
+      option_type: option_type
+    broker_fields:
+      token: fytoken
+      order_symbol: symbol_ticker
+      broker_symbol:
+        column: symbol_ticker
+        transform: strip_exchange_prefix
+      lot_size: minimum_lot_size
+      tick_size: tick_size
+
+  - segment: nse_equity_indices
+    exchange: nse
+    shape: security
+    rules:
+      - match:
+          exchange: '10'
+          segment: '10'
+          exchange_instrument_type: '10'
+    identity:
+      symbol: symbol_ticker
+    broker_fields:
+      token: fytoken
+      order_symbol: symbol_ticker
+      broker_symbol: symbol_details
+      lot_size: minimum_lot_size
+      tick_size: tick_size
+
+  - segment: bse_equity_indices
+    exchange: bse
+    shape: security
+    rules:
+      - match:
+          exchange: '12'
+          segment: '10'
+          exchange_instrument_type: '10'
+    identity:
+      symbol: underlying_symbol
+    broker_fields:
+      token: fytoken
+      order_symbol: symbol_ticker
+      broker_symbol: symbol_details
+      lot_size: minimum_lot_size
+      tick_size: tick_size
+
+  - segment: nse_equity_index_futures
+    exchange: nse
+    shape: future
+    rules:
+      - match:
+          exchange: '10'
+          segment: '11'
+          exchange_instrument_type: '11'
+    identity:
+      underlying_symbol: underlying_symbol
+      expiry_date:
+        column: expiry_date
+        transform: unix_epoch_date
+    broker_fields:
+      token: fytoken
+      order_symbol: symbol_ticker
+      broker_symbol: symbol_details
+      lot_size: minimum_lot_size
+      tick_size: tick_size
+
+  - segment: bse_equity_index_futures
+    exchange: bse
+    shape: future
+    rules:
+      - match:
+          exchange: '12'
+          segment: '11'
+          exchange_instrument_type: '11'
+    identity:
+      underlying_symbol: underlying_symbol
+      expiry_date:
+        column: expiry_date
+        transform: unix_epoch_date
+    broker_fields:
+      token: fytoken
+      order_symbol: symbol_ticker
+      broker_symbol:
+        column: symbol_ticker
+        transform: strip_exchange_prefix
+      lot_size: minimum_lot_size
+      tick_size: tick_size
+
+  - segment: nse_equity_index_options
+    exchange: nse
+    shape: option
+    rules:
+      - match:
+          exchange: '10'
+          segment: '11'
+          exchange_instrument_type: '14'
+    identity:
+      underlying_symbol: underlying_symbol
+      expiry_date:
+        column: expiry_date
+        transform: unix_epoch_date
+      strike_price: strike_price
+      option_type: option_type
+    broker_fields:
+      token: fytoken
+      order_symbol: symbol_ticker
+      broker_symbol: symbol_details
+      lot_size: minimum_lot_size
+      tick_size: tick_size
+
+  - segment: bse_equity_index_options
+    exchange: bse
+    shape: option
+    rules:
+      - match:
+          exchange: '12'
+          segment: '11'
+          exchange_instrument_type: '14'
+    identity:
+      underlying_symbol: underlying_symbol
+      expiry_date:
+        column: expiry_date
+        transform: unix_epoch_date
+      strike_price: strike_price
+      option_type: option_type
+    broker_fields:
+      token: fytoken
+      order_symbol: symbol_ticker
+      broker_symbol:
+        column: symbol_ticker
+        transform: strip_exchange_prefix
+      lot_size: minimum_lot_size
+      tick_size: tick_size
+
+  - segment: nse_currency_futures
+    exchange: nse
+    shape: future
+    rules:
+      - match:
+          exchange: '10'
+          segment: '12'
+          exchange_instrument_type: '16'
+    identity:
+      underlying_symbol: underlying_symbol
+      expiry_date:
+        column: expiry_date
+        transform: unix_epoch_date
+    broker_fields:
+      token: fytoken
+      order_symbol: symbol_ticker
+      broker_symbol: symbol_details
+      lot_size: minimum_lot_size
+      tick_size: tick_size
+
+  - segment: nse_currency_options
+    exchange: nse
+    shape: option
+    rules:
+      - match:
+          exchange: '10'
+          segment: '12'
+          exchange_instrument_type: '19'
+    identity:
+      underlying_symbol: underlying_symbol
+      expiry_date:
+        column: expiry_date
+        transform: unix_epoch_date
+      strike_price: strike_price
+      option_type: option_type
+    broker_fields:
+      token: fytoken
+      order_symbol: symbol_ticker
+      broker_symbol: symbol_details
+      lot_size: minimum_lot_size
+      tick_size: tick_size
+
+  - segment: nse_commodity_futures
+    exchange: nse
+    shape: future
+    rules:
+      - match:
+          exchange: '10'
+          segment: '20'
+          exchange_instrument_type:
+            - '33'
+            - '34'
+            - '35'
+    identity:
+      underlying_symbol: underlying_symbol
+      expiry_date:
+        column: expiry_date
+        transform: unix_epoch_date
+    broker_fields:
+      token: fytoken
+      order_symbol: symbol_ticker
+      broker_symbol: symbol_details
+      lot_size: minimum_lot_size
+      tick_size: tick_size
+
+  - segment: mcx_commodity_futures
+    exchange: mcx
+    shape: future
+    rules:
+      - match:
+          exchange: '11'
+          exchange_instrument_type: '30'
+    identity:
+      underlying_symbol: underlying_symbol
+      expiry_date:
+        column: expiry_date
+        transform: unix_epoch_date
+    broker_fields:
+      token: fytoken
+      order_symbol: symbol_ticker
+      broker_symbol:
+        column: symbol_ticker
+        transform: strip_exchange_prefix
+      lot_size: minimum_lot_size
+      tick_size: tick_size
+
+  - segment: nse_commodity_options
+    exchange: nse
+    shape: option
+    rules:
+      - match:
+          exchange: '10'
+          segment: '20'
+          exchange_instrument_type:
+            - '36'
+            - '37'
+    identity:
+      underlying_symbol: underlying_symbol
+      expiry_date:
+        column: expiry_date
+        transform: unix_epoch_date
+      strike_price: strike_price
+      option_type: option_type
+    broker_fields:
+      token: fytoken
+      order_symbol: symbol_ticker
+      broker_symbol: symbol_details
+      lot_size: minimum_lot_size
+      tick_size: tick_size
+
+  - segment: mcx_commodity_options
+    exchange: mcx
+    shape: option
+    rules:
+      - match:
+          exchange: '11'
+          exchange_instrument_type: '31'
+    identity:
+      underlying_symbol: underlying_symbol
+      expiry_date:
+        column: expiry_date
+        transform: unix_epoch_date
+      strike_price: strike_price
+      option_type: option_type
+    broker_fields:
+      token: fytoken
+      order_symbol: symbol_ticker
+      broker_symbol:
+        column: symbol_ticker
+        transform: strip_exchange_prefix
+      lot_size: minimum_lot_size
+      tick_size: tick_size
+
+  - segment: mcx_commodity_index_futures
+    exchange: mcx
+    shape: future
+    rules:
+      - match:
+          exchange: '11'
+          exchange_instrument_type: '11'
+    identity:
+      underlying_symbol: underlying_symbol
+      expiry_date:
+        column: expiry_date
+        transform: unix_epoch_date
+    broker_fields:
+      token: fytoken
+      order_symbol: symbol_ticker
+      broker_symbol:
+        column: symbol_ticker
+        transform: strip_exchange_prefix
+      lot_size: minimum_lot_size
+      tick_size: tick_size
+
+  - segment: mcx_commodity_index_options
+    exchange: mcx
+    shape: option
+    rules:
+      - match:
+          exchange: '11'
+          exchange_instrument_type: '14'
+    identity:
+      underlying_symbol: underlying_symbol
+      expiry_date:
+        column: expiry_date
+        transform: unix_epoch_date
+      strike_price: strike_price
+      option_type: option_type
+    broker_fields:
+      token: fytoken
+      order_symbol: symbol_ticker
+      broker_symbol:
+        column: symbol_ticker
+        transform: strip_exchange_prefix
+      lot_size: minimum_lot_size
+      tick_size: tick_size
+
+  - segment: nse_mutual_funds
+    exchange: nse
+    shape: security
+    rules:
+      - match:
+          exchange: '10'
+          segment: '10'
+          exchange_instrument_type:
+            - '4'
+            - '8'
+    identity:
+      symbol: symbol_ticker
+    broker_fields:
+      token: fytoken
+      order_symbol: symbol_ticker
+      broker_symbol: symbol_details
+      lot_size: minimum_lot_size
+      tick_size: tick_size
+
+  - segment: nse_exchange_traded_funds
+    exchange: nse
+    shape: security
+    rules:
+      - match:
+          exchange: '10'
+          segment: '10'
+          exchange_instrument_type: '9'
+    identity:
+      symbol: symbol_ticker
+    broker_fields:
+      token: fytoken
+      order_symbol: symbol_ticker
+      broker_symbol: symbol_details
+      lot_size: minimum_lot_size
+      tick_size: tick_size
+
+  - segment: bse_exchange_traded_funds
+    exchange: bse
+    shape: security
+    rules: []
+    identity:
+      symbol: underlying_symbol
+    broker_fields:
+      token: fytoken
+      order_symbol: symbol_ticker
+      broker_symbol: symbol_details
+      lot_size: minimum_lot_size
+      tick_size: tick_size
+
+  - segment: nse_investment_trusts
+    exchange: nse
+    shape: security
+    rules:
+      - match:
+          exchange: '10'
+          segment: '10'
+          exchange_instrument_type:
+            - '0'
+            - '4'
+    identity:
+      symbol: symbol_ticker
+    broker_fields:
+      token: fytoken
+      order_symbol: symbol_ticker
+      broker_symbol: symbol_details
+      lot_size: minimum_lot_size
+      tick_size: tick_size
+
+  - segment: bse_investment_trusts
+    exchange: bse
+    shape: security
+    rules: []
+    identity:
+      symbol: underlying_symbol
+    broker_fields:
+      token: fytoken
+      order_symbol: symbol_ticker
+      broker_symbol: symbol_details
+      lot_size: minimum_lot_size
+      tick_size: tick_size
+
+  - segment: nse_uncategorised
+    exchange: nse
+    shape: security
+    rules: []
+    identity:
+      symbol: underlying_symbol
+    broker_fields:
+      token: fytoken
+      order_symbol: symbol_ticker
+      broker_symbol: symbol_details
+      lot_size: minimum_lot_size
+      tick_size: tick_size
+
+  - segment: bse_uncategorised
+    exchange: bse
+    shape: security
+    rules: []
+    identity:
+      symbol: underlying_symbol
+    broker_fields:
+      token: fytoken
+      order_symbol: symbol_ticker
+      broker_symbol: symbol_details
+      lot_size: minimum_lot_size
+      tick_size: tick_size
+
+  - segment: mcx_uncategorised
+    exchange: mcx
+    shape: security
+    rules: []
+    identity:
+      symbol: underlying_symbol
+    broker_fields:
+      token: fytoken
+      order_symbol: symbol_ticker
+      broker_symbol: symbol_details
+      lot_size: minimum_lot_size
+      tick_size: tick_size
+
+  - segment: uncategorised
+    exchange: unknown
+    shape: security
+    rules: []
+    identity:
+      symbol: underlying_symbol
+    broker_fields:
+      token: fytoken
+      order_symbol: symbol_ticker
+      broker_symbol: symbol_details
+      lot_size: minimum_lot_size
+      tick_size: tick_size

@@ -1,0 +1,377 @@
+broker: indmoney
+raw_table: indmoney.instruments
+
+segments:
+  - segment: nse_fixed_income
+    exchange: nse
+    shape: security
+    rules: []
+    identity:
+      symbol: isin
+    broker_fields:
+      token: security_id
+      broker_symbol: symbol_name
+      lot_size: lot_units
+      tick_size: tick_size
+
+  - segment: bse_fixed_income
+    exchange: bse
+    shape: security
+    rules: []
+    identity:
+      symbol: isin
+    broker_fields:
+      token: security_id
+      broker_symbol: symbol_name
+      lot_size: lot_units
+      tick_size: tick_size
+
+  - segment: nse_equities
+    exchange: nse
+    shape: security
+    rules:
+      - match:
+          exch: NSE
+          segment: E
+          series:
+            - EQ
+            - SM
+            - BE
+            - ST
+            - BZ
+            - SZ
+            - E1
+            - IT
+            - W1
+    identity:
+      symbol: trading_symbol
+    broker_fields:
+      token: security_id
+      broker_symbol: symbol_name
+      lot_size: lot_units
+      tick_size: tick_size
+
+  - segment: bse_equities
+    exchange: bse
+    shape: security
+    rules:
+      - match:
+          exch: BSE
+          segment: E
+          sem_exch_instrument_type:
+            - ES
+            - PS
+      - match:
+          exch: BSE
+          segment: E
+          sem_exch_instrument_type: Other
+          series:
+            - A
+            - B
+            - M
+            - MS
+            - MT
+            - NT
+            - P
+            - R
+            - T
+            - TS
+            - X
+            - XT
+            - Y
+            - ZP
+    identity:
+      symbol: trading_symbol
+    broker_fields:
+      token: security_id
+      broker_symbol: symbol_name
+      lot_size: lot_units
+      tick_size: tick_size
+
+  - segment: nse_equity_futures
+    exchange: nse
+    shape: future
+    rules:
+      - match:
+          exch: NSE
+          segment: D
+          instrument_name: FUTSTK
+    identity:
+      underlying_symbol: trading_symbol
+      expiry_date:
+        column: expiry_date
+        transform: month_day_year_time
+    broker_fields:
+      token: security_id
+      broker_symbol: custom_symbol
+      lot_size: lot_units
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
+
+  - segment: nse_equity_options
+    exchange: nse
+    shape: option
+    rules:
+      - match:
+          exch: NSE
+          segment: D
+          instrument_name: OPTSTK
+    identity:
+      underlying_symbol: trading_symbol
+      expiry_date:
+        column: expiry_date
+        transform: month_day_year_time
+      strike_price: strike_price
+      option_type: option_type
+    broker_fields:
+      token: security_id
+      broker_symbol: custom_symbol
+      lot_size: lot_units
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
+
+  - segment: nse_equity_indices
+    exchange: nse
+    shape: security
+    rules: []
+    identity:
+      symbol: segment
+    broker_fields:
+      token: security_id
+      broker_symbol: segment
+      lot_size: lot_units
+      tick_size: tick_size
+
+  - segment: bse_equity_indices
+    exchange: bse
+    shape: security
+    rules: []
+    identity:
+      symbol: segment
+    broker_fields:
+      token: security_id
+      broker_symbol: segment
+      lot_size: lot_units
+      tick_size: tick_size
+
+  - segment: nse_equity_index_futures
+    exchange: nse
+    shape: future
+    rules:
+      - match:
+          exch: NSE
+          segment: D
+          instrument_name: FUTIDX
+    identity:
+      underlying_symbol: trading_symbol
+      expiry_date:
+        column: expiry_date
+        transform: month_day_year_time
+    broker_fields:
+      token: security_id
+      broker_symbol: custom_symbol
+      lot_size: lot_units
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
+
+  - segment: bse_equity_index_futures
+    exchange: bse
+    shape: future
+    rules:
+      - match:
+          exch: BSE
+          segment: D
+          sem_exch_instrument_type: FUTIDX
+    identity:
+      underlying_symbol:
+        column: trading_symbol
+        transform: underlying_before_first_hyphen
+      expiry_date:
+        column: expiry_date
+        transform: month_day_year_time
+    broker_fields:
+      token: security_id
+      broker_symbol: custom_symbol
+      lot_size: lot_units
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
+
+  - segment: nse_equity_index_options
+    exchange: nse
+    shape: option
+    rules:
+      - match:
+          exch: NSE
+          segment: D
+          instrument_name: OPTIDX
+    identity:
+      underlying_symbol: trading_symbol
+      expiry_date:
+        column: expiry_date
+        transform: month_day_year_time
+      strike_price: strike_price
+      option_type: option_type
+    broker_fields:
+      token: security_id
+      broker_symbol: custom_symbol
+      lot_size: lot_units
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
+
+  - segment: bse_equity_index_options
+    exchange: bse
+    shape: option
+    rules:
+      - match:
+          exch: BSE
+          segment: D
+          sem_exch_instrument_type: OPTIDX
+    identity:
+      underlying_symbol:
+        column: trading_symbol
+        transform: underlying_before_first_hyphen
+      expiry_date:
+        column: expiry_date
+        transform: month_day_year_time
+      strike_price: strike_price
+      option_type: option_type
+    broker_fields:
+      token: security_id
+      broker_symbol: custom_symbol
+      lot_size: lot_units
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
+
+  - segment: nse_mutual_funds
+    exchange: nse
+    shape: security
+    rules:
+      - match:
+          exch: NSE
+          segment: E
+          instrument_name: EQUITY
+          sem_exch_instrument_type: MF
+      - match:
+          exch: NSE
+          segment: E
+          instrument_name: EQUITY
+          sem_exch_instrument_type: Other
+          series: SF
+      - match:
+          exch: NSE
+          segment: E
+          instrument_name: EQUITY
+          sem_exch_instrument_type: ETF
+          series: MF
+    identity:
+      symbol: trading_symbol
+    broker_fields:
+      token: security_id
+      broker_symbol: symbol_name
+      lot_size: lot_units
+      tick_size: tick_size
+
+  - segment: nse_exchange_traded_funds
+    exchange: nse
+    shape: security
+    rules: []
+    identity:
+      symbol: trading_symbol
+    broker_fields:
+      token: security_id
+      broker_symbol: symbol_name
+      lot_size: lot_units
+      tick_size: tick_size
+
+  - segment: bse_exchange_traded_funds
+    exchange: bse
+    shape: security
+    rules: []
+    identity:
+      symbol: trading_symbol
+    broker_fields:
+      token: security_id
+      broker_symbol: symbol_name
+      lot_size: lot_units
+      tick_size: tick_size
+
+  - segment: nse_investment_trusts
+    exchange: nse
+    shape: security
+    rules:
+      - match:
+          exch: NSE
+          segment: E
+          series:
+            - IV
+            - RR
+    identity:
+      symbol: trading_symbol
+    broker_fields:
+      token: security_id
+      broker_symbol: symbol_name
+      lot_size: lot_units
+      tick_size: tick_size
+
+  - segment: bse_investment_trusts
+    exchange: bse
+    shape: security
+    rules:
+      - match:
+          exch: BSE
+          sem_exch_instrument_type:
+            - InvITU
+            - REIT
+      - match:
+          exch: BSE
+          sem_exch_instrument_type: Other
+          series: IF
+    identity:
+      symbol: trading_symbol
+    broker_fields:
+      token: security_id
+      broker_symbol: symbol_name
+      lot_size: lot_units
+      tick_size: tick_size
+
+  - segment: nse_uncategorised
+    exchange: nse
+    shape: security
+    rules: []
+    identity:
+      symbol: trading_symbol
+    broker_fields:
+      token: security_id
+      broker_symbol: symbol_name
+      lot_size: lot_units
+      tick_size: tick_size
+
+  - segment: bse_uncategorised
+    exchange: bse
+    shape: security
+    rules: []
+    identity:
+      symbol: trading_symbol
+    broker_fields:
+      token: security_id
+      broker_symbol: symbol_name
+      lot_size: lot_units
+      tick_size: tick_size
+
+  - segment: uncategorised
+    exchange: unknown
+    shape: security
+    rules: []
+    identity:
+      symbol: trading_symbol
+    broker_fields:
+      token: security_id
+      broker_symbol: symbol_name
+      lot_size: lot_units
+      tick_size: tick_size

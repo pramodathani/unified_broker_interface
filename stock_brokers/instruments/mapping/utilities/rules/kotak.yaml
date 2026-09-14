@@ -1,0 +1,717 @@
+broker: kotak
+raw_table: kotak.instruments
+
+segments:
+  - segment: nse_fixed_income
+    exchange: nse
+    shape: security
+    rules: []
+    identity:
+      symbol: pisin
+    broker_fields:
+      token: psymbol
+      order_symbol: ptrdsymbol
+      broker_symbol: pdesc
+      lot_size: llotsize
+      tick_size:
+        column: dticksize
+        transform: divide_by_100
+
+  - segment: bse_fixed_income
+    exchange: bse
+    shape: security
+    rules:
+      - match:
+          pexchseg: bse_cm
+          pgroup:
+            - F
+            - G
+    identity:
+      symbol: pisin
+    broker_fields:
+      token: psymbol
+      order_symbol: ptrdsymbol
+      broker_symbol: pdesc
+      lot_size: llotsize
+      tick_size: dticksize
+
+  - segment: nse_equities
+    exchange: nse
+    shape: security
+    rules:
+      - match:
+          pexchseg: nse_cm
+          pgroup:
+            - EQ
+            - SM
+            - BE
+            - ST
+            - BZ
+            - SZ
+            - E1
+            - IT
+            - W1
+    identity:
+      symbol: ptrdsymbol
+    broker_fields:
+      token: psymbol
+      order_symbol: ptrdsymbol
+      broker_symbol: pdesc
+      lot_size: llotsize
+      tick_size: dticksize
+
+  - segment: bse_equities
+    exchange: bse
+    shape: security
+    rules:
+      - match:
+          pexchseg: bse_cm
+          pgroup:
+            - A
+            - B
+            - M
+            - MS
+            - MT
+            - P
+            - R
+            - T
+            - TS
+            - X
+            - XT
+            - Y
+            - Z
+            - ZP
+    identity:
+      symbol: ptrdsymbol
+    broker_fields:
+      token: psymbol
+      order_symbol: ptrdsymbol
+      broker_symbol: pdesc
+      lot_size: llotsize
+      tick_size: dticksize
+
+  - segment: nse_equity_futures
+    exchange: nse
+    shape: future
+    rules:
+      - match:
+          pexchseg: nse_fo
+          pinsttype: FUTSTK
+    identity:
+      underlying_symbol: psymbolname
+      expiry_date:
+        column: lexpirydate
+        transform: kotak_expiry_epoch
+    broker_fields:
+      token: psymbol
+      order_symbol: ptrdsymbol
+      broker_symbol: ptrdsymbol
+      lot_size: llotsize
+      tick_size:
+        column: dticksize
+        transform: divide_by_100
+
+  - segment: bse_equity_futures
+    exchange: bse
+    shape: future
+    rules:
+      - match:
+          pexchseg: bse_fo
+          pinsttype: SF
+    identity:
+      underlying_symbol: psymbolname
+      expiry_date:
+        column: lexpirydate
+        transform: unix_epoch_date
+    broker_fields:
+      token: psymbol
+      order_symbol: ptrdsymbol
+      broker_symbol: ptrdsymbol
+      lot_size: llotsize
+      tick_size:
+        column: dticksize
+        transform: divide_by_100
+
+  - segment: nse_equity_options
+    exchange: nse
+    shape: option
+    rules:
+      - match:
+          pexchseg: nse_fo
+          pinsttype: OPTSTK
+    identity:
+      underlying_symbol: psymbolname
+      expiry_date:
+        column: lexpirydate
+        transform: kotak_expiry_epoch
+      strike_price:
+        column: dstrikeprice
+        transform: divide_by_100
+      option_type: poptiontype
+    broker_fields:
+      token: psymbol
+      order_symbol: ptrdsymbol
+      broker_symbol: ptrdsymbol
+      lot_size: llotsize
+      tick_size:
+        column: dticksize
+        transform: divide_by_100
+
+  - segment: bse_equity_options
+    exchange: bse
+    shape: option
+    rules:
+      - match:
+          pexchseg: bse_fo
+          pinsttype: SO
+    identity:
+      underlying_symbol: psymbolname
+      expiry_date:
+        column: lexpirydate
+        transform: unix_epoch_date
+      strike_price:
+        columns:
+          - dstrikeprice
+          - lprecision
+        transform: dynamic_precision_strike
+      option_type: poptiontype
+    broker_fields:
+      token: psymbol
+      order_symbol: ptrdsymbol
+      broker_symbol: ptrdsymbol
+      lot_size: llotsize
+      tick_size:
+        column: dticksize
+        transform: divide_by_100
+
+  - segment: nse_equity_indices
+    exchange: nse
+    shape: security
+    rules:
+      - match:
+          pexchseg: nse_cm
+          ptrdsymbol:
+            - BANKNIFTY
+            - FINNIFTY
+            - MIDCPNIFTY
+            - NIFTY
+    identity:
+      symbol: ptrdsymbol
+    broker_fields:
+      token: psymbol
+      order_symbol: ptrdsymbol
+      broker_symbol: pdesc
+      lot_size: llotsize
+      tick_size: dticksize
+
+  - segment: bse_equity_indices
+    exchange: bse
+    shape: security
+    rules:
+      - match:
+          pexchseg: bse_cm
+          pgroup: null
+    identity:
+      symbol: ptrdsymbol
+    broker_fields:
+      token: psymbol
+      order_symbol: ptrdsymbol
+      broker_symbol: ptrdsymbol
+      lot_size: llotsize
+      tick_size: dticksize
+
+  - segment: nse_equity_index_futures
+    exchange: nse
+    shape: future
+    rules:
+      - match:
+          pexchseg: nse_fo
+          pinsttype: FUTIDX
+    identity:
+      underlying_symbol: psymbolname
+      expiry_date:
+        column: lexpirydate
+        transform: kotak_expiry_epoch
+    broker_fields:
+      token: psymbol
+      order_symbol: ptrdsymbol
+      broker_symbol: ptrdsymbol
+      lot_size: llotsize
+      tick_size:
+        column: dticksize
+        transform: divide_by_100
+
+  - segment: bse_equity_index_futures
+    exchange: bse
+    shape: future
+    rules:
+      - match:
+          pexchseg: bse_fo
+          pinsttype: IF
+    identity:
+      underlying_symbol: psymbolname
+      expiry_date:
+        column: lexpirydate
+        transform: unix_epoch_date
+    broker_fields:
+      token: psymbol
+      order_symbol: ptrdsymbol
+      broker_symbol: ptrdsymbol
+      lot_size: llotsize
+      tick_size:
+        column: dticksize
+        transform: divide_by_100
+
+  - segment: nse_equity_index_options
+    exchange: nse
+    shape: option
+    rules:
+      - match:
+          pexchseg: nse_fo
+          pinsttype: OPTIDX
+    identity:
+      underlying_symbol: psymbolname
+      expiry_date:
+        column: lexpirydate
+        transform: kotak_expiry_epoch
+      strike_price:
+        column: dstrikeprice
+        transform: divide_by_100
+      option_type: poptiontype
+    broker_fields:
+      token: psymbol
+      order_symbol: ptrdsymbol
+      broker_symbol: ptrdsymbol
+      lot_size: llotsize
+      tick_size:
+        column: dticksize
+        transform: divide_by_100
+
+  - segment: bse_equity_index_options
+    exchange: bse
+    shape: option
+    rules:
+      - match:
+          pexchseg: bse_fo
+          pinsttype: IO
+    identity:
+      underlying_symbol: psymbolname
+      expiry_date:
+        column: lexpirydate
+        transform: unix_epoch_date
+      strike_price:
+        columns:
+          - dstrikeprice
+          - lprecision
+        transform: dynamic_precision_strike
+      option_type: poptiontype
+    broker_fields:
+      token: psymbol
+      order_symbol: ptrdsymbol
+      broker_symbol: ptrdsymbol
+      lot_size: llotsize
+      tick_size:
+        column: dticksize
+        transform: divide_by_100
+
+  - segment: nse_currencies
+    exchange: nse
+    shape: security
+    rules:
+      - match:
+          pexchange: CDS
+          pinsttype: UNDCUR
+          psymbolname:
+            - EURINR
+            - EURUSD
+            - GBPINR
+            - GBPUSD
+            - JPYINR
+            - USDINR
+            - USDJPY
+    identity:
+      symbol: psymbolname
+    broker_fields:
+      token: psymbol
+      order_symbol: ptrdsymbol
+      broker_symbol: ptrdsymbol
+      lot_size:
+        constant: null
+      tick_size:
+        constant: null
+
+  - segment: nse_currency_futures
+    exchange: nse
+    shape: future
+    rules:
+      - match:
+          pexchange: CDS
+          pinsttype: FUTCUR
+    identity:
+      underlying_symbol: psymbolname
+      expiry_date:
+        column: lexpirydate
+        transform: kotak_expiry_epoch
+    broker_fields:
+      token: psymbol
+      order_symbol: ptrdsymbol
+      broker_symbol: ptrdsymbol
+      lot_size: llotsize
+      tick_size:
+        column: dticksize
+        transform: divide_by_10_million
+
+  - segment: nse_currency_options
+    exchange: nse
+    shape: option
+    rules:
+      - match:
+          pexchange: CDS
+          pinsttype: OPTCUR
+    identity:
+      underlying_symbol: psymbolname
+      expiry_date:
+        column: lexpirydate
+        transform: kotak_expiry_epoch
+      strike_price:
+        column: dstrikeprice
+        transform: divide_by_10_million
+      option_type: poptiontype
+    broker_fields:
+      token: psymbol
+      order_symbol: ptrdsymbol
+      broker_symbol: ptrdsymbol
+      lot_size: llotsize
+      tick_size:
+        column: dticksize
+        transform: divide_by_10_million
+
+  - segment: nse_commodities
+    exchange: nse
+    shape: security
+    rules:
+      - match:
+          pexchseg: nse_com
+          pinsttype: UNDCOM
+    identity:
+      symbol: psymbolname
+    broker_fields:
+      token: psymbol
+      order_symbol: ptrdsymbol
+      broker_symbol: pdesc
+      lot_size:
+        constant: null
+      tick_size:
+        constant: null
+
+  - segment: mcx_commodities
+    exchange: mcx
+    shape: security
+    rules:
+      - match:
+          pexchseg: mcx_fo
+          pinsttype: COM
+    identity:
+      symbol: psymbolname
+    broker_fields:
+      token: psymbol
+      order_symbol: ptrdsymbol
+      broker_symbol: ptrdsymbol
+      lot_size: llotsize
+      tick_size: dticksize
+
+  - segment: nse_commodity_futures
+    exchange: nse
+    shape: future
+    rules:
+      - match:
+          pexchseg: nse_com
+          pinsttype:
+            - FUTBAS
+            - FUTENR
+            - FUTBLN
+    identity:
+      underlying_symbol: psymbolname
+      expiry_date:
+        column: lexpirydate
+        transform: kotak_expiry_epoch
+    broker_fields:
+      token: psymbol
+      order_symbol: ptrdsymbol
+      broker_symbol: ptrdsymbol
+      lot_size: llotsize
+      tick_size:
+        column: dticksize
+        transform: divide_by_100
+
+  - segment: mcx_commodity_futures
+    exchange: mcx
+    shape: future
+    rules:
+      - match:
+          pexchseg: mcx_fo
+          pinsttype: FUTCOM
+    identity:
+      underlying_symbol: psymbolname
+      expiry_date:
+        column: lexpirydate
+        transform: unix_epoch_date
+    broker_fields:
+      token: psymbol
+      order_symbol: ptrdsymbol
+      broker_symbol: ptrdsymbol
+      lot_size: llotsize
+      tick_size: dticksize
+
+  - segment: nse_commodity_options
+    exchange: nse
+    shape: option
+    rules:
+      - match:
+          pexchseg: nse_com
+          pinsttype:
+            - OPTFUT
+            - OPTBLN
+    identity:
+      underlying_symbol: psymbolname
+      expiry_date:
+        column: lexpirydate
+        transform: kotak_expiry_epoch
+      strike_price:
+        column: dstrikeprice
+        transform: divide_by_10_thousand
+      option_type: poptiontype
+    broker_fields:
+      token: psymbol
+      order_symbol: ptrdsymbol
+      broker_symbol: ptrdsymbol
+      lot_size: llotsize
+      tick_size:
+        column: dticksize
+        transform: divide_by_100
+
+  - segment: mcx_commodity_options
+    exchange: mcx
+    shape: option
+    rules:
+      - match:
+          pexchseg: mcx_fo
+          pinsttype: OPTFUT
+    identity:
+      underlying_symbol: psymbolname
+      expiry_date:
+        column: lexpirydate
+        transform: unix_epoch_date
+      strike_price:
+        columns:
+          - dstrikeprice
+          - lprecision
+        transform: dynamic_precision_strike
+      option_type: poptiontype
+    broker_fields:
+      token: psymbol
+      order_symbol: ptrdsymbol
+      broker_symbol: ptrdsymbol
+      lot_size: llotsize
+      tick_size: dticksize
+
+  - segment: mcx_commodity_indices
+    exchange: mcx
+    shape: security
+    rules:
+      - match:
+          pexchseg: mcx_fo
+          pinsttype: IN
+    identity:
+      symbol: psymbolname
+    broker_fields:
+      token: psymbol
+      order_symbol: ptrdsymbol
+      broker_symbol: ptrdsymbol
+      lot_size: llotsize
+      tick_size: dticksize
+
+  - segment: mcx_commodity_index_futures
+    exchange: mcx
+    shape: future
+    rules:
+      - match:
+          pexchseg: mcx_fo
+          pinsttype: FUTIDX
+    identity:
+      underlying_symbol: psymbolname
+      expiry_date:
+        column: lexpirydate
+        transform: unix_epoch_date
+    broker_fields:
+      token: psymbol
+      order_symbol: ptrdsymbol
+      broker_symbol: ptrdsymbol
+      lot_size: llotsize
+      tick_size: dticksize
+
+  - segment: mcx_commodity_index_options
+    exchange: mcx
+    shape: option
+    rules:
+      - match:
+          pexchseg: mcx_fo
+          pinsttype: OPTIDX
+    identity:
+      underlying_symbol: psymbolname
+      expiry_date:
+        column: lexpirydate
+        transform: unix_epoch_date
+      strike_price:
+        columns:
+          - dstrikeprice
+          - lprecision
+        transform: dynamic_precision_strike
+      option_type: poptiontype
+    broker_fields:
+      token: psymbol
+      order_symbol: ptrdsymbol
+      broker_symbol: ptrdsymbol
+      lot_size: llotsize
+      tick_size: dticksize
+
+  - segment: nse_mutual_funds
+    exchange: nse
+    shape: security
+    rules:
+      - match:
+          pexchseg: nse_cm
+          pgroup:
+            - MF
+            - SF
+    identity:
+      symbol: ptrdsymbol
+    broker_fields:
+      token: psymbol
+      order_symbol: ptrdsymbol
+      broker_symbol: pdesc
+      lot_size: llotsize
+      tick_size: dticksize
+
+  - segment: nse_exchange_traded_funds
+    exchange: nse
+    shape: security
+    rules: []
+    identity:
+      symbol: ptrdsymbol
+    broker_fields:
+      token: psymbol
+      order_symbol: ptrdsymbol
+      broker_symbol: pdesc
+      lot_size: llotsize
+      tick_size:
+        column: dticksize
+        transform: divide_by_100
+
+  - segment: bse_exchange_traded_funds
+    exchange: bse
+    shape: security
+    rules:
+      - match:
+          pexchseg: bse_cm
+          pgroup: E
+    identity:
+      symbol: ptrdsymbol
+    broker_fields:
+      token: psymbol
+      order_symbol: ptrdsymbol
+      broker_symbol: pdesc
+      lot_size: llotsize
+      tick_size:
+        column: dticksize
+        transform: divide_by_100
+
+  - segment: nse_investment_trusts
+    exchange: nse
+    shape: security
+    rules:
+      - match:
+          pexchseg: nse_cm
+          pgroup:
+            - IV
+            - RR
+    identity:
+      symbol: ptrdsymbol
+    broker_fields:
+      token: psymbol
+      order_symbol: ptrdsymbol
+      broker_symbol: pdesc
+      lot_size: llotsize
+      tick_size:
+        column: dticksize
+        transform: divide_by_100
+
+  - segment: bse_investment_trusts
+    exchange: bse
+    shape: security
+    rules:
+      - match:
+          pexchseg: bse_cm
+          pgroup: IF
+    identity:
+      symbol: ptrdsymbol
+    broker_fields:
+      token: psymbol
+      order_symbol: ptrdsymbol
+      broker_symbol: pdesc
+      lot_size: llotsize
+      tick_size:
+        column: dticksize
+        transform: divide_by_100
+
+  - segment: nse_uncategorised
+    exchange: nse
+    shape: security
+    rules: []
+    identity:
+      symbol: ptrdsymbol
+    broker_fields:
+      token: psymbol
+      order_symbol: ptrdsymbol
+      broker_symbol: pdesc
+      lot_size: llotsize
+      tick_size: dticksize
+
+  - segment: bse_uncategorised
+    exchange: bse
+    shape: security
+    rules: []
+    identity:
+      symbol: ptrdsymbol
+    broker_fields:
+      token: psymbol
+      order_symbol: ptrdsymbol
+      broker_symbol: pdesc
+      lot_size: llotsize
+      tick_size: dticksize
+
+  - segment: mcx_uncategorised
+    exchange: mcx
+    shape: security
+    rules: []
+    identity:
+      symbol: ptrdsymbol
+    broker_fields:
+      token: psymbol
+      order_symbol: ptrdsymbol
+      broker_symbol: pdesc
+      lot_size: llotsize
+      tick_size: dticksize
+
+  - segment: uncategorised
+    exchange: unknown
+    shape: security
+    rules: []
+    identity:
+      symbol: ptrdsymbol
+    broker_fields:
+      token: psymbol
+      order_symbol: ptrdsymbol
+      broker_symbol: pdesc
+      lot_size: llotsize
+      tick_size: dticksize

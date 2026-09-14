@@ -1,0 +1,824 @@
+broker: stoxkart
+raw_table: stoxkart.instruments
+
+segments:
+  - segment: nse_fixed_income
+    exchange: nse
+    shape: security
+    rules: []
+    identity:
+      symbol: symbol
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size: tick_size
+
+  - segment: bse_fixed_income
+    exchange: bse
+    shape: security
+    rules: []
+    identity:
+      symbol: isin_code
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size: tick_size
+
+  - segment: nse_fixed_income_futures
+    exchange: nse
+    shape: future
+    rules:
+      - match:
+          exchange: NSECD
+          instrument_type:
+            - FUTIRC
+            - FUTIRT
+    identity:
+      underlying_symbol: symbol
+      expiry_date:
+        column: expiry_date
+        transform: day_month_year_date
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_10_million
+
+  - segment: bse_fixed_income_futures
+    exchange: bse
+    shape: future
+    rules: []
+    identity:
+      underlying_symbol: symbol
+      expiry_date:
+        column: expiry_date
+        transform: day_month_year_date
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_10_million
+
+  - segment: nse_fixed_income_options
+    exchange: nse
+    shape: option
+    rules:
+      - match:
+          exchange: NSECD
+          instrument_type: OPTIRC
+    identity:
+      underlying_symbol: symbol
+      expiry_date:
+        column: expiry_date
+        transform: day_month_year_date
+      strike_price:
+        column: strike_price
+        transform: divide_by_10_million
+      option_type: option_type
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_10_million
+
+  - segment: bse_fixed_income_options
+    exchange: bse
+    shape: option
+    rules: []
+    identity:
+      underlying_symbol: symbol
+      expiry_date:
+        column: expiry_date
+        transform: day_month_year_date
+      strike_price:
+        column: strike_price
+        transform: divide_by_10_million
+      option_type: option_type
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_10_million
+
+  - segment: nse_fixed_income_indices
+    exchange: nse
+    shape: security
+    rules:
+      - match:
+          exchange: NSECD
+          instrument_type: UNDIRC
+          symbol: ONMIBOR
+      - match:
+          exchange: NSECD
+          instrument_type: UNDIRD
+          symbol: 10YGS7
+    identity:
+      symbol: symbol
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size: tick_size
+
+  - segment: bse_fixed_income_indices
+    exchange: bse
+    shape: security
+    rules:
+      - match:
+          exchange: BSECD
+          instrument_type: CUR
+          symbol: ONMIBOR
+    identity:
+      symbol: symbol
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size: tick_size
+
+  - segment: nse_fixed_income_index_futures
+    exchange: nse
+    shape: future
+    rules: []
+    identity:
+      underlying_symbol: symbol
+      expiry_date:
+        column: expiry_date
+        transform: day_month_year_date
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_10_million
+
+  - segment: bse_fixed_income_index_futures
+    exchange: bse
+    shape: future
+    rules: []
+    identity:
+      underlying_symbol: symbol
+      expiry_date:
+        column: expiry_date
+        transform: day_month_year_date
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_10_million
+
+  - segment: nse_equities
+    exchange: nse
+    shape: security
+    rules:
+      - match:
+          exchange: NSE
+          series:
+            - EQ
+            - SM
+            - BE
+            - ST
+            - BZ
+            - SZ
+            - E1
+            - IT
+            - W1
+            - T0
+            - P1
+            - X1
+    identity:
+      symbol: symbol
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size: tick_size
+
+  - segment: bse_equities
+    exchange: bse
+    shape: security
+    rules: []
+    identity:
+      symbol: symbol
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size: tick_size
+
+  - segment: nse_equity_futures
+    exchange: nse
+    shape: future
+    rules:
+      - match:
+          exchange: NFO
+          instrument_type: FUTSTK
+    identity:
+      underlying_symbol: symbol
+      expiry_date:
+        column: expiry_date
+        transform: day_month_year_date
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
+
+  - segment: nse_equity_options
+    exchange: nse
+    shape: option
+    rules:
+      - match:
+          exchange: NFO
+          instrument_type: OPTSTK
+    identity:
+      underlying_symbol: symbol
+      expiry_date:
+        column: expiry_date
+        transform: day_month_year_date
+      strike_price:
+        column: strike_price
+        transform: divide_by_100
+      option_type: option_type
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
+
+  - segment: nse_equity_indices
+    exchange: nse
+    shape: security
+    rules: []
+    identity:
+      symbol: symbol
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size: tick_size
+
+  - segment: bse_equity_indices
+    exchange: bse
+    shape: security
+    rules:
+      - match:
+          exchange: BSE
+          instrument_type: EQUITIES
+          symbol:
+            - BSECD
+            - DOL100
+            - PSUBNK
+            - SHA50
+            - BSEIPO
+            - SMLCAP
+            - MMOM30
+            - BSEIT
+            - DOL30
+            - BSEHC
+            - AUTO
+            - MFG
+            - DIVY50
+            - BSETECK
+            - POWER
+            - OILGAS
+            - BSECG
+            - BSE100
+            - CARBON
+            - SMEIPO
+            - MIDCAP
+            - BSE500
+            - REALTY
+            - BANKEX
+            - BSEFMC
+            - GREENX
+            - T10BNK
+            - BSE200
+            - BSEPSU
+    identity:
+      symbol: symbol
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size: tick_size
+
+  - segment: nse_equity_index_futures
+    exchange: nse
+    shape: future
+    rules:
+      - match:
+          exchange: NFO
+          instrument_type: FUTIDX
+    identity:
+      underlying_symbol: symbol
+      expiry_date:
+        column: expiry_date
+        transform: day_month_year_date
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
+
+  - segment: nse_equity_index_options
+    exchange: nse
+    shape: option
+    rules:
+      - match:
+          exchange: NFO
+          instrument_type: OPTIDX
+    identity:
+      underlying_symbol: symbol
+      expiry_date:
+        column: expiry_date
+        transform: day_month_year_date
+      strike_price:
+        column: strike_price
+        transform: divide_by_100
+      option_type: option_type
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
+
+  - segment: nse_currencies
+    exchange: nse
+    shape: security
+    rules:
+      - match:
+          exchange: NSECD
+          instrument_type: UNDCUR
+          symbol:
+            - EURINR
+            - EURUSD
+            - GBPINR
+            - GBPUSD
+            - JPYINR
+            - USDINR
+            - USDJPY
+    identity:
+      symbol: symbol
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size: tick_size
+
+  - segment: bse_currencies
+    exchange: bse
+    shape: security
+    rules:
+      - match:
+          exchange: BSECD
+          instrument_type: CUR
+          symbol:
+            - EURINR
+            - EURUSD
+            - GBPINR
+            - GBPUSD
+            - JPYINR
+            - USDINR
+            - USDJPY
+            - EURUSDOTC
+            - GBPUSDOTC
+            - USDJPYOTC
+            - GBPINROTC
+            - EURINROTC
+            - USDINROTC
+            - JPYINROTC
+            - USDINROTCD
+    identity:
+      symbol: symbol
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size: tick_size
+
+  - segment: nse_currency_futures
+    exchange: nse
+    shape: future
+    rules:
+      - match:
+          exchange: NSECD
+          instrument_type: FUTCUR
+    identity:
+      underlying_symbol: symbol
+      expiry_date:
+        column: expiry_date
+        transform: day_month_year_date
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_10_million
+
+  - segment: bse_currency_futures
+    exchange: bse
+    shape: future
+    rules: []
+    identity:
+      underlying_symbol: symbol
+      expiry_date:
+        column: expiry_date
+        transform: day_month_year_date
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_10_million
+
+  - segment: nse_currency_options
+    exchange: nse
+    shape: option
+    rules:
+      - match:
+          exchange: NSECD
+          instrument_type: OPTCUR
+    identity:
+      underlying_symbol: symbol
+      expiry_date:
+        column: expiry_date
+        transform: day_month_year_date
+      strike_price:
+        column: strike_price
+        transform: divide_by_10_million
+      option_type: option_type
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_10_million
+
+  - segment: bse_currency_options
+    exchange: bse
+    shape: option
+    rules: []
+    identity:
+      underlying_symbol: symbol
+      expiry_date:
+        column: expiry_date
+        transform: day_month_year_date
+      strike_price:
+        column: strike_price
+        transform: divide_by_10_million
+      option_type: option_type
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_10_million
+
+  - segment: mcx_commodities
+    exchange: mcx
+    shape: security
+    rules: []
+    identity:
+      symbol: symbol
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size: tick_size
+
+  - segment: ncdex_commodities
+    exchange: ncdex
+    shape: security
+    rules: []
+    identity:
+      symbol: symbol
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size: tick_size
+
+  - segment: mcx_commodity_futures
+    exchange: mcx
+    shape: future
+    rules:
+      - match:
+          exchange: MCX
+          instrument_type: FUTCOM
+    identity:
+      underlying_symbol: symbol
+      expiry_date:
+        column: expiry_date
+        transform: day_month_year_date
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size: tick_size
+
+  - segment: ncdex_commodity_futures
+    exchange: ncdex
+    shape: future
+    rules: []
+    identity:
+      underlying_symbol: symbol
+      expiry_date:
+        column: expiry_date
+        transform: day_month_year_date
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size: tick_size
+
+  - segment: mcx_commodity_options
+    exchange: mcx
+    shape: option
+    rules:
+      - match:
+          exchange: MCX
+          instrument_type: OPTFUT
+    identity:
+      underlying_symbol: symbol
+      expiry_date:
+        column: expiry_date
+        transform: day_month_year_date
+      strike_price:
+        column: strike_price
+        transform: divide_by_100
+      option_type: option_type
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size: tick_size
+
+  - segment: ncdex_commodity_options
+    exchange: ncdex
+    shape: option
+    rules:
+      - match:
+          exchange: NCDEX
+          instrument_type: OPTFUT
+    identity:
+      underlying_symbol: symbol
+      expiry_date:
+        column: expiry_date
+        transform: day_month_year_date
+      strike_price:
+        column: strike_price
+        transform: divide_by_100
+      option_type: option_type
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size: tick_size
+
+  - segment: mcx_commodity_indices
+    exchange: mcx
+    shape: security
+    rules:
+      - match:
+          exchange: MCX
+          instrument_type: SPOT
+          symbol:
+            - MCXALUMDEX
+            - MCXGOLDEX
+            - MCXBULLDEX
+            - MCXCOMPDEX
+            - MCXMETLDEX
+            - MCXZINCDEX
+            - MCXSILVDEX
+            - MCXCOPRDEX
+            - MCXLEADEX
+            - MCXNGASDEX
+            - MCXENRGDEX
+            - MCXCRUDEX
+    identity:
+      symbol: symbol
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size: tick_size
+
+  - segment: ncdex_commodity_indices
+    exchange: ncdex
+    shape: security
+    rules: []
+    identity:
+      symbol: symbol_description
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size: tick_size
+
+  - segment: mcx_commodity_index_futures
+    exchange: mcx
+    shape: future
+    rules:
+      - match:
+          exchange: MCX
+          instrument_type: FUTIDX
+    identity:
+      underlying_symbol: symbol
+      expiry_date:
+        column: expiry_date
+        transform: day_month_year_date
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size: tick_size
+
+  - segment: mcx_commodity_index_options
+    exchange: mcx
+    shape: option
+    rules:
+      - match:
+          exchange: MCX
+          instrument_type: OPTIDX
+    identity:
+      underlying_symbol: symbol
+      expiry_date:
+        column: expiry_date
+        transform: day_month_year_date
+      strike_price:
+        column: strike_price
+        transform: divide_by_100
+      option_type: option_type
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size: tick_size
+
+  - segment: nse_mutual_funds
+    exchange: nse
+    shape: security
+    rules:
+      - match:
+          exchange: NSE
+          instrument_type: EQUITIES
+          series:
+            - MF
+            - SF
+    identity:
+      symbol: symbol
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size: tick_size
+
+  - segment: nse_exchange_traded_funds
+    exchange: nse
+    shape: security
+    rules: []
+    identity:
+      symbol: symbol
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
+
+  - segment: bse_exchange_traded_funds
+    exchange: bse
+    shape: security
+    rules: []
+    identity:
+      symbol: symbol
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
+
+  - segment: nse_investment_trusts
+    exchange: nse
+    shape: security
+    rules:
+      - match:
+          exchange: NSE
+          series:
+            - IV
+            - RR
+    identity:
+      symbol: symbol
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
+
+  - segment: bse_investment_trusts
+    exchange: bse
+    shape: security
+    rules:
+      - match:
+          exchange: BSE
+          series: IF
+    identity:
+      symbol: symbol
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
+
+  - segment: nse_uncategorised
+    exchange: nse
+    shape: security
+    rules: []
+    identity:
+      symbol: symbol
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size: tick_size
+
+  - segment: bse_uncategorised
+    exchange: bse
+    shape: security
+    rules: []
+    identity:
+      symbol: symbol
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size: tick_size
+
+  - segment: mcx_uncategorised
+    exchange: mcx
+    shape: security
+    rules: []
+    identity:
+      symbol: symbol
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size: tick_size
+
+  - segment: ncdex_uncategorised
+    exchange: ncdex
+    shape: security
+    rules: []
+    identity:
+      symbol: symbol
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size: tick_size
+
+  - segment: uncategorised
+    exchange: unknown
+    shape: security
+    rules: []
+    identity:
+      symbol: symbol
+    broker_fields:
+      token: token
+      broker_symbol: symbol_description
+      lot_size: lot_size
+      tick_size: tick_size

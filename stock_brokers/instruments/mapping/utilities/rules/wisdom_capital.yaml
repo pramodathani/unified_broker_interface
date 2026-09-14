@@ -1,0 +1,705 @@
+broker: wisdom_capital
+raw_table: wisdom_capital.instruments
+
+segments:
+  - segment: nse_fixed_income
+    exchange: nse
+    shape: security
+    rules: []
+    identity:
+      symbol: name
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: bse_fixed_income
+    exchange: bse
+    shape: security
+    rules: []
+    identity:
+      symbol: isin
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: nse_fixed_income_futures
+    exchange: nse
+    shape: future
+    rules:
+      - match:
+          exchangesegment: NSECD
+          instrumenttype: '1'
+    identity:
+      underlying_symbol: name
+      expiry_date: contractexpiration
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: bse_fixed_income_futures
+    exchange: bse
+    shape: future
+    rules:
+      - match:
+          exchangesegment: BSECD
+          instrumenttype: '1'
+    identity:
+      underlying_symbol: name
+      expiry_date: contractexpiration
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: bse_fixed_income_options
+    exchange: bse
+    shape: option
+    rules:
+      - match:
+          exchangesegment: BSECD
+          instrumenttype: '2'
+    identity:
+      underlying_symbol: name
+      expiry_date: contractexpiration
+      strike_price: strikeprice
+      option_type: optiontype
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: nse_fixed_income_indices
+    exchange: nse
+    shape: security
+    rules:
+      - match:
+          exchangesegment: NSECD
+          instrumenttype: '16'
+          name:
+            - ONMIBOR
+            - 10YGS7
+    identity:
+      symbol: name
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: nse_fixed_income_index_futures
+    exchange: nse
+    shape: future
+    rules: []
+    identity:
+      underlying_symbol: name
+      expiry_date: contractexpiration
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: bse_fixed_income_index_futures
+    exchange: bse
+    shape: future
+    rules: []
+    identity:
+      underlying_symbol: name
+      expiry_date: contractexpiration
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: nse_equities
+    exchange: nse
+    shape: security
+    rules:
+      - match:
+          exchangesegment: NSECM
+          series:
+            - EQ
+            - SM
+            - BE
+            - ST
+            - BZ
+            - SZ
+            - E1
+            - IT
+            - W1
+            - T0
+    identity:
+      symbol: name
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: bse_equities
+    exchange: bse
+    shape: security
+    rules: []
+    identity:
+      symbol: name
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: displayname
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: nse_equity_futures
+    exchange: nse
+    shape: future
+    rules:
+      - match:
+          exchangesegment: NSEFO
+          instrumenttype: '1'
+    identity:
+      underlying_symbol: name
+      expiry_date: contractexpiration
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: bse_equity_futures
+    exchange: bse
+    shape: future
+    rules:
+      - match:
+          exchangesegment: BSEFO
+          instrumenttype: '1'
+    identity:
+      underlying_symbol: name
+      expiry_date: contractexpiration
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: nse_equity_options
+    exchange: nse
+    shape: option
+    rules:
+      - match:
+          exchangesegment: NSEFO
+          instrumenttype: '2'
+    identity:
+      underlying_symbol: name
+      expiry_date: contractexpiration
+      strike_price: strikeprice
+      option_type: optiontype
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: bse_equity_options
+    exchange: bse
+    shape: option
+    rules:
+      - match:
+          exchangesegment: BSEFO
+          instrumenttype: '2'
+    identity:
+      underlying_symbol: name
+      expiry_date: contractexpiration
+      strike_price: strikeprice
+      option_type: optiontype
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: bse_equity_indices
+    exchange: bse
+    shape: security
+    rules:
+      - match:
+          exchangesegment: BSECM
+          series:
+            - SPOT
+    identity:
+      symbol: name
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: nse_equity_index_futures
+    exchange: nse
+    shape: future
+    rules: []
+    identity:
+      underlying_symbol: name
+      expiry_date: contractexpiration
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: bse_equity_index_futures
+    exchange: bse
+    shape: future
+    rules: []
+    identity:
+      underlying_symbol: name
+      expiry_date: contractexpiration
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: nse_equity_index_options
+    exchange: nse
+    shape: option
+    rules: []
+    identity:
+      underlying_symbol: name
+      expiry_date: contractexpiration
+      strike_price: strikeprice
+      option_type: optiontype
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: bse_equity_index_options
+    exchange: bse
+    shape: option
+    rules: []
+    identity:
+      underlying_symbol: name
+      expiry_date: contractexpiration
+      strike_price: strikeprice
+      option_type: optiontype
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: nse_currencies
+    exchange: nse
+    shape: security
+    rules:
+      - match:
+          exchangesegment: NSECD
+          instrumenttype: '16'
+          name:
+            - EURINR
+            - EURUSD
+            - GBPINR
+            - GBPUSD
+            - JPYINR
+            - USDINR
+            - USDJPY
+    identity:
+      symbol: name
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: nse_currency_futures
+    exchange: nse
+    shape: future
+    rules: []
+    identity:
+      underlying_symbol: name
+      expiry_date: contractexpiration
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: bse_currency_futures
+    exchange: bse
+    shape: future
+    rules: []
+    identity:
+      underlying_symbol: name
+      expiry_date: contractexpiration
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: nse_currency_options
+    exchange: nse
+    shape: option
+    rules:
+      - match:
+          exchangesegment: NSECD
+          instrumenttype: '2'
+          name:
+            - EURINR
+            - EURUSD
+            - GBPINR
+            - GBPUSD
+            - JPYINR
+            - USDINR
+            - USDJPY
+    identity:
+      underlying_symbol: name
+      expiry_date: contractexpiration
+      strike_price: strikeprice
+      option_type: optiontype
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: bse_currency_options
+    exchange: bse
+    shape: option
+    rules: []
+    identity:
+      underlying_symbol: name
+      expiry_date: contractexpiration
+      strike_price: strikeprice
+      option_type: optiontype
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: nse_commodities
+    exchange: nse
+    shape: security
+    rules:
+      - match:
+          exchangesegment: NSECO
+          instrumenttype: '16'
+    identity:
+      symbol: name
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: mcx_commodities
+    exchange: mcx
+    shape: security
+    rules:
+      - match:
+          exchangesegment: MCXFO
+          instrumenttype: '16'
+    identity:
+      symbol: name
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: ncdex_commodities
+    exchange: ncdex
+    shape: security
+    rules:
+      - match:
+          exchangesegment: NCDEX
+          instrumenttype: '16'
+    identity:
+      symbol: name
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: nse_commodity_futures
+    exchange: nse
+    shape: future
+    rules:
+      - match:
+          exchangesegment: NSECO
+          instrumenttype: '1'
+    identity:
+      underlying_symbol: name
+      expiry_date: contractexpiration
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: mcx_commodity_futures
+    exchange: mcx
+    shape: future
+    rules:
+      - match:
+          exchangesegment: MCXFO
+          instrumenttype: '1'
+    identity:
+      underlying_symbol: name
+      expiry_date: contractexpiration
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: ncdex_commodity_futures
+    exchange: ncdex
+    shape: future
+    rules:
+      - match:
+          exchangesegment: NCDEX
+          instrumenttype: '1'
+    identity:
+      underlying_symbol: name
+      expiry_date: contractexpiration
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: nse_commodity_options
+    exchange: nse
+    shape: option
+    rules:
+      - match:
+          exchangesegment: NSECO
+          instrumenttype: '2'
+    identity:
+      underlying_symbol: name
+      expiry_date: contractexpiration
+      strike_price: strikeprice
+      option_type: optiontype
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: mcx_commodity_options
+    exchange: mcx
+    shape: option
+    rules:
+      - match:
+          exchangesegment: MCXFO
+          instrumenttype: '2'
+    identity:
+      underlying_symbol: name
+      expiry_date: contractexpiration
+      strike_price: strikeprice
+      option_type: optiontype
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: ncdex_commodity_options
+    exchange: ncdex
+    shape: option
+    rules:
+      - match:
+          exchangesegment: NCDEX
+          instrumenttype: '2'
+    identity:
+      underlying_symbol: name
+      expiry_date: contractexpiration
+      strike_price: strikeprice
+      option_type: optiontype
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: mcx_commodity_indices
+    exchange: mcx
+    shape: security
+    rules: []
+    identity:
+      symbol: name
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: mcx_commodity_index_futures
+    exchange: mcx
+    shape: future
+    rules: []
+    identity:
+      underlying_symbol: name
+      expiry_date: contractexpiration
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: mcx_commodity_index_options
+    exchange: mcx
+    shape: option
+    rules: []
+    identity:
+      underlying_symbol: name
+      expiry_date: contractexpiration
+      strike_price: strikeprice
+      option_type: optiontype
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: nse_mutual_funds
+    exchange: nse
+    shape: security
+    rules:
+      - match:
+          exchangesegment: NSECM
+          series:
+            - MF
+            - SF
+    identity:
+      symbol: name
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: nse_exchange_traded_funds
+    exchange: nse
+    shape: security
+    rules: []
+    identity:
+      symbol: name
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: bse_exchange_traded_funds
+    exchange: bse
+    shape: security
+    rules: []
+    identity:
+      symbol: name
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: nse_investment_trusts
+    exchange: nse
+    shape: security
+    rules:
+      - match:
+          exchangesegment: NSECM
+          series:
+            - IV
+            - RR
+    identity:
+      symbol: name
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: bse_investment_trusts
+    exchange: bse
+    shape: security
+    rules: []
+    identity:
+      symbol: name
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: nse_uncategorised
+    exchange: nse
+    shape: security
+    rules: []
+    identity:
+      symbol: name
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: bse_uncategorised
+    exchange: bse
+    shape: security
+    rules: []
+    identity:
+      symbol: name
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: mcx_uncategorised
+    exchange: mcx
+    shape: security
+    rules: []
+    identity:
+      symbol: name
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: ncdex_uncategorised
+    exchange: ncdex
+    shape: security
+    rules: []
+    identity:
+      symbol: name
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
+
+  - segment: uncategorised
+    exchange: unknown
+    shape: security
+    rules: []
+    identity:
+      symbol: name
+    broker_fields:
+      token: exchangeinstrumentid
+      broker_symbol: description
+      lot_size: lotsize
+      tick_size: ticksize
