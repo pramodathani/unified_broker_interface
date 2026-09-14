@@ -107,6 +107,13 @@ The first segment whose rules match wins. `identity` and `broker_fields` then ma
 onto the unified ones, optionally through a named transform from `TRANSFORMS` in `base.py` -
 `divide_by_100`, `unix_epoch_date`, `kotak_expiry_epoch` and the rest.
 
+`tick_size` is stored in rupees in every tradeable segment. Dhan, Kotak, Stoxkart and INDmoney publish
+it in paise throughout their files, and Groww does for its commodity segments, so those segments carry
+`divide_by_100`; Kotak's and Stoxkart's currency and rate derivatives are scaled by ten million instead.
+Index segments and the uncategorised catch-alls are left as each broker sends them, because their rows
+mix units within one broker. `lot_size` is never converted: it stays each broker's own figure, which on
+MCX means three different things, as the [REST API guide](rest-api.md#instruments) describes.
+
 Python is written only where equality rules cannot express a broker's quirks. Zerodha is the
 extreme case: all 34 of its segments carry `rules: []` and it classifies entirely in code.
 

@@ -24,7 +24,9 @@ segments:
       token: token
       broker_symbol: symbol_description
       lot_size: lot_size
-      tick_size: tick_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
 
   - segment: nse_fixed_income_futures
     exchange: nse
@@ -205,7 +207,9 @@ segments:
       token: token
       broker_symbol: symbol_description
       lot_size: lot_size
-      tick_size: tick_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
 
   - segment: bse_equities
     exchange: bse
@@ -217,7 +221,9 @@ segments:
       token: token
       broker_symbol: symbol_description
       lot_size: lot_size
-      tick_size: tick_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
 
   - segment: nse_equity_futures
     exchange: nse
@@ -540,7 +546,9 @@ segments:
       token: token
       broker_symbol: symbol_description
       lot_size: lot_size
-      tick_size: tick_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
 
   - segment: ncdex_commodity_futures
     exchange: ncdex
@@ -555,7 +563,9 @@ segments:
       token: token
       broker_symbol: symbol_description
       lot_size: lot_size
-      tick_size: tick_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
 
   - segment: mcx_commodity_options
     exchange: mcx
@@ -577,7 +587,9 @@ segments:
       token: token
       broker_symbol: symbol_description
       lot_size: lot_size
-      tick_size: tick_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
 
   - segment: ncdex_commodity_options
     exchange: ncdex
@@ -599,7 +611,9 @@ segments:
       token: token
       broker_symbol: symbol_description
       lot_size: lot_size
-      tick_size: tick_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
 
   - segment: mcx_commodity_indices
     exchange: mcx
@@ -657,7 +671,9 @@ segments:
       token: token
       broker_symbol: symbol_description
       lot_size: lot_size
-      tick_size: tick_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
 
   - segment: mcx_commodity_index_options
     exchange: mcx
@@ -679,7 +695,9 @@ segments:
       token: token
       broker_symbol: symbol_description
       lot_size: lot_size
-      tick_size: tick_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
 
   - segment: nse_mutual_funds
     exchange: nse
@@ -697,7 +715,9 @@ segments:
       token: token
       broker_symbol: symbol_description
       lot_size: lot_size
-      tick_size: tick_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
 
   - segment: nse_exchange_traded_funds
     exchange: nse

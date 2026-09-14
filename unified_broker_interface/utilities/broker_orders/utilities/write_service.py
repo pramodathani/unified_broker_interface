@@ -47,8 +47,9 @@ logger = get_logger("rest_api.order_writes")
 # The orders modules that place, modify and cancel.
 WRITE_SOURCES = {broker: source for broker, source in SOURCES.items() if source.WRITES_ENABLED}
 
-# The brokers whose mapped tick size is in rupees. Dhan, Kotak, INDmoney and Stoxkart store it in paise - 1.0 for
-# a stock that trades in steps of 0.01 - so a price is checked against one of these brokers' tick for the
+# The brokers whose mapped tick size is in rupees in every segment. The mapping rules convert Dhan's, Kotak's,
+# INDmoney's, Stoxkart's and Groww's paise to rupees only in the tradeable segments, and their indices and
+# uncategorised rows are still in paise, so a price is checked against one of these brokers' tick for the
 # instrument, whichever broker the order goes to.
 RUPEE_TICK_BROKERS = ("zerodha", "fyers", "groww", "shoonya", "wisdom_capital")
 

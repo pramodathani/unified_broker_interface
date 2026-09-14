@@ -12,7 +12,9 @@ segments:
       token: security_id
       broker_symbol: symbol_name
       lot_size: lot_units
-      tick_size: tick_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
 
   - segment: bse_fixed_income
     exchange: bse
@@ -24,7 +26,9 @@ segments:
       token: security_id
       broker_symbol: symbol_name
       lot_size: lot_units
-      tick_size: tick_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
 
   - segment: nse_equities
     exchange: nse
@@ -49,7 +53,9 @@ segments:
       token: security_id
       broker_symbol: symbol_name
       lot_size: lot_units
-      tick_size: tick_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
 
   - segment: bse_equities
     exchange: bse
@@ -86,7 +92,9 @@ segments:
       token: security_id
       broker_symbol: symbol_name
       lot_size: lot_units
-      tick_size: tick_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
 
   - segment: nse_equity_futures
     exchange: nse
@@ -275,7 +283,9 @@ segments:
       token: security_id
       broker_symbol: symbol_name
       lot_size: lot_units
-      tick_size: tick_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
 
   - segment: nse_exchange_traded_funds
     exchange: nse
@@ -287,7 +297,9 @@ segments:
       token: security_id
       broker_symbol: symbol_name
       lot_size: lot_units
-      tick_size: tick_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
 
   - segment: bse_exchange_traded_funds
     exchange: bse
@@ -299,7 +311,9 @@ segments:
       token: security_id
       broker_symbol: symbol_name
       lot_size: lot_units
-      tick_size: tick_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
 
   - segment: nse_investment_trusts
     exchange: nse
@@ -317,7 +331,9 @@ segments:
       token: security_id
       broker_symbol: symbol_name
       lot_size: lot_units
-      tick_size: tick_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
 
   - segment: bse_investment_trusts
     exchange: bse
@@ -338,7 +354,9 @@ segments:
       token: security_id
       broker_symbol: symbol_name
       lot_size: lot_units
-      tick_size: tick_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
 
   - segment: nse_uncategorised
     exchange: nse

@@ -33,7 +33,9 @@ segments:
       order_symbol: ptrdsymbol
       broker_symbol: pdesc
       lot_size: llotsize
-      tick_size: dticksize
+      tick_size:
+        column: dticksize
+        transform: divide_by_100
 
   - segment: nse_equities
     exchange: nse
@@ -58,7 +60,9 @@ segments:
       order_symbol: ptrdsymbol
       broker_symbol: pdesc
       lot_size: llotsize
-      tick_size: dticksize
+      tick_size:
+        column: dticksize
+        transform: divide_by_100
 
   - segment: bse_equities
     exchange: bse
@@ -88,7 +92,9 @@ segments:
       order_symbol: ptrdsymbol
       broker_symbol: pdesc
       lot_size: llotsize
-      tick_size: dticksize
+      tick_size:
+        column: dticksize
+        transform: divide_by_100
 
   - segment: nse_equity_futures
     exchange: nse
@@ -461,7 +467,9 @@ segments:
       order_symbol: ptrdsymbol
       broker_symbol: ptrdsymbol
       lot_size: llotsize
-      tick_size: dticksize
+      tick_size:
+        column: dticksize
+        transform: divide_by_100
 
   - segment: nse_commodity_options
     exchange: nse
@@ -513,7 +521,9 @@ segments:
       order_symbol: ptrdsymbol
       broker_symbol: ptrdsymbol
       lot_size: llotsize
-      tick_size: dticksize
+      tick_size:
+        column: dticksize
+        transform: divide_by_100
 
   - segment: mcx_commodity_indices
     exchange: mcx
@@ -548,7 +558,9 @@ segments:
       order_symbol: ptrdsymbol
       broker_symbol: ptrdsymbol
       lot_size: llotsize
-      tick_size: dticksize
+      tick_size:
+        column: dticksize
+        transform: divide_by_100
 
   - segment: mcx_commodity_index_options
     exchange: mcx
@@ -573,7 +585,9 @@ segments:
       order_symbol: ptrdsymbol
       broker_symbol: ptrdsymbol
       lot_size: llotsize
-      tick_size: dticksize
+      tick_size:
+        column: dticksize
+        transform: divide_by_100
 
   - segment: nse_mutual_funds
     exchange: nse
@@ -591,7 +605,9 @@ segments:
       order_symbol: ptrdsymbol
       broker_symbol: pdesc
       lot_size: llotsize
-      tick_size: dticksize
+      tick_size:
+        column: dticksize
+        transform: divide_by_100
 
   - segment: nse_exchange_traded_funds
     exchange: nse

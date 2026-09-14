@@ -297,7 +297,9 @@ segments:
       order_symbol: trading_symbol
       broker_symbol: trading_symbol
       lot_size: lot_size
-      tick_size: tick_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
 
   - segment: nse_commodity_options
     exchange: nse
@@ -342,7 +344,9 @@ segments:
       order_symbol: trading_symbol
       broker_symbol: trading_symbol
       lot_size: lot_size
-      tick_size: tick_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
 
   - segment: mcx_commodity_index_futures
     exchange: mcx
@@ -362,7 +366,9 @@ segments:
       order_symbol: trading_symbol
       broker_symbol: trading_symbol
       lot_size: lot_size
-      tick_size: tick_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
 
   - segment: mcx_commodity_index_options
     exchange: mcx
@@ -386,7 +392,9 @@ segments:
       order_symbol: trading_symbol
       broker_symbol: trading_symbol
       lot_size: lot_size
-      tick_size: tick_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
 
   - segment: nse_mutual_funds
     exchange: nse

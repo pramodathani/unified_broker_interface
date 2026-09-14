@@ -66,7 +66,9 @@ segments:
       token: security_id
       broker_symbol: display_name
       lot_size: lot_size
-      tick_size: tick_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
 
   - segment: nse_equities
     exchange: nse
@@ -91,7 +93,9 @@ segments:
       token: security_id
       broker_symbol: display_name
       lot_size: lot_size
-      tick_size: tick_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
 
   - segment: bse_equities
     exchange: bse
@@ -122,7 +126,9 @@ segments:
       token: security_id
       broker_symbol: display_name
       lot_size: lot_size
-      tick_size: tick_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
 
   - segment: nse_equity_futures
     exchange: nse
@@ -410,7 +416,9 @@ segments:
       token: security_id
       broker_symbol: symbol_name
       lot_size: lot_size
-      tick_size: tick_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
 
   - segment: nse_commodity_options
     exchange: nse
@@ -449,7 +457,9 @@ segments:
       token: security_id
       broker_symbol: symbol_name
       lot_size: lot_size
-      tick_size: tick_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
 
   - segment: mcx_commodity_index_futures
     exchange: mcx
@@ -465,7 +475,9 @@ segments:
       token: security_id
       broker_symbol: symbol_name
       lot_size: lot_size
-      tick_size: tick_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
 
   - segment: mcx_commodity_index_options
     exchange: mcx
@@ -483,7 +495,9 @@ segments:
       token: security_id
       broker_symbol: symbol_name
       lot_size: lot_size
-      tick_size: tick_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
 
   - segment: nse_mutual_funds
     exchange: nse
@@ -508,7 +522,9 @@ segments:
       token: security_id
       broker_symbol: display_name
       lot_size: lot_size
-      tick_size: tick_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
 
   - segment: nse_exchange_traded_funds
     exchange: nse
@@ -587,7 +603,9 @@ segments:
       token: security_id
       broker_symbol: display_name
       lot_size: lot_size
-      tick_size: tick_size
+      tick_size:
+        column: tick_size
+        transform: divide_by_100
 
   - segment: nse_uncategorised
     exchange: nse
