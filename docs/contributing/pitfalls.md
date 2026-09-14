@@ -64,6 +64,13 @@ but not the store, so the failure above took the whole process down - and becaus
 is claimed again on restart, it would have taken it down every ten minutes for as long as the
 service stayed enabled. An unexpected failure costs the series, not the run.
 
+**A single impossible count fails the whole window, every time.** Kite sent volumes above
+2⁶³ − 1 for a handful of 2023 intraday bars, Postgres refused the batch with
+`bigint out of range`, and the window rolled back. Because the next attempt asks for the same
+window, the series never moved again - 77 of them stopped at the same July 2024 boundary, while the
+parser tests passed, since they never see such a value. Counts outside the `BIGINT` range are stored
+as `NULL` with a warning; see [Known issues](known-issues.md#observations-stored-as-received).
+
 ## Writing to the database
 
 **`execute_values` pages internally, so `cursor.rowcount` reports only the last page.** A seed

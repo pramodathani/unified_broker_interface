@@ -90,3 +90,15 @@ after a token expiry, this is the first thing to look at.
 NSE cash segment, which no other broker shows for that date. Most likely a special session. It is
 stored exactly as the broker sent it, which is the rule everywhere in this project - nothing is
 derived, corrected or dropped on the way in.
+
+**Zerodha reports some intraday volumes as negative numbers written unsigned.** The one deliberate
+exception to storing values as received. Kite's 60, 30 and 15 minute candles for small NSE equities
+in 2023 carry volumes such as `18446744073709449716`, which is −101,900 read as an unsigned 64-bit
+integer; BLUECHIP-BE alone had five such bars between August and November 2023, and on 2026-09-14
+77 series across 49 instruments were stuck on them. The value cannot be held by the `BIGINT`
+`volume` and `oi` columns, and the refused insert rolled back the whole window, so the backward
+walk could never get past it. [`BrokerCandles._store`][stock_brokers.instruments.historical.base.BrokerCandles]
+now stores `NULL` for any volume or open interest outside the `BIGINT` range and logs a warning
+naming the bar, keeping the bar's prices. Widening the columns to `NUMERIC(20,0)` would keep the
+exact value, but would mean decompressing the 25 GB of compressed Zerodha chunks and changing
+`unified.price_history` too.

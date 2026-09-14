@@ -62,6 +62,9 @@ MAXIMUM_EMPTY_WINDOWS = 3
 # window's failure does not roll back an hour of work.
 WRITE_BATCH_ROWS = 5000
 
+BIGINT_MINIMUM = -2**63
+BIGINT_MAXIMUM = 2**63 - 1
+
 class CandleError(Exception):
     """Base for the failures a candle download distinguishes between."""
 
@@ -639,8 +642,10 @@ class BrokerCandles:
         # second time", which killed the whole process rather than the window.
         by_time = {}
         for bar in bars:
+            volume = self._value_within_bigint(token, interval, bar[0], "volume", bar[5])
+            open_interest = self._value_within_bigint(token, interval, bar[0], "oi", bar[6])
             by_time[bar[0]] = (bar[0], str(token), interval,
-                               bar[1], bar[2], bar[3], bar[4], bar[5], bar[6])
+                               bar[1], bar[2], bar[3], bar[4], volume, open_interest)
         rows = list(by_time.values())
         times = list(by_time)
 
@@ -686,6 +691,36 @@ class BrokerCandles:
         # immediately and spend the rate limit re-fetching the same bars all weekend.
         if direction == "forward" and previous_latest is not None and max(times) <= previous_latest:
             self._defer_until_tomorrow(token, interval, "forward window gained no new bars")
+
+    def _value_within_bigint(self, token, interval, bar_time, column, value):
+        """Returns a bar's count, or None when the count cannot fit in a BIGINT column.
+
+        Args:
+            token (str): The broker's instrument identifier.
+            interval (str): The stored interval name.
+            bar_time (datetime.datetime): The time of the bar the value belongs to.
+            column (str): The name of the column the value is written to, either "volume" or "oi".
+            value (int | float | None): The count exactly as the broker sent it.
+
+        Returns:
+            int | float | None: The value unchanged when it fits in a BIGINT or is not a number, and None when it does not fit.
+
+        Raises:
+            This method raises no exceptions.
+        """
+        if not isinstance(value, (int, float)):
+            return value
+        if BIGINT_MINIMUM <= value <= BIGINT_MAXIMUM:
+            return value
+        self._logger.warning(
+            "%s %s %s: %s %s does not fit in BIGINT, storing NULL.",
+            token,
+            interval,
+            bar_time.isoformat(),
+            column,
+            value,
+        )
+        return None
 
     def _record_empty(self, token, interval, streak, requested_from, direction):
         """
