@@ -42,9 +42,11 @@ test page, and a login check against the live brokers.
 === "Safe - web page"
 
     **`rest_api_app.py`** - a Streamlit page (port 8501) for calling the [REST API](rest-api.md)'s
-    session, detail and instrument endpoints by hand, including the 401 paths. Start the API first, then
-    `bin/rest-api-app`. A connect replaces the API's one token, so it ends any other client's session.
-    The page makes no portfolio or order calls.
+    session, detail, order book, portfolio and instrument endpoints by hand, including the 401 paths.
+    Start the API first, then `bin/rest-api-app`. A connect replaces the API's one token, so it ends any
+    other client's session. The Orders tab reads `/api/orders/details` and `/api/orders/trades`, and the
+    Portfolio tab reads funds, holdings and positions. The page never calls `/api/orders/place`,
+    `modify` or `cancel`.
 
 === "Live accounts"
 

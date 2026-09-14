@@ -1,5 +1,5 @@
 """
-Streamlit app for trying the REST API's session, detail and instrument endpoints by hand.
+Streamlit app for trying the REST API's session, detail, order book, portfolio and instrument endpoints by hand.
 
 Start the API first, then the app:
 
@@ -15,8 +15,9 @@ sends it - unless the sidebar says to send none or a deliberately wrong one, whi
 paths are tried.
 
 Every call shows its status, time taken and response body, and is added to a request log at the
-bottom of the page. Nothing here places orders: the page calls only the session, detail and instrument
-endpoints, and none of the API's order or portfolio endpoints.
+bottom of the page. Nothing here places orders: the page calls only the session, detail, instrument and
+portfolio endpoints and the two order book reads, `GET /api/orders/details` and `GET /api/orders/trades`,
+and never `/api/orders/place`, `/api/orders/modify` or `/api/orders/cancel`.
 """
 
 import json
@@ -25,6 +26,7 @@ import time
 import uuid
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import requests
@@ -387,6 +389,258 @@ def instruments_tab():
             **instrument_params(), 'start': st.session_state.ticks_start, 'end': st.session_state.ticks_end,
             'adjusted': str(st.session_state.ticks_adjusted).lower()}, stream_rows=st.session_state.ticks_rows), as_table=True)
 
+class UnifiedDocumentView:
+    """A read-only endpoint that answers with a document kept in Redis by a `bin/unified/` script.
+
+    A subclass names its endpoint in `TITLE`, `PATH` and `DESCRIPTION` and draws the document's own tables in `draw_document`.
+
+    Attributes:
+        TITLE: The heading drawn above the endpoint's button.
+        PATH: The endpoint path, such as `/api/portfolio/funds`.
+        DESCRIPTION: What the document holds, drawn under the heading.
+    """
+
+    TITLE = ""
+    PATH = ""
+    DESCRIPTION = ""
+
+    def draw(self) -> None:
+        """Draws the endpoint's heading and button, and after a click the call's outcome and tables.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+
+        Raises:
+            NotImplementedError: The subclass does not define `draw_document`.
+        """
+        st.subheader(self.TITLE)
+        st.caption(f"`GET {self.PATH}`: {self.DESCRIPTION}.")
+        clicked = st.button(
+            "Send",
+            key=f"send {self.PATH}",
+            type="primary",
+            width="stretch",
+        )
+        if not clicked:
+            return
+        result = call('GET', self.PATH, token_header())
+        show_result(result, as_table=True)
+        body = result['body']
+        if result['error'] or not isinstance(body, dict):
+            return
+        self.draw_brokers(body)
+        if result['status'] == 200:
+            self.draw_document(body)
+
+    def draw_brokers(self, body: dict[str, Any]) -> None:
+        """Draws how each broker's data was read, which the API also sends with its 502 and 503 answers.
+
+        Args:
+            body (dict[str, Any]): The response body.
+
+        Returns:
+            None.
+
+        Raises:
+            None.
+        """
+        if body.get('as_of'):
+            st.caption(f"Document written at {body['as_of']}.")
+        brokers = body.get('brokers')
+        if not brokers:
+            return
+        st.markdown("**Brokers**")
+        st.dataframe(pd.DataFrame(brokers), width="stretch", hide_index=True)
+
+    def draw_document(self, body: dict[str, Any]) -> None:
+        """Draws the tables for the document this endpoint answers with.
+
+        Args:
+            body (dict[str, Any]): The response body of a 200 answer.
+
+        Returns:
+            None.
+
+        Raises:
+            NotImplementedError: Always, because each subclass draws its own document.
+        """
+        raise NotImplementedError(f'{type(self).__name__} does not draw its document')
+
+    def draw_figures(self, label: str, figures: dict[str, Any]) -> None:
+        """Draws a dictionary of figures as a two-column table, one row per figure, with nested names joined by dots.
+
+        Args:
+            label (str): The heading drawn above the table.
+            figures (dict[str, Any]): The figures, which may hold nested dictionaries.
+
+        Returns:
+            None.
+
+        Raises:
+            None.
+        """
+        st.markdown(f"**{label}**")
+        if not figures:
+            st.caption("None.")
+            return
+        flattened = pd.json_normalize(figures).iloc[0]
+        rows = []
+        for name, value in flattened.items():
+            rows.append(
+                {
+                    "figure": name,
+                    "value": str(value),
+                }
+            )
+        st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+
+    def draw_rows(self, label: str, rows: list[dict[str, Any]]) -> None:
+        """Draws a list of records as a table, one row per record, with nested fields flattened into columns.
+
+        Args:
+            label (str): The heading drawn above the table, which also shows the row count.
+            rows (list[dict[str, Any]]): The records.
+
+        Returns:
+            None.
+
+        Raises:
+            None.
+        """
+        st.markdown(f"**{label}** ({len(rows)})")
+        if not rows:
+            st.caption("None.")
+            return
+        st.dataframe(pd.json_normalize(rows), width="stretch", hide_index=True)
+
+
+class OrderDetailsView(UnifiedDocumentView):
+    """The `GET /api/orders/details` endpoint, today's orders at every broker."""
+
+    TITLE = "Order details"
+    PATH = "/api/orders/details"
+    DESCRIPTION = "today's orders at every broker, from `unified:orders:orders`"
+
+    def draw_document(self, body: dict[str, Any]) -> None:
+        """Draws the order summary and one row per order.
+
+        Args:
+            body (dict[str, Any]): The response body of a 200 answer.
+
+        Returns:
+            None.
+
+        Raises:
+            None.
+        """
+        self.draw_figures("Summary", body.get('summary') or {})
+        self.draw_rows("Orders", body.get('orders') or [])
+
+
+class TradesView(UnifiedDocumentView):
+    """The `GET /api/orders/trades` endpoint, today's trades at every broker."""
+
+    TITLE = "Trades"
+    PATH = "/api/orders/trades"
+    DESCRIPTION = "today's trades at every broker, from `unified:orders:trades`"
+
+    def draw_document(self, body: dict[str, Any]) -> None:
+        """Draws the trade summary and one row per trade.
+
+        Args:
+            body (dict[str, Any]): The response body of a 200 answer.
+
+        Returns:
+            None.
+
+        Raises:
+            None.
+        """
+        self.draw_figures("Summary", body.get('summary') or {})
+        self.draw_rows("Trades", body.get('trades') or [])
+
+
+class FundsView(UnifiedDocumentView):
+    """The `GET /api/portfolio/funds` endpoint, the account's funds summed across every broker."""
+
+    TITLE = "Funds"
+    PATH = "/api/portfolio/funds"
+    DESCRIPTION = "the account's funds summed across every broker, from `unified:portfolio:funds`"
+
+    def draw_document(self, body: dict[str, Any]) -> None:
+        """Draws the balance, profit, margin and cash movement figures, and one row per segment.
+
+        Args:
+            body (dict[str, Any]): The response body of a 200 answer.
+
+        Returns:
+            None.
+
+        Raises:
+            None.
+        """
+        self.draw_figures("Summary", body.get('summary') or {})
+        self.draw_figures("Profit and loss", body.get('pnl') or {})
+        self.draw_figures("Margin breakdown", body.get('margin_breakdown') or {})
+        self.draw_figures("Cash movement", body.get('cash_movement') or {})
+        segment_rows = []
+        for segment_name, segment_figures in (body.get('segments') or {}).items():
+            row = {"segment": segment_name}
+            row.update(segment_figures)
+            segment_rows.append(row)
+        self.draw_rows("Segments", segment_rows)
+
+
+class HoldingsView(UnifiedDocumentView):
+    """The `GET /api/portfolio/holdings` endpoint, the account's holdings merged across every broker."""
+
+    TITLE = "Holdings"
+    PATH = "/api/portfolio/holdings"
+    DESCRIPTION = "the account's holdings merged across every broker and priced, from `unified:portfolio:holdings`"
+
+    def draw_document(self, body: dict[str, Any]) -> None:
+        """Draws the holdings summary and one row per holding.
+
+        Args:
+            body (dict[str, Any]): The response body of a 200 answer.
+
+        Returns:
+            None.
+
+        Raises:
+            None.
+        """
+        self.draw_figures("Summary", body.get('summary') or {})
+        self.draw_rows("Holdings", body.get('holdings') or [])
+
+
+class PositionsView(UnifiedDocumentView):
+    """The `GET /api/portfolio/positions` endpoint, the account's open positions merged across every broker."""
+
+    TITLE = "Positions"
+    PATH = "/api/portfolio/positions"
+    DESCRIPTION = "the account's open positions, net and day, merged across every broker, from `unified:portfolio:positions`"
+
+    def draw_document(self, body: dict[str, Any]) -> None:
+        """Draws the positions summary, then the net positions and the day positions as separate tables.
+
+        Args:
+            body (dict[str, Any]): The response body of a 200 answer.
+
+        Returns:
+            None.
+
+        Raises:
+            None.
+        """
+        self.draw_figures("Summary", body.get('summary') or {})
+        self.draw_rows("Net positions", body.get('net') or [])
+        self.draw_rows("Day positions", body.get('day') or [])
+
+
 def main():
     """Lay out the page and handle the rerun that follows a successful connect."""
     st.set_page_config(page_title="UBI REST API test run", page_icon="🧪", layout="wide")
@@ -420,12 +674,23 @@ def main():
         with top_left:
             show_result(result)
 
-    tabs = st.tabs(["Session"] + [label for label, _, _ in DETAIL_ENDPOINTS] + ["Instruments"])
+    tabs = st.tabs(["Session"] + [label for label, _, _ in DETAIL_ENDPOINTS] + ["Orders", "Portfolio", "Instruments"])
     with tabs[0]:
         session_tab()
     for tab, (_, path, description) in zip(tabs[1:], DETAIL_ENDPOINTS):
         with tab:
             details_tab(path, description)
+    with tabs[-3]:
+        st.caption("These calls only read the order book. Placing, modifying and cancelling orders are not on this page.")
+        OrderDetailsView().draw()
+        st.divider()
+        TradesView().draw()
+    with tabs[-2]:
+        FundsView().draw()
+        st.divider()
+        HoldingsView().draw()
+        st.divider()
+        PositionsView().draw()
     with tabs[-1]:
         instruments_tab()
 
