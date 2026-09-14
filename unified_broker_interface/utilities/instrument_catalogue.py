@@ -371,25 +371,22 @@ class InstrumentCatalogue:
             "first_seen_date": first_seen.isoformat() if first_seen else None,
             "last_seen_date": last_seen.isoformat() if last_seen else None,
             "lot_size": lot_size,
-            "tick_size": self._agreed_tick_size(carried_by),
+            "tick_size": self.agreed_tick_size(carried_by),
             "carried_by": carried_by,
         }
 
     @staticmethod
-    def _agreed_tick_size(carried_by):
+    def agreed_tick_size(handles):
         """Finds the tick size most of an instrument's brokers agree on.
 
         Args:
-            carried_by (list[dict]): Every broker's handle on the instrument, each with a "tick_size" that is a string in rupees or None.
+            handles (Iterable[dict]): Every broker's handle on the instrument, each with a "tick_size" that is a string in rupees or None.
 
         Returns:
             str | None: The most common positive tick size, written without an exponent, or None when no broker sends one or the two most common values are equally common.
-
-        Raises:
-            None.
         """
         tick_sizes = Counter()
-        for handle in carried_by:
+        for handle in handles:
             try:
                 tick_size = Decimal(str(handle.get("tick_size")))
             except (InvalidOperation, ValueError):

@@ -39,19 +39,13 @@ from unified_broker_interface.utilities.broker_orders.utilities.rate_limits impo
 from unified_broker_interface.utilities.broker_orders.utilities.routing import OrderRouter, record_placed
 from unified_broker_interface.utilities.broker_orders.utilities.service import SOURCES
 from unified_broker_interface.utilities.broker_quotes.utilities.clients import SessionUnavailable, client_for, relogin, session_marker
-from unified_broker_interface.utilities.instrument_identity import RequestError, parse_instrument
+from unified_broker_interface.utilities.instrument_identity import UNCATEGORISED, RequestError, parse_instrument
 from utilities.configurations import get_logger
 
 logger = get_logger("rest_api.order_writes")
 
 # The orders modules that place, modify and cancel.
 WRITE_SOURCES = {broker: source for broker, source in SOURCES.items() if source.WRITES_ENABLED}
-
-# The brokers whose mapped tick size is in rupees in every segment. The mapping rules convert Dhan's, Kotak's,
-# INDmoney's, Stoxkart's and Groww's paise to rupees only in the tradeable segments, and their indices and
-# uncategorised rows are still in paise, so a price is checked against one of these brokers' tick for the
-# instrument, whichever broker the order goes to.
-RUPEE_TICK_BROKERS = ("zerodha", "fyers", "groww", "shoonya", "wisdom_capital")
 
 SIDES = ("BUY", "SELL")
 PRODUCT_CHOICES = ("CNC", "MIS", "NRML")
@@ -224,7 +218,7 @@ class OrderWriteService:
         if broker is None:
             return {"error": "no broker can take this order", "instrument_id": instrument_id, "routing": routing}, 503
         source = WRITE_SOURCES[broker]
-        self._check_handle(order_request, handles, broker)
+        self._check_handle(order_request, identity, handles, broker)
 
         answer = {"broker": broker, "instrument_id": instrument_id, "tag": call.pop("tag", order_request["tag"]),
                   "routing": routing}
@@ -325,20 +319,35 @@ class OrderWriteService:
         if order_type not in TRIGGERED_TYPES and changes.get("trigger_price"):
             raise RequestError(f"a {order_type} order takes no trigger_price")
 
-    def _check_handle(self, order_request, handles, broker):
-        """
-        Refuse a quantity that is not whole lots at the chosen broker, or a price that is not whole ticks of the
-        instrument's tick in rupees.
+    def _check_handle(self, order_request, identity, handles, broker):
+        """Refuses a quantity that is not whole lots at the chosen broker, or a price that is not whole ticks.
+
+        The tick is the one most of the instrument's brokers agree on, in rupees, which is the `tick_size` that `/api/instruments/details` answers. An uncategorised instrument's price is not checked, because the tick sizes of uncategorised rows are not all in rupees.
+
+        Args:
+            order_request (dict): The validated order, with "quantity" (int), and "price" and "trigger_price" (Decimal or None).
+            identity (dict): The instrument's identity, with its "segment" (str).
+            handles (dict): Every broker's order handle on the instrument, by broker name, each with "lot_size" and "tick_size" strings or None.
+            broker (str): The name of the broker the order goes to.
+
+        Returns:
+            None.
+
+        Raises:
+            RequestError: The quantity is not a whole number of lots, or a price is not a whole number of ticks.
         """
         handle = handles[broker]
         lot_size = Decimal(handle["lot_size"]) if handle.get("lot_size") else None
         if lot_size and lot_size > 0 and not _multiple_of(Decimal(order_request["quantity"]), lot_size):
-            raise RequestError(f"quantity must be a whole number of lots of {lot_size.normalize()}")
-        ticks = [handles[name]["tick_size"] for name in RUPEE_TICK_BROKERS if handles.get(name, {}).get("tick_size")]
-        tick_size = Decimal(ticks[0]) if ticks else None
+            raise RequestError(f"quantity must be a whole number of lots of {format(lot_size.normalize(), 'f')}")
+        tick_size = None
+        if not identity["segment"].endswith(UNCATEGORISED):
+            agreed_tick_size = self.catalogue.agreed_tick_size(handles.values())
+            if agreed_tick_size is not None:
+                tick_size = Decimal(agreed_tick_size)
         for field in ("price", "trigger_price"):
             if tick_size and tick_size > 0 and order_request[field] and not _multiple_of(order_request[field], tick_size):
-                raise RequestError(f"{field} must be a whole number of ticks of {tick_size.normalize()}")
+                raise RequestError(f"{field} must be a whole number of ticks of {format(tick_size.normalize(), 'f')}")
 
     def _pending_order(self, broker, source, order_id):
         """

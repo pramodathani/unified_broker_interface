@@ -531,7 +531,9 @@ change come from the unified quote, falling back to the broker's price and previ
 
 ## Orders
 
-Everything under `/api/orders` takes the `access-token` header and answers `GET`.
+Everything under `/api/orders` takes the `access-token` header. The order book and trade book below answer
+`GET`, and the writes are `POST /place`, `PUT /modify` and `DELETE /cancel`, described under
+[placing, modifying and cancelling](#placing-modifying-and-cancelling).
 
 | Path | Parameters | Returns | Answered from |
 | --- | --- | --- | --- |
@@ -657,7 +659,8 @@ Intraday, carry-forward and derivative orders are not funds-checked: the margin 
 broker's own risk checks.
 
 **Checked before sending.** `LIMIT` and `SL` need a price and `SL` and `SL-M` a trigger price, and a type
-refuses one it does not take; the quantity must be whole lots and the prices whole ticks at the chosen broker;
+refuses one it does not take; the quantity must be whole lots at the chosen broker and the prices whole ticks of
+the instrument's `tick_size`;
 `disclosed_quantity` cannot exceed the quantity; `tag` is 1 to 20 letters and digits. A modification or
 cancellation reads the order from the broker's order book first: `404` when the book does not hold it, `409`
 when it is no longer pending or open.
@@ -700,5 +703,7 @@ A broker that is not enabled is never routed to, and a modify or cancel naming i
 reason. The broker's own refusal codes decide between `rejected` and `unknown`: Kite's `InputException` and
 `OrderException`, Dhan's input and order errors, Noren's `Not_Ok`, Groww's `GA001`, `GA004` to `GA007`, INDstocks'
 validation and order errors and XTS's `e-orders` and `e-rms` codes settle a write; anything else leaves it
-unknown. A price is checked against the instrument's tick in rupees from Zerodha, Fyers, Groww, Shoonya or
-Wisdom Capital, because Dhan, Kotak, INDmoney and Stoxkart map the tick in paise.
+unknown. A price is checked against the tick most of the instrument's brokers agree on, in rupees, which is the
+`tick_size` that `/api/instruments/details` answers. When the brokers tie or none sends a tick, and for an
+uncategorised instrument, whose brokers' ticks are not all in rupees, the price is not checked and is left to
+the broker.
