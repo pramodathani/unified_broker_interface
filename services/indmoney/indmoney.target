@@ -1,0 +1,14 @@
+# Everything that runs indmoney's bin/indmoney/ scripts. Enabling it starts them at boot; stopping it stops them all.
+#
+# Install - link every unit in this folder, then enable the target, the login timer and the scripts:
+#
+#     systemctl --user link ~/Projects/unified_broker_interface/services/indmoney/*
+#     systemctl --user daemon-reload
+#     systemctl --user enable --now indmoney.target indmoney-login.timer \
+#         indmoney@quotes.service indmoney@order_updates.service indmoney@persist_ticks.service indmoney@persist_orders.service indmoney@orders.service indmoney@trades.service indmoney@positions.service indmoney@holdings.service indmoney@funds.service indmoney@user-profile.service indmoney-historical-prices.service
+
+[Unit]
+Description=indmoney scripts
+
+[Install]
+WantedBy=default.target

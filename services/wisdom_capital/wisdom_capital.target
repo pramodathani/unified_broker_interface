@@ -1,0 +1,14 @@
+# Everything that runs wisdom_capital's bin/wisdom_capital/ scripts. Enabling it starts them at boot; stopping it stops them all.
+#
+# Install - link every unit in this folder, then enable the target, the login timer and the scripts:
+#
+#     systemctl --user link ~/Projects/unified_broker_interface/services/wisdom_capital/*
+#     systemctl --user daemon-reload
+#     systemctl --user enable --now wisdom_capital.target wisdom_capital-login.timer \
+#         wisdom_capital@quotes.service wisdom_capital@order_updates.service wisdom_capital@persist_ticks.service wisdom_capital@persist_orders.service wisdom_capital@orders.service wisdom_capital@trades.service wisdom_capital@positions.service wisdom_capital@holdings.service wisdom_capital@funds.service wisdom_capital@user-profile.service wisdom_capital@persist_positions.service wisdom_capital-historical-prices.service
+
+[Unit]
+Description=wisdom_capital scripts
+
+[Install]
+WantedBy=default.target

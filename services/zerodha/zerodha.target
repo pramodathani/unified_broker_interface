@@ -1,0 +1,14 @@
+# Everything that runs zerodha's bin/zerodha/ scripts. Enabling it starts them at boot; stopping it stops them all.
+#
+# Install - link every unit in this folder, then enable the target, the login timer and the scripts:
+#
+#     systemctl --user link ~/Projects/unified_broker_interface/services/zerodha/*
+#     systemctl --user daemon-reload
+#     systemctl --user enable --now zerodha.target zerodha-login.timer \
+#         zerodha@quotes.service zerodha@order_updates.service zerodha@persist_ticks.service zerodha@persist_orders.service zerodha@orders.service zerodha@trades.service zerodha@positions.service zerodha@holdings.service zerodha@funds.service zerodha@user-profile.service zerodha-historical-prices.service
+
+[Unit]
+Description=zerodha scripts
+
+[Install]
+WantedBy=default.target

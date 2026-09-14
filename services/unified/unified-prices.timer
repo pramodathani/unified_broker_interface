@@ -1,0 +1,16 @@
+# When the daily unified price history update runs.
+#
+# 08:30 IST Monday to Saturday: after the night's candle downloads and the 07:45 instrument job, and on Saturday to pick up Friday's last bars and the week's corporate actions.
+
+[Unit]
+Description=Daily unified price history update
+PartOf=unified.target
+
+[Timer]
+OnCalendar=Mon..Sat 08:30 Asia/Kolkata
+AccuracySec=1min
+Persistent=true
+Unit=unified-prices.service
+
+[Install]
+WantedBy=timers.target

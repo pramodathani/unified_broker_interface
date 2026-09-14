@@ -1,0 +1,29 @@
+# One bin/zerodha/ script that keeps running: zerodha@quotes.service runs bin/zerodha/quotes, zerodha@user-profile.service
+# runs bin/zerodha/user-profile. The polling scripts, websocket feeders and persisters all fit, because every one of them
+# logs in by itself, logs in again when its token is refused, and exits non-zero only when it cannot recover.
+#
+#     systemctl --user enable --now zerodha@quotes.service
+#     journalctl --user -u zerodha@quotes -f
+
+[Unit]
+Description=zerodha %i
+PartOf=zerodha.target
+Wants=network-online.target
+After=network-online.target
+# Never give up restarting: a broker outage can outlast any start limit, and each script paces its own logins.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+# Python block-buffers stdout when it is not a terminal; without this the journal stays empty.
+Environment=PYTHONUNBUFFERED=1
+SyslogIdentifier=zerodha-%i
+ExecStart=%h/Projects/unified_broker_interface/bin/zerodha/%i
+Restart=always
+RestartSec=15
+# Exit 2 is a bad argument or configuration - nothing to subscribe to, say - which a restart cannot fix.
+RestartPreventExitStatus=2
+TimeoutStopSec=60
+
+[Install]
+WantedBy=zerodha.target

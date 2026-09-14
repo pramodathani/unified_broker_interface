@@ -1,0 +1,29 @@
+# Log fyers in with bin/fyers/login. Driven by fyers-login.timer.
+#
+#     systemctl --user start fyers-login          # log in now
+#     journalctl --user -u fyers-login
+#
+# The bin/fyers/ scripts read the current token on every connect and
+# request, so nothing has to be restarted after a login - it only has to happen ahead of the market.
+#
+# Tried up to three times. bin/fyers/login exits non-zero when the login fails or the session it produced does not
+# answer an authenticated request, and Restart=on-failure runs it again after RestartSec. StartLimitBurst counts the
+# first attempt, so three starts inside the interval is the first try and two retries. Every attempt writes
+# fyers:session:status.
+
+[Unit]
+Description=Log the fyers broker in
+PartOf=fyers.target
+StartLimitIntervalSec=1h
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+Environment=PYTHONUNBUFFERED=1
+SyslogIdentifier=fyers-login
+ExecStart=%h/Projects/unified_broker_interface/bin/fyers/login
+Restart=on-failure
+RestartSec=2min
+# Several brokers log in by driving a headless Chrome and waiting on a TOTP.
+TimeoutStartSec=300
+# Deliberately no PrivateTmp, ProtectHome or NoNewPrivileges: Chrome needs a writable home and /dev/shm.

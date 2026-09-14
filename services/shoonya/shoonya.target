@@ -1,0 +1,14 @@
+# Everything that runs shoonya's bin/shoonya/ scripts. Enabling it starts them at boot; stopping it stops them all.
+#
+# Install - link every unit in this folder, then enable the target, the login timer and the scripts:
+#
+#     systemctl --user link ~/Projects/unified_broker_interface/services/shoonya/*
+#     systemctl --user daemon-reload
+#     systemctl --user enable --now shoonya.target shoonya-login.timer \
+#         shoonya@quotes.service shoonya@order_updates.service shoonya@persist_ticks.service shoonya@persist_orders.service shoonya@orders.service shoonya@trades.service shoonya@positions.service shoonya@holdings.service shoonya@funds.service shoonya@user-profile.service shoonya-historical-prices.service
+
+[Unit]
+Description=shoonya scripts
+
+[Install]
+WantedBy=default.target

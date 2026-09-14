@@ -1,0 +1,35 @@
+# The REST API: bin/rest-api, which replaces itself with gunicorn, so systemd supervises gunicorn directly.
+#
+#     systemctl --user enable --now unified-rest-api.service
+#     journalctl --user -u unified-rest-api -f
+#     curl -s localhost:8080/api/
+#
+# It answers from what the unified@ scripts keep in Redis and the unified tables, so it is useful once unified.target
+# is up, but it does not require it: a route whose document is missing answers 503 and says which key, rather than
+# failing to start. The address, port and token lifetime come from the environment - override them with a drop-in:
+#
+#     systemctl --user edit unified-rest-api
+#     [Service]
+#     Environment=UNIFIED_BROKER_INTERFACE_API_PORT=8090
+
+[Unit]
+Description=Unified broker interface REST API
+PartOf=unified.target
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Environment=PYTHONUNBUFFERED=1
+SyslogIdentifier=unified-rest-api
+ExecStart=%h/Projects/unified_broker_interface/bin/rest-api
+Restart=always
+RestartSec=5
+# gunicorn finishes the requests in flight on SIGTERM; a streamed /api/instruments/ticks can take a while to end.
+TimeoutStopSec=60
+# Order writes reach live broker accounts, so a crash loop is worth seeing rather than hiding behind fast restarts.
+RestartPreventExitStatus=2
+
+[Install]
+WantedBy=unified.target

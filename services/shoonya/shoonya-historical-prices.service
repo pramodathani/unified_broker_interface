@@ -1,0 +1,33 @@
+# bin/shoonya/historical_prices: download shoonya's historical candles into shoonya.price_history, working the queue.
+#
+#     systemctl --user enable --now shoonya-historical-prices.service
+#     bin/shoonya/historical_prices --status
+#
+# A unit of its own rather than shoonya@historical_prices.service, because it paces differently from the feeds: the
+# worker exits 0 when the queue is drained or only backing off, so it is restarted ten minutes later rather than at
+# once, and at low priority. Run only one: the queue is not locked between workers. Seed new instruments with
+# `bin/shoonya/historical_prices --seed-only` after a new master.
+
+[Unit]
+Description=Historical candle download for shoonya
+PartOf=shoonya.target
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Environment=PYTHONUNBUFFERED=1
+SyslogIdentifier=shoonya-historical-prices
+ExecStart=%h/Projects/unified_broker_interface/bin/shoonya/historical_prices
+Restart=always
+RestartSec=600
+# Exit 2 is a failed first login or a bad argument; the morning login timer is the remedy, not a restart loop.
+RestartPreventExitStatus=2
+TimeoutStopSec=120
+Nice=10
+IOSchedulingClass=idle
+CPUWeight=20
+
+[Install]
+WantedBy=shoonya.target

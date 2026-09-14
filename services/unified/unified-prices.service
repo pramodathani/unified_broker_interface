@@ -1,0 +1,24 @@
+# The daily unified price history update: bin/unified/historical_prices daily, which runs load, corrections, load,
+# factors --stale-days 14 and verify, with a failed verify reported but not fatal. Driven by unified-prices.timer.
+#
+#     systemctl --user start unified-prices           # run it now
+#     bin/unified/historical_prices status
+
+[Unit]
+Description=Unified price history and adjustment factors
+PartOf=unified.target
+Wants=network-online.target
+# When the 07:45 instrument job runs past 08:30, this start waits for it to finish, so the history loads against the
+# day's mapping: ordering applies to a job already running, not only to one started in the same transaction.
+After=network-online.target unified-instruments.service
+
+[Service]
+Type=oneshot
+Environment=PYTHONUNBUFFERED=1
+SyslogIdentifier=unified-prices
+ExecStart=%h/Projects/unified_broker_interface/bin/unified/historical_prices daily
+# The first factors run over every instrument is thousands of Yahoo requests at about one a second.
+TimeoutStartSec=4h
+Nice=10
+IOSchedulingClass=idle
+CPUWeight=20

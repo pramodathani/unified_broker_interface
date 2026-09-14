@@ -1,0 +1,17 @@
+# Everything that runs the bin/unified/ scripts. Enabling it starts them at boot; stopping it stops them all.
+#
+# Install - link every unit in this folder, then enable the target, the two daily timers and the scripts:
+#
+#     systemctl --user link ~/Projects/unified_broker_interface/services/unified/*
+#     systemctl --user daemon-reload
+#     systemctl --user enable --now unified.target unified-instruments.timer unified-prices.timer \
+#         unified@quotes.service unified@order_updates.service unified@orders.service unified@trades.service unified@positions.service unified@holdings.service unified@funds.service unified@user-profile.service unified@details.service unified-rest-api.service unified@persist_ticks.service unified@persist_orders.service unified@persist_positions.service
+#
+# The unified scripts read what the bin/<broker>/ scripts write to Redis, so each broker's target should be running
+# for its data to appear.
+
+[Unit]
+Description=Unified scripts
+
+[Install]
+WantedBy=default.target

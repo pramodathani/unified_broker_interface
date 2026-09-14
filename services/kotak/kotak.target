@@ -1,0 +1,14 @@
+# Everything that runs kotak's bin/kotak/ scripts. Enabling it starts them at boot; stopping it stops them all.
+#
+# Install - link every unit in this folder, then enable the target, the login timer and the scripts:
+#
+#     systemctl --user link ~/Projects/unified_broker_interface/services/kotak/*
+#     systemctl --user daemon-reload
+#     systemctl --user enable --now kotak.target kotak-login.timer \
+#         kotak@quotes.service kotak@order_updates.service kotak@persist_ticks.service kotak@persist_orders.service kotak@orders.service kotak@trades.service kotak@positions.service kotak@holdings.service kotak@funds.service kotak@persist_positions.service
+
+[Unit]
+Description=kotak scripts
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,14 @@
+# Everything that runs groww's bin/groww/ scripts. Enabling it starts them at boot; stopping it stops them all.
+#
+# Install - link every unit in this folder, then enable the target, the login timer and the scripts:
+#
+#     systemctl --user link ~/Projects/unified_broker_interface/services/groww/*
+#     systemctl --user daemon-reload
+#     systemctl --user enable --now groww.target groww-login.timer \
+#         groww@quotes.service groww@order_updates.service groww@persist_ticks.service groww@persist_orders.service groww@orders.service groww@trades.service groww@positions.service groww@holdings.service groww@funds.service groww@user-profile.service groww@persist_positions.service
+
+[Unit]
+Description=groww scripts
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,29 @@
+# One bin/dhan/ script that keeps running: dhan@quotes.service runs bin/dhan/quotes, dhan@user-profile.service
+# runs bin/dhan/user-profile. The polling scripts, websocket feeders and persisters all fit, because every one of them
+# logs in by itself, logs in again when its token is refused, and exits non-zero only when it cannot recover.
+#
+#     systemctl --user enable --now dhan@quotes.service
+#     journalctl --user -u dhan@quotes -f
+
+[Unit]
+Description=dhan %i
+PartOf=dhan.target
+Wants=network-online.target
+After=network-online.target
+# Never give up restarting: a broker outage can outlast any start limit, and each script paces its own logins.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+# Python block-buffers stdout when it is not a terminal; without this the journal stays empty.
+Environment=PYTHONUNBUFFERED=1
+SyslogIdentifier=dhan-%i
+ExecStart=%h/Projects/unified_broker_interface/bin/dhan/%i
+Restart=always
+RestartSec=15
+# Exit 2 is a bad argument or configuration - nothing to subscribe to, say - which a restart cannot fix.
+RestartPreventExitStatus=2
+TimeoutStopSec=60
+
+[Install]
+WantedBy=dhan.target

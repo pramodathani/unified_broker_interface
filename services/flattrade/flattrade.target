@@ -1,0 +1,17 @@
+# Everything that runs flattrade's bin/flattrade/ scripts. Enabling it starts them at boot; stopping it stops them all.
+#
+# Install - link every unit in this folder, then enable the target, the login timer and the scripts:
+#
+#     systemctl --user link ~/Projects/unified_broker_interface/services/flattrade/*
+#     systemctl --user daemon-reload
+#     systemctl --user enable --now flattrade.target flattrade-login.timer \
+#         flattrade@quotes.service flattrade@persist_ticks.service flattrade@persist_orders.service flattrade@orders.service flattrade@trades.service flattrade@positions.service flattrade@holdings.service flattrade@funds.service flattrade@user-profile.service flattrade-historical-prices.service
+#
+# order_updates is left out: Flattrade permits one websocket per session and quotes holds it, so enabling
+# flattrade@order_updates.service beside flattrade@quotes.service would knock one of them off.
+
+[Unit]
+Description=flattrade scripts
+
+[Install]
+WantedBy=default.target

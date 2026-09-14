@@ -1,0 +1,33 @@
+# bin/zerodha/historical_prices: download zerodha's historical candles into zerodha.price_history, working the queue.
+#
+#     systemctl --user enable --now zerodha-historical-prices.service
+#     bin/zerodha/historical_prices --status
+#
+# A unit of its own rather than zerodha@historical_prices.service, because it paces differently from the feeds: the
+# worker exits 0 when the queue is drained or only backing off, so it is restarted ten minutes later rather than at
+# once, and at low priority. Run only one: the queue is not locked between workers. Seed new instruments with
+# `bin/zerodha/historical_prices --seed-only` after a new master.
+
+[Unit]
+Description=Historical candle download for zerodha
+PartOf=zerodha.target
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Environment=PYTHONUNBUFFERED=1
+SyslogIdentifier=zerodha-historical-prices
+ExecStart=%h/Projects/unified_broker_interface/bin/zerodha/historical_prices
+Restart=always
+RestartSec=600
+# Exit 2 is a failed first login or a bad argument; the morning login timer is the remedy, not a restart loop.
+RestartPreventExitStatus=2
+TimeoutStopSec=120
+Nice=10
+IOSchedulingClass=idle
+CPUWeight=20
+
+[Install]
+WantedBy=zerodha.target
