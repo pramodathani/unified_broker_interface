@@ -1,0 +1,751 @@
+#!/usr/bin/env python3
+"""
+Stream Groww order updates, and derivatives position updates, over a websocket and merge them into the Redis hashes
+`groww:orders:orders` and `groww:portfolio:positions`, and keep streaming until stopped.
+
+    bin/groww/order_updates
+    redis-cli HGETALL groww:orders:orders
+    redis-cli HGET groww:orders:orders <groww order id>
+    redis-cli HGETALL groww:portfolio:positions
+
+Self-contained: it logs in with `GrowwAPI` and carries its own NATS connection, ed25519 handshake, subscriptions
+and protobuf decoding for Groww's stream at `wss://socket-api.groww.in`, so it needs no other feed process or key.
+
+**The transport** is the one Groww's market feed uses. Before connecting, the script generates a fresh ed25519 key
+pair and exchanges its public key, in NATS NKEY form, for a socket JWT and a subscription id at
+`POST https://api.groww.in/v1/api/apex/v1/socket/token/create/`. The server opens with an `INFO` frame carrying a
+nonce; the script answers `CONNECT` with the JWT and the signed nonce, then subscribes the account's subjects,
+which are keyed by the subscription id rather than by instrument:
+
+- `stocks/order/updates.apex.<subscription id>` and `stocks_fo/order/updates.apex.<subscription id>`, equity and
+  derivatives orders, both `OrderDetailsBroadCastDto` protobuf messages;
+- `stocks_fo/position/updates.apex.<subscription id>`, derivatives positions, `PositionDetailProto` messages.
+  Groww streams no equity positions or holdings.
+
+The script carries both protobuf file descriptors serialized and builds the message classes from them at runtime, in
+a descriptor pool of its own.
+
+**Keys.** Each message is decoded to a plain JSON object with Groww's own field names, enum fields by name
+(`orderStatus: "EXECUTED"`), and every field present even when zero. Nothing else is converted: prices are in
+integer paise exactly as Groww sends them, and a stage's `timeStampFromMidNight` is seconds since midnight.
+
+- `groww:orders:orders`, the one hash for Groww's orders, keyed by `growwOrderId` and shared with `bin/groww/orders`,
+  which merges the polled order book into it. Each update is written as
+  `{"observed_at": <epoch received>, "source": "websocket", "order": <normalized order>, "data": <OrderDetailsBroadCastDto>}`
+  - the order under `orderDetailUpdateDto` and its stage history under `stageAndTimeStamp` in `data` - with the same
+  normalized `order` the poller builds from an order-book row: prices divided from paise into rupees, the first and
+  latest stage times placed on the IST day the update arrived. See `bin/groww/orders` for the fields and how each side
+  fills them.
+- `groww:portfolio:positions`, the one hash for Groww's positions, keyed `EXCHANGE:CONTRACT_ID:PRODUCT` from the message's
+  `symbolData` with the product on the shared vocabulary (`NSE:NIFTY26SEP26000CE:NRML`) and shared with
+  `bin/groww/positions`. Each update is written as
+  `{"observed_at": <epoch received>, "source": "websocket", "position": <normalized position>, "data": <PositionDetailProto>}`
+  - the contract under `symbolData` and the credit (bought) and debit (sold) quantities and prices per exchange under
+  `positionInfo` - with the legs summed into the normalized `position`. See `bin/groww/positions` for the fields.
+
+A websocket update always replaces its entry; a polled row replaces it only when the entry was observed before the
+poll's request was sent. Both hashes expire at 06:00 IST, moved to the next 06:00 by every write. Updates arrive only
+when an order or position changes, so a quiet socket is not a broken one.
+
+**The streams.** Every update is also appended, in arrival order, to a Redis Stream holding the same JSON - orders to
+`groww:order-updates:stream` as an `update` field, which `bin/groww/persist_orders` writes to `groww.order_updates`,
+and positions to `groww:positions_updates:stream` as a `position` field, which `bin/groww/persist_positions` writes
+to `groww.positions` - so the history the hashes overwrite is kept there. Each is capped at about 20,000 entries.
+
+**Sessions.** The access token is read afresh on every connect. When Groww refuses the socket token request (HTTP
+401 or 403) or the NATS server reports an authorization error, or the socket fails to open six times running, it
+logs in again through `GrowwAPI` before reconnecting. A reconnect otherwise backs off from 1 to 60 seconds.
+
+Exits 0 when stopped with Ctrl+C or SIGTERM, and 1 when a login fails or the socket still cannot open after logging
+in again. Reads only - it never places, modifies or cancels an order.
+"""
+
+import sys
+import json
+import uuid
+import base64
+import signal
+import threading
+from datetime import datetime, timedelta
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+FEED_URL = "wss://socket-api.groww.in"
+SOCKET_TOKEN_URL = "https://api.groww.in/v1/api/apex/v1/socket/token/create/"
+
+ORDERS_KEY = "groww:orders:orders"
+POSITIONS_KEY = "groww:portfolio:positions"
+
+# Every order and position update is also appended to these, in arrival order, for bin/groww/persist_orders and
+# bin/groww/persist_positions, which read them with consumer groups. The caps bound Redis memory when a persister
+# is down; entries trimmed before it returns are not persisted.
+ORDER_STREAM_KEY = "groww:order-updates:stream"
+POSITION_STREAM_KEY = "groww:positions_updates:stream"
+STREAM_MAX_LENGTH = 20000
+
+# Subject prefixes, completed with the subscription id issued with the socket token.
+EQUITY_ORDERS = "stocks/order/updates.apex."
+DERIVATIVES_ORDERS = "stocks_fo/order/updates.apex."
+DERIVATIVES_POSITIONS = "stocks_fo/position/updates.apex."
+
+# What the NATS server says when the socket JWT is no good, lowercased.
+AUTHENTICATION_ERRORS = ("authorization violation", "authentication expired", "authentication timeout",
+                         "user authentication")
+
+PING_INTERVAL_SECONDS = 30
+PING_TIMEOUT_SECONDS = 10
+MIN_BACKOFF_SECONDS = 1
+MAX_BACKOFF_SECONDS = 60
+MAX_FAILED_CONNECTS = 6
+
+# Groww's websocket prices are integer paise.
+PAISE_PER_RUPEE = 100.0
+
+INDIA = ZoneInfo("Asia/Kolkata")
+RESET_HOUR = 6
+
+# Merges entries into a hash. KEYS[1] is the hash; ARGV is the expiry epoch, the source, the observed-at epoch, then
+# field and value pairs. A "rest" value replaces an entry only when the entry was observed before ARGV[3]; any other
+# source always replaces. A key of another type - the order book stored whole before this hash - is replaced.
+MERGE_SCRIPT = """
+local kind = redis.call('TYPE', KEYS[1])
+if type(kind) == 'table' then kind = kind['ok'] end
+if kind ~= 'hash' and kind ~= 'none' then redis.call('DEL', KEYS[1]) end
+local written = 0
+for i = 4, #ARGV, 2 do
+    local replace = true
+    if ARGV[2] == 'rest' then
+        local current = redis.call('HGET', KEYS[1], ARGV[i])
+        if current then
+            local ok, decoded = pcall(cjson.decode, current)
+            if ok and type(decoded) == 'table' and tonumber(decoded['observed_at'])
+                    and tonumber(decoded['observed_at']) >= tonumber(ARGV[3]) then
+                replace = false
+            end
+        end
+    end
+    if replace then
+        redis.call('HSET', KEYS[1], ARGV[i], ARGV[i + 1])
+        written = written + 1
+    end
+end
+if #ARGV >= 4 then redis.call('EXPIREAT', KEYS[1], ARGV[1]) end
+return written
+"""
+
+# The shared vocabulary: each broker's spelling of an order's side, product, type, validity and status mapped onto
+# one set. Keys are compared uppercased with underscores levelled to spaces.
+TRANSACTION_TYPES = {
+    "BUY": "BUY", "B": "BUY", "1": "BUY", "BUY ORDER": "BUY",
+    "SELL": "SELL", "S": "SELL", "-1": "SELL", "2": "SELL", "SELL ORDER": "SELL",
+}
+PRODUCTS = {
+    "CNC": "CNC", "C": "CNC", "DELIVERY": "CNC", "CASH": "CNC",
+    "MIS": "MIS", "I": "MIS", "INTRADAY": "MIS", "M": "NRML",
+    "NRML": "NRML", "NORMAL": "NRML", "MARGIN": "NRML", "CARRYFORWARD": "NRML",
+    "CO": "CO", "BO": "BO", "MTF": "MTF", "ARB": "ARB", "H": "CO", "B": "BO",
+}
+ORDER_TYPES = {
+    "MARKET": "MARKET", "MKT": "MARKET", "MKT ORDER": "MARKET", "2": "MARKET",
+    "LIMIT": "LIMIT", "LMT": "LIMIT", "L": "LIMIT", "1": "LIMIT",
+    "SL": "SL", "SL-LMT": "SL", "STOPLIMIT": "SL", "SL LIMIT": "SL", "4": "SL",
+    "SL-M": "SL-M", "SL-MKT": "SL-M", "STOPMARKET": "SL-M", "SL MARKET": "SL-M", "3": "SL-M", "SL M": "SL-M",
+    "SLM": "SL-M", "STOP LOSS": "SL", "STOP LOSS MARKET": "SL-M",
+}
+VALIDITIES = {
+    "DAY": "DAY", "EOS": "DAY", "0": "DAY", "IOC": "IOC", "IMMEDIATE": "IOC", "1": "IOC",
+    "GTT": "GTT", "GTC": "GTC", "GTD": "GTD",
+}
+STATUSES = {
+    "PENDING": "PENDING", "TRANSIT": "PENDING", "VALIDATION PENDING": "PENDING", "PUT ORDER REQ RECEIVED": "PENDING",
+    "TRIGGER PENDING": "PENDING", "AMO REQ RECEIVED": "PENDING", "PENDINGNEW": "PENDING", "O-PENDING": "PENDING",
+    "OPEN": "OPEN", "OPEN PENDING": "OPEN", "NEW": "OPEN", "REPLACED": "OPEN", "ACKED": "OPEN", "APPROVED": "OPEN",
+    "MODIFICATION REQUESTED": "OPEN", "MODIFIED": "OPEN", "MODIFY VALIDATION PENDING": "OPEN", "MODIFY PENDING": "OPEN",
+    "PARTIALLY FILLED": "OPEN", "PARTIALLY EXECUTED": "OPEN", "PLACED": "OPEN", "PART TRADED": "OPEN",
+    "PARTIALLYFILLED": "OPEN", "PENDINGREPLACE": "OPEN", "CONFIRMED": "OPEN",
+    "COMPLETE": "COMPLETE", "COMPLETED": "COMPLETE", "TRADED": "COMPLETE", "FILLED": "COMPLETE",
+    "EXECUTED": "COMPLETE", "FULLY EXECUTED": "COMPLETE", "DELIVERY AWAITED": "COMPLETE",
+    "CANCELLED": "CANCELLED", "CANCELED": "CANCELLED", "CANCEL": "CANCELLED", "CANCEL PENDING": "CANCELLED",
+    "CANCELLATION REQUESTED": "CANCELLED", "PENDINGCANCEL": "CANCELLED", "CANCELLED AFTER MARKET ORDER": "CANCELLED",
+    "REJECTED": "REJECTED", "REJECT": "REJECTED", "FAILED": "REJECTED", "EXPIRED": "EXPIRED",
+}
+
+def normalize(value, mapping):
+    """
+    A broker's term on the shared vocabulary, or the term uppercased when the vocabulary does not know it.
+
+    - `value` is the broker's term.
+    - `mapping` is one of the vocabulary tables.
+    """
+    if value is None or value == "":
+        return None
+    key = str(value).strip().upper().replace("_", " ")
+    if key in mapping:
+        return mapping[key]
+    collapsed = " ".join(key.split())
+    return mapping.get(collapsed, collapsed)
+
+def present(value):
+    """A value, or None for blanks, protobuf's unset empty strings and `NA` placeholders."""
+    return None if value is None or str(value).strip() in ("", "NA") else value
+
+def number(value, cast=float):
+    """
+    A value as a number, or None when it is missing or not numeric. Protobuf's 64-bit integers arrive as strings.
+
+    - `value` is the raw field value.
+    - `cast` is the number type.
+    """
+    value = present(value)
+    try:
+        return None if value is None else int(float(value)) if cast is int else float(value)
+    except (TypeError, ValueError):
+        return None
+
+def text(value):
+    """A value as a string, or None when it is missing."""
+    value = present(value)
+    return None if value is None else str(value)
+
+def next_reset():
+    """The epoch of the next 06:00 IST, when the merged hash expires."""
+    now = datetime.now(INDIA)
+    reset = now.replace(hour=RESET_HOUR, minute=0, second=0, microsecond=0)
+    return int((reset if reset > now else reset + timedelta(days=1)).timestamp())
+
+def position_field(exchange, symbol, product):
+    """
+    The hash field for a Groww position, `EXCHANGE:SYMBOL:PRODUCT`, or None when one part is missing.
+
+    Built the same way from a REST row (`exchange`, `trading_symbol`, `product`) and a websocket position
+    (`symbolData.exchange`, `symbolData.contractId`, `symbolData.stocksProduct`), with the product on the shared
+    vocabulary, so both writers address the same position.
+
+    - `exchange`, `symbol` and `product` are the position's exchange, trading symbol and product as the broker sent them.
+    """
+    parts = [text(exchange), text(symbol), normalize(present(product), PRODUCTS)]
+    return ":".join(str(part).upper() for part in parts) if all(parts) else None
+
+def rupees(value):
+    """
+    An integer paise price in rupees, or None.
+
+    - `value` is the price as Groww sent it.
+    """
+    paise = number(value)
+    return paise / PAISE_PER_RUPEE if paise is not None else None
+
+def stage_timestamp(stage, received_at):
+    """
+    A stage's `timeStampFromMidNight`, seconds after midnight, as an ISO timestamp on the IST day the update arrived.
+
+    - `stage` is one entry of `stageAndTimeStamp`.
+    - `received_at` is the epoch the update was received.
+    """
+    seconds = number((stage or {}).get('timeStampFromMidNight'))
+    if not seconds:
+        return None
+    midnight = datetime.fromtimestamp(received_at, tz=INDIA).replace(hour=0, minute=0, second=0, microsecond=0)
+    return (midnight + timedelta(seconds=seconds)).isoformat()
+
+def order_from_update(data, received_at):
+    """
+    A decoded `OrderDetailsBroadCastDto` as a normalized order, or None when it has no order id.
+
+    - `data` is the decoded message.
+    - `received_at` is the epoch it was received.
+    """
+    detail = data.get('orderDetailUpdateDto') if isinstance(data, dict) else None
+    if not isinstance(detail, dict) or text(detail.get('growwOrderId')) is None:
+        return None
+    stages = [stage for stage in (data.get('stageAndTimeStamp') or []) if isinstance(stage, dict)]
+    exchange, symbol = text(detail.get('exchange')), text(detail.get('contractId'))
+    quantity, filled = number(detail.get('qty'), int), number(detail.get('filledQty'), int)
+    pending = number(detail.get('remainingQty'), int)
+    if pending is None and quantity is not None and filled is not None:
+        pending = quantity - filled
+    return {
+        "order_id": text(detail.get('growwOrderId')),
+        "exchange_order_id": text(detail.get('exchangeOrderId')),
+        "parent_order_id": None,
+        "status": normalize(present(detail.get('orderStatus')), STATUSES),
+        "status_message": text(detail.get('remark')),
+        "id": f"{exchange}:{symbol}" if exchange and symbol else symbol,
+        "instrument_token": None,
+        "tradingsymbol": symbol,
+        "exchange": exchange,
+        "transaction_type": normalize(present(detail.get('buySell')), TRANSACTION_TYPES),
+        "product": normalize(present(detail.get('product')), PRODUCTS),
+        "order_type": normalize(present(detail.get('orderType')), ORDER_TYPES),
+        "validity": normalize(present(detail.get('duration')), VALIDITIES),
+        "quantity": quantity,
+        "filled_quantity": filled,
+        "pending_quantity": pending,
+        "cancelled_quantity": None,
+        "disclosed_quantity": None,
+        "price": rupees(detail.get('price')),
+        "trigger_price": rupees(detail.get('triggerPrice')),
+        "average_price": rupees(detail.get('avgFillPrice')),
+        "order_timestamp": stage_timestamp(stages[0], received_at) if stages else None,
+        "exchange_timestamp": stage_timestamp(stages[-1], received_at) if stages else None,
+        "tag": text(detail.get('guiOrderId')),
+    }
+
+def position_from_update(data):
+    """
+    A decoded `PositionDetailProto` as a normalized position, summing its `NSE` and `BSE` legs, or None when it names no
+    contract.
+
+    - `data` is the decoded message.
+    """
+    symbol_data = data.get('symbolData') if isinstance(data, dict) else None
+    if not isinstance(symbol_data, dict):
+        return None
+    symbol = text(symbol_data.get('contractId')) or text(symbol_data.get('displayName'))
+    if symbol is None:
+        return None
+    info = data.get('positionInfo') if isinstance(data.get('positionInfo'), dict) else {}
+    buy_quantity = buy_value = sell_quantity = sell_value = 0.0
+    for leg in (info.get('NSE'), info.get('BSE')):
+        if isinstance(leg, dict):
+            credit, debit = number(leg.get('creditQty')) or 0.0, number(leg.get('debitQty')) or 0.0
+            buy_quantity += credit
+            sell_quantity += debit
+            buy_value += credit * (number(leg.get('creditPrice')) or 0.0)
+            sell_value += debit * (number(leg.get('debitPrice')) or 0.0)
+    exchange = text(symbol_data.get('exchange'))
+    updated_at = text(symbol_data.get('trTimeStamp'))
+    return {
+        "id": f"{exchange}:{symbol}" if exchange else symbol,
+        "instrument_token": None,
+        "tradingsymbol": symbol,
+        "exchange": exchange,
+        "segment": "FNO",
+        "product": normalize(present(symbol_data.get('stocksProduct')), PRODUCTS),
+        "quantity": int(buy_quantity - sell_quantity),
+        "buy_quantity": int(buy_quantity),
+        "sell_quantity": int(sell_quantity),
+        "buy_price": buy_value / buy_quantity if buy_quantity else None,
+        "sell_price": sell_value / sell_quantity if sell_quantity else None,
+        "buy_value": buy_value,
+        "sell_value": sell_value,
+        "average_price": None,
+        "last_price": None,
+        "realized_pnl": None,
+        "unrealized_pnl": None,
+        "pnl": None,
+        "multiplier": None,
+        "lot_size": number(symbol_data.get('nseMarketLot'), int) or number(symbol_data.get('bseMarketLot'), int) or None,
+        "day_or_net": "NET",
+        "updated_at": None if updated_at in (None, "0") else updated_at,
+    }
+
+
+# Groww's `StockOrdersSocketResponse.proto` and `PositionSocket.proto` file descriptors, serialized. The message
+# classes are built from them at runtime.
+ORDERS_DESCRIPTOR = (
+    "Ch9TdG9ja09yZGVyc1NvY2tldFJlc3BvbnNlLnByb3RvIm4KD1N0b2Nrc0Ftb1N0YXR1cyJbCgRFbnVtEgYKAk5BEAASCwoHUEVO"
+    "RElORxABEg4KCkRJU1BBVENIRUQQAhIKCgZQQVJLRUQQAxIKCgZQTEFDRUQQBBIKCgZGQUlMRUQQBRIKCgZNQVJLRVQQBiLnAQoR"
+    "U3RvY2tzT3JkZXJTdGF0dXMi0QEKBEVudW0SBwoDTkVXEAASCQoFQUNLRUQQARITCg9UUklHR0VSX1BFTkRJTkcQAhIMCghBUFBS"
+    "T1ZFRBADEgwKCFJFSkVDVEVEEAQSCgoGRkFJTEVEEAUSDAoIRVhFQ1VURUQQBhIUChBERUxJVkVSWV9BV0FJVEVEEAcSDQoJQ0FO"
+    "Q0VMTEVEEAgSGgoWQ0FOQ0VMTEFUSU9OX1JFUVVFU1RFRBAJEhoKFk1PRElGSUNBVElPTl9SRVFVRVNURUQQChINCglDT01QTEVU"
+    "RUQQCyJKChNTdG9ja3NPcmRlckR1cmF0aW9uIjMKBEVudW0SBwoDSU9DEAASBwoDREFZEAESBwoDR1REEAISBwoDR1RDEAMSBwoD"
+    "RU9TEAQiUAoNU3RvY2tFeGNoYW5nZSI/CgRFbnVtEgcKA0JTRRAAEgcKA05TRRABEgcKA01DWBACEgkKBU1DWFNYEAMSCQoFTkNE"
+    "RVgQBBIGCgJVUxAFIkYKDFN0b2NrU2VnbWVudCI2CgRFbnVtEggKBENBU0gQABIHCgNGTk8QARIMCghDVVJSRU5DWRACEg0KCUNP"
+    "TU1PRElUWRADIlUKDVN0b2Nrc1Byb2R1Y3QiRAoERW51bRIHCgNDTkMQABIHCgNNSVMQARIGCgJDTxACEgYKAkJPEAMSCAoETlJN"
+    "TBAEEgcKA0FSQhAFEgcKA01URhAGIjsKD1N0b2Nrc09yZGVyVHlwZSIoCgRFbnVtEgcKA01LVBAAEgUKAUwQARIGCgJTTBACEggK"
+    "BFNMX00QAyKCAgoVU3RvY2tzVHJhbnNhY3Rpb25UeXBlIugBCgRFbnVtEgwKCElOVEVSTkFMEAASCwoHUEVORElORxABEgkKBUJP"
+    "TlVTEAISDAoIQlNFX0JPTFQQAxILCgdOU0VfTk9XEAQSBwoDSVBPEAUSEgoOREVNQVRfVFJBTlNGRVIQBhIRCg1ORVNUX1RFUk1J"
+    "TkFMEAcSEgoORVhDSEFOR0VfU0hPUlQQCBILCgdBVUNUSU9OEAkSEgoOSU5URVJOQUxfU0hPUlQQChIKCgZNRVJHRVIQCxIHCgNG"
+    "Tk8QDBIMCghCVVlfQkFDSxANEhcKE1BIWVNJQ0FMX1NFVFRMRU1FTlQQDiIlCg1TdG9ja3NCdXlTZWxsIhQKBEVudW0SBQoBQhAA"
+    "EgUKAVMQASJdChFTdG9ja3NUcmFkZVN0YXR1cyJICgRFbnVtEgwKCEVYRUNVVEVEEAASFAoQREVMSVZFUllfQVdBSVRFRBABEg0K"
+    "CUNPTVBMRVRFRBACEg0KCUNBTkNFTExFRBADIlIKC09yZGVyU291cmNlIkMKBEVudW0SCAoEVVNFUhAAEgoKBlNZU1RFTRABEg0K"
+    "CVNNQUxMQ0FTRRACEg4KClNNQVJUT1JERVIQAxIGCgJOQRAEIkUKEVN0YWdlQW5kVGltZVN0YW1wEh0KFXRpbWVTdGFtcEZyb21N"
+    "aWROaWdodBgBIAEoARIRCglzdGFnZU5hbWUYAiABKAkifgoYT3JkZXJEZXRhaWxzQnJvYWRDYXN0RHRvEi0KEXN0YWdlQW5kVGlt"
+    "ZVN0YW1wGAEgAygLMhIuU3RhZ2VBbmRUaW1lU3RhbXASMwoUb3JkZXJEZXRhaWxVcGRhdGVEdG8YAiABKAsyFS5PcmRlckRldGFp"
+    "bFVwZGF0ZUR0byKLBAoUT3JkZXJEZXRhaWxVcGRhdGVEdG8SCwoDcXR5GAEgASgFEg0KBXByaWNlGAIgASgDEhQKDHRyaWdnZXJQ"
+    "cmljZRgDIAEoAxIRCglmaWxsZWRRdHkYBCABKAUSFAoMcmVtYWluaW5nUXR5GAUgASgFEhQKDGF2Z0ZpbGxQcmljZRgGIAEoAxIU"
+    "Cgxncm93d09yZGVySWQYByABKAkSFwoPZXhjaGFuZ2VPcmRlcklkGAggASgJEiwKC29yZGVyU3RhdHVzGAkgASgOMhcuU3RvY2tz"
+    "T3JkZXJTdGF0dXMuRW51bRIrCghkdXJhdGlvbhgKIAEoDjIZLlN0b2Nrc09yZGVyRHVyYXRpb24uRW51bRIlCghleGNoYW5nZRgL"
+    "IAEoDjITLlN0b2NrRXhjaGFuZ2UuRW51bRIjCgdzZWdtZW50GAwgASgOMhIuU3RvY2tTZWdtZW50LkVudW0SJAoHcHJvZHVjdBgN"
+    "IAEoDjITLlN0b2Nrc1Byb2R1Y3QuRW51bRIoCglvcmRlclR5cGUYDiABKA4yFS5TdG9ja3NPcmRlclR5cGUuRW51bRIkCgdidXlT"
+    "ZWxsGA8gASgOMhMuU3RvY2tzQnV5U2VsbC5FbnVtEg4KBnJlbWFyaxgQIAEoCRISCgpjb250cmFjdElkGBYgASgJEhIKCmd1aU9y"
+    "ZGVySWQYFyABKAliBnByb3RvMw=="
+)
+POSITIONS_DESCRIPTOR = (
+    "ChRQb3NpdGlvblNvY2tldC5wcm90bxIeZ3Jvd3cucHJvdG9idWYuZm5vLmR0by5mbm9EYXRhIqMBChNQb3NpdGlvbkRldGFpbFBy"
+    "b3RvEkMKCnN5bWJvbERhdGEYASABKAsyLy5ncm93dy5wcm90b2J1Zi5mbm8uZHRvLmZub0RhdGEuU3ltYm9sSW5mb1Byb3RvEkcK"
+    "DHBvc2l0aW9uSW5mbxgCIAEoCzIxLmdyb3d3LnByb3RvYnVmLmZuby5kdG8uZm5vRGF0YS5Qb3NpdGlvbkluZm9Qcm90byLHAwoP"
+    "U3ltYm9sSW5mb1Byb3RvEhMKC3RyVGltZVN0YW1wGAEgASgDEhAKCHNlYXJjaElkGAIgASgJEkQKDXN0b2Nrc1Byb2R1Y3QYAyAB"
+    "KA4yLS5ncm93dy5wcm90b2J1Zi5mbm8uZHRvLmZub0RhdGEuU3RvY2tzUHJvZHVjdBISCgpjb250cmFjdElkGAQgASgJEj4KCmVx"
+    "dWl0eVR5cGUYBSABKA4yKi5ncm93dy5wcm90b2J1Zi5mbm8uZHRvLmZub0RhdGEuRXF1aXR5VHlwZRITCgtkaXNwbGF5TmFtZRgG"
+    "IAEoCRIUCgx1bmRlcmx5aW5nSWQYByABKAkSFAoMbnNlTWFya2V0TG90GAggASgDEhQKDGJzZU1hcmtldExvdBgJIAEoAxJIChN1"
+    "bmRlcmx5aW5nQXNzZXRUeXBlGAogASgOMisuZ3Jvd3cucHJvdG9idWYuZm5vLmR0by5mbm9EYXRhLkVxdWl0eUFzc2V0EhEKCWZy"
+    "ZWV6ZVF0eRgLIAEoAxI/CghleGNoYW5nZRgMIAEoDjItLmdyb3d3LnByb3RvYnVmLmZuby5kdG8uZm5vRGF0YS5TdG9ja0V4Y2hh"
+    "bmdlIpUBChFQb3NpdGlvbkluZm9Qcm90bxISCgpzeW1ib2xJc2luGAEgASgJEjUKA0JTRRgCIAEoCzIoLmdyb3d3LnByb3RvYnVm"
+    "LmZuby5kdG8uZm5vRGF0YS5Cc2VQcm90bxI1CgNOU0UYAyABKAsyKC5ncm93dy5wcm90b2J1Zi5mbm8uZHRvLmZub0RhdGEuTnNl"
+    "UHJvdG8iWAoIQnNlUHJvdG8SEQoJY3JlZGl0UXR5GAEgASgBEhMKC2NyZWRpdFByaWNlGAIgASgBEhAKCGRlYml0UXR5GAMgASgB"
+    "EhIKCmRlYml0UHJpY2UYBCABKAEiWAoITnNlUHJvdG8SEQoJY3JlZGl0UXR5GAEgASgBEhMKC2NyZWRpdFByaWNlGAIgASgBEhAK"
+    "CGRlYml0UXR5GAMgASgBEhIKCmRlYml0UHJpY2UYBCABKAEqWwoNU3RvY2tzUHJvZHVjdBIHCgNDTkMQABIHCgNNSVMQARIGCgJD"
+    "TxACEgYKAkJPEAMSCAoETlJNTBAEEgcKA0FSQhAFEgcKA01URhAGEgwKCF91bmtub3duEAcqTwoKRXF1aXR5VHlwZRIKCgZTVE9D"
+    "S1MQABIKCgZGVVRVUkUQARIKCgZPUFRJT04QAhIHCgNFVEYQAxIJCgVJTkRFWBAEEgkKBUJPTkRTEAUqQAoLRXF1aXR5QXNzZXQS"
+    "FwoTRVFVSVRZX0FTU0VUX1NUT0NLUxAAEhgKFEVRVUlUWV9BU1NFVF9JTkRJQ0VTEAEqVAoNU3RvY2tFeGNoYW5nZRIHCgNCU0UQ"
+    "ABIHCgNOU0UQARIHCgNNQ1gQAhIJCgVNQ1hTWBADEgkKBU5DREVYEAQSCgoGR0xPQkFMEAUSBgoCVVMQBkI9Cidjb20uZ3Jvd3cu"
+    "Zm5vLnNvY2tldC51cGRhdGUuY29tbW9ucy5kdG9CEkZub1NvY2tldFVwZGF0ZUR0b2IGcHJvdG8z"
+)
+
+def message_classes():
+    """The `OrderDetailsBroadCastDto` and `PositionDetailProto` message classes, built from the embedded descriptors."""
+    from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
+
+    pool = descriptor_pool.DescriptorPool()
+    for serialized in (ORDERS_DESCRIPTOR, POSITIONS_DESCRIPTOR):
+        pool.Add(descriptor_pb2.FileDescriptorProto.FromString(base64.b64decode("".join(serialized))))
+    return (message_factory.GetMessageClass(pool.FindMessageTypeByName("OrderDetailsBroadCastDto")),
+            message_factory.GetMessageClass(pool.FindMessageTypeByName("groww.protobuf.fno.dto.fnoData.PositionDetailProto")))
+
+def as_dict(message):
+    """
+    A protobuf message as a JSON-ready dict: Groww's field names, enums by name, every field present.
+
+    - `message` is the decoded message.
+    """
+    from google.protobuf import json_format
+
+    return json_format.MessageToDict(message, preserving_proto_field_name=True, always_print_fields_with_no_presence=True)
+
+# ---- NATS NKEY keys and signing ---------------------------------------------------------------------------------
+
+NKEY_PREFIX_USER = 20 << 3
+
+def crc16(data):
+    """
+    CRC-16/XMODEM, as NATS computes it over NKEY material.
+
+    - `data` is the bytes to checksum.
+    """
+    crc = 0
+    for byte in data:
+        crc ^= byte << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
+    return crc
+
+class NkeyPair:
+    """
+    An ed25519 key pair in NATS NKEY form: the public key as a user NKEY, and nonce signing.
+    """
+
+    def __init__(self):
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
+        self._private_key = Ed25519PrivateKey.generate()
+        raw_public = self._private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+        body = bytes([NKEY_PREFIX_USER]) + raw_public
+        self.public_key = base64.b32encode(body + crc16(body).to_bytes(2, "little")).rstrip(b"=").decode()
+
+    def signed_nonce(self, nonce):
+        """
+        A server nonce signed with the private key, base64url encoded without padding, as NATS expects.
+
+        - `nonce` is the nonce from the INFO frame.
+        """
+        signature = self._private_key.sign(nonce.encode() if isinstance(nonce, str) else nonce)
+        return base64.urlsafe_b64encode(signature).rstrip(b"=").decode()
+
+class SocketRefused(Exception):
+    """Groww refused the socket token request for the session."""
+
+# ---- the connection ---------------------------------------------------------------------------------------------
+
+class OrderUpdatesSocket:
+    """
+    Groww's order and position update stream, reconnecting and logging in again until stopped.
+    """
+
+    def __init__(self, cache, logger):
+        """
+        Construct GrowwAPI, which logs in when the stored session is dead.
+
+        - `cache` is the Redis client.
+        - `logger` is where the connection reports.
+        """
+        from stock_brokers.api.groww import GrowwAPI
+
+        self._api_class = GrowwAPI
+        self._groww = GrowwAPI()
+        self._cache = cache
+        self._merge = cache.register_script(MERGE_SCRIPT)
+        self._logger = logger
+        self._order_class, self._position_class = message_classes()
+        self._stop = threading.Event()
+        self._ws = None
+        self._key_pair = None
+        self._socket_jwt = None
+        self._subscription_id = None
+        self._buffer = b""
+        self._opened = False
+        self._authentication_rejected = False
+        self.gave_up = False
+
+    def close(self):
+        """Close the websocket and stop reconnecting."""
+        self._stop.set()
+        if self._ws is not None:
+            self._ws.close()
+
+    def run_forever(self):
+        """Connect, and reconnect with backoff, until closed or unable to recover."""
+        backoff = MIN_BACKOFF_SECONDS
+        failed_connects = 0
+        logged_in_again = False
+        while not self._stop.is_set():
+            self._opened = False
+            self._authentication_rejected = False
+            try:
+                self._connect()
+            except SocketRefused as exception:
+                self._authentication_rejected = True
+                self._logger.error(f"Socket token refused: {exception}")
+            except Exception as exception:
+                self._logger.error(f"Order updates connection failed: {type(exception).__name__}: {exception}")
+            if self._stop.is_set():
+                break
+
+            if self._opened and not self._authentication_rejected:
+                failed_connects, logged_in_again, backoff = 0, False, MIN_BACKOFF_SECONDS
+            else:
+                failed_connects += 1
+
+            if self._authentication_rejected or failed_connects >= MAX_FAILED_CONNECTS:
+                if logged_in_again and (self._authentication_rejected or failed_connects >= MAX_FAILED_CONNECTS):
+                    self.gave_up = True
+                    self._logger.error("Order updates are still refused after logging in again. Giving up.")
+                    break
+                try:
+                    # A dead session: log in again before connecting again.
+                    self._logger.warning("Logging in to Groww again.")
+                    self._groww = self._api_class()
+                except Exception as exception:
+                    self.gave_up = True
+                    self._logger.error(f"Could not log in to Groww again: {type(exception).__name__}: {exception}")
+                    break
+                failed_connects, logged_in_again = 0, True
+
+            self._logger.warning(f"Order updates disconnected. Reconnecting in {backoff} seconds.")
+            self._stop.wait(backoff)
+            backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
+        self._logger.info("Order updates socket stopped.")
+
+    def _socket_token(self):
+        """
+        A socket JWT bound to a fresh key pair, and the subscription id issued with it.
+
+        Raises SocketRefused for HTTP 401 or 403, which means the access token is dead.
+        """
+        import requests
+
+        self._key_pair = NkeyPair()
+        access_token = (self._groww._current_login() or {}).get('access_token')
+        headers = {"x-request-id": str(uuid.uuid4()), "Authorization": f"Bearer {access_token}",
+                   "Content-Type": "application/json", "x-client-id": "growwapi",
+                   "x-client-platform": "growwapi-python-client"}
+        response = requests.post(SOCKET_TOKEN_URL, headers=headers, json={"socketKey": self._key_pair.public_key}, timeout=30)
+        if response.status_code in (401, 403):
+            raise SocketRefused(f"HTTP {response.status_code}: {response.text[:200]}")
+        response.raise_for_status()
+        payload = response.json()
+        payload = payload.get('payload', payload)
+        if not payload.get('token') or not payload.get('subscriptionId'):
+            raise RuntimeError(f"No token or subscription id in the Groww socket token response: {str(payload)[:200]}")
+        self._socket_jwt, self._subscription_id = payload['token'], payload['subscriptionId']
+
+    def _connect(self):
+        """Obtain a socket JWT, open the websocket, and block until it closes."""
+        import websocket
+
+        self._socket_token()
+        self._buffer = b""
+        self._ws = websocket.WebSocketApp(FEED_URL, on_open=self._on_open, on_message=self._on_message,
+                                          on_error=self._on_error, on_close=self._on_close)
+        self._ws.run_forever(ping_interval=PING_INTERVAL_SECONDS, ping_timeout=PING_TIMEOUT_SECONDS)
+
+    def _on_open(self, ws):
+        self._opened = True
+        self._logger.info("Order updates socket opened. Waiting for the NATS INFO frame.")
+
+    def _on_error(self, ws, error):
+        self._logger.error(f"Order updates error: {error}")
+
+    def _on_close(self, ws, status_code, message):
+        self._logger.info(f"Order updates socket closed with status {status_code}: {message}")
+
+    def _send(self, lines):
+        for line in lines if isinstance(lines, (list, tuple)) else [lines]:
+            self._ws.send(line)
+
+    def order_subjects(self):
+        """The subjects carrying this account's equity and derivatives orders."""
+        return [f"{EQUITY_ORDERS}{self._subscription_id}", f"{DERIVATIVES_ORDERS}{self._subscription_id}"]
+
+    def position_subjects(self):
+        """The subject carrying this account's derivatives positions."""
+        return [f"{DERIVATIVES_POSITIONS}{self._subscription_id}"]
+
+    def _on_message(self, ws, message):
+        """Consume a frame as NATS, merge the orders and positions it completed into the hashes, and append them to the streams."""
+        received_at, orders, positions = self.parse(message)
+        if not orders and not positions:
+            return
+        received = datetime.fromtimestamp(received_at).strftime("%Y-%m-%d %H:%M:%S.%f")
+        # The hashes keep each order's and position's latest state; the streams keep every update, even two of one order
+        # in the same frame, in the shape bin/groww/persist_orders and bin/groww/persist_positions read.
+        for hash_key, name, entries in ((ORDERS_KEY, "order", orders), (POSITIONS_KEY, "position", positions)):
+            if entries:
+                values = []
+                for field, normalized, data in entries:
+                    values += [field, json.dumps({"observed_at": received_at, "source": "websocket", name: normalized,
+                                                  "data": data})]
+                self._merge(keys=[hash_key], args=[next_reset(), "websocket", repr(received_at)] + values)
+        pipeline = self._cache.pipeline(transaction=False)
+        for stream_key, field, entries in ((ORDER_STREAM_KEY, "update", orders), (POSITION_STREAM_KEY, "position", positions)):
+            for _, _, data in entries:
+                pipeline.xadd(stream_key, {field: json.dumps({'timestamp': received, 'data': data})},
+                              maxlen=STREAM_MAX_LENGTH, approximate=True)
+        pipeline.execute()
+        if orders:
+            self._logger.info(f"Merged {len(orders)} order update(s) into {ORDERS_KEY}: {', '.join(entry[0] for entry in orders)}")
+        if positions:
+            self._logger.info(f"Merged {len(positions)} position update(s) into {POSITIONS_KEY}: "
+                              f"{', '.join(entry[0] for entry in positions)}")
+
+    def parse(self, message):
+        """
+        The epoch the frame was received, and the order and position entries it completed, each a list of
+        `(hash field, normalized, decoded message)` in arrival order.
+
+        - `message` is the frame received.
+        """
+        received_at = datetime.now().timestamp()
+        position_subjects = set(self.position_subjects())
+        order_subjects = set(self.order_subjects())
+        orders, positions = [], []
+        for subject, payload in self.consume_nats(message):
+            try:
+                if subject in order_subjects:
+                    broadcast = self._order_class.FromString(payload)
+                    if broadcast.HasField('orderDetailUpdateDto') and broadcast.orderDetailUpdateDto.growwOrderId:
+                        data = as_dict(broadcast)
+                        order = order_from_update(data, received_at)
+                        if order is not None:
+                            orders.append((order["order_id"], order, data))
+                elif subject in position_subjects:
+                    detail = self._position_class.FromString(payload)
+                    if detail.HasField('symbolData'):
+                        data = as_dict(detail)
+                        symbol = data['symbolData']
+                        field = position_field(symbol.get('exchange'), symbol.get('contractId') or symbol.get('displayName'),
+                                               symbol.get('stocksProduct'))
+                        position = position_from_update(data)
+                        if field is not None and position is not None:
+                            positions.append((field, position, data))
+                else:
+                    self._logger.info(f"Ignoring a message on an unexpected subject {subject}.")
+            except Exception as exception:
+                self._logger.warning(f"Could not decode a payload on {subject}: {type(exception).__name__}: {exception}")
+        return received_at, orders, positions
+
+    def consume_nats(self, message):
+        """
+        Feed a frame through the NATS protocol and return the `(subject, payload)` messages it completed.
+
+        NATS is line based: control lines end with CRLF, and a `MSG` line is followed by a payload of the declared
+        length. A frame may split or join those, so the stream is buffered and only whole messages come back.
+
+        - `message` is the frame received.
+        """
+        if isinstance(message, str):
+            message = message.encode()
+        self._buffer += bytes(message)
+        delivered = []
+        while True:
+            end = self._buffer.find(b"\r\n")
+            if end == -1:
+                break
+            line, rest = self._buffer[:end], self._buffer[end + 2:]
+            if line.startswith(b"MSG "):
+                parts = line.decode('utf-8', errors='replace').split()
+                if len(parts) < 4:
+                    self._buffer = rest
+                    continue
+                length = int(parts[-1])
+                if len(rest) < length + 2:
+                    break                                   # the payload has not fully arrived yet
+                delivered.append((parts[1], rest[:length]))
+                self._buffer = rest[length + 2:]
+                continue
+
+            self._buffer = rest
+            if line.startswith(b"INFO "):
+                info = json.loads(line[5:].decode('utf-8'))
+                connect = {"jwt": self._socket_jwt, "sig": self._key_pair.signed_nonce(info.get('nonce', '')),
+                           "verbose": False, "pedantic": False, "tls_required": False, "lang": "python",
+                           "version": "1.0.0", "protocol": 1, "headers": bool(info.get('headers', False)),
+                           "no_responders": False}
+                subjects = self.order_subjects() + self.position_subjects()
+                self._send([f"CONNECT {json.dumps(connect)}\r\n", "PING\r\n"]
+                           + [f"SUB {subject} {index}\r\n" for index, subject in enumerate(subjects, start=1)])
+                self._logger.info(f"Authenticated and subscribed to {len(subjects)} subject(s). Waiting for updates.")
+            elif line == b"PING":
+                self._send("PONG\r\n")
+            elif line.startswith(b"-ERR"):
+                error = line.decode('utf-8', errors='replace')
+                self._logger.error(f"NATS error: {error}")
+                if any(marker in error.lower() for marker in AUTHENTICATION_ERRORS):
+                    self._authentication_rejected = True
+                    self._ws.close()
+        return delivered
+
+def main():
+    """Stream Groww order and position updates into Redis until stopped."""
+    from utilities.configurations import get_cache, get_logger
+
+    logger = get_logger("groww.order_updates")
+    try:
+        socket = OrderUpdatesSocket(get_cache(), logger)
+    except Exception as exception:
+        logger.error(f"Could not log in to Groww: {type(exception).__name__}: {exception}")
+        return 1
+
+    # Installed before the thread starts: systemd stops a unit with SIGTERM, and the default action would kill the
+    # process without closing the connection.
+    def _handle_signal(signal_number, frame):
+        logger.info(f"Received signal {signal_number}. Closing the order updates feed.")
+        socket.close()
+
+    for signal_number in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(signal_number, _handle_signal)
+
+    thread = threading.Thread(target=socket.run_forever, name="groww_order_updates", daemon=True)
+    logger.info("Starting the order updates feed.")
+    thread.start()
+
+    # Block in the main thread so the signal handlers above can run.
+    while thread.is_alive():
+        thread.join(timeout=1)
+
+    if socket.gave_up:
+        return 1
+    logger.info("Order updates feed stopped.")
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())

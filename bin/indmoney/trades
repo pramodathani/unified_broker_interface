@@ -1,0 +1,93 @@
+#!/usr/bin/env python3
+"""
+Poll the day's INDmoney trade book every half second and write it to the Redis key `indmoney:orders:trades`.
+
+    bin/indmoney/trades
+    redis-cli GET indmoney:orders:trades
+
+INDstocks serves the trade book one segment at a time, so each poll calls
+`GET https://api.indstocks.com/trade-book?segment=EQUITY` and then `?segment=DERIVATIVE` through
+`INDMoneyAPI`, which logs in first if the stored session is dead. The two are written together as one JSON
+string with SET, replacing the one before: `timestamp`, `status` and `code` of the later response, and
+under `data` the rows of both, each with a `segment` field added saying which book it came from. A segment
+with no trades answers `null`, which contributes nothing, so an empty book is `[]`.
+
+INDstocks publishes no trade-book schema and no trade has been seen, so a row's fields are unconfirmed; the
+project reads them as `fill_id`, `order_id`, `exch_order_id`, `security_id`, `exchange`, `txn_type`,
+`product`, `quantity`, `price` and `trade_date_time`.
+
+Runs until Ctrl+C. A dead session (a refusal naming the access token, asking to re-authenticate, or
+unauthorized) is logged in again before the next request; any other failed poll - including either
+segment failing - is logged and leaves `indmoney:orders:trades` unchanged. Exits 1 when the first login, or
+a login after the session died, fails. Reads only - it never places, modifies or cancels an order.
+"""
+
+import sys
+import json
+import time
+from pathlib import Path
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+TRADES_URL = "https://api.indstocks.com/trade-book"
+TRADE_SEGMENTS = ("EQUITY", "DERIVATIVE")
+REDIS_KEY = "indmoney:orders:trades"
+DELAY_SECONDS = 0.5
+TIMEOUT_SECONDS = 10
+
+# What INDstocks says when the session is no good, lowercased.
+AUTHENTICATION_MARKERS = ("access_token", "re-authenticate", "unauthorized")
+
+def is_authentication_error(exception):
+    """Whether INDstocks refused the request because the session is dead."""
+    return any(marker in str(exception).lower() for marker in AUTHENTICATION_MARKERS)
+
+def fetch_trades(indmoney):
+    """Both segments' trade books as one response, each row tagged with its segment."""
+    rows = []
+    response = {}
+    for segment in TRADE_SEGMENTS:
+        response = indmoney.get(url=TRADES_URL, params={'segment': segment}, timeout=TIMEOUT_SECONDS)
+        rows.extend({'segment': segment, **row} for row in (response.get('data') or []) if isinstance(row, dict))
+    return {**response, 'data': rows}
+
+def main():
+    """Fetch the trade book and write it to indmoney:orders:trades every half second, until interrupted."""
+    from stock_brokers.api.indmoney import INDMoneyAPI
+    from utilities.configurations import get_cache, get_logger
+    from utilities.poll_reporter import PollReporter
+
+    logger = get_logger("indmoney.trades")
+    report = PollReporter(logger)
+    cache = get_cache()
+    try:
+        indmoney = INDMoneyAPI()
+    except Exception as exception:
+        logger.error(f"Could not log in to INDmoney: {type(exception).__name__}: {exception}")
+        return 1
+
+    try:
+        while True:
+            try:
+                trades = fetch_trades(indmoney)
+                cache.set(REDIS_KEY, json.dumps(trades))
+                report.info(f"Wrote {len(trades['data'])} trades to {REDIS_KEY}")
+            except Exception as exception:
+                if is_authentication_error(exception):
+                    # A dead session: log in again before sending anything more.
+                    logger.warning(f"INDmoney session expired, logging in again: {exception}")
+                    indmoney = INDMoneyAPI()
+                else:
+                    report.error(f"Trades poll failed: {type(exception).__name__}: {exception}")
+            time.sleep(DELAY_SECONDS)
+    except KeyboardInterrupt:
+        logger.info("Stopped")
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,406 @@
+#!/usr/bin/env python3
+"""
+Persist Groww position updates from the Redis Stream `groww:positions_updates:stream` into `groww.positions`, and keep
+persisting until stopped.
+
+    bin/groww/persist_positions
+    redis-cli XINFO GROUPS groww:positions_updates:stream   # lag and pending count
+
+`bin/groww/order_updates` appends every derivatives position update to the stream, each as `{"timestamp": ...,
+"data": <decoded PositionDetailProto>}`; this reads it as the `persist` consumer group and writes one row per update -
+a snapshot of the position at that moment, so the table is the series of those snapshots - to the `groww.positions` hypertable with COPY, a batch at a time. Groww streams no equity positions.
+
+**Nothing is lost across a restart.** An entry is acknowledged only after the batch holding it has been committed; a
+crash, a refused write or a lost connection leaves it pending, and pending entries are read first at the next start
+or after the failure. A batch committed just before a crash and not yet acknowledged is written a second time. The
+stream is capped at about 20,000 entries, so updates trimmed while this is stopped are lost and counted as skipped.
+Run one instance.
+
+**Columns.** Groww describes a position as credit (bought) and debit (sold) legs per exchange under `positionInfo`,
+with the contract under `symbolData`. The legs are summed across whichever exchanges are present, and the whole
+decoded message is kept in `raw`:
+
+| column | from Groww |
+| --- | --- |
+| `time` | when `bin/groww/order_updates` received it |
+| `id`, `instrument_token`, `tradingsymbol` | `exchange:contractId`, `contractId`, `contractId` or `displayName` |
+| `exchange`, `segment`, `product` | `symbolData.exchange`, `equityType`, `stocksProduct` on the shared vocabulary |
+| `quantity`, `buy_quantity`, `sell_quantity` | credit less debit, `creditQty`, `debitQty`, summed over NSE and BSE |
+| `buy_value`, `sell_value` | quantity times price per leg, summed |
+| `buy_price`, `sell_price` | value over quantity |
+| `lot_size`, `updated_at` | `nseMarketLot` or `bseMarketLot`, `trTimeStamp` as sent |
+| `average_price`, `last_price`, pnl, `multiplier`, `day_or_net` | not sent by Groww, NULL |
+
+Leg prices are stored as Groww sends them, without the paise division orders get: no live Groww position has yet
+confirmed the unit. An update without `symbolData`, or one that is not JSON, is skipped and acknowledged.
+
+Exits 0 when stopped with Ctrl+C or SIGTERM, after writing and acknowledging the batch in hand. A database or Redis
+that cannot be reached is retried with backoff rather than ending the process.
+
+**The table** is created on start from `060_groww_streams.sql` in `stock_brokers/instruments/ticks/utilities/sql/ddl`,
+whose statements are all safe to run again, so a new database needs no separate step. A start that cannot apply
+it exits 1.
+"""
+
+import io
+import sys
+import json
+import time
+import signal
+import argparse
+import threading
+from datetime import datetime, timezone
+from pathlib import Path
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+STREAM_KEY = "groww:positions_updates:stream"
+STREAM_FIELD = "position"
+TABLE = "groww.positions"
+
+# The DDL that creates groww.positions, with the rest of groww's stream tables.
+DDL_FILE = "060_groww_streams.sql"
+DDL_DIRECTORY = PROJECT_ROOT / "stock_brokers" / "instruments" / "ticks" / "utilities" / "sql" / "ddl"
+GROUP = "persist"
+CONSUMER = "persist_positions"
+
+MIN_BACKOFF_SECONDS = 1
+MAX_BACKOFF_SECONDS = 60
+
+# The table's columns in the order each row is built.
+COLUMNS = [
+    "time", "id", "instrument_token", "tradingsymbol", "exchange", "segment", "product",
+    "quantity", "buy_quantity", "sell_quantity", "buy_price", "sell_price", "buy_value", "sell_value",
+    "average_price", "last_price", "realized_pnl", "unrealized_pnl", "pnl",
+    "multiplier", "lot_size", "day_or_net", "updated_at", "raw",
+]
+
+# The shared vocabulary's products: each broker's spelling of a product mapped onto one set. Keys are compared
+# uppercased with underscores levelled to spaces.
+PRODUCTS = {
+    "CNC": "CNC", "C": "CNC", "DELIVERY": "CNC", "CASH": "CNC",
+    "MIS": "MIS", "I": "MIS", "INTRADAY": "MIS", "M": "NRML",
+    "NRML": "NRML", "NORMAL": "NRML", "MARGIN": "NRML", "CARRYFORWARD": "NRML",
+    "CO": "CO", "BO": "BO", "MTF": "MTF", "ARB": "ARB", "H": "CO", "B": "BO",
+}
+
+def normalize(value, mapping):
+    """
+    A broker's term on the shared vocabulary, or the term uppercased when the vocabulary does not know it.
+
+    - `value` is the broker's term.
+    - `mapping` is one of the vocabulary tables.
+    """
+    if value is None or value == "":
+        return None
+    key = str(value).strip().upper().replace("_", " ")
+    if key in mapping:
+        return mapping[key]
+    collapsed = " ".join(key.split())
+    return mapping.get(collapsed, collapsed)
+
+def present(value):
+    """A value, or None for protobuf's unset empty string."""
+    return None if value is None or (isinstance(value, str) and not value.strip()) else value
+
+def number(value, cast=float):
+    """
+    A value as a number, or None when it is missing or not numeric. Protobuf's 64-bit integers arrive as strings.
+
+    - `value` is the raw field value.
+    - `cast` is the number type.
+    """
+    value = present(value)
+    try:
+        return None if value is None else cast(float(value)) if cast is int else cast(value)
+    except (TypeError, ValueError):
+        return None
+
+def received_moment(value):
+    """
+    The time the feeder stamped an update, local wall clock, as an aware datetime.
+
+    - `value` is the `timestamp` field, `YYYY-MM-DD HH:MM:SS.ffffff`.
+    """
+    try:
+        return datetime.strptime(str(value), "%Y-%m-%d %H:%M:%S.%f").astimezone()
+    except (TypeError, ValueError):
+        return datetime.now(tz=timezone.utc)
+
+def position_row(update):
+    """
+    One position update mapped into COLUMNS order, or None when it names no contract.
+
+    - `update` is the decoded stream entry, `{"timestamp": ..., "data": <decoded PositionDetailProto>}`.
+    """
+    data = (update or {}).get('data') if isinstance(update, dict) else None
+    symbol_data = data.get('symbolData') if isinstance(data, dict) else None
+    if not isinstance(symbol_data, dict):
+        return None
+    info = data.get('positionInfo') if isinstance(data.get('positionInfo'), dict) else {}
+
+    buy_quantity = buy_value = sell_quantity = sell_value = 0.0
+    for leg in (info.get('NSE'), info.get('BSE')):
+        if not isinstance(leg, dict):
+            continue
+        credit, debit = number(leg.get('creditQty')) or 0.0, number(leg.get('debitQty')) or 0.0
+        buy_quantity += credit
+        sell_quantity += debit
+        buy_value += credit * (number(leg.get('creditPrice')) or 0.0)
+        sell_value += debit * (number(leg.get('debitPrice')) or 0.0)
+
+    symbol = present(symbol_data.get('contractId')) or present(symbol_data.get('displayName'))
+    if symbol is None:
+        return None
+    exchange = present(symbol_data.get('exchange'))
+    lot_size = number(symbol_data.get('nseMarketLot'), int) or number(symbol_data.get('bseMarketLot'), int)
+    updated_at = present(symbol_data.get('trTimeStamp'))
+    return [
+        received_moment(update.get('timestamp')).isoformat(),
+        f"{exchange}:{symbol}" if exchange else symbol,
+        present(symbol_data.get('contractId')),
+        symbol,
+        exchange,
+        present(symbol_data.get('equityType')),
+        normalize(present(symbol_data.get('stocksProduct')), PRODUCTS),
+        int(buy_quantity - sell_quantity),
+        int(buy_quantity),
+        int(sell_quantity),
+        buy_value / buy_quantity if buy_quantity else None,
+        sell_value / sell_quantity if sell_quantity else None,
+        buy_value or None,
+        sell_value or None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        lot_size or None,
+        None,
+        None if updated_at in (None, "0") else str(updated_at),
+        json.dumps(data),
+    ]
+
+def copy_value(value):
+    """
+    One value in COPY text format, with the format's NULL marker and its three structural characters escaped.
+
+    - `value` is the column value.
+    """
+    if value is None:
+        return "\\N"
+    return str(value).replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n")
+
+class StreamPersister:
+    """
+    Reads one Redis Stream as a consumer group and writes its entries to one table, acknowledging after commit.
+
+    The same class in every bin/<broker>/persist_* script; only the constants and the row function differ.
+    """
+
+    def __init__(self, cache, connect, logger, batch_size, flush_interval, row, noun, stream=STREAM_KEY,
+                 field=STREAM_FIELD, table=TABLE, columns=COLUMNS, consumer=CONSUMER):
+        """
+        - `cache` is the Redis client.
+        - `connect` opens a new database connection.
+        - `logger` is where progress is reported.
+        - `batch_size` is the most rows written in one COPY.
+        - `flush_interval` is the longest a row waits, in seconds, before its batch is written.
+        - `stream`, `field`, `table`, `columns` and `consumer` say what is read and where it is written.
+        - `row` turns one decoded entry into a row in `columns` order, or None to skip it.
+        - `noun` names an entry in the log.
+        """
+        self._stream, self._field, self._table, self._columns = stream, field, table, columns
+        self._row, self._consumer, self._noun = row, consumer, noun
+        self._cache = cache
+        self._connect = connect
+        self._logger = logger
+        self._batch_size = batch_size
+        self._flush_interval = flush_interval
+        self._connection = None
+        self.written = 0
+        self.skipped = 0
+
+    def ensure_group(self):
+        """Create the consumer group at the start of the stream, creating the stream too, unless it exists."""
+        try:
+            self._cache.xgroup_create(self._stream, GROUP, id="0", mkstream=True)
+            self._logger.info(f"Created consumer group {GROUP} on {self._stream}.")
+        except Exception as exception:
+            if "BUSYGROUP" not in str(exception):
+                raise
+
+    def run(self, stop):
+        """
+        Persist until `stop` is set, then write and acknowledge whatever batch is in hand.
+
+        - `stop` is a threading.Event.
+        """
+        backoff = MIN_BACKOFF_SECONDS
+        # Pending entries - read before but never acknowledged - are taken first, at every start and after
+        # every failure, so a batch that failed to commit is written before anything newer.
+        pending_first = True
+        batch = []
+        started = time.monotonic()
+        while True:
+            try:
+                if pending_first:
+                    # Reading pending entries always starts from the oldest unacknowledged one, so each read is
+                    # written and acknowledged before the next rather than gathered, which would repeat them.
+                    self.ensure_group()
+                    entries = self._read(True, self._batch_size, 0)
+                    if entries:
+                        self._write(entries)
+                    else:
+                        pending_first = False
+                    backoff = MIN_BACKOFF_SECONDS
+                    continue
+
+                if not stop.is_set():
+                    remaining = self._flush_interval - (time.monotonic() - started) if batch else self._flush_interval
+                    entries = self._read(False, self._batch_size - len(batch), max(0.0, remaining))
+                    if entries and not batch:
+                        started = time.monotonic()
+                    batch.extend(entries)
+
+                due = batch and time.monotonic() - started >= self._flush_interval
+                if batch and (len(batch) >= self._batch_size or due or stop.is_set()):
+                    self._write(batch)
+                    batch = []
+                    backoff = MIN_BACKOFF_SECONDS
+                elif stop.is_set():
+                    break
+            except Exception as exception:
+                self._logger.error(f"Persisting failed, retrying in {backoff} seconds: {type(exception).__name__}: {exception}")
+                self._reset_connection()
+                # The batch in hand is still pending in the group; drop it here and read it back from there.
+                batch, pending_first = [], True
+                if stop.is_set():
+                    break
+                stop.wait(backoff)
+                backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
+        self._reset_connection()
+        self._logger.info(f"Stopped. Wrote {self.written} {self._noun}(s), skipped {self.skipped}.")
+
+    def _read(self, pending, count, wait):
+        """
+        Up to `count` entries as `(id, fields)` pairs: this consumer's pending ones, or new ones waiting up to `wait` seconds.
+
+        - `pending` reads the pending entries instead of new ones.
+        - `count` is the most entries to read.
+        - `wait` is how long to block for new entries, in seconds.
+        """
+        response = self._cache.xreadgroup(GROUP, self._consumer, {self._stream: "0" if pending else ">"}, count=count,
+                                          block=None if pending else max(1, int(wait * 1000)))
+        return [entry for _, entries in (response or []) for entry in entries]
+
+    def _write(self, batch):
+        """
+        Write a batch with COPY, commit, then acknowledge every entry in it.
+
+        - `batch` is a list of `(id, fields)` pairs.
+        """
+        buffer = io.StringIO()
+        rows = skipped = 0
+        for _, fields in batch:
+            try:
+                row = self._row(json.loads((fields or {}).get(self._field)))
+            except (TypeError, ValueError):
+                row = None
+            if row is None:
+                # Not JSON, no id, or trimmed from the stream while pending.
+                skipped += 1
+                continue
+            buffer.write("\t".join(copy_value(value) for value in row) + "\n")
+            rows += 1
+
+        if rows:
+            if self._connection is None:
+                self._connection = self._connect()
+            buffer.seek(0)
+            columns = ", ".join(f'"{column}"' for column in self._columns)
+            with self._connection.cursor() as cursor:
+                cursor.copy_expert(f"copy {self._table} ({columns}) from stdin with (format text)", buffer)
+            self._connection.commit()
+            self.written += rows
+        self._cache.xack(self._stream, GROUP, *[entry_id for entry_id, _ in batch])
+        # Counted only once the batch is acknowledged: a batch whose commit fails is read back and counted then.
+        self.skipped += skipped
+        self._logger.debug(f"Wrote {rows} {self._noun}(s) to {self._table}.")
+
+    def _reset_connection(self):
+        """Roll back and close the database connection, so the next write opens a fresh one."""
+        if self._connection is not None:
+            try:
+                self._connection.rollback()
+                self._connection.close()
+            except Exception:
+                pass
+            self._connection = None
+
+def apply_table(connect, logger):
+    """
+    Apply the broker's stream table DDL, which creates the table the first time and changes nothing after.
+
+    Executed through psycopg2 rather than SQLAlchemy's text(), which would take the colons in the file's comments for
+    bind parameters.
+
+    - `connect` opens a database connection.
+    - `logger` is where progress is reported.
+    """
+    path = DDL_DIRECTORY / DDL_FILE
+    connection = connect()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(path.read_text())
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+    logger.info(f"Applied {path.name}.")
+
+def main():
+    """Persist Groww position updates from groww:positions_updates:stream into groww.positions until stopped."""
+    parser = argparse.ArgumentParser(description="Persist Groww position updates into groww.positions.")
+    parser.add_argument("--batch-size", type=int, default=200, help="most position updates written in one COPY, default 200")
+    parser.add_argument("--flush-interval", type=float, default=1.0,
+                        help="longest an update waits before its batch is written, in seconds, default 1")
+    arguments = parser.parse_args()
+
+    from utilities.configurations import get_cache, get_logger, get_postgres
+
+    logger = get_logger("groww.persist_positions")
+    if arguments.batch_size < 1 or arguments.flush_interval <= 0:
+        logger.error("--batch-size must be at least 1 and --flush-interval above 0.")
+        return 2
+
+    try:
+        apply_table(get_postgres, logger)
+    except Exception as exception:
+        logger.error(f"Could not prepare groww.positions: {type(exception).__name__}: {exception}")
+        return 1
+
+    stop = threading.Event()
+
+    def _handle_signal(signal_number, frame):
+        logger.info(f"Received signal {signal_number}. Writing the batch in hand, then stopping.")
+        stop.set()
+
+    for signal_number in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(signal_number, _handle_signal)
+
+    logger.info(f"Persisting {STREAM_KEY} into {TABLE}.")
+    StreamPersister(get_cache(), get_postgres, logger, arguments.batch_size, arguments.flush_interval,
+                    row=position_row, noun="position update").run(stop)
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())

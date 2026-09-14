@@ -1,0 +1,136 @@
+#!/usr/bin/env python3
+"""
+Log in to the Kotak Neo API by constructing `KotakAPI`, confirm the session works, record the outcome in the
+Redis key `kotak:session:status`, and, when a login happened, write the account's profile to
+`kotak:user:details`.
+
+    bin/kotak/login
+    redis-cli GET kotak:session:status
+    redis-cli GET kotak:user:details
+
+`KotakAPI()` probes `GET {base_url}/quick/user/positions` with the stored token and only runs the real
+login - the mobile number, UCC and a TOTP, then the MPIN - when that probe fails. The login stores the
+token, the `sid` and the `base_url`, the API host Kotak assigned this session, in MongoDB and in the Redis
+`last_login` hash, where every other process picks them up. Kotak has no profile endpoint, so the positions
+probe is then made once more, with the body checked, and a success means a session that has actually been
+used, not just a constructor that returned. A flat account's "No Data" answer (stCode 5203) counts as used.
+
+`kotak:session:status` holds one JSON object, replaced on every run:
+
+    {"status": "success", "access-token": "<token>", "last_login": "2026-09-14 08:30:02.123456"}
+    {"status": "failure", "access-token": null, "last_login": "2026-09-14 08:30:02.123456"}
+
+On success `last_login` is when the token in force was issued, which is earlier than this run when the
+stored session was still good. On failure it is when this attempt was made.
+
+Kotak has no profile endpoint: the profile arrives only in the Login Validate response, beside the tokens.
+So `kotak:user:details` is written only on a run that actually logged in, as one JSON object in the shape
+the other brokers' keys use - `timestamp`, `status`, `code` and the profile under `data` - holding the
+fields named in PROFILE_FIELDS and never the tokens. When the stored session was still good there is no
+login response, and the key keeps the profile from the last login. `kId` appears to be the account's PAN.
+
+Exits 0 when the session works and 1 when the login, the check or the session status write fails, so a
+systemd unit can retry on failure. A failed profile write is reported but does not change the exit code: a
+retry would find the new session good, not log in, and have no profile to write. Logs in to a live broker account. Reads only - it places no orders.
+"""
+
+import sys
+import json
+from datetime import datetime
+from pathlib import Path
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+POSITIONS_PATH = "/quick/user/positions"
+REDIS_KEY = "kotak:session:status"
+PROFILE_REDIS_KEY = "kotak:user:details"
+TIMEOUT_SECONDS = 10
+
+# The Login Validate fields that describe the account, per Kotak's Totp_validate documentation. Named rather
+# than filtered so a token Kotak adds to the response later can never land in the profile.
+PROFILE_FIELDS = ("ucc", "greetingName", "clientType", "isNRI", "isTrialAccount", "dormancyStatus", "mfAccess",
+                  "asbaStatus", "clientGroup", "kId", "isUserPwdExpired", "derivativesRiskDisclosure", "incRange",
+                  "incUpdFlag")
+
+# Kotak's status code for an answer with nothing in it.
+NO_DATA_STATUS_CODE = 5203
+
+def kotak_request(kotak, method, path, body=None):
+    """
+    Call a Kotak path on the session's host and return the response in the API client's shape.
+
+    Made here rather than through the API client, because the client drops `timeout`. Kotak's "No Data"
+    answer comes back with `data` as `[]`; any other `Not_Ok` body, and any HTTP error, raises
+    KotakAPIException.
+
+    - `kotak` is the KotakAPI whose stored login supplies the host, `Auth` and `Sid`.
+    - `method` is the HTTP method.
+    - `path` is the path on the session's host.
+    - `body` is the form body to send, if any.
+    """
+    import requests
+    from stock_brokers.api.kotak import KotakAPIException
+
+    login = kotak._current_login() or {}
+    headers = {"neo-fin-key": "neotradeapi", "Auth": str(login.get("access_token")), "Sid": str(login.get("sid"))}
+    response = requests.request(method, kotak.url(path), data=body, headers=headers, timeout=TIMEOUT_SECONDS)
+    if response.status_code >= 300:
+        raise KotakAPIException(code=response.status_code, message=response.text[:300])
+    try:
+        payload = response.json()
+    except ValueError:
+        raise KotakAPIException(code=response.status_code, message=response.text[:300])
+
+    content = {'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"), 'status': 'success',
+               'code': response.status_code}
+    if isinstance(payload, dict) and payload.get('stCode') == NO_DATA_STATUS_CODE:
+        return {**content, 'data': []}
+    if isinstance(payload, dict) and payload.get('stat') not in (None, 'Ok'):
+        message = str(payload.get('errMsg') or payload.get('emsg') or payload)
+        raise KotakAPIException(code=payload.get('stCode'), message=message[:300])
+    return {**content, 'data': payload.get('data') if isinstance(payload, dict) and 'data' in payload else payload}
+
+def main():
+    """Construct KotakAPI, which logs in when the stored session is dead, confirm it, and record the outcome."""
+    from stock_brokers.api.kotak import KotakAPI
+    from utilities.configurations import get_cache
+
+    profile = None
+    try:
+        kotak = KotakAPI()
+        kotak_request(kotak, 'GET', POSITIONS_PATH)
+        login = kotak._last_login or {}
+        record = {'status': 'success', 'access-token': login.get('access_token'), 'last_login': login.get('last_login')}
+        if kotak.login_response:
+            profile = {'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"), 'status': 'success', 'code': 200,
+                       'data': {field: kotak.login_response.get(field) for field in PROFILE_FIELDS}}
+        print(f"kotak ok logged in at {record['last_login']}")
+    except Exception as exception:
+        record = {'status': 'failure', 'access-token': None, 'last_login': datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")}
+        print(f"kotak FAILED {type(exception).__name__}: {exception}", file=sys.stderr)
+
+    try:
+        cache = get_cache()
+        cache.set(REDIS_KEY, json.dumps(record))
+    except Exception as exception:
+        print(f"kotak could not write {REDIS_KEY}: {type(exception).__name__}: {exception}", file=sys.stderr)
+        return 1
+
+    if profile:
+        try:
+            cache.set(PROFILE_REDIS_KEY, json.dumps(profile))
+            print(f"kotak wrote the profile of {profile['data'].get('ucc')} to {PROFILE_REDIS_KEY}")
+        except Exception as exception:
+            print(f"kotak could not write {PROFILE_REDIS_KEY}: {type(exception).__name__}: {exception}", file=sys.stderr)
+    elif record['status'] == 'success':
+        print(f"kotak session was still good, so no login response: {PROFILE_REDIS_KEY} left unchanged")
+
+    return 0 if record['status'] == 'success' else 1
+
+if __name__ == "__main__":
+    raise SystemExit(main())

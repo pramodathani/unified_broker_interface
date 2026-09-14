@@ -1,0 +1,71 @@
+#!/usr/bin/env python3
+"""
+Log in to the Shoonya API by constructing `ShoonyaAPI`, confirm the session works, and record the
+outcome in the Redis key `shoonya:session:status`.
+
+    bin/shoonya/login
+    redis-cli GET shoonya:session:status
+
+`ShoonyaAPI()` probes `POST /UserDetails` with the stored token and only runs the real login - a headless
+Chrome entering the UCC code, password and a TOTP, then exchanging the authorization code for a token
+through `GenAcsTok` - when that probe raises.
+A new token is written to MongoDB and to the Redis `last_login` hash, where every other process picks it
+up. `UserDetails` is then asked once more and its body checked, because Shoonya runs on Noren and Noren
+answers HTTP 200 whether or not it served the request: a success means a response with `stat` `Ok`, not
+just a constructor that returned.
+
+`shoonya:session:status` holds one JSON object, replaced on every run:
+
+    {"status": "success", "access-token": "<token>", "last_login": "2026-09-14 08:30:02.123456"}
+    {"status": "failure", "access-token": null, "last_login": "2026-09-14 08:30:02.123456"}
+
+On success `last_login` is when the token in force was issued, which is earlier than this run when the
+stored session was still good. On failure it is when this attempt was made.
+
+Exits 0 when the session works and 1 when the login, the check or the Redis write fails, so a systemd
+unit can retry on failure. Logs in to a live broker account. Reads only - it places no orders.
+"""
+
+import sys
+import json
+from datetime import datetime
+from pathlib import Path
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+USER_DETAILS_URL = "https://api.shoonya.com/NorenWClientAPI/UserDetails"
+REDIS_KEY = "shoonya:session:status"
+TIMEOUT_SECONDS = 10
+
+def main():
+    """Construct ShoonyaAPI, which logs in when the stored session is dead, confirm it, and record the outcome."""
+    from stock_brokers.api.shoonya import ShoonyaAPI
+    from utilities.configurations import get_cache
+
+    try:
+        shoonya = ShoonyaAPI()
+        details = (shoonya.post(url=USER_DETAILS_URL, timeout=TIMEOUT_SECONDS) or {}).get('data')
+        if not isinstance(details, dict) or str(details.get('stat', '')).lower() != 'ok':
+            raise RuntimeError(f"UserDetails refused the session: {str(details)[:200]}")
+        login = shoonya._last_login or {}
+        record = {'status': 'success', 'access-token': login.get('access_token'), 'last_login': login.get('last_login')}
+        print(f"shoonya ok logged in at {record['last_login']}")
+    except Exception as exception:
+        record = {'status': 'failure', 'access-token': None, 'last_login': datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")}
+        print(f"shoonya FAILED {type(exception).__name__}: {exception}", file=sys.stderr)
+
+    try:
+        get_cache().set(REDIS_KEY, json.dumps(record))
+    except Exception as exception:
+        print(f"shoonya could not write {REDIS_KEY}: {type(exception).__name__}: {exception}", file=sys.stderr)
+        return 1
+
+    return 0 if record['status'] == 'success' else 1
+
+if __name__ == "__main__":
+    raise SystemExit(main())

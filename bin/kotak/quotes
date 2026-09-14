@@ -1,0 +1,584 @@
+#!/usr/bin/env python3
+"""
+Stream Kotak Neo market quotes over websockets into the Redis hash `kotak:quotes:live`, and keep streaming
+until stopped.
+
+    bin/kotak/quotes                                 # instruments from the Redis set kotak:quotes:subscriptions
+    bin/kotak/quotes --tokens "nse_cm|11536,mcx_fo|565899"
+    bin/kotak/quotes --per-socket 500
+
+    redis-cli SADD kotak:quotes:subscriptions "nse_cm|11536" "nse_fo|42020"
+    redis-cli HGET kotak:quotes:live "TCS-EQ"
+    redis-cli HGETALL kotak:quotes:instruments
+
+Self-contained: it logs in with `KotakAPI` and carries its own connection, authentication, subscription and
+binary packet decoding for Kotak's market feed at `wss://sfeed.kotaksecurities.com/apifeed`, so it needs no
+other feed process or key.
+
+**Instruments** are `--tokens` when given, otherwise the members of the Redis set `kotak:quotes:subscriptions`,
+each as `EXCHANGE|TOKEN` with Kotak's lowercase segment names - `nse_cm`, `bse_cm`, `nse_fo`, `bse_fo`, `cde_fo`,
+`nse_com`, `bse_cd`, `bse_co` or `mcx_fo` - and the instrument's `pSymbol` from Kotak's scrip master. Each is
+named with its trading symbol (`pTrdSymbol`) from Kotak's public scrip master files for today, downloaded at
+startup; an instrument those do not name takes the symbol Kotak returns in its subscription acknowledgement.
+One websocket carries up to `--per-socket` instruments, 1000 by default.
+
+**Keys.**
+
+- `kotak:quotes:live`, a hash of the latest tick per instrument as JSON, keyed by the instrument's trading
+  symbol (`TCS-EQ`), or by its `EXCHANGE|TOKEN` while it has no name. A tick is replaced as the next one
+  arrives. It is not cleared at startup, so an instrument no longer subscribed keeps its last tick.
+- `kotak:quotes:instruments`, a hash of every subscribed `EXCHANGE|TOKEN` to its trading symbol, or to an empty
+  string when unnamed. Replaced whole at startup, and filled in when an acknowledgement names an instrument.
+- `kotak:quotes:stream`, a Redis Stream with every tick in arrival order as a `tick` field, which
+  `bin/kotak/persist_ticks` writes to `kotak.ticks`. Capped at about 100,000 entries, so ticks that arrive while
+  the persister is down for long enough are trimmed before they are persisted.
+
+A tick has `id`, `broker`, `instrument_token`, `exchange`, `mode`, `last_price`, `last_quantity`,
+`average_price`, `volume`, `buy_quantity`, `sell_quantity`, `ohlc`, `change`, `oi`, `oi_day_high`,
+`oi_day_low`, `last_trade_time`, `exchange_timestamp`, `depth` (`buy` and `sell` levels of `quantity`, `price`
+and `orders`) and `received_at`, with `None` for what Kotak does not send. `mode` is `full` when the packet
+carried depth and `quote` otherwise. Prices are rupees: Kotak sends scaled integers whose divider is per
+exchange segment, learned from the authentication response, with 100 until it arrives.
+
+**The protocol.** The feed authenticates with a JSON frame carrying the account's UCC as the user and the login
+session id as the credential - not the REST access token - and `source` `NEOTRADEAPI`. Kotak answers 1117 for an
+authenticated session and then subscribes happen; a 1120 refusal arrives after the 1117 rather than instead of it.
+Binary frames are batches of packets, each declaring its own length in its first two bytes.
+
+**Sessions.** Each connection reads the UCC and the session id in force when it connects, so a login made by any
+process is picked up. When Kotak refuses the session (1120), or a socket fails to open six times running, it logs
+in again through `KotakAPI` - one socket at a time - before reconnecting. A reconnect otherwise backs off from 1
+to 60 seconds.
+
+Exits 0 when stopped with Ctrl+C or SIGTERM, 1 when a login fails or a socket still cannot open after logging in
+again, and 2 when there is nothing to subscribe to. Reads only - it places no orders.
+"""
+
+import sys
+import csv
+import json
+import time
+import signal
+import struct
+import argparse
+import threading
+from datetime import date
+from io import StringIO
+from pathlib import Path
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+FEED_URL = "wss://sfeed.kotaksecurities.com/apifeed"
+SCRIP_MASTER_BASE_URL = "https://lapi.kotaksecurities.com/wso2-scripmaster/v1/prod"
+# The scrip master files for a day, by the path Kotak serves each under.
+SCRIP_MASTER_FILES = ("transformed/cde_fo", "transformed/mcx_fo", "transformed/nse_fo", "transformed/bse_fo",
+                      "transformed/nse_com", "transformed-v1/bse_cm-v1", "transformed-v1/nse_cm-v1")
+
+LIVE_KEY = "kotak:quotes:live"
+INSTRUMENTS_KEY = "kotak:quotes:instruments"
+SUBSCRIPTIONS_KEY = "kotak:quotes:subscriptions"
+
+# Every tick is also appended here for bin/kotak/persist_ticks, which reads it with a consumer group. The cap
+# bounds Redis memory when the persister is down; ticks trimmed before it returns are not persisted.
+STREAM_KEY = "kotak:quotes:stream"
+STREAM_MAX_LENGTH = 100000
+
+# Kotak's numeric exchange segments, as packet headers carry them, to its segment names.
+EXCHANGES = {0: "none", 1: "nse_cm", 2: "nse_fo", 3: "cde_fo", 4: "nse_com", 5: "bse_cm", 6: "bse_fo", 7: "bse_cd",
+             8: "bse_co", 9: "mcx_fo"}
+SEGMENTS = tuple(name for code, name in EXCHANGES.items() if code)
+
+HEADER = struct.Struct("<HHbBBBB")
+HEADER_SIZE = 9
+U16 = struct.Struct("<H")
+INDEX_BODY = struct.Struct("<IiiiiiQiiidBi21s")
+MARKET_PICTURE_BODY = struct.Struct("<IqqqqqIIIIIqIIIIhiIdiIIIIIBI")
+MARKET_PICTURE_FIXED_END = 144
+DEPTH_ROW = struct.Struct("<qii")
+DEPTH_ROW_SIZE = 16
+DEFAULT_DIVIDER = 100
+
+# Control plane message codes: 1117 the authentication response, 1120 a refusal that follows it.
+AUTH_RESPONSE, AUTH_REFUSED = 1117, 1120
+INDEX, MARKET_STATUS, MARKET_OPEN, MARKET_CLOSE = 7207, 105, 6511, 6521
+LEVEL_TOUCH_LINE, MARKET_PICTURE_LEVELS = 4, (2, 4, 8, 16)
+
+DEFAULT_PER_SOCKET = 1000
+
+PING_INTERVAL_SECONDS = 30
+PING_TIMEOUT_SECONDS = 10
+MIN_BACKOFF_SECONDS = 1
+MAX_BACKOFF_SECONDS = 60
+MAX_FAILED_CONNECTS = 6
+
+class KotakSession:
+    """
+    The Kotak login every socket authenticates with, logged in again by one socket at a time.
+    """
+
+    def __init__(self, logger):
+        """
+        Construct KotakAPI, which logs in when the stored session is dead.
+
+        - `logger` is where logins are reported.
+        """
+        from stock_brokers.api.kotak import KotakAPI
+
+        self._api_class = KotakAPI
+        self._logger = logger
+        self._lock = threading.Lock()
+        self._kotak = KotakAPI()
+
+    def credentials(self):
+        """
+        The account's UCC and the session id in force now, which may be one another process has just obtained.
+        """
+        login = self._kotak._current_login() or {}
+        return self._kotak._settings.get('ucc_code'), login.get('sid')
+
+    def log_in_again(self, stale_sid):
+        """
+        Log in again, unless another socket already replaced the session that failed.
+
+        - `stale_sid` is the session id the failing connection used.
+        """
+        with self._lock:
+            if self.credentials()[1] != stale_sid:
+                return
+            self._logger.warning("Logging in to Kotak again.")
+            self._kotak = self._api_class()
+
+class QuotesSocket:
+    """
+    One Kotak market feed websocket for a batch of instruments, reconnecting until stopped.
+    """
+
+    def __init__(self, name, tokens, names, session, cache, logger):
+        """
+        - `name` is the connection's name, for the log.
+        - `tokens` is the batch of `EXCHANGE|TOKEN` instrument tokens.
+        - `names` maps `EXCHANGE|TOKEN` to the instrument's trading symbol, shared by every socket.
+        - `session` is the shared KotakSession.
+        - `cache` is the Redis client.
+        - `logger` is where the connection reports.
+        """
+        self.name = name
+        self._tokens = tokens
+        self._names = names
+        self._session = session
+        self._cache = cache
+        self._logger = logger
+        self._stop = threading.Event()
+        self._ws = None
+        self._sid = None
+        self._opened = False
+        self._authenticated = False
+        self._authentication_rejected = False
+        # Price dividers per numeric exchange segment, from the authentication response.
+        self._dividers = {}
+        self.gave_up = False
+
+    def close(self):
+        """Close the websocket and stop reconnecting."""
+        self._stop.set()
+        if self._ws is not None:
+            self._ws.close()
+
+    def run_forever(self):
+        """Connect, and reconnect with backoff, until closed or unable to recover."""
+        backoff = MIN_BACKOFF_SECONDS
+        failed_connects = 0
+        logged_in_again = False
+        while not self._stop.is_set():
+            self._opened = False
+            self._authentication_rejected = False
+            try:
+                self._connect()
+            except Exception as exception:
+                self._logger.error(f"{self.name} connection failed: {type(exception).__name__}: {exception}")
+            if self._stop.is_set():
+                break
+
+            if self._opened and not self._authentication_rejected:
+                failed_connects, logged_in_again, backoff = 0, False, MIN_BACKOFF_SECONDS
+            else:
+                failed_connects += 1
+
+            if self._authentication_rejected or failed_connects >= MAX_FAILED_CONNECTS:
+                if logged_in_again and failed_connects >= MAX_FAILED_CONNECTS:
+                    self.gave_up = True
+                    self._logger.error(f"{self.name} still cannot connect after logging in again. Giving up.")
+                    break
+                try:
+                    # A dead session: log in again before connecting again.
+                    self._session.log_in_again(self._sid)
+                except Exception as exception:
+                    self.gave_up = True
+                    self._logger.error(f"{self.name} could not log in to Kotak again: {type(exception).__name__}: {exception}")
+                    break
+                failed_connects, logged_in_again = 0, True
+
+            self._logger.warning(f"{self.name} disconnected. Reconnecting in {backoff} seconds.")
+            self._stop.wait(backoff)
+            backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
+        self._logger.info(f"{self.name} stopped.")
+
+    def _connect(self):
+        """Open the websocket and block until it closes."""
+        import websocket
+
+        self._ws = websocket.WebSocketApp(FEED_URL, on_open=self._on_open, on_message=self._on_message,
+                                          on_error=self._on_error, on_close=self._on_close)
+        self._ws.run_forever(ping_interval=PING_INTERVAL_SECONDS, ping_timeout=PING_TIMEOUT_SECONDS)
+
+    def _on_open(self, ws):
+        """Authenticate with the UCC and the session id in force now. Subscribing waits for the acknowledgement."""
+        self._opened = True
+        self._authenticated = False
+        self._dividers = {}
+        ucc, self._sid = self._session.credentials()
+        ws.send(json.dumps({
+            "user": ucc, "auth": self._sid, "format": "native_batch",
+            # NEOTRADEAPI, not API: Kotak answers an unrecognised source with a 1117 and then a 1120 refusal.
+            "source": "NEOTRADEAPI", "platform": "python", "version": "1.0.0", "sdk_version": "1.0.0",
+            "sdk_date": "2026-01-01", "conn_req_time": int(time.time() * 1000), "sessionValidation": False,
+        }))
+        self._logger.info(f"{self.name} opened. Authenticating.")
+
+    def _on_error(self, ws, error):
+        self._logger.error(f"{self.name} error: {error}")
+
+    def _on_close(self, ws, status_code, message):
+        self._logger.info(f"{self.name} closed with status {status_code}: {message}")
+
+    def _on_message(self, ws, message):
+        """Handle a control frame, or decode a binary batch and write its ticks to the live quotes hash."""
+        if isinstance(message, str):
+            self._handle_text(message)
+            return
+        if not isinstance(message, (bytes, bytearray)):
+            return
+        data = bytes(message)
+        # An authentication response may arrive as text inside a binary frame.
+        if data[:1] in (b'{', b'['):
+            self._handle_text(data.decode('utf-8', errors='replace'))
+            return
+        ticks = self.parse_batch(data)
+        if ticks:
+            encoded = [(tick['id'], json.dumps(tick)) for tick in ticks]
+            # The latest tick per instrument and every tick in arrival order, in one round trip.
+            pipeline = self._cache.pipeline(transaction=False)
+            pipeline.hset(LIVE_KEY, mapping=dict(encoded))
+            for _, payload in encoded:
+                pipeline.xadd(STREAM_KEY, {"tick": payload}, maxlen=STREAM_MAX_LENGTH, approximate=True)
+            pipeline.execute()
+
+    def _handle_text(self, message):
+        """
+        Read a JSON control frame: the dividers, the authentication response or refusal, and acknowledged names.
+
+        - `message` is the decoded text frame.
+        """
+        try:
+            payload = json.loads(message)
+        except json.JSONDecodeError:
+            return
+
+        for entry in (payload if isinstance(payload, list) else [payload]):
+            if not isinstance(entry, dict):
+                continue
+            code = entry.get('message_code')
+
+            if code == AUTH_REFUSED:
+                self._logger.error(f"{self.name}: Kotak refused the session: {entry.get('message')}")
+                self._authenticated = False
+                self._authentication_rejected = True
+                if self._ws is not None:
+                    self._ws.close()
+                continue
+
+            # The banner and the authentication response carry the dividers keyed by exchange name:
+            # {"nse_cm": {"value": 1, "divider": 100}}.
+            exchanges = entry.get('exchanges')
+            if isinstance(exchanges, dict):
+                for details in exchanges.values():
+                    try:
+                        self._dividers[int(details['value'])] = int(details['divider'])
+                    except (KeyError, TypeError, ValueError):
+                        continue
+
+            if (code == AUTH_RESPONSE or entry.get('type') in ('cn', 'auth') or entry.get('stat') == 'Ok'
+                    or 'ak' in entry) and not self._authenticated:
+                self._authenticated = True
+                self._subscribe()
+
+            # The subscription acknowledgement maps each instrument to its trading symbol.
+            learned = {}
+            for key in ('symbols', 'scrips', 'data'):
+                mapping = entry.get(key)
+                if isinstance(mapping, dict):
+                    learned.update({token: symbol for token, symbol in mapping.items()
+                                    if isinstance(symbol, str) and not self._names.get(token)})
+            if learned:
+                self._names.update(learned)
+                self._cache.hset(INSTRUMENTS_KEY, mapping=learned)
+
+    def _subscribe(self):
+        """Subscribe the batch in full depth."""
+        if self._ws is None or not self._tokens:
+            return
+        self._ws.send(json.dumps({"event": "subscribeFullDepth", "inputtoken": ",".join(self._tokens),
+                                  "ack_symbol": True}))
+        self._logger.info(f"{self.name} authenticated and subscribed to {len(self._tokens)} instrument(s) in full depth.")
+
+    def parse_batch(self, data):
+        """
+        The ticks in a binary batch.
+
+        - `data` is the binary frame.
+        """
+        ticks = []
+        for packet in split_batch(data):
+            message_length, code, exchange_id, level, _auction, _sequence, _bitmask = HEADER.unpack_from(packet, 0)
+            exchange = EXCHANGES.get(exchange_id, str(exchange_id))
+            try:
+                if code in (MARKET_OPEN, MARKET_CLOSE, MARKET_STATUS):
+                    continue
+                if code == INDEX:
+                    ticks.append(self._decode_index(packet, exchange, exchange_id))
+                elif level in MARKET_PICTURE_LEVELS:
+                    ticks.append(self._decode_market_picture(packet, exchange, exchange_id, level, message_length))
+            except struct.error as exception:
+                self._logger.debug(f"{self.name} skipped a malformed packet: {exception}")
+        return ticks
+
+    def _divider(self, exchange_id):
+        return self._dividers.get(exchange_id) or DEFAULT_DIVIDER
+
+    def _decode_market_picture(self, packet, exchange, exchange_id, level, message_length):
+        """
+        A tick from a market picture packet, which carries the quote fields and the depth book.
+
+        - `packet` is the binary packet.
+        - `exchange` and `exchange_id` are its segment name and number.
+        - `level` is the subscription level, which decides the depth row count.
+        - `message_length` is the length the header declared.
+        """
+        divider = self._divider(exchange_id)
+        (token, total_buy_qty, total_sell_qty, volume, last_trade_time, last_update_time, open_price, close_price,
+         high_price, low_price, last_traded_price, last_trade_qty, average_price, _indicative_close, buy_depth_count,
+         sell_depth_count, _trading_status, _net_change_percent, open_interest, _total_traded_value, _net_change,
+         _upper_circuit, _lower_circuit, _yearly_high, _yearly_low, _market_lot, _precision,
+         _multiplier) = MARKET_PICTURE_BODY.unpack_from(packet, HEADER_SIZE)
+
+        # A never traded instrument stamps this with a negative placeholder rather than zero.
+        last_update_time = max(last_update_time, 0)
+        # The touch line level always carries exactly one bid and one ask, whatever the counts say.
+        buy_rows, sell_rows = (1, 1) if level == LEVEL_TOUCH_LINE else (buy_depth_count, sell_depth_count)
+
+        depth = {"buy": [], "sell": []}
+        offset, limit = MARKET_PICTURE_FIXED_END, min(message_length, len(packet))
+        for row in range(buy_rows + sell_rows):
+            if offset + DEPTH_ROW_SIZE > limit:
+                break
+            quantity, price, orders = DEPTH_ROW.unpack_from(packet, offset)
+            depth["buy" if row < buy_rows else "sell"].append({"quantity": quantity, "price": price / divider,
+                                                               "orders": orders})
+            offset += DEPTH_ROW_SIZE
+
+        tick = self._empty_tick(f"{exchange}|{token}", exchange)
+        close, last_price = close_price / divider, last_traded_price / divider
+        tick.update({
+            "mode": "full" if depth["buy"] or depth["sell"] else "quote", "last_price": last_price,
+            "last_quantity": last_trade_qty, "average_price": average_price / divider, "volume": volume,
+            "buy_quantity": total_buy_qty, "sell_quantity": total_sell_qty,
+            "ohlc": {"open": open_price / divider, "high": high_price / divider, "low": low_price / divider, "close": close},
+            "change": (last_price - close) * 100 / close if close else None, "oi": open_interest,
+            "last_trade_time": last_trade_time or None, "exchange_timestamp": last_update_time or None, "depth": depth,
+        })
+        return tick
+
+    def _decode_index(self, packet, exchange, exchange_id):
+        """
+        A tick from an index packet.
+
+        - `packet` is the binary packet.
+        - `exchange` and `exchange_id` are its segment name and number.
+        """
+        divider = self._divider(exchange_id)
+        (token, open_price, close_price, high_price, low_price, index_value, last_trade_time, _yearly_high, _yearly_low,
+         _net_change, _percent_change, _market_type, _reserved, _name) = INDEX_BODY.unpack_from(packet, HEADER_SIZE)
+
+        tick = self._empty_tick(f"{exchange}|{token}", exchange)
+        close, last_price = close_price / divider, index_value / divider
+        tick.update({
+            "last_price": last_price,
+            "ohlc": {"open": open_price / divider, "high": high_price / divider, "low": low_price / divider, "close": close},
+            "change": (last_price - close) * 100 / close if close else None,
+            "exchange_timestamp": last_trade_time or None,
+        })
+        return tick
+
+    def _empty_tick(self, token, exchange):
+        """
+        A tick with every field unset.
+
+        - `token` is the instrument's `EXCHANGE|TOKEN`.
+        - `exchange` is its segment name.
+        """
+        return {"id": self._names.get(token) or token, "broker": "kotak", "instrument_token": token,
+                "exchange": exchange, "mode": "quote", "last_price": None, "last_quantity": None,
+                "average_price": None, "volume": None, "buy_quantity": None, "sell_quantity": None,
+                "ohlc": {"open": None, "high": None, "low": None, "close": None}, "change": None, "oi": None,
+                "oi_day_high": None, "oi_day_low": None, "last_trade_time": None, "exchange_timestamp": None,
+                "depth": {"buy": [], "sell": []}, "received_at": time.time()}
+
+def split_batch(frame):
+    """
+    A binary frame's packets. Each declares its own length in its first two bytes, and they run back to back.
+
+    - `frame` is the binary frame.
+    """
+    packets, offset = [], 0
+    while offset + 2 <= len(frame):
+        size = U16.unpack_from(frame, offset)[0]
+        # A length shorter than a header, or running past the frame, means a truncated tail: it ends the walk.
+        if size < HEADER_SIZE or offset + size > len(frame):
+            break
+        packets.append(frame[offset:offset + size])
+        offset += size
+    return packets
+
+def resolve_tokens(tokens, cache, logger):
+    """
+    The valid `EXCHANGE|TOKEN` tokens to subscribe to: `--tokens` when given, otherwise the subscription set.
+
+    - `tokens` is a comma separated list of instrument tokens, or None.
+    - `cache` is the Redis client.
+    - `logger` is where the resolution is reported.
+    """
+    if tokens:
+        wanted, source = [token.strip() for token in tokens.split(",")], "--tokens"
+    else:
+        wanted, source = list(cache.smembers(SUBSCRIPTIONS_KEY)), SUBSCRIPTIONS_KEY
+
+    resolved = []
+    for token in sorted({str(token).strip() for token in wanted if str(token).strip()}):
+        segment, _, instrument = token.partition('|')
+        if segment in SEGMENTS and instrument.isdigit():
+            resolved.append(token)
+        else:
+            logger.warning(f"Skipping {token}: expected EXCHANGE|TOKEN with EXCHANGE one of {', '.join(SEGMENTS)}.")
+    logger.info(f"Subscribing to {len(resolved)} instrument(s) from {source}.")
+    return resolved
+
+def instrument_names(tokens, logger):
+    """
+    The trading symbols of the subscribed instruments from today's scrip master files, keyed by `EXCHANGE|TOKEN`.
+
+    A file that cannot be downloaded is reported and skipped; its instruments take their names from the
+    subscription acknowledgement instead.
+
+    - `tokens` is the list of subscribed `EXCHANGE|TOKEN` tokens.
+    - `logger` is where a failed download is reported.
+    """
+    import requests
+
+    wanted = set(tokens)
+    wanted_segments = {token.partition('|')[0] for token in tokens}
+    names = {}
+    for path in SCRIP_MASTER_FILES:
+        segment = path.rsplit('/', 1)[1].removesuffix('-v1')
+        if segment not in wanted_segments:
+            continue
+        url = f"{SCRIP_MASTER_BASE_URL}/{date.today().isoformat()}/{path}.csv"
+        try:
+            response = requests.get(url, timeout=120)
+            response.raise_for_status()
+        except Exception as exception:
+            logger.warning(f"Could not download Kotak's {segment} scrip master: {exception}")
+            continue
+        for row in csv.DictReader(StringIO(response.text)):
+            token = f"{(row.get('pExchSeg') or '').strip()}|{(row.get('pSymbol') or '').strip()}"
+            if token in wanted and (row.get('pTrdSymbol') or '').strip():
+                names[token] = row['pTrdSymbol'].strip()
+    return names
+
+def main():
+    """Stream Kotak quotes into kotak:quotes:live until stopped."""
+    parser = argparse.ArgumentParser(description="Stream Kotak Neo market quotes into kotak:quotes:live until stopped.")
+    parser.add_argument("--tokens", help='comma separated EXCHANGE|TOKEN tokens, for example "nse_cm|11536"')
+    parser.add_argument("--per-socket", type=int, default=DEFAULT_PER_SOCKET,
+                        help=f"instruments per websocket connection, default {DEFAULT_PER_SOCKET}")
+    arguments = parser.parse_args()
+
+    from utilities.configurations import get_cache, get_logger
+
+    logger = get_logger("kotak.quotes")
+    cache = get_cache()
+
+    if arguments.per_socket < 1:
+        logger.error("--per-socket must be at least 1.")
+        return 2
+
+    tokens = resolve_tokens(arguments.tokens, cache, logger)
+    if not tokens:
+        logger.error(f"Nothing to subscribe to. Pass --tokens or add EXCHANGE|TOKEN members to the Redis set "
+                     f"{SUBSCRIPTIONS_KEY}.")
+        return 2
+
+    try:
+        session = KotakSession(logger)
+    except Exception as exception:
+        logger.error(f"Could not log in to Kotak: {type(exception).__name__}: {exception}")
+        return 1
+
+    names = instrument_names(tokens, logger)
+    pipeline = cache.pipeline()
+    pipeline.delete(INSTRUMENTS_KEY)
+    pipeline.hset(INSTRUMENTS_KEY, mapping={token: names.get(token, "") for token in tokens})
+    pipeline.execute()
+    unnamed = [token for token in tokens if token not in names]
+    logger.info(f"Wrote {len(tokens)} subscribed instrument(s) to {INSTRUMENTS_KEY}.")
+    if unnamed:
+        logger.warning(f"{len(unnamed)} instrument(s) are not in the scrip master and are keyed by token until Kotak "
+                       f"names them: {', '.join(unnamed[:20])}{' ...' if len(unnamed) > 20 else ''}")
+
+    batches = [tokens[start:start + arguments.per_socket] for start in range(0, len(tokens), arguments.per_socket)]
+    sockets = [QuotesSocket(f"socket_{index}", batch, names, session, cache, logger) for index, batch in enumerate(batches)]
+
+    # Installed before the sockets start: systemd stops a unit with SIGTERM, and the default action would kill
+    # the process without closing anything.
+    def _handle_signal(signal_number, frame):
+        logger.info(f"Received signal {signal_number}. Closing the quotes feed.")
+        for socket in sockets:
+            socket.close()
+
+    for signal_number in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(signal_number, _handle_signal)
+
+    threads = [threading.Thread(target=socket.run_forever, name=f"kotak_quotes_{socket.name}", daemon=True)
+               for socket in sockets]
+    logger.info(f"Starting {len(sockets)} websocket(s) for {len(tokens)} instrument(s).")
+    for thread in threads:
+        thread.start()
+
+    # Block in the main thread so the signal handlers above can run.
+    while any(thread.is_alive() for thread in threads):
+        for thread in threads:
+            thread.join(timeout=1)
+
+    gave_up = [socket.name for socket in sockets if socket.gave_up]
+    if gave_up:
+        logger.error(f"Socket(s) {', '.join(gave_up)} gave up.")
+        return 1
+    logger.info("Quotes feed stopped.")
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,180 @@
+#!/usr/bin/env python3
+"""
+Download Dhan's instrument master, append today's snapshot to `dhan.instruments`, and store it in Redis as
+`dhan:instruments:master` with `dhan:instruments:meta` beside it.
+
+    bin/dhan/instruments
+    bin/dhan/instruments --bootstrap              # replace today's stored snapshot in the table
+
+    redis-cli HGET dhan:instruments:master NSE:E:2885
+    redis-cli GET dhan:instruments:meta
+
+**The download** is Dhan's public detailed scrip master, `https://images.dhan.co/api-data/api-scrip-master-detailed.csv`
+- about 35 MB and 200,000 rows, no login needed - fetched once through `DhanInstruments` and used for both
+stores.
+
+**The table** is written by `DhanInstruments.ingest`: column names normalized to snake_case, whitespace stripped,
+the empty column left by each line's trailing comma dropped, `NSETEST` placeholder rows dropped, duplicates on
+`(exch_id, segment, security_id)` dropped, `download_date` added, and the rows appended to `dhan.instruments`. A
+date already stored is skipped unless `--bootstrap` is given, and a row count more than ten percent off the earlier
+days' average is reported.
+
+**Redis** gets the same cleaned rows, whether or not the table already had today's:
+
+- `dhan:instruments:master`, a hash with one field per instrument, `EXCH_ID:SEGMENT:SECURITY_ID` as the file
+  spells them (`NSE:E:2885`, `NSE:D:35001`, `MCX:M:447552`) - the table's own natural key, which covers every
+  row, including NSE commodities that Dhan's feed segment names (`NSE_EQ` and the rest) do not. The value is
+  the row as a JSON array in column order, with `null` for a value Dhan left blank or `NA`; the column names
+  are stored once in the meta key rather than in every row, which keeps the hash near the file's own size.
+- `dhan:instruments:meta`, a JSON object: `download_date`, `rows`, `columns` (the order the arrays follow),
+  `source_last_modified` (the file's Last-Modified header) and `written_at`.
+
+The hash is built under `dhan:instruments:master:staging` and swapped in at the end, so a reader sees either
+yesterday's complete hash or today's, never one half-written; the previous hash is unlinked in the background
+rather than freed inline.
+
+Exits 0 when both the table and Redis were written (or the table already held today's snapshot), and 1 when
+the download, the table write or the Redis write failed, saying which.
+"""
+
+import sys
+import json
+import argparse
+from datetime import date, datetime
+from pathlib import Path
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+MASTER_KEY = "dhan:instruments:master"
+STAGING_KEY = "dhan:instruments:master:staging"
+PREVIOUS_KEY = "dhan:instruments:master:previous"
+META_KEY = "dhan:instruments:meta"
+
+KEY_COLUMNS = ("exch_id", "segment", "security_id")
+FIELDS_PER_BATCH = 5000
+
+def downloader():
+    """
+    A DhanInstruments whose download happens once, so the table write and Redis share one fetch.
+    """
+    from stock_brokers.instruments.dhan import DhanInstruments
+
+    class OnceDownloadedDhanInstruments(DhanInstruments):
+        """DhanInstruments keeping the frame it downloaded, for the Redis write to reuse."""
+
+        _frame = None
+
+        def download(self):
+            if self._frame is None:
+                self._frame = super().download()
+            return self._frame.copy()
+
+    return OnceDownloadedDhanInstruments()
+
+def cleaned(ingester):
+    """
+    The downloaded rows cleaned exactly as `ingest` cleans them before the table write.
+
+    - `ingester` is the DhanInstruments that downloaded the file.
+    """
+    frame = ingester.download()
+    for step in (ingester.normalize_columns, ingester.strip_whitespace, ingester.drop_unnamed_columns,
+                 ingester.drop_garbage_rows, ingester.dedupe):
+        frame = step(frame)
+    return frame
+
+def source_last_modified():
+    """The scrip master's Last-Modified header, or None when it cannot be read."""
+    import requests
+    from stock_brokers.instruments.dhan import INSTRUMENTS_URL
+
+    try:
+        return requests.head(INSTRUMENTS_URL, timeout=30).headers.get("Last-Modified")
+    except Exception:
+        return None
+
+def write_redis(cache, frame, download_date, logger):
+    """
+    Build the instrument hash under a staging key, then swap it and the meta in together.
+
+    - `cache` is the Redis client.
+    - `frame` is the cleaned instrument rows.
+    - `download_date` is the snapshot's date.
+    - `logger` is where progress is reported.
+    """
+    columns = list(frame.columns)
+    key_positions = [columns.index(column) for column in KEY_COLUMNS]
+    # Blank and "NA" arrive as NaN, which is not JSON; NaN is the one value unequal to itself.
+    rows = [[None if value != value else value for value in row] for row in frame.itertuples(index=False, name=None)]
+
+    cache.unlink(STAGING_KEY)
+    for start in range(0, len(rows), FIELDS_PER_BATCH):
+        batch = rows[start:start + FIELDS_PER_BATCH]
+        cache.hset(STAGING_KEY, mapping={":".join(str(row[position]) for position in key_positions): json.dumps(row)
+                                         for row in batch})
+    stored = cache.hlen(STAGING_KEY)
+
+    meta = {"download_date": str(download_date), "rows": stored, "columns": columns,
+            "source_last_modified": source_last_modified(), "written_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+
+    # Renaming onto an existing key frees the old value inline, which for a hash this size can stall Redis,
+    # so the old hash is moved aside and unlinked, which frees it in the background.
+    pipeline = cache.pipeline(transaction=True)
+    if cache.exists(MASTER_KEY):
+        pipeline.rename(MASTER_KEY, PREVIOUS_KEY)
+    pipeline.rename(STAGING_KEY, MASTER_KEY)
+    pipeline.set(META_KEY, json.dumps(meta))
+    pipeline.unlink(PREVIOUS_KEY)
+    pipeline.execute()
+
+    if stored != len(rows):
+        logger.warning(f"{len(rows)} row(s) produced {stored} field(s): some rows share an EXCH_ID:SEGMENT:SECURITY_ID.")
+    logger.info(f"Wrote {stored} instrument(s) to {MASTER_KEY} and the meta to {META_KEY}.")
+
+def main():
+    """Download Dhan's instrument master into dhan.instruments and Redis."""
+    parser = argparse.ArgumentParser(description="Download Dhan's instrument master into dhan.instruments and Redis.")
+    parser.add_argument("--bootstrap", action="store_true",
+                        help="replace today's stored snapshot in the table instead of skipping")
+    arguments = parser.parse_args()
+
+    from utilities.configurations import get_cache, get_logger
+
+    logger = get_logger("dhan.instruments")
+    download_date = date.today()
+    ingester = downloader()
+
+    try:
+        frame = cleaned(ingester)
+    except Exception as exception:
+        logger.error(f"Could not download Dhan's instrument master: {type(exception).__name__}: {exception}")
+        return 1
+    logger.info(f"Downloaded {len(frame)} instrument(s) for {download_date}.")
+
+    failures = []
+    try:
+        rows = ingester.ingest(download_date=download_date, bootstrap=arguments.bootstrap)
+        if rows:
+            ingester.check_row_count_deviation(download_date)
+    except Exception as exception:
+        failures.append("table")
+        logger.error(f"Could not write dhan.instruments: {type(exception).__name__}: {exception}")
+
+    try:
+        write_redis(get_cache(), frame, download_date, logger)
+    except Exception as exception:
+        failures.append("Redis")
+        logger.error(f"Could not write {MASTER_KEY}: {type(exception).__name__}: {exception}")
+
+    if failures:
+        logger.error(f"Failed: {' and '.join(failures)}.")
+        return 1
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,72 @@
+#!/usr/bin/env python3
+"""
+Poll the Dhan user profile every minute and write it to the Redis key `dhan:user:details`.
+
+    bin/dhan/user-profile
+    redis-cli GET dhan:user:details
+
+Calls `GET https://api.dhan.co/v2/profile` through `DhanAPI`, which logs in first if the stored session
+is dead. Each response - `timestamp`, `status`, `code` and Dhan's profile under `data` (`dhanClientId`,
+`tokenValidity`, `activeSegment`, `ddpi`, `mtf`, `dataPlan`, `dataValidity`) - is written as one JSON
+string with SET, replacing the one before.
+
+Runs until Ctrl+C. A dead session (`Invalid_Authentication`, DH-901) is logged in again before the next
+request; any other failed poll is logged and leaves `dhan:user:details` unchanged. Exits 1 when the first
+login, or a login after the session died, fails. Reads only - it places no orders.
+"""
+
+import sys
+import json
+import time
+from pathlib import Path
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+PROFILE_URL = "https://api.dhan.co/v2/profile"
+REDIS_KEY = "dhan:user:details"
+DELAY_SECONDS = 60
+TIMEOUT_SECONDS = 10
+
+def is_authentication_error(exception):
+    """Whether Dhan refused the request because the session is dead."""
+    code = str(getattr(exception, 'code', '') or '').lower()
+    return code == 'invalid_authentication' or 'dh-901' in str(exception).lower()
+
+def main():
+    """Fetch the profile and write it to dhan:user:details every 60 seconds, until interrupted."""
+    from stock_brokers.api.dhan import DhanAPI
+    from utilities.configurations import get_cache, get_logger
+
+    logger = get_logger("dhan.user_profile")
+    cache = get_cache()
+    try:
+        dhan = DhanAPI()
+    except Exception as exception:
+        logger.error(f"Could not log in to Dhan: {type(exception).__name__}: {exception}")
+        return 1
+
+    try:
+        while True:
+            try:
+                profile = dhan.get(url=PROFILE_URL, timeout=TIMEOUT_SECONDS)
+                cache.set(REDIS_KEY, json.dumps(profile))
+                logger.info(f"Wrote the profile of {(profile.get('data') or {}).get('dhanClientId')} to {REDIS_KEY}")
+            except Exception as exception:
+                if is_authentication_error(exception):
+                    # A dead session: log in again before sending anything more.
+                    logger.warning(f"Dhan session expired, logging in again: {exception}")
+                    dhan = DhanAPI()
+                else:
+                    logger.error(f"Profile poll failed: {type(exception).__name__}: {exception}")
+            time.sleep(DELAY_SECONDS)
+    except KeyboardInterrupt:
+        logger.info("Stopped")
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())

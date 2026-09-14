@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+"""
+Log in to the Flattrade API by constructing `FlattradeAPI`, confirm the session works, and record the
+outcome in the Redis key `flattrade:session:status`.
+
+    bin/flattrade/login
+    redis-cli GET flattrade:session:status
+
+`FlattradeAPI()` probes `POST /UserDetails` with the stored token and only runs the real login - the user
+name, hashed password and a TOTP, then exchanging the request code for a token - when that probe raises.
+A new token is written to MongoDB and to the Redis `last_login` hash, where every other process picks it
+up. `UserDetails` is then asked once more and its body checked, because Flattrade runs on Noren and Noren
+answers HTTP 200 whether or not it served the request: a success means a response with `stat` `Ok`, not
+just a constructor that returned.
+
+`flattrade:session:status` holds one JSON object, replaced on every run:
+
+    {"status": "success", "access-token": "<token>", "last_login": "2026-09-14 08:30:02"}
+    {"status": "failure", "access-token": null, "last_login": "2026-09-14 08:30:02"}
+
+On success `last_login` is when the token in force was issued, which is earlier than this run when the
+stored session was still good. On failure it is when this attempt was made.
+
+Exits 0 when the session works and 1 when the login, the check or the Redis write fails, so a systemd
+unit can retry on failure. Logs in to a live broker account. Reads only - it places no orders.
+"""
+
+import sys
+import json
+from datetime import datetime
+from pathlib import Path
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+USER_DETAILS_URL = "https://piconnect.flattrade.in/PiConnectAPI/UserDetails"
+REDIS_KEY = "flattrade:session:status"
+TIMEOUT_SECONDS = 10
+
+def main():
+    """Construct FlattradeAPI, which logs in when the stored session is dead, confirm it, and record the outcome."""
+    from stock_brokers.api.flattrade import FlattradeAPI
+    from utilities.configurations import get_cache
+
+    try:
+        flattrade = FlattradeAPI()
+        details = (flattrade.post(url=USER_DETAILS_URL, timeout=TIMEOUT_SECONDS) or {}).get('data')
+        if not isinstance(details, dict) or str(details.get('stat', '')).lower() != 'ok':
+            raise RuntimeError(f"UserDetails refused the session: {str(details)[:200]}")
+        login = flattrade._last_login or {}
+        record = {'status': 'success', 'access-token': login.get('access_token'), 'last_login': login.get('last_login')}
+        print(f"flattrade ok logged in at {record['last_login']}")
+    except Exception as exception:
+        record = {'status': 'failure', 'access-token': None, 'last_login': datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+        print(f"flattrade FAILED {type(exception).__name__}: {exception}", file=sys.stderr)
+
+    try:
+        get_cache().set(REDIS_KEY, json.dumps(record))
+    except Exception as exception:
+        print(f"flattrade could not write {REDIS_KEY}: {type(exception).__name__}: {exception}", file=sys.stderr)
+        return 1
+
+    return 0 if record['status'] == 'success' else 1
+
+if __name__ == "__main__":
+    raise SystemExit(main())
