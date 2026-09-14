@@ -20,11 +20,15 @@ maps and warms the cache from; every query here names its tables through
   from today's cache but still has prices, so `/prices` and `/ticks` look it up in the instrument table.
 """
 
+from collections import Counter
+from decimal import Decimal, InvalidOperation
+
 from sqlalchemy import text
 
 from stock_brokers.instruments.mapping.utilities import tables
 from stock_brokers.instruments.mapping.utilities.resolution import MappingResolver
 from stock_brokers.instruments.mapping.utilities.segments import segment_rank, split_segment_value
+from stock_brokers.instruments.ticks.utilities.resolution import units_per_lot
 from unified_broker_interface.utilities.instrument_identity import (IDENTITY_FIELDS, UNCATEGORISED, RequestError,
                                                                     identity_to_json, shape_of)
 from utilities.configurations import get_logger
@@ -338,7 +342,9 @@ class InstrumentCatalogue:
 
     def details(self, instrument, as_of=None):
         """
-        One instrument's identity, the dates it was seen, and every broker's handle on the mapping date.
+        One instrument's identity, the dates it was seen, its lot and tick size, and every broker's handle on the mapping date.
+
+        `lot_size` is underlying units per lot, decided as the unified quote decides it: 1 for a security, Groww's figure on MCX, and the brokers' majority elsewhere. `tick_size` is in rupees, the value most brokers agree on. Each is null when the brokers tie or none sends one. The handles in `carried_by` keep each broker's own lot size, because an order's quantity is checked against the broker it goes to.
 
         - `instrument` is the `InstrumentQuery` the request parsed to.
         - `as_of` is the date asked about, or None for today.
@@ -355,10 +361,44 @@ class InstrumentCatalogue:
                           | {"lot_size": None if row["lot_size"] is None else str(row["lot_size"]),
                              "tick_size": None if row["tick_size"] is None else str(row["tick_size"])}
                           for row in self._resolver.broker_rows_on_date(identifier, mapping_date)]
+        handles_by_broker = {}
+        for handle in carried_by:
+            handles_by_broker[handle["broker"]] = handle
+        lot_size, _ = units_per_lot(identity, handles_by_broker)
         return {
             **identity_to_json(identity),
             "mapping_date": mapping_date.isoformat(),
             "first_seen_date": first_seen.isoformat() if first_seen else None,
             "last_seen_date": last_seen.isoformat() if last_seen else None,
+            "lot_size": lot_size,
+            "tick_size": self._agreed_tick_size(carried_by),
             "carried_by": carried_by,
         }
+
+    @staticmethod
+    def _agreed_tick_size(carried_by):
+        """Finds the tick size most of an instrument's brokers agree on.
+
+        Args:
+            carried_by (list[dict]): Every broker's handle on the instrument, each with a "tick_size" that is a string in rupees or None.
+
+        Returns:
+            str | None: The most common positive tick size, written without an exponent, or None when no broker sends one or the two most common values are equally common.
+
+        Raises:
+            None.
+        """
+        tick_sizes = Counter()
+        for handle in carried_by:
+            try:
+                tick_size = Decimal(str(handle.get("tick_size")))
+            except (InvalidOperation, ValueError):
+                continue
+            if tick_size.is_finite() and tick_size > 0:
+                tick_sizes[tick_size] += 1
+        ranked = tick_sizes.most_common(2)
+        if not ranked:
+            return None
+        if len(ranked) > 1 and ranked[0][1] == ranked[1][1]:
+            return None
+        return format(ranked[0][0].normalize(), "f")

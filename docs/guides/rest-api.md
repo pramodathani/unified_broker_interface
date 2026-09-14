@@ -179,7 +179,7 @@ Everything under `/api/instruments` takes the `access-token` header and answers 
 | `/segments` | none | Every segment mapped today, with its shape, identity fields and instrument count | Redis |
 | `/master` | `exchange`, `segment` (either may be `all`), `date` | **Streamed** JSON array of identities, in segment, name, expiry, strike order; `X-Mapping-Date` header | Redis |
 | `/search` | `exchange`, `segment`, `q`, `date`, `limit` (50, at most 200) | `{mapping_date, instruments}`: exact name matches, then prefixes, then substrings | Redis |
-| `/details` | an instrument, `date` | Identity, `mapping_date`, seen dates, `carried_by` each broker's token, order symbol, lot and tick size | Redis |
+| `/details` | an instrument, `date` | Identity, `mapping_date`, seen dates, the instrument's `lot_size` and `tick_size`, and `carried_by` each broker's token, order symbol, lot and tick size | Redis |
 | `/ltp` | an instrument | Identity, `last_price`, `last_trade_time`, `received_at`, `source` | Quote cache or broker |
 | `/ohlc` | an instrument | The above with `ohlc`, `previous_close`, `change_percent` | Quote cache or broker |
 | `/quote` | an instrument | The whole [unified quote](../architecture/contracts.md#the-unified-quote), depth included, with `source` | Quote cache or broker |
@@ -190,6 +190,16 @@ Everything under `/api/instruments` takes the `access-token` header and answers 
 needs: `symbol` for a security; `underlying_symbol` and `expiry_date` for a future; those and
 `strike_price` and `option_type` for an option. Names are matched case-insensitively. `segment` may be
 the stored value (`nse_equities`) or the bare name (`equities`).
+
+**Lot and tick size.** The top-level `lot_size` and `tick_size` in `/details` are the ones to use for the
+instrument itself. `lot_size` is an integer count of underlying units per lot, decided exactly as the
+[unified quote](../architecture/contracts.md#the-unified-quote) decides it: 1 for a security, Groww's figure
+on MCX, and the brokers' majority elsewhere. `tick_size` is a string in rupees, the value most brokers
+agree on. Either is null when the brokers tie or none sends one. The entries in `carried_by` are each
+broker's own handle and are not interchangeable: on MCX, Dhan, Fyers, Wisdom Capital and Zerodha give a
+lot size of 1 (one lot), Flattrade, Kotak, Shoonya and Stoxkart give the lot in the exchange's physical
+trading unit, and Groww gives it in quotation units. An order's quantity is checked against the lot size
+of the broker it goes to.
 
 ```bash
 curl -s "localhost:8080/api/instruments/search?exchange=nse&segment=equities&q=RELIANCE" -H "access-token: $TOKEN"
