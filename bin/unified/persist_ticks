@@ -1,0 +1,375 @@
+#!/usr/bin/env python3
+"""
+Persist unified quotes from the Redis Stream `unified:quotes:stream` into `unified.ticks`, and keep persisting until stopped.
+
+    bin/unified/persist_ticks
+    bin/unified/persist_ticks --batch-size 2000 --flush-interval 2
+
+    redis-cli XINFO GROUPS unified:quotes:stream          # lag and pending count
+
+`bin/unified/quotes` appends every quote the unified quote layer accepts - resolved to its instrument, from the broker
+that owned it at that moment, normalized - to the stream as field `quote`; this reads it as the `persist` consumer group,
+apart from any other reader, and writes one row per quote to `unified.ticks` with COPY, a batch at a time. A batch is
+written when it holds `--batch-size` rows or has waited `--flush-interval` seconds, whichever comes first.
+
+**The table** is created on start from `300_unified_ticks.sql` - safe to apply again.
+
+**Columns:** `time` is the quote's `received_at`, when the broker feed decoded the tick; then `instrument_id`,
+`broker`, `exchange_time` and `last_trade_time` as instants, `last_price`, `last_quantity`, `average_price`, `volume`,
+`buy_quantity`, `sell_quantity`, `open`/`high`/`low` from `ohlc`, `previous_close`, `change_percent`, `oi`,
+`oi_day_high`, `oi_day_low`, `lot_size`, and the five bid and ask levels from `depth` flattened into `bid1_price` ...
+`ask5_orders`. A quote without an `instrument_id`, flagged `stale`, or not JSON is skipped and acknowledged; an
+integer column given a float is rounded rather than failing the batch.
+
+**Nothing is lost across a restart.** An entry is acknowledged only after the batch holding it has been committed; a
+crash, a refused write or a lost connection leaves it pending, and pending entries are read first at the next start or
+after the failure. A batch committed just before a crash and not yet acknowledged is written a second time. The stream is
+capped at about 200,000 entries, so quotes trimmed while this is stopped are lost and counted as skipped. Run one
+instance.
+
+Exits 0 when stopped with Ctrl+C or SIGTERM, after writing and acknowledging the batch in hand; 1 when the table cannot
+be prepared; 2 for a bad argument. A database or Redis that cannot be reached while running is retried with backoff.
+"""
+
+import io
+import sys
+import json
+import time
+import uuid
+import signal
+import argparse
+import threading
+from datetime import datetime, timezone
+from pathlib import Path
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+STREAM_KEY = "unified:quotes:stream"
+STREAM_FIELD = "quote"
+TABLE = "unified.ticks"
+GROUP = "persist"
+CONSUMER = "persist_ticks"
+DDL_FILE = "300_unified_ticks.sql"
+
+MIN_BACKOFF_SECONDS = 1
+MAX_BACKOFF_SECONDS = 60
+
+# Where the unified live-data tables are defined, beside the per-broker stream tables.
+DDL_DIRECTORY = PROJECT_ROOT / "stock_brokers" / "instruments" / "ticks" / "utilities" / "sql" / "ddl"
+
+def epoch_timestamp(value):
+    """
+    An epoch in seconds as an ISO timestamp in UTC, or None.
+
+    - `value` is the epoch, or None.
+    """
+    if value is None or value == "":
+        return None
+    try:
+        return datetime.fromtimestamp(float(value), tz=timezone.utc).isoformat()
+    except (TypeError, ValueError, OSError, OverflowError):
+        return None
+
+def whole(value):
+    """
+    A value for an integer column: a whole number, None when missing or not numeric.
+
+    COPY refuses `5.0` for a BIGINT and fails the whole batch with it, so a float is rounded here instead.
+
+    - `value` is the field value.
+    """
+    if value is None or value == "" or isinstance(value, bool):
+        return None
+    try:
+        return int(round(float(value)))
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+def decimal(value):
+    """
+    A value for a numeric column: a finite number, None when missing or not numeric.
+
+    - `value` is the field value.
+    """
+    if value is None or value == "" or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if number != number or number in (float("inf"), float("-inf")) else number
+
+def instrument(value):
+    """
+    A value for a UUID column: the id when it is one, None otherwise, so one malformed id cannot fail a batch.
+
+    - `value` is the field value.
+    """
+    try:
+        return str(uuid.UUID(str(value))) if value else None
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+def apply_table(connect, ddl_file, logger):
+    """
+    Apply this persister's own DDL file, which creates its table the first time and changes nothing after.
+
+    Executed through psycopg2 rather than SQLAlchemy's text(), which would take the colons in the file's comments for
+    bind parameters.
+
+    - `connect` opens a database connection.
+    - `ddl_file` is the file's name in DDL_DIRECTORY.
+    - `logger` is where progress is reported.
+    """
+    path = DDL_DIRECTORY / ddl_file
+    connection = connect()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(path.read_text())
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+    logger.info(f"Applied {path.name}.")
+
+# The table's columns in the order each row is built, which is the order of unified.ticks.
+COLUMNS = [
+    "time", "instrument_id", "broker", "exchange_time", "last_trade_time",
+    "last_price", "last_quantity", "average_price", "volume", "buy_quantity", "sell_quantity",
+    "open", "high", "low", "previous_close", "change_percent",
+    "oi", "oi_day_high", "oi_day_low", "lot_size",
+] + [f"{side}{level}_{field}" for side in ("bid", "ask") for level in range(1, 6)
+     for field in ("price", "quantity", "orders")]
+
+def quote_row(quote):
+    """
+    A unified quote flattened into COLUMNS order, or None when it names no instrument or is a stale flag.
+
+    - `quote` is the decoded stream entry.
+    """
+    if not isinstance(quote, dict) or quote.get("stale") or not instrument(quote.get("instrument_id")) \
+            or not quote.get("broker"):
+        return None
+    ohlc = quote.get("ohlc") if isinstance(quote.get("ohlc"), dict) else {}
+    depth = quote.get("depth") if isinstance(quote.get("depth"), dict) else {}
+    row = [
+        epoch_timestamp(quote.get("received_at")) or datetime.now(tz=timezone.utc).isoformat(),
+        instrument(quote.get("instrument_id")), quote.get("broker"),
+        epoch_timestamp(quote.get("exchange_time")), epoch_timestamp(quote.get("last_trade_time")),
+        decimal(quote.get("last_price")), whole(quote.get("last_quantity")), decimal(quote.get("average_price")),
+        whole(quote.get("volume")), whole(quote.get("buy_quantity")), whole(quote.get("sell_quantity")),
+        decimal(ohlc.get("open")), decimal(ohlc.get("high")), decimal(ohlc.get("low")),
+        decimal(quote.get("previous_close")), decimal(quote.get("change_percent")),
+        whole(quote.get("oi")), whole(quote.get("oi_day_high")), whole(quote.get("oi_day_low")),
+        whole(quote.get("lot_size")),
+    ]
+    for side in ("buy", "sell"):
+        levels = depth.get(side) if isinstance(depth.get(side), list) else []
+        for index in range(5):
+            level = levels[index] if index < len(levels) and isinstance(levels[index], dict) else {}
+            row.extend([decimal(level.get("price")), whole(level.get("quantity")), whole(level.get("orders"))])
+    return row
+
+
+def copy_value(value):
+    """
+    One value in COPY text format, with the format's NULL marker and its three structural characters escaped.
+
+    - `value` is the column value.
+    """
+    if value is None:
+        return "\\N"
+    return str(value).replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n")
+
+class StreamPersister:
+    """
+    Reads one Redis Stream as a consumer group and writes its entries to one table, acknowledging after commit.
+
+    The same class in every bin/<broker>/persist_* script; only the constants and the row function differ.
+    """
+
+    def __init__(self, cache, connect, logger, batch_size, flush_interval, row, noun, stream=STREAM_KEY,
+                 field=STREAM_FIELD, table=TABLE, columns=COLUMNS, consumer=CONSUMER):
+        """
+        - `cache` is the Redis client.
+        - `connect` opens a new database connection.
+        - `logger` is where progress is reported.
+        - `batch_size` is the most rows written in one COPY.
+        - `flush_interval` is the longest a row waits, in seconds, before its batch is written.
+        - `stream`, `field`, `table`, `columns` and `consumer` say what is read and where it is written.
+        - `row` turns one decoded entry into a row in `columns` order, or None to skip it.
+        - `noun` names an entry in the log.
+        """
+        self._stream, self._field, self._table, self._columns = stream, field, table, columns
+        self._row, self._consumer, self._noun = row, consumer, noun
+        self._cache = cache
+        self._connect = connect
+        self._logger = logger
+        self._batch_size = batch_size
+        self._flush_interval = flush_interval
+        self._connection = None
+        self.written = 0
+        self.skipped = 0
+
+    def ensure_group(self):
+        """Create the consumer group at the start of the stream, creating the stream too, unless it exists."""
+        try:
+            self._cache.xgroup_create(self._stream, GROUP, id="0", mkstream=True)
+            self._logger.info(f"Created consumer group {GROUP} on {self._stream}.")
+        except Exception as exception:
+            if "BUSYGROUP" not in str(exception):
+                raise
+
+    def run(self, stop):
+        """
+        Persist until `stop` is set, then write and acknowledge whatever batch is in hand.
+
+        - `stop` is a threading.Event.
+        """
+        backoff = MIN_BACKOFF_SECONDS
+        # Pending entries - read before but never acknowledged - are taken first, at every start and after
+        # every failure, so a batch that failed to commit is written before anything newer.
+        pending_first = True
+        batch = []
+        started = time.monotonic()
+        while True:
+            try:
+                if pending_first:
+                    # Reading pending entries always starts from the oldest unacknowledged one, so each read is
+                    # written and acknowledged before the next rather than gathered, which would repeat them.
+                    self.ensure_group()
+                    entries = self._read(True, self._batch_size, 0)
+                    if entries:
+                        self._write(entries)
+                    else:
+                        pending_first = False
+                    backoff = MIN_BACKOFF_SECONDS
+                    continue
+
+                if not stop.is_set():
+                    remaining = self._flush_interval - (time.monotonic() - started) if batch else self._flush_interval
+                    entries = self._read(False, self._batch_size - len(batch), max(0.0, remaining))
+                    if entries and not batch:
+                        started = time.monotonic()
+                    batch.extend(entries)
+
+                due = batch and time.monotonic() - started >= self._flush_interval
+                if batch and (len(batch) >= self._batch_size or due or stop.is_set()):
+                    self._write(batch)
+                    batch = []
+                    backoff = MIN_BACKOFF_SECONDS
+                elif stop.is_set():
+                    break
+            except Exception as exception:
+                self._logger.error(f"Persisting failed, retrying in {backoff} seconds: {type(exception).__name__}: {exception}")
+                self._reset_connection()
+                # The batch in hand is still pending in the group; drop it here and read it back from there.
+                batch, pending_first = [], True
+                if stop.is_set():
+                    break
+                stop.wait(backoff)
+                backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
+        self._reset_connection()
+        self._logger.info(f"Stopped. Wrote {self.written} {self._noun}(s), skipped {self.skipped}.")
+
+    def _read(self, pending, count, wait):
+        """
+        Up to `count` entries as `(id, fields)` pairs: this consumer's pending ones, or new ones waiting up to `wait` seconds.
+
+        - `pending` reads the pending entries instead of new ones.
+        - `count` is the most entries to read.
+        - `wait` is how long to block for new entries, in seconds.
+        """
+        response = self._cache.xreadgroup(GROUP, self._consumer, {self._stream: "0" if pending else ">"}, count=count,
+                                          block=None if pending else max(1, int(wait * 1000)))
+        return [entry for _, entries in (response or []) for entry in entries]
+
+    def _write(self, batch):
+        """
+        Write a batch with COPY, commit, then acknowledge every entry in it.
+
+        - `batch` is a list of `(id, fields)` pairs.
+        """
+        buffer = io.StringIO()
+        rows = skipped = 0
+        for _, fields in batch:
+            try:
+                row = self._row(json.loads((fields or {}).get(self._field)))
+            except (TypeError, ValueError):
+                row = None
+            if row is None:
+                # Not JSON, no id, or trimmed from the stream while pending.
+                skipped += 1
+                continue
+            buffer.write("\t".join(copy_value(value) for value in row) + "\n")
+            rows += 1
+
+        if rows:
+            if self._connection is None:
+                self._connection = self._connect()
+            buffer.seek(0)
+            columns = ", ".join(f'"{column}"' for column in self._columns)
+            with self._connection.cursor() as cursor:
+                cursor.copy_expert(f"copy {self._table} ({columns}) from stdin with (format text)", buffer)
+            self._connection.commit()
+            self.written += rows
+        self._cache.xack(self._stream, GROUP, *[entry_id for entry_id, _ in batch])
+        # Counted only once the batch is acknowledged: a batch whose commit fails is read back and counted then.
+        self.skipped += skipped
+        self._logger.debug(f"Wrote {rows} {self._noun}(s) to {self._table}.")
+
+    def _reset_connection(self):
+        """Roll back and close the database connection, so the next write opens a fresh one."""
+        if self._connection is not None:
+            try:
+                self._connection.rollback()
+                self._connection.close()
+            except Exception:
+                pass
+            self._connection = None
+
+def main():
+    """Persist unified quotes from unified:quotes:stream into unified.ticks until stopped."""
+    parser = argparse.ArgumentParser(description="Persist unified quotes from unified:quotes:stream into unified.ticks until stopped.")
+    parser.add_argument("--batch-size", type=int, default=500,
+                        help="most quotes written in one COPY, default 500")
+    parser.add_argument("--flush-interval", type=float, default=1.0,
+                        help="longest a quote waits before its batch is written, in seconds, default 1")
+    arguments = parser.parse_args()
+
+    from utilities.configurations import get_cache, get_logger, get_postgres
+
+    logger = get_logger("unified.persist_ticks")
+    if arguments.batch_size < 1 or arguments.flush_interval <= 0:
+        logger.error("--batch-size must be at least 1 and --flush-interval above 0.")
+        return 2
+
+    try:
+        apply_table(get_postgres, DDL_FILE, logger)
+    except Exception as exception:
+        logger.error(f"Could not prepare unified.ticks: {type(exception).__name__}: {exception}")
+        return 1
+
+    stop = threading.Event()
+
+    def _handle_signal(signal_number, frame):
+        logger.info(f"Received signal {signal_number}. Writing the batch in hand, then stopping.")
+        stop.set()
+
+    for signal_number in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(signal_number, _handle_signal)
+
+    logger.info(f"Persisting {STREAM_KEY} into {TABLE}.")
+    StreamPersister(get_cache(), get_postgres, logger, arguments.batch_size, arguments.flush_interval,
+                    row=quote_row, noun="quote").run(stop)
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())

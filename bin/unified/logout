@@ -1,0 +1,140 @@
+#!/usr/bin/env python3
+"""
+Log out of the unified broker interface: revoke the access token in force and mark `unified:session:status` logged out.
+
+    bin/unified/logout                                   # asks for the key and secret
+    UNIFIED_BROKER_INTERFACE_API_KEY=... UNIFIED_BROKER_INTERFACE_API_SECRET=... bin/unified/logout
+
+    redis-cli GET unified:session:status
+
+The equivalent of the REST API's `DELETE /api/session/disconnect`. The REST API authenticates that with the token in
+force; this takes the api key and secret instead, the same way `bin/unified/login` does - `--api-key`, or
+`UNIFIED_BROKER_INTERFACE_API_KEY`, or a prompt, and the secret from `UNIFIED_BROKER_INTERFACE_API_SECRET` or a prompt
+that does not echo - checked in constant time against the `unified_broker_interface` document in `settings`.
+
+**Revoking** writes the REST API's revoked login document - `access_token` and `expires_at` null - to the MongoDB
+`last_login` collection and then the Redis `last_login` hash, clearing the Redis copy if that write fails. The token stops
+being accepted at once, by the REST API as well, for every client. `unified:session:status` is then replaced with
+
+    {"status": "logged out", "access-token": null, "last_login": null, "expires_at": null}
+
+Unlike the brokers' logout, which only marks the status, this one does end the session: the token is this application's
+own, so revoking it disturbs nothing else.
+
+Exits 0 when the token was revoked, 1 when the credentials are wrong, the settings document is missing or the revocation
+could not be stored, and 2 when no key or secret was given.
+"""
+
+import os
+import sys
+import hmac
+import json
+import getpass
+import argparse
+from datetime import datetime
+from pathlib import Path
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+REDIS_KEY = "unified:session:status"
+
+# The application's own documents in `settings` and `last_login`, and the Redis hash mirroring `last_login`.
+APP_NAME = "unified_broker_interface"
+LOGIN_COLLECTION = "last_login"
+LOGIN_CACHE_KEY = "last_login"
+TIME_FORMAT = "%Y-%m-%d %H:%M:%S.%f"
+
+API_KEY_VARIABLE = "UNIFIED_BROKER_INTERFACE_API_KEY"
+API_SECRET_VARIABLE = "UNIFIED_BROKER_INTERFACE_API_SECRET"
+
+def matches(supplied, stored):
+    """
+    Whether a supplied credential equals the stored one, compared in constant time.
+
+    - `supplied` is the value given, or None.
+    - `stored` is the value from `settings`, or None.
+    """
+    if not supplied or not stored:
+        return False
+    return hmac.compare_digest(str(supplied).encode(), str(stored).encode())
+
+def store_login(mongo_db, cache, document, logger):
+    """
+    Write the application's login document to MongoDB and then to Redis, clearing the Redis copy if that write fails.
+
+    - `mongo_db` is the MongoDB database.
+    - `cache` is the Redis client.
+    - `document` is the login document.
+    - `logger` is where a failed Redis write is reported.
+    """
+    mongo_db[LOGIN_COLLECTION].replace_one({"broker_name": APP_NAME}, document, upsert=True)
+    try:
+        cache.hset(LOGIN_CACHE_KEY, APP_NAME, json.dumps(document))
+    except Exception as exception:
+        logger.warning(f"Could not write the revoked token to Redis, clearing its copy: {exception}")
+        try:
+            cache.hdel(LOGIN_CACHE_KEY, APP_NAME)
+        except Exception:
+            pass
+
+def credentials(arguments):
+    """
+    The api key and secret, from the argument or the environment, asking for whichever is missing.
+
+    - `arguments` is the parsed command line.
+    """
+    api_key = arguments.api_key or os.environ.get(API_KEY_VARIABLE)
+    api_secret = os.environ.get(API_SECRET_VARIABLE)
+    if not api_key and sys.stdin.isatty():
+        api_key = input("api key: ").strip()
+    if not api_secret and sys.stdin.isatty():
+        api_secret = getpass.getpass("api secret: ").strip()
+    return api_key, api_secret
+
+def main():
+    """Check the api key and secret, revoke the access token, and mark the session logged out."""
+    parser = argparse.ArgumentParser(description="Log out of the unified broker interface, revoking its access token.")
+    parser.add_argument("--api-key", help=f"the api key; otherwise {API_KEY_VARIABLE} or a prompt")
+    arguments = parser.parse_args()
+
+    from utilities.configurations import get_cache, get_logger, get_mongo_db
+
+    logger = get_logger("unified.logout")
+    api_key, api_secret = credentials(arguments)
+    if not api_key or not api_secret:
+        logger.error(f"An api key and secret are needed: pass --api-key or set {API_KEY_VARIABLE}, and set "
+                     f"{API_SECRET_VARIABLE}, or run it in a terminal to be asked.")
+        return 2
+
+    try:
+        mongo_db, cache = get_mongo_db(), get_cache()
+        settings = mongo_db["settings"].find_one({"broker_name": APP_NAME}, {"_id": 0})
+        if not settings:
+            logger.error(f"No {APP_NAME} document in the settings collection, so no credentials to check against.")
+            return 1
+        # Both compared even when the key already failed, so the time taken says nothing about which was wrong.
+        key_matches = matches(api_key, settings.get("api_key"))
+        secret_matches = matches(api_secret, settings.get("api_secret"))
+        if not (key_matches and secret_matches):
+            logger.error("Invalid api key or secret. The session in force is unchanged.")
+            return 1
+
+        store_login(mongo_db, cache, {"broker_name": APP_NAME, "access_token": None,
+                                      "last_login": datetime.now().strftime(TIME_FORMAT), "expires_at": None}, logger)
+        cache.set(REDIS_KEY, json.dumps({"status": "logged out", "access-token": None, "last_login": None,
+                                         "expires_at": None}))
+    except Exception as exception:
+        logger.error(f"Could not revoke the access token: {type(exception).__name__}: {exception}")
+        return 1
+
+    logger.info("Revoked the access token.")
+    print("logged out")
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())

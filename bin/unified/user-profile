@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""
+Combine every broker's user profile into one JSON object in the Redis key `unified:user:details`, every minute.
+
+    bin/unified/user-profile
+    redis-cli GET unified:user:details
+
+The value is one object with a key per broker and that broker's profile as the value:
+
+    {"dhan": {"dhanClientId": ..., "activeSegment": ..., ...}, "zerodha": {"user_id": ..., ...}, ...}
+
+**Where the profiles come from.** Nothing here logs in or calls a broker. Each broker's profile is already kept in
+Redis by that broker's own script, as `{"timestamp", "status", "code", "data"}` under `<broker>:user:details`, and the
+value here is its `data`:
+
+| broker | kept by | refreshed |
+| --- | --- | --- |
+| dhan, zerodha, flattrade, shoonya, fyers, indmoney, groww | `bin/<broker>/user-profile` | every minute |
+| wisdom_capital | `bin/wisdom_capital/user-profile` | once a day, as Wisdom Capital allows about one profile call a day |
+| kotak | `bin/kotak/login`, from the login response | at each login; Kotak has no profile endpoint |
+
+So a broker's profile here is as fresh as its own script keeps it, and reading every key costs one round trip. A broker
+whose key is missing - its script has not run, or the key has been deleted - or holds something that is not a profile
+is `null`, so every broker in the list is always present as a key. Stoxkart is not in the list: it has no bin scripts.
+
+Written with SET, replacing the object before, once at startup and then every minute. Runs until Ctrl+C or SIGTERM; a
+Redis that cannot be reached is logged and tried again at the next minute. Reads only - it places no orders.
+"""
+
+import sys
+import json
+import time
+import signal
+import threading
+from pathlib import Path
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+REDIS_KEY = "unified:user:details"
+DELAY_SECONDS = 60
+
+# The brokers with bin/<broker>/ scripts, each keeping its profile in <broker>:user:details.
+BROKERS = ("dhan", "zerodha", "flattrade", "shoonya", "fyers", "indmoney", "wisdom_capital", "groww", "kotak")
+
+def profile_key(broker):
+    """
+    The Redis key a broker's own script keeps its profile in.
+
+    - `broker` is the broker name.
+    """
+    return f"{broker}:user:details"
+
+def profile_from(raw):
+    """
+    The profile inside a broker's stored value - its `data` - or None when there is no usable profile.
+
+    - `raw` is the stored JSON string, or None when the key is missing.
+    """
+    if raw is None:
+        return None
+    try:
+        stored = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    return stored.get('data') if isinstance(stored, dict) else None
+
+def combined_profiles(cache):
+    """
+    Every broker's profile in one object keyed by broker name, read in one round trip.
+
+    - `cache` is the Redis client.
+    """
+    values = cache.mget([profile_key(broker) for broker in BROKERS])
+    return {broker: profile_from(raw) for broker, raw in zip(BROKERS, values)}
+
+def main():
+    """Write the combined profiles to unified:user:details every minute, until stopped."""
+    from utilities.configurations import get_cache, get_logger
+
+    logger = get_logger("unified.user_profile")
+    cache = get_cache()
+    stop = threading.Event()
+
+    def _handle_signal(signal_number, frame):
+        logger.info(f"Received signal {signal_number}. Stopping.")
+        stop.set()
+
+    for signal_number in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(signal_number, _handle_signal)
+
+    while not stop.is_set():
+        try:
+            profiles = combined_profiles(cache)
+            cache.set(REDIS_KEY, json.dumps(profiles))
+            present = [broker for broker, profile in profiles.items() if profile is not None]
+            missing = [broker for broker, profile in profiles.items() if profile is None]
+            logger.info(f"Wrote {len(present)} profile(s) to {REDIS_KEY}"
+                        + (f"; none for {', '.join(missing)}" if missing else ""))
+        except Exception as exception:
+            logger.error(f"Could not combine the profiles: {type(exception).__name__}: {exception}")
+        stop.wait(DELAY_SECONDS)
+    logger.info("Stopped")
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,1577 @@
+#!/usr/bin/env python3
+"""
+Combine every broker's order and position update streams into unified ones, and keep combining until stopped.
+
+    bin/unified/order_updates
+
+    redis-cli XREVRANGE unified:order-updates:stream + - COUNT 5
+    redis-cli HGET unified:order-updates dhan:<order id>
+    redis-cli XREVRANGE unified:positions_updates:stream + - COUNT 5
+    redis-cli HGETALL unified:positions_updates
+
+Nothing here calls a broker. Each broker's `bin/<broker>/order_updates` appends every update its websocket delivers to a
+Redis Stream, as `{"timestamp", "data": <the broker's payload>}`: orders to `<broker>:order-updates:stream` (field
+`update`) for dhan, flattrade, fyers, groww, indmoney, kotak, shoonya, wisdom_capital and zerodha, and positions to
+`<broker>:positions_updates:stream` (field `position`) for the four that stream positions - fyers, groww, kotak and
+wisdom_capital. This reads all thirteen streams as the consumer group `unified`, apart from the `persist` group the
+persisters read them with, so neither disturbs the other.
+
+**An order update** is normalized exactly as that broker's own `bin/<broker>/order_updates` normalizes it before merging
+it into `<broker>:orders:orders` - the same function, carried here under a broker prefix - so its fields are the REST order
+contract's: `order_id`, `exchange_order_id`, `parent_order_id`, `status`, `status_message`, `id`, `instrument_token`,
+`tradingsymbol`, `exchange`, `transaction_type`, `product`, `order_type`, `validity`, the five quantities, `price`,
+`trigger_price`, `average_price`, `order_timestamp`, `exchange_timestamp` and `tag`. To those it adds `broker`,
+`instrument_id` and `observed_at`, the epoch the broker's script received it. It is appended to the Redis Stream
+`unified:order-updates:stream` as field `update`, and the latest per order kept in the hash `unified:order-updates`,
+keyed `broker:order_id`.
+
+**A position update** is one position in the shape `bin/unified/positions` gives each position in
+`unified:portfolio:positions` - the REST position contract: `instrument_id`, `symbol`, `exchange`, `segment`,
+`expiry_date`, `strike_price`, `option_type`, `product` (`delivery`, `intraday`, `carry`, `margin_trading`, `cover`,
+`bracket`), `quantity` (signed), `buy` and `sell` (`quantity`, `average_price`, `value`), `average_price`, `last_price`,
+`pnl` (`realized`, `unrealized`, `total`), `day_change` and `day_change_percentage`. It is read by the same functions,
+carried here: the update is first built into the entry the broker's script merges into `<broker>:portfolio:positions`,
+keyed the same way; a Fyers or Groww update is then read from that entry's normalized `position`, and a Kotak or Wisdom
+Capital one from its raw `data`, as `bin/unified/positions` reads a websocket entry. It is resolved as positions are, and
+not merged with any other position. No quote is read: `last_price` and the day change come from the prices the broker
+sent, which none of the four streams carries, so they are null. To the position it adds `broker`, `position_key` (the
+field the broker's script keys the position by), `basis` (`day` for a Wisdom Capital `DAY:` field, `net` otherwise) and
+`observed_at`. It is appended to `unified:positions_updates:stream` as field `position`, and the latest per position kept
+in the hash `unified:positions_updates`, keyed `broker:position_key`.
+
+**Resolving** follows the REST API and `bin/unified/trades`: the broker's exchange code, with the segment where the code
+alone does not say the kind (Fyers, Groww, INDmoney), names an exchange and a kind of instrument; the token is looked up in
+`unified:broker_tokens` and kept among that venue's segments, several survivors taken in vocabulary order, then by symbol
+and id. Groww sends no token, so a Groww cash order or position is looked up by symbol in `unified:instrument_symbols`.
+A position's venue is the one `bin/unified/positions` reads from it, so both resolve a position alike. Nothing
+resolves to a null `instrument_id`. Answers are remembered until the cache's mapping date changes.
+
+**Delivery.** An entry is acknowledged only after its unified stream entry and hash field are written, in one pipeline;
+a failure leaves it pending in the group, and pending entries are taken first after a reconnect or at the next start, so
+nothing is lost, and an entry written just before a crash may be appended twice. The consumer group is created at the
+start of each stream the first time, so the first run works through everything already in them. A value that cannot be
+decoded, or was trimmed from a stream while pending, is skipped and acknowledged.
+
+**The hashes** expire at 06:00 IST, moved to the next 06:00 by every write, like the brokers' merged hashes; an update
+observed before the latest 06:00 goes to the unified stream but not into the hash, so yesterday's orders do not refill
+today's. The unified streams are capped at about 50,000 entries each.
+
+Runs until Ctrl+C or SIGTERM; a Redis that cannot be reached is retried with backoff. Reads only - it places no orders.
+Stoxkart is not included: it has no bin scripts.
+"""
+
+import sys
+import json
+import time
+import signal
+import threading
+from datetime import datetime, timedelta
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+ORDER_BROKERS = ("dhan", "flattrade", "fyers", "groww", "indmoney", "kotak", "shoonya", "wisdom_capital", "zerodha")
+POSITION_BROKERS = ("fyers", "groww", "kotak", "wisdom_capital")
+
+ORDERS_STREAM_KEY = "unified:order-updates:stream"
+ORDERS_HASH_KEY = "unified:order-updates"
+POSITIONS_STREAM_KEY = "unified:positions_updates:stream"
+POSITIONS_HASH_KEY = "unified:positions_updates"
+STREAM_MAX_LENGTH = 50000
+
+GROUP = "unified"
+CONSUMER = "unified_order_updates"
+ENTRIES_PER_READ = 500
+BLOCK_MILLISECONDS = 1000
+MIN_BACKOFF_SECONDS = 1
+MAX_BACKOFF_SECONDS = 60
+RESET_HOUR = 6
+
+BROKER_TOKENS_KEY = "unified:broker_tokens"
+INSTRUMENT_SYMBOLS_KEY = "unified:instrument_symbols"
+INSTRUMENTS_KEY = "unified:instruments"
+META_KEY = "unified:mapping:meta"
+
+# Broker venue codes, upper-cased, to the canonical exchange and the kind of instrument traded there.
+VENUES = {
+    "NSE": ("nse", "cash"), "BSE": ("bse", "cash"),
+    "NFO": ("nse", "derivative"), "BFO": ("bse", "derivative"),
+    "CDS": ("nse", "currency"), "BCD": ("bse", "currency"),
+    "MCX": ("mcx", "commodity"), "NCX": ("ncdex", "commodity"), "NCDEX": ("ncdex", "commodity"),
+    "NSE_EQ": ("nse", "cash"), "BSE_EQ": ("bse", "cash"),
+    "NSE_FNO": ("nse", "derivative"), "BSE_FNO": ("bse", "derivative"),
+    "NSE_CURRENCY": ("nse", "currency"), "BSE_CURRENCY": ("bse", "currency"),
+    "MCX_COMM": ("mcx", "commodity"),
+    "NSECM": ("nse", "cash"), "BSECM": ("bse", "cash"),
+    "NSEFO": ("nse", "derivative"), "BSEFO": ("bse", "derivative"),
+    "NSECD": ("nse", "currency"), "BSECD": ("bse", "currency"),
+    "NSECO": ("nse", "commodity"), "MCXFO": ("mcx", "commodity"),
+    "NSE_CM": ("nse", "cash"), "BSE_CM": ("bse", "cash"),
+    "NSE_FO": ("nse", "derivative"), "BSE_FO": ("bse", "derivative"),
+    "CDE_FO": ("nse", "currency"), "MCX_FO": ("mcx", "commodity"), "NSE_COM": ("nse", "commodity"),
+}
+
+# Fyers' numeric segment codes, and Groww's and INDstocks' segment names, to the kind of instrument.
+FYERS_SEGMENT_KINDS = {"10": "cash", "11": "derivative", "12": "currency", "20": "commodity"}
+GROWW_SEGMENT_KINDS = {"CASH": "cash", "FNO": "derivative", "COMMODITY": "commodity"}
+INDMONEY_SEGMENT_KINDS = {"EQUITY": "cash", "DERIVATIVE": "derivative"}
+
+def venue(value):
+    """A broker's venue code as `(exchange, kind)`, or `(None, None)` when it is not one this knows."""
+    return VENUES.get(str(value or "").strip().upper(), (None, None))
+
+# ---- each broker's normalizers ------------------------------------------------------------------------------------------
+#
+# Carried from each bin/<broker>/order_updates, where they normalize the same payloads before merging them into the broker's
+# own hashes; a name that differs between brokers carries the broker's prefix, and the vocabulary every broker shares keeps
+# its own name.
+
+TRANSACTION_TYPES = {'BUY': 'BUY', 'B': 'BUY', '1': 'BUY', 'BUY ORDER': 'BUY', 'SELL': 'SELL', 'S': 'SELL', '-1': 'SELL', '2': 'SELL', 'SELL ORDER': 'SELL'}
+
+PRODUCTS = {'CNC': 'CNC', 'C': 'CNC', 'DELIVERY': 'CNC', 'CASH': 'CNC', 'MIS': 'MIS', 'I': 'MIS', 'INTRADAY': 'MIS', 'M': 'NRML', 'NRML': 'NRML', 'NORMAL': 'NRML', 'MARGIN': 'NRML', 'CARRYFORWARD': 'NRML', 'CO': 'CO', 'BO': 'BO', 'MTF': 'MTF', 'ARB': 'ARB', 'H': 'CO', 'B': 'BO'}
+
+ORDER_TYPES = {'MARKET': 'MARKET', 'MKT': 'MARKET', 'MKT ORDER': 'MARKET', '2': 'MARKET', 'LIMIT': 'LIMIT', 'LMT': 'LIMIT', 'L': 'LIMIT', '1': 'LIMIT', 'SL': 'SL', 'SL-LMT': 'SL', 'STOPLIMIT': 'SL', 'SL LIMIT': 'SL', '4': 'SL', 'SL-M': 'SL-M', 'SL-MKT': 'SL-M', 'STOPMARKET': 'SL-M', 'SL MARKET': 'SL-M', '3': 'SL-M', 'SL M': 'SL-M', 'SLM': 'SL-M', 'STOP LOSS': 'SL', 'STOP LOSS MARKET': 'SL-M'}
+
+VALIDITIES = {'DAY': 'DAY', 'EOS': 'DAY', '0': 'DAY', 'IOC': 'IOC', 'IMMEDIATE': 'IOC', '1': 'IOC', 'GTT': 'GTT', 'GTC': 'GTC', 'GTD': 'GTD'}
+
+STATUSES = {'PENDING': 'PENDING', 'TRANSIT': 'PENDING', 'VALIDATION PENDING': 'PENDING', 'PUT ORDER REQ RECEIVED': 'PENDING', 'TRIGGER PENDING': 'PENDING', 'AMO REQ RECEIVED': 'PENDING', 'PENDINGNEW': 'PENDING', 'O-PENDING': 'PENDING', 'OPEN': 'OPEN', 'OPEN PENDING': 'OPEN', 'NEW': 'OPEN', 'REPLACED': 'OPEN', 'ACKED': 'OPEN', 'APPROVED': 'OPEN', 'MODIFICATION REQUESTED': 'OPEN', 'MODIFIED': 'OPEN', 'MODIFY VALIDATION PENDING': 'OPEN', 'MODIFY PENDING': 'OPEN', 'PARTIALLY FILLED': 'OPEN', 'PARTIALLY EXECUTED': 'OPEN', 'PLACED': 'OPEN', 'PART TRADED': 'OPEN', 'PARTIALLYFILLED': 'OPEN', 'PENDINGREPLACE': 'OPEN', 'CONFIRMED': 'OPEN', 'COMPLETE': 'COMPLETE', 'COMPLETED': 'COMPLETE', 'TRADED': 'COMPLETE', 'FILLED': 'COMPLETE', 'EXECUTED': 'COMPLETE', 'FULLY EXECUTED': 'COMPLETE', 'DELIVERY AWAITED': 'COMPLETE', 'CANCELLED': 'CANCELLED', 'CANCELED': 'CANCELLED', 'CANCEL': 'CANCELLED', 'CANCEL PENDING': 'CANCELLED', 'CANCELLATION REQUESTED': 'CANCELLED', 'PENDINGCANCEL': 'CANCELLED', 'CANCELLED AFTER MARKET ORDER': 'CANCELLED', 'REJECTED': 'REJECTED', 'REJECT': 'REJECTED', 'FAILED': 'REJECTED', 'EXPIRED': 'EXPIRED'}
+
+def normalize(value, mapping):
+    """
+    A broker's term on the shared vocabulary, or the term uppercased when the vocabulary does not know it.
+
+    - `value` is the broker's term.
+    - `mapping` is one of the vocabulary tables.
+    """
+    if value is None or value == '':
+        return None
+    key = str(value).strip().upper().replace('_', ' ')
+    if key in mapping:
+        return mapping[key]
+    collapsed = ' '.join(key.split())
+    return mapping.get(collapsed, collapsed)
+
+INDIA = ZoneInfo('Asia/Kolkata')
+
+# dhan
+
+def dhan_present(value):
+    """A value, or None for Dhan's blanks and `NA` placeholders."""
+    return None if value is None or str(value).strip() in ('', 'NA') else value
+
+def dhan_number(value, cast=float):
+    """
+    A value as a number, or None when it is missing or not numeric.
+
+    - `value` is the raw field value.
+    - `cast` is the number type.
+    """
+    value = dhan_present(value)
+    try:
+        return None if value is None else int(float(value)) if cast is int else float(value)
+    except (TypeError, ValueError):
+        return None
+
+def dhan_text(value):
+    """A value as a string, or None when it is missing."""
+    value = dhan_present(value)
+    return None if value is None else str(value)
+
+def dhan_dhan_timestamp(value):
+    """
+    A Dhan order time, IST wall clock, as an ISO timestamp with the IST offset, or None.
+
+    Dhan's placeholder for a time it has not set - `0001-01-01 00:00:00` and the like - reads as None.
+
+    - `value` is the time as Dhan sent it.
+    """
+    value = dhan_present(value)
+    if value is None:
+        return None
+    for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S', '%d/%m/%Y %H:%M:%S', '%d-%b-%Y %H:%M:%S', '%Y-%m-%d %H:%M'):
+        try:
+            moment = datetime.strptime(str(value).strip(), fmt)
+        except ValueError:
+            continue
+        return None if moment.year < 1971 else moment.replace(tzinfo=INDIA).isoformat()
+    return None
+
+dhan_EXCHANGE_SEGMENTS = {('NSE', 'E'): 'NSE_EQ', ('NSE', 'D'): 'NSE_FNO', ('NSE', 'C'): 'NSE_CURRENCY', ('BSE', 'E'): 'BSE_EQ', ('BSE', 'D'): 'BSE_FNO', ('BSE', 'C'): 'BSE_CURRENCY', ('MCX', 'M'): 'MCX_COMM', ('NSE', 'I'): 'IDX_I', ('BSE', 'I'): 'IDX_I'}
+
+def dhan_order_from_update(data):
+    """
+    A Dhan order update's `Data` as a normalized order, or None when it has no order number.
+
+    - `data` is the `Data` object of an `order_alert` message.
+    """
+    if not isinstance(data, dict) or dhan_text(data.get('OrderNo')) is None:
+        return None
+    exchange_name, segment = (dhan_text(data.get('Exchange')), dhan_text(data.get('Segment')))
+    exchange = dhan_text(data.get('ExchangeSegment')) or dhan_EXCHANGE_SEGMENTS.get((exchange_name, segment)) or (f'{exchange_name}_{segment}' if exchange_name and segment else exchange_name)
+    symbol = dhan_text(data.get('Symbol')) or dhan_text(data.get('DisplayName'))
+    quantity, filled = (dhan_number(data.get('Quantity'), int), dhan_number(data.get('TradedQty'), int))
+    pending = dhan_number(data.get('RemainingQuantity'), int)
+    if pending is None and quantity is not None and (filled is not None):
+        pending = quantity - filled
+    disclosed = data.get('DiscQuantity') if dhan_present(data.get('DiscQuantity')) is not None else data.get('DisclosedQuantity')
+    return {'order_id': dhan_text(data.get('OrderNo')), 'exchange_order_id': dhan_text(data.get('ExchOrderNo')), 'parent_order_id': dhan_text(data.get('ParentOrderNo')), 'status': normalize(dhan_present(data.get('Status')), STATUSES), 'status_message': dhan_text(data.get('ReasonDescription')), 'id': f'{exchange}:{symbol}' if exchange and symbol else symbol, 'instrument_token': dhan_text(data.get('SecurityId')), 'tradingsymbol': symbol, 'exchange': exchange, 'transaction_type': normalize(dhan_present(data.get('TxnType')) or dhan_present(data.get('TransactionType')), TRANSACTION_TYPES), 'product': normalize(dhan_present(data.get('Product')) or dhan_present(data.get('ProductType')), PRODUCTS), 'order_type': normalize(dhan_present(data.get('OrderType')), ORDER_TYPES), 'validity': normalize(dhan_present(data.get('Validity')), VALIDITIES), 'quantity': quantity, 'filled_quantity': filled, 'pending_quantity': pending, 'cancelled_quantity': dhan_number(data.get('CancelledQty'), int), 'disclosed_quantity': dhan_number(disclosed, int), 'price': dhan_number(data.get('Price')), 'trigger_price': dhan_number(data.get('TriggerPrice')), 'average_price': dhan_number(data.get('AvgTradedPrice')), 'order_timestamp': dhan_dhan_timestamp(data.get('OrderDateTime') or data.get('CreateTime')), 'exchange_timestamp': dhan_dhan_timestamp(data.get('ExchOrderTime') or data.get('LastUpdatedTime')), 'tag': dhan_text(data.get('CorrelationId'))}
+
+# zerodha
+
+def zerodha_present(value):
+    """A value, or None for blanks and `NA` placeholders."""
+    return None if value is None or str(value).strip() in ('', 'NA') else value
+
+def zerodha_number(value, cast=float):
+    """
+    A value as a number, or None when it is missing or not numeric.
+
+    - `value` is the raw field value.
+    - `cast` is the number type.
+    """
+    value = zerodha_present(value)
+    try:
+        return None if value is None else int(float(value)) if cast is int else float(value)
+    except (TypeError, ValueError):
+        return None
+
+def zerodha_text(value):
+    """A value as a string, or None when it is missing."""
+    value = zerodha_present(value)
+    return None if value is None else str(value)
+
+def zerodha_kite_timestamp(value):
+    """
+    A Kite order time, India wall clock, as an aware ISO timestamp, or None.
+
+    Kite sends `YYYY-MM-DD HH:MM:SS` with no offset; an ISO string that carries its own offset keeps it.
+
+    - `value` is the time as Kite sent it.
+    """
+    value = zerodha_present(value)
+    if value is None:
+        return None
+    text = str(value).strip()
+    for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%d %H:%M'):
+        try:
+            moment = datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+        return None if moment.year < 1971 else moment.replace(tzinfo=INDIA).isoformat()
+    try:
+        moment = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return (moment if moment.tzinfo else moment.replace(tzinfo=INDIA)).isoformat()
+
+def zerodha_order_from_kite(row):
+    """
+    A Kite order - an order-book row or an order update's `data`, which are the same object - as a normalized order,
+    or None when it has no order id.
+
+    - `row` is the Kite order.
+    """
+    if not isinstance(row, dict) or zerodha_text(row.get('order_id')) is None:
+        return None
+    exchange, symbol = (zerodha_text(row.get('exchange')), zerodha_text(row.get('tradingsymbol')))
+    return {'order_id': zerodha_text(row.get('order_id')), 'exchange_order_id': zerodha_text(row.get('exchange_order_id')), 'parent_order_id': zerodha_text(row.get('parent_order_id')), 'status': normalize(zerodha_present(row.get('status')), STATUSES), 'status_message': zerodha_text(row.get('status_message')) or zerodha_text(row.get('status_message_raw')), 'id': f'{exchange}:{symbol}' if exchange and symbol else symbol, 'instrument_token': zerodha_text(row.get('instrument_token')), 'tradingsymbol': symbol, 'exchange': exchange, 'transaction_type': normalize(zerodha_present(row.get('transaction_type')), TRANSACTION_TYPES), 'product': normalize(zerodha_present(row.get('product')), PRODUCTS), 'order_type': normalize(zerodha_present(row.get('order_type')), ORDER_TYPES), 'validity': normalize(zerodha_present(row.get('validity')), VALIDITIES), 'quantity': zerodha_number(row.get('quantity'), int), 'filled_quantity': zerodha_number(row.get('filled_quantity'), int), 'pending_quantity': zerodha_number(row.get('pending_quantity'), int), 'cancelled_quantity': zerodha_number(row.get('cancelled_quantity'), int), 'disclosed_quantity': zerodha_number(row.get('disclosed_quantity'), int), 'price': zerodha_number(row.get('price')), 'trigger_price': zerodha_number(row.get('trigger_price')), 'average_price': zerodha_number(row.get('average_price')), 'order_timestamp': zerodha_kite_timestamp(row.get('order_timestamp')), 'exchange_timestamp': zerodha_kite_timestamp(row.get('exchange_timestamp')) or zerodha_kite_timestamp(row.get('exchange_update_timestamp')), 'tag': zerodha_text(row.get('tag'))}
+
+# flattrade
+
+flattrade_NOREN_TIME_FORMATS = ('%H:%M:%S %d-%m-%Y', '%d-%m-%Y %H:%M:%S', '%Y-%m-%d %H:%M:%S')
+
+def flattrade_present(value):
+    """A value, or None for Noren's blanks and `NA` placeholders."""
+    return None if value is None or str(value).strip() in ('', 'NA') else value
+
+def flattrade_number(value, cast=float):
+    """
+    A Noren string field as a number, or None when it is missing or not numeric.
+
+    - `value` is the raw field value.
+    - `cast` is the number type.
+    """
+    value = flattrade_present(value)
+    try:
+        return None if value is None else int(float(value)) if cast is int else float(value)
+    except (TypeError, ValueError):
+        return None
+
+def flattrade_text(value):
+    """A value as a string, or None when it is missing."""
+    value = flattrade_present(value)
+    return None if value is None else str(value)
+
+def flattrade_noren_timestamp(value):
+    """
+    A Noren order time, IST wall clock, as an ISO timestamp with the IST offset, or None.
+
+    Noren's placeholder for a time the exchange never set, `01-01-1980 00:00:00`, reads as None.
+
+    - `value` is the time as Noren sent it.
+    """
+    value = flattrade_present(value)
+    if value is None:
+        return None
+    for fmt in flattrade_NOREN_TIME_FORMATS:
+        try:
+            moment = datetime.strptime(str(value).strip(), fmt)
+        except ValueError:
+            continue
+        return None if moment.year <= 1980 else moment.replace(tzinfo=INDIA).isoformat()
+    return None
+
+def flattrade_order_from_noren(row):
+    """
+    A Noren order - an order-book row or an `om` order update, which carry the same fields - as a normalized order,
+    or None when it has no order number.
+
+    The same function in bin/flattrade/orders and bin/flattrade/order_updates, so both writers of the orders hash
+    produce the same `order`.
+
+    - `row` is one order-book row, or one `om` frame.
+    """
+    if not isinstance(row, dict) or flattrade_text(row.get('norenordno')) is None:
+        return None
+    exchange, symbol = (flattrade_text(row.get('exch')), flattrade_text(row.get('tsym')))
+    quantity, filled = (flattrade_number(row.get('qty'), int), flattrade_number(row.get('fillshares'), int))
+    cancelled = flattrade_number(row.get('cancelqty'), int)
+    pending = max(quantity - (filled or 0) - (cancelled or 0), 0) if quantity is not None else None
+    return {'order_id': flattrade_text(row.get('norenordno')), 'exchange_order_id': flattrade_text(row.get('exchordid')), 'parent_order_id': flattrade_text(row.get('snonum')), 'status': normalize(flattrade_present(row.get('status')), STATUSES), 'status_message': flattrade_text(row.get('rejreason')), 'id': f'{exchange}:{symbol}' if exchange and symbol else symbol, 'instrument_token': flattrade_text(row.get('token')), 'tradingsymbol': symbol, 'exchange': exchange, 'transaction_type': normalize(flattrade_present(row.get('trantype')), TRANSACTION_TYPES), 'product': normalize(flattrade_present(row.get('prd')), PRODUCTS), 'order_type': normalize(flattrade_present(row.get('prctyp')), ORDER_TYPES), 'validity': normalize(flattrade_present(row.get('ret')), VALIDITIES), 'quantity': quantity, 'filled_quantity': filled, 'pending_quantity': pending, 'cancelled_quantity': cancelled, 'disclosed_quantity': flattrade_number(row.get('dscqty'), int), 'price': flattrade_number(row.get('prc')), 'trigger_price': flattrade_number(row.get('trgprc')), 'average_price': flattrade_number(row.get('avgprc')), 'order_timestamp': flattrade_noren_timestamp(row.get('norentm')), 'exchange_timestamp': flattrade_noren_timestamp(row.get('exch_tm')), 'tag': flattrade_text(row.get('remarks'))}
+
+# shoonya
+
+def shoonya_present(value):
+    """A value, or None for Noren's blanks and `NA` placeholders."""
+    return None if value is None or str(value).strip() in ('', 'NA') else value
+
+def shoonya_number(value, cast=float):
+    """
+    A value as a number, or None when it is missing or not numeric.
+
+    - `value` is the raw field value, which Noren sends as a string.
+    - `cast` is the number type.
+    """
+    value = shoonya_present(value)
+    try:
+        return None if value is None else int(float(value)) if cast is int else float(value)
+    except (TypeError, ValueError):
+        return None
+
+def shoonya_text(value):
+    """A value as a string, or None when it is missing."""
+    value = shoonya_present(value)
+    return None if value is None else str(value)
+
+def shoonya_noren_timestamp(value):
+    """
+    A Noren order time, IST wall clock, as an ISO timestamp with the IST offset, or None.
+
+    `HH:MM:SS DD-MM-YYYY` is the order stream's spelling and `DD-MM-YYYY HH:MM:SS` the order book's. Noren's placeholder
+    for a time the exchange never set, `01-01-1980 00:00:00`, reads as None.
+
+    - `value` is the time as Noren sent it.
+    """
+    value = shoonya_present(value)
+    if value is None:
+        return None
+    for fmt in ('%H:%M:%S %d-%m-%Y', '%d-%m-%Y %H:%M:%S', '%Y-%m-%d %H:%M:%S', '%d/%m/%Y %H:%M:%S'):
+        try:
+            moment = datetime.strptime(str(value).strip(), fmt)
+        except ValueError:
+            continue
+        return None if moment.year <= 1980 else moment.replace(tzinfo=INDIA).isoformat()
+    return None
+
+def shoonya_order_from_noren(row):
+    """
+    A Noren order - an order-book row or an `om` order update, which carry the same fields - as a normalized order,
+    or None when it has no order number.
+
+    - `row` is one row of `OrderBook`, or one `om` message.
+    """
+    if not isinstance(row, dict) or shoonya_text(row.get('norenordno')) is None:
+        return None
+    exchange, symbol = (shoonya_text(row.get('exch')), shoonya_text(row.get('tsym')))
+    quantity, filled = (shoonya_number(row.get('qty'), int), shoonya_number(row.get('fillshares'), int))
+    cancelled = shoonya_number(row.get('cancelqty'), int)
+    pending = max(quantity - filled - (cancelled or 0), 0) if quantity is not None and filled is not None else None
+    return {'order_id': shoonya_text(row.get('norenordno')), 'exchange_order_id': shoonya_text(row.get('exchordid')), 'parent_order_id': shoonya_text(row.get('snonum')), 'status': normalize(shoonya_present(row.get('status')), STATUSES), 'status_message': shoonya_text(row.get('rejreason')), 'id': f'{exchange}:{symbol}' if exchange and symbol else symbol, 'instrument_token': shoonya_text(row.get('token')), 'tradingsymbol': symbol, 'exchange': exchange, 'transaction_type': normalize(shoonya_present(row.get('trantype')), TRANSACTION_TYPES), 'product': normalize(shoonya_present(row.get('prd')), PRODUCTS), 'order_type': normalize(shoonya_present(row.get('prctyp')), ORDER_TYPES), 'validity': normalize(shoonya_present(row.get('ret')), VALIDITIES), 'quantity': quantity, 'filled_quantity': filled, 'pending_quantity': pending, 'cancelled_quantity': cancelled, 'disclosed_quantity': shoonya_number(row.get('dscqty'), int), 'price': shoonya_number(row.get('prc')), 'trigger_price': shoonya_number(row.get('trgprc')), 'average_price': shoonya_number(row.get('avgprc')), 'order_timestamp': shoonya_noren_timestamp(row.get('norentm')), 'exchange_timestamp': shoonya_noren_timestamp(row.get('exch_tm')), 'tag': shoonya_text(row.get('remarks'))}
+
+# fyers
+
+def fyers_present(value):
+    """A value, or None for blanks and `NA` placeholders."""
+    return None if value is None or str(value).strip() in ('', 'NA') else value
+
+def fyers_number(value, cast=float):
+    """
+    A value as a number, or None when it is missing or not numeric.
+
+    - `value` is the raw field value.
+    - `cast` is the number type.
+    """
+    value = fyers_present(value)
+    try:
+        return None if value is None else int(float(value)) if cast is int else float(value)
+    except (TypeError, ValueError):
+        return None
+
+def fyers_text(value):
+    """A value as a string, or None when it is missing."""
+    value = fyers_present(value)
+    return None if value is None else str(value)
+
+def fyers_exchange_of(symbol):
+    """
+    The exchange a Fyers symbol names in its prefix (`NSE` for `NSE:INFY-EQ`), or None.
+
+    Both the REST rows and the websocket messages carry `exchange` as a number (10 for NSE), but only the symbol
+    names it in words, and both carry the symbol, so it is read from there on either side.
+
+    - `symbol` is the Fyers symbol.
+    """
+    prefix, colon, _ = str(symbol or '').partition(':')
+    return prefix if colon and prefix else None
+
+fyers_FYERS_STATUS_CODES = {1: 'CANCELLED', 2: 'COMPLETE', 3: 'COMPLETE', 4: 'OPEN', 5: 'REJECTED', 6: 'PENDING'}
+
+def fyers_fyers_status(value):
+    """
+    Fyers' order state on the shared vocabulary: its numeric codes translated first, a word normalized.
+
+    - `value` is the raw status, an integer code or a word.
+    """
+    code = fyers_number(value, int)
+    if code is not None and code in fyers_FYERS_STATUS_CODES:
+        return fyers_FYERS_STATUS_CODES[code]
+    return normalize(fyers_present(value), STATUSES)
+
+def fyers_fyers_timestamp(value):
+    """
+    A Fyers order time as an ISO timestamp, or None: `DD-Mon-YYYY HH:MM:SS` is IST wall clock, a number an epoch.
+
+    - `value` is the time as Fyers sent it.
+    """
+    value = fyers_present(value)
+    if value is None:
+        return None
+    if isinstance(value, (int, float)) or str(value).replace('.', '', 1).isdigit():
+        try:
+            return datetime.fromtimestamp(float(value), tz=INDIA).isoformat()
+        except (ValueError, OSError, OverflowError):
+            return None
+    for fmt in ('%d-%b-%Y %H:%M:%S', '%Y-%m-%d %H:%M:%S', '%d/%m/%Y %H:%M:%S', '%Y-%m-%dT%H:%M:%S'):
+        try:
+            return datetime.strptime(str(value).strip(), fmt).replace(tzinfo=INDIA).isoformat()
+        except ValueError:
+            continue
+    return None
+
+def fyers_order_from_update(data):
+    """
+    A Fyers order update's `orders` object as a normalized order, or None when it has no order id.
+
+    - `data` is the `orders` object of an order update message.
+    """
+    if not isinstance(data, dict) or fyers_text(data.get('id')) is None:
+        return None
+    symbol = fyers_text(data.get('symbol'))
+    quantity, filled = (fyers_number(data.get('qty'), int), fyers_number(data.get('qty_filled'), int))
+    pending = fyers_number(data.get('qty_remaining'), int)
+    if pending is None and quantity is not None and (filled is not None):
+        pending = quantity - filled
+    status = data.get('org_ord_status') if data.get('org_ord_status') is not None else data.get('status')
+    return {'order_id': fyers_text(data.get('id')), 'exchange_order_id': fyers_text(data.get('id_exchange')), 'parent_order_id': fyers_text(data.get('id_parent')), 'status': fyers_fyers_status(status), 'status_message': fyers_text(data.get('oms_msg')) or fyers_text(data.get('message')), 'id': symbol, 'instrument_token': fyers_text(data.get('fy_token')), 'tradingsymbol': symbol, 'exchange': fyers_exchange_of(symbol), 'transaction_type': normalize(fyers_present(data.get('tran_side')), TRANSACTION_TYPES), 'product': normalize(fyers_present(data.get('product_type')), PRODUCTS), 'order_type': normalize(fyers_present(data.get('ord_type')), ORDER_TYPES), 'validity': normalize(fyers_present(data.get('validity')), VALIDITIES), 'quantity': quantity, 'filled_quantity': filled, 'pending_quantity': pending, 'cancelled_quantity': fyers_number(data.get('qty_cancelled'), int), 'disclosed_quantity': fyers_number(data.get('qty_disclosed'), int), 'price': fyers_number(data.get('price_limit')), 'trigger_price': fyers_number(data.get('price_stop')), 'average_price': fyers_number(data.get('price_traded')), 'order_timestamp': fyers_fyers_timestamp(data.get('time_oms')), 'exchange_timestamp': fyers_fyers_timestamp(data.get('time_exch')), 'tag': fyers_text(data.get('ordertag'))}
+
+def fyers_position_key(symbol, product):
+    """
+    The hash field for a Fyers position, `symbol:product` as Fyers spells both (`NSE:INFY-EQ:INTRADAY`), or None.
+
+    The REST row and the websocket message carry the same two values under different names - `symbol` and
+    `productType` against `symbol` and `product_type` - so both writers build the field here and a position lands on
+    one field whichever wrote it. A position without a product falls back to the symbol alone.
+
+    - `symbol` is the Fyers symbol.
+    - `product` is Fyers' product, `CNC`, `INTRADAY`, `MARGIN`, `CO`, `BO` or `MTF`.
+    """
+    symbol, product = (fyers_text(symbol), fyers_text(product))
+    if symbol is None:
+        return None
+    return f'{symbol}:{product.strip().upper()}' if product else symbol
+
+def fyers_position_from_update(data):
+    """
+    A Fyers position update's `positions` object as a normalized position.
+
+    - `data` is the `positions` object of a position update message.
+    """
+    symbol = fyers_text(data.get('symbol'))
+    buy_quantity, sell_quantity = (fyers_number(data.get('buy_qty'), int), fyers_number(data.get('sell_qty'), int))
+    net = fyers_number(data.get('net_qty'), int)
+    if net is None and buy_quantity is not None and (sell_quantity is not None):
+        net = buy_quantity - sell_quantity
+    realized, unrealized = (fyers_number(data.get('pl_realized')), fyers_number(data.get('pl_unrealized')))
+    total = fyers_number(data.get('pl_total'))
+    if total is None and realized is not None and (unrealized is not None):
+        total = realized + unrealized
+    carried = (fyers_number(data.get('cf_buy_qty'), int) or 0) or (fyers_number(data.get('cf_sell_qty'), int) or 0)
+    return {'id': symbol, 'instrument_token': fyers_text(data.get('fy_token')), 'tradingsymbol': symbol, 'exchange': fyers_exchange_of(symbol), 'segment': fyers_text(data.get('segment')), 'product': normalize(fyers_present(data.get('product_type')), PRODUCTS), 'quantity': net, 'buy_quantity': buy_quantity, 'sell_quantity': sell_quantity, 'buy_price': fyers_number(data.get('buy_avg')), 'sell_price': fyers_number(data.get('sell_avg')), 'buy_value': fyers_number(data.get('buy_val')), 'sell_value': fyers_number(data.get('sell_val')), 'average_price': fyers_number(data.get('net_avg')), 'last_price': None, 'realized_pnl': realized, 'unrealized_pnl': unrealized, 'pnl': total, 'multiplier': fyers_number(data.get('qty_multiplier')), 'lot_size': None, 'day_or_net': 'NET' if carried else 'DAY', 'updated_at': None}
+
+# indmoney
+
+def indmoney_present(value):
+    """A value, or None for blanks and `NA` placeholders."""
+    return None if value is None or str(value).strip() in ('', 'NA') else value
+
+def indmoney_first(data, *names):
+    """
+    The first present value among several spellings of a field, or None.
+
+    - `data` is the row or message.
+    - `names` are the spellings to try, in order.
+    """
+    for name in names:
+        if indmoney_present(data.get(name)) is not None:
+            return data[name]
+    return None
+
+def indmoney_number(value, cast=float):
+    """
+    A value as a number, or None when it is missing or not numeric.
+
+    - `value` is the raw field value.
+    - `cast` is the number type.
+    """
+    value = indmoney_present(value)
+    try:
+        return None if value is None else int(float(value)) if cast is int else float(value)
+    except (TypeError, ValueError):
+        return None
+
+def indmoney_text(value):
+    """A value as a string, or None when it is missing."""
+    value = indmoney_present(value)
+    return None if value is None else str(value)
+
+def indmoney_order_timestamp(value):
+    """
+    An INDstocks order time as an ISO timestamp with the IST offset, or None.
+
+    An epoch - milliseconds above 10^11, seconds below - is an instant; text is read as IST wall clock. Both are written
+    with the IST offset, so the same moment reads the same from either writer. A placeholder year before 1971 reads as
+    None.
+
+    - `value` is the time as INDstocks sent it.
+    """
+    value = indmoney_present(value)
+    if value is None:
+        return None
+    epoch = indmoney_number(value)
+    if epoch is not None:
+        if epoch <= 0:
+            return None
+        try:
+            return datetime.fromtimestamp(epoch / 1000 if epoch > 100000000000.0 else epoch, tz=INDIA).isoformat()
+        except (OverflowError, OSError, ValueError):
+            return None
+    for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S', '%d/%m/%Y %H:%M:%S', '%d-%b-%Y %H:%M:%S', '%Y-%m-%d %H:%M'):
+        try:
+            moment = datetime.strptime(str(value).strip()[:19], fmt)
+        except ValueError:
+            continue
+        return None if moment.year < 1971 else moment.replace(tzinfo=INDIA).isoformat()
+    return None
+
+def indmoney_order_from_update(data):
+    """
+    An INDstocks order update as a normalized order, or None when it has no order id.
+
+    - `data` is the order: the message itself, or its nested `data` object.
+    """
+    if not isinstance(data, dict) or indmoney_text(indmoney_first(data, 'order_id', 'orderId')) is None:
+        return None
+    exchange, security_id = (indmoney_text(indmoney_first(data, 'exchange', 'exchange_segment')), indmoney_text(indmoney_first(data, 'security_id', 'token')))
+    quantity = indmoney_number(indmoney_first(data, 'quantity', 'qty', 'order_quantity'), int)
+    filled = indmoney_number(indmoney_first(data, 'filled_quantity', 'filled_qty', 'executed_quantity'), int)
+    pending = indmoney_number(indmoney_first(data, 'remaining_quantity', 'pending_quantity', 'unfilled_quantity'), int)
+    if pending is None and quantity is not None:
+        pending = quantity - (filled or 0)
+    return {'order_id': indmoney_text(indmoney_first(data, 'order_id', 'orderId')), 'exchange_order_id': indmoney_text(indmoney_first(data, 'exchange_order_id', 'exch_order_id')), 'parent_order_id': indmoney_text(indmoney_first(data, 'parent_order_id')), 'status': normalize(indmoney_first(data, 'order_status', 'status'), STATUSES), 'status_message': indmoney_text(indmoney_first(data, 'status_message', 'rejection_reason', 'message')), 'id': f'{exchange}:{security_id}' if exchange and security_id else None, 'instrument_token': security_id, 'tradingsymbol': indmoney_text(indmoney_first(data, 'trading_symbol', 'tradingsymbol', 'symbol')), 'exchange': exchange, 'transaction_type': normalize(indmoney_first(data, 'txn_type', 'transaction_type', 'side'), TRANSACTION_TYPES), 'product': normalize(indmoney_first(data, 'product', 'product_type'), PRODUCTS), 'order_type': normalize(indmoney_first(data, 'order_type', 'price_type'), ORDER_TYPES), 'validity': normalize(indmoney_first(data, 'validity', 'time_in_force'), VALIDITIES), 'quantity': quantity, 'filled_quantity': filled, 'pending_quantity': pending, 'cancelled_quantity': indmoney_number(indmoney_first(data, 'cancelled_quantity'), int), 'disclosed_quantity': indmoney_number(indmoney_first(data, 'disclosed_quantity'), int), 'price': indmoney_number(indmoney_first(data, 'price', 'limit_price')), 'trigger_price': indmoney_number(indmoney_first(data, 'trigger_price', 'stop_price')), 'average_price': indmoney_number(indmoney_first(data, 'average_price', 'avg_price')), 'order_timestamp': indmoney_order_timestamp(indmoney_first(data, 'order_timestamp', 'timestamp')), 'exchange_timestamp': indmoney_order_timestamp(indmoney_first(data, 'exchange_timestamp', 'timestamp')), 'tag': indmoney_text(indmoney_first(data, 'tag', 'remarks'))}
+
+# kotak
+
+def kotak_present(value):
+    """A value, or None for Kotak's blanks and `NA` placeholders."""
+    return None if value is None or str(value).strip() in ('', 'NA') else value
+
+def kotak_first(data, *names):
+    """
+    The first present value among a field's spellings; Kotak's abbreviations vary between segments.
+
+    - `data` is the payload.
+    - `names` are the candidate field names.
+    """
+    for name in names:
+        if kotak_present(data.get(name)) is not None:
+            return data[name]
+    return None
+
+def kotak_number(value, cast=float):
+    """
+    A value as a number, or None when it is missing or not numeric.
+
+    - `value` is the raw field value.
+    - `cast` is the number type.
+    """
+    value = kotak_present(value)
+    try:
+        return None if value is None else int(float(value)) if cast is int else float(value)
+    except (TypeError, ValueError):
+        return None
+
+def kotak_text(value):
+    """A value as a string, or None when it is missing."""
+    value = kotak_present(value)
+    return None if value is None else str(value)
+
+def kotak_kotak_timestamp(value):
+    """
+    A Kotak time, IST wall clock such as `12-Sep-2026 09:20:11`, as an ISO timestamp with the IST offset, or None.
+
+    An epoch is read as one; a placeholder before 1971 or an unrecognised string reads as None.
+
+    - `value` is the time as Kotak sent it.
+    """
+    value = kotak_present(value)
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if raw.replace('.', '', 1).isdigit():
+        try:
+            return datetime.fromtimestamp(float(raw), tz=INDIA).isoformat()
+        except (ValueError, OSError, OverflowError):
+            return None
+    for fmt in ('%d-%b-%Y %H:%M:%S', '%d-%b-%Y %H:%M:%S.%f', '%d/%m/%Y %H:%M:%S', '%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S', '%d-%m-%Y %H:%M:%S', '%Y-%m-%d %H:%M'):
+        try:
+            moment = datetime.strptime(raw, fmt)
+        except ValueError:
+            continue
+        return None if moment.year < 1971 else moment.replace(tzinfo=INDIA).isoformat()
+    return None
+
+def kotak_normalized_order(data):
+    """
+    A Kotak order as a normalized order, or None when it has no order number.
+
+    Kotak's order-book row and its order update message carry the same abbreviated fields, so both writers of
+    `kotak:orders:orders` build `order` with this one function.
+
+    - `data` is an order-book row, or an order message's `data`.
+    """
+    if not isinstance(data, dict) or kotak_text(data.get('nOrdNo')) is None:
+        return None
+    symbol, exchange = (kotak_text(kotak_first(data, 'trdSym', 'sym')), kotak_text(kotak_first(data, 'exSeg', 'exch')))
+    quantity, filled = (kotak_number(data.get('qty'), int), kotak_number(data.get('fldQty'), int))
+    pending = kotak_number(data.get('unFldSz'), int)
+    if pending is None and quantity is not None and (filled is not None):
+        pending = quantity - filled
+    return {'order_id': kotak_text(data.get('nOrdNo')), 'exchange_order_id': kotak_text(data.get('exOrdId')), 'parent_order_id': kotak_text(data.get('snoOrdNo')), 'status': normalize(kotak_present(kotak_first(data, 'ordSt', 'stat')), STATUSES), 'status_message': kotak_text(kotak_first(data, 'rejRsn', 'rejectionReason', 'errMsg', 'statMsg')), 'id': f'{exchange}:{symbol}' if exchange and symbol else symbol, 'instrument_token': kotak_text(data.get('tok')), 'tradingsymbol': symbol, 'exchange': exchange, 'transaction_type': normalize(kotak_present(data.get('trnsTp')), TRANSACTION_TYPES), 'product': normalize(kotak_present(data.get('prod')), PRODUCTS), 'order_type': normalize(kotak_present(data.get('prcTp')), ORDER_TYPES), 'validity': normalize(kotak_present(kotak_first(data, 'vldt', 'ret')), VALIDITIES), 'quantity': quantity, 'filled_quantity': filled, 'pending_quantity': pending, 'cancelled_quantity': kotak_number(data.get('cnclQty'), int), 'disclosed_quantity': kotak_number(data.get('dscQty'), int), 'price': kotak_number(data.get('prc')), 'trigger_price': kotak_number(data.get('trgPrc')), 'average_price': kotak_number(data.get('avgPrc')), 'order_timestamp': kotak_kotak_timestamp(data.get('ordDtTm')), 'exchange_timestamp': kotak_kotak_timestamp(kotak_first(data, 'exCfmTm', 'boeSec')), 'tag': kotak_text(kotak_first(data, 'tag', 'usrRmk', 'remarks'))}
+
+def kotak_total(*values):
+    """The sum of the values that are present, or None when none is."""
+    present_values = [value for value in values if value is not None]
+    return sum(present_values) if present_values else None
+
+def kotak_position_key(data):
+    """
+    The hash field for a Kotak position, `exSeg:tok:prod`, with the trading symbol standing in for a missing token, or
+    None when the position names no segment, instrument or product.
+
+    Kotak holds one position per instrument and product, and its positions row and position message name them with
+    the same fields, so both writers of `kotak:portfolio:positions` build the field with this one function.
+
+    - `data` is a positions row, or a position message's `data`.
+    """
+    if not isinstance(data, dict):
+        return None
+    parts = [kotak_text(data.get('exSeg')), kotak_text(data.get('tok')) or kotak_text(kotak_first(data, 'trdSym', 'sym')), kotak_text(data.get('prod'))]
+    return ':'.join(parts) if all(parts) else None
+
+def kotak_normalized_position(data):
+    """
+    A Kotak position as a normalized position.
+
+    Today's (`fl...`) and carried-forward (`cf...`) buys and sells are added together, as the positions endpoint
+    splits them; a message that sends only today's leg is read with that leg alone. Kotak reports values rather than
+    averages, so the prices are derived, and it reports no profit, last price or average cost.
+
+    - `data` is a positions row, or a position message's `data`.
+    """
+    exchange, symbol = (kotak_text(data.get('exSeg')), kotak_text(kotak_first(data, 'trdSym', 'sym')))
+    bought = kotak_total(kotak_number(data.get('flBuyQty'), int), kotak_number(data.get('cfBuyQty'), int))
+    sold = kotak_total(kotak_number(data.get('flSellQty'), int), kotak_number(data.get('cfSellQty'), int))
+    buy_value = kotak_total(kotak_number(data.get('buyAmt')), kotak_number(data.get('cfBuyAmt')))
+    sell_value = kotak_total(kotak_number(data.get('sellAmt')), kotak_number(data.get('cfSellAmt')))
+    return {'id': f'{exchange}:{symbol}' if exchange and symbol else symbol, 'instrument_token': kotak_text(data.get('tok')), 'tradingsymbol': symbol, 'exchange': exchange, 'segment': exchange.split('_', 1)[1] if exchange and '_' in exchange else None, 'product': normalize(kotak_present(data.get('prod')), PRODUCTS), 'quantity': bought - sold if bought is not None and sold is not None else None, 'buy_quantity': bought, 'sell_quantity': sold, 'buy_price': buy_value / bought if buy_value is not None and bought else None, 'sell_price': sell_value / sold if sell_value is not None and sold else None, 'buy_value': buy_value, 'sell_value': sell_value, 'average_price': None, 'last_price': None, 'realized_pnl': None, 'unrealized_pnl': None, 'pnl': None, 'multiplier': kotak_number(data.get('multiplier')), 'lot_size': kotak_number(data.get('lotSz'), int), 'day_or_net': 'NET', 'updated_at': kotak_text(data.get('hsUpTm'))}
+
+# groww
+
+groww_PAISE_PER_RUPEE = 100.0
+
+def groww_present(value):
+    """A value, or None for blanks, protobuf's unset empty strings and `NA` placeholders."""
+    return None if value is None or str(value).strip() in ('', 'NA') else value
+
+def groww_number(value, cast=float):
+    """
+    A value as a number, or None when it is missing or not numeric. Protobuf's 64-bit integers arrive as strings.
+
+    - `value` is the raw field value.
+    - `cast` is the number type.
+    """
+    value = groww_present(value)
+    try:
+        return None if value is None else int(float(value)) if cast is int else float(value)
+    except (TypeError, ValueError):
+        return None
+
+def groww_text(value):
+    """A value as a string, or None when it is missing."""
+    value = groww_present(value)
+    return None if value is None else str(value)
+
+def groww_position_field(exchange, symbol, product):
+    """
+    The hash field for a Groww position, `EXCHANGE:SYMBOL:PRODUCT`, or None when one part is missing.
+
+    Built the same way from a REST row (`exchange`, `trading_symbol`, `product`) and a websocket position
+    (`symbolData.exchange`, `symbolData.contractId`, `symbolData.stocksProduct`), with the product on the shared
+    vocabulary, so both writers address the same position.
+
+    - `exchange`, `symbol` and `product` are the position's exchange, trading symbol and product as the broker sent them.
+    """
+    parts = [groww_text(exchange), groww_text(symbol), normalize(groww_present(product), PRODUCTS)]
+    return ':'.join((str(part).upper() for part in parts)) if all(parts) else None
+
+def groww_rupees(value):
+    """
+    An integer paise price in rupees, or None.
+
+    - `value` is the price as Groww sent it.
+    """
+    paise = groww_number(value)
+    return paise / groww_PAISE_PER_RUPEE if paise is not None else None
+
+def groww_stage_timestamp(stage, received_at):
+    """
+    A stage's `timeStampFromMidNight`, seconds after midnight, as an ISO timestamp on the IST day the update arrived.
+
+    - `stage` is one entry of `stageAndTimeStamp`.
+    - `received_at` is the epoch the update was received.
+    """
+    seconds = groww_number((stage or {}).get('timeStampFromMidNight'))
+    if not seconds:
+        return None
+    midnight = datetime.fromtimestamp(received_at, tz=INDIA).replace(hour=0, minute=0, second=0, microsecond=0)
+    return (midnight + timedelta(seconds=seconds)).isoformat()
+
+def groww_order_from_update(data, received_at):
+    """
+    A decoded `OrderDetailsBroadCastDto` as a normalized order, or None when it has no order id.
+
+    - `data` is the decoded message.
+    - `received_at` is the epoch it was received.
+    """
+    detail = data.get('orderDetailUpdateDto') if isinstance(data, dict) else None
+    if not isinstance(detail, dict) or groww_text(detail.get('growwOrderId')) is None:
+        return None
+    stages = [stage for stage in data.get('stageAndTimeStamp') or [] if isinstance(stage, dict)]
+    exchange, symbol = (groww_text(detail.get('exchange')), groww_text(detail.get('contractId')))
+    quantity, filled = (groww_number(detail.get('qty'), int), groww_number(detail.get('filledQty'), int))
+    pending = groww_number(detail.get('remainingQty'), int)
+    if pending is None and quantity is not None and (filled is not None):
+        pending = quantity - filled
+    return {'order_id': groww_text(detail.get('growwOrderId')), 'exchange_order_id': groww_text(detail.get('exchangeOrderId')), 'parent_order_id': None, 'status': normalize(groww_present(detail.get('orderStatus')), STATUSES), 'status_message': groww_text(detail.get('remark')), 'id': f'{exchange}:{symbol}' if exchange and symbol else symbol, 'instrument_token': None, 'tradingsymbol': symbol, 'exchange': exchange, 'transaction_type': normalize(groww_present(detail.get('buySell')), TRANSACTION_TYPES), 'product': normalize(groww_present(detail.get('product')), PRODUCTS), 'order_type': normalize(groww_present(detail.get('orderType')), ORDER_TYPES), 'validity': normalize(groww_present(detail.get('duration')), VALIDITIES), 'quantity': quantity, 'filled_quantity': filled, 'pending_quantity': pending, 'cancelled_quantity': None, 'disclosed_quantity': None, 'price': groww_rupees(detail.get('price')), 'trigger_price': groww_rupees(detail.get('triggerPrice')), 'average_price': groww_rupees(detail.get('avgFillPrice')), 'order_timestamp': groww_stage_timestamp(stages[0], received_at) if stages else None, 'exchange_timestamp': groww_stage_timestamp(stages[-1], received_at) if stages else None, 'tag': groww_text(detail.get('guiOrderId'))}
+
+def groww_position_from_update(data):
+    """
+    A decoded `PositionDetailProto` as a normalized position, summing its `NSE` and `BSE` legs, or None when it names no
+    contract.
+
+    - `data` is the decoded message.
+    """
+    symbol_data = data.get('symbolData') if isinstance(data, dict) else None
+    if not isinstance(symbol_data, dict):
+        return None
+    symbol = groww_text(symbol_data.get('contractId')) or groww_text(symbol_data.get('displayName'))
+    if symbol is None:
+        return None
+    info = data.get('positionInfo') if isinstance(data.get('positionInfo'), dict) else {}
+    buy_quantity = buy_value = sell_quantity = sell_value = 0.0
+    for leg in (info.get('NSE'), info.get('BSE')):
+        if isinstance(leg, dict):
+            credit, debit = (groww_number(leg.get('creditQty')) or 0.0, groww_number(leg.get('debitQty')) or 0.0)
+            buy_quantity += credit
+            sell_quantity += debit
+            buy_value += credit * (groww_number(leg.get('creditPrice')) or 0.0)
+            sell_value += debit * (groww_number(leg.get('debitPrice')) or 0.0)
+    exchange = groww_text(symbol_data.get('exchange'))
+    updated_at = groww_text(symbol_data.get('trTimeStamp'))
+    return {'id': f'{exchange}:{symbol}' if exchange else symbol, 'instrument_token': None, 'tradingsymbol': symbol, 'exchange': exchange, 'segment': 'FNO', 'product': normalize(groww_present(symbol_data.get('stocksProduct')), PRODUCTS), 'quantity': int(buy_quantity - sell_quantity), 'buy_quantity': int(buy_quantity), 'sell_quantity': int(sell_quantity), 'buy_price': buy_value / buy_quantity if buy_quantity else None, 'sell_price': sell_value / sell_quantity if sell_quantity else None, 'buy_value': buy_value, 'sell_value': sell_value, 'average_price': None, 'last_price': None, 'realized_pnl': None, 'unrealized_pnl': None, 'pnl': None, 'multiplier': None, 'lot_size': groww_number(symbol_data.get('nseMarketLot'), int) or groww_number(symbol_data.get('bseMarketLot'), int) or None, 'day_or_net': 'NET', 'updated_at': None if updated_at in (None, '0') else updated_at}
+
+# wisdom_capital
+
+def wisdom_capital_present(value):
+    """A value, or None for XTS's blanks and its `NA` and `NaN` placeholders."""
+    return None if value is None or str(value).strip() in ('', 'NA', 'NaN', 'nan') else value
+
+def wisdom_capital_first(data, *names):
+    """
+    The first present value among several spellings of a field.
+
+    - `data` is the XTS payload.
+    - `names` are the candidate field names.
+    """
+    for name in names:
+        if wisdom_capital_present(data.get(name)) is not None:
+            return data[name]
+    return None
+
+def wisdom_capital_number(value, cast=float):
+    """
+    A value as a number, or None when it is missing or not numeric. XTS sends many numbers as strings.
+
+    - `value` is the raw field value.
+    - `cast` is the number type.
+    """
+    value = wisdom_capital_present(value)
+    try:
+        return None if value is None else int(float(value)) if cast is int else float(value)
+    except (TypeError, ValueError):
+        return None
+
+def wisdom_capital_text(value):
+    """A present value as a string, or None."""
+    value = wisdom_capital_present(value)
+    return None if value is None else str(value)
+
+wisdom_capital_XTS_TIME_FORMATS = ('%d-%m-%Y %H:%M:%S', '%d-%b-%Y %H:%M:%S', '%b %d %Y %H:%M:%S', '%d/%m/%Y %H:%M:%S', '%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S')
+
+def wisdom_capital_xts_timestamp(value):
+    """
+    An XTS time, IST wall clock, as an ISO timestamp with the IST offset, or None.
+
+    A placeholder for a time not yet set - `01-01-1980 00:00:00` and the like - reads as None.
+
+    - `value` is the time as XTS sent it.
+    """
+    value = wisdom_capital_present(value)
+    if value is None:
+        return None
+    raw = str(value).strip()
+    candidates = [raw]
+    head, separator, tail = raw.rpartition(':')
+    if separator and tail.isdigit() and (len(tail) == 3):
+        candidates.append(head)
+    candidates.append(raw.split('.')[0])
+    for candidate in candidates:
+        for fmt in wisdom_capital_XTS_TIME_FORMATS:
+            try:
+                moment = datetime.strptime(candidate, fmt)
+            except ValueError:
+                continue
+            return None if moment.year <= 1980 else moment.replace(tzinfo=INDIA).isoformat()
+    return None
+
+def wisdom_capital_normalized_order(row):
+    """
+    An XTS order as a normalized order, or None when it has no `AppOrderID`.
+
+    XTS's order-book row and its interactive socket's order event are the same object, so `bin/wisdom_capital/orders`
+    and `bin/wisdom_capital/order_updates` both build `order` with this function.
+
+    - `row` is one order-book row or one order event payload.
+    """
+    if not isinstance(row, dict) or wisdom_capital_text(row.get('AppOrderID')) is None:
+        return None
+    segment = wisdom_capital_text(row.get('ExchangeSegment'))
+    symbol = wisdom_capital_text(wisdom_capital_first(row, 'TradingSymbol', 'TradingSymbolName'))
+    quantity, filled = (wisdom_capital_number(row.get('OrderQuantity'), int), wisdom_capital_number(row.get('CumulativeQuantity'), int))
+    pending = wisdom_capital_number(row.get('LeavesQuantity'), int)
+    if pending is None and quantity is not None and (filled is not None):
+        pending = quantity - filled
+    return {'order_id': wisdom_capital_text(row.get('AppOrderID')), 'exchange_order_id': wisdom_capital_text(row.get('ExchangeOrderID')), 'parent_order_id': wisdom_capital_text(row.get('OrderReferenceID')), 'status': normalize(wisdom_capital_present(row.get('OrderStatus')), STATUSES), 'status_message': wisdom_capital_text(row.get('CancelRejectReason')), 'id': f'{segment}:{symbol}' if segment and symbol else symbol, 'instrument_token': wisdom_capital_text(row.get('ExchangeInstrumentID')), 'tradingsymbol': symbol, 'exchange': segment, 'transaction_type': normalize(wisdom_capital_present(row.get('OrderSide')), TRANSACTION_TYPES), 'product': normalize(wisdom_capital_present(row.get('ProductType')), PRODUCTS), 'order_type': normalize(wisdom_capital_present(row.get('OrderType')), ORDER_TYPES), 'validity': normalize(wisdom_capital_present(row.get('TimeInForce')), VALIDITIES), 'quantity': quantity, 'filled_quantity': filled, 'pending_quantity': pending, 'cancelled_quantity': wisdom_capital_number(row.get('CancelledQuantity'), int), 'disclosed_quantity': wisdom_capital_number(row.get('OrderDisclosedQuantity'), int), 'price': wisdom_capital_number(row.get('OrderPrice')), 'trigger_price': wisdom_capital_number(row.get('OrderStopPrice')), 'average_price': wisdom_capital_number(row.get('OrderAverageTradedPrice')), 'order_timestamp': wisdom_capital_xts_timestamp(wisdom_capital_first(row, 'OrderGeneratedDateTime', 'LastUpdateDateTime')), 'exchange_timestamp': wisdom_capital_xts_timestamp(row.get('ExchangeTransactTime')), 'tag': wisdom_capital_text(row.get('OrderUniqueIdentifier'))}
+
+def wisdom_capital_day_or_net(value):
+    """
+    `NET` or `DAY` for XTS's basis spelling - the positions request's `NetWise` or `DayWise`, or a position's own
+    `DayOrNet` - or None when it names neither.
+
+    - `value` is the basis as XTS spells it.
+    """
+    value = (wisdom_capital_text(value) or '').strip().upper()
+    return 'DAY' if value.startswith('DAY') else 'NET' if value.startswith('NET') else None
+
+def wisdom_capital_position_field(row, basis=None):
+    """
+    The hash field for an XTS position, `DAY_OR_NET:ExchangeSegment:ExchangeInstrumentID:ProductType`, or None when
+    it lacks one of them.
+
+    The basis comes from the positions request for a polled row and from the position's own `DayOrNet` for a socket
+    event, so the same position gets the same field from both writers. A socket position with no `DayOrNet` is taken
+    as `NET`, XTS's default view.
+
+    - `row` is one position row or one position event payload.
+    - `basis` is the request's `NetWise` or `DayWise`, or None to read the position's own.
+    """
+    if not isinstance(row, dict):
+        return None
+    view = wisdom_capital_day_or_net(basis if basis is not None else wisdom_capital_first(row, 'DayOrNet', 'IsDayWiseNetWise')) or 'NET'
+    parts = [wisdom_capital_text(row.get('ExchangeSegment')), wisdom_capital_text(wisdom_capital_first(row, 'ExchangeInstrumentID', 'ExchangeInstrumentId')), (wisdom_capital_text(row.get('ProductType')) or '').upper() or None]
+    return ':'.join([view] + parts) if all(parts) else None
+
+def wisdom_capital_position_from_row(row, basis=None):
+    """
+    An XTS position as a normalized position, following XTS's published position schema.
+
+    - `row` is one position row or one position event payload.
+    - `basis` is the request's `NetWise` or `DayWise`, or None to read the position's own.
+    """
+    segment = wisdom_capital_text(row.get('ExchangeSegment'))
+    instrument = wisdom_capital_text(wisdom_capital_first(row, 'ExchangeInstrumentID', 'ExchangeInstrumentId'))
+    symbol = wisdom_capital_text(wisdom_capital_first(row, 'TradingSymbol', 'TradingSymbolName', 'Symbol'))
+    buy_quantity, sell_quantity = (wisdom_capital_number(row.get('OpenBuyQuantity'), int), wisdom_capital_number(row.get('OpenSellQuantity'), int))
+    quantity = wisdom_capital_number(wisdom_capital_first(row, 'Quantity', 'NetQuantity'), int)
+    if quantity is None and buy_quantity is not None and (sell_quantity is not None):
+        quantity = buy_quantity - sell_quantity
+    return {'id': f'{segment}:{symbol}' if segment and symbol else symbol or (f'{segment}:{instrument}' if segment else instrument), 'instrument_token': instrument, 'tradingsymbol': symbol, 'exchange': segment, 'segment': segment[-2:] if segment and segment[-2:] in ('CM', 'FO', 'CD') else None, 'product': normalize(wisdom_capital_present(row.get('ProductType')), PRODUCTS), 'quantity': quantity, 'buy_quantity': buy_quantity, 'sell_quantity': sell_quantity, 'buy_price': wisdom_capital_number(row.get('BuyAveragePrice')), 'sell_price': wisdom_capital_number(row.get('SellAveragePrice')), 'buy_value': wisdom_capital_number(row.get('BuyAmount')), 'sell_value': wisdom_capital_number(row.get('SellAmount')), 'average_price': None, 'last_price': None, 'realized_pnl': wisdom_capital_number(row.get('RealizedMTM')), 'unrealized_pnl': wisdom_capital_number(row.get('UnrealizedMTM')), 'pnl': wisdom_capital_number(row.get('MTM')), 'multiplier': wisdom_capital_number(row.get('Multiplier')), 'lot_size': wisdom_capital_number(wisdom_capital_first(row, 'Marketlot', 'LotSize'), int), 'day_or_net': wisdom_capital_day_or_net(basis if basis is not None else wisdom_capital_first(row, 'DayOrNet', 'IsDayWiseNetWise')) or 'NET', 'updated_at': wisdom_capital_text(row.get('LastUpdateDateTime'))}
+
+def received_epoch(timestamp):
+    """The epoch a broker's script stamped an entry with, local wall clock, or now when it cannot be read."""
+    try:
+        return datetime.strptime(str(timestamp), "%Y-%m-%d %H:%M:%S.%f").timestamp()
+    except (TypeError, ValueError):
+        return time.time()
+
+def fyers_venue(symbol, segment):
+    """A Fyers row's exchange, from its symbol's prefix, and kind, from its numeric segment."""
+    prefix = str(symbol or "").partition(":")[0]
+    return (prefix.lower() or None, FYERS_SEGMENT_KINDS.get(str(segment)))
+
+def order_update(broker, data, received_at):
+    """
+    A broker's order payload as `(order, venue)`, or None when it is not an order.
+
+    - `broker` is the broker name.
+    - `data` is the payload from the broker's stream.
+    - `received_at` is the epoch the broker's script received it.
+    """
+    if broker == "dhan":
+        order = dhan_order_from_update(data)
+        return order and (order, venue(order["exchange"]))
+    if broker == "zerodha":
+        order = zerodha_order_from_kite(data)
+        return order and (order, venue(order["exchange"]))
+    if broker == "flattrade":
+        order = flattrade_order_from_noren(data)
+        return order and (order, venue(order["exchange"]))
+    if broker == "shoonya":
+        order = shoonya_order_from_noren(data)
+        return order and (order, venue(order["exchange"]))
+    if broker == "kotak":
+        order = kotak_normalized_order(data)
+        return order and (order, venue(order["exchange"]))
+    if broker == "wisdom_capital":
+        order = wisdom_capital_normalized_order(data)
+        return order and (order, venue(order["exchange"]))
+    if broker == "fyers":
+        order = fyers_order_from_update(data)
+        return order and (order, fyers_venue(order["tradingsymbol"], data.get("segment")))
+    if broker == "indmoney":
+        order = indmoney_order_from_update(data)
+        segment = str(data.get("segment") or data.get("exchange_segment") or "").upper()
+        return order and (order, (str(order["exchange"] or "").lower() or None, INDMONEY_SEGMENT_KINDS.get(segment, "cash")))
+    if broker == "groww":
+        order = groww_order_from_update(data, received_at)
+        detail = data.get("orderDetailUpdateDto") or {}
+        return order and (order, (str(order["exchange"] or "").lower() or None,
+                                  GROWW_SEGMENT_KINDS.get(str(detail.get("segment") or "").upper())))
+    return None
+
+# ---- what each broker's position means, as bin/unified/positions reads it ------------------------------------------------
+
+# The brokers whose hash fields carry the basis, `NET:` or `DAY:`.
+BASIS_BROKERS = ("zerodha", "wisdom_capital")
+
+# Broker product codes, upper-cased, to the product a position answers with.
+POSITION_PRODUCTS = {
+    "CNC": "delivery", "C": "delivery", "DELIVERY": "delivery",
+    "MIS": "intraday", "I": "intraday", "INTRA": "intraday", "INTRADAY": "intraday",
+    "NRML": "carry", "M": "carry", "MARGIN": "carry", "NORMAL": "carry",
+    "MTF": "margin_trading",
+    "CO": "cover", "H": "cover", "BO": "bracket", "B": "bracket",
+}
+
+def number(value):
+    """A broker's field as a float, or 0.0 when it is missing or not a number."""
+    if value is None:
+        return 0.0
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return parsed if parsed == parsed else 0.0
+
+def price(value):
+    """A broker's price as a float, or None when it is missing, not a number, or zero - no listed security trades at zero."""
+    parsed = number(value)
+    return parsed if parsed else None
+
+def canonical_exchange(value):
+    """A broker's exchange, `NSE` or `nse_cm` or `BSE`, as the canonical `nse` or `bse`, or None."""
+    lowered = str(value or "").strip().lower()
+    for exchange in ("nse", "bse"):
+        if lowered == exchange or lowered.startswith(f"{exchange}_"):
+            return exchange
+    return None
+
+def product(value):
+    """A broker's product code as the product a position answers with, or the code lower-cased when it is not known."""
+    code = str(value or "").strip()
+    return POSITION_PRODUCTS.get(code.upper().replace("-", ""), code.lower() or None)
+
+def position(broker_token=None, exchange=None, kind=None, symbol=None, product_code=None, quantity=0.0,
+             buy_quantity=0.0, buy_value=0.0, sell_quantity=0.0, sell_value=0.0, realized=0.0, unrealized=0.0,
+             last_price=None, close_price=None):
+    """
+    One position at one broker, in the REST API's position contract.
+
+    - `broker_token` is the broker's own token, or None when it sends none.
+    - `exchange`, `kind` are the position's venue.
+    - `symbol` is the broker's trading symbol, reported when the instrument does not resolve.
+    - `product_code` is the broker's product code.
+    - `quantity` is the signed net quantity; the buy and sell figures are totals; profits are the broker's own.
+    - `last_price`, `close_price` are the broker's own last price and previous close, or None.
+    """
+    return {
+        "broker_token": None if broker_token in (None, "", 0, "0") else str(broker_token),
+        "exchange": exchange,
+        "kind": kind,
+        "symbol": symbol or None,
+        "product": product(product_code),
+        "quantity": number(quantity),
+        "buy_quantity": number(buy_quantity),
+        "buy_value": number(buy_value),
+        "sell_quantity": number(sell_quantity),
+        "sell_value": number(sell_value),
+        "realized": number(realized),
+        "unrealized": number(unrealized),
+        "last_price": price(last_price),
+        "close_price": price(close_price),
+    }
+
+def zerodha_position(row):
+    exchange, kind = venue(row.get("exchange"))
+    return position(broker_token=row.get("instrument_token"), exchange=exchange, kind=kind, symbol=row.get("tradingsymbol"),
+                    product_code=row.get("product"), quantity=row.get("quantity"),
+                    buy_quantity=row.get("buy_quantity"), buy_value=row.get("buy_value"),
+                    sell_quantity=row.get("sell_quantity"), sell_value=row.get("sell_value"),
+                    realized=row.get("realised"), unrealized=row.get("unrealised"),
+                    last_price=row.get("last_price"), close_price=row.get("close_price"))
+
+def dhan_position(row):
+    exchange, kind = venue(row.get("exchangeSegment"))
+    return position(broker_token=row.get("securityId"), exchange=exchange, kind=kind, symbol=row.get("tradingSymbol"),
+                    product_code=row.get("productType"), quantity=row.get("netQty"),
+                    buy_quantity=row.get("buyQty"), buy_value=number(row.get("buyQty")) * number(row.get("buyAvg")),
+                    sell_quantity=row.get("sellQty"), sell_value=number(row.get("sellQty")) * number(row.get("sellAvg")),
+                    realized=row.get("realizedProfit"), unrealized=row.get("unrealizedProfit"))
+
+def noren_position(row):
+    exchange, kind = venue(row.get("exch"))
+    return position(broker_token=row.get("token"), exchange=exchange, kind=kind, symbol=row.get("tsym"),
+                    product_code=row.get("prd"), quantity=row.get("netqty"),
+                    buy_quantity=number(row.get("daybuyqty")) + number(row.get("cfbuyqty")),
+                    buy_value=number(row.get("daybuyamt")) + number(row.get("cfbuyamt")),
+                    sell_quantity=number(row.get("daysellqty")) + number(row.get("cfsellqty")),
+                    sell_value=number(row.get("daysellamt")) + number(row.get("cfsellamt")),
+                    realized=row.get("rpnl"), unrealized=row.get("urmtom"),
+                    last_price=row.get("lp"), close_price=row.get("c"))
+
+def fyers_position(row):
+    symbol = str(row.get("symbol") or "")
+    prefix, _, trading_symbol = symbol.partition(":")
+    return position(broker_token=row.get("fyToken"), exchange=prefix.lower() or None,
+                    kind=FYERS_SEGMENT_KINDS.get(str(row.get("segment"))), symbol=trading_symbol or symbol,
+                    product_code=row.get("productType"), quantity=row.get("netQty"),
+                    buy_quantity=row.get("buyQty"), buy_value=row.get("buyVal"),
+                    sell_quantity=row.get("sellQty"), sell_value=row.get("sellVal"),
+                    realized=row.get("realized_profit"), unrealized=row.get("unrealized_profit"),
+                    last_price=row.get("ltp"))
+
+def fyers_stream_position(normalized):
+    """A Fyers position update, from its normalized `position`, in the contract - its raw stream fields differ from REST's."""
+    symbol = str(normalized.get("tradingsymbol") or "")
+    prefix, _, trading_symbol = symbol.partition(":")
+    return position(broker_token=normalized.get("instrument_token"),
+                    exchange=(prefix or str(normalized.get("exchange") or "")).lower() or None,
+                    kind=FYERS_SEGMENT_KINDS.get(str(normalized.get("segment"))), symbol=trading_symbol or symbol,
+                    product_code=normalized.get("product"), quantity=normalized.get("quantity"),
+                    buy_quantity=normalized.get("buy_quantity"), buy_value=normalized.get("buy_value"),
+                    sell_quantity=normalized.get("sell_quantity"), sell_value=normalized.get("sell_value"),
+                    realized=normalized.get("realized_pnl"), unrealized=normalized.get("unrealized_pnl"),
+                    last_price=normalized.get("last_price"))
+
+def groww_position(row):
+    return position(exchange=canonical_exchange(row.get("exchange")) or str(row.get("exchange") or "").lower() or None,
+                    kind=GROWW_SEGMENT_KINDS.get(str(row.get("segment") or "").upper()), symbol=row.get("trading_symbol"),
+                    product_code=row.get("product"), quantity=row.get("quantity"),
+                    buy_quantity=row.get("credit_quantity"),
+                    buy_value=number(row.get("credit_quantity")) * number(row.get("credit_price")),
+                    sell_quantity=row.get("debit_quantity"),
+                    sell_value=number(row.get("debit_quantity")) * number(row.get("debit_price")))
+
+def groww_stream_position(normalized):
+    """A Groww position update, from its normalized `position`, in the contract - the stream carries NSE and BSE legs."""
+    exchange = normalized.get("exchange")
+    return position(exchange=canonical_exchange(exchange) or str(exchange or "").lower() or None,
+                    kind=GROWW_SEGMENT_KINDS.get(str(normalized.get("segment") or "").upper()),
+                    symbol=normalized.get("tradingsymbol"), product_code=normalized.get("product"),
+                    quantity=normalized.get("quantity"), buy_quantity=normalized.get("buy_quantity"),
+                    buy_value=normalized.get("buy_value"), sell_quantity=normalized.get("sell_quantity"),
+                    sell_value=normalized.get("sell_value"))
+
+def indmoney_position(row):
+    exchange, kind = venue(row.get("exchange") or row.get("segment"))
+    return position(broker_token=row.get("security_id"), exchange=exchange, kind=kind,
+                    symbol=row.get("symbol") or row.get("trading_symbol"), product_code=row.get("product"),
+                    quantity=row.get("net_qty"), buy_quantity=row.get("buy_qty"), buy_value=row.get("buy_value"),
+                    sell_quantity=row.get("sell_qty"), sell_value=row.get("sell_value"),
+                    realized=row.get("realized_pnl"), unrealized=row.get("unrealized_pnl"),
+                    last_price=row.get("last_price") or row.get("ltp"))
+
+def kotak_position(row):
+    exchange, kind = venue(row.get("exSeg"))
+    bought = number(row.get("flBuyQty")) + number(row.get("cfBuyQty"))
+    sold = number(row.get("flSellQty")) + number(row.get("cfSellQty"))
+    return position(broker_token=row.get("tok"), exchange=exchange, kind=kind, symbol=row.get("trdSym"),
+                    product_code=row.get("prod"), quantity=bought - sold,
+                    buy_quantity=bought, buy_value=number(row.get("buyAmt")) + number(row.get("cfBuyAmt")),
+                    sell_quantity=sold, sell_value=number(row.get("sellAmt")) + number(row.get("cfSellAmt")))
+
+def wisdom_capital_position(row):
+    exchange, kind = venue(row.get("ExchangeSegment"))
+    return position(broker_token=row.get("ExchangeInstrumentId") or row.get("ExchangeInstrumentID"),
+                    exchange=exchange, kind=kind, symbol=row.get("TradingSymbol") or row.get("Symbol"),
+                    product_code=row.get("ProductType"), quantity=row.get("Quantity"),
+                    buy_quantity=row.get("OpenBuyQuantity"), buy_value=row.get("BuyAmount"),
+                    sell_quantity=row.get("OpenSellQuantity"), sell_value=row.get("SellAmount"),
+                    realized=row.get("RealizedMTM"), unrealized=row.get("UnrealizedMTM"))
+
+# Each broker's reader of one stored positions row, the entry's `data`.
+NORMALIZERS = {"zerodha": zerodha_position, "dhan": dhan_position, "flattrade": noren_position, "shoonya": noren_position,
+               "fyers": fyers_position, "groww": groww_position, "indmoney": indmoney_position, "kotak": kotak_position,
+               "wisdom_capital": wisdom_capital_position}
+
+# The brokers whose update stream sends a shape unlike their REST positions, read from the entry's normalized `position`.
+STREAM_NORMALIZERS = {"fyers": fyers_stream_position, "groww": groww_stream_position}
+
+def entry_position(broker, entry):
+    """
+    One stored hash entry as a position in the contract, or None when it cannot be read.
+
+    - `broker` is the broker name.
+    - `entry` is the decoded entry.
+    """
+    if not isinstance(entry, dict):
+        return None
+    if entry.get("source") == "websocket" and broker in STREAM_NORMALIZERS:
+        return STREAM_NORMALIZERS[broker](entry["position"]) if isinstance(entry.get("position"), dict) else None
+    return NORMALIZERS[broker](entry["data"]) if isinstance(entry.get("data"), dict) else None
+
+def basis_of(broker, field):
+    """
+    The basis a hash field's position is on: `day` for Zerodha's and Wisdom Capital's `DAY:` fields, `net` otherwise.
+
+    - `broker` is the broker name.
+    - `field` is the hash field.
+    """
+    return "day" if broker in BASIS_BROKERS and str(field).startswith("DAY:") else "net"
+
+def rounded(value):
+    """A figure rounded to paise, or None."""
+    return None if value is None else round(value, 2)
+
+def emitted(rows, quotes):
+    """
+    One basis's merged rows as the positions the document answers with, sorted by symbol and product.
+
+    - `rows` are the merged rows.
+    - `quotes` are the quotes, keyed by instrument id.
+    """
+    positions = []
+    for row in rows:
+        identity = row["identity"]
+        quote = quotes.get(identity["instrument_id"]) if identity else None
+        if quote and quote.get("last_price") is not None:
+            last_price, previous_close = quote["last_price"], quote.get("previous_close") or row["close_price"]
+        else:
+            last_price, previous_close = row["last_price"], row["close_price"]
+        day_change = last_price - previous_close if last_price is not None and previous_close else None
+
+        quantity, buy_quantity, sell_quantity = row["quantity"], row["buy_quantity"], row["sell_quantity"]
+        strike = identity["strike_price"] if identity else None
+        positions.append({
+            "instrument_id": identity["instrument_id"] if identity else None,
+            "symbol": (identity["symbol"] or identity["underlying_symbol"]) if identity else row["symbol"],
+            "exchange": identity["exchange"] if identity else row["exchange"],
+            "segment": identity["segment"] if identity else None,
+            "expiry_date": (identity["expiry_date"] or None) if identity else None,
+            "strike_price": float(strike) if strike is not None else None,
+            "option_type": identity["option_type"] if identity else None,
+            "product": row["product"],
+            "quantity": round(quantity, 2),
+            "buy": {
+                "quantity": round(buy_quantity, 2),
+                "average_price": round(row["buy_value"] / buy_quantity, 2) if buy_quantity else 0.0,
+                "value": round(row["buy_value"], 2),
+            },
+            "sell": {
+                "quantity": round(sell_quantity, 2),
+                "average_price": round(row["sell_value"] / sell_quantity, 2) if sell_quantity else 0.0,
+                "value": round(row["sell_value"], 2),
+            },
+            "average_price": round((row["buy_value"] - row["sell_value"]) / quantity, 2) if quantity else 0.0,
+            "last_price": last_price,
+            "pnl": {
+                "realized": round(row["realized"], 2),
+                "unrealized": round(row["unrealized"], 2),
+                "total": round(row["realized"] + row["unrealized"], 2),
+            },
+            "day_change": rounded(day_change),
+            "day_change_percentage": rounded(day_change / previous_close * 100) if day_change is not None else None,
+        })
+    positions.sort(key=lambda entry: (entry["symbol"] or "", entry["expiry_date"] or "", entry["strike_price"] or 0,
+                                      entry["option_type"] or "", entry["product"] or ""))
+    return positions
+
+def position_update(broker, data):
+    """
+    A broker's position payload as `(position_key, entry)`, or None when it is not a position: the key the broker's script
+    keys it by in `<broker>:portfolio:positions`, and the value it merges there, `{"source", "position", "data"}`.
+
+    - `broker` is the broker name.
+    - `data` is the payload from the broker's stream.
+    """
+    if broker == "fyers":
+        key, normalized = fyers_position_key(data.get("symbol"), data.get("product_type")), fyers_position_from_update(data)
+    elif broker == "kotak":
+        key, normalized = kotak_position_key(data), kotak_normalized_position(data)
+    elif broker == "groww":
+        symbol = data.get("symbolData") or {}
+        key = groww_position_field(symbol.get("exchange"), symbol.get("contractId") or symbol.get("displayName"),
+                                   symbol.get("stocksProduct"))
+        normalized = groww_position_from_update(data)
+    elif broker == "wisdom_capital":
+        key, normalized = wisdom_capital_position_field(data), wisdom_capital_position_from_row(data)
+    else:
+        return None
+    return key and normalized and (key, {"source": "websocket", "position": normalized, "data": data})
+
+def position_row(identity, contract):
+    """
+    One position as the row `emitted` reads, the way bin/unified/positions merges a lone position into one.
+
+    - `identity` is the resolved instrument, or None.
+    - `contract` is the position in the contract, from `entry_position`.
+    """
+    row = {"identity": identity, "symbol": contract["symbol"], "exchange": contract["exchange"],
+           "product": contract["product"]}
+    for field in ("quantity", "buy_quantity", "buy_value", "sell_quantity", "sell_value", "realized", "unrealized"):
+        row[field] = 0.0 + contract[field]
+    row["last_price"], row["close_price"] = contract["last_price"], contract["close_price"]
+    return row
+
+# ---- resolving to unified instruments -----------------------------------------------------------------------------------
+
+class Resolver:
+    """
+    Resolves broker tokens and symbols to unified instruments from the Redis cache, remembering answers for one mapping date.
+    """
+
+    def __init__(self, cache):
+        """
+        - `cache` is the Redis client.
+        """
+        from stock_brokers.instruments.mapping.utilities.segments import (CANONICAL_EXCHANGES, CANONICAL_SEGMENTS,
+                                                                          CASH_SEGMENTS, segments_of)
+        self._cache = cache
+        self._exchanges, self._segments_of = CANONICAL_EXCHANGES, segments_of
+        # The bare segments each kind of venue trades, in the order a token's candidates are preferred.
+        self._kind_segments = {
+            "cash": CASH_SEGMENTS,
+            "derivative": tuple(name for name, shape in CANONICAL_SEGMENTS
+                                if shape in ("future", "option") and not name.startswith(("currency", "commodity"))),
+            "currency": tuple(name for name, _ in CANONICAL_SEGMENTS if name.startswith("currenc")),
+            "commodity": tuple(name for name, _ in CANONICAL_SEGMENTS if name.startswith("commodit")),
+        }
+        self._all_segments = tuple(name for name, _ in CANONICAL_SEGMENTS)
+        self._mapping_date = None
+        self._columns = None
+        self._remembered = {}
+
+    def venue_segments(self, exchange, kind):
+        """The prefixed segments an instrument on a venue can be, in preference order."""
+        return self._segments_of([exchange] if exchange else list(self._exchanges),
+                                 self._kind_segments.get(kind, self._all_segments))
+
+    def refresh(self):
+        """Forget remembered answers when the cache has moved to another mapping date."""
+        meta = json.loads(self._cache.get(META_KEY) or "null") or {}
+        if meta.get("mapping_date") != self._mapping_date:
+            self._mapping_date, self._columns, self._remembered = meta.get("mapping_date"), meta.get("columns"), {}
+
+    def resolve(self, broker, token, symbol, exchange, kind):
+        """
+        The identity a token on a venue resolves to - or, with no token, a cash symbol - or None.
+
+        - `broker` is the broker name.
+        - `token` is the broker's token, or None.
+        - `symbol` is the broker's trading symbol, or None.
+        - `exchange` and `kind` are the venue.
+        """
+        if self._mapping_date is None:
+            return None
+        key = (broker, token, exchange, kind, None if token else symbol)
+        if key not in self._remembered:
+            self._remembered[key] = self._identity(broker, token, symbol, exchange, kind)
+        return self._remembered[key]
+
+    def _identity(self, broker, token, symbol, exchange, kind):
+        segments = self.venue_segments(exchange, kind)
+        if token:
+            identifiers = json.loads(self._cache.hget(BROKER_TOKENS_KEY, f"{broker}:{token}") or "[]")
+            order = {segment: position for position, segment in enumerate(segments)}
+            candidates = [identity for identity in self._identities(identifiers) if identity["segment"] in order]
+            if not candidates:
+                return None
+            return min(candidates, key=lambda identity: (order[identity["segment"]], identity["symbol"] is None,
+                                                         identity["symbol"] or "", identity["instrument_id"]))
+        if symbol and kind == "cash":
+            for segment in segments:
+                identifier = self._cache.hget(INSTRUMENT_SYMBOLS_KEY, f"{segment}:{str(symbol).upper()}")
+                if identifier:
+                    found = self._identities([json.loads(identifier)])
+                    return found[0] if found else None
+        return None
+
+    def _identities(self, identifiers):
+        """
+        The cached instruments for some ids, as identities with `instrument_id`, `symbol`, `underlying_symbol`, `exchange`,
+        `segment`, `expiry_date`, `strike_price` and `option_type`.
+        """
+        if not identifiers or not self._columns:
+            return []
+        position_of = {column: index for index, column in enumerate(self._columns["instruments"])}
+        identities = []
+        for identifier, value in zip(identifiers, self._cache.hmget(INSTRUMENTS_KEY, identifiers)):
+            if value is None:
+                continue
+            instrument = json.loads(value)
+            identity = {"instrument_id": identifier}
+            for column in ("symbol", "underlying_symbol", "exchange", "segment", "expiry_date", "strike_price", "option_type"):
+                identity[column] = instrument[position_of[column]]
+            identities.append(identity)
+        return identities
+
+# ---- consuming the brokers' streams ---------------------------------------------------------------------------------------
+
+def source_streams():
+    """Every broker stream read, as `stream key -> (broker, kind, field)`."""
+    streams = {f"{broker}:order-updates:stream": (broker, "order", "update") for broker in ORDER_BROKERS}
+    streams.update({f"{broker}:positions_updates:stream": (broker, "position", "position") for broker in POSITION_BROKERS})
+    return streams
+
+def reset_epochs(now=None):
+    """The epochs of the latest 06:00 IST, before which an update does not enter the hashes, and of the next one."""
+    now = now or datetime.now(INDIA)
+    reset = now.replace(hour=RESET_HOUR, minute=0, second=0, microsecond=0)
+    latest = reset if reset <= now else reset - timedelta(days=1)
+    return latest.timestamp(), int((latest + timedelta(days=1)).timestamp())
+
+class UnifiedUpdates:
+    """
+    Reads the brokers' update streams as a consumer group and writes the unified streams and hashes, acknowledging after
+    the write.
+    """
+
+    def __init__(self, cache, resolver, logger):
+        """
+        - `cache` is the Redis client.
+        - `resolver` is the Resolver.
+        - `logger` is where progress is reported.
+        """
+        self._cache = cache
+        self._resolver = resolver
+        self._logger = logger
+        self._streams = source_streams()
+        self.orders = 0
+        self.positions = 0
+        self.skipped = 0
+
+    def ensure_groups(self):
+        """Create the consumer group at the start of each stream, creating the stream too, unless it exists."""
+        for stream in self._streams:
+            try:
+                self._cache.xgroup_create(stream, GROUP, id="0", mkstream=True)
+                self._logger.info(f"Created consumer group {GROUP} on {stream}.")
+            except Exception as exception:
+                if "BUSYGROUP" not in str(exception):
+                    raise
+
+    def run(self, stop):
+        """
+        Consume until `stop` is set.
+
+        - `stop` is a threading.Event.
+        """
+        backoff = MIN_BACKOFF_SECONDS
+        pending_first = True
+        while not stop.is_set():
+            try:
+                if pending_first:
+                    # Reading pending entries always starts from the oldest unacknowledged one, so each read is written
+                    # and acknowledged before the next rather than gathered, which would repeat them.
+                    self.ensure_groups()
+                    response = self._cache.xreadgroup(GROUP, CONSUMER, {stream: "0" for stream in self._streams},
+                                                      count=ENTRIES_PER_READ)
+                    if any(entries for _, entries in (response or [])):
+                        self.process(response)
+                    else:
+                        pending_first = False
+                else:
+                    response = self._cache.xreadgroup(GROUP, CONSUMER, {stream: ">" for stream in self._streams},
+                                                      count=ENTRIES_PER_READ, block=BLOCK_MILLISECONDS)
+                    if response:
+                        self.process(response)
+                backoff = MIN_BACKOFF_SECONDS
+            except Exception as exception:
+                self._logger.error(f"Combining updates failed, retrying in {backoff} seconds: "
+                                   f"{type(exception).__name__}: {exception}")
+                pending_first = True
+                stop.wait(backoff)
+                backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
+        self._logger.info(f"Stopped. Wrote {self.orders} order and {self.positions} position update(s), "
+                          f"skipped {self.skipped}.")
+
+    def process(self, response):
+        """
+        Normalize, resolve and write one read's entries, then acknowledge them.
+
+        - `response` is an XREADGROUP answer, a list of `(stream, [(id, fields), ...])`.
+        """
+        self._resolver.refresh()
+        latest_reset, next_reset = reset_epochs()
+        pipeline = self._cache.pipeline(transaction=False)
+        acknowledged, orders, positions, skipped = {}, 0, 0, 0
+        for stream, entries in response:
+            stream = stream.decode() if isinstance(stream, bytes) else stream
+            broker, kind, field = self._streams[stream]
+            for entry_id, fields in entries:
+                acknowledged.setdefault(stream, []).append(entry_id)
+                written = self._write(pipeline, broker, kind, (fields or {}).get(field), latest_reset)
+                if written == "order":
+                    orders += 1
+                elif written == "position":
+                    positions += 1
+                else:
+                    skipped += 1
+        if orders:
+            pipeline.expireat(ORDERS_HASH_KEY, next_reset)
+        if positions:
+            pipeline.expireat(POSITIONS_HASH_KEY, next_reset)
+        pipeline.execute()
+        for stream, identifiers in acknowledged.items():
+            self._cache.xack(stream, GROUP, *identifiers)
+        self.orders, self.positions, self.skipped = self.orders + orders, self.positions + positions, self.skipped + skipped
+        if orders or positions:
+            self._logger.info(f"Wrote {orders} order and {positions} position update(s); skipped {skipped}.")
+
+    def _write(self, pipeline, broker, kind, value, latest_reset):
+        """
+        Queue one entry's unified stream entry and hash field on the pipeline, answering what it was, or None to skip it.
+
+        - `pipeline` is the Redis pipeline.
+        - `broker` is the broker name.
+        - `kind` is `order` or `position`.
+        - `value` is the stream field's JSON, or None when trimmed.
+        - `latest_reset` is the epoch before which an update does not enter the hash.
+        """
+        try:
+            entry = json.loads(value)
+            data = entry["data"]
+            observed_at = received_epoch(entry.get("timestamp"))
+            if not isinstance(data, dict):
+                return None
+            if kind == "order":
+                found = order_update(broker, data, observed_at)
+                if not found:
+                    return None
+                order, (exchange, venue_kind) = found
+                identity = self._resolver.resolve(broker, order["instrument_token"], order["tradingsymbol"], exchange, venue_kind)
+                record = {"broker": broker, **order, "instrument_id": identity["instrument_id"] if identity else None,
+                          "observed_at": observed_at}
+                payload = json.dumps(record)
+                pipeline.xadd(ORDERS_STREAM_KEY, {"update": payload}, maxlen=STREAM_MAX_LENGTH, approximate=True)
+                if observed_at >= latest_reset:
+                    pipeline.hset(ORDERS_HASH_KEY, f"{broker}:{order['order_id']}", payload)
+                return "order"
+            found = position_update(broker, data)
+            if not found:
+                return None
+            position_key, merged_entry = found
+            contract = entry_position(broker, merged_entry)
+            if contract is None:
+                return None
+            identity = self._resolver.resolve(broker, contract["broker_token"], contract["symbol"], contract["exchange"],
+                                              contract["kind"])
+            # No quote is read: the last price and previous close are the ones the broker sent.
+            unified, = emitted([position_row(identity, contract)], {})
+            record = {"broker": broker, "position_key": position_key, "basis": basis_of(broker, position_key), **unified,
+                      "observed_at": observed_at}
+            payload = json.dumps(record)
+            pipeline.xadd(POSITIONS_STREAM_KEY, {"position": payload}, maxlen=STREAM_MAX_LENGTH, approximate=True)
+            if observed_at >= latest_reset:
+                pipeline.hset(POSITIONS_HASH_KEY, f"{broker}:{position_key}", payload)
+            return "position"
+        except (TypeError, ValueError, KeyError, AttributeError):
+            return None
+
+def main():
+    """Combine the brokers' order and position update streams until stopped."""
+    from utilities.configurations import get_cache, get_logger
+
+    logger = get_logger("unified.order_updates")
+    cache = get_cache()
+    stop = threading.Event()
+
+    def _handle_signal(signal_number, frame):
+        logger.info(f"Received signal {signal_number}. Finishing the read in hand, then stopping.")
+        stop.set()
+
+    for signal_number in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(signal_number, _handle_signal)
+
+    logger.info(f"Combining {len(source_streams())} broker stream(s) into {ORDERS_STREAM_KEY} and {POSITIONS_STREAM_KEY}.")
+    UnifiedUpdates(cache, Resolver(cache), logger).run(stop)
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())

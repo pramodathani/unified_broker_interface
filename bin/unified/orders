@@ -1,0 +1,381 @@
+#!/usr/bin/env python3
+"""
+Combine every broker's orders from Redis into one orders document, the way the REST API's `/api/orders/details` answers,
+and write it to the Redis key `unified:orders:orders` every half second.
+
+    bin/unified/orders
+    redis-cli GET unified:orders:orders
+
+Nothing here calls a broker. Each broker's orders are already kept in Redis as one merged hash, `<broker>:orders:orders`,
+keyed by the broker's order id and written by two scripts - `bin/<broker>/orders` from the order book and
+`bin/<broker>/order_updates` from the order update websocket - each value
+`{"observed_at", "source", "order": <normalized order>, "data": <the broker's own order>}`. The instruments are kept by
+`bin/unified/map_instruments`. This reads those and interprets them.
+
+**The document** has the REST API's shape:
+
+    {"orders": [...], "summary": {"count", "by_status", "filled_value"}, "brokers": [...], "as_of": ...}
+
+**An order** is the REST API's order contract: `broker`, `order_id`, `exchange_order_id`, `parent_order_id`, `status`,
+`status_message`, `id`, `instrument_token`, `tradingsymbol`, `exchange`, `transaction_type`, `product`, `order_type`,
+`validity`, `quantity`, `filled_quantity`, `pending_quantity`, `cancelled_quantity`, `disclosed_quantity`, `price`,
+`trigger_price`, `average_price`, `order_timestamp`, `exchange_timestamp`, `tag` and `instrument_id`, without the feed's
+`raw` and `received_at`. The stored `order` already carries every one of those fields under the same name, normalized onto
+the same vocabulary - status `PENDING`, `OPEN`, `COMPLETE`, `CANCELLED`, `REJECTED` or `EXPIRED`, `BUY`/`SELL`, `CNC`,
+`MIS`, `NRML`, `MARKET`, `LIMIT`, `SL`, `SL-M` - with `exchange` the broker's own code, so an order is copied across field
+for field. Three things differ from what the REST API answers:
+
+- Timestamps. The REST API passes each broker's time through as the broker wrote it; the stored orders carry them as ISO
+  timestamps with the IST offset, so they are answered that way, and sort correctly within a broker.
+- INDmoney's `id`. INDstocks names no trading symbol, and the stored order builds `id` from the security id; the REST API
+  leaves it null until the instrument supplies a symbol, so it is cleared here to do the same.
+- Freshness. The REST API asks each broker at request time; this answers with what the two writers last stored, which is
+  at most a poll - half a second - behind while `bin/<broker>/orders` runs.
+
+**Venue and resolving** follow the REST API. A broker's exchange code names an exchange and a kind of instrument - `NFO`,
+`NSE_EQ`, `NSECM`, `nse_fo` - read the same way; Fyers' kind comes from its numeric `segment`, Groww's and INDmoney's from
+their `segment`, all read from the stored `data`. The token is looked up in `unified:broker_tokens` among the segments its
+venue's kind trades on that exchange, several survivors taken in vocabulary order, then by symbol and id; Groww sends no
+token, so a Groww cash order is looked up by its symbol in `unified:instrument_symbols`. An order nothing resolves has a
+null `instrument_id`; a resolved order the broker gave no symbol takes the instrument's, and its `id` with it. Resolutions
+are remembered until the cache's mapping date changes.
+
+**Sorted** by broker, then order time, then order id, as the REST API sorts. `summary` counts orders by status and adds
+`filled_value`, filled quantity times average price. `brokers` says, for each broker, how its hash was read, with `as_of`,
+the newer of the newest `observed_at` in it and the last successful poll, which `bin/<broker>/orders` records in
+`<broker>:orders:orders:polled_at`:
+
+- `ok` - within a minute, which it always is while `bin/<broker>/orders` runs, since every poll re-observes every order in
+  the book and records itself, a day with no orders included;
+- `stale` - older than a minute: the poller has probably stopped. Its orders are still included;
+- `missing` - no hash and no poll recorded: the broker's scripts have not run today. It contributes nothing;
+- `unreadable` - the key is not a hash, or no entry in it holds an order.
+
+Written with SET every half second. Runs until Ctrl+C or SIGTERM; a Redis that cannot be reached is logged and tried
+again. Reads only - it never places, modifies or cancels an order. Stoxkart is not included: it has no bin scripts.
+"""
+
+import sys
+import json
+import signal
+import threading
+from datetime import datetime
+from pathlib import Path
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+REDIS_KEY = "unified:orders:orders"
+DELAY_SECONDS = 0.5
+STALE_SECONDS = 60
+
+BROKER_TOKENS_KEY = "unified:broker_tokens"
+INSTRUMENT_SYMBOLS_KEY = "unified:instrument_symbols"
+INSTRUMENTS_KEY = "unified:instruments"
+META_KEY = "unified:mapping:meta"
+
+BROKERS = ("dhan", "flattrade", "fyers", "groww", "indmoney", "kotak", "shoonya", "wisdom_capital", "zerodha")
+
+# The REST API's order contract, in its order, after `broker` and before `instrument_id`.
+ORDER_FIELDS = ("order_id", "exchange_order_id", "parent_order_id", "status", "status_message", "id", "instrument_token",
+                "tradingsymbol", "exchange", "transaction_type", "product", "order_type", "validity", "quantity",
+                "filled_quantity", "pending_quantity", "cancelled_quantity", "disclosed_quantity", "price",
+                "trigger_price", "average_price", "order_timestamp", "exchange_timestamp", "tag")
+
+# Broker venue codes, upper-cased, to the canonical exchange and the kind of instrument traded there.
+VENUES = {
+    "NSE": ("nse", "cash"), "BSE": ("bse", "cash"),
+    "NFO": ("nse", "derivative"), "BFO": ("bse", "derivative"),
+    "CDS": ("nse", "currency"), "BCD": ("bse", "currency"),
+    "MCX": ("mcx", "commodity"), "NCX": ("ncdex", "commodity"), "NCDEX": ("ncdex", "commodity"),
+    "NSE_EQ": ("nse", "cash"), "BSE_EQ": ("bse", "cash"),
+    "NSE_FNO": ("nse", "derivative"), "BSE_FNO": ("bse", "derivative"),
+    "NSE_CURRENCY": ("nse", "currency"), "BSE_CURRENCY": ("bse", "currency"),
+    "MCX_COMM": ("mcx", "commodity"),
+    "NSECM": ("nse", "cash"), "BSECM": ("bse", "cash"),
+    "NSEFO": ("nse", "derivative"), "BSEFO": ("bse", "derivative"),
+    "NSECD": ("nse", "currency"), "BSECD": ("bse", "currency"),
+    "NSECO": ("nse", "commodity"), "MCXFO": ("mcx", "commodity"),
+    "NSE_CM": ("nse", "cash"), "BSE_CM": ("bse", "cash"),
+    "NSE_FO": ("nse", "derivative"), "BSE_FO": ("bse", "derivative"),
+    "CDE_FO": ("nse", "currency"), "MCX_FO": ("mcx", "commodity"), "NSE_COM": ("nse", "commodity"),
+}
+
+# Fyers' numeric segment codes, and Groww's and INDstocks' segment names, to the kind of instrument.
+FYERS_SEGMENT_KINDS = {"10": "cash", "11": "derivative", "12": "currency", "20": "commodity"}
+GROWW_SEGMENT_KINDS = {"CASH": "cash", "FNO": "derivative", "COMMODITY": "commodity"}
+INDMONEY_SEGMENT_KINDS = {"EQUITY": "cash", "DERIVATIVE": "derivative"}
+
+def venue(value):
+    """A broker's venue code as `(exchange, kind)`, or `(None, None)` when it is not one this knows."""
+    return VENUES.get(str(value or "").strip().upper(), (None, None))
+
+def canonical_exchange(value):
+    """A broker's exchange, `NSE` or `nse_cm` or `BSE`, as the canonical `nse` or `bse`, or None."""
+    lowered = str(value or "").strip().lower()
+    for exchange in ("nse", "bse"):
+        if lowered == exchange or lowered.startswith(f"{exchange}_"):
+            return exchange
+    return None
+
+def order_venue(broker, order, data):
+    """
+    An order's `(exchange, kind)`, read from its broker's exchange code as the REST API reads it.
+
+    - `broker` is the broker name.
+    - `order` is the stored normalized order.
+    - `data` is the broker's own order as stored beside it.
+    """
+    exchange = order.get("exchange")
+    segment = str((data or {}).get("segment") or "")
+    if broker == "fyers":
+        return (str(exchange or "").lower() or None, FYERS_SEGMENT_KINDS.get(segment))
+    if broker == "groww":
+        return (canonical_exchange(exchange) or str(exchange or "").lower() or None, GROWW_SEGMENT_KINDS.get(segment.upper()))
+    if broker == "indmoney":
+        return (str(exchange or "").lower() or None, INDMONEY_SEGMENT_KINDS.get(segment.upper(), "cash"))
+    return venue(exchange)
+
+def order_row(broker, stored):
+    """
+    One stored hash value as an order in the REST API's contract, with a private `venue`, or None when it holds no order.
+
+    - `broker` is the broker name.
+    - `stored` is the decoded hash value.
+    """
+    order = stored.get("order") if isinstance(stored, dict) else None
+    if not isinstance(order, dict) or not order.get("order_id"):
+        return None
+    row = {"broker": broker}
+    row.update({field: order.get(field) for field in ORDER_FIELDS})
+    row["instrument_id"] = None
+    if broker == "indmoney" and not row["tradingsymbol"]:
+        # The REST API leaves INDstocks' id null until the instrument names a symbol.
+        row["id"] = None
+    data = stored.get("data") if isinstance(stored.get("data"), dict) else {}
+    row["venue"] = order_venue(broker, order, data)
+    return row
+
+class Resolver:
+    """
+    Resolves trades to unified instruments from the Redis cache, remembering answers for one mapping date.
+    """
+
+    def __init__(self, cache):
+        """
+        - `cache` is the Redis client.
+        """
+        from stock_brokers.instruments.mapping.utilities.segments import (CANONICAL_EXCHANGES, CANONICAL_SEGMENTS,
+                                                                          CASH_SEGMENTS, segments_of)
+        self._cache = cache
+        self._exchanges, self._segments_of = CANONICAL_EXCHANGES, segments_of
+        # The bare segments each kind of venue trades, in the order a token's candidates are preferred.
+        self._kind_segments = {
+            "cash": CASH_SEGMENTS,
+            "derivative": tuple(name for name, shape in CANONICAL_SEGMENTS
+                                if shape in ("future", "option") and not name.startswith(("currency", "commodity"))),
+            "currency": tuple(name for name, _ in CANONICAL_SEGMENTS if name.startswith("currenc")),
+            "commodity": tuple(name for name, _ in CANONICAL_SEGMENTS if name.startswith("commodit")),
+        }
+        self._all_segments = tuple(name for name, _ in CANONICAL_SEGMENTS)
+        self._mapping_date = None
+        self._columns = None
+        self._remembered = {}
+
+    def venue_segments(self, exchange, kind):
+        """The prefixed segments an instrument on a venue can be, in preference order."""
+        return self._segments_of([exchange] if exchange else list(self._exchanges),
+                                 self._kind_segments.get(kind, self._all_segments))
+
+    def resolve(self, trades):
+        """
+        Set each order's `instrument_id`, and its `tradingsymbol` and `id` when the broker sent none, and remove its `venue`.
+
+        - `trades` is every broker's orders.
+        """
+        meta = json.loads(self._cache.get(META_KEY) or "null") or {}
+        if meta.get("mapping_date") != self._mapping_date:
+            self._mapping_date, self._columns, self._remembered = meta.get("mapping_date"), meta.get("columns"), {}
+        for row in trades:
+            exchange, kind = row.pop("venue")
+            if self._mapping_date is None:
+                continue
+            key = (row["broker"], row["instrument_token"], exchange, kind,
+                   None if row["instrument_token"] else row["tradingsymbol"])
+            if key not in self._remembered:
+                self._remembered[key] = self._identity(row["broker"], row["instrument_token"], row["tradingsymbol"],
+                                                       exchange, kind)
+            identity = self._remembered[key]
+            if identity:
+                row["instrument_id"] = identity["instrument_id"]
+                # INDstocks names no trading symbol, so the instrument's stands in, and the id built from it.
+                if not row["tradingsymbol"]:
+                    row["tradingsymbol"] = identity["symbol"] or identity["underlying_symbol"]
+                    if "id" in row and not row["id"]:
+                        row["id"] = f"{row['exchange']}:{row['tradingsymbol']}" if row["exchange"] else row["tradingsymbol"]
+
+    def _identity(self, broker, token, symbol, exchange, kind):
+        """
+        The identity a token on a venue resolves to - or, with no token, a cash symbol - or None.
+        """
+        segments = self.venue_segments(exchange, kind)
+        if token:
+            identifiers = json.loads(self._cache.hget(BROKER_TOKENS_KEY, f"{broker}:{token}") or "[]")
+            order = {segment: position for position, segment in enumerate(segments)}
+            candidates = [identity for identity in self._identities(identifiers) if identity["segment"] in order]
+            if not candidates:
+                return None
+            return min(candidates, key=lambda identity: (order[identity["segment"]], identity["symbol"] is None,
+                                                         identity["symbol"] or "", identity["instrument_id"]))
+        if symbol and kind == "cash":
+            for segment in segments:
+                identifier = self._cache.hget(INSTRUMENT_SYMBOLS_KEY, f"{segment}:{str(symbol).upper()}")
+                if identifier:
+                    found = self._identities([json.loads(identifier)])
+                    return found[0] if found else None
+        return None
+
+    def _identities(self, identifiers):
+        """The cached instruments for some ids, as identities with `instrument_id`, `segment`, `symbol` and `underlying_symbol`."""
+        if not identifiers or not self._columns:
+            return []
+        position = {column: index for index, column in enumerate(self._columns["instruments"])}
+        identities = []
+        for identifier, value in zip(identifiers, self._cache.hmget(INSTRUMENTS_KEY, identifiers)):
+            if value is None:
+                continue
+            instrument = json.loads(value)
+            identities.append({"instrument_id": identifier, "segment": instrument[position["segment"]],
+                               "symbol": instrument[position["symbol"]],
+                               "underlying_symbol": instrument[position["underlying_symbol"]]})
+        return identities
+
+def broker_orders(cache):
+    """
+    Every broker's stored hash and when its order book was last polled, read in one round trip, as
+    `{broker: (fields or an exception, polled epoch or None)}`.
+
+    - `cache` is the Redis client.
+
+    `bin/<broker>/orders` records each successful poll in `<broker>:orders:orders:polled_at`, which is what says a
+    broker with no orders today is being read at all: Redis keeps no empty hash.
+    """
+    pipeline = cache.pipeline(transaction=False)
+    for broker in BROKERS:
+        pipeline.hgetall(f"{broker}:orders:orders")
+        pipeline.get(f"{broker}:orders:orders:polled_at")
+    results = pipeline.execute(raise_on_error=False)
+    return {broker: (results[2 * index], polled_epoch(results[2 * index + 1])) for index, broker in enumerate(BROKERS)}
+
+def polled_epoch(value):
+    """
+    A stored poll time as epoch seconds, or None when it is missing or unreadable.
+
+    - `value` is the stored string, None, or the exception reading it raised.
+    """
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+def orders_document(cache, resolver, now):
+    """
+    Every broker's stored orders as one document in the REST API's shape.
+
+    - `cache` is the Redis client.
+    - `resolver` is the Resolver.
+    - `now` is the current local time, for staleness and `as_of`.
+    """
+    rows, statuses = [], []
+    for broker, (fields, polled) in broker_orders(cache).items():
+        if isinstance(fields, Exception):
+            statuses.append({"broker": broker, "status": "unreadable", "as_of": None})
+            continue
+        if not fields:
+            # No orders today, or nothing reading the book: the last poll tells them apart.
+            if polled is None:
+                statuses.append({"broker": broker, "status": "missing", "as_of": None})
+            else:
+                as_of = datetime.fromtimestamp(polled)
+                stale = (now - as_of).total_seconds() > STALE_SECONDS
+                statuses.append({"broker": broker, "status": "stale" if stale else "ok",
+                                 "as_of": as_of.strftime("%Y-%m-%d %H:%M:%S.%f")})
+            continue
+        broker_rows, newest = [], polled
+        for value in fields.values():
+            try:
+                stored = json.loads(value)
+            except (TypeError, ValueError):
+                continue
+            row = order_row(broker, stored)
+            if row is None:
+                continue
+            broker_rows.append(row)
+            try:
+                observed = float(stored.get("observed_at"))
+                newest = observed if newest is None else max(newest, observed)
+            except (TypeError, ValueError):
+                pass
+        if not broker_rows:
+            statuses.append({"broker": broker, "status": "unreadable", "as_of": None})
+            continue
+        as_of = datetime.fromtimestamp(newest) if newest is not None else None
+        stale = as_of is None or (now - as_of).total_seconds() > STALE_SECONDS
+        statuses.append({"broker": broker, "status": "stale" if stale else "ok",
+                         "as_of": as_of.strftime("%Y-%m-%d %H:%M:%S.%f") if as_of else None})
+        rows.extend(broker_rows)
+
+    resolver.resolve(rows)
+    # Each broker writes its timestamps its own way, so they only sort within a broker.
+    rows.sort(key=lambda row: (row["broker"], str(row["order_timestamp"] or ""), row["order_id"] or ""))
+    by_status = {}
+    filled_value = 0.0
+    for row in rows:
+        status = row["status"] or "UNKNOWN"
+        by_status[status] = by_status.get(status, 0) + 1
+        if row["filled_quantity"] and row["average_price"]:
+            filled_value += row["filled_quantity"] * row["average_price"]
+    return {
+        "orders": rows,
+        "summary": {"count": len(rows), "by_status": by_status, "filled_value": round(filled_value, 2)},
+        "brokers": statuses,
+        "as_of": now.strftime("%Y-%m-%dT%H:%M:%S"),
+    }
+
+def main():
+    """Write the unified orders document to unified:orders:orders every half second, until stopped."""
+    from utilities.configurations import get_cache, get_logger
+    from utilities.poll_reporter import PollReporter
+
+    logger = get_logger("unified.orders")
+    report = PollReporter(logger)
+    cache = get_cache()
+    resolver = Resolver(cache)
+    stop = threading.Event()
+
+    def _handle_signal(signal_number, frame):
+        logger.info(f"Received signal {signal_number}. Stopping.")
+        stop.set()
+
+    for signal_number in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(signal_number, _handle_signal)
+
+    while not stop.is_set():
+        try:
+            document = orders_document(cache, resolver, datetime.now())
+            cache.set(REDIS_KEY, json.dumps(document))
+            not_ok = [f"{status['broker']} {status['status']}" for status in document["brokers"] if status["status"] != "ok"]
+            report.info(f"Wrote {document['summary']['count']} order(s) to {REDIS_KEY}"
+                        + (f"; {', '.join(not_ok)}" if not_ok else ""))
+        except Exception as exception:
+            report.error(f"Could not combine the orders: {type(exception).__name__}: {exception}")
+        stop.wait(DELAY_SECONDS)
+    logger.info("Stopped")
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())

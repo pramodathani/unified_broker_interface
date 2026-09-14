@@ -1,0 +1,469 @@
+#!/usr/bin/env python3
+"""
+Combine every broker's trade book from Redis into one trades document, the way the REST API's `/api/orders/trades`
+answers, and write it to the Redis key `unified:orders:trades` every half second.
+
+    bin/unified/trades
+    redis-cli GET unified:orders:trades
+
+Nothing here calls a broker. Each broker's trade book is already kept in Redis by `bin/<broker>/trades`, as
+`{"timestamp", "status", "code", "data"}` under `<broker>:orders:trades`, and the instruments by
+`bin/unified/map_instruments`, so this reads those and interprets them.
+
+**The document** has the REST API's shape:
+
+    {"trades": [...], "summary": {"count", "buy_value", "sell_value", "total_value"}, "brokers": [...], "as_of": ...}
+
+**A trade** is one fill, in the REST API's trade contract, the same for every broker: `broker`, `trade_id`, `order_id`,
+`exchange_order_id`, `exchange_trade_id`, `instrument_id`, `instrument_token`, `tradingsymbol`, `exchange`,
+`transaction_type`, `product`, `quantity`, `price`, `value`, `trade_timestamp` and `exchange_timestamp`. Side and
+product are on the shared vocabulary (`BUY`/`SELL`; `CNC`, `MIS`, `NRML`...), `value` is quantity times price rounded to
+paise, `exchange` stays the broker's own code, and timestamps are passed through as each broker writes them. Each
+broker's fields are read exactly as the REST API's orders modules read them:
+
+| broker | trade id, order id | token, symbol, exchange | side, product | quantity, price | times |
+| --- | --- | --- | --- | --- | --- |
+| zerodha | `trade_id`, `order_id` | `instrument_token`, `tradingsymbol`, `exchange` | `transaction_type`, `product` | `quantity`, `average_price` | `fill_timestamp`, `exchange_timestamp` |
+| dhan | `exchangeTradeId`, `orderId` | `securityId`, `tradingSymbol`, `exchangeSegment` | `transactionType`, `productType` | `tradedQuantity`, `tradedPrice` | `createTime`, `exchangeTime` |
+| flattrade, shoonya | `flid`, `norenordno` | `token`, `tsym`, `exch` | `trantype`, `prd` | `flqty`, `flprc` | `fltm`, `exch_tm` (placeholder read as none) |
+| fyers | `tradeNumber`, `orderNumber` | `fyToken`, `symbol`, the symbol's prefix | `side`, `productType` | `tradedQty`, `tradePrice` | `orderDateTime` |
+| groww | `groww_trade_id`, `groww_order_id` | no token, `trading_symbol`, `exchange` | `transaction_type`, `product` | `quantity`, `price` | `trade_date_time` or `created_at` |
+| indmoney | `fill_id` or `trade_id`, `order_id` or `id` | `security_id`, no symbol, `exchange` | `txn_type`, `product` | `quantity` or `traded_qty`, `price` or `traded_price` | `trade_date_time` or `created_at` |
+| kotak | `flId`, `nOrdNo` | `tok`, `trdSym` or `sym`, `exSeg` or `exch` | `trnsTp`, `prod` | `fldQty`, `avgPrc` | `flDt flTm`, `exTm` |
+| wisdom_capital | `ExecutionID`, `AppOrderID` | `ExchangeInstrumentID`, `TradingSymbol`, `ExchangeSegment` | `OrderSide`, `ProductType` | `LastTradedQuantity`, `LastTradedPrice` | `LastExecutionTransactTime`, `ExchangeTransactTime` |
+
+**Resolving** follows the REST API. A broker's exchange code names an exchange and a kind of instrument - cash,
+derivative, currency or commodity - and a token is only unique within one of an exchange's scrip files, so a token is
+looked up in `unified:broker_tokens` and kept only among the segments its venue's kind trades on that exchange; several
+survivors are taken in vocabulary order, then by symbol and id. Groww sends no token, so a Groww cash trade is looked up by
+its symbol in `unified:instrument_symbols`. A trade nothing resolves has a null `instrument_id`; a resolved trade the
+broker gave no symbol takes the instrument's. Resolutions are remembered until the cache's mapping date changes.
+
+**Not merged, and sorted** by broker, then trade time, then trade id, since each broker writes times its own way.
+`summary` adds `value` by side. `brokers` says, for each broker, how its stored book was read: `ok`, `stale` (stored more
+than a minute ago - its script may have stopped; its trades are still included), `missing` (no key) or `unreadable`,
+with `as_of`, when its script stored it.
+
+Written with SET every half second. Runs until Ctrl+C or SIGTERM; a Redis that cannot be reached is logged and tried
+again. Reads only - it places no orders. Stoxkart is not included: it has no bin scripts.
+"""
+
+import sys
+import json
+import signal
+import threading
+from datetime import datetime
+from pathlib import Path
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+REDIS_KEY = "unified:orders:trades"
+DELAY_SECONDS = 0.5
+STALE_SECONDS = 60
+
+BROKER_TOKENS_KEY = "unified:broker_tokens"
+INSTRUMENT_SYMBOLS_KEY = "unified:instrument_symbols"
+INSTRUMENTS_KEY = "unified:instruments"
+META_KEY = "unified:mapping:meta"
+
+BROKERS = ("dhan", "flattrade", "fyers", "groww", "indmoney", "kotak", "shoonya", "wisdom_capital", "zerodha")
+
+# The shared vocabulary for a trade's side and product. Keys are compared uppercased with underscores levelled to spaces.
+TRANSACTION_TYPES = {
+    "BUY": "BUY", "B": "BUY", "1": "BUY", "BUY ORDER": "BUY",
+    "SELL": "SELL", "S": "SELL", "-1": "SELL", "2": "SELL", "SELL ORDER": "SELL",
+}
+PRODUCTS = {
+    "CNC": "CNC", "C": "CNC", "DELIVERY": "CNC", "CASH": "CNC",
+    "MIS": "MIS", "I": "MIS", "INTRADAY": "MIS", "M": "NRML",
+    "NRML": "NRML", "NORMAL": "NRML", "MARGIN": "NRML", "CARRYFORWARD": "NRML",
+    "CO": "CO", "BO": "BO", "MTF": "MTF", "ARB": "ARB", "H": "CO", "B": "BO",
+}
+
+# Broker venue codes, upper-cased, to the canonical exchange and the kind of instrument traded there.
+VENUES = {
+    "NSE": ("nse", "cash"), "BSE": ("bse", "cash"),
+    "NFO": ("nse", "derivative"), "BFO": ("bse", "derivative"),
+    "CDS": ("nse", "currency"), "BCD": ("bse", "currency"),
+    "MCX": ("mcx", "commodity"), "NCX": ("ncdex", "commodity"), "NCDEX": ("ncdex", "commodity"),
+    "NSE_EQ": ("nse", "cash"), "BSE_EQ": ("bse", "cash"),
+    "NSE_FNO": ("nse", "derivative"), "BSE_FNO": ("bse", "derivative"),
+    "NSE_CURRENCY": ("nse", "currency"), "BSE_CURRENCY": ("bse", "currency"),
+    "MCX_COMM": ("mcx", "commodity"),
+    "NSECM": ("nse", "cash"), "BSECM": ("bse", "cash"),
+    "NSEFO": ("nse", "derivative"), "BSEFO": ("bse", "derivative"),
+    "NSECD": ("nse", "currency"), "BSECD": ("bse", "currency"),
+    "NSECO": ("nse", "commodity"), "MCXFO": ("mcx", "commodity"),
+    "NSE_CM": ("nse", "cash"), "BSE_CM": ("bse", "cash"),
+    "NSE_FO": ("nse", "derivative"), "BSE_FO": ("bse", "derivative"),
+    "CDE_FO": ("nse", "currency"), "MCX_FO": ("mcx", "commodity"), "NSE_COM": ("nse", "commodity"),
+}
+
+# Fyers' numeric segment codes, and Groww's and INDstocks' segment names, to the kind of instrument.
+FYERS_SEGMENT_KINDS = {"10": "cash", "11": "derivative", "12": "currency", "20": "commodity"}
+GROWW_SEGMENT_KINDS = {"CASH": "cash", "FNO": "derivative", "COMMODITY": "commodity"}
+INDMONEY_SEGMENT_KINDS = {"EQUITY": "cash", "DERIVATIVE": "derivative"}
+
+# Noren's exchange timestamp for a fill the exchange never timestamped.
+NOREN_NO_EXCHANGE_TIME = "01-01-1980 00:00:00"
+
+def normalize(value, mapping):
+    """
+    A broker's term on the shared vocabulary, or the term uppercased when the vocabulary does not know it.
+
+    - `value` is the broker's term.
+    - `mapping` is one of the vocabulary tables.
+    """
+    if value is None or value == "":
+        return None
+    key = str(value).strip().upper().replace("_", " ")
+    if key in mapping:
+        return mapping[key]
+    collapsed = " ".join(key.split())
+    return mapping.get(collapsed, collapsed)
+
+def number(value, cast=float):
+    """
+    A broker's field as a number, or None when it is blank, a placeholder or not a number.
+
+    - `value` is the field as the broker sent it.
+    - `cast` is `float` or `int`.
+    """
+    if value is None or value == "" or value == "NA":
+        return None
+    try:
+        return cast(float(value)) if cast is int else cast(value)
+    except (TypeError, ValueError):
+        return None
+
+def text(value):
+    """A broker's identifier or message as a string, or None when it is blank or zero."""
+    if value is None or value in ("", 0, "0"):
+        return None
+    return str(value)
+
+def first(row, *names):
+    """The first of several fields a row carries a value for, or None."""
+    for name in names:
+        value = row.get(name)
+        if value not in (None, ""):
+            return value
+    return None
+
+def venue(value):
+    """A broker's venue code as `(exchange, kind)`, or `(None, None)` when it is not one this knows."""
+    return VENUES.get(str(value or "").strip().upper(), (None, None))
+
+def canonical_exchange(value):
+    """A broker's exchange, `NSE` or `nse_cm` or `BSE`, as the canonical `nse` or `bse`, or None."""
+    lowered = str(value or "").strip().lower()
+    for exchange in ("nse", "bse"):
+        if lowered == exchange or lowered.startswith(f"{exchange}_"):
+            return exchange
+    return None
+
+def trade(broker, exchange_code, trade_venue=None, **fields):
+    """
+    One trade with every field of the contract present, `value` worked out, and a private `venue` for resolving it.
+
+    - `broker` is the broker name.
+    - `exchange_code` is the broker's own exchange or segment code, answered as `exchange`.
+    - `trade_venue` is a ready `(exchange, kind)` pair, or None to read one from `exchange_code`.
+    - `fields` are the trade's other fields, already normalized.
+    """
+    row = {"broker": broker, "trade_id": None, "order_id": None, "exchange_order_id": None, "exchange_trade_id": None,
+           "instrument_id": None, "instrument_token": None, "tradingsymbol": None, "exchange": exchange_code,
+           "transaction_type": None, "product": None, "quantity": None, "price": None, "value": None,
+           "trade_timestamp": None, "exchange_timestamp": None}
+    row.update(fields)
+    if row["quantity"] is not None and row["price"] is not None:
+        row["value"] = round(row["quantity"] * row["price"], 2)
+    row["venue"] = trade_venue if trade_venue is not None else venue(exchange_code)
+    return row
+
+def zerodha_trade(row):
+    return trade("zerodha", row.get("exchange"),
+                 trade_id=text(row.get("trade_id")), order_id=text(row.get("order_id")),
+                 exchange_order_id=text(row.get("exchange_order_id")), instrument_token=text(row.get("instrument_token")),
+                 tradingsymbol=row.get("tradingsymbol"),
+                 transaction_type=normalize(row.get("transaction_type"), TRANSACTION_TYPES),
+                 product=normalize(row.get("product"), PRODUCTS),
+                 quantity=number(row.get("quantity"), int), price=number(row.get("average_price")),
+                 trade_timestamp=row.get("fill_timestamp"), exchange_timestamp=row.get("exchange_timestamp"))
+
+def dhan_trade(row):
+    return trade("dhan", row.get("exchangeSegment"),
+                 trade_id=text(row.get("exchangeTradeId")), order_id=text(row.get("orderId")),
+                 exchange_order_id=text(row.get("exchangeOrderId")), exchange_trade_id=text(row.get("exchangeTradeId")),
+                 instrument_token=text(row.get("securityId")), tradingsymbol=row.get("tradingSymbol"),
+                 transaction_type=normalize(row.get("transactionType"), TRANSACTION_TYPES),
+                 product=normalize(row.get("productType"), PRODUCTS),
+                 quantity=number(row.get("tradedQuantity"), int), price=number(row.get("tradedPrice")),
+                 trade_timestamp=row.get("createTime"), exchange_timestamp=row.get("exchangeTime"))
+
+def noren_trade(broker):
+    def build(row):
+        exchange_time = row.get("exch_tm")
+        return trade(broker, row.get("exch"),
+                     trade_id=text(row.get("flid")), order_id=text(row.get("norenordno")),
+                     exchange_order_id=text(row.get("exchordid")), exchange_trade_id=text(row.get("flid")),
+                     instrument_token=text(row.get("token")), tradingsymbol=row.get("tsym"),
+                     transaction_type=normalize(row.get("trantype"), TRANSACTION_TYPES),
+                     product=normalize(row.get("prd"), PRODUCTS),
+                     quantity=number(row.get("flqty"), int), price=number(row.get("flprc")),
+                     trade_timestamp=row.get("fltm"),
+                     exchange_timestamp=None if not exchange_time or exchange_time == NOREN_NO_EXCHANGE_TIME else exchange_time)
+    return build
+
+def fyers_trade(row):
+    symbol = row.get("symbol")
+    prefix = str(symbol or "").partition(":")[0]
+    return trade("fyers", symbol.partition(":")[0] if symbol else None,
+                 (prefix.lower() or None, FYERS_SEGMENT_KINDS.get(str(row.get("segment")))),
+                 trade_id=text(row.get("tradeNumber")), order_id=text(row.get("orderNumber")),
+                 exchange_order_id=text(row.get("exchangeOrderNo")), instrument_token=text(row.get("fyToken")),
+                 tradingsymbol=symbol, transaction_type=normalize(row.get("side"), TRANSACTION_TYPES),
+                 product=normalize(row.get("productType"), PRODUCTS),
+                 quantity=number(row.get("tradedQty"), int), price=number(row.get("tradePrice")),
+                 trade_timestamp=row.get("orderDateTime"))
+
+def groww_trade(row):
+    exchange = row.get("exchange")
+    return trade("groww", exchange,
+                 (canonical_exchange(exchange) or str(exchange or "").lower() or None,
+                  GROWW_SEGMENT_KINDS.get(str(row.get("segment") or "").upper())),
+                 trade_id=text(row.get("groww_trade_id")), order_id=text(row.get("groww_order_id")),
+                 exchange_order_id=text(row.get("exchange_order_id")), exchange_trade_id=text(row.get("exchange_trade_id")),
+                 tradingsymbol=row.get("trading_symbol"),
+                 transaction_type=normalize(row.get("transaction_type"), TRANSACTION_TYPES),
+                 product=normalize(row.get("product"), PRODUCTS),
+                 quantity=number(row.get("quantity"), int), price=number(row.get("price")),
+                 trade_timestamp=row.get("trade_date_time") or row.get("created_at"))
+
+def indmoney_trade(row):
+    return trade("indmoney", row.get("exchange"),
+                 (str(row.get("exchange") or "").lower() or None,
+                  INDMONEY_SEGMENT_KINDS.get(str(row.get("segment") or "").upper(), "cash")),
+                 trade_id=text(row.get("fill_id") or row.get("trade_id")), order_id=text(row.get("order_id") or row.get("id")),
+                 exchange_order_id=text(row.get("exch_order_id")), instrument_token=text(row.get("security_id")),
+                 transaction_type=normalize(row.get("txn_type"), TRANSACTION_TYPES),
+                 product=normalize(row.get("product"), PRODUCTS),
+                 quantity=number(row.get("quantity") or row.get("traded_qty"), int),
+                 price=number(row.get("price") or row.get("traded_price")),
+                 trade_timestamp=row.get("trade_date_time") or row.get("created_at"))
+
+def kotak_trade(row):
+    fill_date, fill_time = row.get("flDt"), row.get("flTm")
+    return trade("kotak", first(row, "exSeg", "exch"),
+                 trade_id=text(row.get("flId")), order_id=text(row.get("nOrdNo")),
+                 exchange_order_id=text(row.get("exOrdId")), exchange_trade_id=text(row.get("flId")),
+                 instrument_token=text(row.get("tok")), tradingsymbol=first(row, "trdSym", "sym"),
+                 transaction_type=normalize(row.get("trnsTp"), TRANSACTION_TYPES),
+                 product=normalize(row.get("prod"), PRODUCTS),
+                 quantity=number(row.get("fldQty"), int), price=number(row.get("avgPrc")),
+                 trade_timestamp=f"{fill_date} {fill_time}" if fill_date and fill_time else fill_date or fill_time,
+                 exchange_timestamp=row.get("exTm"))
+
+def wisdom_capital_trade(row):
+    return trade("wisdom_capital", row.get("ExchangeSegment"),
+                 trade_id=text(row.get("ExecutionID")), order_id=text(row.get("AppOrderID")),
+                 exchange_order_id=text(row.get("ExchangeOrderID")), exchange_trade_id=text(row.get("ExecutionID")),
+                 instrument_token=text(row.get("ExchangeInstrumentID")), tradingsymbol=row.get("TradingSymbol"),
+                 transaction_type=normalize(row.get("OrderSide"), TRANSACTION_TYPES),
+                 product=normalize(row.get("ProductType"), PRODUCTS),
+                 quantity=number(row.get("LastTradedQuantity"), int), price=number(row.get("LastTradedPrice")),
+                 trade_timestamp=row.get("LastExecutionTransactTime"), exchange_timestamp=row.get("ExchangeTransactTime"))
+
+# Each broker's reader of one stored trade-book row.
+NORMALIZERS = {"zerodha": zerodha_trade, "dhan": dhan_trade, "flattrade": noren_trade("flattrade"),
+               "shoonya": noren_trade("shoonya"), "fyers": fyers_trade, "groww": groww_trade,
+               "indmoney": indmoney_trade, "kotak": kotak_trade, "wisdom_capital": wisdom_capital_trade}
+
+def stored_rows(broker, stored):
+    """
+    The trade-book rows inside a broker's stored value, or None when the value is not a trade book.
+
+    Fyers' body keeps the rows under `tradeBook`; every other broker's script stores them as the list under `data`.
+
+    - `broker` is the broker name.
+    - `stored` is the decoded stored value.
+    """
+    data = stored.get("data") if isinstance(stored, dict) else None
+    if broker == "fyers" and isinstance(data, dict):
+        data = data.get("tradeBook") or []
+    return [row for row in data if isinstance(row, dict)] if isinstance(data, list) else None
+
+class Resolver:
+    """
+    Resolves trades to unified instruments from the Redis cache, remembering answers for one mapping date.
+    """
+
+    def __init__(self, cache):
+        """
+        - `cache` is the Redis client.
+        """
+        from stock_brokers.instruments.mapping.utilities.segments import (CANONICAL_EXCHANGES, CANONICAL_SEGMENTS,
+                                                                          CASH_SEGMENTS, segments_of)
+        self._cache = cache
+        self._exchanges, self._segments_of = CANONICAL_EXCHANGES, segments_of
+        # The bare segments each kind of venue trades, in the order a token's candidates are preferred.
+        self._kind_segments = {
+            "cash": CASH_SEGMENTS,
+            "derivative": tuple(name for name, shape in CANONICAL_SEGMENTS
+                                if shape in ("future", "option") and not name.startswith(("currency", "commodity"))),
+            "currency": tuple(name for name, _ in CANONICAL_SEGMENTS if name.startswith("currenc")),
+            "commodity": tuple(name for name, _ in CANONICAL_SEGMENTS if name.startswith("commodit")),
+        }
+        self._all_segments = tuple(name for name, _ in CANONICAL_SEGMENTS)
+        self._mapping_date = None
+        self._columns = None
+        self._remembered = {}
+
+    def venue_segments(self, exchange, kind):
+        """The prefixed segments an instrument on a venue can be, in preference order."""
+        return self._segments_of([exchange] if exchange else list(self._exchanges),
+                                 self._kind_segments.get(kind, self._all_segments))
+
+    def resolve(self, trades):
+        """
+        Set each trade's `instrument_id`, and its `tradingsymbol` when the broker sent none, and remove its `venue`.
+
+        - `trades` is every broker's trades.
+        """
+        meta = json.loads(self._cache.get(META_KEY) or "null") or {}
+        if meta.get("mapping_date") != self._mapping_date:
+            self._mapping_date, self._columns, self._remembered = meta.get("mapping_date"), meta.get("columns"), {}
+        for row in trades:
+            exchange, kind = row.pop("venue")
+            if self._mapping_date is None:
+                continue
+            key = (row["broker"], row["instrument_token"], exchange, kind,
+                   None if row["instrument_token"] else row["tradingsymbol"])
+            if key not in self._remembered:
+                self._remembered[key] = self._identity(row["broker"], row["instrument_token"], row["tradingsymbol"],
+                                                       exchange, kind)
+            identity = self._remembered[key]
+            if identity:
+                row["instrument_id"] = identity["instrument_id"]
+                # INDstocks names no trading symbol, so the instrument's stands in.
+                if not row["tradingsymbol"]:
+                    row["tradingsymbol"] = identity["symbol"] or identity["underlying_symbol"]
+
+    def _identity(self, broker, token, symbol, exchange, kind):
+        """
+        The identity a token on a venue resolves to - or, with no token, a cash symbol - or None.
+        """
+        segments = self.venue_segments(exchange, kind)
+        if token:
+            identifiers = json.loads(self._cache.hget(BROKER_TOKENS_KEY, f"{broker}:{token}") or "[]")
+            order = {segment: position for position, segment in enumerate(segments)}
+            candidates = [identity for identity in self._identities(identifiers) if identity["segment"] in order]
+            if not candidates:
+                return None
+            return min(candidates, key=lambda identity: (order[identity["segment"]], identity["symbol"] is None,
+                                                         identity["symbol"] or "", identity["instrument_id"]))
+        if symbol and kind == "cash":
+            for segment in segments:
+                identifier = self._cache.hget(INSTRUMENT_SYMBOLS_KEY, f"{segment}:{str(symbol).upper()}")
+                if identifier:
+                    found = self._identities([json.loads(identifier)])
+                    return found[0] if found else None
+        return None
+
+    def _identities(self, identifiers):
+        """The cached instruments for some ids, as identities with `instrument_id`, `segment`, `symbol` and `underlying_symbol`."""
+        if not identifiers or not self._columns:
+            return []
+        position = {column: index for index, column in enumerate(self._columns["instruments"])}
+        identities = []
+        for identifier, value in zip(identifiers, self._cache.hmget(INSTRUMENTS_KEY, identifiers)):
+            if value is None:
+                continue
+            instrument = json.loads(value)
+            identities.append({"instrument_id": identifier, "segment": instrument[position["segment"]],
+                               "symbol": instrument[position["symbol"]],
+                               "underlying_symbol": instrument[position["underlying_symbol"]]})
+        return identities
+
+def trades_document(cache, resolver, now):
+    """
+    Every broker's stored trades as one document in the REST API's shape.
+
+    - `cache` is the Redis client.
+    - `resolver` is the Resolver.
+    - `now` is the current local time, for staleness and `as_of`.
+    """
+    rows, statuses = [], []
+    for broker, raw in zip(BROKERS, cache.mget([f"{broker}:orders:trades" for broker in BROKERS])):
+        if raw is None:
+            statuses.append({"broker": broker, "status": "missing", "as_of": None})
+            continue
+        try:
+            stored = json.loads(raw)
+            broker_rows = stored_rows(broker, stored)
+        except (TypeError, ValueError):
+            broker_rows, stored = None, {}
+        stored_at = stored.get("timestamp") if isinstance(stored, dict) else None
+        if broker_rows is None:
+            statuses.append({"broker": broker, "status": "unreadable", "as_of": stored_at})
+            continue
+        try:
+            age = (now - datetime.strptime(stored_at, "%Y-%m-%d %H:%M:%S.%f")).total_seconds()
+        except (TypeError, ValueError):
+            age = None
+        status = "stale" if age is None or age > STALE_SECONDS else "ok"
+        statuses.append({"broker": broker, "status": status, "as_of": stored_at})
+        rows.extend(NORMALIZERS[broker](row) for row in broker_rows)
+
+    resolver.resolve(rows)
+    # Each broker writes its timestamps its own way, so they only sort within a broker.
+    rows.sort(key=lambda row: (row["broker"], str(row["trade_timestamp"] or row["exchange_timestamp"] or ""),
+                               row["trade_id"] or ""))
+    buy_value = sum((row["value"] or 0.0 for row in rows if row["transaction_type"] == "BUY"), 0.0)
+    sell_value = sum((row["value"] or 0.0 for row in rows if row["transaction_type"] == "SELL"), 0.0)
+    return {
+        "trades": rows,
+        "summary": {"count": len(rows), "buy_value": round(buy_value, 2), "sell_value": round(sell_value, 2),
+                    "total_value": round(buy_value + sell_value, 2)},
+        "brokers": statuses,
+        "as_of": now.strftime("%Y-%m-%dT%H:%M:%S"),
+    }
+
+def main():
+    """Write the unified trades document to unified:orders:trades every half second, until stopped."""
+    from utilities.configurations import get_cache, get_logger
+    from utilities.poll_reporter import PollReporter
+
+    logger = get_logger("unified.trades")
+    report = PollReporter(logger)
+    cache = get_cache()
+    resolver = Resolver(cache)
+    stop = threading.Event()
+
+    def _handle_signal(signal_number, frame):
+        logger.info(f"Received signal {signal_number}. Stopping.")
+        stop.set()
+
+    for signal_number in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(signal_number, _handle_signal)
+
+    while not stop.is_set():
+        try:
+            document = trades_document(cache, resolver, datetime.now())
+            cache.set(REDIS_KEY, json.dumps(document))
+            not_ok = [f"{status['broker']} {status['status']}" for status in document["brokers"] if status["status"] != "ok"]
+            report.info(f"Wrote {document['summary']['count']} trade(s) to {REDIS_KEY}"
+                        + (f"; {', '.join(not_ok)}" if not_ok else ""))
+        except Exception as exception:
+            report.error(f"Could not combine the trades: {type(exception).__name__}: {exception}")
+        stop.wait(DELAY_SECONDS)
+    logger.info("Stopped")
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())
