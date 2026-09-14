@@ -1,0 +1,41 @@
+CREATE TABLE IF NOT EXISTS dhan.instruments (
+    "exch_id" TEXT,
+    "segment" TEXT,
+    "security_id" TEXT,
+    "isin" TEXT,
+    "instrument" TEXT,
+    "underlying_security_id" TEXT,
+    "underlying_symbol" TEXT,
+    "symbol_name" TEXT,
+    "display_name" TEXT,
+    "instrument_type" TEXT,
+    "series" TEXT,
+    "lot_size" TEXT,
+    "sm_expiry_date" TEXT,
+    "strike_price" TEXT,
+    "option_type" TEXT,
+    "tick_size" TEXT,
+    "expiry_flag" TEXT,
+    "bracket_flag" TEXT,
+    "cover_flag" TEXT,
+    "asm_gsm_flag" TEXT,
+    "asm_gsm_category" TEXT,
+    "buy_sell_indicator" TEXT,
+    "buy_co_min_margin_per" TEXT,
+    "buy_co_sl_range_max_perc" TEXT,
+    "buy_co_sl_range_min_perc" TEXT,
+    "buy_bo_min_margin_per" TEXT,
+    "buy_bo_profit_range_max_perc" TEXT,
+    "buy_bo_profit_range_min_perc" TEXT,
+    "mtf_leverage" TEXT,
+    "sm_upper_limit" TEXT,
+    "sm_lower_limit" TEXT,
+    "sm_freeze_qty" TEXT,
+    "download_date" DATE NOT NULL
+);
+
+SELECT create_hypertable(
+    'dhan.instruments',
+    by_range('download_date', INTERVAL '1 month'),
+    if_not_exists => TRUE
+);
