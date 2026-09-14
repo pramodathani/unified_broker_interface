@@ -6,8 +6,8 @@ sends that token with every other request.
 
 Six groups of endpoints are served today: the session, the user, broker and exchange details, the
 [instruments](#instruments), the [portfolio](#portfolio) - funds, holdings and positions - and
-[orders](#orders) - today's order book and trade book. The API reads orders but does not place, modify or
-cancel them.
+[orders](#orders) - today's order book and trade book, and [placing an order](#placing-an-order). The API
+places orders but does not modify or cancel them.
 
 ## Running it
 
@@ -19,13 +19,14 @@ rest-api --dev           # Flask's development server, for local debugging
 
 The workers are threaded, so a long stream or a slow broker quote holds one thread rather than a whole
 worker, and is not cut off by gunicorn's timeout for a hung worker. The address and the token lifetime
-come from the environment. All three variables are optional.
+come from the environment. All four variables are optional, and each is read once when a worker starts.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `UNIFIED_BROKER_INTERFACE_API_HOST` | `127.0.0.1` | Address to bind |
 | `UNIFIED_BROKER_INTERFACE_API_PORT` | `8080` | Port to bind |
 | `UNIFIED_BROKER_INTERFACE_API_TOKEN_TTL_SECONDS` | `86400` | How long an access token is accepted |
+| `UNIFIED_BROKER_INTERFACE_API_ORDER_EXCLUDED_BROKERS` | empty | Comma-separated broker names that `POST /api/orders/place` never sends to, such as `kotak,stoxkart` |
 
 ## Endpoints
 
@@ -43,6 +44,7 @@ come from the environment. All three variables are optional.
 | `GET` | `/api/portfolio/positions` | `access-token` header | The account's open positions, net and day, merged across every broker, from `unified:portfolio:positions` |
 | `GET` | `/api/orders/details` | `access-token` header | Today's orders at every broker, from `unified:orders:orders` |
 | `GET` | `/api/orders/trades` | `access-token` header | Today's trades at every broker, from `unified:orders:trades` |
+| `POST` | `/api/orders/place` | `access-token` header | Places one order at the next broker in a round robin, see [Placing an order](#placing-an-order) |
 
 Errors come back as `{"error": "…"}`. A refused token is `401`, with a message saying whether it
 was missing, not the token in force, or expired. A detail collection with nothing in it is `404`.
@@ -529,12 +531,13 @@ change come from the unified quote, falling back to the broker's price and previ
 ## Orders
 
 Everything under `/api/orders` takes the `access-token` header. The order book and trade book below answer
-`GET`, and there are no routes that write orders.
+`GET`, and [placing an order](#placing-an-order) is a `POST`. Nothing modifies or cancels an order.
 
 | Path | Parameters | Returns | Answered from |
 | --- | --- | --- | --- |
 | `/details` | none | Today's orders at every broker, and how each broker's data was read | `unified:orders:orders`, written by `bin/unified/orders` every half second |
 | `/trades` | none | Today's trades at every broker, and how each broker's data was read | `unified:orders:trades`, written by `bin/unified/trades` every half second |
+| `/place` | a JSON body, below | The broker's answer to one order | one request to the broker whose turn it is |
 
 ```bash
 curl -s localhost:8080/api/orders/details -H "access-token: $TOKEN"
@@ -619,3 +622,107 @@ names the company rather than a trading symbol, so its `tradingsymbol` is the re
     read yet. Every other broker's
     order fields, and every broker's trade fields, follow its published schema or the field names of its
     order update messages, and should be checked on a day with orders and fills.
+
+### Placing an order
+
+`POST /api/orders/place` sends one order to one broker. The API chooses the broker, not the caller: the ten
+brokers take turns in a fixed order, and the turn is kept in a Redis counter that every gunicorn worker
+shares, so consecutive orders go to consecutive brokers.
+
+!!! danger "This places real orders on live trading accounts"
+
+    Every request without `"dry_run": true` reaches a broker, and an order the broker accepts is live at the
+    exchange. The API has no route that cancels it: cancel it at the broker. Try a new body with `dry_run`
+    first, which answers with the exact request that would have been sent and sends nothing.
+
+The endpoint is built for latency. Before the broker's own place-order call it reads Redis only, in two
+round trips, or three when the instrument is named by its fields, and it never reads MongoDB or PostgreSQL
+or calls a broker for anything else. It checks no funds, takes no rate-limit slot, checks no market hours,
+and starts no login. Each worker keeps one open HTTPS connection per broker, so only the first order a
+worker sends to a broker pays for the TLS handshake.
+
+```text
+request ──► check the body (no I/O)
+        ──► Redis: API token, mapping date, broker logins and settings
+        ──► Redis: the instrument by its fields (only when there is no instrument_id)
+        ──► Redis: the identity, every broker's order handle, and the round-robin counter
+        ──► choose the broker, check lots and ticks (no I/O)
+        ──► one POST to the broker
+```
+
+The body is JSON. The vocabulary is the [shared one](../architecture/contracts.md#the-shared-vocabulary),
+written in capitals, though lower case is accepted.
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `instrument_id` | this, or the fields below | The instrument's id, as `/api/instruments/details` answers it |
+| `exchange`, `segment` | when there is no `instrument_id` | `nse` or `bse`, and a segment such as `equities` or `nse_equity_options` |
+| `symbol` | for a security | The trading symbol, such as `SBIN` |
+| `underlying_symbol`, `expiry_date` | for a future or option | Such as `NIFTY` and `2026-09-29` |
+| `strike_price`, `option_type` | for an option | Such as `25000` and `CE` |
+| `transaction_type` | yes | `BUY` or `SELL` |
+| `product` | yes | `CNC`, `MIS` or `NRML` |
+| `order_type` | yes | `MARKET`, `LIMIT`, `SL` or `SL-M` |
+| `quantity` | yes | Units, not lots, and a whole number of the broker's lots |
+| `validity` | no | `DAY` (the default) or `IOC` |
+| `price` | for `LIMIT` and `SL`, refused otherwise | A whole number of ticks |
+| `trigger_price` | for `SL` and `SL-M`, refused otherwise | A whole number of ticks |
+| `disclosed_quantity` | no | At most `quantity` |
+| `after_market` | no | `true` for an after-market order |
+| `tag` | no | 1 to 20 letters and digits, passed to the broker's own tag or remarks field |
+| `dry_run` | no | `true` to answer with the request instead of sending it |
+
+Orders are sent only for NSE and BSE cash instruments, equity and fixed income derivatives, ETFs,
+investment trusts and mutual fund units. Indices, commodities, currencies and uncategorised instruments
+are refused with `400`, because their quantity may be counted in lots at some brokers, which has not been
+confirmed. The lot is the chosen broker's `lot_size`, and the tick is the `tick_size` most brokers agree
+on, which is what `/api/instruments/details` answers.
+
+```bash
+curl -s -X POST localhost:8080/api/orders/place -H "access-token: $TOKEN" -H 'Content-Type: application/json' \
+     -d '{"exchange": "nse", "segment": "equities", "symbol": "SBIN", "transaction_type": "BUY",
+          "product": "CNC", "order_type": "LIMIT", "quantity": 1, "price": "500.10", "dry_run": true}'
+```
+
+When the broker whose turn it is cannot take the order, the next broker in the list is tried, and every
+broker passed over is listed in `skipped` with its reason. A broker is passed over when it is excluded by
+`UNIFIED_BROKER_INTERFACE_API_ORDER_EXCLUDED_BROKERS`, has no mapping for the instrument, has no login or
+no account settings in Redis, or does not take the order: INDmoney takes no `SL` or `SL-M` orders, and
+Groww and Wisdom Capital take no after-market orders. Once an order has been sent it is never sent to
+another broker, whatever the answer, because a second send could place the order twice.
+
+```json
+{
+  "broker": "zerodha", "instrument_id": "ead1abb8-3a2d-5952-9552-aa77d27b8619", "tag": null,
+  "outcome": "accepted", "order_id": "250915000001", "status_message": null,
+  "broker_response": { "status": "success", "data": { "order_id": "250915000001" } },
+  "skipped": [],
+  "timing_ms": { "preparation": 0.6, "broker": 84.2 }
+}
+```
+
+`timing_ms.preparation` is the API's own time before the broker call, and `timing_ms.broker` is the broker
+call itself. A dry run answers `request` (the method, URL and form or JSON body, without the session
+headers) and `dry_run: true` in place of the outcome.
+
+| Status | Outcome | Meaning |
+| --- | --- | --- |
+| `200` | `accepted` | The broker answered with an order id, or it was a dry run |
+| `422` | `rejected` | The broker refused the order, or it could not be connected to, so nothing was placed |
+| `504` | `unknown` | The broker answered with a server error, did not answer in time, or answered without an order id: check the order book before sending again |
+| `400` | | The body is not a valid order, or the quantity or a price is not whole lots or ticks |
+| `401` | | The access token is missing, wrong or expired |
+| `404` | | The instrument is not in today's mapping cache |
+| `503` | | Redis cannot be read, nothing has been mapped, or no broker can take the order, with `skipped` |
+
+A broker that refuses the session, because its token has expired, answers `rejected` with its own
+message. Nothing logs in again: run `bin/<broker>/login`, and the next order uses the new token without a
+restart, because the token is read from Redis on every order.
+
+!!! warning "Orders need the mapping cache warmed for today"
+
+    The instrument, its broker tokens and its lots and ticks come only from the `unified:catalogue:` keys in
+    Redis. Those keys expire at midnight and are warmed again after the 07:45 instrument mapping, so between
+    midnight and that warm every order is refused with `404`. `python -m
+    stock_brokers.instruments.mapping.utilities.warm_cache` warms them by hand. See
+    [Known issues](../contributing/known-issues.md).

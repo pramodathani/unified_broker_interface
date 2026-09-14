@@ -135,6 +135,7 @@ REST API answers with. Every document carries `brokers`, saying for each broker 
 | `unified:portfolio:funds` | string | `bin/unified/funds`, every half second | `{"summary", "pnl", "margin_breakdown", "cash_movement", "segments", "brokers", "as_of"}` |
 | `unified:orders:orders` | string | `bin/unified/orders`, every half second | `{"orders", "summary", "brokers", "as_of"}` |
 | `unified:orders:trades` | string | `bin/unified/trades`, every half second | `{"trades", "summary", "brokers", "as_of"}` |
+| `unified:orders:round_robin` | string | `POST /api/orders/place`, one `INCR` per checked order | A counter with no expiry; the broker whose turn it is is this count modulo the number of brokers not excluded |
 
 ### Order and position updates
 

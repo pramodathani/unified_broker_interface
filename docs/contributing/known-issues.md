@@ -37,6 +37,19 @@ broker files rather than a unit problem. Index ticks were brought into rupees on
 [mapping guide](../guides/instrument-mapping.md) describes, but Dhan's and Fyers' figures still disagree
 for a few indices, such as INDIA VIX (0.05 and 0.01), and `/details` answers a null `tick_size` for them.
 
+**Orders are refused between midnight and the morning cache warm.** `POST /api/orders/place` reads the
+instrument, its broker tokens and its lots and ticks only from the `unified:catalogue:` keys in Redis, so
+that it never waits on PostgreSQL. Those keys expire at midnight, and the next warm runs after the 07:45
+instrument mapping, so an after-market order sent in between is refused with `404`. Running
+`python -m stock_brokers.instruments.mapping.utilities.warm_cache` refills them for the latest mapping date.
+
+**Placing an order is unconfirmed live.** Each broker's order request is copied from the order builders that
+were removed in commit 4cc8c91, and their responses were checked only against stubbed answers. No order
+has been placed through the endpoint. The removed code also recorded that Kotak's API app refused order
+writes as unauthorised, that Stoxkart had no live session or algo identifier, and that Fyers' API app was
+not approved for placing orders, so those three are rotated through but the least likely to succeed.
+`UNIFIED_BROKER_INTERFACE_API_ORDER_EXCLUDED_BROKERS` takes them out of the rotation.
+
 **Most unified tick normalizers are unconfirmed live.** Only Zerodha is verified, and Dhan agrees with it
 on stored in-session MCX ticks but has no in-session NSE ticks stored. What Kotak, Flattrade, Shoonya,
 Wisdom Capital, Fyers, Groww and INDmoney send was taken from stored weekend snapshots, a mock session
