@@ -10,7 +10,7 @@ others.
 | --- | --- | --- |
 | Broker scripts | `bin/<broker>/` | The only code that talks to a broker: sessions, pollers, quote and order update feeds, persisters, instrument masters and candles. See [Broker scripts](../guides/broker-scripts.md) |
 | Unified scripts | `bin/unified/` | Every broker combined from Redis and the database: instruments, price history, quotes, orders and the portfolio. See [Unified scripts](../guides/unified-scripts.md) |
-| REST API | `unified_broker_interface` | One HTTP interface over the unified layer, and order placement at a broker. See [REST API](../guides/rest-api.md) |
+| REST API | `unified_broker_interface` | One HTTP interface over the unified layer. See [REST API](../guides/rest-api.md) |
 | Services | `services/<broker>/`, `services/unified/` | The systemd user units that run all of it. See [Running it as a service](../guides/services.md) |
 
 ## Package layout
@@ -71,9 +71,8 @@ A package that implements something once per broker holds exactly three kinds of
 Everything else the subsystem needs - an orchestrator or registry, SQL and its runner, schema
 definitions, helpers - goes in a `utilities/` subpackage inside that same package.
 
-`instruments/mapping/`, `instruments/historical/`, `instruments/ticks/` and the REST API's
-`broker_funds/`, `broker_holdings/`, `broker_orders/`, `broker_positions/` and `broker_quotes/` all read this
-way, which is what makes "which brokers are implemented here" a question answered by listing the
+`instruments/mapping/`, `instruments/historical/`, `instruments/ticks/` and the REST API's `broker_quotes/`
+all read this way, which is what makes "which brokers are implemented here" a question answered by listing the
 directory. In `historical/` and `ticks/` the module Flattrade and Shoonya share, as deployments of one
 platform, sits beside them as `noren.py`.
 
@@ -118,4 +117,3 @@ broker-specific.
 | Mapping | `BROKER_NAME` and a rules file; `classify`, `to_identity` or `read_raw_rows` only where the rules cannot say it | Classification, identity, the upsert |
 | Price history | Six class attributes, `fetch_candles` and `parse_response` | The rate limiter, the queue, the watermarks, the backoff, the upsert |
 | Tick normalization | `feed_key` and the class attributes stating lots, close policy and trusted timestamps | Resolution plans, unit conversion, rounding, instants |
-| REST API orders | `fetch_orders`, `fetch_trades`, `normalize_order`, `normalize_trade`, `is_authentication_error`; `build_place`, `build_modify` and `build_cancel` where `WRITES_ENABLED` | Asking every broker, resolution, routing, rate limits |

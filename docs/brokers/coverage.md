@@ -62,7 +62,7 @@ They differ, and the differences are deliberate.
 | `segments.MAPPED_BROKERS` | 10 | `stock_brokers/instruments/mapping/utilities/segments.py` | The same ten, but **ordered**: the order they must be mapped in. |
 | `orchestrator.CANDLE_BROKERS` | 7 | `stock_brokers/instruments/historical/utilities/orchestrator.py` | Every broker with a candle downloader. |
 | `BROKERS` | 9 | each combiner in `bin/unified/`; `ORDER_BROKERS` and `POSITION_BROKERS` (4) in `order_updates` | The brokers that script combines. Stoxkart is absent. |
-| `SOURCES` | varies | `utilities/service.py` in the REST API's `broker_funds`, `broker_orders` and `broker_quotes` | The broker modules in service. |
+| `SOURCES` | varies | `utilities/service.py` in the REST API's `broker_quotes` | The broker quote modules in service. |
 
 When adding a broker, all of them need looking at - a broker whose scripts write to Redis but which is
 missing from a `bin/unified/` script's `BROKERS` never reaches the unified keys that script writes.

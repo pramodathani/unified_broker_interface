@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this project is
 
-The project connects to ten Indian stock brokers (Dhan, Flattrade, Fyers, Groww, INDmoney, Kotak, Shoonya, Stoxkart, Wisdom Capital and Zerodha) and presents them as one account. Broker scripts collect sessions, quotes, orders, positions, instrument masters and candles into Redis and TimescaleDB, unified scripts combine every broker's data into one view, and a Flask REST API serves that view and places orders.
+The project connects to ten Indian stock brokers (Dhan, Flattrade, Fyers, Groww, INDmoney, Kotak, Shoonya, Stoxkart, Wisdom Capital and Zerodha) and presents them as one account. Broker scripts collect sessions, quotes, orders, positions, instrument masters and candles into Redis and TimescaleDB, unified scripts combine every broker's data into one view, and a Flask REST API serves that view.
 
 The `docs/` directory is a detailed MkDocs site and is the authoritative reference. Read the relevant page before changing a subsystem, and read `docs/contributing/pitfalls.md` before touching sessions, feeds, the candle queue or database writes, because every entry there is a bug that passed review and only failed against a live broker.
 
@@ -29,7 +29,7 @@ There is no `pyproject.toml`, no build step and no pytest suite. The project roo
 
 The two offline suites are plain scripts with a `main()`, not pytest files, so there is no way to run a single case other than editing or importing the module. They need no Redis, database, credentials or network.
 
-`test_runs/broker_login_test.py` logs in to live broker accounts. Anything under `bin/<broker>/`, and the REST API's `/api/orders/place`, `modify` and `cancel` routes, reach real trading accounts, so do not run them without the user's say-so.
+`test_runs/broker_login_test.py` logs in to live broker accounts, and anything under `bin/<broker>/` reaches real trading accounts, so do not run them without the user's say-so.
 
 ## Architecture
 
@@ -48,7 +48,7 @@ Redis ──── bin/<broker>/persist_* ───► TimescaleDB schema <broke
 bin/unified/*           reads only Redis and the database, never a broker
         │  writes unified:* keys and the unified.* schema
         ▼
-unified_broker_interface/   Flask REST API over the unified layer, plus order placement at brokers
+unified_broker_interface/   Flask REST API over the unified layer
 ```
 
 MongoDB holds broker credentials (`settings`) and login tokens (`last_login`), keyed by `broker_name`. Infrastructure locations come from `.env` through `utilities/configurations.py`, which is the one place that opens Redis, MongoDB and PostgreSQL connections.
@@ -65,7 +65,7 @@ Orders and positions are written to one hash per broker by two scripts, the REST
 
 ### Normalized contracts
 
-Four dictionary shapes keep every broker's output identical: the tick, the order, the position and the unified quote. They are defined in `docs/architecture/contracts.md`. Every key is always present, and a missing field is `None`. Nothing validates them at runtime; each script writes every key out explicitly. Broker spellings of status, product, order type and validity map onto one shared vocabulary in `unified_broker_interface/utilities/broker_orders/utilities/vocabulary.py`, and each `bin/<broker>/` script that normalizes orders carries its own copy of those tables. The broker's untouched payload is always kept beside the normalized one (`data` in Redis, `raw` in the database). Data is stored exactly as the broker sent it, and nothing is corrected or dropped on the way in.
+Four dictionary shapes keep every broker's output identical: the tick, the order, the position and the unified quote. They are defined in `docs/architecture/contracts.md`. Every key is always present, and a missing field is `None`. Nothing validates them at runtime; each script writes every key out explicitly. Broker spellings of status, product, order type and validity map onto one shared vocabulary, listed in `docs/architecture/contracts.md`, and each `bin/<broker>/` script that normalizes orders carries its own copy of those tables. The broker's untouched payload is always kept beside the normalized one (`data` in Redis, `raw` in the database). Data is stored exactly as the broker sent it, and nothing is corrected or dropped on the way in.
 
 ### Per-broker packages
 
@@ -78,9 +78,9 @@ Every package implemented once per broker holds exactly three kinds of file: `__
 | `stock_brokers/instruments/mapping/` | `BrokerMappingAdapter` | `BROKER_NAME` and a YAML rules file in `utilities/rules/`; overrides only where rules cannot express it |
 | `stock_brokers/instruments/historical/` | `BrokerCandles` | Six class attributes, `fetch_candles` and `parse_response` |
 | `stock_brokers/instruments/ticks/` | `TickNormalizer` | `feed_key` and class attributes for lots, close policy and trusted timestamps |
-| `unified_broker_interface/utilities/broker_orders/` and siblings | per package | Fetching and normalizing, plus `build_place`, `build_modify` and `build_cancel` where `WRITES_ENABLED` |
+| `unified_broker_interface/utilities/broker_quotes/` | `BrokerQuoteSource` | Fetching a quote and turning it into a tick |
 
-Adding a broker touches many registries (`INGESTERS`, `ADAPTERS`, `MAPPED_BROKERS`, `DOWNLOADERS`, `NORMALIZERS`, `SOURCES`, `API_CLASSES`, `BROKER_PREFERENCE`, and the `BROKERS` lists inside each `bin/unified/` combiner). `docs/contributing/adding-a-broker.md` lists them in order. `MAPPED_BROKERS` in `mapping/utilities/segments.py` is a processing order, not an unordered list.
+Adding a broker touches many registries (`INGESTERS`, `ADAPTERS`, `MAPPED_BROKERS`, `DOWNLOADERS`, `NORMALIZERS`, `SOURCES`, `API_CLASSES`, and the `BROKERS` lists inside each `bin/unified/` combiner). `docs/contributing/adding-a-broker.md` lists them in order. `MAPPED_BROKERS` in `mapping/utilities/segments.py` is a processing order, not an unordered list.
 
 ### Sessions and logins
 

@@ -6,7 +6,8 @@ sends that token with every other request.
 
 Six groups of endpoints are served today: the session, the user, broker and exchange details, the
 [instruments](#instruments), the [portfolio](#portfolio) - funds, holdings and positions - and
-[orders](#orders) - today's order book and trade book, and placing, modifying and cancelling.
+[orders](#orders) - today's order book and trade book. The API reads orders but does not place, modify or
+cancel them.
 
 ## Running it
 
@@ -42,9 +43,6 @@ come from the environment. All three variables are optional.
 | `GET` | `/api/portfolio/positions` | `access-token` header | The account's open positions, net and day, merged across every broker, from `unified:portfolio:positions` |
 | `GET` | `/api/orders/details` | `access-token` header | Today's orders at every broker, from `unified:orders:orders` |
 | `GET` | `/api/orders/trades` | `access-token` header | Today's trades at every broker, from `unified:orders:trades` |
-| `POST` | `/api/orders/place` | `access-token` header | Places an order at the broker the API chooses |
-| `PUT` | `/api/orders/modify` | `access-token` header | Modifies a pending or open order |
-| `DELETE` | `/api/orders/cancel` | `access-token` header | Cancels a pending or open order |
 
 Errors come back as `{"error": "…"}`. A refused token is `401`, with a message saying whether it
 was missing, not the token in force, or expired. A detail collection with nothing in it is `404`.
@@ -373,8 +371,7 @@ balance is never passed off as today's. A document in which no broker is `ok` or
 and the `brokers` list. The same rules hold for holdings (five minutes, since it is written every minute),
 positions, orders and trades.
 
-Each broker's module in `unified_broker_interface/utilities/broker_funds/` reads its own response into these
-buckets. Where a broker states what can back a new order, that figure is the available balance; where it
+Each broker's `bin/<broker>/funds` script reads its own response into these buckets. Where a broker states what can back a new order, that figure is the available balance; where it
 does not, the balance is derived as shown.
 
 | Broker | Endpoint | `available_balance` | `segments` |
@@ -532,8 +529,7 @@ change come from the unified quote, falling back to the broker's price and previ
 ## Orders
 
 Everything under `/api/orders` takes the `access-token` header. The order book and trade book below answer
-`GET`, and the writes are `POST /place`, `PUT /modify` and `DELETE /cancel`, described under
-[placing, modifying and cancelling](#placing-modifying-and-cancelling).
+`GET`, and there are no routes that write orders.
 
 | Path | Parameters | Returns | Answered from |
 | --- | --- | --- | --- |
@@ -623,87 +619,3 @@ names the company rather than a trading symbol, so its `tradingsymbol` is the re
     read yet. Every other broker's
     order fields, and every broker's trade fields, follow its published schema or the field names of its
     order update messages, and should be checked on a day with orders and fills.
-
-### Placing, modifying and cancelling
-
-!!! danger "These move real money"
-
-    Every write reaches a live broker account unless `dry_run` is true. Seven brokers write, and no order has
-    yet been sent to any of them through this API: every broker's calls have been built and checked offline
-    with the broker faked, placements dry-run over HTTP, and a cancel sent to each writing broker for an
-    order id its live order book does not hold.
-
-| Route | Body | Answers |
-| --- | --- | --- |
-| `POST /place` | an instrument - `instrument_id`, or `exchange`, `segment` and identity fields as `/api/instruments` takes them - with `transaction_type`, `product`, `order_type`, `validity` (`DAY`), `quantity` in units, `price`, `trigger_price`, `disclosed_quantity`, `after_market`, `tag`, `dry_run` | `broker`, `instrument_id`, `outcome`, `order_id`, `status_message`, `tag`, `routing` |
-| `PUT /modify` | `broker`, `order_id`, any of `quantity`, `price`, `trigger_price`, `order_type`, `validity`, `disclosed_quantity`, and `dry_run` | `broker`, `order_id`, `outcome`, `status_message` |
-| `DELETE /cancel` | `broker`, `order_id`, `dry_run` | the same |
-
-The fields are the order contract's vocabulary - `BUY`/`SELL`, `CNC`/`MIS`/`NRML`, `MARKET`/`LIMIT`/`SL`/`SL-M`,
-`DAY`/`IOC` - read case-insensitively, and a body may be JSON or query parameters.
-
-```bash
-curl -s -X POST localhost:8080/api/orders/place -H "access-token: $TOKEN" -H "Content-Type: application/json" \
-     -d '{"exchange": "nse", "segment": "equities", "symbol": "SBIN", "transaction_type": "BUY", "product": "CNC",
-          "order_type": "LIMIT", "quantity": 1, "price": "800.00", "tag": "example1", "dry_run": true}'
-curl -s -X DELETE localhost:8080/api/orders/cancel -H "access-token: $TOKEN" -H "Content-Type: application/json" \
-     -d '{"broker": "zerodha", "order_id": "250914000010"}'
-```
-
-**The API chooses the broker.** A placement names no broker. Every broker that carries the instrument, writes
-through this API, takes the order type and has room in its order limits is a candidate; a delivery buy also
-needs a live available balance of at least the order's value - price times quantity, or for a market order the
-unified quote's last price plus 1%. The candidates are ranked by how many orders the API has placed at each
-today, then by a fixed preference. `routing` lists every broker with whether it was eligible and why not.
-Intraday, carry-forward and derivative orders are not funds-checked: the margin they need is left to the
-broker's own risk checks.
-
-**Checked before sending.** `LIMIT` and `SL` need a price and `SL` and `SL-M` a trigger price, and a type
-refuses one it does not take; the quantity must be whole lots at the chosen broker and the prices whole ticks of
-the instrument's `tick_size`;
-`disclosed_quantity` cannot exceed the quantity; `tag` is 1 to 20 letters and digits. A modification or
-cancellation reads the order from the broker's order book first: `404` when the book does not hold it, `409`
-when it is no longer pending or open.
-
-**`dry_run`** builds the broker call - method, URL and body - and returns it with the routing, sending
-nothing. The session headers the broker's API client adds are not shown.
-
-**Three outcomes, never retried.**
-
-| `outcome` | Status | Meaning |
-| --- | --- | --- |
-| `accepted` | `200` | The broker took it; `order_id` is the broker's |
-| `rejected` | `422` | The broker refused it, or it could not be sent; nothing happened |
-| `unknown` | `504` | A timeout, dropped connection or broker failure - it may have reached the exchange |
-
-After `unknown`, find the order in `/api/orders/details` - by `tag` for a placement - before sending anything
-again. A write refused for a dead session is the one exception: the refusal is certain, so when another process
-has already stored a newer session the write is sent once more with it. Otherwise the broker's login unit is
-started and the write is `rejected`, nothing sent - send it again once the login has run. Every write takes a slot in the broker's order limits first and is
-refused with `429` and a retry time when there is none. `503` means no broker could take the placement, and
-`501` a broker that does not write through the API yet.
-
-**Cash and equity derivatives only, for now.** Commodity and currency derivatives are refused at every broker:
-several count their order quantity in lots where every other order is in units, and that has not been confirmed
-for any of them.
-
-| Broker | Place | Modify | Cancel | Limits |
-| --- | --- | --- | --- | --- |
-| Zerodha | `POST /orders/regular`, or `/orders/amo` | `PUT /orders/{variety}/{order_id}`, changed fields only | `DELETE /orders/{variety}/{order_id}` | |
-| Dhan | `POST /v2/orders` | `PUT /v2/orders/{orderId}`, whole order restated | `DELETE /v2/orders/{orderId}` | |
-| Flattrade, Shoonya | `POST …/PlaceOrder` | `POST …/ModifyOrder`, whole order restated | `POST …/CancelOrder` | a refused session inside a 200 is logged in again |
-| Groww | `POST /v1/order/create` | `POST /v1/order/modify`, type, quantity and prices only | `POST /v1/order/cancel` | no after-market orders; `tag` answered as Groww's unique `order_reference_id` |
-| INDmoney | `POST /order` | `POST /order/modify`, quantity and limit price only | `POST /order/cancel` | market and limit orders only |
-| Wisdom Capital | `POST /interactive/orders` | `PUT /interactive/orders`, whole order restated | `DELETE /interactive/orders` | no after-market orders |
-| Kotak | built | built | built | **not enabled** - the API app is read-only |
-| Fyers | built | built | built | **not enabled** - the app is not approved for placing orders |
-| Stoxkart | built | built | built | **not enabled** - no live session and no algo identifier |
-
-A broker that is not enabled is never routed to, and a modify or cancel naming it answers `501` with the
-reason. The broker's own refusal codes decide between `rejected` and `unknown`: Kite's `InputException` and
-`OrderException`, Dhan's input and order errors, Noren's `Not_Ok`, Groww's `GA001`, `GA004` to `GA007`, INDstocks'
-validation and order errors and XTS's `e-orders` and `e-rms` codes settle a write; anything else leaves it
-unknown. A price is checked against the tick most of the instrument's brokers agree on, in rupees, which is the
-`tick_size` that `/api/instruments/details` answers. When the brokers tie or none sends a tick, and for an
-uncategorised instrument, whose brokers' ticks are not all in rupees, the price is not checked and is left to
-the broker.

@@ -15,9 +15,8 @@ sends it - unless the sidebar says to send none or a deliberately wrong one, whi
 paths are tried.
 
 Every call shows its status, time taken and response body, and is added to a request log at the
-bottom of the page. Nothing here places orders: the page calls only the session, detail, instrument and
-portfolio endpoints and the two order book reads, `GET /api/orders/details` and `GET /api/orders/trades`,
-and never `/api/orders/place`, `/api/orders/modify` or `/api/orders/cancel`.
+bottom of the page. The page calls the session, detail, instrument and portfolio endpoints and the two
+order book reads, `GET /api/orders/details` and `GET /api/orders/trades`.
 """
 
 import json

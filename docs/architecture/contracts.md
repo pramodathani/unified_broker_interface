@@ -77,9 +77,8 @@ The broker's untouched payload is never thrown away. In the Redis hash it is the
 `bin/<broker>/persist_orders` stores the whole update in the `raw` column of `<broker>.order_updates`. Order
 events are financial records, so a field mapped wrongly has to stay recoverable from the stored row.
 
-The REST API's orders are the same contract, built by
-[`empty_order_update`][unified_broker_interface.utilities.broker_orders.utilities.vocabulary.empty_order_update]:
-with `broker` and the order's `instrument_id`, and without `raw` and `received_at`. `bin/unified/order_updates`
+The REST API's orders are the same contract, copied field for field by `bin/unified/orders`: with `broker`
+and the order's `instrument_id`, and without `raw` and `received_at`. `bin/unified/order_updates`
 adds `broker`, `instrument_id` and `observed_at` to each update it combines. See [REST API](../guides/rest-api.md).
 
 ## The position
@@ -147,10 +146,10 @@ a quote - resolution, session windows and which broker owns an instrument - is i
 
 ## The shared vocabulary
 
-Brokers describe the same order in wildly different words, so
-[`vocabulary.py`][unified_broker_interface.utilities.broker_orders.utilities.vocabulary] maps each broker's
-spelling onto one set of terms. Keys are compared case-insensitively. The REST API reads the tables from
-that module; each `bin/<broker>/` script that normalizes orders carries its own copy of them.
+Brokers describe the same order in wildly different words, so each broker's spelling is mapped onto one set
+of terms, listed below. Keys are compared case-insensitively. There is no shared module holding the tables:
+each `bin/<broker>/` script that normalizes orders carries its own copy of the ones it needs, and those
+copies must agree with this page.
 
 === "Transaction types"
 

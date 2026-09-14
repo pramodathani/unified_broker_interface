@@ -123,18 +123,11 @@ is the previous close and which timestamps are true. See [Unified scripts](../gu
 
 - Add the API class to `API_CLASSES`, and its login unit to `LOGIN_UNITS`, in
   `unified_broker_interface/utilities/broker_quotes/utilities/clients.py`.
-- `broker_funds/<broker>.py` and `broker_orders/<broker>.py`, registered in `SOURCES` in each package's
-  `utilities/service.py`. The order router checks balances with the funds module. An orders module that
-  places, modifies and cancels sets `WRITES_ENABLED` and writes `build_place`, `build_modify` and
-  `build_cancel`; add the broker to `BROKER_PREFERENCE` in `broker_orders/utilities/routing.py`.
 - If the API should fetch quotes from the broker when the quote cache cannot answer, a `TickNormalizer` in
   `stock_brokers/instruments/ticks/<broker>.py` - its `feed_key`, lot fields, close policy and trusted
   timestamps - registered in `NORMALIZERS` in `ticks/utilities/registry.py` and placed in the priority order
   in `ticks/utilities/sources.py`; then `broker_quotes/<broker>.py`, added to `SOURCES` only once its quotes
   have been checked against live quotes and against Zerodha on the same instruments.
-
-A broker whose venue codes are not in `VENUES` in `broker_positions/base.py` needs them added there. See
-[REST API](../guides/rest-api.md).
 
 ## 9. Documentation
 

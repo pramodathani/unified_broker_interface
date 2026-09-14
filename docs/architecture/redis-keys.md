@@ -219,17 +219,11 @@ does not fail the run; the API reads the unified tables until the next warm succ
 The prefix is not `unified:mapping:` because a warm deletes every key under its prefix but the current
 date's, and `unified:mapping:meta` belongs to `bin/unified/map_instruments`' own cache.
 
-### Runs and order limits
+### Runs
 
 | Key | Type | Written by | Holds |
 | --- | --- | --- | --- |
 | `unified:prices:last_run` | string | `bin/unified/historical_prices` | The outcome of the last run, as JSON |
-| `unified:orders:placed:<broker>:<date>` | string counter | the REST API | Orders the API has placed at that broker on that India date; lapses after two days |
-| `unified:orders:rate_limit:<broker>:<window>:<bucket>` | string counter | the REST API | Order writes in one fixed window - `<window>` is 1, 60 or 86400 seconds - expiring with it |
-
-A write takes a slot in every one of the broker's windows before it is sent, and gives them back and is
-refused with a retry time when any is full. The order router peeks at the same counters, without
-taking a slot, to leave out a broker that is at its limit. See [REST API](../guides/rest-api.md).
 
 ## Shared with MongoDB
 
