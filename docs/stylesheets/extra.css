@@ -1,0 +1,14 @@
+/* Wider content column: the broker coverage tables and the flattened tick schema both have
+   more columns than Material's default 61rem comfortably holds. */
+.md-grid {
+  max-width: 72rem;
+}
+
+/* Tables of icons - the coverage matrix - set their column alignment in the Markdown itself,
+   so nothing is centred globally here. Prose columns read badly centred. */
+
+/* The live-order warning appears on several pages and needs to be impossible to skim past. */
+.md-typeset .admonition.danger,
+.md-typeset details.danger {
+  border-left-width: 0.4rem;
+}

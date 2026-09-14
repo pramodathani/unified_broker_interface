@@ -1,0 +1,168 @@
+site_name: Unified Broker Interface
+site_description: One normalized interface over ten Indian retail brokers - REST, market data, order updates, positions and instrument masters.
+site_author: Pramod Athani
+copyright: Copyright &copy; Pramod Athani
+
+# Uncomment once this project has a remote, to get "Edit this page" links and a repo card.
+# repo_url: https://github.com/<owner>/unified_broker_interface
+# repo_name: unified_broker_interface
+# edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  language: en
+  icon:
+    logo: material/swap-horizontal-bold
+    repo: fontawesome/brands/github
+  palette:
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Follow the system theme
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - content.tooltips
+
+extra_css:
+  - stylesheets/extra.css
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      toc_depth: 3
+  - pymdownx.details
+  # Renders the :material-…: and :octicons-…: shortcodes as inline SVG icons.
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets:
+      check_paths: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.keys
+  - pymdownx.caret
+  - pymdownx.mark
+  - pymdownx.tilde
+
+plugins:
+  - search
+  - gen-files:
+      scripts:
+        - utilities/gen_ref_pages.py
+  - literate-nav:
+      nav_file: SUMMARY.md
+  - section-index
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          paths: [.]
+          options:
+            docstring_style: google
+            docstring_section_style: table
+            docstring_options:
+              # Docstrings here write "Returns:\n    pandas.DataFrame: ...", which is a type and
+              # not a named value. Without this, griffe reads the type as a name and then warns
+              # that the return has no type - which --strict turns into a build failure.
+              returns_named_value: false
+              warn_unknown_params: false
+            show_root_heading: true
+            show_root_full_path: false
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            show_source: true
+            show_if_no_docstring: false
+            inherited_members: true
+            members_order: source
+            filters: ["!^_[^_]"]
+            merge_init_into_class: true
+            separate_signature: true
+            signature_crossrefs: true
+            line_length: 96
+            heading_level: 2
+
+watch:
+  - stock_brokers
+  - utilities
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - getting-started/index.md
+      - Installation: getting-started/installation.md
+      - Configuration: getting-started/configuration.md
+      - Data stores: getting-started/data-stores.md
+  - Architecture:
+      - architecture/index.md
+      - Normalized contracts: architecture/contracts.md
+      - Redis keys: architecture/redis-keys.md
+  - Brokers:
+      - brokers/index.md
+      - Coverage matrix: brokers/coverage.md
+  - Guides:
+      - Broker scripts: guides/broker-scripts.md
+      - Unified scripts: guides/unified-scripts.md
+      - Instrument masters: guides/instruments.md
+      - Instrument mapping: guides/instrument-mapping.md
+      - Price history: guides/price-history.md
+      - Unified price history: guides/unified-price-history.md
+      - Running it as a service: guides/services.md
+      - REST API: guides/rest-api.md
+      - Test runs: guides/test-runs.md
+  - Database:
+      - database/index.md
+      - DDL and migrations: database/ddl.md
+  - Contributing:
+      - Adding a broker: contributing/adding-a-broker.md
+      - Pitfalls: contributing/pitfalls.md
+      - Known issues: contributing/known-issues.md
+      - Writing docs: contributing/documentation.md
+  - API reference: reference/

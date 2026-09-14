@@ -1,0 +1,186 @@
+# Normalized contracts
+
+Four dictionaries: the tick, the order, the position and the unified quote. Each has a fixed set of
+keys, every key is always present, and a field the broker does not supply is `None` rather than
+missing. Consumers can therefore rely on the shape without asking which broker a message came from.
+
+The first three are built by each broker's own [scripts](../guides/broker-scripts.md) in `bin/<broker>/`,
+each of which carries its own decoding and normalization. Every script's module docstring has the table of
+how each field is derived from that broker's own names. The unified quote is built from the ticks by
+`bin/unified/quotes`.
+
+## The tick
+
+Written by every `bin/<broker>/quotes` to the hash `<broker>:quotes:live` and the stream
+`<broker>:quotes:stream`, which `bin/<broker>/persist_ticks` writes to `<broker>.ticks` with the order book
+flattened into columns. The REST API's quote modules build the same shape from a broker's quote response
+with [`contract_tick`][unified_broker_interface.utilities.broker_quotes.base.contract_tick], so a fetched
+quote is normalized exactly as a streamed one.
+
+| Field | Meaning |
+| --- | --- |
+| `id` | The instrument's name from the broker's instrument file (`NSE:RELIANCE`), or its token when the file does not name it |
+| `broker` | The broker the tick came from |
+| `instrument_token` | The broker's own token |
+| `exchange` | Exchange or segment, in the broker's own spelling |
+| `mode` | `ltp`, `quote` or `full` |
+| `last_price`, `last_quantity`, `average_price` | Last trade and the day average |
+| `volume`, `buy_quantity`, `sell_quantity` | Day volume and total pending quantity each side |
+| `ohlc` | `open`, `high`, `low`, `close` |
+| `change` | Percentage change against close |
+| `oi`, `oi_day_high`, `oi_day_low` | Open interest and its day range |
+| `last_trade_time`, `exchange_timestamp` | Epoch seconds, or `None` |
+| `depth` | `buy` and `sell` lists of `{quantity, price, orders}` |
+| `received_at` | Epoch seconds at which the script decoded the tick |
+
+`received_at` is set locally, not by the broker. The gap between it and `exchange_timestamp` is
+the only feed latency measure available for brokers that timestamp their frames at all.
+
+The keys are the same at every broker, but not always the meaning: the token and exchange are in the
+broker's own vocabulary, MCX quantities are lots at some brokers, and `close` is today's close at some
+brokers once the session has ended. The unified quote below is the form that means the same thing
+everywhere.
+
+## The order
+
+Built by `bin/<broker>/orders` from the order book and by `bin/<broker>/order_updates` from the broker's
+websocket, onto the same fields on both sides even where the broker names things differently in its order
+book and its update stream, and stored as the `order` of each entry in `<broker>:orders:orders`.
+
+| Field | Meaning |
+| --- | --- |
+| `order_id`, `exchange_order_id`, `parent_order_id` | The broker's, the exchange's and the parent order's ids |
+| `status`, `status_message` | The status on the shared vocabulary, and the broker's message |
+| `id`, `instrument_token`, `tradingsymbol`, `exchange` | The instrument, as the broker names it |
+| `transaction_type`, `product`, `order_type`, `validity` | On the shared vocabulary |
+| `quantity`, `filled_quantity`, `pending_quantity`, `cancelled_quantity`, `disclosed_quantity` | Quantities |
+| `price`, `trigger_price`, `average_price` | Prices |
+| `order_timestamp`, `exchange_timestamp` | ISO timestamps with the IST offset |
+| `tag` | The order's tag |
+
+`status` is normalized onto one of six values, so a consumer branches on one vocabulary rather
+than nine:
+
+| Status | Meaning |
+| --- | --- |
+| `PENDING` | Accepted by the broker, not yet at the exchange |
+| `OPEN` | Live at the exchange |
+| `COMPLETE` | Fully filled |
+| `CANCELLED` | Cancelled |
+| `REJECTED` | Rejected |
+| `EXPIRED` | Lapsed at end of day |
+
+An unrecognised status is passed through uppercased rather than being forced into one of these,
+so a broker inventing a new one is visible instead of silently mislabelled.
+
+The broker's untouched payload is never thrown away. In the Redis hash it is the `data` beside `order`, and
+`bin/<broker>/persist_orders` stores the whole update in the `raw` column of `<broker>.order_updates`. Order
+events are financial records, so a field mapped wrongly has to stay recoverable from the stored row.
+
+The REST API's orders are the same contract, built by
+[`empty_order_update`][unified_broker_interface.utilities.broker_orders.utilities.vocabulary.empty_order_update]:
+with `broker` and the order's `instrument_id`, and without `raw` and `received_at`. `bin/unified/order_updates`
+adds `broker`, `instrument_id` and `observed_at` to each update it combines. See [REST API](../guides/rest-api.md).
+
+## The position
+
+Built by `bin/<broker>/positions` from the broker's positions, and by `bin/<broker>/order_updates` at the four
+brokers that stream them - Fyers, Groww, Kotak and Wisdom Capital - and stored as the `position` of each
+entry in `<broker>:portfolio:positions`. A position is a snapshot rather than an event: each one is the state
+of an instrument at a moment, and the history in `<broker>.positions` is the series of snapshots.
+
+| Field | Meaning |
+| --- | --- |
+| `id`, `instrument_token`, `tradingsymbol`, `exchange`, `segment` | The instrument, as the broker names it |
+| `product` | On the shared vocabulary |
+| `quantity`, `buy_quantity`, `sell_quantity` | Net quantity, and what was bought and sold |
+| `buy_price`, `sell_price`, `buy_value`, `sell_value` | Averages and totals, paid and received |
+| `average_price`, `last_price` | The broker's average and last price |
+| `realized_pnl`, `unrealized_pnl`, `pnl` | The broker's own profit figures |
+| `multiplier`, `lot_size` | The contract's multiplier and lot size, where the broker sends them |
+| `day_or_net` | `NET` or `DAY` |
+| `updated_at` | When the broker last updated the position, where it says |
+
+`quantity` is net and signed, positive meaning long. `day_or_net` distinguishes the two views where the
+broker offers both.
+
+The REST API answers positions in a shape of its own, resolved to an instrument and merged across brokers,
+with products such as `delivery`, `intraday` and `carry`. See [REST API](../guides/rest-api.md#positions).
+
+## The unified quote
+
+One quote per unified instrument, whichever broker streams it, written by `bin/unified/quotes` to
+`unified:quotes:live` and `unified:quotes:stream` and served by the REST API's `/api/instruments/quote`. The
+REST API builds a quote fetched from a broker into the same document.
+
+| Group | Fields |
+| --- | --- |
+| Identity | `instrument_id`, `exchange`, `segment`, `shape`, `symbol`, `underlying_symbol`, `expiry_date`, `strike_price`, `option_type`, `lot_size` |
+| Source | `broker`, `broker_token` |
+| Prices | `last_price`, `average_price`, `ohlc` (`open`, `high`, `low`), `previous_close`, `change_percent` |
+| Quantities, in units | `last_quantity`, `volume`, `buy_quantity`, `sell_quantity`, `oi`, `oi_day_high`, `oi_day_low` |
+| Book | `depth.buy`, `depth.sell`: up to five `{price, quantity, orders}`, best first |
+| Instants, epoch seconds | `last_trade_time`, `exchange_time`, `received_at` (the broker script decoded it), `unified_at` (the unified script wrote it) |
+| Freshness | `stale`, `stale_since` |
+
+What normalized means:
+
+| Field | Rule |
+| --- | --- |
+| Prices | Rupees, rounded to 2 places, or 4 for currency derivatives. Rounding also removes the float32 noise some feeds carry (2232.6001 is 2232.60). Zero is null, and a negative price is kept only for commodity derivatives. |
+| `previous_close` | Always the previous session's close. A broker's `close` is used only where it means that - Zerodha's always, Dhan's only before the session ends (after it, Dhan's `close` is the day's own close) - and otherwise the value seen earlier that day carries forward. |
+| `change_percent` | Recomputed from `last_price` and `previous_close`, never taken from the broker; Zerodha's index packets, for one, send points. |
+| Quantities | Underlying units, never lots, because exchanges revise lot sizes and a lot count stops being comparable when they do. On MCX that is the contract's quotation unit, so price times quantity is notional: CRUDEOIL volume 67958 lots is 6,795,800 barrels. `lot_size` says what was applied. |
+| Open interest | Null for securities. |
+| Instants | True UTC. Null when a broker does not send one reliably, or when it lies days away from the tick's receipt - a clock nobody corrected. |
+| Book | Levels without both a price and a quantity are dropped, so an empty level means the same at every broker. |
+
+MCX lot sizes come from Groww. The brokers disagree - on 2026-09-13 GOLD OCT had a lot of 100 at Groww
+and 1 at the other eight - and Groww's are the ones that match the MCX contract specifications: CRUDEOIL
+100, NATURALGAS 1250, GOLD 100, SILVER 30, COPPER 2500, ZINC 5000. On NSE and BSE the brokers agree, and
+their common value is used.
+
+Prices are stored as streamed. Splits and bonuses are applied on read through `unified.ticks_adjusted`,
+from the same factors as the [unified price history](../guides/unified-price-history.md). How a tick becomes
+a quote - resolution, session windows and which broker owns an instrument - is in
+[Unified scripts](../guides/unified-scripts.md#live-quotes-quotes).
+
+## The shared vocabulary
+
+Brokers describe the same order in wildly different words, so
+[`vocabulary.py`][unified_broker_interface.utilities.broker_orders.utilities.vocabulary] maps each broker's
+spelling onto one set of terms. Keys are compared case-insensitively. The REST API reads the tables from
+that module; each `bin/<broker>/` script that normalizes orders carries its own copy of them.
+
+=== "Transaction types"
+
+    `BUY`, `SELL`
+
+    Brokers spell these as `B`/`S`, `1`/`-1`, `1`/`2`, or `BUY_ORDER`/`SELL_ORDER`.
+
+=== "Products"
+
+    `CNC`, `MIS`, `NRML`, `CO`, `BO`, `MTF`, `ARB`
+
+    The Noren brokers abbreviate to a single letter - `C` cash, `M` margin, `I` intraday,
+    `H` cover, `B` bracket. `B` is a product here and a side in the transaction table; they are
+    different tables, so the letters do not collide.
+
+=== "Order types"
+
+    `MARKET`, `LIMIT`, `SL`, `SL-M`
+
+    Spelled variously `MKT`, `LMT`, `L`, `SL-LMT`, `STOPMARKET`, or as the numbers 1 to 4.
+
+=== "Validities"
+
+    `DAY`, `IOC`, `GTT`, `GTC`, `GTD`
+
+    `EOS` and `0` normalize to `DAY`; `IMMEDIATE` and `1` to `IOC`.
+
+## Where the contracts are enforced
+
+Nowhere, structurally - there is no schema validation at runtime. Each script builds its dictionaries with
+every key written out, and its docstring states where each field comes from. The offline checks are
+`python -m test_runs.candle_parse` for the candle parsers and `python -m test_runs.unified_ticks_sessions`
+for the session calendar. See [Test runs](../guides/test-runs.md).
