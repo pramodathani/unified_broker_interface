@@ -1,0 +1,207 @@
+# Trading holidays and special sessions for 2026, by exchange and calendar.
+#
+# Generated on 2026-09-13 from each exchange's own publication, not typed by hand:
+#
+#   nse    https://www.nseindia.com/api/holiday-master?type=trading - segments CM (equity; FO is
+#          identical), CD (currency) and COM (commodity)
+#   bse    https://www.bseindia.com/static/markets/marketinfo/listholi.aspx - Equity Segment and
+#          Equity Derivative Segment; Currency Derivatives Segments; Commodity Derivatives Segment
+#   mcx    https://www.mcxindia.com/market-operations/trading-surveillance/trading-holidays
+#   ncdex  circular NCDEX/TRADING-040/2025 of 2025-12-16, https://www.ncdex.com/public/uploads/
+#          circulars/Trading_holidays_for_the_calendar_year_2026_1765886308.pdf
+#
+# NSE and BSE agree date for date on all three calendars. MCX differs from them only on 2026-01-15,
+# the Maharashtra municipal election, which NSE and BSE close for the commodity morning session and
+# MCX does not list.
+#
+# A calendar is the set of segments that close together: `equity` is cash, indices and equity
+# derivatives; `currency` is currency derivatives, which also close on bank holidays; `commodity` is
+# commodity derivatives on every exchange. `closed` is `all`, or `morning` or `evening` for the
+# commodity calendars, whose sessions are split at 17:00. Holidays falling on a Saturday or Sunday are
+# listed as the exchanges list them; weekends are closed anyway.
+#
+# Exchanges revise these by circular during the year. A new year's file is added beside this one when
+# the calendars are published, each December.
+
+year: 2026
+
+holidays:
+  nse:
+    equity:
+      - {date: 2026-01-15, closed: all, name: "Municipal Corporation Election - Maharashtra"}
+      - {date: 2026-01-26, closed: all, name: "Republic Day"}
+      - {date: 2026-02-15, closed: all, name: "Mahashivratri"}
+      - {date: 2026-03-03, closed: all, name: "Holi"}
+      - {date: 2026-03-21, closed: all, name: "Id-Ul-Fitr (Ramadan Eid)"}
+      - {date: 2026-03-26, closed: all, name: "Shri Ram Navami"}
+      - {date: 2026-03-31, closed: all, name: "Shri Mahavir Jayanti"}
+      - {date: 2026-04-03, closed: all, name: "Good Friday"}
+      - {date: 2026-04-14, closed: all, name: "Dr. Baba Saheb Ambedkar Jayanti"}
+      - {date: 2026-05-01, closed: all, name: "Maharashtra Day"}
+      - {date: 2026-05-28, closed: all, name: "Bakri Id"}
+      - {date: 2026-06-26, closed: all, name: "Muharram"}
+      - {date: 2026-08-15, closed: all, name: "Independence Day"}
+      - {date: 2026-09-14, closed: all, name: "Ganesh Chaturthi"}
+      - {date: 2026-10-02, closed: all, name: "Mahatma Gandhi Jayanti"}
+      - {date: 2026-10-20, closed: all, name: "Dussehra"}
+      - {date: 2026-11-08, closed: all, name: "Diwali Laxmi Pujan*"}
+      - {date: 2026-11-10, closed: all, name: "Diwali-Balipratipada"}
+      - {date: 2026-11-24, closed: all, name: "Prakash Gurpurb Sri Guru Nanak Dev"}
+      - {date: 2026-12-25, closed: all, name: "Christmas"}
+    currency:
+      - {date: 2026-01-15, closed: all, name: "Municipal Corporation Election - Maharashtra"}
+      - {date: 2026-01-26, closed: all, name: "Republic Day"}
+      - {date: 2026-02-15, closed: all, name: "Mahashivratri"}
+      - {date: 2026-02-19, closed: all, name: "Chatrapati Shivaji Maharaj Jayanti"}
+      - {date: 2026-03-03, closed: all, name: "Holi"}
+      - {date: 2026-03-19, closed: all, name: "Gudi Padwa"}
+      - {date: 2026-03-21, closed: all, name: "Id-Ul-Fitr (Ramadan Eid)"}
+      - {date: 2026-03-26, closed: all, name: "Shri Ram Navami"}
+      - {date: 2026-03-31, closed: all, name: "Shri Mahavir Jayanti"}
+      - {date: 2026-04-01, closed: all, name: "Annual Bank Closing"}
+      - {date: 2026-04-03, closed: all, name: "Good Friday"}
+      - {date: 2026-04-14, closed: all, name: "Dr. Baba Saheb Ambedkar Jayanti"}
+      - {date: 2026-05-01, closed: all, name: "Maharashtra Day / Buddha Pournima"}
+      - {date: 2026-05-28, closed: all, name: "Bakri Id"}
+      - {date: 2026-06-26, closed: all, name: "Muharram"}
+      - {date: 2026-08-15, closed: all, name: "Independence Day / Parsi New Year"}
+      - {date: 2026-08-26, closed: all, name: "Id-E-Milad"}
+      - {date: 2026-09-14, closed: all, name: "Ganesh Chaturthi"}
+      - {date: 2026-10-02, closed: all, name: "Mahatma Gandhi Jayanti"}
+      - {date: 2026-10-20, closed: all, name: "Dussehra"}
+      - {date: 2026-11-08, closed: all, name: "Diwali Laxmi Pujan*"}
+      - {date: 2026-11-10, closed: all, name: "Diwali-Balipratipada"}
+      - {date: 2026-11-24, closed: all, name: "Prakash Gurpurb Sri Guru Nanak Dev"}
+      - {date: 2026-12-25, closed: all, name: "Christmas"}
+    commodity:
+      - {date: 2026-01-01, closed: evening, name: "New year"}
+      - {date: 2026-01-15, closed: morning, name: "Municipal Corporation Election - Maharashtra"}
+      - {date: 2026-01-26, closed: all, name: "Republic Day"}
+      - {date: 2026-02-15, closed: all, name: "Mahashivratri"}
+      - {date: 2026-03-03, closed: morning, name: "Holi"}
+      - {date: 2026-03-21, closed: all, name: "Id-Ul-Fitr (Ramadan Eid)"}
+      - {date: 2026-03-26, closed: morning, name: "Shri Ram Navami"}
+      - {date: 2026-03-31, closed: morning, name: "Shri Mahavir Jayanti"}
+      - {date: 2026-04-03, closed: all, name: "Good Friday"}
+      - {date: 2026-04-14, closed: morning, name: "Dr. Baba Saheb Ambedkar Jayanti"}
+      - {date: 2026-05-01, closed: morning, name: "Maharashtra Day"}
+      - {date: 2026-05-28, closed: morning, name: "Bakri Id"}
+      - {date: 2026-06-26, closed: morning, name: "Muharram"}
+      - {date: 2026-08-15, closed: all, name: "Independence Day"}
+      - {date: 2026-09-14, closed: morning, name: "Ganesh Chaturthi"}
+      - {date: 2026-10-02, closed: all, name: "Mahatma Gandhi Jayanti"}
+      - {date: 2026-10-20, closed: morning, name: "Dussehra"}
+      - {date: 2026-11-08, closed: all, name: "Diwali Laxmi Pujan*"}
+      - {date: 2026-11-10, closed: morning, name: "Diwali-Balipratipada"}
+      - {date: 2026-11-24, closed: morning, name: "Prakash Gurpurb Sri Guru Nanak Dev"}
+      - {date: 2026-12-25, closed: all, name: "Christmas"}
+  bse:
+    equity:
+      - {date: 2026-01-15, closed: all, name: "MCGM Election day"}
+      - {date: 2026-01-26, closed: all, name: "Republic Day"}
+      - {date: 2026-03-03, closed: all, name: "Holi"}
+      - {date: 2026-03-26, closed: all, name: "Shri Ram Navami"}
+      - {date: 2026-03-31, closed: all, name: "Shri Mahavir Jayanti"}
+      - {date: 2026-04-03, closed: all, name: "Good Friday"}
+      - {date: 2026-04-14, closed: all, name: "Dr. Baba Saheb Ambedkar Jayanti"}
+      - {date: 2026-05-01, closed: all, name: "Maharashtra Day"}
+      - {date: 2026-05-28, closed: all, name: "Bakri Id"}
+      - {date: 2026-06-26, closed: all, name: "Muharram"}
+      - {date: 2026-09-14, closed: all, name: "Ganesh Chaturthi"}
+      - {date: 2026-10-02, closed: all, name: "Mahatma Gandhi Jayanti"}
+      - {date: 2026-10-20, closed: all, name: "Dussehra"}
+      - {date: 2026-11-10, closed: all, name: "Diwali Balipratipada"}
+      - {date: 2026-11-24, closed: all, name: "Prakash Gurpurb Sri Guru Nanak Dev"}
+      - {date: 2026-12-25, closed: all, name: "Christmas"}
+    currency:
+      - {date: 2026-01-15, closed: all, name: "MCGM Election day"}
+      - {date: 2026-01-26, closed: all, name: "Republic Day"}
+      - {date: 2026-02-19, closed: all, name: "Chatrapati Shivaji Maharaj Jayanti"}
+      - {date: 2026-03-03, closed: all, name: "Holi"}
+      - {date: 2026-03-19, closed: all, name: "Gudhipadwa"}
+      - {date: 2026-03-26, closed: all, name: "Shri Ram Navami"}
+      - {date: 2026-03-31, closed: all, name: "Shri Mahavir Jayanti"}
+      - {date: 2026-04-01, closed: all, name: "Annual Bank Closing"}
+      - {date: 2026-04-03, closed: all, name: "Good Friday"}
+      - {date: 2026-04-14, closed: all, name: "Dr. Baba Saheb Ambedkar Jayanti"}
+      - {date: 2026-05-01, closed: all, name: "Maharashtra Day / Buddha Pournima"}
+      - {date: 2026-05-28, closed: all, name: "Bakri Id"}
+      - {date: 2026-06-26, closed: all, name: "Muharram"}
+      - {date: 2026-08-26, closed: all, name: "Id-E-Milad"}
+      - {date: 2026-09-14, closed: all, name: "Ganesh Chaturthi"}
+      - {date: 2026-10-02, closed: all, name: "Mahatma Gandhi Jayanti"}
+      - {date: 2026-10-20, closed: all, name: "Dussehra"}
+      - {date: 2026-11-10, closed: all, name: "Diwali Balipratipada"}
+      - {date: 2026-11-24, closed: all, name: "Prakash Gurpurb Sri Guru Nanak Dev"}
+      - {date: 2026-12-25, closed: all, name: "Christmas"}
+    commodity:
+      - {date: 2026-01-01, closed: evening, name: "New Year Day"}
+      - {date: 2026-01-15, closed: morning, name: "MCGM Election day"}
+      - {date: 2026-01-26, closed: all, name: "Republic Day"}
+      - {date: 2026-03-03, closed: morning, name: "Holi"}
+      - {date: 2026-03-26, closed: morning, name: "Shri Ram Navami"}
+      - {date: 2026-03-31, closed: morning, name: "Shri Mahavir Jayanti"}
+      - {date: 2026-04-03, closed: all, name: "Good Friday"}
+      - {date: 2026-04-14, closed: morning, name: "Dr. Baba Saheb Ambedkar Jayanti"}
+      - {date: 2026-05-01, closed: morning, name: "Maharashtra Day"}
+      - {date: 2026-05-28, closed: morning, name: "Bakri Id"}
+      - {date: 2026-06-26, closed: morning, name: "Muharram"}
+      - {date: 2026-09-14, closed: morning, name: "Ganesh Chaturthi"}
+      - {date: 2026-10-02, closed: all, name: "Mahatma Gandhi Jayanti"}
+      - {date: 2026-10-20, closed: morning, name: "Dussehra"}
+      - {date: 2026-11-10, closed: morning, name: "Diwali Balipratipada"}
+      - {date: 2026-11-24, closed: morning, name: "Prakash Gurpurb Sri Guru Nanak Dev"}
+      - {date: 2026-12-25, closed: all, name: "Christmas"}
+  mcx:
+    commodity:
+      - {date: 2026-01-01, closed: evening, name: "New Year Day"}
+      - {date: 2026-01-26, closed: all, name: "Republic Day"}
+      - {date: 2026-03-03, closed: morning, name: "Holi"}
+      - {date: 2026-03-26, closed: morning, name: "Shri Ram Navmi"}
+      - {date: 2026-03-31, closed: morning, name: "Shri Mahavir Jayanti"}
+      - {date: 2026-04-03, closed: all, name: "Good Friday"}
+      - {date: 2026-04-14, closed: morning, name: "Dr. Baba Saheb Ambedkar Jayanti"}
+      - {date: 2026-05-01, closed: morning, name: "Maharashtra Day"}
+      - {date: 2026-05-28, closed: morning, name: "Bakri Id"}
+      - {date: 2026-06-26, closed: morning, name: "Moharram"}
+      - {date: 2026-09-14, closed: morning, name: "Ganesh Chaturthi"}
+      - {date: 2026-10-02, closed: all, name: "Mahatma Gandhi Jayanti"}
+      - {date: 2026-10-20, closed: morning, name: "Dassera"}
+      - {date: 2026-11-10, closed: morning, name: "Diwali-Balipratipada"}
+      - {date: 2026-11-24, closed: morning, name: "Guru Nanak Jayanti"}
+      - {date: 2026-12-25, closed: all, name: "Christmas"}
+  ncdex:
+    commodity:
+      - {date: 2026-01-01, closed: evening, name: "New year Day"}
+      - {date: 2026-01-26, closed: all, name: "Republic Day"}
+      - {date: 2026-02-15, closed: all, name: "Mahashivratri"}
+      - {date: 2026-03-03, closed: all, name: "Holi"}
+      - {date: 2026-03-21, closed: all, name: "Id-Ul-Fitr (Ramadan EId)"}
+      - {date: 2026-03-26, closed: all, name: "Shri Ram Navami"}
+      - {date: 2026-03-31, closed: all, name: "Shri Mahavir Jayanti"}
+      - {date: 2026-04-03, closed: all, name: "Good Friday"}
+      - {date: 2026-04-14, closed: all, name: "Dr. Baba Saheb Ambedkar Jayanti"}
+      - {date: 2026-05-01, closed: all, name: "Maharashtra Day"}
+      - {date: 2026-05-28, closed: all, name: "Bakri Id"}
+      - {date: 2026-06-26, closed: all, name: "Muharram"}
+      - {date: 2026-08-15, closed: all, name: "Independence Day"}
+      - {date: 2026-09-14, closed: all, name: "Ganesh Chaturthi"}
+      - {date: 2026-10-02, closed: all, name: "Mahatma Gandhi Jayanti"}
+      - {date: 2026-10-20, closed: all, name: "Dussehra"}
+      - {date: 2026-11-08, closed: all, name: "Diwali Laxmi Pujan"}
+      - {date: 2026-11-10, closed: all, name: "Diwali-Balipratipada"}
+      - {date: 2026-11-24, closed: all, name: "Guru Nanak Jayanti"}
+      - {date: 2026-12-25, closed: all, name: "Christmas"}
+
+# Sessions on a day that would otherwise be closed. Every exchange announces Muhurat trading on
+# Diwali, Sunday 2026-11-08, with its timings "to be notified subsequently" (BSE's currency segment
+# holds it only for RFQ). Until the circular gives the hour, the whole day is accepted: a window too
+# wide costs a few snapshot rows from brokers reconnecting that Sunday, while one too narrow would drop
+# the session. Narrow `opens` and `closes` when the timings are published.
+special_sessions:
+  - date: 2026-11-08
+    name: "Muhurat trading (timings to be notified)"
+    exchanges: [nse, bse, mcx, ncdex]
+    calendars: [equity, currency, commodity]
+    opens: "09:00"
+    closes: "23:59:59"
