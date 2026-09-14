@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+"""
+Serve the unified broker interface REST API.
+
+    rest-api                  # gunicorn on UNIFIED_BROKER_INTERFACE_API_HOST:PORT (127.0.0.1:8080)
+    rest-api --workers 4      # more gunicorn workers
+    rest-api --dev            # Flask's development server instead, for local debugging
+
+The address comes from the environment so a systemd unit and a shell agree on it. Every worker
+holds its own MongoDB and Redis connections, and the access token lives in those stores rather than
+in the process, so a token issued by one worker is accepted by every other.
+"""
+
+import os
+import sys
+import argparse
+from pathlib import Path
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+def main():
+    """Start the API under gunicorn, or under Flask's development server with --dev."""
+    from utilities.configurations import api_configuration
+
+    parser = argparse.ArgumentParser(description="Serve the unified broker interface REST API.")
+    parser.add_argument("--dev", action="store_true",
+                        help="run Flask's development server instead of gunicorn")
+    parser.add_argument("--workers", type=int, default=2, help="gunicorn worker processes (default 2)")
+    parser.add_argument("--threads", type=int, default=4, help="threads per gunicorn worker (default 4)")
+    arguments = parser.parse_args()
+
+    address = f"{api_configuration['host']}:{api_configuration['port']}"
+
+    if arguments.dev:
+        from unified_broker_interface.api import api
+        api.run(host=api_configuration['host'], port=api_configuration['port'])
+        return 0
+
+    gunicorn = Path(sys.executable).parent / "gunicorn"
+    # Replaces this process, so systemd supervises gunicorn directly.
+    os.chdir(PROJECT_ROOT)
+    # Threaded workers: a streamed /api/instruments/ticks or a slow broker quote holds a thread, not the
+    # whole worker, and the worker keeps answering gunicorn's heartbeat, so a long stream is not killed
+    # by the timeout meant for a hung worker.
+    os.execv(str(gunicorn), [str(gunicorn), "--bind", address, "--workers", str(arguments.workers),
+                             "--worker-class", "gthread", "--threads", str(arguments.threads),
+                             "--chdir", str(PROJECT_ROOT), "unified_broker_interface.wsgi:api"])
+
+if __name__ == "__main__":
+    raise SystemExit(main())

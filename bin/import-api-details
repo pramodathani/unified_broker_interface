@@ -1,0 +1,71 @@
+#!/usr/bin/env python3
+"""
+Load the REST API's detail collections - exchange_details, broker_details, user_details - from a
+directory of MongoDB Compass exports, and copy each exchange's trading hours and holidays into its
+exchange_details document.
+
+    import-api-details /path/to/exports             # upsert exchanges and brokers, load users if empty,
+                                                    # then copy trading hours and holidays
+    import-api-details /path/to/exports --replace   # also reload user_details over what is there
+    import-api-details --calendars-only             # only re-copy trading hours and holidays
+
+Safe to run twice: exchanges and brokers are upserted on their keys, and the calendar copy overwrites
+only its own fields. Run --calendars-only after a calendar file changes - the API serves the copy in
+MongoDB, not the file. See unified_broker_interface/utilities/import_details.py and
+exchange_calendar.py for what is done on the way in.
+"""
+
+import sys
+import argparse
+from pathlib import Path
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+def main():
+    """Import the detail collections and the exchange calendars, and report what each received."""
+    from utilities.configurations import get_mongo_db
+    from unified_broker_interface.utilities.import_details import DetailsImportError, import_details
+    from unified_broker_interface.utilities.exchange_calendar import CalendarCopyError, copy_exchange_calendars
+
+    parser = argparse.ArgumentParser(
+        description="Load exchange_details, broker_details and user_details from Compass exports, "
+                    "and copy exchange trading hours and holidays into exchange_details.")
+    parser.add_argument("export_directory", type=Path, nargs="?",
+                        help="directory holding the unified_broker_interface.*.json exports")
+    parser.add_argument("--replace", action="store_true",
+                        help="empty user_details and reload it instead of skipping a non-empty one")
+    parser.add_argument("--calendars-only", action="store_true",
+                        help="skip the exports and only copy trading hours and holidays")
+    arguments = parser.parse_args()
+
+    if not arguments.calendars_only and arguments.export_directory is None:
+        parser.error("give the export directory, or --calendars-only")
+
+    mongo_db = get_mongo_db()
+
+    if not arguments.calendars_only:
+        try:
+            report = import_details(mongo_db, arguments.export_directory, replace=arguments.replace)
+        except (DetailsImportError, FileNotFoundError) as error:
+            print(f"Nothing imported: {error}", file=sys.stderr)
+            return 1
+        for line in report:
+            print(line)
+
+    try:
+        report = copy_exchange_calendars(mongo_db)
+    except CalendarCopyError as error:
+        print(f"Calendars not copied: {error}", file=sys.stderr)
+        return 1
+    print("exchange_details  trading hours and holidays copied")
+    for line in report:
+        print(f"  {line}")
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())

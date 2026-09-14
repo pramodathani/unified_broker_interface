@@ -1,0 +1,280 @@
+#!/usr/bin/env python3
+"""
+Check that every broker API can be reached with the credentials on file.
+
+Constructing a broker's API object is what establishes the session: each class first probes an
+authenticated endpoint and, only if that probe fails, runs the broker's login flow. This script
+constructs each object and then calls that same probe endpoint again, so a broker is reported as
+reachable only when a real authenticated request came back with data.
+
+No response body is ever printed - only whether data came back.
+
+    check-broker-connections                  # every broker
+    check-broker-connections zerodha dhan     # only these
+    check-broker-connections --list           # show the broker names
+    check-broker-connections --verbose        # show the login chatter too
+
+This logs in to live broker accounts. It reads only - it places no orders and cancels nothing -
+but several brokers log in by driving a headless Chrome and consuming a TOTP, so running it
+repeatedly means repeatedly authenticating for real.
+
+Exits non-zero when any checked broker failed.
+"""
+
+import sys
+import time
+import logging
+import argparse
+import importlib
+from pathlib import Path
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+# Imported after the re-exec above, so they are resolved from the virtual environment. Rich turns
+# colour and animation off by itself when the output is not a terminal, so a cron job's log gets
+# the same text without escape codes or a redrawn progress bar.
+from rich import box
+from rich.console import Console
+from rich.progress import (Progress, SpinnerColumn, BarColumn, TextColumn,
+                           MofNCompleteColumn, TimeElapsedColumn)
+from rich.table import Table
+
+console = Console()
+
+# The endpoint each broker's constructor probes to decide whether the stored session is still
+# usable. Kept identical to what the constructor calls, so this checks the same thing the rest of
+# the project relies on rather than some other endpoint that might be up while that one is not.
+BROKERS = {
+    "zerodha": {
+        "module": "stock_brokers.api.zerodha",
+        "class": "ZerodhaAPI",
+        "endpoint": "GET api.kite.trade/user/profile",
+        "probe": lambda api: api.get(url="https://api.kite.trade/user/profile"),
+    },
+    "dhan": {
+        "module": "stock_brokers.api.dhan",
+        "class": "DhanAPI",
+        "endpoint": "GET api.dhan.co/v2/profile",
+        "probe": lambda api: api.get(url="https://api.dhan.co/v2/profile"),
+    },
+    "flattrade": {
+        "module": "stock_brokers.api.flattrade",
+        "class": "FlattradeAPI",
+        "endpoint": "POST piconnect.flattrade.in/PiConnectAPI/UserDetails",
+        "probe": lambda api: api.post(url="https://piconnect.flattrade.in/PiConnectAPI/UserDetails"),
+    },
+    "shoonya": {
+        "module": "stock_brokers.api.shoonya",
+        "class": "ShoonyaAPI",
+        "endpoint": "POST api.shoonya.com/NorenWClientAPI/UserDetails",
+        "probe": lambda api: api.post(url="https://api.shoonya.com/NorenWClientAPI/UserDetails"),
+    },
+    "fyers": {
+        "module": "stock_brokers.api.fyers",
+        "class": "FyersAPI",
+        "endpoint": "GET api-t1.fyers.in/api/v3/profile",
+        "probe": lambda api: api.get(url="https://api-t1.fyers.in/api/v3/profile"),
+    },
+    "groww": {
+        "module": "stock_brokers.api.groww",
+        "class": "GrowwAPI",
+        "endpoint": "GET api.groww.in/v1/user/detail",
+        "probe": lambda api: api.get(url="https://api.groww.in/v1/user/detail"),
+    },
+    "kotak": {
+        "module": "stock_brokers.api.kotak",
+        "class": "KotakAPI",
+        # Host deliberately absent: Kotak assigns one per session and refuses any other.
+        "endpoint": "GET <account host>/quick/user/positions",
+        "probe": lambda api: api.get(url=api.url("/quick/user/positions")),
+    },
+    "indmoney": {
+        "module": "stock_brokers.api.indmoney",
+        "class": "INDMoneyAPI",
+        "endpoint": "GET api.indstocks.com/user/profile",
+        "probe": lambda api: api.get(url="https://api.indstocks.com/user/profile"),
+    },
+    "wisdom_capital": {
+        "module": "stock_brokers.api.wisdom_capital",
+        "class": "WisdomCapitalAPI",
+        # The funds endpoint, not /user/profile: Wisdom Capital allows only about one
+        # profile call a day. This authenticates the same way without spending that.
+        "endpoint": "GET trade.wisdomcapital.in/interactive/user/balance",
+        "probe": lambda api: api.get(
+            url=f"https://trade.wisdomcapital.in/interactive/user/balance"
+                f"?clientID={api._settings['ucc_code']}"),
+    },
+    "stoxkart": {
+        "module": "stock_brokers.api.stoxkart",
+        "class": "StoxkartAPI",
+        "endpoint": "GET openapi.stoxkart.com/funds",
+        "probe": lambda api: api.get(url="https://openapi.stoxkart.com/funds"),
+    },
+}
+
+# Brokers answer a rejected request with a payload rather than an HTTP error often enough that a
+# response arriving is not on its own proof of a working session. These are the ways the ten of
+# them spell failure in a body that still came back 200.
+ERROR_STATUS_VALUES = {"error", "err", "not_ok", "notok", "failure", "failed", "false"}
+ERROR_STATUS_FIELDS = ("status", "stat", "s", "state")
+
+def describe_failure(payload):
+    """
+    Why a returned payload should not count as a working connection, or None if it is fine.
+
+    - `payload` is whatever the probe returned.
+    """
+    if payload is None:
+        return "no response"
+    if payload is False or payload == "" or payload == [] or payload == {}:
+        return "empty response"
+    if not isinstance(payload, dict):
+        return None
+
+    for field in ERROR_STATUS_FIELDS:
+        value = payload.get(field)
+        if isinstance(value, str) and value.strip().lower() in ERROR_STATUS_VALUES:
+            message = (payload.get("message") or payload.get("emsg") or payload.get("errorMessage")
+                       or payload.get("error") or payload.get("description"))
+            return f"{field}={value}" + (f": {message}" if isinstance(message, str) and message else "")
+
+    if payload.get("errorCode") not in (None, 0, "0", "", False):
+        return f"errorCode={payload['errorCode']}"
+
+    return None
+
+def check_broker(broker_name, definition):
+    """
+    Construct one broker's API object and call its probe endpoint.
+
+    Returns a result dictionary. The response body itself is deliberately not kept: what is
+    recorded is whether data came back, never what the data was.
+
+    - `broker_name` is the name of the broker.
+    - `definition` is that broker's entry in `BROKERS`.
+    """
+    result = {"broker": broker_name, "endpoint": definition["endpoint"],
+              "ok": False, "reason": None, "seconds": 0.0}
+    started = time.monotonic()
+
+    try:
+        module = importlib.import_module(definition["module"])
+        api_class = getattr(module, definition["class"])
+        # Constructing is the connection: the class probes its endpoint and logs in if needed.
+        api = api_class()
+        payload = definition["probe"](api)
+    except Exception as exception:
+        first_line = str(exception).splitlines()[0] if str(exception).strip() else ""
+        result["reason"] = f"{type(exception).__name__}" + (f": {first_line}" if first_line else "")
+        result["seconds"] = time.monotonic() - started
+        return result
+
+    result["seconds"] = time.monotonic() - started
+    failure = describe_failure(payload)
+    if failure:
+        result["reason"] = failure
+    else:
+        result["ok"] = True
+    return result
+
+def print_report(results):
+    """
+    Print the summary table and the count of working connections.
+
+    - `results` is the list of result dictionaries from `check_broker`.
+    """
+    table = Table(box=box.ROUNDED, header_style="bold", expand=False)
+    table.add_column("Broker", style="bold")
+    table.add_column("Result", justify="center")
+    table.add_column("Time", justify="right")
+    table.add_column("Endpoint", style="dim", overflow="fold")
+
+    for result in results:
+        verdict = "[green]OK[/green]" if result["ok"] else "[red]FAILED[/red]"
+        table.add_row(result["broker"], verdict, f"{result['seconds']:.1f}s", result["endpoint"])
+
+    console.print()
+    console.print(table)
+
+    succeeded = [result["broker"] for result in results if result["ok"]]
+    failed = [result["broker"] for result in results if not result["ok"]]
+
+    console.print()
+    console.print(f"[green]Connected[/green]  {len(succeeded)}/{len(results)}: "
+                  f"{', '.join(succeeded) if succeeded else 'none'}")
+    if failed:
+        console.print(f"[red]Failed[/red]     {len(failed)}/{len(results)}: {', '.join(failed)}")
+
+def main():
+    """Check the requested brokers and report which connections worked."""
+    parser = argparse.ArgumentParser(
+        description="Check that each broker API can be reached with the credentials on file.",
+        epilog="Logs in to live accounts. Reads only - places no orders.")
+    parser.add_argument("brokers", nargs="*", metavar="BROKER",
+                        help="brokers to check, by name. Every broker when omitted.")
+    parser.add_argument("--list", action="store_true", help="list the broker names and exit")
+    parser.add_argument("--verbose", action="store_true",
+                        help="show the login chatter the broker classes log")
+    arguments = parser.parse_args()
+
+    if arguments.list:
+        listing = Table(box=box.ROUNDED, header_style="bold")
+        listing.add_column("Broker", style="bold")
+        listing.add_column("Probe endpoint", style="dim")
+        for broker_name, definition in BROKERS.items():
+            listing.add_row(broker_name, definition["endpoint"])
+        console.print(listing)
+        return 0
+
+    selected = arguments.brokers or list(BROKERS)
+    unknown = [broker_name for broker_name in selected if broker_name not in BROKERS]
+    if unknown:
+        print(f"Unknown broker(s): {', '.join(unknown)}", file=sys.stderr)
+        print(f"Known: {', '.join(BROKERS)}", file=sys.stderr)
+        return 2
+
+    # utilities.configurations calls basicConfig at INFO on import, and the login flows are
+    # chatty. Quieten them so the report is the output, unless the chatter was asked for.
+    import utilities.configurations  # noqa: F401  (imported for its logging setup)
+    if not arguments.verbose:
+        logging.getLogger().setLevel(logging.WARNING)
+
+    console.print(f"Checking [bold]{len(selected)}[/bold] broker connection(s). Each one logs in "
+                  f"if its stored session has expired, so this can take a while.\n")
+
+    results = []
+    # The bar advances one broker at a time because the checks run in sequence: several of these
+    # logins drive a headless Chrome and consume a TOTP, which is not something to do in parallel.
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(bar_width=None),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        console=console,
+        transient=True,
+    ) as progress:
+        task = progress.add_task("connecting", total=len(selected))
+        for broker_name in selected:
+            progress.update(task, description=f"connecting to [bold]{broker_name}[/bold]")
+            result = check_broker(broker_name, BROKERS[broker_name])
+            results.append(result)
+            word, style = ("connected", "green") if result["ok"] else ("failed", "red")
+            # Padded before the markup is wrapped around it, so the colour codes do not count
+            # towards the column width and the times stay in line.
+            # Printed through the progress console so the line lands above the bar rather than
+            # being overwritten by it.
+            progress.console.print(f"  {result['broker']:<16} [{style}]{word:<9}[/{style}]  "
+                                   f"[dim]{result['seconds']:>4.1f}s[/dim]")
+            progress.advance(task)
+
+    print_report(results)
+    return 0 if all(result["ok"] for result in results) else 1
+
+if __name__ == "__main__":
+    raise SystemExit(main())

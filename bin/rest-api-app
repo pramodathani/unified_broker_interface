@@ -1,0 +1,48 @@
+#!/usr/bin/env python3
+"""
+Open the Streamlit test page for the REST API, test_runs/rest_api_app.py.
+
+    rest-api-app              # http://127.0.0.1:8501, reachable from this machine only
+    rest-api-app --lan        # listen on every interface, to open it from another machine
+    rest-api-app --port 8502
+
+Start the API first with `rest-api`. This wrapper exists for two reasons. `streamlit` is installed
+only inside the virtual environment, so a bare `streamlit run` is not found unless the environment
+is activated. And an interactive first run of Streamlit stops to ask for an email address before it
+serves anything, which looks exactly like a hang; running headless skips that prompt.
+"""
+
+import os
+import sys
+import argparse
+from pathlib import Path
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+def main():
+    """Replace this process with Streamlit serving the REST API test page."""
+    parser = argparse.ArgumentParser(description="Serve the REST API Streamlit test page.")
+    parser.add_argument("--port", type=int, default=8501, help="port to serve on (default 8501)")
+    parser.add_argument("--lan", action="store_true",
+                        help="listen on every interface rather than 127.0.0.1 only")
+    arguments = parser.parse_args()
+
+    address = "0.0.0.0" if arguments.lan else "127.0.0.1"
+    streamlit = Path(sys.executable).parent / "streamlit"
+    print(f"REST API test page on http://{'<this machine>' if arguments.lan else address}:{arguments.port}",
+          flush=True)
+
+    os.chdir(PROJECT_ROOT)
+    os.execv(str(streamlit), [str(streamlit), "run", str(PROJECT_ROOT / "test_runs" / "rest_api_app.py"),
+                              "--server.headless", "true",
+                              "--server.address", address,
+                              "--server.port", str(arguments.port),
+                              "--browser.gatherUsageStats", "false"])
+
+if __name__ == "__main__":
+    raise SystemExit(main())

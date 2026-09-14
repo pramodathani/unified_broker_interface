@@ -1,0 +1,333 @@
+#!/usr/bin/env python3
+"""
+Search a broker's instrument master for a symbol or a name.
+
+    search-instruments zerodha INFY
+    search-instruments dhan RELIANCE --limit 100
+    search-instruments kotak "NIFTY 26SEP" --all-columns
+    search-instruments fyers --show-columns          # what this broker is searched on
+    search-instruments groww BANKNIFTY --date 2026-09-11
+
+The broker is mandatory, because each one publishes its own file into its own schema and the
+columns differ so completely that there is no cross broker query worth writing. Zerodha calls it
+`tradingsymbol`, Kotak `ptrdsymbol`, Fyers `symbol_ticker`, Wisdom Capital `namewithseries`.
+
+Rather than hard code that per broker, the columns are read from the database at run time and the
+ones that look like a symbol or a name are searched: any column whose name contains symbol, name,
+desc, ticker or isin, less a short list of columns that match the pattern but hold file metadata
+rather than anything about the instrument. `--show-columns` prints the list for a broker, and
+`--columns` overrides it.
+
+By default only the most recent snapshot is searched, since the table holds one row per contract
+per day and every earlier day would otherwise come back as a duplicate.
+"""
+
+import sys
+import argparse
+from pathlib import Path
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+# Imported after the re-exec above, so they resolve from the virtual environment. Rich drops
+# colour by itself when the output is not a terminal, so piping this into a file stays readable.
+from rich import box
+from rich.console import Console
+from rich.table import Table
+
+console = Console()
+
+# A column is searched when its name contains one of these.
+SEARCHABLE_PATTERNS = ("symbol", "name", "desc", "ticker", "isin")
+
+# Columns that match a pattern above but say nothing about the instrument.
+SEARCHABLE_EXCLUSIONS = {
+    "source_file_name",      # shoonya: which zip the row was read out of
+    "source_zip_url",        # shoonya: where that zip was downloaded from
+    "premarkstext",          # kotak: free text notices
+    "surveillancemessage",   # kotak: exchange surveillance notices
+}
+
+# Shown alongside the matched columns, because they are what makes one match distinguishable from
+# another: which exchange, which expiry, which strike. Ordered by how much they distinguish, and
+# only the first match for each is taken - Kotak alone has pexpirydate and lexpirydate, three
+# different lot size columns and three exchange columns, and printing all of them helps nobody.
+CONTEXT_PATTERN_GROUPS = (
+    ("exch",),
+    ("token", "fytoken", "security_id", "instrumentid", "contractid"),
+    ("instrument_type", "insttype", "instrumenttype", "instrument"),
+    ("expiry", "expiration"),
+    ("strike",),
+    ("option",),
+    ("lot",),
+    ("series",),
+    ("segment",),
+)
+
+# Columns matching a context pattern that are noise rather than context.
+CONTEXT_EXCLUSIONS = {"expiry_flag", "expiry_code", "pnodelstartdate", "pnodelenddate"}
+
+DEFAULT_MAX_CONTEXT = 6
+
+def searchable_columns(columns):
+    """
+    The columns that look like a symbol or a name.
+
+    - `columns` is the table's column names, in table order.
+    """
+    return [column for column in columns
+            if any(pattern in column for pattern in SEARCHABLE_PATTERNS)
+            and column not in SEARCHABLE_EXCLUSIONS]
+
+def context_columns(columns, maximum=DEFAULT_MAX_CONTEXT):
+    """
+    The columns worth showing beside a match to tell one contract from another.
+
+    At most one column is taken from each group in `CONTEXT_PATTERN_GROUPS`, in that order, so a
+    broker that spells the same fact three different ways contributes it once.
+
+    - `columns` is the table's column names, in table order.
+    - `maximum` is how many context columns to return at most.
+    """
+    searchable = set(searchable_columns(columns))
+    available = [column for column in columns
+                 if column not in searchable
+                 and column != "download_date"
+                 and column not in CONTEXT_EXCLUSIONS]
+
+    chosen = []
+    for patterns in CONTEXT_PATTERN_GROUPS:
+        if len(chosen) >= maximum:
+            break
+        for column in available:
+            if column not in chosen and any(pattern in column for pattern in patterns):
+                chosen.append(column)
+                break
+
+    # Back into table order, which is the order the broker publishes and so the order that reads
+    # most naturally against the broker's own file.
+    return [column for column in columns if column in chosen]
+
+def table_columns(connection, broker_name):
+    """
+    Every column of a broker's instruments table, in table order.
+
+    - `connection` is an open psycopg2 connection.
+    - `broker_name` is the name of the broker, which is also its schema.
+    """
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "select column_name from information_schema.columns "
+            "where table_schema = %s and table_name = 'instruments' "
+            "order by ordinal_position",
+            (broker_name,))
+        return [row[0] for row in cursor.fetchall()]
+
+def latest_download_date(connection, broker_name):
+    """
+    The most recent snapshot date stored for a broker, or None when the table is empty.
+
+    - `connection` is an open psycopg2 connection.
+    - `broker_name` is the name of the broker.
+    """
+    from psycopg2 import sql
+
+    with connection.cursor() as cursor:
+        cursor.execute(sql.SQL("select max(download_date) from {}.instruments")
+                       .format(sql.Identifier(broker_name)))
+        return cursor.fetchone()[0]
+
+def search(connection, broker_name, term, search_columns, display, download_date, limit, exact):
+    """
+    Rows whose symbol or name columns match the search term.
+
+    Identifiers are composed with psycopg2's `sql` module rather than formatted into the string,
+    so a column name discovered from the database is quoted properly and the term itself is only
+    ever a bound parameter.
+
+    - `connection` is an open psycopg2 connection.
+    - `broker_name` is the name of the broker, which is also its schema.
+    - `term` is the text to look for.
+    - `search_columns` are the columns to look in.
+    - `display` are the columns to return.
+    - `download_date` is the snapshot to search, or None for every stored snapshot.
+    - `limit` is the maximum number of rows, or None for all of them.
+    - `exact` matches the whole value rather than any part of it.
+    """
+    from psycopg2 import sql
+
+    pattern = term if exact else f"%{term}%"
+    conditions = [sql.SQL("{} ilike %s").format(sql.Identifier(column)) for column in search_columns]
+    parameters = [pattern] * len(search_columns)
+
+    query = sql.SQL("select {fields} from {schema}.instruments where ({matches})").format(
+        fields=sql.SQL(", ").join(sql.Identifier(column) for column in display),
+        schema=sql.Identifier(broker_name),
+        matches=sql.SQL(" or ").join(conditions))
+
+    if download_date is not None:
+        query = query + sql.SQL(" and download_date = %s")
+        parameters.append(download_date)
+
+    query = query + sql.SQL(" order by {}").format(
+        sql.SQL(", ").join(sql.Identifier(column) for column in display[:2]))
+
+    if limit is not None:
+        query = query + sql.SQL(" limit %s")
+        parameters.append(limit)
+
+    with connection.cursor() as cursor:
+        cursor.execute(query, parameters)
+        return cursor.fetchall()
+
+def print_table(headers, rows, max_width, matched_columns=()):
+    """
+    Print the matches as a table.
+
+    The columns that were actually searched are styled differently from the context columns, so
+    it is obvious at a glance which value the search hit and which are there to tell one contract
+    from another.
+
+    - `headers` are the column names.
+    - `rows` are the result tuples.
+    - `max_width` is the widest a single column may be rendered.
+    - `matched_columns` are the searched columns, highlighted in the header.
+    """
+    matched = set(matched_columns)
+    table = Table(box=box.ROUNDED, header_style="bold", expand=False)
+    for header in headers:
+        is_searched = header in matched
+        table.add_column(
+            header,
+            header_style="bold cyan" if is_searched else "bold dim",
+            style="" if is_searched else "dim",
+            max_width=max_width,
+            overflow="ellipsis",
+            no_wrap=True)
+
+    for row in rows:
+        table.add_row(*["" if value is None else str(value) for value in row])
+
+    console.print(table)
+
+def main():
+    """Search one broker's instrument master and print the matches."""
+    from stock_brokers.instruments.orchestrator import INSTRUMENT_BROKERS
+
+    parser = argparse.ArgumentParser(
+        description="Search a broker's instrument master by symbol or name.")
+    parser.add_argument("broker", choices=sorted(INSTRUMENT_BROKERS), metavar="BROKER",
+                        help=f"broker to search. One of: {', '.join(sorted(INSTRUMENT_BROKERS))}")
+    parser.add_argument("term", nargs="?", help="text to look for, matched case insensitively")
+    parser.add_argument("--exact", action="store_true",
+                        help="match the whole value instead of any part of it")
+    parser.add_argument("--columns", help="comma separated columns to search instead of the "
+                                          "symbol and name columns")
+    parser.add_argument("--show-columns", action="store_true",
+                        help="print the columns this broker would be searched on, and exit")
+    parser.add_argument("--all-columns", action="store_true",
+                        help="show every column of a matching row, not just symbol and context")
+    parser.add_argument("--date", help="snapshot to search, as YYYY-MM-DD. Defaults to the latest")
+    parser.add_argument("--all-dates", action="store_true",
+                        help="search every stored snapshot, not just the latest")
+    parser.add_argument("--limit", type=int, default=50,
+                        help="maximum rows to print, default 50. 0 for no limit")
+    parser.add_argument("--width", type=int, default=32,
+                        help="truncate any cell wider than this, default 32")
+    parser.add_argument("--max-context", type=int, default=DEFAULT_MAX_CONTEXT,
+                        help=f"context columns shown beside the matches, default "
+                             f"{DEFAULT_MAX_CONTEXT}. Use --all-columns for every column")
+    arguments = parser.parse_args()
+
+    if not arguments.term and not arguments.show_columns:
+        parser.error("a search term is required unless --show-columns is given")
+
+    from utilities.configurations import get_postgres
+
+    connection = get_postgres()
+    try:
+        columns = table_columns(connection, arguments.broker)
+        if not columns:
+            print(f"No {arguments.broker}.instruments table. Create it with "
+                  f"`python -m stock_brokers.instruments.sql.apply_ddl` and ingest with "
+                  f"`python -m test_runs.download_instruments {arguments.broker}`.", file=sys.stderr)
+            return 2
+
+        if arguments.columns:
+            requested = [column.strip() for column in arguments.columns.split(",") if column.strip()]
+            unknown = [column for column in requested if column not in columns]
+            if unknown:
+                print(f"{arguments.broker}.instruments has no column(s): {', '.join(unknown)}",
+                      file=sys.stderr)
+                return 2
+            search_columns = requested
+        else:
+            search_columns = searchable_columns(columns)
+
+        if not search_columns:
+            print(f"No symbol or name columns found in {arguments.broker}.instruments.",
+                  file=sys.stderr)
+            return 2
+
+        if arguments.show_columns:
+            context = context_columns(columns, arguments.max_context)
+            listing = Table(box=box.ROUNDED, header_style="bold",
+                            title=f"{arguments.broker}.instruments  ({len(columns)} columns)",
+                            title_justify="left", title_style="bold")
+            listing.add_column("Column")
+            listing.add_column("Role")
+            for column in search_columns:
+                listing.add_row(f"[cyan]{column}[/cyan]", "searched")
+            for column in context:
+                listing.add_row(f"[dim]{column}[/dim]", "[dim]shown for context[/dim]")
+            console.print(listing)
+            return 0
+
+        if arguments.all_dates:
+            download_date = None
+        elif arguments.date:
+            download_date = arguments.date
+        else:
+            download_date = latest_download_date(connection, arguments.broker)
+            if download_date is None:
+                print(f"{arguments.broker}.instruments is empty. Ingest with "
+                      f"`python -m test_runs.download_instruments {arguments.broker}`.",
+                      file=sys.stderr)
+                return 2
+
+        if arguments.all_columns:
+            display = columns
+        else:
+            display = search_columns + context_columns(columns, arguments.max_context)
+            if "download_date" in columns and arguments.all_dates:
+                display = display + ["download_date"]
+
+        limit = None if arguments.limit == 0 else arguments.limit
+        rows = search(connection, arguments.broker, arguments.term, search_columns,
+                      display, download_date, limit, arguments.exact)
+    finally:
+        connection.close()
+
+    scope = "every snapshot" if download_date is None else f"snapshot {download_date}"
+    if not rows:
+        console.print(f"No match for [bold]{arguments.term}[/bold] in "
+                      f"[bold]{arguments.broker}.instruments[/bold] ([dim]{scope}[/dim]).")
+        return 1
+
+    console.print(f"\n[bold]{arguments.broker}.instruments[/bold]  [dim]{scope}, searched "
+                  f"{len(search_columns)} symbol/name column(s)[/dim]")
+    print_table(display, rows, arguments.width, search_columns)
+
+    if limit is not None and len(rows) == limit:
+        console.print(f"[yellow]{len(rows)} row(s)[/yellow], truncated at --limit {limit}. "
+                      f"Use [bold]--limit 0[/bold] for all.")
+    else:
+        console.print(f"[green]{len(rows)} row(s).[/green]")
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())

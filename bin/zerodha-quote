@@ -1,0 +1,312 @@
+#!/usr/bin/env python3
+"""
+Show everything Zerodha knows about one trading symbol: the instrument master row, the LTP, the
+day's OHLC and the full quote with its five level order book.
+
+    zerodha-quote INFY
+    zerodha-quote INFY --exchange BSE
+    zerodha-quote INFY26NOV1000CE
+    zerodha-quote CRUDEOIL26SEPFUT          # MCX trades until 23:30 IST
+
+The symbol is resolved against the latest `zerodha.instruments` snapshot to find which exchange
+it trades on, because Kite addresses an instrument as EXCHANGE:TRADINGSYMBOL and the exchange is
+not in the symbol. A symbol listed on more than one exchange resolves to NSE unless --exchange
+says otherwise, and the alternatives are named in the output rather than silently dropped.
+
+Three Kite endpoints are called, because they are three different things and the point here is to
+see all of them: /quote/ltp is the cheapest and carries only the last price, /quote/ohlc adds the
+day's open, high, low and close, and /quote returns the whole book.
+"""
+
+import sys
+import argparse
+from pathlib import Path
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+from rich import box
+from rich.columns import Columns
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
+
+console = Console()
+
+LTP_URL = "https://api.kite.trade/quote/ltp"
+OHLC_URL = "https://api.kite.trade/quote/ohlc"
+QUOTE_URL = "https://api.kite.trade/quote"
+
+# Preferred when a symbol is listed on several exchanges and none was asked for.
+EXCHANGE_PREFERENCE = ("NSE", "BSE", "NFO", "BFO", "MCX", "CDS", "BCD")
+
+def number(value, decimals=2):
+    """
+    A number with thousands separators, or a dash when there is nothing to show.
+
+    - `value` is the number to format.
+    - `decimals` is how many decimal places to keep.
+    """
+    if value is None or value == "":
+        return "-"
+    try:
+        return f"{float(value):,.{decimals}f}"
+    except (TypeError, ValueError):
+        return str(value)
+
+def quantity(value):
+    """
+    A whole number with thousands separators, or a dash.
+
+    - `value` is the quantity to format.
+    """
+    if value is None or value == "":
+        return "-"
+    try:
+        return f"{int(float(value)):,}"
+    except (TypeError, ValueError):
+        return str(value)
+
+def find_instrument(connection, tradingsymbol, exchange=None):
+    """
+    The instrument master row for a trading symbol, and the other exchanges it is listed on.
+
+    Returns a `(columns, row, other_exchanges)` triple, or `(None, None, [])` when the symbol is
+    not in the latest snapshot.
+
+    - `connection` is an open psycopg2 connection.
+    - `tradingsymbol` is the symbol to look up, matched case insensitively.
+    - `exchange` restricts the lookup to one exchange.
+    """
+    with connection.cursor() as cursor:
+        cursor.execute("select max(download_date) from zerodha.instruments")
+        download_date = cursor.fetchone()[0]
+        if download_date is None:
+            return None, None, []
+
+        cursor.execute(
+            "select column_name from information_schema.columns "
+            "where table_schema = 'zerodha' and table_name = 'instruments' "
+            "order by ordinal_position")
+        columns = [row[0] for row in cursor.fetchall() if row[0] != "download_date"]
+
+        fields = ", ".join(f'"{column}"' for column in columns)
+        cursor.execute(
+            f"select {fields} from zerodha.instruments "
+            f"where download_date = %s and upper(tradingsymbol) = upper(%s)",
+            (download_date, tradingsymbol))
+        rows = cursor.fetchall()
+
+    if not rows:
+        return columns, None, []
+
+    exchange_index = columns.index("exchange")
+    by_exchange = {row[exchange_index]: row for row in rows}
+
+    if exchange:
+        chosen = by_exchange.get(exchange.upper())
+        if chosen is None:
+            return columns, None, sorted(by_exchange)
+        return columns, chosen, sorted(set(by_exchange) - {exchange.upper()})
+
+    for preferred in EXCHANGE_PREFERENCE:
+        if preferred in by_exchange:
+            return columns, by_exchange[preferred], sorted(set(by_exchange) - {preferred})
+
+    first = sorted(by_exchange)[0]
+    return columns, by_exchange[first], sorted(set(by_exchange) - {first})
+
+def horizontal_fields(pairs):
+    """
+    `label: value` pairs laid out across the width, with the values in bold.
+
+    Rich flows these into as many columns as fit, so a narrow terminal wraps onto more lines
+    rather than breaking a pair in half.
+
+    - `pairs` are `(label, value)` or `(label, value, style)` tuples.
+    """
+    items = []
+    for pair in pairs:
+        label, value = pair[0], pair[1]
+        style = pair[2] if len(pair) > 2 else "bold bright_white"
+        # The base Text carries no style. Giving it "dim" here would apply dim to the appended
+        # value too, and dim beats bold, which would leave the value looking unemphasised.
+        text = Text()
+        text.append(f"{label}: ", style="dim")
+        text.append("-" if value in (None, "") else str(value), style=style)
+        items.append(text)
+    return Columns(items, padding=(0, 3), expand=False)
+
+def price_panel(title, rows, border_style="cyan"):
+    """
+    A titled panel of label and value pairs.
+
+    - `title` is the panel heading.
+    - `rows` are `(label, renderable)` pairs.
+    - `border_style` is the colour of the panel border.
+    """
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style="dim", justify="right")
+    grid.add_column()
+    for label, value in rows:
+        grid.add_row(label, value)
+    return Panel(grid, title=title, title_align="left", border_style=border_style, box=box.ROUNDED,
+                 expand=False)
+
+def depth_table(depth):
+    """
+    The five level order book, bids beside asks.
+
+    - `depth` is the `depth` dictionary from a full quote.
+    """
+    table = Table(box=box.ROUNDED, header_style="bold", expand=False)
+    table.add_column("Bid orders", justify="right", style="dim")
+    table.add_column("Bid qty", justify="right")
+    table.add_column("Bid", justify="right", style="green")
+    table.add_column("Ask", justify="left", style="red")
+    table.add_column("Ask qty", justify="left")
+    table.add_column("Ask orders", justify="left", style="dim")
+
+    buys = (depth or {}).get("buy") or []
+    sells = (depth or {}).get("sell") or []
+    for level in range(max(len(buys), len(sells), 5)):
+        buy = buys[level] if level < len(buys) else {}
+        sell = sells[level] if level < len(sells) else {}
+        table.add_row(
+            quantity(buy.get("orders")), quantity(buy.get("quantity")), number(buy.get("price")),
+            number(sell.get("price")), quantity(sell.get("quantity")), quantity(sell.get("orders")))
+    return table
+
+def change_text(last_price, close):
+    """
+    The move against the previous close, coloured by direction.
+
+    - `last_price` is the last traded price.
+    - `close` is the previous close.
+    """
+    if last_price is None or not close:
+        return Text("-")
+    difference = float(last_price) - float(close)
+    percentage = difference / float(close) * 100
+    style = "green" if difference > 0 else "red" if difference < 0 else "dim"
+    arrow = "▲" if difference > 0 else "▼" if difference < 0 else "▬"
+    return Text(f"{arrow} {difference:+,.2f}  ({percentage:+.2f}%)", style=style)
+
+def main():
+    """Resolve a Zerodha trading symbol and print its details, LTP, OHLC and full quote."""
+    parser = argparse.ArgumentParser(
+        description="Show a Zerodha instrument's details, LTP, OHLC and full quote.")
+    parser.add_argument("tradingsymbol", help="Zerodha trading symbol, for example INFY")
+    parser.add_argument("--exchange", help="exchange to use when the symbol is listed on several")
+    parser.add_argument("--no-instrument", action="store_true",
+                        help="skip the instrument master lookup and quote --exchange:SYMBOL directly")
+    arguments = parser.parse_args()
+
+    from utilities.configurations import get_postgres
+
+    tradingsymbol = arguments.tradingsymbol.upper()
+    columns = row = None
+    others = []
+
+    if arguments.no_instrument:
+        if not arguments.exchange:
+            parser.error("--no-instrument needs --exchange, since Kite addresses an instrument "
+                         "as EXCHANGE:TRADINGSYMBOL")
+        exchange = arguments.exchange.upper()
+    else:
+        connection = get_postgres()
+        try:
+            columns, row, others = find_instrument(connection, tradingsymbol, arguments.exchange)
+        finally:
+            connection.close()
+
+        if columns is None:
+            console.print("[red]zerodha.instruments is empty.[/red] Ingest it with "
+                          "`python -m test_runs.download_instruments zerodha`.")
+            return 2
+        if row is None:
+            message = f"[red]{tradingsymbol}[/red] is not in the latest zerodha.instruments snapshot"
+            if arguments.exchange:
+                message += f" on [bold]{arguments.exchange.upper()}[/bold]"
+                if others:
+                    message += f". It is listed on: {', '.join(others)}"
+            console.print(message + ".")
+            console.print("[dim]Search for it with "
+                          f"`search-instruments zerodha {tradingsymbol}`.[/dim]")
+            return 1
+
+        exchange = row[columns.index("exchange")]
+        tradingsymbol = row[columns.index("tradingsymbol")]
+
+    instrument_key = f"{exchange}:{tradingsymbol}"
+
+    from stock_brokers.api.zerodha import ZerodhaAPI
+
+    with console.status(f"Fetching {instrument_key} from Kite ..."):
+        api = ZerodhaAPI()
+        ltp = api.get(url=LTP_URL, params={"i": instrument_key})["data"].get(instrument_key, {})
+        ohlc = api.get(url=OHLC_URL, params={"i": instrument_key})["data"].get(instrument_key, {})
+        quote = api.get(url=QUOTE_URL, params={"i": instrument_key})["data"].get(instrument_key, {})
+
+    if not quote:
+        console.print(f"[red]Kite returned no quote for {instrument_key}.[/red] The symbol exists "
+                      f"in the instrument master but the quote endpoint did not recognise it.")
+        return 1
+
+    name = row[columns.index("name")] if row is not None else ""
+    heading = Text(instrument_key, style="bold cyan")
+    if name:
+        heading.append(f"   {name}", style="not bold white")
+    if others:
+        heading.append(f"   also on {', '.join(others)}", style="dim")
+    console.print()
+    console.print(heading)
+    console.print()
+
+    if row is not None:
+        console.print(horizontal_fields(list(zip(columns, row))))
+        console.print()
+
+    day = quote.get("ohlc") or ohlc.get("ohlc") or {}
+    last_price = quote.get("last_price", ltp.get("last_price"))
+
+    console.print(horizontal_fields([
+        ("Open", number(day.get("open"))),
+        ("High", number(day.get("high")), "bold bright_green"),
+        ("Low", number(day.get("low")), "bold bright_red"),
+        ("Close", number(day.get("close"))),
+    ]))
+    console.print()
+
+    console.print(price_panel("LTP", [
+        ("Last price", Text(number(last_price), style="bold")),
+        ("Change", change_text(last_price, day.get("close"))),
+        ("Last qty", Text(quantity(quote.get("last_quantity")))),
+        ("Avg price", Text(number(quote.get("average_price")))),
+    ]))
+
+    console.print(price_panel("Full quote", [
+        ("Volume", Text(quantity(quote.get("volume")))),
+        ("Buy qty", Text(quantity(quote.get("buy_quantity")), style="green")),
+        ("Sell qty", Text(quantity(quote.get("sell_quantity")), style="red")),
+        ("Open interest", Text(quantity(quote.get("oi")))),
+        ("OI day high", Text(quantity(quote.get("oi_day_high")))),
+        ("OI day low", Text(quantity(quote.get("oi_day_low")))),
+        ("Lower circuit", Text(number(quote.get("lower_circuit_limit")))),
+        ("Upper circuit", Text(number(quote.get("upper_circuit_limit")))),
+        ("Instrument token", Text(str(quote.get("instrument_token", "-")), style="dim")),
+        ("Last trade", Text(str(quote.get("last_trade_time") or "-"), style="dim")),
+        ("Quote time", Text(str(quote.get("timestamp") or "-"), style="dim")),
+    ], border_style="blue"))
+
+    console.print(Text(" Market depth", style="bold"))
+    console.print(depth_table(quote.get("depth")))
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())
