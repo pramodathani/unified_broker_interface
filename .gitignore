@@ -1,0 +1,15 @@
+# Credentials. This file holds the MongoDB and PostgreSQL passwords that guard every broker
+# API key, secret and TOTP seed, so it must never be committed.
+.env
+
+# Virtual environment
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# MkDocs build output. The site is published to the gh-pages branch by `mkdocs gh-deploy`,
+# so the generated HTML never belongs on the source branch.
+site/
