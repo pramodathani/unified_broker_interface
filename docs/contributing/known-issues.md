@@ -189,13 +189,6 @@ text that must equal the token in `unified:catalogue:<date>:tokens:<broker>`. Th
 the test reached. At Stoxkart, BSE KWIL's token `544622` also names an MCX commodity option, which the exchange check
 tells apart. Groww stores no token on its orders, so a Groww modification is never checked against the tick size.
 
-**Some after-market and modification statuses are not in the shared vocabulary.** The live modify test on 2026-09-15
-stored Zerodha's `MODIFY AMO REQ RECEIVED`, Kotak's `AFTER MARKET ORDER REQ RECEIVED` and
-`MODIFY AFTER MARKET ORDER REQ RECEIVED`, and an INDmoney order from that morning shows `SUCCESS`. The order scripts'
-status tables do not list them, so they are passed through upper-cased instead of becoming `PENDING` or `COMPLETE`, and
-`GET /api/orders/details` shows them as they are. The order routes treat any status other than the four finished ones
-as open, so modifying and cancelling such an order still works.
-
 **Most unified tick normalizers are unconfirmed live.** Only Zerodha is verified, and Dhan agrees with it
 on stored in-session MCX ticks but has no in-session NSE ticks stored. Kotak agreed with it on every field
 in a live NSE and MCX session on 2026-09-15, INDmoney on NSE the same day, and Stoxkart's streamed ticks on

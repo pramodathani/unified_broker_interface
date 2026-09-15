@@ -177,6 +177,31 @@ copies must agree with this page.
 
     `EOS` and `0` normalize to `DAY`; `IMMEDIATE` and `1` to `IOC`.
 
+=== "Statuses"
+
+    `PENDING`, `OPEN`, `COMPLETE`, `CANCELLED`, `REJECTED`, `EXPIRED`
+
+    Underscores are read as spaces and repeated spaces collapsed before a spelling is looked up, so Kotak's
+    lower-case `modify after market order req received` and Groww's `TRIGGER_PENDING` match. A spelling not
+    listed is passed through upper-cased. Stoxkart's two order scripts carry a smaller table of the spellings
+    Stoxkart uses, and every spelling in it maps as below.
+
+    | Status | Spellings |
+    | --- | --- |
+    | `PENDING` | `PENDING`, `TRANSIT`, `VALIDATION PENDING`, `PUT ORDER REQ RECEIVED`, `TRIGGER PENDING`, `AMO REQ RECEIVED`, `PENDINGNEW`, `O-PENDING`, `MODIFY AMO REQ RECEIVED`, `AFTER MARKET ORDER REQ RECEIVED`, `AMO PENDING`, `MODIFY AFTER MARKET ORDER REQ RECEIVED`, `QUEUED`, `PROCESSING`, `SL-PENDING` |
+    | `OPEN` | `OPEN`, `OPEN PENDING`, `NEW`, `REPLACED`, `ACKED`, `APPROVED`, `MODIFICATION REQUESTED`, `MODIFIED`, `MODIFY VALIDATION PENDING`, `MODIFY PENDING`, `PARTIALLY FILLED`, `PARTIALLY EXECUTED`, `PLACED`, `PART TRADED`, `PARTIALLYFILLED`, `PENDINGREPLACE`, `CONFIRMED`, `PARTIALLY TRADED`, `INITIATED` |
+    | `COMPLETE` | `COMPLETE`, `COMPLETED`, `TRADED`, `FILLED`, `EXECUTED`, `FULLY EXECUTED`, `DELIVERY AWAITED`, `SUCCESS` |
+    | `CANCELLED` | `CANCELLED`, `CANCELED`, `CANCEL`, `CANCEL PENDING`, `CANCELLATION REQUESTED`, `PENDINGCANCEL`, `CANCELLED AFTER MARKET ORDER`, `AMO CANCELLED`, `PARTIALLY FILLED - CANCELLED` |
+    | `REJECTED` | `REJECTED`, `REJECT`, `FAILED`, `ABORTED` |
+    | `EXPIRED` | `EXPIRED`, `PARTIALLY FILLED - EXPIRED` |
+
+    The after-market and modification spellings were added on 2026-09-15, after a live modify test stored
+    Zerodha's `MODIFY AMO REQ RECEIVED`, Kotak's `AFTER MARKET ORDER REQ RECEIVED` and
+    `MODIFY AFTER MARKET ORDER REQ RECEIVED`, and INDmoney's `SUCCESS` unmapped. INDstocks documents `SUCCESS` as
+    "Order has been successfully executed", and its other spellings here, `QUEUED`, `PROCESSING`, `SL-PENDING`,
+    `INITIATED`, `ABORTED` and the two `PARTIALLY FILLED - …` endings, come from its
+    [order status types](https://api-docs.indstocks.com/normal_orders/).
+
 ## Where the contracts are enforced
 
 Nowhere, structurally - there is no schema validation at runtime. Each script builds its dictionaries with
