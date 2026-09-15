@@ -56,8 +56,9 @@ instrument mapping, so an after-market order sent in between is refused with `40
 
 **Placing an order is confirmed live at every broker except Stoxkart.** On 2026-09-15 one-share NSE CNC
 limit buys were sent through `POST /api/orders/place`, and Dhan, Flattrade, Fyers, Groww, INDmoney, Kotak,
-Shoonya, Wisdom Capital and Zerodha each accepted and filled theirs. Stoxkart has no live session, so it is
-skipped, and `UNIFIED_BROKER_INTERFACE_API_ORDER_EXCLUDED_BROKERS` takes a broker out of the rotation.
+Shoonya, Wisdom Capital and Zerodha each accepted and filled theirs. Stoxkart could not log in that
+morning, so it was skipped; its login has worked since later the same day, but no order has been sent
+through it yet, and `UNIFIED_BROKER_INTERFACE_API_ORDER_EXCLUDED_BROKERS` takes a broker out of the rotation.
 
 **Kotak refuses every order from an IP address it has not whitelisted.** Kotak first answered
 `{"stCode": 100008, "errMsg": "unauthorized", "stat": "Not_Ok"}`. The removed order code read this as a
@@ -94,9 +95,11 @@ happily on the same platform. `flattrade@order_updates` is left out of `flattrad
 `flattrade@quotes` holds the connection, which makes Flattrade the one gap in the live half of the system. Noren can carry
 order updates on the market socket, and that is the way to get both back.
 
-**Stoxkart has no scripts but its instrument download.** Its REST authentication is unresolved on
-the broker's side, so it has no `bin/stoxkart/` scripts beyond `instruments`. Its instrument master is a
-public file, downloaded daily by `unified-instruments.service`, which is everything currently possible.
+**Stoxkart has no scripts but its instrument download.** Its REST login was blocked on the broker's
+side until the API app was approved, and was confirmed working on 2026-09-15 through Stoxkart's version 2
+login. The quote, order, positions and login scripts and units have not been written yet, so
+`bin/stoxkart/` still holds only `instruments`, whose public file `unified-instruments.service` downloads
+daily.
 
 ## Instruments deliberately excluded
 

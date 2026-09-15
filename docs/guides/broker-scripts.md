@@ -62,8 +62,8 @@ The gaps follow the brokers:
 - **`persist_positions`** exists only for the four brokers whose `order_updates` socket carries
   positions: Fyers, Wisdom Capital, Groww (derivatives positions only) and Kotak. The other five stream
   orders alone, and their positions come only from the `positions` poller.
-- **Stoxkart** has only `instruments`. Its login is a known, unresolved issue, but its instrument master
-  is public, so this one script lets the daily mapping include it. It has no units of its own; it runs as
+- **Stoxkart** has only `instruments`. Its REST login works, but its other scripts have not been
+  written yet. Its instrument master is public, so this one script lets the daily mapping include it. It has no units of its own; it runs as
   part of `unified-instruments.service`.
 
 ## Sessions

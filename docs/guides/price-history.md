@@ -113,8 +113,7 @@ dates in each module's docstring.
 Three brokers serve nothing, and the reason is recorded in
 [`UNSUPPORTED`][stock_brokers.instruments.historical.utilities.orchestrator] rather than left as a
 gap to be rediscovered: Groww answers 403 on the historical endpoint, which is an entitlement
-rather than a bug; Kotak publishes no candle endpoint at all; Stoxkart has no candle path and its
-REST authentication is unresolved.
+rather than a bug; Kotak publishes no candle endpoint at all; Stoxkart has no candle path.
 
 ### The traps
 

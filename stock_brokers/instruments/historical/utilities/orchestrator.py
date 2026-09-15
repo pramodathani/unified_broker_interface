@@ -25,7 +25,7 @@ DOWNLOADERS = {
 UNSUPPORTED = {
     "groww": "returns 403 on the historical endpoint; it is an entitlement, not a bug",
     "kotak": "publishes no historical candle endpoint at all",
-    "stoxkart": "no candle path, and its REST authentication is unresolved",
+    "stoxkart": "no candle path",
 }
 
 CANDLE_BROKERS = tuple(DOWNLOADERS)

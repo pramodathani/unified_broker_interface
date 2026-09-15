@@ -44,9 +44,10 @@ broker, so a broker with an instrument master necessarily has a mapping adapter.
 unverified, and Groww's account is not entitled to live data. Wisdom Capital has no quote module. See
 [REST API](../guides/rest-api.md#live-quotes).
 
-**Stoxkart.** No quote or order scripts, because its API login is broken on the broker's side. Its
-instrument master is a public file needing no login, so that part works, and so does its
-mapping.
+**Stoxkart.** No quote or order scripts yet. Its API login works as of 2026-09-15, after being blocked
+on the broker's side until its API app was approved, but nothing beyond the instrument download has
+been built on it. Its instrument master is a public file needing no login, so that part works, and so
+does its mapping.
 
 **Flattrade's order feed is implemented but not running.** The broker permits one websocket per
 session, so `flattrade@order_updates` is not enabled and `flattrade@quotes` holds the connection. See

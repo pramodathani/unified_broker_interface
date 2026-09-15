@@ -44,9 +44,9 @@ implementations.
 
 === "Not streaming"
 
-    **Stoxkart** has no quote or order scripts. Its API login is broken on the broker's side, so only
-    its instrument master is ingested - that is a public file needing no login, so it is
-    downloadable today and the rest is ready the day the broker fixes their end.
+    **Stoxkart** has no quote or order scripts yet. Its API login works as of 2026-09-15, but only
+    its instrument master is ingested - that is a public file needing no login - until the rest
+    of its scripts are written.
 
 ## Per-broker notes
 
@@ -61,7 +61,7 @@ implementations.
 | Kotak | Selenium + TOTP | Streams positions; its instrument master URL is stamped with today's date; its feed is the binary HSM protocol of Kotak's own SDK, which wants data frames acknowledged and sends MCX quantities in Kotak's lots |
 | IND Money | Token | - |
 | Wisdom Capital | Token | XTS; separate market data credentials, REST subscription, socket.io transport, and `apiType=INTERACTIVE` required in the order socket's query |
-| Stoxkart | Broken upstream | Instrument master only |
+| Stoxkart | REST + TOTP | Instrument master only; its version 2 login needs a publisher key pair in `publisher_api_key` and `publisher_api_secret` beside the app's own key |
 
 See the [coverage matrix](coverage.md) for what each broker supports subsystem by subsystem,
 and [Pitfalls](../contributing/pitfalls.md#feeds-one-refusal-per-broker) for the way each of

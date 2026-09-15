@@ -51,7 +51,7 @@ API_CLASSES = {
     "stoxkart": ("stock_brokers.api.stoxkart", "StoxkartAPI"),
 }
 
-# The brokers with a login unit. Stoxkart has none: its login is a known, accepted issue and is never started.
+# The brokers with a login unit. Stoxkart has none yet, so its login is never started.
 LOGIN_UNITS = {broker: f"{broker}-login.service" for broker in
                ("zerodha", "dhan", "flattrade", "shoonya", "fyers", "groww", "kotak", "indmoney", "wisdom_capital")}
 

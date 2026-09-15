@@ -1,41 +1,44 @@
-import hmac
-import pyotp
+"""Stoxkart's REST API, with the client id, password and TOTP login that obtains its access token.
+
+Typical usage example:
+
+  stoxkart = StoxkartAPI()
+  funds = stoxkart.get(url=f"{BASE_URL}/funds")
+"""
 import hashlib
-import requests
+import hmac
 import json as json_lib
+import time
 from datetime import datetime
-from selenium.webdriver import Chrome
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.common.exceptions import TimeoutException
-from selenium.common.exceptions import *
-from selenium.webdriver.common.by import By
-from urllib.parse import urlparse, parse_qs
+
+import pyotp
+import requests
 
 from stock_brokers.api.base import BrokerAPI, BrokerAPIException
 
 BASE_URL = "https://openapi.stoxkart.com"
-LOGIN_PORTAL_URL = "https://superrtrade.stoxkart.com/login"
+LOGIN_DEVICE_ID = "developer-portal"
+LOGIN_API_VERSION = "v2"
+LOGIN_CLIENT_VERSION = "dev-portal"
+LOGIN_TIMEOUT_SECONDS = 30
+TOTP_MINIMUM_SECONDS_LEFT = 5
 
 
 class StoxkartAPIException(BrokerAPIException):
-    """Raised for Stoxkart broker API errors."""
+    """An error returned by Stoxkart's API, or a Stoxkart response that could not be used."""
 
 
 class StoxkartAPI(BrokerAPI):
-    """
-    Stoxkart API class
-    """
+    """A session with Stoxkart's REST API for the account in the `stoxkart` settings document."""
 
     def __init__(self, force_login=False):
-        """
-        Stoxkart API class.
+        """Checks the stored access token and logs in again when Stoxkart no longer accepts it.
 
-        On construction the existing access token is validated against the broker.
-        If it is missing or stale a fresh login is performed and the new token is
-        persisted to MongoDB and Redis.
+        Args:
+            force_login (bool): When True, the stored token is not checked and a fresh login is always made.
 
-        - `force_login`: skip the cached-session check and always log in again.
+        Raises:
+            StoxkartAPIException: Stoxkart refused a login step, or checking the stored token failed for a reason other than an expired session.
         """
         super().__init__(broker_name="stoxkart")
 
@@ -45,14 +48,16 @@ class StoxkartAPI(BrokerAPI):
         self._login()
 
     def _has_valid_session(self):
-        """
-        Returns True when the cached access token is still accepted by the broker.
+        """Reports whether Stoxkart still accepts the current access token.
 
-        Only an authentication failure is treated as "needs login"; any other
-        error (network outage, broker downtime) is propagated so that a transient
-        problem is not silently turned into a full login attempt.
+        Only an authentication failure counts as an expired session. Any other error, such as a network outage, is raised so that it is not mistaken for a reason to log in.
+
+        Returns:
+            bool: True when the token is accepted, and False when there is no token or Stoxkart rejects it as unauthorised.
+
+        Raises:
+            StoxkartAPIException: The check failed for a reason other than authentication.
         """
-        # Another process may have logged in since this object was built.
         self._current_login()
         if not self._last_login or not self._last_login.get("access_token"):
             return False
@@ -60,268 +65,236 @@ class StoxkartAPI(BrokerAPI):
         try:
             self.get(url=f"{BASE_URL}/funds")
             return True
-        except StoxkartAPIException as e:
-            if str(e.code) in ("AuthorizationError", "401", "Invalid Session"):
+        except StoxkartAPIException as error:
+            if str(error.code) in ("AuthorizationError", "401", "Invalid Session"):
                 self._logger.info(msg="Stoxkart session expired, logging in again.")
                 return False
             raise
 
     def _login(self):
-        """
-        Logs in to Stoxkart and stores the resulting access token.
+        """Logs in with the client id, password and TOTP, and stores the resulting access token.
 
-        The direct REST login documented at
-        https://developers.stoxkart.com/api-documentation/login is attempted
-        first because it needs no browser. The Selenium based portal login is
-        kept as a fallback for the case where the REST flow is unavailable.
+        Raises:
+            StoxkartAPIException: Stoxkart refused one of the login steps or left a token out of its answer.
         """
-        try:
-            request_token = self._request_token_via_rest()
-        except StoxkartAPIException:
-            raise
-        except Exception as e:
-            self._logger.warning(msg=f"Stoxkart REST login failed ({e}), falling back to browser login.")
-            request_token = self._request_token_via_browser()
-
+        self._login_session = requests.Session()
+        register_token = self._register_token()
+        request_token = self._verify_totp(register_token)
         access_token = self._exchange_request_token(request_token)
         self._persist_access_token(access_token)
 
-    def _auth_post(self, path, payload):
-        """
-        Posts to an unauthenticated Stoxkart `/auth/*` endpoint and returns the
-        decoded JSON body. Login endpoints are not covered by `_request` because
-        they must not send the (not yet existing) access token headers.
+    def _login_headers(self):
+        """Builds the headers that every step of the version 2 login sends.
 
-        - `path`: endpoint path, e.g. `/auth/login`.
-        - `payload`: dictionary sent as the JSON request body.
+        The publisher key pair is read from the `publisher_api_key` and `publisher_api_secret` fields of the `stoxkart` settings document, and is separate from the app's own `api_key` and `api_secret`.
+
+        Returns:
+            dict: The platform, client id, device and publisher key headers, keyed by header name.
+
+        Raises:
+            StoxkartAPIException: The settings document has no publisher key pair.
         """
-        url = f"{BASE_URL}{path}?api-key={self._settings['api_key']}"
-        response = self._session.post(
-            url,
-            data=json_lib.dumps(payload),
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
-            timeout=30,
+        publisher_api_key = self._settings.get("publisher_api_key")
+        publisher_api_secret = self._settings.get("publisher_api_secret")
+        if not publisher_api_key or not publisher_api_secret:
+            raise StoxkartAPIException(
+                code="500",
+                message="The stoxkart settings document needs publisher_api_key and publisher_api_secret for the version 2 login.",
+            )
+
+        return {
+            "platform": "api",
+            "client-id": self._settings["ucc_code"],
+            "device-id": LOGIN_DEVICE_ID,
+            "x-api-key": publisher_api_key,
+            "x-api-secret": publisher_api_secret,
+            "api-version": LOGIN_API_VERSION,
+            "client-version": LOGIN_CLIENT_VERSION,
+        }
+
+    def _login_post(self, path, step_headers):
+        """Posts one step of the version 2 login and returns Stoxkart's decoded answer.
+
+        The login steps carry everything in headers and send an empty JSON body. They do not go through `_request`, because no access token exists yet.
+
+        Args:
+            path (str): The endpoint path, such as `/auth/v2/login`.
+            step_headers (dict): The headers this step adds to the common login headers.
+
+        Returns:
+            dict: The decoded JSON answer.
+
+        Raises:
+            StoxkartAPIException: Stoxkart answered with an error status or with something other than JSON.
+        """
+        headers = self._login_headers()
+        headers.update(step_headers)
+        response = self._login_session.post(
+            f"{BASE_URL}{path}",
+            params={"api-key": self._settings["api_key"]},
+            json={},
+            headers=headers,
+            timeout=LOGIN_TIMEOUT_SECONDS,
         )
 
         try:
             body = response.json()
-        except ValueError:
+        except ValueError as error:
             raise StoxkartAPIException(
                 code=response.status_code,
                 message=f"Stoxkart returned a non-JSON response for {path}: {response.text[:300]}",
-            )
+            ) from error
 
         if response.status_code >= 300:
             code = body.get("status_code") or body.get("code") or response.status_code
             message = body.get("status_message") or body.get("message") or body
-
-            if str(code) == "E-011" or "API Key not found" in str(message):
-                raise StoxkartAPIException(
-                    code="E-011",
-                    message=(
-                        f"Stoxkart does not recognise API key '{self._settings['api_key']}' "
-                        f"(endpoint {path} returned 'API Key not found'). The client id, password "
-                        "and TOTP are not the problem - the app registration itself is missing or "
-                        "revoked. Regenerate the API key/secret under MyApps on "
-                        "https://developers.stoxkart.com and update the 'stoxkart' document in the "
-                        "MongoDB 'settings' collection."
-                    ),
-                )
-
-            if str(code) == "E-010" or "Invalid X-API-Key" in str(message):
-                raise StoxkartAPIException(
-                    code="E-010",
-                    message=(
-                        f"Stoxkart rejected {path} with '{message}'. This is a gateway level "
-                        "rejection on the 'api' platform that happens before the API key is "
-                        "looked up: a valid key, an unregistered key and a random string all "
-                        "produce this identical response, so it does not indicate a problem with "
-                        f"API key '{self._settings['api_key']}'. The 'api' platform requires a "
-                        "publisher X-API-Key/X-API-Secret pair that is separate from the app "
-                        "key/secret. The same failure affects Stoxkart's own login portal, so "
-                        "this needs to be raised with Stoxkart support rather than fixed here."
-                    ),
-                )
-
-            raise StoxkartAPIException(code=code, message=message)
+            raise StoxkartAPIException(
+                code=code,
+                message=f"Stoxkart rejected {path} with HTTP {response.status_code}: {message}",
+            )
 
         return body
 
-    def _request_token_via_rest(self):
-        """
-        Performs the documented client id / password / TOTP login and returns the
-        request token that is exchanged for an access token.
-        """
-        self._session = requests.Session()
+    def _register_token(self):
+        """Sends the client id and password and returns the token that the TOTP step needs.
 
-        login = self._auth_post(
-            "/auth/login",
+        Returns:
+            str: The register token from Stoxkart's answer.
+
+        Raises:
+            StoxkartAPIException: The password was refused, the account must change its password first, TOTP is not enabled on the account, or the answer had no register token.
+        """
+        body = self._login_post(
+            "/auth/v2/login",
             {
-                "platform": "api",
-                "data": {
-                    "client_id": self._settings["ucc_code"],
-                    "password": self._settings["api_password"],
-                },
+                "password": self._settings["api_password"],
             },
         )
+        data = body.get("data") or {}
 
-        data = login.get("data", {})
-        request_token = data.get("request_token")
-
-        if not data.get("is_2fa_enabled") and request_token:
-            return request_token
-
-        # The login call only opens the session; the final request token is issued
-        # once the second factor has been verified. On the "api" platform the
-        # interim token comes back as request_token, the web portal calls the same
-        # field token/register_token.
-        session_token = request_token or data.get("token") or data.get("register_token")
-        if not session_token:
+        if data.get("is_change_pwd_required"):
             raise StoxkartAPIException(
                 code="500",
-                message=f"Stoxkart login response did not contain a session token: {login}",
+                message="Stoxkart requires the account's password to be changed before it can log in.",
             )
 
-        verified = self._auth_post(
-            "/auth/twofa/verify",
+        if not data.get("is_2fa_enabled"):
+            raise StoxkartAPIException(
+                code="500",
+                message="Stoxkart asked for an SMS OTP rather than a TOTP, so TOTP must be enabled on the account before it can log in unattended.",
+            )
+
+        register_token = data.get("register_token")
+        if not register_token:
+            raise StoxkartAPIException(
+                code="500",
+                message=f"Stoxkart's login answer contained no register_token: {body}",
+            )
+
+        return register_token
+
+    def _verify_totp(self, register_token):
+        """Sends the current TOTP and returns the request token that is exchanged for an access token.
+
+        Args:
+            register_token (str): The token returned by the password step.
+
+        Returns:
+            str: The request token from Stoxkart's answer.
+
+        Raises:
+            StoxkartAPIException: The TOTP was refused or the answer had no request token.
+        """
+        body = self._login_post(
+            "/auth/v2/twofa/verify",
             {
-                "platform": "api",
-                "data": {
-                    "client_id": self._settings["ucc_code"],
-                    "req_token": session_token,
-                    "action": "api-key-validation",
-                    "otp": pyotp.TOTP(self._settings["totp_secret"]).now(),
-                },
+                "second-auth-type": "TOTP",
+                "second-auth-value": self._current_totp(),
+                "registered-token": register_token,
             },
         )
 
-        request_token = verified.get("data", {}).get("request_token")
+        request_token = (body.get("data") or {}).get("request_token")
         if not request_token:
             raise StoxkartAPIException(
                 code="500",
-                message=(
-                    "Stoxkart verified the TOTP but returned no request_token: "
-                    f"{verified}. The API key is most likely not bound to this login."
-                ),
+                message=f"Stoxkart verified the TOTP but returned no request_token: {body}",
             )
 
         return request_token
 
-    def _request_token_via_browser(self):
+    def _current_totp(self):
+        """Returns a TOTP code that will stay valid while the request is in flight.
+
+        When the current code has fewer than `TOTP_MINIMUM_SECONDS_LEFT` seconds left, this waits for the next code.
+
+        Returns:
+            str: The six digit TOTP code.
         """
-        Fallback login that drives the Stoxkart web login portal with Selenium and
-        reads the request token off the redirect URL.
-
-        Elements are located by their stable `name` attributes; the portal is a
-        React application whose generated element ids change on every deployment,
-        so they must not be used as selectors.
-        """
-        chrome_options = Options()
-        chrome_options.add_argument('--headless=new')
-        chrome_options.add_argument('--no-sandbox')
-        chrome_options.add_argument('--disable-dev-shm-usage')
-        chrome_options.add_argument('--window-size=1400,1000')
-        driver = Chrome(options=chrome_options)
-
-        try:
-            driver.get(f"{LOGIN_PORTAL_URL}?api_key={self._settings['api_key']}")
-            self._logger.info(msg="Started the chrome driver")
-
-            wait = WebDriverWait(driver, 20)
-            wait.until(lambda d: d.find_elements(By.NAME, "client_id"))
-
-            driver.find_element(By.NAME, "client_id").send_keys(self._settings['ucc_code'])
-            driver.find_element(By.NAME, "password").send_keys(self._settings['api_password'])
-            driver.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
-
-            otp_field = wait.until(self._find_otp_field)
-            otp_field.send_keys(pyotp.TOTP(self._settings['totp_secret']).now())
-
-            for button in driver.find_elements(By.TAG_NAME, "button"):
-                if button.is_displayed() and button.text.strip().lower() in ("verify", "submit", "continue", "login"):
-                    button.click()
-                    break
-
-            try:
-                wait.until(lambda d: "request_token=" in d.current_url)
-            except TimeoutException:
-                raise StoxkartAPIException(
-                    code="500",
-                    message=(
-                        "Stoxkart login did not redirect with a request_token. "
-                        f"Final URL: {driver.current_url}. Page text: "
-                        f"{driver.find_element(By.TAG_NAME, 'body').text[:1000]}"
-                    ),
-                )
-
-            return parse_qs(urlparse(driver.current_url).query)['request_token'][0]
-        finally:
-            driver.quit()
-
-    @staticmethod
-    def _find_otp_field(driver):
-        """
-        Returns the OTP input once the second factor dialog is rendered.
-
-        The dialog reuses plain text inputs, so the credential fields are excluded
-        by name rather than by position in the DOM.
-        """
-        for field in driver.find_elements(By.CSS_SELECTOR, "input[type='text'], input[type='tel'], input[type='number']"):
-            if field.get_attribute("name") not in ("client_id", "password") and field.is_displayed():
-                return field
-        return False
+        totp = pyotp.TOTP(self._settings["totp_secret"])
+        seconds_left = totp.interval - time.time() % totp.interval
+        if seconds_left < TOTP_MINIMUM_SECONDS_LEFT:
+            time.sleep(seconds_left + 1)
+        return totp.now()
 
     def _exchange_request_token(self, request_token):
-        """
-        Exchanges a request token for an access token using the HMAC-SHA256
-        signature scheme documented by Stoxkart, where the message is the API
-        secret and the key is the API key concatenated with the request token.
+        """Exchanges a request token for an access token.
 
-        - `request_token`: the token obtained from the login flow.
+        The signature is an HMAC-SHA256 whose key is the app's API key followed by the request token and whose message is the app's API secret.
+
+        Args:
+            request_token (str): The token returned by the TOTP step.
+
+        Returns:
+            str: The access token.
+
+        Raises:
+            StoxkartAPIException: Stoxkart refused the exchange or its answer had no access token.
         """
-        app_key = self._settings['api_key']
-        key = (app_key + request_token).encode('utf-8')
+        app_key = self._settings["api_key"]
+        key = (app_key + request_token).encode("utf-8")
 
         signature = hmac.new(
             key,
-            self._settings['api_secret'].encode('utf-8'),
-            hashlib.sha256
+            self._settings["api_secret"].encode("utf-8"),
+            hashlib.sha256,
         ).hexdigest()
 
         params = {
             "api_key": app_key,
             "signature": signature,
-            "req_token": request_token
+            "req_token": request_token,
         }
 
         data = self.post(
             f"{BASE_URL}/auth/token",
             data=json_lib.dumps(params),
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+            },
         )
 
-        if 'data' not in data or 'access_token' not in data['data']:
+        if "data" not in data or "access_token" not in data["data"]:
             raise StoxkartAPIException(
                 code="500",
                 message=f"Cannot get access token from the Stoxkart server. Response: {data}",
             )
 
-        return data['data']['access_token']
+        return data["data"]["access_token"]
 
     def _persist_access_token(self, access_token):
-        """
-        Stores the access token in MongoDB and Redis so that later sessions reuse
-        it instead of logging in again.
+        """Stores the access token in MongoDB and then in Redis, so that every process uses it.
 
-        - `access_token`: the token returned by the token exchange.
+        Args:
+            access_token (str): The token returned by the token exchange.
         """
         last_login = {
-            "broker_name": 'stoxkart',
+            "broker_name": "stoxkart",
             "access_token": access_token,
-            "last_login": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+            "last_login": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"),
         }
-        self._mongo_db['last_login'].replace_one({'broker_name': 'stoxkart'}, last_login, upsert=True)
-        self._cache.hset('last_login', 'stoxkart', json_lib.dumps(last_login))
+        self._mongo_db["last_login"].replace_one({"broker_name": "stoxkart"}, last_login, upsert=True)
+        self._cache.hset("last_login", "stoxkart", json_lib.dumps(last_login))
         self._last_login = last_login
 
     def _request(self, method, url, params=None, data=None, headers=None, cookies=None, files=None, auth=None, timeout=None, allow_redirects=None, proxies=None, hooks=None, stream=None, verify=None, cert=None, json=None, verbose=False):

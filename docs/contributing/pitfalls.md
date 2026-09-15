@@ -36,6 +36,15 @@ and every other process waits it out. The lock records the holder's pid, and a l
 released rather than waited for. `ensure_session` is what `BrokerCandles` and IND Money's instrument
 ingester log in through by default; the `bin/<broker>/` scripts log in through the broker's API class.
 
+**Stoxkart's documented login stops at the TOTP.** Once the API app was approved, `/auth/login` accepted
+the password and asked for a TOTP, but `/auth/twofa/verify` answered every attempt with HTTP 400 and a
+body of only `{"status":"error"}`. Stoxkart's documentation does not describe the TOTP step at all.
+Its own login page had moved to `/auth/v2/login` and `/auth/v2/twofa/verify`, which carry the client id,
+password and TOTP in headers alongside a publisher key pair that is separate from the app's key, and
+that flow worked first time on 2026-09-15. The pair lives in the `stoxkart` settings document as
+`publisher_api_key` and `publisher_api_secret`; if the login starts failing again, compare it with the
+pair in the current JavaScript of `superrtrade.stoxkart.com/login`.
+
 ## The candle queue
 
 **The backward walk has to finish before any forward fill.** Preferring a forward fill whenever
