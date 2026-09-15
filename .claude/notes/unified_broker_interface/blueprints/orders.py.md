@@ -100,9 +100,15 @@ A few details matter:
 
 An HTTP status below 500 at or above 300 is `rejected`, because the broker validated and refused the request. A 5xx is `unknown`, unless the broker's error code is one the removed code treated as a settled refusal, such as Kite's `OrderException` or Groww's `GA004`. A 2xx with a refusal in its body, such as Noren's `stat` of `Not_Ok`, is `rejected`. A 2xx with no order id is `unknown`. A connect timeout is `rejected`, because the request never left, and any other network error is `unknown`.
 
-## Segments that are refused
+## Segments that are accepted, and markets that are not yet taken
 
-Only NSE and BSE cash instruments and equity and fixed income derivatives are sent. Every removed builder had exchange codes for exactly those, and refused commodity and currency derivatives because brokers may count their quantity in lots, which has not been confirmed. Indices are refused because they cannot be traded, and uncategorised instruments are refused because their segment says nothing about which exchange code to send.
+Until 2026-09-15 only NSE and BSE cash instruments and equity and fixed income derivatives were accepted. Every removed builder had exchange codes for exactly those, and refused commodity and currency derivatives because brokers may count their quantity in lots, which has not been confirmed.
+
+On 2026-09-15 the user asked for every segment to be enabled. The route now accepts every segment in the mapping's vocabulary on all four exchanges except the indices, which cannot be traded, and `uncategorised`, whose segment says nothing about which exchange code to send; the user was told of these two exceptions when the design was proposed. Opening a segment at the route and opening it at a broker are kept apart: `Instrument.market()` gives `(exchange, asset class, kind)`, each broker's `MARKETS` lists the markets it takes with their codes, and `place_skip_reason` passes a broker over for any other market before looking at anything else. Every broker lists only the four NSE and BSE securities markets, so a currency or commodity order is answered `503` with every broker skipped.
+
+The reason for not listing more is evidence found in Redis that day. For the October 2026 CRUDEOIL future the brokers' lot sizes were 1 at Dhan, Fyers, Wisdom Capital and Zerodha and 100 at Flattrade, Groww, Kotak, Shoonya and Stoxkart, while every broker agreed on 500 for the RELIANCE future. The route's quantity is in units and its lot check uses the chosen broker's `lot_size`, so at a broker whose lot is 1 an order for 100 barrels would pass the check and could be read as 100 lots. A market is to be listed for a broker only once its order API's code and quantity unit there are confirmed, and converting units to lots needs a units-per-lot figure the mapping does not publish yet; the user was told this is a decision still open.
+
+`MARKETS` keys use `securities` for equities, fixed income, funds and trusts together, because every broker sends all of them with the same exchange codes. Fyers carries the exchange in its symbol, so its `MARKETS` values are not sent and only its keys matter.
 
 ## The midnight gap
 

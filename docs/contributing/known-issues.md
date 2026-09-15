@@ -54,6 +54,19 @@ that it never waits on PostgreSQL. Those keys expire at midnight, and the next w
 instrument mapping, so an after-market order sent in between is refused with `404`. Running
 `python -m stock_brokers.instruments.mapping.utilities.warm_cache` refills them for the latest mapping date.
 
+**No broker takes currency or commodity orders yet.** `POST /api/orders/place` accepts orders in every
+segment on NSE, BSE, MCX and NCDEX except indices and uncategorised instruments, but each broker's order
+class lists only NSE and BSE securities in its `MARKETS`, so a currency or commodity order is answered `503`
+with every broker skipped. The order API's quantity unit has not been confirmed for any broker in those
+markets, and the brokers' own lot sizes show they do not agree. On 2026-09-15 the October 2026 CRUDEOIL
+future had a lot size of 1 at Dhan, Fyers, Wisdom Capital and Zerodha and 100 at Flattrade, Groww, Kotak,
+Shoonya and Stoxkart, and the October GOLD future 1 everywhere except Groww, at 100. The route's `quantity`
+is in units, as the contracts require, so the lot-size check against the chosen broker's own `lot_size`
+would pass 100 barrels at a broker whose lot is 1, and a broker whose order API counts lots would read it as
+100 lots. Opening a market needs, per broker, the exchange or segment code its order API uses there, whether
+it counts quantity in units or lots, and, for lots, a units-per-lot figure that does not depend on the
+broker's own convention, which the mapping does not publish yet.
+
 **Placing an order is confirmed live at every broker, but no Stoxkart order has filled yet.** On
 2026-09-15 one-share NSE CNC limit buys were sent through `POST /api/orders/place`, and Dhan, Flattrade,
 Fyers, Groww, INDmoney, Kotak, Shoonya, Wisdom Capital and Zerodha each accepted and filled theirs.

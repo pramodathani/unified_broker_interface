@@ -694,7 +694,7 @@ written in capitals, though lower case is accepted.
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `instrument_id` | this, or the fields below | The instrument's id, as `/api/instruments/details` answers it |
-| `exchange`, `segment` | when there is no `instrument_id` | `nse` or `bse`, and a segment such as `equities` or `nse_equity_options` |
+| `exchange`, `segment` | when there is no `instrument_id` | `nse`, `bse`, `mcx` or `ncdex`, and a segment such as `equities` or `nse_equity_options` |
 | `symbol` | for a security | The trading symbol, such as `SBIN` |
 | `underlying_symbol`, `expiry_date` | for a future or option | Such as `NIFTY` and `2026-09-29` |
 | `strike_price`, `option_type` | for an option | Such as `25000` and `CE` |
@@ -710,11 +710,24 @@ written in capitals, though lower case is accepted.
 | `tag` | no | 1 to 20 letters and digits, passed to the broker's own tag or remarks field |
 | `dry_run` | no | `true` to answer with the request instead of sending it |
 
-Orders are sent only for NSE and BSE cash instruments, equity and fixed income derivatives, ETFs,
-investment trusts and mutual fund units. Indices, commodities, currencies and uncategorised instruments
-are refused with `400`, because their quantity may be counted in lots at some brokers, which has not been
-confirmed. The lot is the chosen broker's `lot_size`, and the tick is the `tick_size` most brokers agree
-on, which is what `/api/instruments/details` answers.
+Orders are accepted for every segment on NSE, BSE, MCX and NCDEX except indices, which cannot be traded,
+and uncategorised instruments, whose segment does not say whether they are cash instruments or derivatives;
+those two are refused with `400`. Accepting an order does not mean a broker takes it. Each broker lists the
+markets it has been confirmed for, as an exchange, an asset class (securities, currency or commodity) and
+cash or derivative, and passes over an order in any other market with a reason such as
+`does not take mcx commodity derivative orders`. Today every broker lists only NSE and BSE securities, so a
+currency or commodity order is answered `503` with every broker in `skipped`.
+
+!!! warning "Currency and commodity orders wait on confirming how each broker counts quantity"
+
+    For the same MCX future, brokers disagree about the lot size: on 2026-09-15 CRUDEOIL's October 2026
+    contract had a lot size of 1 at Dhan, Fyers, Wisdom Capital and Zerodha and 100 at Flattrade, Groww,
+    Kotak, Shoonya and Stoxkart. `quantity` is in units, so a broker whose order API counts lots would read
+    100 barrels as 100 lots. A broker's markets are widened only once how its order API counts quantity
+    there has been confirmed. See [Known issues](../contributing/known-issues.md).
+
+The lot is the chosen broker's `lot_size`, and the tick is the `tick_size` most brokers agree on, which is
+what `/api/instruments/details` answers.
 
 ```bash
 curl -s -X POST localhost:8080/api/orders/place -H "access-token: $TOKEN" -H 'Content-Type: application/json' \
