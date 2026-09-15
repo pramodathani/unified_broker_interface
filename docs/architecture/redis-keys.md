@@ -58,6 +58,11 @@ A websocket update always replaces its order's entry; a polled row replaces it o
 observed before the poll's request was sent, so an update that arrived while the request was in flight
 is never overwritten by the older snapshot. The check and the write run together as one Redis script.
 
+Stoxkart's entries also carry a top-level `variety` beside `data`, such as `NORMAL`, `AMO` or `BO`, which
+`DELETE /api/orders/cancel` builds Stoxkart's cancel URL from. It is stored apart from `data` because
+Stoxkart's order socket reports `NORMAL` for an after-market order, so `bin/stoxkart/order_updates` keeps
+an `AMO` or `BO` variety already stored rather than taking the socket's.
+
 `polled_at` exists because Redis keeps no empty hash, so the hash alone cannot say that an empty book
 was read. Both keys expire at 06:00 IST, and every write moves that to the next 06:00, so yesterday's
 orders stay readable overnight and the first poll of the day starts afresh.

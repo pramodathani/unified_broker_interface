@@ -26,7 +26,7 @@ come from the environment. All four variables are optional, and each is read onc
 | `UNIFIED_BROKER_INTERFACE_API_HOST` | `127.0.0.1` | Address to bind |
 | `UNIFIED_BROKER_INTERFACE_API_PORT` | `8080` | Port to bind |
 | `UNIFIED_BROKER_INTERFACE_API_TOKEN_TTL_SECONDS` | `86400` | How long an access token is accepted |
-| `UNIFIED_BROKER_INTERFACE_API_ORDER_EXCLUDED_BROKERS` | empty | Comma-separated broker names that `POST /api/orders/place` never sends to, such as `kotak,stoxkart` |
+| `UNIFIED_BROKER_INTERFACE_API_ORDER_EXCLUDED_BROKERS` | empty | Comma-separated broker names that `POST /api/orders/place` never sends to, such as `kotak,groww` |
 
 ## Endpoints
 
@@ -620,13 +620,13 @@ names the company rather than a trading symbol, so its `tradingsymbol` is the re
 | Groww | `GET /v1/order/list` | `GET /v1/order/trades/{id}` for each filled order, at once | Groww's schema |
 | INDmoney | `GET /order-book` | `GET /trade-book` for `EQUITY` and `DERIVATIVE`, at once | orders checked against a live order; trades unverified |
 | Kotak | `GET {base_url}/quick/user/orders` | `GET {base_url}/quick/user/trades` | the fields of Kotak's order update message |
-| Stoxkart | `GET /reports/order-book` | `GET /reports/trade-book` | Stoxkart's documented schema, unconfirmed |
+| Stoxkart | `GET /reports/order-book` | `GET /reports/trade-book` | Stoxkart's documented schema; orders checked against rejected, after-market and cancelled orders; trades unverified |
 | Wisdom Capital | `GET /interactive/orders` | `GET /interactive/orders/trades` | the fields of XTS's order event |
 
 !!! warning "Most row field names are unverified"
 
-    Noren's and INDmoney's order-book fields have been confirmed against live orders, and no trade has been
-    read yet. Every other broker's
+    Noren's and INDmoney's order-book fields have been confirmed against live orders, Stoxkart's against
+    rejected, after-market and cancelled orders only, and no trade has been read yet. Every other broker's
     order fields, and every broker's trade fields, follow its published schema or the field names of its
     order update messages, and should be checked on a day with orders and fills.
 
@@ -699,15 +699,17 @@ no account settings in Redis, or does not take the order: INDmoney takes no `SL`
 Groww and Wisdom Capital take no after-market orders. Once an order has been sent it is never sent to
 another broker, whatever the answer, because a second send could place the order twice.
 
-!!! warning "Stoxkart refuses every order this endpoint sends"
+!!! warning "Stoxkart needs its Algo-ID in a header, and no Stoxkart order has filled yet"
 
-    On 2026-09-15 two live test orders for one KWIL share, an NSE `DELIVERY` `LIMIT` buy at 39.00 against a
-    last price of 41.18, were refused by Stoxkart with HTTP 400 and
-    `{"message":"invalid algo_id","status":"failed","code":"ValidationError"}`. The first carried no `algo_id`
-    and the second carried `"algo_id": "0"`, which is what this endpoint sends. No order reached the
-    exchange, and the correct algo identifier is not known. Until it is, set
-    `UNIFIED_BROKER_INTERFACE_API_ORDER_EXCLUDED_BROKERS=stoxkart` so that Stoxkart is passed over in the
-    rotation.
+    SEBI's framework requires an exchange-issued Algo-ID on every API order. Stoxkart refuses an order with
+    `invalid algo_id` unless the code arrives as the HTTP header `X-Algo-Id`, whatever the body's `algo_id`
+    says, so this endpoint sends `X-Algo-Id: 99999` together with `"algo_id": "99999"` in the body, for NSE
+    and BSE alike. The code belongs to the API app "Test App" (#30), approved under the non-registered
+    strategy `NSE-BSE_NON_REGISTERED`, with the host's static IPs registered for it on Stoxkart's developer
+    site.
+    On 2026-09-15 orders with the header passed the Algo-ID check, and two after-market KWIL orders were
+    accepted with status `AMO PENDING` and then cancelled, but no Stoxkart order has yet been placed during
+    market hours or filled. See [Pitfalls](../contributing/pitfalls.md#placing-and-cancelling-orders).
 
 ```json
 {
@@ -785,13 +787,15 @@ curl -s -X DELETE "localhost:8080/api/orders/cancel?order_id=26091500012345&brok
 An order becomes cancellable only once its broker's scripts have recorded it. The poller reads the order book
 every half second, every five seconds at Fyers and every second at Stoxkart, and the websocket records an
 order as the broker pushes it, so an order placed a moment ago can still be answered `404`. A Stoxkart order
-is found once its poller or its order socket has recorded it, and cancelling one has not yet been tried
-against a live order. Flattrade and Shoonya both number orders as the date followed by eight digits,
+is found once its poller or its order socket has recorded it. Stoxkart's socket sent nothing when two
+after-market orders were placed on 2026-09-15, so such an order is found only after the next order book
+poll, within about a second. Flattrade and Shoonya both number orders as the date followed by eight digits,
 so the same id can turn up at both. Such an id is answered `409` with the brokers listed, and the request is
 sent again with `broker`.
 
 Each broker's cancel request is shown below. Five brokers need a value besides the order id, which is read
-from the broker's own copy of the order kept beside the normalized one in Redis.
+from the broker's own copy of the order kept beside the normalized one in Redis, or at Stoxkart first from
+a `variety` stored beside that copy.
 
 | Broker | Request | Value read from the stored order |
 | --- | --- | --- |
@@ -802,11 +806,20 @@ from the broker's own copy of the order kept beside the normalized one in Redis.
 | INDmoney | `POST /order/cancel` with `{"order_id", "segment"}` | `segment`; when absent, `DERIVATIVE` for an id starting `DRV` and `EQUITY` otherwise |
 | Kotak | `POST {base_url}/quick/order/cancel` with `jData={"on", "am": "NO"}` | none |
 | Flattrade, Shoonya | `POST …/CancelOrder` with `jData={"uid", "norenordno"}` | none |
-| Stoxkart | `DELETE /orders/{variety}/{order_id}` | `variety` in lower case, because Stoxkart's order book spells it `NORMAL`; `normal` when absent |
+| Stoxkart | `DELETE /orders/{variety}/{order_id}` with the header `X-Algo-Id: 99999` | the entry's top-level `variety`, then `data.variety`, then `normal`, in lower case, because Stoxkart spells it `NORMAL`, `AMO` or `BO` |
 | Wisdom Capital | `DELETE /interactive/orders` with `appOrderID`, `orderUniqueIdentifier` and `clientID` | `OrderUniqueIdentifier`, `ubi` when absent |
 
 Groww's order update websocket does not send an order's segment, so an order the websocket recorded last is
 answered `503` until the next order book poll replaces its entry, within about half a second.
+
+Stoxkart's variety is read first from a `variety` field that its two order scripts keep beside `data` in
+each `stoxkart:orders:orders` entry, rather than from `data` alone, because Stoxkart's order socket
+reported `NORMAL` for after-market orders whose order book row said `AMO`. The poller stores the order
+book row's variety, and `bin/stoxkart/order_updates` keeps an `AMO` or `BO` variety already stored.
+Stoxkart's cancel is the only one confirmed live: on 2026-09-15 it cancelled two after-market KWIL orders,
+one on NSE and one on BSE, each answered HTTP 200 with outcome `accepted` and
+`Order Submitted For Cancellation` in about 178 ms of broker time, and the order book then showed
+`AMO CANCELLED`.
 
 ```json
 {

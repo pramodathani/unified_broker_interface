@@ -55,12 +55,15 @@ unified combiners read all of them. It still differs from the other brokers in t
   two websockets Stoxkart's own trading website uses. Stoxkart may change them without notice. The quote
   feed is last in the unified quote priority and is not verified, and it is not one of the REST API's
   broker quote modules. See [Broker scripts](../guides/broker-scripts.md#stoxkarts-quote-feed).
-- **Order placement is refused.** Two live test orders were refused with `invalid algo_id`. Stoxkart is
-  still in the order rotation unless `UNIFIED_BROKER_INTERFACE_API_ORDER_EXCLUDED_BROKERS` names it. See
+- **Orders carry an Algo-ID header.** Stoxkart accepts the exchange-issued Algo-ID `99999` only as an
+  `X-Algo-Id` HTTP header, which Stoxkart's documentation does not mention, so
+  `POST /api/orders/place` and `DELETE /api/orders/cancel` send it. On 2026-09-15 two after-market orders
+  were accepted and then cancelled through the API, but no Stoxkart order has yet filled at the exchange.
+  See [Pitfalls](../contributing/pitfalls.md#placing-and-cancelling-orders) and
   [Known issues](../contributing/known-issues.md).
-- **Unconfirmed fields.** No order or position has existed on the account, so the order book, trade
-  book and positions field names come from Stoxkart's documentation rather than a live answer, and no
-  order update has been seen on the order socket.
+- **Unconfirmed fields.** No trade or position has existed on the account, so the trade book and
+  positions field names come from Stoxkart's documentation rather than a live answer. The order book
+  and the order socket have been seen live only for rejected, after-market and cancelled orders.
 
 **Flattrade's order feed is implemented but not running.** The broker permits one websocket per
 session, so `flattrade@order_updates` is not enabled and `flattrade@quotes` holds the connection. See

@@ -54,18 +54,17 @@ that it never waits on PostgreSQL. Those keys expire at midnight, and the next w
 instrument mapping, so an after-market order sent in between is refused with `404`. Running
 `python -m stock_brokers.instruments.mapping.utilities.warm_cache` refills them for the latest mapping date.
 
-**Placing an order is confirmed live at every broker except Stoxkart.** On 2026-09-15 one-share NSE CNC
-limit buys were sent through `POST /api/orders/place`, and Dhan, Flattrade, Fyers, Groww, INDmoney, Kotak,
-Shoonya, Wisdom Capital and Zerodha each accepted and filled theirs. Stoxkart could not log in that
-morning, so it was skipped.
-
-**Stoxkart refuses every order with `invalid algo_id`.** Later on 2026-09-15 two live test orders for one
-KWIL share, an NSE `DELIVERY` `LIMIT` buy at 39.00 against a last price of 41.18, were refused by Stoxkart
-with HTTP 400 and `{"message":"invalid algo_id","status":"failed","code":"ValidationError"}`. The first
-carried no `algo_id` and the second carried `"algo_id": "0"`, which is what `POST /api/orders/place` sends.
-No order reached the exchange. The correct algo identifier is not known. The variable
-`UNIFIED_BROKER_INTERFACE_API_ORDER_EXCLUDED_BROKERS` was not set on 2026-09-15, so an order the rotation
-sends to Stoxkart is refused; setting it to `stoxkart` passes Stoxkart over until the identifier is found.
+**Placing an order is confirmed live at every broker, but no Stoxkart order has filled yet.** On
+2026-09-15 one-share NSE CNC limit buys were sent through `POST /api/orders/place`, and Dhan, Flattrade,
+Fyers, Groww, INDmoney, Kotak, Shoonya, Wisdom Capital and Zerodha each accepted and filled theirs.
+Stoxkart could not log in that morning, so it was skipped. Later that day Stoxkart refused orders with
+`invalid algo_id` until the Algo-ID was sent as an `X-Algo-Id` header, as
+[Pitfalls](pitfalls.md#placing-and-cancelling-orders) describes. With the header, three NSE KWIL orders
+sent at 15:40 IST passed the Algo-ID check and were rejected by Stoxkart's risk checks only because the
+market had closed, with `MARKET IS CLOSE YOU CANNOT PLACE AN ORDER NOW`. Two after-market orders for one
+KWIL share, one on NSE and one on BSE, were then sent to Stoxkart's `POST /orders/amo` with the header and
+accepted with HTTP 200, `Order Submitted` and status `AMO PENDING`. Stoxkart therefore takes orders, but
+no Stoxkart order has yet been placed during market hours or filled at the exchange.
 
 **Kotak refuses every order from an IP address it has not whitelisted.** Kotak first answered
 `{"stCode": 100008, "errMsg": "unauthorized", "stat": "Not_Ok"}`. The removed order code read this as a
@@ -79,11 +78,14 @@ order book, positions and funds scripts kept working while writes were refused. 
 address was registered, the next order was accepted with no code change and no new login. If the host's
 public address changes, Kotak orders fail again with `100008` until the new address is registered.
 
-**Cancelling an order is unconfirmed live, and misses some orders.** `DELETE /api/orders/cancel` finds an
+**Cancelling an order is confirmed live only at Stoxkart, and misses some orders.** `DELETE /api/orders/cancel` finds an
 order's broker in the `<broker>:orders:orders` hashes, so it cannot cancel an order that no order script has
 recorded yet. A Stoxkart order is recorded by `bin/stoxkart/orders`, which polls once a second, or by
-`bin/stoxkart/order_updates` from Stoxkart's order socket, and no Stoxkart order has existed to cancel, so Stoxkart's cancel, which lowercases the order book's `NORMAL`
-variety into the URL, is untried. Each broker's cancel
+`bin/stoxkart/order_updates` from Stoxkart's order socket. On 2026-09-15 the endpoint cancelled the two
+after-market KWIL orders described above: each cancel was answered HTTP 200 with outcome `accepted` and
+`Order Submitted For Cancellation` in about 178 ms of broker time, and the order book then showed
+`AMO CANCELLED` with nothing traded. Cancelling an open Stoxkart order during market hours has not been
+tried. Every other broker's cancel
 request is copied from the `build_cancel` methods removed in commit 4cc8c91 and was checked only against
 stubbed answers. Kotak's request always sends `am` as `NO`, as the removed code did, so a Kotak after-market
 order may be refused. INDmoney's fallback segment, used when the stored order names none, assumes derivative
@@ -122,11 +124,16 @@ containing `new incoming connection`, so `stoxkart@order_updates` and a Stoxkart
 the same account knock each other off. The script waits five minutes before reclaiming the socket, and
 order updates are missed while the website or app holds it; the `orders` poller still records the orders.
 
-**Stoxkart's order, trade and position fields are unconfirmed.** No order, fill or open position has
-existed on the Stoxkart account, so `bin/stoxkart/orders`, `trades` and `positions`, and the unified readers
-of them, use the field names in Stoxkart's documentation. No update has arrived on the order socket either,
-so `bin/stoxkart/order_updates` reads the order book's field names with fallbacks, such as `status` or
-`order_status` and `action` or `transaction_type`, and logs every message at INFO until one is seen. The holdings row seen live already differed from
+**Stoxkart's trade and position fields, and its open and filled orders, are unconfirmed.** No fill or
+open position has existed on the Stoxkart account, so `bin/stoxkart/trades` and `positions`, and the
+unified readers of them, use the field names in Stoxkart's documentation. The order book and the order
+socket were seen live on 2026-09-15, but only for rejected, after-market and cancelled orders, whose
+statuses were `REJECTED`, `AMO PENDING` (normalized to `PENDING`) and `AMO CANCELLED` (normalized to
+`CANCELLED`). The statuses of an open, partly filled or filled order, and the socket updates that go with
+them, have not been seen. The order book's `order_date_time` looked like `15-Sep-2026 15:40:40`, and
+`exch_order_id` and `parent_order_id` were `"0"` before an id was assigned, which the normalized order
+holds as null while `data` keeps Stoxkart's `"0"`. `bin/stoxkart/order_updates` still logs every message at INFO so that the first update for an
+open or filled order shows its shape. The holdings row seen live already differed from
 that documentation, carrying `nse_symbol`, `nse_token`, `bse_symbol`, `bse_token` and `isin_code` in place
 of a single `symbol` and `token`, so the other books may differ too. The sign of `net_quantity` for a short
 position is also unverified.

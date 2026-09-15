@@ -161,6 +161,15 @@ they read the same whichever script wrote them - for orders `order_id`,
 with the IST offset, with statuses on one vocabulary: `PENDING`, `OPEN`, `COMPLETE`, `CANCELLED`,
 `REJECTED` and `EXPIRED`.
 
+Stoxkart's order entries carry one more field, a top-level `variety` beside `data`, such as `NORMAL`,
+`AMO` or `BO` in upper case. The REST API's cancel endpoint builds Stoxkart's cancel URL from it. It is
+kept apart from `data` because Stoxkart's order socket reported `NORMAL` for after-market orders whose
+order book row said `AMO`. The two scripts fill it in differently:
+
+- `bin/stoxkart/orders` copies the order book row's `variety`.
+- `bin/stoxkart/order_updates` keeps an `AMO` or `BO` variety already stored for the order, reads `AMO`
+  from a status starting with `AMO`, and otherwise uses the update's own `variety`.
+
 **Which write wins.** A websocket update always replaces its entry. A polled row replaces an entry only
 when that entry was observed before the poll's request was sent, so an update arriving while a request
 was in flight is never overwritten by the older snapshot. The check and the write run together in one
@@ -323,11 +332,25 @@ Stoxkart keeps one order socket per client. A new connection closes the older on
 containing `new incoming connection`, so the script and a logged-in Stoxkart website or app knock each
 other off. When that happens the script waits five minutes before reclaiming the socket.
 
-No update had arrived by 2026-09-15, because no order could be placed through the API (Stoxkart refused
-each with `invalid algo_id`), so the fields of an update are unconfirmed. The script normalizes an update
-with the order book's field names and fallbacks, such as `status` or `order_status` and `action` or
-`transaction_type`, and logs every message at INFO so the first real update shows its shape in the
-journal. An update carrying an `order_id` is merged into `stoxkart:orders:orders` with source `websocket`
+The first updates arrived on 2026-09-15. Three NSE KWIL orders sent at 15:40 IST were rejected because
+the market had closed, and two after-market KWIL orders were placed and then cancelled. The socket sent
+an update within a second of each rejection and each cancellation, but sent nothing when the two
+after-market orders were placed, so only `bin/stoxkart/orders` recorded those until they were cancelled.
+Every value in an update was a string, and an update carried these fields:
+
+- `client_id`, `user_id`, `order_id`, `exch_order_id` and `order_timestamp`, which was blank
+- `variety`, `exchange`, `trading_symbol`, `symbol`, `token`, `segment` and `lot_size`
+- `order_type`, `transaction_type`, `validity` and `product`
+- `quantity`, `disclose_quantity`, `disclose_quantity_remaining`, `traded_quantity` and `pending_quantity`
+- `price` and `trigger_price`
+- `order_status` and `reason`
+- `expiry_date`, `strike_price` and `option_type`
+
+The cancellation updates said `variety: NORMAL` for the after-market orders, which is why the order
+entries carry their own `variety`, as [Orders and positions](#orders-and-positions) describes. Updates
+for an open, partly filled or filled order have not been seen, so the script still reads fallbacks for
+some fields, such as `status` or `order_status` and `action` or `transaction_type`, and logs every
+message at INFO so that the first such update shows its shape in the journal. An update carrying an `order_id` is merged into `stoxkart:orders:orders` with source `websocket`
 and appended to `stoxkart:order-updates:stream` as `{"timestamp", "order": <normalized order>, "data": <the update>}`.
 Unlike the other brokers' streams, the entry carries the normalized `order`, which
 `bin/unified/order_updates` uses as it is.

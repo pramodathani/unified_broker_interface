@@ -13,11 +13,11 @@
 
 Stoxkart keeps one order socket per client. A new connection closes the older one with a close reason containing `new incoming connection`, so this script and a logged-in Stoxkart website or app knock each other off. When that happens here the script waits five minutes before reclaiming the socket, so a person using the website is not fought over every few seconds.
 
-**What an update holds** had not been seen by 2026-09-15: no order changed while the socket was open, because Stoxkart refused API orders with `invalid algo_id`. Stoxkart's website reads `order_status` and `variety` from an update, so an update is taken to be an order object. Every JSON object received is logged at INFO with its first 300 characters, so the first real update shows its shape in the journal.
+**What an update holds** was first seen on 2026-09-15, when three KWIL orders sent after the close were rejected: an update arrived within a second of each order, carrying `client_id`, `user_id`, `order_id`, `exch_order_id`, `order_timestamp` (blank on a rejection), `variety`, `exchange`, `trading_symbol`, `symbol`, `token`, `segment`, `order_type`, `transaction_type`, `validity`, `product`, `quantity`, `disclose_quantity`, `disclose_quantity_remaining`, `price`, `trigger_price`, `traded_quantity`, `pending_quantity`, `order_status`, `reason`, `expiry_date`, `strike_price`, `option_type` and `lot_size`, every value a string. No update arrived when two after-market orders were placed the same evening, which only `bin/stoxkart/orders` recorded, but one arrived for each when they were cancelled, with `order_status` `AMO CANCELLED`. Updates for open, partly filled and filled orders have not been seen yet. Every JSON object received is logged at INFO with its first 300 characters.
 
 **Keys.** An object carrying an `order_id` is an order update:
 
-- It is merged into `stoxkart:orders:orders`, the hash `bin/stoxkart/orders` also writes, keyed by `order_id`, as `{"observed_at": <epoch>, "source": "websocket", "order": <normalized order>, "data": <the update as Stoxkart sent it>}`. A websocket update always replaces its entry; the poller replaces an entry only when it was observed before the poll's request was sent. The hash expires at 06:00 IST, moved to the next 06:00 by every write.
+- It is merged into `stoxkart:orders:orders`, the hash `bin/stoxkart/orders` also writes, keyed by `order_id`, as `{"observed_at": <epoch>, "source": "websocket", "order": <normalized order>, "data": <the update as Stoxkart sent it>, "variety": <the order's variety>}`. `variety` is what the REST API's cancel endpoint builds Stoxkart's cancel path from. Stoxkart's socket reported `NORMAL` for after-market orders whose order book row said `AMO`, so an `AMO` or `BO` variety already stored for the order is kept, a status beginning with `AMO` means `AMO`, and only otherwise is the update's own `variety` used. A websocket update always replaces its entry; the poller replaces an entry only when it was observed before the poll's request was sent. The hash expires at 06:00 IST, moved to the next 06:00 by every write.
 - It is appended to the Redis Stream `stoxkart:order-updates:stream` as an `update` field holding `{"timestamp": "YYYY-MM-DD HH:MM:SS.ffffff", "order": <normalized order>, "data": <the update>}`, capped at about 20,000 entries, which `bin/stoxkart/persist_orders` writes to `stoxkart.order_updates` and `bin/unified/order_updates` combines.
 
 Any other object - an acknowledgement, a heartbeat reply - is logged and not stored.
@@ -162,6 +162,7 @@ class StoxkartUpdateNormalizer:
         "TRANSIT": "PENDING",
         "TRIGGER PENDING": "PENDING",
         "AMO REQ RECEIVED": "PENDING",
+        "AMO PENDING": "PENDING",
         "AFTER MARKET ORDER REQ RECEIVED": "PENDING",
         "O-PENDING": "PENDING",
         "OPEN": "OPEN",
@@ -181,6 +182,7 @@ class StoxkartUpdateNormalizer:
         "CANCELLED": "CANCELLED",
         "CANCELED": "CANCELLED",
         "CANCEL": "CANCELLED",
+        "AMO CANCELLED": "CANCELLED",
         "REJECTED": "REJECTED",
         "REJECT": "REJECTED",
         "FAILED": "REJECTED",
@@ -212,8 +214,8 @@ class StoxkartUpdateNormalizer:
 
         return {
             "order_id": order_id,
-            "exchange_order_id": self._first(update, "exch_order_id", "exchange_order_id"),
-            "parent_order_id": self._first(update, "parent_order_id"),
+            "exchange_order_id": self._identifier(self._first(update, "exch_order_id", "exchange_order_id")),
+            "parent_order_id": self._identifier(self._first(update, "parent_order_id")),
             "status": self._vocabulary(self._first(update, "status", "order_status"), self.STATUSES),
             "status_message": self._first(update, "reason", "rejection_reason", "status_message"),
             "id": instrument_name,
@@ -281,6 +283,19 @@ class StoxkartUpdateNormalizer:
                 return text
         return None
 
+    def _identifier(self, value):
+        """Returns an order id, treating Stoxkart's `0` for an id not yet assigned as missing.
+
+        Args:
+            value (str | None): The raw field value.
+
+        Returns:
+            str | None: The id, or None when it is missing or `0`.
+        """
+        if value == "0":
+            return None
+        return value
+
     def _vocabulary(self, value, table):
         """Maps a Stoxkart term onto the shared vocabulary.
 
@@ -339,7 +354,7 @@ class StoxkartUpdateNormalizer:
         """
         if value is None:
             return None
-        for pattern in ("%d-%m-%Y %H:%M:%S", "%d/%m/%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+        for pattern in ("%d-%b-%Y %H:%M:%S", "%d-%m-%Y %H:%M:%S", "%d/%m/%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
             try:
                 moment = datetime.strptime(value, pattern)
             except ValueError:
@@ -508,18 +523,22 @@ class StoxkartOrderSocket:
             repr(observed_at),
         ]
         stream_entries = []
+        orders = []
         for item in items:
             if not isinstance(item, dict):
                 continue
             self.logger.info(f"Order socket message: {json.dumps(item)[:300]}")
             order = self.normalizer.normalize(item)
-            if order is None:
-                continue
+            if order is not None:
+                orders.append((order, item))
+        stored_varieties = self._stored_varieties(orders)
+        for order, item in orders:
             entry = {
                 "observed_at": observed_at,
                 "source": "websocket",
                 "order": order,
                 "data": item,
+                "variety": self._variety(item, stored_varieties.get(order["order_id"])),
             }
             merge_arguments.append(order["order_id"])
             merge_arguments.append(json.dumps(entry))
@@ -533,6 +552,61 @@ class StoxkartOrderSocket:
             pipeline.xadd(STREAM_KEY, {"update": update}, maxlen=STREAM_MAX_LENGTH, approximate=True)
         pipeline.execute()
         self.logger.info(f"Merged {len(stream_entries)} order update(s) into {ORDERS_KEY}")
+
+    def _stored_varieties(self, orders):
+        """Reads the variety already stored for each order, from the entries in `stoxkart:orders:orders`.
+
+        Args:
+            orders (list): Pairs of (normalized order, update).
+
+        Returns:
+            dict: Each order id mapped to its stored variety, uppercased, for the orders whose entry holds one.
+        """
+        if not orders:
+            return {}
+        order_ids = []
+        for order, _ in orders:
+            order_ids.append(order["order_id"])
+        stored = self.cache.hmget(ORDERS_KEY, order_ids)
+        varieties = {}
+        for order_id, value in zip(order_ids, stored):
+            if not value:
+                continue
+            try:
+                entry = json.loads(value)
+            except ValueError:
+                continue
+            if not isinstance(entry, dict):
+                continue
+            variety = entry.get("variety")
+            data = entry.get("data")
+            if not variety and entry.get("source") == "rest" and isinstance(data, dict):
+                variety = data.get("variety")
+            if variety:
+                varieties[order_id] = str(variety).strip().upper()
+        return varieties
+
+    def _variety(self, update, stored_variety):
+        """Chooses the variety an order is cancelled with.
+
+        Stoxkart's order socket reported `NORMAL` for two after-market orders on 2026-09-15 while the order book said `AMO`, so an `AMO` or `BO` variety already stored for the order is kept, a status beginning with `AMO` means `AMO`, and only otherwise is the update's own variety used.
+
+        Args:
+            update (dict): One order update as Stoxkart sent it.
+            stored_variety (str | None): The variety already stored for the order, uppercased, or None.
+
+        Returns:
+            str | None: The variety, uppercased, or None when neither the stored entry nor the update names one.
+        """
+        if stored_variety in ("AMO", "BO"):
+            return stored_variety
+        status = str(update.get("order_status") or update.get("status") or "").strip().upper()
+        if status.startswith("AMO"):
+            return "AMO"
+        variety = str(update.get("variety") or "").strip().upper()
+        if variety:
+            return variety
+        return stored_variety
 
     def _next_reset(self):
         """Returns the epoch of the next 06:00 in India, when the order hash expires.

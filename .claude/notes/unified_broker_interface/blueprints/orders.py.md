@@ -63,6 +63,16 @@ Only NSE and BSE cash instruments and equity and fixed income derivatives are se
 
 The `unified:catalogue:` keys expire at midnight and are warmed after the 07:45 mapping, so the endpoint refuses every order in between. Falling back to PostgreSQL would break the rule that an order never waits on the database. This is recorded in `docs/contributing/known-issues.md`.
 
+## Why Stoxkart's Algo-ID goes in a header
+
+SEBI's framework requires every API order to carry an exchange-issued Algo-ID. Stoxkart's API key for this account is approved under the non-registered strategy `NSE-BSE_NON_REGISTERED`, whose code is `99999`. On 2026-09-15 Stoxkart refused every order that carried the code only in the JSON body as `algo_id` - as `"99999"`, as the number `99999`, as `"9999999999999999"` and as the strategy name, on both `openapi.stoxkart.com` and `openapi-v2.stoxkart.com` - with HTTP 400 `invalid algo_id`. The same order with an `X-Algo-Id: 99999` header passed the check, with or without the body field, and was rejected only by Stoxkart's risk system because the market had closed. Headers named `algo-id` or `algo_id` were refused. Stoxkart's documentation mentions neither the field nor the header.
+
+`place` therefore sends `X-Algo-Id: 99999` and keeps `algo_id` in the body too, set to the same code instead of the `"0"` it sent before. The same evening two after-market KWIL orders, one on NSE and one on BSE, were accepted by Stoxkart with the header and `99999`, so BSE needs no separate code. SEBI's framework also covers modifications and cancellations, so `cancel` sends the same `X-Algo-Id: 99999` header on Stoxkart's `DELETE /orders/{variety}/{order_id}`. Both after-market orders were then cancelled through `DELETE /api/orders/cancel`, which Stoxkart answered with `Order Submitted For Cancellation` in about 178 ms, and its order book showed `AMO CANCELLED` with nothing traded.
+
+## Why Stoxkart's cancel reads `variety` beside `data`
+
+Stoxkart's cancel path names the order's variety, `/orders/normal/{order_id}` or `/orders/amo/{order_id}`. The order book row carries it as `variety`, but the order socket's updates for the two after-market orders said `NORMAL`. Had a socket update been the latest write to `stoxkart:orders:orders` when the order was cancelled, the cancel would have gone to the wrong path. The raw row stays as Stoxkart sent it, so both Stoxkart order scripts store the resolved variety as a top-level `variety` in the entry, and `cancel` reads that first, then `data.variety`, then `normal`.
+
 ## How `cancel` finds the broker
 
 A cancel names only the broker's order id, so the method has to work out which broker holds it. Three ways were weighed with the user on 2026-09-15: look the id up in the `<broker>:orders:orders` hashes that the order scripts already keep, record each order's broker when `place` sends it, or both. The user chose the hashes. They need no change to `place`, and they also hold orders placed outside the API, such as from a broker's own app. The cost is that an order is found only after a poll or a websocket update has recorded it. A Stoxkart order is found once `bin/stoxkart/order_updates` or `bin/stoxkart/orders`, which polls once a second, has recorded it.

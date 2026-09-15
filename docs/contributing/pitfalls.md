@@ -45,6 +45,37 @@ that flow worked first time on 2026-09-15. The pair lives in the `stoxkart` sett
 `publisher_api_key` and `publisher_api_secret`; if the login starts failing again, compare it with the
 pair in the current JavaScript of `superrtrade.stoxkart.com/login`.
 
+**Changing Stoxkart's API key must keep the publisher key pair.** When the settings document was updated
+for a new API key on 2026-09-15, `publisher_api_key` and `publisher_api_secret` were lost, and every
+Stoxkart login failed until the old pair was put back. The pair comes from Stoxkart's login page rather
+than from the API app, and the old pair works with the new key, so only the app's own key changes.
+
+## Placing and cancelling orders
+
+**Stoxkart takes its Algo-ID only as an `X-Algo-Id` header.** SEBI's framework for retail algorithmic
+trading requires an exchange-issued Algo-ID on every order sent through an API. Stoxkart refused every
+test order with HTTP 400 and `{"message":"invalid algo_id","status":"failed","code":"ValidationError"}`,
+first while the body carried no `algo_id` or `"algo_id": "0"`, and then even after the API key was moved
+from the app "Test1234", approved for the strategy `BSE_NON_REGISTERED` with the code `9999999999999999`
+on BSE only, to the app "Test App" (#30), approved for the non-registered strategy
+`NSE-BSE_NON_REGISTERED` with the code `99999`, with the host's static IPs registered under My API
+Requests on `developers.stoxkart.com`. With that app, the body's `algo_id` was still refused as the
+string `"99999"`, as the number `99999`, as `"9999999999999999"` and as the strategy name, on both
+`openapi.stoxkart.com` and `openapi-v2.stoxkart.com`. An order passed the Algo-ID check only when the
+code was sent as the HTTP header `X-Algo-Id: 99999`, and headers named `algo-id` or `algo_id` were
+refused. Stoxkart's documentation does not mention the header. `POST /api/orders/place` now
+sends the header together with `"algo_id": "99999"` in the body, BSE orders accept the same code, and
+`DELETE /api/orders/cancel` sends the same header on Stoxkart's cancel.
+
+**Stoxkart's order socket reports an after-market order's variety as `NORMAL`.** Stoxkart's cancel URL
+names the order's variety, as in `DELETE /orders/amo/{order_id}`. On 2026-09-15 the order book said
+`AMO` for two after-market orders, but the socket's cancellation updates for the same orders said
+`variety: NORMAL`, so a cancel built from the newest socket update would name the wrong variety. Each
+entry in `stoxkart:orders:orders` therefore carries a top-level `variety` beside `data`. The poller
+copies the order book row's variety, and `bin/stoxkart/order_updates` keeps an `AMO` or `BO` variety
+already stored, reads `AMO` from a status starting with `AMO`, and uses the update's own variety only
+otherwise.
+
 ## The candle queue
 
 **The backward walk has to finish before any forward fill.** Preferring a forward fill whenever

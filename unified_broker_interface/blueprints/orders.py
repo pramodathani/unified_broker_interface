@@ -981,6 +981,7 @@ class OrdersBlueprint(BaseBlueprint):
                 'X-Platform': 'api',
                 'X-Api-Key': str(chosen_settings['api_key']),
                 'X-Access-Token': login_token,
+                'X-Algo-Id': '99999',
             }
             request_json = {
                 'exchange': exchange_codes[
@@ -997,7 +998,7 @@ class OrdersBlueprint(BaseBlueprint):
                 'stop_loss_price': trigger_price_text,
                 'trailing_stop_loss': '0',
                 'validity': validity,
-                'algo_id': '0',
+                'algo_id': '99999',
             }
             if tag:
                 request_json['tag'] = tag
@@ -1717,7 +1718,7 @@ class OrdersBlueprint(BaseBlueprint):
             shown_form = request_data
 
         elif chosen_broker == 'stoxkart':
-            variety = str(order_data.get('variety') or 'normal').lower()
+            variety = str(entry.get('variety') or order_data.get('variety') or 'normal').lower()
             request_method = 'DELETE'
             request_url = (
                 f'https://openapi.stoxkart.com/orders/{variety}/{order_id}'
@@ -1727,6 +1728,7 @@ class OrdersBlueprint(BaseBlueprint):
                 'X-Platform': 'api',
                 'X-Api-Key': str(broker_settings['api_key']),
                 'X-Access-Token': login_token,
+                'X-Algo-Id': '99999',
             }
 
         elif chosen_broker == 'wisdom_capital':

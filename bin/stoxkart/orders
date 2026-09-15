@@ -9,24 +9,24 @@ Calls `GET https://openapi.stoxkart.com/reports/order-book` through `StoxkartAPI
 
 **One key for orders.** `stoxkart:orders:orders` is a hash keyed by Stoxkart's `order_id`. It is written by two scripts: this poller, and `bin/stoxkart/order_updates`, which merges each update from Stoxkart's order websocket into the same hash. Every value is
 
-    {"observed_at": <epoch>, "source": "rest" | "websocket", "order": <normalized order>, "data": <Stoxkart's own order>}
+    {"observed_at": <epoch>, "source": "rest" | "websocket", "order": <normalized order>, "data": <Stoxkart's own order>, "variety": <the order's variety>}
 
-`data` is the order-book row exactly as Stoxkart sent it, including its `variety` (`NORMAL`, `AMO` or `BO`), which the REST API's cancel endpoint uses to build the cancellation URL. `order` is built from it:
+`data` is the order-book row exactly as Stoxkart sent it. `variety` is the row's `variety` (`NORMAL`, `AMO` or `BO`) uppercased, which the REST API's cancel endpoint builds the cancellation URL from; it sits beside `data` because Stoxkart's order socket reports `NORMAL` for after-market orders, and `bin/stoxkart/order_updates` keeps the variety the order book gave. `order` is built from it:
 
 | field | from Stoxkart |
 | --- | --- |
-| `order_id`, `exchange_order_id`, `parent_order_id` | `order_id`, `exch_order_id`, `parent_order_id` |
+| `order_id`, `exchange_order_id`, `parent_order_id` | `order_id`, `exch_order_id`, `parent_order_id`, with `0` read as not yet assigned |
 | `status`, `status_message` | `status` on the shared vocabulary, `reason` |
 | `id`, `instrument_token`, `tradingsymbol`, `exchange` | `exchange:tradingsymbol`, `token`, `symbol_description` for a future or option whose description begins with its symbol, is longer, has no space and carries a digit, and `symbol` otherwise, `exchange` |
 | `transaction_type`, `product`, `order_type`, `validity` | `action`, `product_type`, `order_type`, `validity`, on the shared vocabulary |
 | `quantity`, `filled_quantity`, `pending_quantity`, `disclosed_quantity` | `quantity`, `traded_quantity`, `pending_quantity`, `disclose_quantity` |
 | `cancelled_quantity` | null, because Stoxkart does not send one |
 | `price`, `trigger_price`, `average_price` | `price`, `trigger_price`, `trade_average_price` |
-| `order_timestamp` | `order_date_time`, `DD-MM-YYYY HH:MM:SS` in India time, as ISO with the IST offset |
+| `order_timestamp` | `order_date_time`, `DD-Mon-YYYY HH:MM:SS` in India time (`DD-MM-YYYY` in Stoxkart's documentation), as ISO with the IST offset |
 | `exchange_timestamp` | null, because Stoxkart does not send one |
 | `tag` | `tag` |
 
-The shared vocabulary puts status on `PENDING`, `OPEN`, `COMPLETE`, `CANCELLED`, `REJECTED` and `EXPIRED`, and passes an unknown term through uppercased. Stoxkart's documentation shows `order_type` as `RL` and `product_type` as `BRACKET ORDER`, so those spellings and Stoxkart's own order-placement words are in the tables. No populated order book had been seen by 2026-09-15, so the field names come from Stoxkart's documentation and are unconfirmed.
+The shared vocabulary puts status on `PENDING`, `OPEN`, `COMPLETE`, `CANCELLED`, `REJECTED` and `EXPIRED`, and passes an unknown term through uppercased. Stoxkart's documentation shows `order_type` as `RL` and `product_type` as `BRACKET ORDER`, so those spellings and Stoxkart's own order-placement words are in the tables. The field names were confirmed against three rejected KWIL orders in the live order book on 2026-09-15, whose `status` was `REJECTED`, `order_type` `LIMIT`, `product_type` `DELIVERY` and `instrument_type` `EQUITY`, and two after-market KWIL orders the same evening, whose `variety` was `AMO` and `status` `AMO PENDING`, then `AMO CANCELLED` once cancelled; filled and open orders have not been seen yet.
 
 **Which write wins.** A row from this poller replaces an entry only when that entry was observed before this poll's request was sent. The check and the write run together in Redis, as one script. `observed_at` of a polled row is the moment its request was sent, so an update the websocket delivered while the request was in flight is never overwritten by the older snapshot.
 
@@ -148,6 +148,7 @@ class StoxkartOrderNormalizer:
         "TRANSIT": "PENDING",
         "TRIGGER PENDING": "PENDING",
         "AMO REQ RECEIVED": "PENDING",
+        "AMO PENDING": "PENDING",
         "AFTER MARKET ORDER REQ RECEIVED": "PENDING",
         "O-PENDING": "PENDING",
         "OPEN": "OPEN",
@@ -167,6 +168,7 @@ class StoxkartOrderNormalizer:
         "CANCELLED": "CANCELLED",
         "CANCELED": "CANCELLED",
         "CANCEL": "CANCELLED",
+        "AMO CANCELLED": "CANCELLED",
         "REJECTED": "REJECTED",
         "REJECT": "REJECTED",
         "FAILED": "REJECTED",
@@ -197,8 +199,8 @@ class StoxkartOrderNormalizer:
 
         return {
             "order_id": self._text(row.get("order_id")),
-            "exchange_order_id": self._text(row.get("exch_order_id")),
-            "parent_order_id": self._text(row.get("parent_order_id")),
+            "exchange_order_id": self._identifier(row.get("exch_order_id")),
+            "parent_order_id": self._identifier(row.get("parent_order_id")),
             "status": self._vocabulary(row.get("status"), self.STATUSES),
             "status_message": self._text(row.get("reason")),
             "id": instrument_name,
@@ -278,6 +280,20 @@ class StoxkartOrderNormalizer:
             return None
         return text
 
+    def _identifier(self, value):
+        """Returns an order id, treating Stoxkart's `0` for an id not yet assigned as missing.
+
+        Args:
+            value (object): The raw field value.
+
+        Returns:
+            str | None: The id, or None when it is missing, blank, `NA` or `0`.
+        """
+        text = self._text(value)
+        if text == "0":
+            return None
+        return text
+
     def _decimal(self, value):
         """Returns a value as a float.
 
@@ -313,7 +329,7 @@ class StoxkartOrderNormalizer:
         """Converts a Stoxkart order time into an ISO timestamp with the IST offset.
 
         Args:
-            value (object): The time as Stoxkart sent it, such as `16-02-2023 17:15:37`.
+            value (object): The time as Stoxkart sent it, such as `15-Sep-2026 15:40:40` in the live order book or `16-02-2023 17:15:37` in the documentation.
 
         Returns:
             str | None: The ISO timestamp, or None when the value is missing or in no known format.
@@ -321,7 +337,7 @@ class StoxkartOrderNormalizer:
         text = self._text(value)
         if text is None:
             return None
-        for pattern in ("%d-%m-%Y %H:%M:%S", "%d/%m/%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+        for pattern in ("%d-%b-%Y %H:%M:%S", "%d-%m-%Y %H:%M:%S", "%d/%m/%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
             try:
                 moment = datetime.strptime(text, pattern)
             except ValueError:
@@ -415,6 +431,7 @@ class StoxkartOrdersPoller:
                 "source": "rest",
                 "order": order,
                 "data": row,
+                "variety": self._variety(row),
             }
             arguments.append(order["order_id"])
             arguments.append(json.dumps(entry))
@@ -422,6 +439,20 @@ class StoxkartOrdersPoller:
         written = self._merge(keys=[REDIS_KEY], args=arguments)
         self.cache.set(POLLED_KEY, repr(requested_at), exat=expires_at)
         return written
+
+    def _variety(self, row):
+        """Returns the order book row's variety, which the REST API's cancel endpoint builds Stoxkart's cancel path from.
+
+        Args:
+            row (dict): One row of Stoxkart's order book.
+
+        Returns:
+            str | None: The variety uppercased, such as `NORMAL` or `AMO`, or None when the row names none.
+        """
+        variety = str(row.get("variety") or "").strip().upper()
+        if variety:
+            return variety
+        return None
 
     def _next_reset(self):
         """Returns the epoch of the next 06:00 in India, when the order hash expires.
