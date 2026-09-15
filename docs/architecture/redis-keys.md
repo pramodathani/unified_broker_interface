@@ -221,6 +221,7 @@ does not fail the run; the API reads the unified tables until the next warm succ
 | `unified:catalogue:<date>:identity` | hash | `instrument_id` | That instrument's exchange, segment, shape and identity fields |
 | `unified:catalogue:<date>:tokens:<broker>` | hash | broker token | The `instrument_id` that token resolves to |
 | `unified:catalogue:<date>:order_handles` | hash | `instrument_id` | What a broker needs to place an order on it |
+| `unified:catalogue:<date>:contract_sizes` | hash | `instrument_id` | A currency or commodity contract's `units_per_lot`, `status` and `tradeable`, copied from `unified.contract_sizes` |
 | `unified:catalogue:<date>:catalogue:<segment>` | sorted set, scores 0 | lexical | `NAME\|expiry\|strike\|option_type\|instrument_id` per instrument |
 | `unified:catalogue:<date>:names:<segment>` | sorted set, scores 0 | lexical | The segment's distinct symbols or underlyings |
 | `unified:catalogue:<date>:seen` | hash | `instrument_id` | `first_seen_date\|last_seen_date` |

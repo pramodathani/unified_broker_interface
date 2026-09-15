@@ -15,7 +15,7 @@ in Redis as `unified:instruments` and `unified:broker_mappings`.
     redis-cli HGET unified:instrument_symbols nse_equities:RELIANCE
     redis-cli GET unified:mapping:meta
 
-Each run does four things, in order; `--cache-only` does only the last two, for a date already mapped.
+Each run does five things, in order; `--cache-only` does only the last three, for a date already mapped.
 
 **1. Tables.** The DDL under `stock_brokers/instruments/mapping/utilities/sql/ddl` is applied - every statement is safe
 to run again - which creates the `unified` schema and its two tables the first time. `unified.broker_mappings` is a
@@ -30,7 +30,13 @@ cleanly, stale duplicate instruments are merged away, unless `--skip-collisions`
 already in `unified.broker_mappings` is refused: mapping an older date on top of newer data leaves seen dates and index
 names resolved in the wrong order, and a backfill has to start from empty tables instead.
 
-**3. Cache.** The mapped date's rows are written to Redis, whether or not every broker mapped:
+**3. Contract sizes.** `stock_brokers/instruments/mapping/utilities/contract_sizes.py` decides how many quotation units
+one lot of every live currency and commodity derivative is, from the contract size fields several brokers' snapshots
+carry, and writes each decision, its status and every source's figure to `unified.contract_sizes` for the date. An
+order on such a contract reads only that decision. A failure is logged and does not fail the run; orders on those
+contracts are then refused, because the warm finds no decision for them.
+
+**4. Cache.** The mapped date's rows are written to Redis, whether or not every broker mapped:
 
 - `unified:instruments`, a hash of every instrument mapped on the date, keyed by `instrument_id`, each value a JSON
   array in the order `columns.instruments` in the meta gives: `exchange`, `segment`, `shape`, `symbol`,
@@ -49,9 +55,9 @@ Dates are ISO strings and numbers JSON numbers. All four hashes are built under 
 the meta, so a reader sees yesterday's complete cache or today's, never a mix; the previous hashes are unlinked in the
 background. For today's date that is about half a million instruments and two million mappings.
 
-**4. The REST API's catalogue.** The REST API's instrument routes read the mapping cache in
+**5. The REST API's catalogue.** The REST API's instrument routes read the mapping cache in
 `stock_brokers/instruments/mapping/utilities/cache.py` - identities, each broker's tokens, order handles, and a
-browsable catalogue per segment - so it is warmed for the date from the unified tables, under `unified:catalogue:`,
+browsable catalogue per segment, and the contract size decisions - so it is warmed for the date from the unified tables, under `unified:catalogue:`,
 and every other date's keys there are cleared. A warm that fails is logged and does not fail the run: the API reads the
 unified tables until the next warm succeeds.
 
@@ -222,6 +228,29 @@ def write_cache(cache, connect, mapping_date, logger):
     logger.info(f"Cached {mapping_date}: " + ", ".join(f"{count:,} in {key}" for key, count in counts.items()) + ".")
     return counts
 
+def decide_contract_sizes(mapping_date, logger):
+    """
+    Decide the date's currency and commodity contract sizes, and say whether it worked.
+
+    - `mapping_date` is the date to decide.
+    - `logger` is where the summary and any failure are reported.
+    """
+    from stock_brokers.instruments.mapping.utilities.contract_sizes import ContractSizeResolver
+
+    try:
+        summary = ContractSizeResolver().run(mapping_date)
+    except Exception as exception:
+        logger.error(f"Could not decide contract sizes: {type(exception).__name__}: {exception}")
+        return False
+    totals = {}
+    for (segment, status, tradeable), count in summary.items():
+        totals[status] = totals.get(status, 0) + count
+    logger.info(f"Contract sizes for {mapping_date}: {totals}")
+    for (segment, status, tradeable), count in sorted(summary.items()):
+        if status in ("conflict", "no_source") or (status == "single_source" and not tradeable):
+            logger.warning(f"  {count} {segment} contract(s) are not tradeable: {status}")
+    return True
+
 def warm_catalogue(mapping_date, logger):
     """
     Warm the REST API's mapping cache for the date from the unified tables, and say whether it worked.
@@ -275,6 +304,7 @@ def main():
         if cached is None:
             logger.error(f"Nothing is mapped on {mapping_date}, so the cache was left as it was.")
             return 1
+        decide_contract_sizes(mapping_date, logger)
         warm_catalogue(mapping_date, logger)
         return 0
 
@@ -296,6 +326,8 @@ def main():
         # The daily job expects today's snapshots; none at all usually means the downloads did not run.
         logger.error(f"No broker has instrument rows stored for {mapping_date}; nothing was mapped. "
                      f"Download the instruments first, with bin/<broker>/instruments.")
+    if results:
+        decide_contract_sizes(mapping_date, logger)
 
     try:
         cached = write_cache(get_cache(), get_postgres, mapping_date, logger)

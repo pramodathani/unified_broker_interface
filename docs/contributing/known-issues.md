@@ -65,17 +65,27 @@ INDmoney answers it `403`; no block has been seen, but a broker's firewall react
 is off unless `UNIFIED_BROKER_INTERFACE_API_ORDER_WARM_BROKERS` names the broker.
 
 **No broker takes currency or commodity orders yet.** `POST /api/orders/place` accepts orders in every
-segment on NSE, BSE, MCX and NCDEX except indices and uncategorised instruments, but each broker's order
-class lists only NSE and BSE securities in its `MARKETS`, so a currency or commodity order is answered `503`
-with every broker skipped. The order API's quantity unit has not been confirmed for any broker in those
-markets, and the brokers' own lot sizes show they do not agree. On 2026-09-15 the October 2026 CRUDEOIL
-future had a lot size of 1 at Dhan, Fyers, Wisdom Capital and Zerodha and 100 at Flattrade, Groww, Kotak,
-Shoonya and Stoxkart, and the October GOLD future 1 everywhere except Groww, at 100. The route's `quantity`
-is in units, as the contracts require, so the lot-size check against the chosen broker's own `lot_size`
-would pass 100 barrels at a broker whose lot is 1, and a broker whose order API counts lots would read it as
-100 lots. Opening a market needs, per broker, the exchange or segment code its order API uses there, whether
-it counts quantity in units or lots, and, for lots, a units-per-lot figure that does not depend on the
-broker's own convention, which the mapping does not publish yet.
+segment on NSE, BSE, MCX and NCDEX except indices and uncategorised instruments, and takes a currency or
+commodity contract's lot size from the morning's `unified.contract_sizes` decision. No broker's order class
+lists those markets in `MARKETS` and `QUANTITY_UNITS` yet, so such an order is answered `503` with every broker
+skipped. What each broker's order API expects in its quantity field there - lots, quotation units, or lots times
+its own lot size - is being confirmed from its API documentation and then with one small order per broker. The
+brokers' own lot sizes show why it matters: on 2026-09-15 the October CRUDEOIL future had a lot size of 1 at Dhan,
+Fyers, Wisdom Capital and Zerodha and 100 at Flattrade, Groww, Kotak, Shoonya and Stoxkart.
+
+**BSE currencies and NCDEX trust Stoxkart's lot size alone.** No other broker's instrument file lists them, and on
+2026-09-15 the user chose to trade them on Stoxkart's figure rather than keep them closed. Stoxkart's NCDEX lot sizes
+(JEERAUNJHA 3, GUARSEED10 5) may be in the exchange's trading unit, tonnes, rather than the quotation unit, quintals,
+which has not been checked; if so, a `quantity` in quintals would be read as ten times too many lots.
+
+**Some contract sizes are conflicts every day.** On 2026-09-15 Kotak gave the 12 NSE SILVER100 futures a contract
+size of 100 where Wisdom Capital and Groww gave 1, and Stoxkart gave 9 NSE GBPINR and JPYINR options 2000 where Kotak
+and Shoonya gave 1000. Those contracts are refused until the sources agree.
+
+**Flattrade rounds currency option strikes, which splits some contracts in two.** Flattrade lists NSE USDINR strikes
+to two decimals (95.88 for the exchange's 95.875), so the mapping computes a different `instrument_id` from the
+other brokers' and 302 NSE currency options on 2026-09-15 were carried by Flattrade alone. They have no contract size
+source and are refused.
 
 **Placing an order is confirmed live at every broker, but no Stoxkart order has filled yet.** On
 2026-09-15 one-share NSE CNC limit buys were sent through `POST /api/orders/place`, and Dhan, Flattrade,

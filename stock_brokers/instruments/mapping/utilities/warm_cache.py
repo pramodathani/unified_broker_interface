@@ -14,6 +14,8 @@ Every field written goes through the same ``MappingRedisTier`` the cache reads t
 import argparse
 import datetime
 
+from sqlalchemy.exc import ProgrammingError
+
 from stock_brokers.instruments.mapping.utilities.cache import MappingPostgresTier, MappingRedisTier
 from stock_brokers.instruments.mapping.utilities.segments import MAPPED_BROKERS
 
@@ -138,6 +140,30 @@ class CacheWarmer:
         written += self.redis_tier.write_fields(key, fields, self.expiry_seconds)
         return written
 
+    def warm_contract_sizes(self):
+        """
+        Write every contract size decision for the date, keyed by instrument id.
+
+        The decisions are made in `contract_sizes.py` straight after the mapping, and an order on a currency or commodity derivative reads only this hash for its lot size. A database without the table yet, because its DDL has not been applied, writes nothing, and such orders are refused until it has been.
+
+        Returns:
+            int: The number of decisions written.
+        """
+        key = self.redis_tier.contract_sizes_key(self.mapping_date)
+        written = 0
+        fields = {}
+        try:
+            for instrument_identifier, units_per_lot, status, tradeable in self.postgres_tier.stream_contract_sizes(self.mapping_date):
+                fields[instrument_identifier] = self.redis_tier.encode_contract_size(units_per_lot, status, tradeable)
+                if len(fields) >= self.WRITE_BATCH_FIELDS:
+                    written += self.redis_tier.write_fields(key, fields, self.expiry_seconds)
+                    fields = {}
+        except ProgrammingError as error:
+            print(f"  contract sizes could not be read, so none were warmed: {error.orig}")
+            return written
+        written += self.redis_tier.write_fields(key, fields, self.expiry_seconds)
+        return written
+
     def warm_catalogue(self):
         """
         Write the lookup indexes a caller browsing or searching the instruments needs.
@@ -189,7 +215,7 @@ class CacheWarmer:
             clear (bool): Whether to delete the cached keys of every other date.
 
         Returns:
-            dict: The counts written, with keys "identities", "tokens", "instruments", "catalogued" and "cleared".
+            dict: The counts written, with keys "identities", "tokens", "instruments", "contract_sizes", "catalogued" and "cleared".
 
         Raises:
             SystemExit: If Redis cannot be reached.
@@ -212,6 +238,9 @@ class CacheWarmer:
         instruments = self.warm_order_handles()
         print(f"  order handles             {instruments:>10}")
 
+        contract_sizes = self.warm_contract_sizes()
+        print(f"  contract sizes            {contract_sizes:>10}")
+
         catalogued = self.warm_catalogue()
         print(f"  catalogue                 {catalogued:>10}")
 
@@ -229,6 +258,7 @@ class CacheWarmer:
             "identities": identities,
             "tokens": tokens,
             "instruments": instruments,
+            "contract_sizes": contract_sizes,
             "catalogued": catalogued,
             "cleared": cleared,
         }

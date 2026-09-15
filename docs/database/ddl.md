@@ -44,7 +44,7 @@ file at a time, each file executed in one transaction by the script that needs i
 | Directory | Files | Applied by |
 | --- | --- | --- |
 | `stock_brokers/instruments/sql/ddl` | `000_schemas.sql`, `010` to `100` - the ten broker schemas and their `instruments` tables | `python -m stock_brokers.instruments.sql.apply_ddl` |
-| `stock_brokers/instruments/mapping/utilities/sql/ddl` | `100_unified_schema.sql`, `110_unified_instruments.sql`, `120_unified_broker_mappings.sql` | `bin/unified/map_instruments` and `bin/unified/historical_prices` on every run, or `python -m stock_brokers.instruments.mapping.utilities.sql.apply_ddl` |
+| `stock_brokers/instruments/mapping/utilities/sql/ddl` | `100_unified_schema.sql`, `110_unified_instruments.sql`, `120_unified_broker_mappings.sql`, `130_unified_contract_sizes.sql` | `bin/unified/map_instruments` and `bin/unified/historical_prices` on every run, or `python -m stock_brokers.instruments.mapping.utilities.sql.apply_ddl` |
 | `stock_brokers/instruments/historical/utilities/sql/ddl` | `000` to `060` - each broker's `price_history` and `price_history_progress`; `200` to `250` - the unified price history | `bin/unified/historical_prices` on every run, or `python -m stock_brokers.instruments.historical.utilities.sql.apply_ddl` |
 | `stock_brokers/instruments/ticks/utilities/sql/ddl` | `010` to `100` - each broker's stream tables; `300` to `330` - `unified.ticks`, `unified.order_updates`, `unified.positions` and `unified.ticks_adjusted` | One file at a time, by the scripts that write the tables - see below |
 
@@ -83,7 +83,8 @@ Within the mapping directory the prefixes carry a hard dependency of their own, 
 stock_brokers/instruments/mapping/utilities/sql/ddl/
 ├── 100_unified_schema.sql              the schema for data that belongs to no single broker
 ├── 110_unified_instruments.sql         one row per real-world instrument
-└── 120_unified_broker_mappings.sql     each broker's token for it, per day
+├── 120_unified_broker_mappings.sql     each broker's token for it, per day
+└── 130_unified_contract_sizes.sql      each currency and commodity contract's decided lot size, per day
 ```
 
 ## Every statement is re-runnable

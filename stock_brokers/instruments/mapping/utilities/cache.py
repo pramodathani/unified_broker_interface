@@ -224,6 +224,41 @@ class MappingRedisTier:
         """
         return f"{self.KEY_PREFIX}{mapping_date.isoformat()}:order_handles"
 
+    def contract_sizes_key(self, mapping_date):
+        """
+        The key of the hash holding one date's contract size decisions, keyed by instrument id.
+
+        Args:
+            mapping_date (datetime.date): The mapping date the hash covers.
+
+        Returns:
+            str: The full key.
+        """
+        return f"{self.KEY_PREFIX}{mapping_date.isoformat()}:contract_sizes"
+
+    def encode_contract_size(self, units_per_lot, status, tradeable):
+        """
+        Encode one contract size decision as the JSON the order route reads.
+
+        The size is kept as text, as lot sizes are in order handles, so it survives the round trip exactly.
+
+        Args:
+            units_per_lot (decimal.Decimal | None): Quotation units per lot, or None when undecided.
+            status (str): The decision's status.
+            tradeable (bool): Whether orders may be sent.
+
+        Returns:
+            str: The JSON text.
+        """
+        size_text = None
+        if units_per_lot is not None:
+            size_text = format(decimal.Decimal(units_per_lot).normalize(), "f")
+        return json.dumps({
+            "units_per_lot": size_text,
+            "status": status,
+            "tradeable": bool(tradeable),
+        })
+
     def segments_key(self, mapping_date):
         """
         The key of the hash holding how many instruments each segment has on one date.
@@ -1167,6 +1202,25 @@ class MappingPostgresTier:
         with self.streaming_connection() as connection:
             for row in connection.execute(statement, {"mapping_date": mapping_date}):
                 yield str(row.instrument_id), row.broker, self.handle_from_row(row)
+
+    def stream_contract_sizes(self, mapping_date):
+        """
+        Yield every contract size decision for the date.
+
+        Args:
+            mapping_date (datetime.date): The mapping date to read.
+
+        Yields:
+            tuple: The instrument id as text, the units per lot, the status and whether the contract is tradeable.
+        """
+        statement = text(
+            "SELECT instrument_id, units_per_lot, status, tradeable "
+            f"FROM {tables.CONTRACT_SIZES} "
+            "WHERE mapping_date = :mapping_date"
+        )
+        with self.streaming_connection() as connection:
+            for row in connection.execute(statement, {"mapping_date": mapping_date}):
+                yield str(row.instrument_id), row.units_per_lot, row.status, row.tradeable
 
     def stream_catalogue(self, mapping_date):
         """

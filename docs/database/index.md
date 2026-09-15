@@ -22,6 +22,7 @@ its own, `unified`, starting with the two tables of the
 | --- | --- |
 | `unified.instruments` | One row per real-world instrument, whoever lists it |
 | `unified.broker_mappings` | The token each broker uses for that instrument, per day |
+| `unified.contract_sizes` | Each live currency and commodity contract's lot size in quotation units, how it was decided and whether orders may be sent, per day |
 
 `unified.broker_mappings` does carry a `broker` column, and that is its content rather than a
 violation: the whole purpose of the row is to join a shared instrument to one broker's own

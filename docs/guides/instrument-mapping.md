@@ -170,6 +170,40 @@ ever deleted - master rows are not.
 
 A run covering a subset of brokers skips this step, since one broker cannot vote on itself.
 
+## Contract sizes
+
+Straight after the mapping and the duplicate merge, `bin/unified/map_instruments` decides how many quotation units
+one lot of every live currency and commodity derivative is, and writes each decision to `unified.contract_sizes`
+for the date. The brokers' own `lot_size` figures cannot be compared on these markets, because each broker counts a
+lot in its own unit: on MCX, GOLD's lot is 1 at Zerodha (one lot), 1 at Kotak (one kilogram) and 100 at Groww
+(quotation units of 10 grams). Several brokers' instrument files also carry the exchange's contract size, and
+[`contract_sizes.py`][stock_brokers.instruments.mapping.utilities.contract_sizes] reads those as independent
+sources:
+
+| Source | Read on | Figure |
+| --- | --- | --- |
+| Wisdom Capital | `MCXFO`, `NSECO` | `multiplier` |
+| Kotak | `mcx_fo`, `nse_com`, `cde_fo` | `llotsize` × `lmultiplier` (when positive) × `dgennum` ÷ `dgenden` |
+| Groww | `COMMODITY` | `lot_size` |
+| Shoonya | `CDS` | `lotsize` × `multiplier` |
+| Stoxkart | `NSECD`, `BSECD`, `NCDEX` | `lot_size` |
+
+| Status | Meaning | Tradeable |
+| --- | --- | --- |
+| `confirmed` | At least two sources give a size, and every one gives the same | yes |
+| `single_source` | Exactly one source gives a size | only on BSE currencies and NCDEX, where Stoxkart is the only broker listing them |
+| `conflict` | The sources disagree | no |
+| `no_source` | No source gives a size | no |
+
+On 2026-09-15 every live MCX contract that any source covered was confirmed (15,887), as were 24,969 NSE commodity and
+11,064 NSE currency contracts; 12 SILVER100 futures and 9 GBPINR and JPYINR options were conflicts, and BSE
+currencies (13,089) and NCDEX (1,918) were single-source. The warm copies the decisions to Redis, and
+`POST /api/orders/place` reads only them for a currency or commodity contract's lot size. To decide a date again:
+
+```bash
+python -m stock_brokers.instruments.mapping.utilities.contract_sizes --date 2026-09-15
+```
+
 ## Checking a run
 
 ```bash

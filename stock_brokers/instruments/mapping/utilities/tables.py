@@ -13,6 +13,8 @@ MASTER = "unified.instruments"
 # The dated table of which token each broker uses for each instrument.
 BROKER_MAPPINGS = "unified.broker_mappings"
 
+CONTRACT_SIZES = "unified.contract_sizes"
+
 # The prefix of every Redis key the mapping cache keeps for these tables. Not `unified:mapping:`, because the cache's
 # warm deletes every key under its prefix but the current date's, and `unified:mapping:meta` belongs to
 # bin/unified/map_instruments' own cache.

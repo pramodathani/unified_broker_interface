@@ -1,6 +1,6 @@
 # Test runs
 
-`test_runs/` holds the manual scripts: four offline suites, the instrument download runner, the REST API
+`test_runs/` holds the manual scripts: five offline suites, the instrument download runner, the REST API
 test page, and a login check against the live brokers.
 
 !!! warning "`broker_login_test.py` logs in to live broker accounts"
@@ -38,8 +38,13 @@ test page, and a login check against the live brokers.
     accepted. It takes about 40 seconds and sends nothing beyond the machine. Run it after touching
     `broker_orders/base.py`, `connection_pool.py` or `connection_warmer.py`.
 
+    **`contract_sizes.py`** - the rule that decides whether a currency or commodity contract's size is trusted,
+    run on made-up source figures. Run it after touching
+    `stock_brokers/instruments/mapping/utilities/contract_sizes.py`.
+
     ```bash
     python -m test_runs.candle_parse
+    python -m test_runs.contract_sizes
     python -m test_runs.unified_ticks_sessions
     python -m test_runs.connection_warming
     python -m test_runs.order_routes
