@@ -1,6 +1,6 @@
 # Test runs
 
-`test_runs/` holds the manual scripts: two offline suites, the instrument download runner, the REST API
+`test_runs/` holds the manual scripts: three offline suites, the instrument download runner, the REST API
 test page, and a login check against the live brokers.
 
 !!! warning "`broker_login_test.py` logs in to live broker accounts"
@@ -23,9 +23,19 @@ test page, and a login check against the live brokers.
     publications state. Needs no Redis, no database and no broker. Run it after adding or amending a
     year's calendar.
 
+    **`order_routes.py`** - `POST /api/orders/place` and `DELETE /api/orders/cancel` run in-process against an
+    in-memory stand-in for Redis, with every broker call answered by a stub. Each of its 440 scenarios keeps the
+    HTTP status, the response body, every request that would have reached a broker, headers included, and the
+    number of Redis round trips, and the suite compares them with `test_runs/fixtures/order_routes.jsonl`. It
+    sends nothing to a broker and needs no Redis, but importing the API reads `.env`. Run it after touching the
+    order routes; after an intended change, `--record` rewrites the recording, and the diff of that file is the
+    change to review.
+
     ```bash
     python -m test_runs.candle_parse
     python -m test_runs.unified_ticks_sessions
+    python -m test_runs.order_routes
+    python -m test_runs.order_routes --record   # after an intended change
     ```
 
 === "Safe - infrastructure"
