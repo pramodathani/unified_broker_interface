@@ -128,6 +128,13 @@ is the previous close and which timestamps are true. See [Unified scripts](../gu
   timestamps - registered in `NORMALIZERS` in `ticks/utilities/registry.py` and placed in the priority order
   in `ticks/utilities/sources.py`; then `broker_quotes/<broker>.py`, added to `SOURCES` only once its quotes
   have been checked against live quotes and against Zerodha on the same instruments.
+- For placing and cancelling orders, `unified_broker_interface/utilities/broker_orders/<broker>.py` with a
+  [`BrokerOrders`][unified_broker_interface.utilities.broker_orders.base.BrokerOrders] subclass: its
+  `MARKETS` with each market's exchange or segment code, the settings each request needs, its place and
+  cancel requests and how it reads a success answer. Add it to `BROKER_ORDER_CLASSES` in
+  `broker_orders/utilities/registry.py`, whose order is the round robin's turn order, and add a dry run and
+  a sent order for it to `test_runs/order_routes.py` before recording. List a market only once the broker's
+  order API has been confirmed to take it and to count quantity in units there.
 
 ## 9. Documentation
 
