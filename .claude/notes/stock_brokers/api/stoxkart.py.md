@@ -34,4 +34,4 @@ The login page's JavaScript points its API client at `https://preprod-openapi.st
 
 ## The account seen on 2026-09-15
 
-`/funds` returned a cash balance of exactly 10000.0 with nothing used, and the app is registered as `Test1234` with `https://www.google.com` as its redirect address. Whether this is the real trading account or a test account had not been confirmed when the login was fixed.
+`/funds` returned a cash balance of exactly 10000.0 with nothing used, and the app is registered as `Test1234` with `https://www.google.com` as its redirect address. The account holder confirmed that exactly 10,000 rupees had been added to the account, so this is the real trading account despite the app's test-like name.
