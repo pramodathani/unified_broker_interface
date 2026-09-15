@@ -7,9 +7,9 @@
 
 Calls `GET https://openapi.stoxkart.com/reports/order-book` through `StoxkartAPI`, which logs in first if the stored session is dead.
 
-**One key for orders.** `stoxkart:orders:orders` is a hash keyed by Stoxkart's `order_id`. At the other brokers it is written by two scripts, the REST poller and `order_updates`; Stoxkart's API streams no order updates, so this poller is its only writer. Stoxkart delivers order status only to a postback URL registered on the API app, which needs a public web server. Every value is
+**One key for orders.** `stoxkart:orders:orders` is a hash keyed by Stoxkart's `order_id`. It is written by two scripts: this poller, and `bin/stoxkart/order_updates`, which merges each update from Stoxkart's order websocket into the same hash. Every value is
 
-    {"observed_at": <epoch>, "source": "rest", "order": <normalized order>, "data": <Stoxkart's own order>}
+    {"observed_at": <epoch>, "source": "rest" | "websocket", "order": <normalized order>, "data": <Stoxkart's own order>}
 
 `data` is the order-book row exactly as Stoxkart sent it, including its `variety` (`NORMAL`, `AMO` or `BO`), which the REST API's cancel endpoint uses to build the cancellation URL. `order` is built from it:
 
@@ -17,7 +17,7 @@ Calls `GET https://openapi.stoxkart.com/reports/order-book` through `StoxkartAPI
 | --- | --- |
 | `order_id`, `exchange_order_id`, `parent_order_id` | `order_id`, `exch_order_id`, `parent_order_id` |
 | `status`, `status_message` | `status` on the shared vocabulary, `reason` |
-| `id`, `instrument_token`, `tradingsymbol`, `exchange` | `exchange:tradingsymbol`, `token`, `symbol_description` for a future or option whose description begins with its symbol and `symbol` otherwise, `exchange` |
+| `id`, `instrument_token`, `tradingsymbol`, `exchange` | `exchange:tradingsymbol`, `token`, `symbol_description` for a future or option whose description begins with its symbol, is longer, has no space and carries a digit, and `symbol` otherwise, `exchange` |
 | `transaction_type`, `product`, `order_type`, `validity` | `action`, `product_type`, `order_type`, `validity`, on the shared vocabulary |
 | `quantity`, `filled_quantity`, `pending_quantity`, `disclosed_quantity` | `quantity`, `traded_quantity`, `pending_quantity`, `disclose_quantity` |
 | `cancelled_quantity` | null, because Stoxkart does not send one |
@@ -28,7 +28,7 @@ Calls `GET https://openapi.stoxkart.com/reports/order-book` through `StoxkartAPI
 
 The shared vocabulary puts status on `PENDING`, `OPEN`, `COMPLETE`, `CANCELLED`, `REJECTED` and `EXPIRED`, and passes an unknown term through uppercased. Stoxkart's documentation shows `order_type` as `RL` and `product_type` as `BRACKET ORDER`, so those spellings and Stoxkart's own order-placement words are in the tables. No populated order book had been seen by 2026-09-15, so the field names come from Stoxkart's documentation and are unconfirmed.
 
-**Which write wins.** A row from this poller replaces an entry only when that entry was observed before this poll's request was sent. The check and the write run together in Redis, as one script. `observed_at` of a polled row is the moment its request was sent. With no second writer this changes nothing today, and it keeps the hash compatible with the other brokers' writers.
+**Which write wins.** A row from this poller replaces an entry only when that entry was observed before this poll's request was sent. The check and the write run together in Redis, as one script. `observed_at` of a polled row is the moment its request was sent, so an update the websocket delivered while the request was in flight is never overwritten by the older snapshot.
 
 **Daily reset.** The hash expires at 06:00 IST, and every write moves that to the next 06:00, so yesterday's orders remain readable overnight. Each successful poll also writes its request time to `stoxkart:orders:orders:polled_at`, expiring with the hash, so an empty order book can be told apart from a poller that is not running.
 
@@ -238,7 +238,9 @@ class StoxkartOrderNormalizer:
         description = self._text(row.get("symbol_description"))
         if not instrument_type.startswith(self.DERIVATIVE_TYPE_PREFIXES) or description is None:
             return symbol
-        if symbol is None or description.startswith(symbol):
+        if symbol is None:
+            return description
+        if description.startswith(symbol) and len(description) > len(symbol) and " " not in description and any(character.isdigit() for character in description):
             return description
         return symbol
 

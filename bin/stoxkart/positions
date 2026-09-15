@@ -115,7 +115,7 @@ class StoxkartInstrumentNames:
     def symbol(self, exchange, token):
         """Looks up the trading symbol of one instrument.
 
-        A future or option whose `symbol_description` begins with its `symbol`, such as `NIFTY26SEPFUT`, is named by that description. A commodity contract's description is only the commodity's name, so its name is built from the symbol, expiry, strike and option type instead, such as `CRUDEOIL21SEP26FUT`. Anything else is named by `symbol`.
+        A future or option whose `symbol_description` already names the contract, such as `NIFTY26SEPFUT`, is named by that description. A commodity contract's description is often only the commodity's name, such as `COPPER` or `GOLD 995`, so its name is built from the symbol, expiry, strike and option type instead, such as `CRUDEOIL21SEP26FUT`. Anything else is named by `symbol`.
 
         Args:
             exchange (str | None): Stoxkart's exchange, such as `NSE` or `NFO`.
@@ -155,10 +155,31 @@ class StoxkartInstrumentNames:
         instrument_type = str(row[columns["instrument_type"]] or "").upper()
         if not symbol or not instrument_type.startswith(self.DERIVATIVE_TYPE_PREFIXES):
             return symbol
-        description = row[columns["symbol_description"]]
-        if description and str(description).startswith(str(symbol)):
+        description = str(row[columns["symbol_description"]] or "")
+        if self._is_contract_name(description, str(symbol)):
             return description
         return self._contract_name(row, columns, symbol)
+
+    def _is_contract_name(self, description, symbol):
+        """Reports whether a master row's description already names the contract.
+
+        A contract name such as `NIFTY26SEPFUT` begins with the symbol, is longer than it, has no spaces and carries the expiry's digits. A commodity description such as `COPPER` or `GOLD 995` fails at least one of those tests.
+
+        Args:
+            description (str): The row's `symbol_description`.
+            symbol (str): The row's `symbol`.
+
+        Returns:
+            bool: True when the description can be used as the trading symbol.
+        """
+        if not description.startswith(symbol) or len(description) <= len(symbol):
+            return False
+        if " " in description:
+            return False
+        for character in description:
+            if character.isdigit():
+                return True
+        return False
 
     def _contract_name(self, row, columns, symbol):
         """Builds a contract name from the symbol, expiry, strike and option type.

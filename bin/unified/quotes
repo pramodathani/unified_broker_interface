@@ -58,8 +58,7 @@ persister. `unified:quotes:stats` holds the counts - received, unresolved, out_o
 written - and `unified:quotes:unresolved` counts each unresolved `broker:token:reason`.
 
 Runs until Ctrl+C or SIGTERM, writing and acknowledging the batch in hand. A Redis that cannot be reached is retried.
-Reads only - it places no orders. Stoxkart's stream is filled by polling Stoxkart's REST quotes about once a second,
-so its ticks trail the other brokers' feeds by up to a second.
+Reads only - it places no orders.
 """
 
 import sys
@@ -751,9 +750,9 @@ class WisdomCapitalNormalizer(Normalizer):
         return FeedKey(instrument_id.strip(), segments)
 
 class StoxkartNormalizer(Normalizer):
-    """Stoxkart's polled REST quotes: `EXCHANGE:TOKEN`; `close` good until the session closes; MCX in lots; last trade time true.
+    """Stoxkart's broadcast feed: `EXCHANGE:TOKEN`; `close` good until the session closes; MCX in lots; both times true on NSE.
 
-    Measured against Zerodha's ticks in the same second on 2026-09-15: `close` was the previous close, NSE volume matched, MCX volume and open interest were lots as at Zerodha, and the last trade time matched to the second. What `close` means after the session has not been seen, so it is trusted only before the session closes.
+    Measured against Zerodha's ticks in the same second on 2026-09-15: `close`, taken from Stoxkart's previous close packet, was the previous close; NSE price, volume, average price, total bid and offered quantity and first depth level matched; MCX volume and open interest were lots as at Zerodha; and the last trade and exchange times matched to the second. Stoxkart sends no MCX exchange time. What `close` means after the session has not been seen, so it is trusted only before the session closes.
     """
     BROKER_NAME = "stoxkart"
     EXCHANGES = {"NSE": (("nse",), "cash_or_index"), "BSE": (("bse",), "cash_or_index"), "NFO": (("nse",), "derivative"),
