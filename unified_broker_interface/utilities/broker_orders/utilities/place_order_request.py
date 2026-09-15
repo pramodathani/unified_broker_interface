@@ -23,8 +23,6 @@ class PlaceOrderRequest(OrderRequest):
     Building one reads nothing but the body, so every check here costs no I/O.
 
     Attributes:
-        PRICED_ORDER_TYPES (list): The order types that need a price.
-        TRIGGERED_ORDER_TYPES (list): The order types that need a trigger price.
         transaction_type (str): `BUY` or `SELL`.
         product (str): `CNC`, `MIS` or `NRML`.
         order_type (str): `MARKET`, `LIMIT`, `SL` or `SL-M`.
@@ -44,16 +42,6 @@ class PlaceOrderRequest(OrderRequest):
         catalogue_segment (str | None): The exchange-prefixed segment to search when the body gave identity fields instead.
         catalogue_prefix (str | None): The catalogue member prefix the identity fields make.
     """
-
-    PRICED_ORDER_TYPES = [
-        'LIMIT',
-        'SL',
-    ]
-
-    TRIGGERED_ORDER_TYPES = [
-        'SL',
-        'SL-M',
-    ]
 
     def __init__(self, body):
         """Validates a request body into an order.
@@ -127,60 +115,6 @@ class PlaceOrderRequest(OrderRequest):
         self.catalogue_prefix = None
         self.parse_instrument(body)
 
-    def parse_choice(self, body, field_name, default, choices):
-        """Reads a field that must be one of a few upper-case words.
-
-        Args:
-            body (dict): The request body.
-            field_name (str): The field's name.
-            default (str | None): The value when the field is absent or empty, or None when the field is required.
-            choices (list): The accepted words.
-
-        Returns:
-            str: The chosen word, upper-cased.
-
-        Raises:
-            InvalidOrderError: When the value is not one of the choices.
-        """
-        value = str(body.get(field_name) or default or '').strip().upper()
-        if value not in choices:
-            message = f'{field_name} must be one of {", ".join(choices)}'
-            raise InvalidOrderError(message)
-        return value
-
-    def parse_whole_number(self, body, field_name, minimum):
-        """Reads a whole-number field.
-
-        Args:
-            body (dict): The request body.
-            field_name (str): The field's name.
-            minimum (int): The smallest accepted value.
-
-        Returns:
-            int | None: The number, or None when the field is absent or empty.
-
-        Raises:
-            InvalidOrderError: When the value is not a whole number of at least the minimum.
-        """
-        raw_value = body.get(field_name)
-        if raw_value is None or raw_value == '':
-            return None
-        try:
-            value = decimal.Decimal(str(raw_value).strip())
-        except decimal.InvalidOperation:
-            value = None
-        if (
-            value is None
-            or not value.is_finite()
-            or value != value.to_integral_value()
-            or value < minimum
-        ):
-            message = (
-                f'{field_name} must be a whole number of at least {minimum}'
-            )
-            raise InvalidOrderError(message)
-        return int(value)
-
     def parse_quantities(self, body):
         """Reads `quantity` and `disclosed_quantity` and checks them against each other.
 
@@ -208,31 +142,6 @@ class PlaceOrderRequest(OrderRequest):
             raise InvalidOrderError(message)
         self.quantity = quantity
         self.disclosed_quantity = disclosed_quantity
-
-    def parse_price(self, body, field_name):
-        """Reads a price field.
-
-        Args:
-            body (dict): The request body.
-            field_name (str): `price` or `trigger_price`.
-
-        Returns:
-            decimal.Decimal | None: The price, or None when the field is absent or empty.
-
-        Raises:
-            InvalidOrderError: When the value is not a finite number of at least 0.
-        """
-        raw_value = body.get(field_name)
-        if raw_value is None or raw_value == '':
-            return None
-        try:
-            value = decimal.Decimal(str(raw_value).strip())
-        except decimal.InvalidOperation:
-            value = None
-        if value is None or not value.is_finite() or value < 0:
-            message = f'{field_name} must be a number of at least 0'
-            raise InvalidOrderError(message)
-        return value
 
     def check_prices_fit_the_order_type(self):
         """Checks that a price and a trigger price are given exactly when the order type needs them.
@@ -416,16 +325,7 @@ class PlaceOrderRequest(OrderRequest):
         Returns:
             str | None: The error message when the quantity is not a whole number of lots, or None.
         """
-        try:
-            lot_size = decimal.Decimal(str(handle.get('lot_size')))
-        except decimal.InvalidOperation:
-            return None
-        if not lot_size.is_finite() or lot_size <= 0:
-            return None
-        if decimal.Decimal(self.quantity) % lot_size == 0:
-            return None
-        lot_text = format(lot_size.normalize(), 'f')
-        return f'quantity must be a whole number of lots of {lot_text}'
+        return self.handle_lot_size_problem(self.quantity, handle)
 
     def contract_lot_problem(self, units_per_lot):
         """Checks the quantity and disclosed quantity against a currency or commodity contract's trusted size.
@@ -436,12 +336,11 @@ class PlaceOrderRequest(OrderRequest):
         Returns:
             str | None: The error message for the first quantity that is not a whole number of lots, or None.
         """
-        lot_text = format(units_per_lot.normalize(), 'f')
-        if decimal.Decimal(self.quantity) % units_per_lot != 0:
-            return f'quantity must be a whole number of lots of {lot_text}'
-        if decimal.Decimal(self.disclosed_quantity) % units_per_lot != 0:
-            return f'disclosed_quantity must be a whole number of lots of {lot_text}'
-        return None
+        quantities = {
+            'quantity': self.quantity,
+            'disclosed_quantity': self.disclosed_quantity,
+        }
+        return self.quantities_off_lot_problem(units_per_lot, quantities)
 
     def with_quantities(self, quantity, disclosed_quantity):
         """A copy of the order carrying quantities in a broker's own terms, for building that broker's request.
@@ -458,40 +357,6 @@ class PlaceOrderRequest(OrderRequest):
         broker_order.disclosed_quantity = disclosed_quantity
         return broker_order
 
-    def agreed_tick_size(self, handles):
-        """Finds the tick size most brokers agree on for the instrument.
-
-        Args:
-            handles (dict): Every broker's order handle, by broker name.
-
-        Returns:
-            decimal.Decimal | None: The tick size with the most brokers behind it, or None when there is none or two sizes tie.
-        """
-        tick_size_counts = {}
-        for broker_handle in handles.values():
-            if not isinstance(broker_handle, dict):
-                continue
-            try:
-                tick_size = decimal.Decimal(str(broker_handle.get('tick_size')))
-            except decimal.InvalidOperation:
-                continue
-            if tick_size.is_finite() and tick_size > 0:
-                count = tick_size_counts.get(tick_size, 0)
-                tick_size_counts[tick_size] = count + 1
-        agreed_tick_size = None
-        highest_count = 0
-        tied = False
-        for tick_size, count in tick_size_counts.items():
-            if count > highest_count:
-                agreed_tick_size = tick_size
-                highest_count = count
-                tied = False
-            elif count == highest_count:
-                tied = True
-        if tied:
-            return None
-        return agreed_tick_size
-
     def tick_size_problem(self, handles):
         """Checks the price and trigger price against the tick size most brokers agree on.
 
@@ -501,17 +366,8 @@ class PlaceOrderRequest(OrderRequest):
         Returns:
             str | None: The error message for the first price that is not a whole number of ticks, or None.
         """
-        agreed_tick_size = self.agreed_tick_size(handles)
-        if agreed_tick_size is None:
-            return None
         prices = {
             'price': self.price,
             'trigger_price': self.trigger_price,
         }
-        for field_name, value in prices.items():
-            if value and value % agreed_tick_size != 0:
-                tick_text = format(agreed_tick_size.normalize(), 'f')
-                return (
-                    f'{field_name} must be a whole number of ticks of {tick_text}'
-                )
-        return None
+        return self.prices_off_tick_problem(handles, prices)

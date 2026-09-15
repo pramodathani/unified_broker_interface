@@ -1,7 +1,5 @@
 """The parameters of `DELETE /api/orders/cancel`, validated."""
 
-import re
-
 from unified_broker_interface.utilities.broker_orders.utilities.order_request import (
     InvalidOrderError,
 )
@@ -43,60 +41,3 @@ class CancelOrderRequest(OrderRequest):
         if raw_dry_run is None:
             raw_dry_run = query_arguments.get('dry_run')
         self.dry_run = self.parse_flag('dry_run', raw_dry_run)
-
-    def parse_order_id(self, body, query_arguments):
-        """Reads the order id.
-
-        Args:
-            body (dict): The request body.
-            query_arguments (werkzeug.datastructures.MultiDict): The query string arguments.
-
-        Returns:
-            str: The order id with surrounding spaces removed.
-
-        Raises:
-            InvalidOrderError: When the order id is missing or is not 1 to 64 letters, digits, hyphens or underscores.
-        """
-        order_id = body.get('order_id')
-        if order_id is None:
-            order_id = query_arguments.get('order_id')
-        if order_id is None or order_id == '':
-            raise InvalidOrderError('order_id is required')
-        if isinstance(order_id, int) and not isinstance(order_id, bool):
-            order_id = str(order_id)
-        if isinstance(order_id, str):
-            order_id = order_id.strip()
-        if not isinstance(order_id, str) or not re.fullmatch(
-            r'[A-Za-z0-9_-]{1,64}',
-            order_id,
-        ):
-            message = (
-                'order_id must be 1 to 64 letters, digits, hyphens or underscores'
-            )
-            raise InvalidOrderError(message)
-        return order_id
-
-    def parse_broker(self, body, query_arguments, broker_names):
-        """Reads the optional broker name.
-
-        Args:
-            body (dict): The request body.
-            query_arguments (werkzeug.datastructures.MultiDict): The query string arguments.
-            broker_names (list): Every broker's name.
-
-        Returns:
-            str | None: The broker name, lower-cased, or None when not given.
-
-        Raises:
-            InvalidOrderError: When the name is not one of the brokers.
-        """
-        requested_broker = body.get('broker')
-        if requested_broker is None:
-            requested_broker = query_arguments.get('broker')
-        if requested_broker is None or requested_broker == '':
-            return None
-        requested_broker = str(requested_broker).strip().lower()
-        if requested_broker not in broker_names:
-            message = 'broker must be one of ' + ', '.join(broker_names)
-            raise InvalidOrderError(message)
-        return requested_broker

@@ -7,7 +7,7 @@ from unified_broker_interface.utilities.broker_orders.utilities.broker_request i
     BrokerRequest,
 )
 from unified_broker_interface.utilities.broker_orders.utilities.stored_order import (
-    CancelNotReadyError,
+    OrderNotReadyError,
 )
 
 
@@ -112,14 +112,14 @@ class GrowwOrders(BrokerOrders):
             BrokerRequest: The request.
 
         Raises:
-            CancelNotReadyError: When the stored order has no segment, as after a websocket update.
+            OrderNotReadyError: When the stored order has no segment, as after a websocket update.
         """
         segment = stored_order.data.get('segment')
         if not segment:
             message = (
                 "Redis does not hold this Groww order's segment yet, so try again after Groww's next order book poll"
             )
-            raise CancelNotReadyError(message)
+            raise OrderNotReadyError(message)
         return BrokerRequest(
             'POST',
             'https://api.groww.in/v1/order/cancel',

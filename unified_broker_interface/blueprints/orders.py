@@ -42,7 +42,7 @@ from unified_broker_interface.utilities.broker_orders.utilities.registry import 
     BROKER_ORDER_CLASSES,
 )
 from unified_broker_interface.utilities.broker_orders.utilities.stored_order import (
-    CancelNotReadyError,
+    OrderNotReadyError,
 )
 from unified_broker_interface.utilities.broker_orders.utilities.stored_order import (
     StoredOrder,
@@ -793,7 +793,7 @@ class OrdersBlueprint(BaseBlueprint):
                 login,
                 settings,
             )
-        except CancelNotReadyError as error:
+        except OrderNotReadyError as error:
             raise self.refuse(
                 str(error),
                 503,
@@ -829,11 +829,11 @@ class OrdersBlueprint(BaseBlueprint):
             },
         }), answer.http_status()
 
-    def find_stored_order(self, cancel_request, order_texts):
+    def find_stored_order(self, order_request, order_texts):
         """Finds the one broker whose order book holds the order.
 
         Args:
-            cancel_request (CancelOrderRequest): The validated cancel request.
+            order_request (CancelOrderRequest | ModifyOrderRequest): The validated cancel or modify request, with `order_id` and `broker`.
             order_texts (list): Each broker's hash entry for the order id as Redis holds it, in `broker_names` order.
 
         Returns:
@@ -844,7 +844,7 @@ class OrdersBlueprint(BaseBlueprint):
         """
         matched_entries = {}
         for position, broker_name in enumerate(self.broker_names):
-            requested_broker = cancel_request.broker
+            requested_broker = order_request.broker
             if requested_broker is not None and broker_name != requested_broker:
                 continue
             order_text = order_texts[position]
@@ -861,13 +861,13 @@ class OrdersBlueprint(BaseBlueprint):
             raise self.refuse(
                 'no broker order book in Redis holds this order_id',
                 404,
-                order_id=cancel_request.order_id,
+                order_id=order_request.order_id,
             )
         if len(matched_entries) > 1:
             raise self.refuse(
                 'more than one broker holds an order with this order_id, so give broker',
                 409,
-                order_id=cancel_request.order_id,
+                order_id=order_request.order_id,
                 brokers=list(matched_entries),
             )
         broker_name = list(matched_entries)[0]

@@ -1,15 +1,15 @@
 """One order as a broker's order scripts keep it in Redis."""
 
 
-class CancelNotReadyError(Exception):
-    """A cancel that cannot be built yet because Redis does not hold a value the broker needs; its message is answered with HTTP 503."""
+class OrderNotReadyError(Exception):
+    """A cancel or modification that cannot be built yet because Redis does not hold a value the broker needs; its message is answered with HTTP 503."""
 
 
 class StoredOrder:
     """One entry of a `<broker>:orders:orders` hash.
 
     Attributes:
-        FINISHED_STATUSES (list): The statuses an order never leaves, so a cancel is refused without calling the broker.
+        FINISHED_STATUSES (list): The statuses an order never leaves, so a cancel or modification is refused without calling the broker.
         entry (dict): The whole entry.
         order (dict): The normalized order, or an empty dictionary when the entry has none.
         data (dict): The broker's own copy of the order, or an empty dictionary when the entry has none.

@@ -17,8 +17,8 @@ from unified_broker_interface.utilities.broker_orders.utilities.broker_answer im
 from unified_broker_interface.utilities.broker_orders.utilities.connection_pool import (
     IdleLimitedAdapter,
 )
-from unified_broker_interface.utilities.broker_orders.utilities.place_order_request import (
-    PlaceOrderRequest,
+from unified_broker_interface.utilities.broker_orders.utilities.order_request import (
+    OrderRequest,
 )
 
 
@@ -170,7 +170,7 @@ class BrokerOrders:
         missing = self.missing_settings(settings, self.PLACE_SETTINGS_FIELDS)
         if missing:
             return 'has no ' + ', '.join(missing) + ' in its Redis settings'
-        triggered = order.order_type in PlaceOrderRequest.TRIGGERED_ORDER_TYPES
+        triggered = order.order_type in OrderRequest.TRIGGERED_ORDER_TYPES
         if triggered and not self.TAKES_TRIGGERED_ORDERS:
             return f'takes no {order.order_type} orders'
         if order.after_market and not self.TAKES_AFTER_MARKET:
@@ -209,18 +209,37 @@ class BrokerOrders:
         Returns:
             tuple: `(quantity, disclosed_quantity)`, both ints.
         """
+        quantity = self.broker_quantity(order.quantity, instrument, handle)
+        disclosed_quantity = self.broker_quantity(
+            order.disclosed_quantity,
+            instrument,
+            handle,
+        )
+        return quantity, disclosed_quantity
+
+    def broker_quantity(self, units, instrument, handle):
+        """One quantity in units, converted into the broker's own terms.
+
+        For a securities market it is unchanged. For a currency or commodity market it must be a whole number of lots of the instrument's trusted size, which the caller has checked, and it is converted by the broker's `QUANTITY_UNITS` entry for the market, which the caller has made sure exists.
+
+        Args:
+            units (int): The quantity in units.
+            instrument (Instrument): The tradeable instrument.
+            handle (dict): The broker's order handle for the instrument.
+
+        Returns:
+            int: The quantity the broker's request carries.
+        """
         if instrument.is_securities_market():
-            return order.quantity, order.disclosed_quantity
+            return units
         units_per_lot = instrument.trusted_units_per_lot()
-        lots = int(decimal.Decimal(order.quantity) / units_per_lot)
-        disclosed_lots = int(decimal.Decimal(order.disclosed_quantity) / units_per_lot)
+        lots = int(decimal.Decimal(units) / units_per_lot)
         quantity_unit = self.QUANTITY_UNITS[instrument.market()]
         if quantity_unit == 'lots':
-            return lots, disclosed_lots
+            return lots
         if quantity_unit == 'broker_lot_size':
-            lot_size = self.broker_lot_size(handle)
-            return lots * lot_size, disclosed_lots * lot_size
-        return order.quantity, order.disclosed_quantity
+            return lots * self.broker_lot_size(handle)
+        return units
 
     def handle_skip_reason(self, handle):
         """Checks what the broker needs from its order handle beyond the identifier field.
@@ -562,8 +581,22 @@ class BrokerOrders:
             BrokerAnswer: The answer.
         """
         answer = self.send(broker_request)
+        self.decide_instruction_outcome(answer)
+        return answer
+
+    def decide_instruction_outcome(self, answer):
+        """Decides whether the broker took an instruction about an existing order, a cancel or a modification.
+
+        An error status below 500 is `rejected` and a server error is `unknown`. A success status is `rejected` when its body carries a refusal and `accepted` otherwise, which means the broker took the instruction, not that the exchange has acted on it. An answer with no status, after a network error, keeps the outcome `send` gave it.
+
+        Args:
+            answer (BrokerAnswer): The answer, whose `outcome` and `status_message` are set.
+
+        Returns:
+            None: This method returns nothing.
+        """
         if answer.status_code is None:
-            return answer
+            return
 
         if answer.status_code >= 300:
             answer.status_message = self.error_message(answer)
@@ -571,7 +604,7 @@ class BrokerOrders:
                 answer.outcome = 'rejected'
             else:
                 answer.outcome = 'unknown'
-            return answer
+            return
 
         refusal = self.read_refusal(answer.response_fields())
         if refusal is not None:
@@ -579,4 +612,3 @@ class BrokerOrders:
             answer.status_message = str(refusal)[:300]
         else:
             answer.outcome = 'accepted'
-        return answer
