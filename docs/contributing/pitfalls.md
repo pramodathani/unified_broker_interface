@@ -111,6 +111,13 @@ connection exactly ten seconds later, every time, at every heartbeat rate and wi
 identifier the login offers. The "Your session has been expired" that arrives alongside the join
 is noise - it appears for a token minted a second earlier.
 
+**Wisdom Capital's interactive socket must not log in for itself.** XTS keeps one interactive session per
+application key, so a login by the socket logged out the token the pollers share, the pollers logged in again, and
+their login logged out the socket. The socket then received `logout` ("You have been logged out by another user.")
+and stayed connected while delivering nothing, which looks exactly like a quiet account. From 2026-09-14 to
+2026-09-15 it merged no updates at all. It now joins with the shared `last_login` token, taking the user id from the
+token's payload, and treats `logout` as a reason to reconnect with whatever login replaced it.
+
 **XTS states two heartbeat numbers and they disagree.** The server says how often it wants to
 hear from us and how long it will wait, and market data asks every 20s while waiting 60s where
 interactive asks every 25s but waits only 20s. Pacing on `pingInterval` alone heartbeats every

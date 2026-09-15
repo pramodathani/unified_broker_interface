@@ -12,11 +12,12 @@ Self-contained: it logs in with `WisdomCapitalAPI` and carries its own XTS trans
 handshake, socket.io framing and heartbeat - so it needs no other feed process or key.
 
 **The session.** XTS splits a broker into a market data application and an interactive (trading) one; orders and
-positions live in the interactive one. Each connection logs in to it with `api_key` and `api_secret` through
-`POST /interactive/user/session`, as the interactive socket has always done, which returns the token and the
-user id the socket is joined with. Nothing is subscribed to: joining the namespace with `apiType=INTERACTIVE` is
-enough, and XTS pushes every order, trade and position event for the account. Without that parameter the server
-cuts the connection after ten seconds.
+positions live in the interactive one. XTS keeps one interactive session per application key, and a new login logs
+the previous token out, so the socket never logs in for itself. It joins with the token `WisdomCapitalAPI` shares
+through the Redis `last_login` hash, the same token the orders, positions, trades, funds and holdings pollers send,
+and reads the user id from that token's payload. Nothing is subscribed to: joining the namespace with
+`apiType=INTERACTIVE` is enough, and XTS pushes every order, trade and position event for the account. Without that
+parameter the server cuts the connection after ten seconds.
 
 **The transport.** The host's certificate is issued to the platform provider's domain, so the exact certificate
 is pinned instead of the hostname being checked. A connection opens an Engine.IO session over HTTPS, attaches a
@@ -52,9 +53,13 @@ at 06:00 IST, moved to the next 06:00 by every write.
 `wisdom_capital.order_updates`, and `wisdom_capital:positions_updates:stream` as a `position` field, which
 `bin/wisdom_capital/persist_positions` writes to `wisdom_capital.positions`. Each is capped at about 20,000 entries.
 
-**Sessions.** A socket whose handshake is refused for its token (`e-session`, `e-token`, "Invalid Token"), or that
-fails to open six times running, logs in to `WisdomCapitalAPI` again before reconnecting. A reconnect otherwise
-backs off from 1 to 60 seconds. Updates arrive only when something changes, so a quiet socket is not a broken one.
+**Sessions.** When another login replaces the token, XTS sends a `logout` event ("You have been logged out by another
+user.") and leaves the connection open while delivering nothing more. The socket closes on that event, waits up to
+ten seconds for the replacing login to reach Redis, and reconnects with it. When the stored token is still the one
+that was logged out, when a handshake is refused for its token (`e-session`, `e-token`, "Invalid Token"), or when
+the socket fails to open six times running, it constructs `WisdomCapitalAPI` again before reconnecting, which keeps a
+stored token that still works and logs in only when it does not. A reconnect otherwise backs off from 1 to 60
+seconds. Updates arrive only when something changes, so a quiet socket is not a broken one.
 
 Exits 0 when stopped with Ctrl+C or SIGTERM, and 1 when a login fails or the socket still cannot open after
 logging in again. Reads only - it never places, modifies or cancels an order.
@@ -63,6 +68,8 @@ logging in again. Reads only - it never places, modifies or cancels an order.
 import ssl
 import sys
 import json
+import time
+import base64
 import signal
 import hashlib
 import threading
@@ -80,7 +87,6 @@ PROJECT_ROOT = run_under_venv(__file__)
 HOST = "trade.wisdomcapital.in"
 PORT = 443
 APPLICATION_PATH = "/interactive"
-SESSION_URL = f"https://{HOST}{APPLICATION_PATH}/user/session"
 
 # SHA-256 of the certificate trade.wisdomcapital.in serves, valid to 2027-01-20. Refresh with:
 #   echo | openssl s_client -connect trade.wisdomcapital.in:443 2>/dev/null | openssl x509 -noout -fingerprint -sha256
@@ -102,6 +108,7 @@ DEFAULT_HEARTBEAT_SECONDS = 10.0
 MIN_BACKOFF_SECONDS = 1
 MAX_BACKOFF_SECONDS = 60
 MAX_FAILED_CONNECTS = 6
+REPLACEMENT_LOGIN_WAIT_SECONDS = 10
 
 INDIA = ZoneInfo("Asia/Kolkata")
 RESET_HOUR = 6
@@ -420,6 +427,8 @@ class OrderUpdatesSocket:
         self._ws = None
         self._opened = False
         self._authentication_rejected = False
+        self._logged_out = False
+        self._token = None
         self._heartbeat_seconds = DEFAULT_HEARTBEAT_SECONDS
         self._connection_closed = threading.Event()
         self.gave_up = False
@@ -438,12 +447,19 @@ class OrderUpdatesSocket:
         while not self._stop.is_set():
             self._opened = False
             self._authentication_rejected = False
+            self._logged_out = False
             try:
                 self._connect()
             except Exception as exception:
                 self._logger.error(f"Order updates connection failed: {type(exception).__name__}: {exception}")
             if self._stop.is_set():
                 break
+
+            if self._logged_out and not self._wait_for_replacement_login():
+                if self._stop.is_set():
+                    break
+                self._logger.warning("The stored Wisdom Capital token is still the one that was logged out.")
+                self._authentication_rejected = True
 
             if self._opened and not self._authentication_rejected:
                 failed_connects, logged_in_again, backoff = 0, False, MIN_BACKOFF_SECONDS
@@ -457,7 +473,7 @@ class OrderUpdatesSocket:
                     break
                 try:
                     # A dead session: log in again before connecting again.
-                    self._logger.warning("Logging in to Wisdom Capital again.")
+                    self._logger.warning("Checking the Wisdom Capital login, and logging in again if it is dead.")
                     self._api = self._api_class()
                 except Exception as exception:
                     self.gave_up = True
@@ -470,22 +486,76 @@ class OrderUpdatesSocket:
             backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
         self._logger.info("Order updates socket stopped.")
 
-    def _interactive_session(self):
-        """Log in to the interactive application for this connection and return its token and user id."""
-        settings = self._api._settings or {}
-        response = self._api.post(url=SESSION_URL, headers={"Content-Type": "application/json"},
-                                  json={"appKey": settings.get('api_key'), "secretKey": settings.get('api_secret'),
-                                        "source": "WEBAPI"})
-        result = (response or {}).get('data') or {}
-        if not result.get('token'):
-            raise RuntimeError(f"the interactive login returned no token: {str(response)[:200]}")
-        return result['token'], result.get('userID')
+    def _wait_for_replacement_login(self):
+        """Waits for the login that logged this socket out to reach the shared last_login hash.
+
+        Returns:
+            bool: True when the shared login holds a token other than the one this connection used, and False when it still holds that token after REPLACEMENT_LOGIN_WAIT_SECONDS or the socket is stopped first.
+        """
+        deadline = time.monotonic() + REPLACEMENT_LOGIN_WAIT_SECONDS
+        while not self._stop.is_set():
+            login = self._api._current_login() or {}
+            if login.get("access_token") != self._token:
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            self._stop.wait(1)
+        return False
+
+    @staticmethod
+    def _user_id_from_token(token):
+        """Reads the user id that XTS signs into an interactive token.
+
+        Args:
+            token (str): The interactive access token, a JWT.
+
+        Returns:
+            str | None: The token's `userID` claim, or None when the token is not a readable JWT or has no such claim.
+        """
+        parts = token.split(".")
+        if len(parts) != 3:
+            return None
+        padded_payload = parts[1] + "=" * (-len(parts[1]) % 4)
+        try:
+            payload = json.loads(base64.urlsafe_b64decode(padded_payload))
+        except ValueError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        return payload.get("userID")
+
+    def _shared_session(self):
+        """Reads the interactive login that every Wisdom Capital process shares.
+
+        Returns:
+            tuple[str, str]: The access token, and the user id it was issued to.
+
+        Raises:
+            RuntimeError: No usable token is stored, or the stored token carries no user id.
+        """
+        login = self._api._current_login() or {}
+        token = login.get("access_token")
+        if not token or token == "None":
+            raise RuntimeError("no Wisdom Capital access token is stored in last_login")
+        user_id = self._user_id_from_token(token)
+        if user_id is None:
+            raise RuntimeError("the stored Wisdom Capital access token carries no userID")
+        return token, user_id
 
     def _connect(self):
-        """Log in, open an Engine.IO session, attach the websocket and block until it closes."""
+        """Opens an Engine.IO session with the shared login, attaches the websocket and blocks until it closes.
+
+        Raises:
+            RuntimeError: No usable token is stored, or the Engine.IO handshake is refused.
+        """
         import websocket
 
-        token, user_id = self._interactive_session()
+        try:
+            token, user_id = self._shared_session()
+        except RuntimeError:
+            self._authentication_rejected = True
+            raise
+        self._token = token
         query = f"token={token}&userID={user_id}&apiType=INTERACTIVE"
 
         response = pinned_get(f"{APPLICATION_PATH}/socket.io/?EIO=3&transport=polling&{query}")
@@ -571,6 +641,11 @@ class OrderUpdatesSocket:
                 payload = json.loads(payload)
             except json.JSONDecodeError:
                 pass
+        if name == "logout":
+            self._logger.warning(f"Wisdom Capital logged this socket out: {json.dumps(payload)[:200]}. Reconnecting with the login now in force.")
+            self._logged_out = True
+            ws.close()
+            return
         entries = [entry for entry in (payload if isinstance(payload, list) else [payload]) if isinstance(entry, dict)]
         received_at = datetime.now()
         received, observed_at = received_at.strftime("%Y-%m-%d %H:%M:%S.%f"), received_at.timestamp()

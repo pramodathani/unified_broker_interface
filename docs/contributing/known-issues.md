@@ -22,6 +22,13 @@ taken from the table itself are unaffected. The fix is to count true insertions 
 for having never traded, and then started trading would stay retired forever. Clearing
 `reached_broker_limit` where `limit_reason` names that case, periodically, would fix it.
 
+**Wisdom Capital's pollers log in independently when the session expires.** `bin/wisdom_capital/orders`,
+`positions`, `trades` and `funds` each construct `WisdomCapitalAPI` when their token is refused, and XTS allows one
+interactive session per application key, so four logins in the same second can log each other out. On 2026-09-15
+they did this twice, at 06:36:07 and 06:36:20, before settling on one token. The interactive login has no
+cross-process lock like the market data login in `bin/wisdom_capital/quotes`, and adding one to `WisdomCapitalAPI`
+would change every Wisdom Capital script, so it was left alone.
+
 **Fyers currency derivatives are left out of the unified quotes.** Fyers scales prices by a precision and
 multiplier per instrument. A fixed divisor of 100 is right for two-decimal instruments and a hundred times
 wrong for four-decimal currency pairs. `bin/fyers/quotes` divides by 10 to the precision times the
