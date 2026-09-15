@@ -215,7 +215,7 @@ only when no verified broker streams it, until a live session confirms what is m
 | Wisdom Capital | not used - XTS `Close` is the last price | lots (unconfirmed) | both true instants | Mock session agrees with Flattrade on price, volume and time |
 | Fyers | `prev_close_price`, always | lots (unconfirmed) | both | Protocol only; nothing stored yet. Currency derivatives left out |
 | Groww | not used until confirmed | NSE and BSE only | exchange time | Protocol only; nothing stored yet |
-| INDmoney | not used until confirmed | NSE and BSE only | exchange time | Protocol only; nothing stored yet. Prices assumed rupees |
+| INDmoney | not used - `close` is the last price | NSE and BSE only | both true instants | In-session NSE ticks, 2026-09-15, agree with Zerodha on price, volume and times; no order book quantities |
 
 Where a broker's `close` is not used, the previous close carries forward from whichever broker owned
 the instrument earlier that day, and is null if none did. `bin/unified/quotes` carries these normalizers

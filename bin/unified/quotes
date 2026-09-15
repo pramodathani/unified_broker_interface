@@ -683,12 +683,11 @@ class GrowwNormalizer(Normalizer):
         return FeedKey(parts[2], segments) if segments is not None else None
 
 class IndmoneyNormalizer(Normalizer):
-    """INDstocks: `SEGMENT:TOKEN`; `close` never trusted; units; no last trade time."""
+    """INDstocks: `SEGMENT:TOKEN`; `close` is the last price, never used; units; both times true."""
     BROKER_NAME = "indmoney"
     SEGMENTS = {"NSE": (("nse",), "cash"), "BSE": (("bse",), "cash"), "NFO": (("nse",), "derivative"),
                 "BFO": (("bse",), "derivative"), "NIDX": (("nse",), "index"), "BIDX": (("bse",), "index")}
     CLOSE_POLICY = {"nse": CLOSE_NEVER, "bse": CLOSE_NEVER}
-    TRUSTS_LAST_TRADE_TIME = False
 
     def __init__(self):
         self._segments = {name: family_segments(exchanges, family) for name, (exchanges, family) in self.SEGMENTS.items()}

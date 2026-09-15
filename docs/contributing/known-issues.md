@@ -63,8 +63,8 @@ not approved for placing orders, so those three are rotated through but the leas
 
 **Most unified tick normalizers are unconfirmed live.** Only Zerodha is verified, and Dhan agrees with it
 on stored in-session MCX ticks but has no in-session NSE ticks stored. Kotak agreed with it on every field
-in a live NSE and MCX session on 2026-09-15 but is not yet marked verified. What Flattrade, Shoonya,
-Wisdom Capital, Fyers, Groww and INDmoney send was taken from stored weekend snapshots, a mock session
+in a live NSE and MCX session on 2026-09-15, and INDmoney on NSE the same day, but neither is yet marked
+verified. What Flattrade, Shoonya, Wisdom Capital, Fyers and Groww send was taken from stored weekend snapshots, a mock session
 or the protocol, and the table in
 [Unified scripts](../guides/unified-scripts.md#what-each-brokers-values-mean) marks which.
 

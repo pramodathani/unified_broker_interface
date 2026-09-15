@@ -120,6 +120,16 @@ connection exactly ten seconds later, every time, at every heartbeat rate and wi
 identifier the login offers. The "Your session has been expired" that arrives alongside the join
 is noise - it appears for a token minted a second earlier.
 
+**INDmoney's price feed sends JSON inside a JSON string.** Every update is a line such as
+`"{\"mode\":\"full\",\"instrument\":\"11536\",...}"`, so one `json.loads` returns a `str`. `bin/indmoney/quotes`
+treated anything that was not a dict as a heartbeat and skipped it quietly, and for at least the five days to
+2026-09-15 the feed connected, subscribed and streamed about ten updates a second while `indmoney.ticks` stayed
+empty. Decode a string result a second time, and log a message you skip rather than dropping it silently.
+
+**INDmoney's `close` is the last price.** In `quote` and `full` mode the feed's `close` moves with every trade and
+equals `ltp`; the previous close is not on the feed at all. `quote` mode has no `ltp`, which made `close` look like
+the only price.
+
 **Wisdom Capital's interactive socket must not log in for itself.** XTS keeps one interactive session per
 application key, so a login by the socket logged out the token the pollers share, the pollers logged in again, and
 their login logged out the socket. The socket then received `logout` ("You have been logged out by another user.")

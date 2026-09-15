@@ -17,8 +17,9 @@ key.
 
 **Instruments** are `--tokens` when given, otherwise the members of the Redis set `indmoney:quotes:subscriptions`,
 each as `SEGMENT:TOKEN` with INDstocks' segment names - `NSE` and `BSE` for equity, `NFO` and `BFO` for
-derivatives, `NIDX` and `BIDX` for indices - then INDstocks' security id. One websocket carries up to
-`--per-socket` instruments, 1000 by default. INDstocks publishes no connection limit.
+derivatives, `NIDX` and `BIDX` for indices - then INDstocks' security id. Each websocket carries instruments of one
+segment only, up to `--per-socket` of them, 1000 by default, because the feed names an instrument by its bare
+security id and only the socket's segment places it. INDstocks publishes no connection limit.
 
 **Names.** INDstocks' instrument master sits behind a login and runs to three files, so rather than download it
 here the names are read from `indmoney:instruments:master`, which `bin/indmoney/instruments` fills: an equity or
@@ -37,14 +38,27 @@ by its token, and a warning says how many.
   `bin/indmoney/persist_ticks` writes to `indmoney.ticks`. Capped at about 100,000 entries, so ticks that arrive
   while the persister is down for long enough are trimmed before they are persisted.
 
-**The feed** is JSON both ways. After connecting, one message subscribes the batch in quote mode; each update names
-an instrument - sometimes as the bare token, whose segment is then recovered from the subscription - a millisecond
-timestamp, and a `data` object whose fields depend on the mode. An update carries only what changed, so each
-instrument's fields are merged across updates before a tick is built. A tick has the same fields as every broker's
-here: `id`, `broker`, `instrument_token`, `exchange`, `mode`, `last_price`, `last_quantity`, `average_price`,
-`volume`, `buy_quantity`, `sell_quantity`, `ohlc`, `change`, `oi`, `oi_day_high`, `oi_day_low`,
-`last_trade_time`, `exchange_timestamp` (epoch seconds), `depth` and `received_at`. INDstocks documents only the
-ltp payload, so each quote field is read under the spellings the feed is known to use. Prices are rupees.
+**The feed.** After connecting, one JSON message subscribes the batch in `full` mode, the richest the feed serves:
+`ltp` carries only the last price, `quote` carries `open`, `high`, `low`, `close` and `volume` without a last price,
+and `depth`, `market_depth`, `depth5` and `snapquote` send nothing. Every update arrives as a JSON string whose
+content is itself JSON - `"{\"mode\":\"full\",\"instrument\":\"11536\",...}"` followed by a newline - so each line of
+a frame is decoded twice. An update names the instrument by its bare security id, a millisecond `timestamp`, and a
+`data` object. A message without `data` is logged, not silently dropped.
+
+A tick has the same fields as every broker's here, taken from `full` mode's `data` as measured against Zerodha's
+ticks on 2026-09-15:
+
+| Tick field | INDstocks field |
+| --- | --- |
+| `last_price` | `ltp`, in rupees |
+| `volume`, `buy_quantity`, `sell_quantity`, `oi` | `volume`, `total_buy_qty`, `total_sell_qty`, `oi`, in units |
+| `ohlc` | `open`, `high`, `low`, and `close` as sent, which is the last price and not the previous close |
+| `last_trade_time` | `ltt`, milliseconds on the wire, epoch seconds here |
+| `exchange_timestamp` | the update's `timestamp`, milliseconds on the wire, epoch seconds here |
+| `depth` | one level each side, `bid_price` and `ask_price` with no quantity or order count |
+
+`last_quantity`, `average_price`, `change`, `oi_day_high` and `oi_day_low` are always `None`: the feed sends no last
+quantity, average price or previous close. `mode` is always `quote`, since the feed has no order book.
 
 **Sessions.** The token travels as an `Authorization` header in the websocket handshake, so a dead token fails the
 upgrade itself - INDstocks answers 401, 403 or 513 - rather than a message. Each connection reads the current token
@@ -90,6 +104,7 @@ SEGMENTS = {"NSE": ("NSE", "E"), "BSE": ("BSE", "E"), "NFO": ("NSE", "D"), "BFO"
             "NIDX": ("NSE", None), "BIDX": ("BSE", None)}
 
 DEFAULT_INSTRUMENTS_PER_CONNECTION = 1000
+SUBSCRIPTION_MODE = "full"
 
 # Handshake statuses that mean the token was refused. INDstocks answers a bad token with 513.
 AUTHENTICATION_STATUS_CODES = (401, 403, 513)
@@ -224,11 +239,15 @@ class QuotesSocket:
         self._ws.run_forever(ping_interval=PING_INTERVAL_SECONDS, ping_timeout=PING_TIMEOUT_SECONDS)
 
     def _on_open(self, ws):
-        """Subscribe the batch in quote mode."""
+        """Subscribes the batch in SUBSCRIPTION_MODE.
+
+        Args:
+            ws (websocket.WebSocketApp): The connection that opened.
+        """
         self._opened = True
         self._state = {}
-        ws.send(json.dumps({"action": "subscribe", "mode": "quote", "instruments": list(self._tokens)}))
-        self._logger.info(f"{self.name} opened and subscribed to {len(self._tokens)} instrument(s).")
+        ws.send(json.dumps({"action": "subscribe", "mode": SUBSCRIPTION_MODE, "instruments": list(self._tokens)}))
+        self._logger.info(f"{self.name} opened and subscribed to {len(self._tokens)} instrument(s) in {SUBSCRIPTION_MODE} mode.")
 
     def _on_error(self, ws, error):
         """Log the error, and take a refused handshake as a dead session."""
@@ -254,113 +273,167 @@ class QuotesSocket:
                 pipeline.xadd(STREAM_KEY, {"tick": payload}, maxlen=STREAM_MAX_LENGTH, approximate=True)
             pipeline.execute()
 
-    def parse_ticks(self, message):
-        """
-        Normalized ticks from one INDstocks message, merging each instrument's fields across updates.
+    def _decode_entries(self, message):
+        """Decodes one frame into its update dictionaries.
 
-        - `message` is the message received.
+        Each line of a frame is a JSON string whose content is itself JSON, so a line that decodes to a string is decoded a second time. A line that is not JSON is logged at debug level and skipped.
+
+        Args:
+            message (str | bytes): The frame received.
+
+        Returns:
+            list[dict]: The decoded updates, in order.
         """
         if isinstance(message, (bytes, bytearray)):
-            message = message.decode('utf-8', errors='replace')
-        if not isinstance(message, str) or not message.strip():
-            return []
-        try:
-            payload = json.loads(message)
-        except json.JSONDecodeError:
-            self._logger.debug(f"{self.name} ignored a frame that is not JSON: {message[:120]}")
+            message = message.decode("utf-8", errors="replace")
+        if not isinstance(message, str):
             return []
 
-        ticks = []
-        for entry in (payload if isinstance(payload, list) else [payload]):
-            if not isinstance(entry, dict):
+        entries = []
+        for line in message.splitlines():
+            if not line.strip():
                 continue
-            data = entry.get('data')
-            instrument = entry.get('instrument') or entry.get('token')
-            if not isinstance(data, dict) or instrument is None:
-                continue                                  # heartbeats and acknowledgements
+            try:
+                payload = json.loads(line)
+                if isinstance(payload, str):
+                    payload = json.loads(payload)
+            except json.JSONDecodeError:
+                self._logger.debug(f"{self.name} ignored a line that is not JSON: {line[:120]}")
+                continue
+            if isinstance(payload, list):
+                for item in payload:
+                    if isinstance(item, dict):
+                        entries.append(item)
+            elif isinstance(payload, dict):
+                entries.append(payload)
+        return entries
 
-            # The feed may echo the bare token, so its segment is recovered from the subscription.
+    def parse_ticks(self, message):
+        """Returns the normalized ticks in one INDstocks frame, merging each instrument's fields across updates.
+
+        Args:
+            message (str | bytes): The frame received.
+
+        Returns:
+            list[dict]: One tick per update that carried a last price.
+        """
+        ticks = []
+        for entry in self._decode_entries(message):
+            data = entry.get("data")
+            instrument = entry.get("instrument")
+            if not isinstance(data, dict) or instrument is None:
+                self._logger.info(f"{self.name} message without instrument data: {json.dumps(entry)[:200]}")
+                continue
+
             instrument = str(instrument)
-            token = instrument if ':' in instrument else self._subscribed_token(instrument)
+            if ":" in instrument:
+                token = instrument
+            else:
+                token = self._subscribed_token(instrument)
             state = self._state.setdefault(token, {})
             state.update(data)
-            if entry.get('timestamp') is not None:
-                state['timestamp'] = entry['timestamp']
+            if entry.get("timestamp") is not None:
+                state["timestamp"] = entry["timestamp"]
 
             tick = self._build_tick(token, state)
-            if tick['last_price'] is None and not tick['depth']['buy'] and not tick['depth']['sell']:
+            if tick["last_price"] is None:
                 continue
             ticks.append(tick)
         return ticks
 
     def _subscribed_token(self, bare):
-        """
-        The subscribed `SEGMENT:TOKEN` ending in a bare token, or the bare token when none does.
+        """Returns the subscribed `SEGMENT:TOKEN` for a bare security id.
 
-        - `bare` is the token as the feed echoed it.
+        Every socket carries one segment, so at most one subscribed token ends in the bare id.
+
+        Args:
+            bare (str): The security id as the feed sent it.
+
+        Returns:
+            str: The subscribed token, or the bare id when this socket did not subscribe it.
         """
         for token in self._tokens:
             if token.endswith(f":{bare}"):
                 return token
         return bare
 
+    @staticmethod
+    def _epoch_seconds(value):
+        """Converts a feed time to whole epoch seconds.
+
+        Args:
+            value (int | float | str | None): The time as sent, in milliseconds, or in seconds for a small value.
+
+        Returns:
+            int | None: Epoch seconds, or None for a missing or zero time.
+        """
+        moment = number(value)
+        if not moment:
+            return None
+        if moment > 1e11:
+            return int(moment / 1000)
+        return int(moment)
+
     def _build_tick(self, token, state):
+        """Builds a normalized tick from an instrument's merged `full` mode fields.
+
+        Args:
+            token (str): The instrument's `SEGMENT:TOKEN`.
+            state (dict): Its fields merged across updates, with the latest update's `timestamp`.
+
+        Returns:
+            dict: The tick.
         """
-        A normalized tick from an instrument's merged fields.
+        buy_levels = []
+        bid_price = number(state.get("bid_price"))
+        if bid_price is not None:
+            buy_levels.append({
+                "quantity": None,
+                "price": bid_price,
+                "orders": None,
+            })
+        sell_levels = []
+        ask_price = number(state.get("ask_price"))
+        if ask_price is not None:
+            sell_levels.append({
+                "quantity": None,
+                "price": ask_price,
+                "orders": None,
+            })
 
-        - `token` is the instrument's `SEGMENT:TOKEN`.
-        - `state` is its merged fields.
-        """
-        last_price = number(first(state, 'ltp', 'last_price', 'lastPrice'))
-        close = number(first(state, 'close', 'prev_close', 'previousClose', 'close_price'))
-
-        depth = {"buy": [], "sell": []}
-        for side, names in (('buy', ('bids', 'buy', 'depth_buy')), ('sell', ('asks', 'sell', 'depth_sell'))):
-            levels = first(state, *names)
-            if isinstance(levels, list):
-                for level in levels:
-                    if isinstance(level, dict):
-                        depth[side].append({"quantity": whole(first(level, 'quantity', 'qty', 'q')),
-                                            "price": number(first(level, 'price', 'p')),
-                                            "orders": whole(first(level, 'orders', 'o'))})
-
-        timestamp = number(state.get('timestamp'))
+        exchange = None
+        if ":" in token:
+            exchange = token.split(":", 1)[0]
         return {
             "id": self._names.get(token) or token,
             "broker": "indmoney",
             "instrument_token": token,
-            "exchange": token.split(':', 1)[0] if ':' in token else None,
-            "mode": "full" if depth['buy'] or depth['sell'] else "quote",
-            "last_price": last_price,
-            "last_quantity": whole(first(state, 'last_quantity', 'ltq', 'lastTradedQty')),
-            "average_price": number(first(state, 'average_price', 'atp', 'avg_price')),
-            "volume": whole(first(state, 'volume', 'vol', 'volume_traded')),
-            "buy_quantity": whole(first(state, 'total_buy_quantity', 'tbq', 'buy_quantity')),
-            "sell_quantity": whole(first(state, 'total_sell_quantity', 'tsq', 'sell_quantity')),
-            "ohlc": {"open": number(first(state, 'open', 'open_price')), "high": number(first(state, 'high', 'high_price')),
-                     "low": number(first(state, 'low', 'low_price')), "close": close},
-            "change": (last_price - close) * 100 / close if last_price is not None and close else None,
-            "oi": whole(first(state, 'oi', 'open_interest', 'openInterest')),
+            "exchange": exchange,
+            "mode": "quote",
+            "last_price": number(state.get("ltp")),
+            "last_quantity": None,
+            "average_price": None,
+            "volume": whole(state.get("volume")),
+            "buy_quantity": whole(state.get("total_buy_qty")),
+            "sell_quantity": whole(state.get("total_sell_qty")),
+            "ohlc": {
+                "open": number(state.get("open")),
+                "high": number(state.get("high")),
+                "low": number(state.get("low")),
+                "close": number(state.get("close")),
+            },
+            "change": None,
+            "oi": whole(state.get("oi")),
             "oi_day_high": None,
             "oi_day_low": None,
-            "last_trade_time": None,
-            # Milliseconds on the wire; seconds here.
-            "exchange_timestamp": int(timestamp / 1000) if timestamp and timestamp > 1e11 else (int(timestamp) if timestamp else None),
-            "depth": depth,
+            "last_trade_time": self._epoch_seconds(state.get("ltt")),
+            "exchange_timestamp": self._epoch_seconds(state.get("timestamp")),
+            "depth": {
+                "buy": buy_levels,
+                "sell": sell_levels,
+            },
             "received_at": time.time(),
         }
-
-def first(data, *names):
-    """
-    The first present value among several spellings of a field.
-
-    - `data` is the fields to look in.
-    - `names` are the spellings to try, in order.
-    """
-    for name in names:
-        if name in data and data[name] is not None:
-            return data[name]
-    return None
 
 def number(value):
     """
@@ -470,7 +543,13 @@ def main():
                      f"{SUBSCRIPTIONS_KEY}.")
         return 2
 
-    batches = [tokens[start:start + arguments.per_socket] for start in range(0, len(tokens), arguments.per_socket)]
+    tokens_by_segment = {}
+    for token in tokens:
+        tokens_by_segment.setdefault(token.partition(":")[0], []).append(token)
+    batches = []
+    for segment_tokens in tokens_by_segment.values():
+        for start in range(0, len(segment_tokens), arguments.per_socket):
+            batches.append(segment_tokens[start:start + arguments.per_socket])
 
     try:
         session = IndmoneySession(logger)

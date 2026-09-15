@@ -6,17 +6,18 @@ equity on `NSE` and `BSE`, derivatives on `NFO` and `BFO` and indices on `NIDX` 
 the bare token. No INDstocks token collided across segments on 2026-09-13, but the segment still
 narrows the search so that one never silently does.
 
-Nothing INDmoney streams is stored yet - its raw tick table is empty - so the broker stays unverified
-until a live session, and it is read conservatively:
+What INDmoney's values mean, as measured on the feed's `full` mode against Zerodha's ticks received at
+the same moment during the session of 2026-09-15, on TCS, INFY, ICICIBANK, RELIANCE and HDFCBANK:
 
-- `close` is not taken as the previous close; the feed does not document which close it sends. The
-  previous close comes from an earlier owner's tick the same day instead.
-- Quantities are taken to be units, which is what NSE and BSE report.
-- Prices are taken as the market feed publishes them. The feed treats INDstocks prices as rupees,
-  which is documented for the last price only; a ratio of 100 against another broker's quote shows at once if
-  that is wrong, and the correction is one constant in `bin/indmoney/quotes`.
+- `close` is not the previous close but the last price: HDFCBANK read 722.25 as both, where the
+  previous close was 708.25. It is never used; the previous close comes from an earlier owner's tick the
+  same day instead.
+- Prices are rupees: last price, open, high and low matched Zerodha's.
+- Quantities are units: INFY and ICICIBANK volumes matched Zerodha's exactly.
+- Both times are true instants: the last trade time matched Zerodha's to within three seconds and the
+  exchange timestamp to within two, and ticks arrived 0.8 seconds after it.
 
-The feed sends no last trade time, and INDstocks streams no MCX.
+The feed sends no last quantity, average price or order book quantities, and INDstocks streams no MCX.
 """
 
 from stock_brokers.instruments.ticks.base import CLOSE_NEVER, FeedKey, TickNormalizer, family_segments
@@ -39,8 +40,6 @@ class IndmoneyTickNormalizer(TickNormalizer):
     }
 
     CLOSE_POLICY = {"nse": CLOSE_NEVER, "bse": CLOSE_NEVER}
-
-    TRUSTS_LAST_TRADE_TIME = False
 
     def __init__(self):
         self._segments = {name: family_segments(exchanges, family)

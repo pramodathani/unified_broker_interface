@@ -20,8 +20,8 @@ The REST quote uses names of its own, mapped onto the feed's contract. Measured 
 - `live_price`, `day_open`, `day_high`, `day_low`, `volume` and `open_interest` are the last price, the
   day's open, high and low, volume and open interest; prices are rupees and quantities units.
 - `prev_close` is the previous session's close even after the bell (RELIANCE 1274.0, as Zerodha), and
-  goes in `ohlc.close`, which is where the feed puts it. The INDmoney normalizer does not yet trust
-  `close`, so it does not reach the quote until that is settled for the feed.
+  goes in `ohlc.close`. The market feed's `close` is the last price instead (measured 2026-09-15), so the
+  INDmoney normalizer never uses `close`, and this previous close does not reach the quote.
 - The order book is five rows of `{buy, sell}` pairs whose numbers are strings with Indian digit
   grouping - `"1,56,975"`, `"1,257.50"` - and no order counts; `aggregate.total_buy` and `total_sell`
   are the buy and sell quantities.
