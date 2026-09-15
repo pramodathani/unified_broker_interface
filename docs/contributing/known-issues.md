@@ -61,6 +61,14 @@ writes as unauthorised, that Stoxkart had no live session or algo identifier, an
 not approved for placing orders, so those three are rotated through but the least likely to succeed.
 `UNIFIED_BROKER_INTERFACE_API_ORDER_EXCLUDED_BROKERS` takes them out of the rotation.
 
+**Cancelling an order is unconfirmed live, and misses some orders.** `DELETE /api/orders/cancel` finds an
+order's broker in the `<broker>:orders:orders` hashes, so it cannot cancel an order that no order script has
+recorded yet, and it never finds a Stoxkart order, because Stoxkart has no order scripts. Each broker's cancel
+request is copied from the `build_cancel` methods removed in commit 4cc8c91 and was checked only against
+stubbed answers. Kotak's request always sends `am` as `NO`, as the removed code did, so a Kotak after-market
+order may be refused. INDmoney's fallback segment, used when the stored order names none, assumes derivative
+order ids start with `DRV`, which has not been seen on a live order.
+
 **Most unified tick normalizers are unconfirmed live.** Only Zerodha is verified, and Dhan agrees with it
 on stored in-session MCX ticks but has no in-session NSE ticks stored. Kotak agreed with it on every field
 in a live NSE and MCX session on 2026-09-15, and INDmoney on NSE the same day, but neither is yet marked

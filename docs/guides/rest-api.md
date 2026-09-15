@@ -6,8 +6,8 @@ sends that token with every other request.
 
 Six groups of endpoints are served today: the session, the user, broker and exchange details, the
 [instruments](#instruments), the [portfolio](#portfolio) - funds, holdings and positions - and
-[orders](#orders) - today's order book and trade book, and [placing an order](#placing-an-order). The API
-places orders but does not modify or cancel them.
+[orders](#orders) - today's order book and trade book, [placing an order](#placing-an-order) and
+[cancelling an order](#cancelling-an-order). The API places and cancels orders but does not modify them.
 
 ## Running it
 
@@ -45,6 +45,7 @@ come from the environment. All four variables are optional, and each is read onc
 | `GET` | `/api/orders/details` | `access-token` header | Today's orders at every broker, from `unified:orders:orders` |
 | `GET` | `/api/orders/trades` | `access-token` header | Today's trades at every broker, from `unified:orders:trades` |
 | `POST` | `/api/orders/place` | `access-token` header | Places one order at the next broker in a round robin, see [Placing an order](#placing-an-order) |
+| `DELETE` | `/api/orders/cancel` | `access-token` header | Cancels one order at the broker that holds it, see [Cancelling an order](#cancelling-an-order) |
 
 Errors come back as `{"error": "…"}`. A refused token is `401`, with a message saying whether it
 was missing, not the token in force, or expired. A detail collection with nothing in it is `404`.
@@ -531,13 +532,15 @@ change come from the unified quote, falling back to the broker's price and previ
 ## Orders
 
 Everything under `/api/orders` takes the `access-token` header. The order book and trade book below answer
-`GET`, and [placing an order](#placing-an-order) is a `POST`. Nothing modifies or cancels an order.
+`GET`, [placing an order](#placing-an-order) is a `POST` and [cancelling an order](#cancelling-an-order) is a
+`DELETE`. Nothing modifies an order.
 
 | Path | Parameters | Returns | Answered from |
 | --- | --- | --- | --- |
 | `/details` | none | Today's orders at every broker, and how each broker's data was read | `unified:orders:orders`, written by `bin/unified/orders` every half second |
 | `/trades` | none | Today's trades at every broker, and how each broker's data was read | `unified:orders:trades`, written by `bin/unified/trades` every half second |
 | `/place` | a JSON body, below | The broker's answer to one order | one request to the broker whose turn it is |
+| `/cancel` | `order_id`, below | The broker's answer to one cancel | one request to the broker whose order book holds the order |
 
 ```bash
 curl -s localhost:8080/api/orders/details -H "access-token: $TOKEN"
@@ -632,8 +635,9 @@ shares, so consecutive orders go to consecutive brokers.
 !!! danger "This places real orders on live trading accounts"
 
     Every request without `"dry_run": true` reaches a broker, and an order the broker accepts is live at the
-    exchange. The API has no route that cancels it: cancel it at the broker. Try a new body with `dry_run`
-    first, which answers with the exact request that would have been sent and sends nothing.
+    exchange. It can be cancelled with [`DELETE /api/orders/cancel`](#cancelling-an-order) once its broker's order
+    scripts have recorded it, or at the broker. Try a new body with `dry_run` first, which answers with the exact
+    request that would have been sent and sends nothing.
 
 The endpoint is built for latency. Before the broker's own place-order call it reads Redis only, in two
 round trips, or three when the instrument is named by its fields, and it never reads MongoDB or PostgreSQL
@@ -726,3 +730,90 @@ restart, because the token is read from Redis on every order.
     midnight and that warm every order is refused with `404`. `python -m
     stock_brokers.instruments.mapping.utilities.warm_cache` warms them by hand. See
     [Known issues](../contributing/known-issues.md).
+
+### Cancelling an order
+
+`DELETE /api/orders/cancel` cancels one order, named by the broker's own `order_id`, at the broker whose order
+book holds it. The caller does not say which broker: the API looks the id up in every broker's
+`<broker>:orders:orders` hash in Redis, which each broker's order book poller and order update websocket keep,
+and sends the cancel to the one broker whose hash holds it.
+
+!!! danger "This cancels real orders on live trading accounts"
+
+    Every request without `"dry_run": true` reaches a broker. Try it with `dry_run` first, which answers with
+    the exact request that would have been sent and sends nothing.
+
+The endpoint is built the way placement is. Before the broker's cancel call it reads Redis once, in one
+round trip, and it never reads MongoDB or PostgreSQL. It reuses the same open HTTPS connection per broker as
+placement.
+
+```text
+request ──► check the parameters (no I/O)
+        ──► Redis: API token, broker logins and settings, and the order id in all ten orders hashes
+        ──► find the one broker holding the order, refuse a finished order (no I/O)
+        ──► one request to that broker
+```
+
+The parameters can be sent as a JSON body or in the query string.
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `order_id` | yes | The broker's order id, as `POST /api/orders/place` and `GET /api/orders/details` answer it |
+| `broker` | no | The broker's name, needed only when two brokers hold an order with the same id |
+| `dry_run` | no | `true` to answer with the request instead of sending it |
+
+```bash
+curl -s -X DELETE localhost:8080/api/orders/cancel -H "access-token: $TOKEN" -H 'Content-Type: application/json' \
+     -d '{"order_id": "26091500012345", "dry_run": true}'
+curl -s -X DELETE "localhost:8080/api/orders/cancel?order_id=26091500012345&broker=shoonya" -H "access-token: $TOKEN"
+```
+
+An order becomes cancellable only once its broker's scripts have recorded it. The poller reads the order book
+every half second, or every five seconds at Fyers, and the websocket records an order as the broker pushes
+it, so an order placed a moment ago can still be answered `404`. Stoxkart has no order scripts, so a
+Stoxkart order is never found. Flattrade and Shoonya both number orders as the date followed by eight digits,
+so the same id can turn up at both. Such an id is answered `409` with the brokers listed, and the request is
+sent again with `broker`.
+
+Each broker's cancel request is shown below. Four brokers need a value besides the order id, which is read
+from the broker's own copy of the order kept beside the normalized one in Redis.
+
+| Broker | Request | Value read from the stored order |
+| --- | --- | --- |
+| Zerodha | `DELETE /orders/{variety}/{order_id}` | `variety`, `regular` when absent |
+| Dhan | `DELETE /v2/orders/{order_id}` | none |
+| Fyers | `DELETE /api/v3/orders/sync` with `{"id"}` | none |
+| Groww | `POST /v1/order/cancel` with `{"groww_order_id", "segment"}` | `segment`; answered `503` when absent |
+| INDmoney | `POST /order/cancel` with `{"order_id", "segment"}` | `segment`; when absent, `DERIVATIVE` for an id starting `DRV` and `EQUITY` otherwise |
+| Kotak | `POST {base_url}/quick/order/cancel` with `jData={"on", "am": "NO"}` | none |
+| Flattrade, Shoonya | `POST …/CancelOrder` with `jData={"uid", "norenordno"}` | none |
+| Stoxkart | `DELETE /orders/{variety}/{order_id}` | `variety`, `normal` when absent |
+| Wisdom Capital | `DELETE /interactive/orders` with `appOrderID`, `orderUniqueIdentifier` and `clientID` | `OrderUniqueIdentifier`, `ubi` when absent |
+
+Groww's order update websocket does not send an order's segment, so an order the websocket recorded last is
+answered `503` until the next order book poll replaces its entry, within about half a second.
+
+```json
+{
+  "broker": "shoonya", "order_id": "26091500012345", "status_before_cancel": "OPEN",
+  "outcome": "accepted", "status_message": null,
+  "broker_response": { "stat": "Ok", "result": "26091500012345" },
+  "timing_ms": { "preparation": 0.4, "broker": 61.8 }
+}
+```
+
+`status_before_cancel` is the order's status in Redis when the cancel was sent. An `accepted` cancel means
+the broker took the request, not that the exchange has cancelled the order, which can still fill in the
+meantime: the order book shows the result within a poll. A dry run answers `request` and `dry_run: true` in
+place of the outcome.
+
+| Status | Outcome | Meaning |
+| --- | --- | --- |
+| `200` | `accepted` | The broker accepted the cancel, or it was a dry run |
+| `422` | `rejected` | The broker refused the cancel, or it could not be connected to, so nothing was sent |
+| `504` | `unknown` | The broker answered with a server error or did not answer in time: check the order book |
+| `400` | | `order_id`, `broker` or `dry_run` is missing or malformed |
+| `401` | | The access token is missing, wrong or expired |
+| `404` | | No broker's order book in Redis holds the order id |
+| `409` | | The order is already `COMPLETE`, `CANCELLED`, `REJECTED` or `EXPIRED`, or two brokers hold the id |
+| `503` | | Redis cannot be read, or it holds no login or settings for the broker, or no segment for a Groww order |

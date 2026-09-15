@@ -1,13 +1,14 @@
 """
-`/api/orders`: today's orders and trades across every broker, and placing an order.
+`/api/orders`: today's orders and trades across every broker, and placing and cancelling an order.
 
 | Route | Does |
 | --- | --- |
 | `GET /details` | Every broker's orders, from `unified:orders:orders`, kept by `bin/unified/orders` every half second |
 | `GET /trades` | Every broker's trades, from `unified:orders:trades`, kept by `bin/unified/trades` every half second |
 | `POST /place` | Places one order at the next broker in a round robin, reading only Redis before the broker's place-order call |
+| `DELETE /cancel` | Cancels one order at the broker whose order book in Redis holds its order id |
 
-`GET /details` and `GET /trades` ask no broker. `POST /place` sends exactly one request to one broker and never reads MongoDB or PostgreSQL, so that the API's own work adds as little as possible to the time the broker takes.
+`GET /details` and `GET /trades` ask no broker. `POST /place` and `DELETE /cancel` each send exactly one request to one broker and never read MongoDB or PostgreSQL, so that the API's own work adds as little as possible to the time the broker takes.
 """
 
 import datetime
@@ -29,10 +30,10 @@ from utilities.configurations import api_configuration
 
 
 class OrdersBlueprint(BaseBlueprint):
-    """The `/api/orders` routes: order and trade books from Redis, and order placement.
+    """The `/api/orders` routes: order and trade books from Redis, and placing and cancelling orders.
 
     Attributes:
-        broker_sessions (dict): One `requests.Session` per broker name, created on the first order sent to that broker, so later orders reuse its open connection.
+        broker_sessions (dict): One `requests.Session` per broker name, created on the first order or cancel sent to that broker, so later requests reuse its open connection.
         broker_sessions_lock (threading.Lock): Guards the creation of entries in `broker_sessions` across the worker's threads.
     """
 
@@ -41,6 +42,7 @@ class OrdersBlueprint(BaseBlueprint):
         ('/details', 'details', ['GET']),
         ('/trades', 'trades', ['GET']),
         ('/place', 'place', ['POST']),
+        ('/cancel', 'cancel', ['DELETE']),
     ]
 
     def __init__(self):
@@ -1345,6 +1347,576 @@ class OrdersBlueprint(BaseBlueprint):
             'status_message': status_message,
             'broker_response': response_body,
             'skipped': skipped,
+            'timing_ms': {
+                'preparation': round(preparation_milliseconds, 3),
+                'broker': round(broker_milliseconds, 3),
+            },
+        }), outcome_statuses[outcome]
+
+    def cancel(self):
+        """Cancels one order at the broker whose order book holds it.
+
+        The order is named by `order_id`, the broker's own order id as `POST /place` and `GET /details` answer it, given in the JSON body or the query string.
+        `broker` may also be given, and is needed only when two brokers hold an order with the same id.
+        With `dry_run` it answers with the request it would have sent instead of sending it.
+
+        The broker is found by looking the order id up in every broker's `<broker>:orders:orders` hash, which the broker's order poller and order update websocket keep in Redis.
+        An order can therefore be cancelled only once one of those scripts has recorded it, and a Stoxkart order is never found, because Stoxkart has no order scripts.
+        The method reads Redis in one round trip and then sends one request to one broker.
+        It never reads MongoDB or PostgreSQL and never retries a sent cancel.
+        Every failure is answered with an HTTP status rather than raised.
+
+        Returns:
+            tuple: The Flask JSON response (flask.Response) and its HTTP status (int), which is 200 when the broker accepted the cancel or for a dry run, 422 when the broker refused it, 504 when the outcome is unknown, 400 for a malformed order_id, broker or dry_run, 401 for a missing, wrong or expired access token, 404 when no broker's order book in Redis holds the order, 409 when the order has already finished or two brokers hold the order id, and 503 when Redis cannot be read or does not hold the broker's login, settings or the order's details.
+        """
+        started_at = time.perf_counter()
+
+        access_token = request.headers.get('access-token')
+        if not access_token:
+            return jsonify({'error': 'Access token is required'}), 401
+
+        broker_names = [
+            'dhan',
+            'flattrade',
+            'fyers',
+            'groww',
+            'indmoney',
+            'kotak',
+            'shoonya',
+            'stoxkart',
+            'wisdom_capital',
+            'zerodha',
+        ]
+
+        body = request.get_json(silent=True)
+        if body is None:
+            body = {}
+        if not isinstance(body, dict):
+            message = 'the request body must be a JSON object'
+            return jsonify({'error': message}), 400
+
+        order_id = body.get('order_id')
+        if order_id is None:
+            order_id = request.args.get('order_id')
+        if order_id is None or order_id == '':
+            return jsonify({'error': 'order_id is required'}), 400
+        if isinstance(order_id, int) and not isinstance(order_id, bool):
+            order_id = str(order_id)
+        if isinstance(order_id, str):
+            order_id = order_id.strip()
+        if not isinstance(order_id, str) or not re.fullmatch(
+            r'[A-Za-z0-9_-]{1,64}',
+            order_id,
+        ):
+            message = (
+                'order_id must be 1 to 64 letters, digits, hyphens or underscores'
+            )
+            return jsonify({'error': message}), 400
+
+        requested_broker = body.get('broker')
+        if requested_broker is None:
+            requested_broker = request.args.get('broker')
+        if requested_broker is None or requested_broker == '':
+            requested_broker = None
+        else:
+            requested_broker = str(requested_broker).strip().lower()
+            if requested_broker not in broker_names:
+                message = 'broker must be one of ' + ', '.join(broker_names)
+                return jsonify({'error': message}), 400
+
+        true_spellings = [
+            'true',
+            '1',
+            'yes',
+        ]
+        false_spellings = [
+            'false',
+            '0',
+            'no',
+            '',
+        ]
+        raw_dry_run = body.get('dry_run')
+        if raw_dry_run is None:
+            raw_dry_run = request.args.get('dry_run')
+        if raw_dry_run is None:
+            dry_run = False
+        elif isinstance(raw_dry_run, bool):
+            dry_run = raw_dry_run
+        elif str(raw_dry_run).strip().lower() in true_spellings:
+            dry_run = True
+        elif str(raw_dry_run).strip().lower() in false_spellings:
+            dry_run = False
+        else:
+            message = 'dry_run must be true or false'
+            return jsonify({'error': message}), 400
+
+        try:
+            pipeline = self.cache.pipeline(transaction=False)
+            pipeline.hget('last_login', 'unified_broker_interface')
+            pipeline.hmget('last_login', broker_names)
+            pipeline.hmget('settings', broker_names)
+            for broker_name in broker_names:
+                pipeline.hget(f'{broker_name}:orders:orders', order_id)
+            replies = pipeline.execute()
+        except redis.RedisError as error:
+            return jsonify({'error': f'Redis could not be read: {error}'}), 503
+        token_document_text = replies[0]
+        login_texts = replies[1]
+        settings_texts = replies[2]
+        order_texts = replies[3:]
+
+        token_document = None
+        if token_document_text:
+            try:
+                token_document = json.loads(token_document_text)
+            except ValueError:
+                token_document = None
+        stored_token = None
+        if isinstance(token_document, dict):
+            stored_token = token_document.get('access_token')
+        if not stored_token or not hmac.compare_digest(
+            access_token.encode(),
+            str(stored_token).encode(),
+        ):
+            return jsonify({'error': 'Invalid access token'}), 401
+        try:
+            expires_at = datetime.datetime.strptime(
+                token_document['expires_at'],
+                '%Y-%m-%d %H:%M:%S.%f',
+            )
+        except (KeyError, TypeError, ValueError):
+            expires_at = None
+        if expires_at is None or expires_at <= datetime.datetime.now():
+            return jsonify({'error': 'Access token has expired'}), 401
+
+        matched_entries = {}
+        for position, broker_name in enumerate(broker_names):
+            if requested_broker is not None and broker_name != requested_broker:
+                continue
+            order_text = order_texts[position]
+            if not order_text:
+                continue
+            try:
+                entry = json.loads(order_text)
+            except ValueError:
+                entry = None
+            if isinstance(entry, dict):
+                matched_entries[broker_name] = entry
+
+        if not matched_entries:
+            message = 'no broker order book in Redis holds this order_id'
+            return jsonify({
+                'error': message,
+                'order_id': order_id,
+            }), 404
+        if len(matched_entries) > 1:
+            message = (
+                'more than one broker holds an order with this order_id, so give broker'
+            )
+            return jsonify({
+                'error': message,
+                'order_id': order_id,
+                'brokers': list(matched_entries),
+            }), 409
+
+        chosen_broker = list(matched_entries)[0]
+        entry = matched_entries[chosen_broker]
+        order = entry.get('order')
+        if not isinstance(order, dict):
+            order = {}
+        order_data = entry.get('data')
+        if not isinstance(order_data, dict):
+            order_data = {}
+
+        order_status = order.get('status')
+        finished_statuses = [
+            'COMPLETE',
+            'CANCELLED',
+            'REJECTED',
+            'EXPIRED',
+        ]
+        if order_status in finished_statuses:
+            message = f'the order is already {order_status}'
+            return jsonify({
+                'error': message,
+                'broker': chosen_broker,
+                'order_id': order_id,
+            }), 409
+
+        settings_fields = {
+            'dhan': [],
+            'flattrade': [
+                'username',
+            ],
+            'fyers': [
+                'app_id',
+            ],
+            'groww': [],
+            'indmoney': [],
+            'kotak': [],
+            'shoonya': [
+                'ucc_code',
+            ],
+            'stoxkart': [
+                'ucc_code',
+                'api_key',
+            ],
+            'wisdom_capital': [
+                'ucc_code',
+            ],
+            'zerodha': [
+                'api_key',
+            ],
+        }
+
+        position = broker_names.index(chosen_broker)
+        login = None
+        if login_texts[position]:
+            try:
+                login = json.loads(login_texts[position])
+            except ValueError:
+                login = None
+        if not isinstance(login, dict) or not login.get('access_token'):
+            message = f'{chosen_broker} has no login in Redis'
+            return jsonify({
+                'error': message,
+                'broker': chosen_broker,
+                'order_id': order_id,
+            }), 503
+        if chosen_broker == 'kotak' and not login.get('sid'):
+            message = 'kotak has no sid in its login in Redis'
+            return jsonify({
+                'error': message,
+                'broker': chosen_broker,
+                'order_id': order_id,
+            }), 503
+
+        broker_settings = {}
+        if settings_texts[position]:
+            try:
+                broker_settings = json.loads(settings_texts[position])
+            except ValueError:
+                broker_settings = {}
+        if not isinstance(broker_settings, dict):
+            broker_settings = {}
+        missing_settings = []
+        for settings_field in settings_fields[chosen_broker]:
+            if not broker_settings.get(settings_field):
+                missing_settings.append(settings_field)
+        if missing_settings:
+            message = (
+                f'{chosen_broker} has no '
+                + ', '.join(missing_settings)
+                + ' in its Redis settings'
+            )
+            return jsonify({
+                'error': message,
+                'broker': chosen_broker,
+                'order_id': order_id,
+            }), 503
+
+        login_token = str(login.get('access_token'))
+        request_method = 'POST'
+        request_url = None
+        request_headers = {}
+        request_params = None
+        request_data = None
+        request_json = None
+        shown_form = None
+        verify_certificate = True
+
+        if chosen_broker == 'zerodha':
+            variety = str(order_data.get('variety') or 'regular')
+            request_method = 'DELETE'
+            request_url = f'https://api.kite.trade/orders/{variety}/{order_id}'
+            request_headers = {
+                'X-Kite-Version': '3',
+                'Authorization': (
+                    f'token {broker_settings["api_key"]}:{login_token}'
+                ),
+            }
+
+        elif chosen_broker == 'dhan':
+            request_method = 'DELETE'
+            request_url = f'https://api.dhan.co/v2/orders/{order_id}'
+            request_headers = {
+                'access-token': login_token,
+            }
+
+        elif chosen_broker == 'fyers':
+            request_method = 'DELETE'
+            request_url = 'https://api-t1.fyers.in/api/v3/orders/sync'
+            request_headers = {
+                'Authorization': f'{broker_settings["app_id"]}:{login_token}',
+            }
+            request_json = {
+                'id': order_id,
+            }
+
+        elif chosen_broker == 'groww':
+            segment = order_data.get('segment')
+            if not segment:
+                message = (
+                    "Redis does not hold this Groww order's segment yet, so try again after Groww's next order book poll"
+                )
+                return jsonify({
+                    'error': message,
+                    'broker': chosen_broker,
+                    'order_id': order_id,
+                }), 503
+            request_url = 'https://api.groww.in/v1/order/cancel'
+            request_headers = {
+                'Accept': 'application/json',
+                'Authorization': f'Bearer {login_token}',
+                'X-API-Version': '1.0',
+            }
+            request_json = {
+                'groww_order_id': order_id,
+                'segment': str(segment),
+            }
+
+        elif chosen_broker == 'indmoney':
+            segment = order_data.get('segment')
+            if not segment:
+                if order_id.upper().startswith('DRV'):
+                    segment = 'DERIVATIVE'
+                else:
+                    segment = 'EQUITY'
+            request_url = 'https://api.indstocks.com/order/cancel'
+            request_headers = {
+                'Authorization': login_token,
+            }
+            request_json = {
+                'order_id': order_id,
+                'segment': str(segment),
+            }
+
+        elif chosen_broker == 'kotak':
+            base_url = str(login.get('base_url') or '').strip()
+            base_url = base_url.rstrip('/')
+            if not base_url or base_url == 'None':
+                base_url = 'https://gw-napi.kotaksecurities.com'
+            elif not base_url.startswith((
+                'http://',
+                'https://',
+            )):
+                base_url = f'https://{base_url}'
+            request_url = f'{base_url}/quick/order/cancel'
+            request_headers = {
+                'neo-fin-key': 'neotradeapi',
+                'Auth': login_token,
+                'Sid': str(login.get('sid')),
+            }
+            kotak_fields = {
+                'on': order_id,
+                'am': 'NO',
+            }
+            request_data = {
+                'jData': json.dumps(kotak_fields),
+            }
+            shown_form = request_data
+
+        elif chosen_broker == 'stoxkart':
+            variety = str(order_data.get('variety') or 'normal')
+            request_method = 'DELETE'
+            request_url = (
+                f'https://openapi.stoxkart.com/orders/{variety}/{order_id}'
+            )
+            request_headers = {
+                'X-Client-Id': str(broker_settings['ucc_code']),
+                'X-Platform': 'api',
+                'X-Api-Key': str(broker_settings['api_key']),
+                'X-Access-Token': login_token,
+            }
+
+        elif chosen_broker == 'wisdom_capital':
+            if order_id.isdigit():
+                application_order_id = int(order_id)
+            else:
+                application_order_id = order_id
+            unique_identifier = order_data.get('OrderUniqueIdentifier')
+            if not unique_identifier:
+                unique_identifier = 'ubi'
+            request_method = 'DELETE'
+            request_url = 'https://trade.wisdomcapital.in/interactive/orders'
+            request_headers = {
+                'authorization': login_token,
+            }
+            request_params = {
+                'appOrderID': application_order_id,
+                'orderUniqueIdentifier': str(unique_identifier),
+                'clientID': str(broker_settings['ucc_code']),
+            }
+            verify_certificate = False
+
+        else:
+            if chosen_broker == 'flattrade':
+                base_url = 'https://piconnect.flattrade.in/PiConnectAPI'
+                account_identifier = str(broker_settings['username'])
+            else:
+                base_url = 'https://api.shoonya.com/NorenWClientAPI'
+                account_identifier = str(broker_settings['ucc_code'])
+            request_url = f'{base_url}/CancelOrder'
+            noren_fields = {
+                'uid': account_identifier,
+                'norenordno': order_id,
+            }
+            escaped_fields = json.dumps(noren_fields).replace('&', '\\u0026')
+            request_data = f'jData={escaped_fields}&jKey={login_token}'
+            shown_form = noren_fields
+
+        if dry_run:
+            shown_request = {
+                'method': request_method,
+                'url': request_url,
+            }
+            if request_params is not None:
+                shown_request['params'] = request_params
+            if shown_form is not None:
+                shown_request['form'] = shown_form
+            elif request_json is not None:
+                shown_request['json'] = request_json
+            preparation_milliseconds = (time.perf_counter() - started_at) * 1000
+            return jsonify({
+                'broker': chosen_broker,
+                'order_id': order_id,
+                'status_before_cancel': order_status,
+                'dry_run': True,
+                'request': shown_request,
+                'timing_ms': {
+                    'preparation': round(preparation_milliseconds, 3),
+                },
+            }), 200
+
+        with self.broker_sessions_lock:
+            session = self.broker_sessions.get(chosen_broker)
+            if session is None:
+                session = requests.Session()
+                self.broker_sessions[chosen_broker] = session
+
+        outcome = 'unknown'
+        status_message = None
+        response_body = None
+        sent_at = time.perf_counter()
+        try:
+            response = session.request(
+                request_method,
+                request_url,
+                params=request_params,
+                data=request_data,
+                json=request_json,
+                headers=request_headers,
+                timeout=(3.05, 10),
+                verify=verify_certificate,
+            )
+        except requests.exceptions.ConnectTimeout as error:
+            response = None
+            outcome = 'rejected'
+            status_message = (
+                f'could not connect to the broker, so nothing was sent: {error}'
+            )
+        except requests.exceptions.RequestException as error:
+            response = None
+            outcome = 'unknown'
+            status_message = f'{type(error).__name__}: {error}'
+        answered_at = time.perf_counter()
+
+        if response is not None:
+            try:
+                response_body = response.json()
+            except ValueError:
+                response_body = response.text[:300]
+            response_fields = {}
+            if isinstance(response_body, dict):
+                response_fields = response_body
+
+            if response.status_code >= 300:
+                error_message_keys = [
+                    'message',
+                    'errorMessage',
+                    'emsg',
+                    'description',
+                    'errMsg',
+                ]
+                error_message = None
+                for key in error_message_keys:
+                    if response_fields.get(key):
+                        error_message = str(response_fields.get(key))
+                        break
+                nested_error = response_fields.get('error')
+                if isinstance(nested_error, dict) and not error_message:
+                    error_message = nested_error.get('message')
+                status_message = str(error_message or response_body)[:300]
+                if response.status_code < 500:
+                    outcome = 'rejected'
+                else:
+                    outcome = 'unknown'
+
+            else:
+                refusal = None
+                if chosen_broker == 'fyers':
+                    fyers_state = response_fields.get('s')
+                    if fyers_state is not None and fyers_state != 'ok':
+                        refusal = response_fields.get('message')
+                        if not refusal:
+                            refusal = f's {fyers_state}'
+                elif chosen_broker == 'groww':
+                    groww_status = response_fields.get('status')
+                    if groww_status is not None and groww_status != 'SUCCESS':
+                        nested_error = response_fields.get('error')
+                        if isinstance(nested_error, dict):
+                            refusal = nested_error.get('message')
+                        if not refusal:
+                            refusal = response_fields.get('message')
+                        if not refusal:
+                            refusal = f'status {groww_status}'
+                elif chosen_broker == 'indmoney':
+                    status_text = str(response_fields.get('status', 'success'))
+                    if status_text.lower() != 'success':
+                        refusal = response_fields.get('message')
+                        if not refusal:
+                            refusal = f'status {status_text}'
+                elif chosen_broker == 'kotak':
+                    kotak_refused = response_fields.get('stat') == 'Not_Ok'
+                    if kotak_refused or response_fields.get('errMsg'):
+                        refusal = response_fields.get('errMsg')
+                        if not refusal:
+                            refusal = 'the broker refused the request'
+                elif chosen_broker == 'wisdom_capital':
+                    xts_type = response_fields.get('type')
+                    if xts_type is not None and xts_type != 'success':
+                        refusal = response_fields.get('description')
+                        if not refusal:
+                            refusal = response_fields.get('message')
+                        if not refusal:
+                            refusal = f'type {xts_type}'
+                elif chosen_broker == 'flattrade' or chosen_broker == 'shoonya':
+                    stat = str(response_fields.get('stat', ''))
+                    if stat.lower() != 'ok':
+                        refusal = response_fields.get('emsg')
+                        if not refusal:
+                            refusal = 'the broker refused the request'
+
+                if refusal is not None:
+                    outcome = 'rejected'
+                    status_message = str(refusal)[:300]
+                else:
+                    outcome = 'accepted'
+
+        outcome_statuses = {
+            'accepted': 200,
+            'rejected': 422,
+            'unknown': 504,
+        }
+        preparation_milliseconds = (sent_at - started_at) * 1000
+        broker_milliseconds = (answered_at - sent_at) * 1000
+        return jsonify({
+            'broker': chosen_broker,
+            'order_id': order_id,
+            'status_before_cancel': order_status,
+            'outcome': outcome,
+            'status_message': status_message,
+            'broker_response': response_body,
             'timing_ms': {
                 'preparation': round(preparation_milliseconds, 3),
                 'broker': round(broker_milliseconds, 3),
