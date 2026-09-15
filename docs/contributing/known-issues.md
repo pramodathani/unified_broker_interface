@@ -146,10 +146,19 @@ stubbed answers. Kotak's request always sends `am` as `NO`, as the removed code 
 order may be refused. INDmoney's fallback segment, used when the stored order names none, assumes derivative
 order ids start with `DRV`, which has not been seen on a live order.
 
-**Modifying an order is not confirmed live at any broker.** `PUT /api/orders/modify` was added on 2026-09-15.
-Each broker's request is built from that broker's current documentation, its official SDK and, for Kotak,
-which publishes no raw REST documentation, from Kotak's SDK and one production library, and every request was
-checked only against stubbed answers. Several things are still open:
+**Modifying an order is confirmed live only at Stoxkart, and only on an after-market order.** `PUT /api/orders/modify`
+was added on 2026-09-15. Each broker's request is built from that broker's current documentation, its official SDK
+and, for Kotak, which publishes no raw REST documentation, from Kotak's SDK and one production library.
+
+At 22:48 IST that day the branch's routes were run in-process against the live Redis, with every other broker
+excluded. They placed an after-market NSE buy of one KWIL share at ₹33 with Stoxkart, order `526091532861`, changed
+its price to ₹32.50 and then its quantity to 2, and cancelled it. Each request was answered HTTP 200 with outcome
+`accepted` in 149 to 187 ms of broker time: `Order Submitted`, then `Order Submitted For Modification` twice, then
+`Order Submitted For Cancellation`. Within a second of each, Stoxkart's order book in Redis showed the new price, the
+new quantity, and finally `AMO CANCELLED` with nothing filled. The route found the order's instrument from its stored
+token `760946` both times, so the price passed the tick check and the quantity the lot check.
+
+Every other broker's modify request was checked only against stubbed answers. Several things are still open:
 
 | Broker | Not yet confirmed |
 | --- | --- |
@@ -157,11 +166,12 @@ checked only against stubbed answers. Several things are still open:
 | Dhan | Whether `legName`, which Dhan documents only for bracket and cover orders, is needed on a regular order, and whether `STOP_LOSS_MARKET` is honoured |
 | Fyers, Groww, INDmoney, Stoxkart, Wisdom Capital | Whether the quantity is the new total quantity or the pending quantity after a partial fill; Zerodha, Dhan and Noren document the total |
 | Kotak | Whether `dd`, `fq` and `am`, which Kotak's SDK sends and a production library leaves out, are needed |
-| Stoxkart | Whether a modification needs the `X-Algo-Id` header, which is sent because placements need it |
+| Stoxkart | Whether a modification needs the `X-Algo-Id` header, which was sent in the live test because placements need it; and how a modification behaves on an order during market hours |
 
 The modification finds the order's instrument from the broker token stored on the order, and treats the token as
-text that must equal the token in `unified:catalogue:<date>:tokens:<broker>`. Nothing has checked that the stored
-tokens match at Kotak, whose order book calls it `tok` while the mapping reads `psymbol`, or at INDmoney. Where
+text that must equal the token in `unified:catalogue:<date>:tokens:<broker>`. The stored tokens were seen to match
+at Stoxkart, where BSE KWIL's token `544622` also names an MCX commodity option, which the exchange check tells apart.
+Nothing has checked that the stored tokens match at Kotak, whose order book calls it `tok` while the mapping reads `psymbol`, or at INDmoney. Where
 they differ, a price change is sent without the tick check and a quantity change is refused. Groww stores no
 token on its orders, so a Groww modification is never checked against the tick size.
 

@@ -874,8 +874,9 @@ broker's `<broker>:orders:orders` hash in Redis, so an order placed outside the 
 !!! danger "This changes real orders on live trading accounts"
 
     Every request without `"dry_run": true` reaches a broker. Try it with `dry_run` first, which answers with
-    the exact request that would have been sent and sends nothing. No modification has been sent to a live
-    broker yet: every request below is built from the broker's documentation and checked only against stubs.
+    the exact request that would have been sent and sends nothing. Modification is confirmed live only at
+    Stoxkart, on an after-market order: every other broker's request below is built from the broker's
+    documentation and checked only against stubs. See [Known issues](../contributing/known-issues.md).
 
 A modification is checked the way a placement is. A new `quantity` is in units, as `POST /api/orders/place`
 takes it, and is converted into the broker's own terms with this morning's contract size decision, because the
