@@ -1365,6 +1365,41 @@ class OrderRoutesState:
                 price=6000.0,
             ),
         )
+        books['kotak']['KOTAKAMO'] = self.order_entry(
+            'PENDING',
+            {
+                'trdSym': 'RELIANCE-EQ',
+                'ordGenTp': 'AMO',
+            },
+            order_fields=self.limit_order('kotak', 'nse_cm'),
+        )
+        books['kotak']['MODKOTAKNOSIDE'] = self.order_entry(
+            'OPEN',
+            {
+                'trdSym': 'RELIANCE-EQ',
+            },
+            order_fields=self.limit_order(
+                'kotak',
+                'nse_cm',
+                transaction_type=None,
+            ),
+        )
+        books['indmoney']['EQ-MODNOVALIDITY'] = self.order_entry(
+            'PENDING',
+            {
+                'segment': 'EQUITY',
+            },
+            order_fields=self.limit_order(
+                'indmoney',
+                'NSE',
+                validity=None,
+            ),
+        )
+        books['dhan']['MODDHANNOVALIDITY'] = self.order_entry(
+            'OPEN',
+            {},
+            order_fields=self.limit_order('dhan', 'NSE_EQ', validity=None),
+        )
         books['kotak']['MODKOTAKNOSYMBOL'] = self.order_entry(
             'OPEN',
             {},
@@ -3225,6 +3260,26 @@ class OrderRoutesScenarios:
                 'modify_kotak_without_trading_symbol',
                 self.modify_body('MODKOTAKNOSYMBOL', price=2501),
             ),
+            self.modify(
+                'modify_kotak_stored_transaction_type_missing',
+                self.modify_body('MODKOTAKNOSIDE', price=2501),
+            ),
+            self.modify(
+                'modify_indmoney_stored_validity_missing',
+                self.modify_body(
+                    'EQ-MODNOVALIDITY',
+                    price='33.5',
+                    dry_run=True,
+                ),
+            ),
+            self.modify(
+                'modify_dhan_stored_validity_missing',
+                self.modify_body('MODDHANNOVALIDITY', price=2501),
+            ),
+            self.modify(
+                'modify_kotak_after_market_order',
+                self.modify_body('KOTAKAMO', price=2501, dry_run=True),
+            ),
         ]
 
     def modify_merge_scenarios(self):
@@ -3648,6 +3703,10 @@ class OrderRoutesScenarios:
             self.cancel(
                 'cancel_stoxkart_variety_from_data',
                 self.cancel_body('SX0002', dry_run=True),
+            ),
+            self.cancel(
+                'cancel_kotak_after_market_order',
+                self.cancel_body('KOTAKAMO', dry_run=True),
             ),
             self.cancel(
                 'cancel_wisdom_capital_identifier_not_numeric',

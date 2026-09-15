@@ -153,6 +153,9 @@ class DhanOrders(BrokerOrders):
 
         Returns:
             BrokerRequest: The request.
+
+        Raises:
+            OrderNotReadyError: When Redis does not hold the order's validity.
         """
         json_body = {
             'dhanClientId': str(settings['client_id']),
@@ -162,7 +165,7 @@ class DhanOrders(BrokerOrders):
             'price': modification.price_number,
             'disclosedQuantity': modification.disclosed_quantity,
             'triggerPrice': modification.trigger_price_number,
-            'validity': modification.validity,
+            'validity': self.stored_value(modification.validity, 'validity'),
         }
         return BrokerRequest(
             'PUT',

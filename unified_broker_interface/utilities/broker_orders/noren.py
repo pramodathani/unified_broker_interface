@@ -172,7 +172,7 @@ class NorenOrders(BrokerOrders):
             BrokerRequest: The request.
 
         Raises:
-            OrderNotReadyError: When Redis does not hold the order's exchange or trading symbol.
+            OrderNotReadyError: When Redis does not hold the order's exchange, trading symbol or validity.
         """
         if modification.exchange is None or modification.tradingsymbol is None:
             message = (
@@ -190,7 +190,7 @@ class NorenOrders(BrokerOrders):
             'qty': str(modification.quantity),
             'prctyp': self.ORDER_TYPE_CODES[modification.order_type],
             'prc': modification.price_text,
-            'ret': modification.validity,
+            'ret': self.stored_value(modification.validity, 'validity'),
         }
         if modification.trigger_price is not None:
             noren_fields['trgprc'] = modification.trigger_price_text

@@ -200,16 +200,25 @@ class WisdomCapitalOrders(BrokerOrders):
 
         Returns:
             BrokerRequest: The request.
+
+        Raises:
+            OrderNotReadyError: When Redis does not hold the order's product or validity.
         """
         json_body = {
             'appOrderID': self.application_order_id(order_id),
-            'modifiedProductType': modification.product,
+            'modifiedProductType': self.stored_value(
+                modification.product,
+                'product',
+            ),
             'modifiedOrderType': self.ORDER_TYPE_CODES[modification.order_type],
             'modifiedOrderQuantity': modification.quantity,
             'modifiedDisclosedQuantity': modification.disclosed_quantity,
             'modifiedLimitPrice': modification.price_number,
             'modifiedStopPrice': modification.trigger_price_number,
-            'modifiedTimeInForce': modification.validity,
+            'modifiedTimeInForce': self.stored_value(
+                modification.validity,
+                'validity',
+            ),
             'orderUniqueIdentifier': self.unique_identifier(stored_order),
             'clientID': str(settings['ucc_code']),
         }

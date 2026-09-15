@@ -137,7 +137,7 @@ Because the order id is sent before the token is checked, a malformed `order_id`
 
 ## Values a cancel needs besides the order id
 
-Four brokers need a second value, and the method reads it from the broker's own copy of the order under `data` in the hash entry, instead of fetching the order book as the removed code did, which would have cost a second broker call.
+Six brokers need a second value, and the method reads it from the broker's own copy of the order under `data` in the hash entry, instead of fetching the order book as the removed code did, which would have cost a second broker call.
 
 | Broker | Value | When the stored order lacks it |
 | --- | --- | --- |
@@ -146,8 +146,9 @@ Four brokers need a second value, and the method reads it from the broker's own 
 | Groww | `segment`, `CASH` or `FNO` | Answered `503`. Groww's websocket update, `orderDetailUpdateDto`, carries no segment, and a wrong segment would only be refused, so the method waits for the next poll to replace the entry rather than guess. |
 | INDmoney | `segment`, `EQUITY` or `DERIVATIVE` | Guessed from the id. Live equity ids look like `EQ-100072817`; the `DRV` prefix for derivatives comes from the older cancel code and has not been seen live. |
 | Wisdom Capital | `OrderUniqueIdentifier` | `ubi`, the value `place` sends when there is no tag. |
+| Kotak | `ordGenTp`, which is `AMO` for an after-market order and sets `am` to `YES` | `NO`. |
 
-Kotak's `am` is always `NO`, copied from the removed `build_cancel`. Kotak's order book field for an after-market order has not been identified, so reading it was not attempted.
+Kotak's `am` was at first always `NO`, copied from the removed `build_cancel`. On 2026-09-15 Kotak refused that cancel of a live after-market order with `hash error`, and accepted it with `YES`, so the cancel now reads Kotak's order book field `ordGenTp`, which is `AMO` for such an order.
 
 A finished order, one whose stored status is `COMPLETE`, `CANCELLED`, `REJECTED` or `EXPIRED`, is refused without calling the broker, because those statuses never change back. An `OPEN` status may be half a second stale, so an order that has just filled is still sent, and the broker refuses it.
 
@@ -227,4 +228,16 @@ On 2026-09-15 each broker's current modify documentation and official SDK were r
 `python -m test_runs.order_routes` gained 155 modify scenarios on 2026-09-15, recorded only after a run showed every one as `NEW` and none of the 457 existing scenarios as `CHANGED`. They cover the parameters, finding the order, what each broker can change, laying changes over the stored order, finding the instrument through a token that names instruments on two exchanges, converting commodity quantities at a lots broker and a lot-size broker, an untrusted contract size, Redis failures in each round trip, a repeat that the worker's cache answers in one round trip, and a dry run and every kind of answer at every broker. The answer scenarios give the same status, outcome and message as the matching cancel scenarios.
 
 The same evening, at the user's request and with their approval before each order, the branch's routes were run in-process from a scratchpad helper against the live Redis, with every broker but Stoxkart excluded through `api_configuration`, because the running API still had the code without the route and reloading it would have put unmerged code live. Stoxkart after-market order `526091532861`, one NSE KWIL share at ₹33, was modified to ₹32.50 and then to two shares, and cancelled. Stoxkart answered each modification `Order Submitted For Modification` in about 185 ms, its order book in Redis showed each change within a second, and the order ended `AMO CANCELLED` with nothing filled. The modifications were sent with Stoxkart's `X-Algo-Id` header, so whether a modification needs it is still unknown, and the quantity question, total or pending after a partial fill, could not be answered on an order that never filled.
+
+## The live round at every broker
+
+Later that evening the user asked for one round of place, modify and cancel at every broker, and gave permission to run it without asking before each order. A scratchpad helper ran the round in-process at one broker at a time, with every other broker excluded, on an after-market NSE buy of one KWIL share at ₹33, near ₹41 in the market, and checked each change in Redis before the next step. The results, and each broker's refusal, are in `docs/contributing/known-issues.md` and `docs/contributing/pitfalls.md`.
+
+The round changed three things in the code:
+
+- **Side, product and validity may be missing.** INDmoney's order book stores `validity` as an empty string, so every INDmoney modification was answered `503`, although INDmoney's modify request sends no validity; and a Shoonya quantity change was answered `503` because the entry, most likely written by Shoonya's order websocket after the price change, had no product, although Noren's modify request sends no product. `OrderModification` therefore reads these three as optional, still answering `409` for a word outside the route's vocabulary, and each builder that sends one refuses a missing value through `BrokerOrders.stored_value`. The order type stays required, because every builder and the price rules use it.
+- **Kotak's cancel reads `ordGenTp`**, as the cancel section above describes.
+- **Test prices stay inside the price band.** The first Zerodha price change, to ₹32.50, was refused as below the lower circuit limit, so the helper moved to ₹33.50, and Zerodha's round was run again and passed.
+
+The rounds at INDmoney, Shoonya, Kotak and Zerodha were run a second time after the fixes, and every step passed. Every test order ended cancelled with nothing filled.
 

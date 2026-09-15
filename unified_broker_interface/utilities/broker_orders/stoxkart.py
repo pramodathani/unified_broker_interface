@@ -187,7 +187,7 @@ class StoxkartOrders(BrokerOrders):
             BrokerRequest: The request.
 
         Raises:
-            OrderNotReadyError: When Redis does not hold the order's exchange or token.
+            OrderNotReadyError: When Redis does not hold the order's exchange, token or validity.
         """
         missing = (
             modification.exchange is None
@@ -208,7 +208,7 @@ class StoxkartOrders(BrokerOrders):
             'price': modification.price_text,
             'trigger_price': modification.trigger_price_text,
             'stop_loss_price': modification.trigger_price_text,
-            'validity': modification.validity,
+            'validity': self.stored_value(modification.validity, 'validity'),
         }
         return BrokerRequest(
             'PUT',

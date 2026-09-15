@@ -167,7 +167,7 @@ class KotakOrders(BrokerOrders):
         )
 
     def build_cancel_request(self, order_id, stored_order, login, settings):
-        """Builds `POST {base_url}/quick/order/cancel`.
+        """Builds `POST {base_url}/quick/order/cancel`, with `am` set to `YES` when Kotak's order book marks the order `ordGenTp` `AMO`, because Kotak refuses a cancel of an after-market order sent with `NO`.
 
         Args:
             order_id (str): Kotak's order id.
@@ -178,9 +178,12 @@ class KotakOrders(BrokerOrders):
         Returns:
             BrokerRequest: The request.
         """
+        after_market_text = 'NO'
+        if str(stored_order.data.get('ordGenTp') or '').upper() == 'AMO':
+            after_market_text = 'YES'
         kotak_fields = {
             'on': order_id,
-            'am': 'NO',
+            'am': after_market_text,
         }
         form = {
             'jData': json.dumps(kotak_fields),
@@ -216,7 +219,7 @@ class KotakOrders(BrokerOrders):
             BrokerRequest: The request.
 
         Raises:
-            OrderNotReadyError: When Redis does not hold the order's token, exchange segment or trading symbol.
+            OrderNotReadyError: When Redis does not hold the order's token, exchange segment, trading symbol, side, product or validity.
         """
         trading_symbol = stored_order.data.get('trdSym')
         missing = (
@@ -229,19 +232,23 @@ class KotakOrders(BrokerOrders):
                 "Redis does not hold this Kotak order's token, exchange segment and trading symbol yet, so try again after Kotak's next order book poll"
             )
             raise OrderNotReadyError(message)
+        transaction_type = self.stored_value(
+            modification.transaction_type,
+            'transaction_type',
+        )
         kotak_fields = {
             'no': order_id,
             'tk': modification.instrument_token,
             'es': modification.exchange,
             'ts': str(trading_symbol),
-            'tt': self.SIDE_CODES[modification.transaction_type],
-            'pc': modification.product,
+            'tt': self.SIDE_CODES[transaction_type],
+            'pc': self.stored_value(modification.product, 'product'),
             'pt': self.ORDER_TYPE_CODES[modification.order_type],
             'qt': str(modification.quantity),
             'pr': modification.price_text,
             'tp': modification.trigger_price_text,
             'dq': str(modification.disclosed_quantity),
-            'vd': modification.validity,
+            'vd': self.stored_value(modification.validity, 'validity'),
             'dd': 'NA',
             'mp': '0',
         }

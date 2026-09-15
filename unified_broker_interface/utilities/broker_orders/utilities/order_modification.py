@@ -23,19 +23,21 @@ class OrderModification:
 
     Building one reads nothing but the stored order and the request, so every check here costs no I/O. The quantities stay in the broker's own terms as the order scripts stored them until the blueprint converts a changed quantity and calls `with_quantities`.
 
+    The transaction type, product and validity may be missing, because some brokers' order books or websocket updates leave them out and not every broker's modify request sends them; a builder that sends one refuses a missing value with `OrderNotReadyError`.
+
     Attributes:
         ORDER_TYPES (list): The order types the route handles.
         VALIDITIES (list): The validities the route handles.
         PRODUCTS (list): The products the route handles.
         TRANSACTION_TYPES (list): The transaction types the route handles.
         changed_fields (list): The names of the fields the caller gave.
-        transaction_type (str): `BUY` or `SELL`, as stored.
-        product (str): `CNC`, `MIS` or `NRML`, as stored.
+        transaction_type (str | None): `BUY` or `SELL`, as stored, or None when Redis holds none.
+        product (str | None): `CNC`, `MIS` or `NRML`, as stored, or None when Redis holds none.
         exchange (str | None): The broker's own exchange or segment code, as stored.
         tradingsymbol (str | None): The broker's trading symbol, as stored.
         instrument_token (str | None): The broker's instrument token as text, as stored, or None.
         order_type (str): The order type after the change.
-        validity (str): The validity after the change.
+        validity (str | None): The validity after the change, or None when the caller did not change it and Redis holds none.
         quantity (int): The total quantity in the broker's own terms.
         disclosed_quantity (int): The disclosed quantity in the broker's own terms, 0 when there is none.
         price (decimal.Decimal | None): The limit price after the change, or None when the order type takes none.
@@ -87,12 +89,16 @@ class OrderModification:
         """
         order = stored_order.order
         self.changed_fields = list(modify_request.changed_fields)
-        self.transaction_type = self.stored_word(
+        self.transaction_type = self.stored_optional_word(
             order,
             'transaction_type',
             self.TRANSACTION_TYPES,
         )
-        self.product = self.stored_word(order, 'product', self.PRODUCTS)
+        self.product = self.stored_optional_word(
+            order,
+            'product',
+            self.PRODUCTS,
+        )
         self.exchange = self.stored_text(order, 'exchange')
         self.tradingsymbol = self.stored_text(order, 'tradingsymbol')
         self.instrument_token = self.stored_text(order, 'instrument_token')
@@ -109,7 +115,11 @@ class OrderModification:
         if modify_request.changes('validity'):
             self.validity = modify_request.validity
         else:
-            self.validity = self.stored_word(order, 'validity', self.VALIDITIES)
+            self.validity = self.stored_optional_word(
+                order,
+                'validity',
+                self.VALIDITIES,
+            )
 
         self.quantity = self.stored_quantity(order, 'quantity', True)
         self.disclosed_quantity = self.stored_quantity(
@@ -181,6 +191,24 @@ class OrderModification:
             message = f'the order has {field_name} {word}, which the modify route does not handle'
             raise UnmodifiableOrderError(message)
         return word
+
+    def stored_optional_word(self, order, field_name, words):
+        """Reads a stored field that, when Redis holds it, must be one of the route's words.
+
+        Args:
+            order (dict): The stored normalized order.
+            field_name (str): The field's name.
+            words (list): The words the route handles.
+
+        Returns:
+            str | None: The stored word, or None when Redis holds no value for the field.
+
+        Raises:
+            UnmodifiableOrderError: When the stored value is not one of the words.
+        """
+        if self.stored_text(order, field_name) is None:
+            return None
+        return self.stored_word(order, field_name, words)
 
     def stored_quantity(self, order, field_name, required):
         """Reads a stored quantity, in the broker's own terms.

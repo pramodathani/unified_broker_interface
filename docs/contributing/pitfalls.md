@@ -76,6 +76,26 @@ copies the order book row's variety, and `bin/stoxkart/order_updates` keeps an `
 already stored, reads `AMO` from a status starting with `AMO`, and uses the update's own variety only
 otherwise.
 
+**Kotak refuses to cancel an after-market order sent with `am` of `NO`.** On 2026-09-15 Kotak accepted an
+after-market order, two modifications of it and nothing else: the cancel, sent with `"am": "NO"` as the removed
+cancel code sent it, came back with `stCode` 14, `error from core` and `ErrorCode(16) -> ErrorText(hash error)`,
+which says nothing about the flag. The same cancel with `"am": "YES"` was accepted. Kotak's order book marks
+such an order `ordGenTp: "AMO"`, which the cancel now reads. Its modification needed no after-market flag.
+
+**Dhan refuses to modify an after-market order after hours, but cancels it.** On 2026-09-15 at 22:55 IST Dhan
+accepted an after-market order, refused both a price and a quantity modification with `DH-906`
+`Market is Closed! You cannot modify/cancel an order now.`, and then accepted a cancel of the same order a
+second later, despite the message. A modification has to be tried during market hours.
+
+**Fyers takes no after-market orders through its API.** An order with `offlineOrder: true` was refused with
+`AMO order placement is not supported via API.`, so outside market hours nothing can be placed at Fyers to
+modify.
+
+**Zerodha checks an after-market modification against the circuit limits.** Kite accepted an after-market buy of
+KWIL at ₹33 but refused a modification to ₹32.50, below the lower circuit limit of ₹32.67, with an
+`InputException`, while Stoxkart accepted the same price that evening. Test prices far from the market must stay
+inside the day's price band.
+
 ## The candle queue
 
 **The backward walk has to finish before any forward fill.** Preferring a forward fill whenever

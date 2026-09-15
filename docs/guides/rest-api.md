@@ -874,9 +874,10 @@ broker's `<broker>:orders:orders` hash in Redis, so an order placed outside the 
 !!! danger "This changes real orders on live trading accounts"
 
     Every request without `"dry_run": true` reaches a broker. Try it with `dry_run` first, which answers with
-    the exact request that would have been sent and sends nothing. Modification is confirmed live only at
-    Stoxkart, on an after-market order: every other broker's request below is built from the broker's
-    documentation and checked only against stubs. See [Known issues](../contributing/known-issues.md).
+    the exact request that would have been sent and sends nothing. Modification is confirmed live on
+    after-market orders at Flattrade, INDmoney, Kotak, Shoonya, Stoxkart and Zerodha. Dhan refused to modify an
+    after-market order after hours, Fyers takes no after-market orders through its API, and Groww's and Wisdom
+    Capital's requests are checked only against stubs. See [Known issues](../contributing/known-issues.md).
 
 A modification is checked the way a placement is. A new `quantity` is in units, as `POST /api/orders/place`
 takes it, and is converted into the broker's own terms with this morning's contract size decision, because the
@@ -1016,7 +1017,7 @@ poll, within about a second. Flattrade and Shoonya both number orders as the dat
 so the same id can turn up at both. Such an id is answered `409` with the brokers listed, and the request is
 sent again with `broker`.
 
-Each broker's cancel request is shown below. Five brokers need a value besides the order id, which is read
+Each broker's cancel request is shown below. Six brokers need a value besides the order id, which is read
 from the broker's own copy of the order kept beside the normalized one in Redis, or at Stoxkart first from
 a `variety` stored beside that copy.
 
@@ -1027,7 +1028,7 @@ a `variety` stored beside that copy.
 | Fyers | `DELETE /api/v3/orders/sync` with `{"id"}` | none |
 | Groww | `POST /v1/order/cancel` with `{"groww_order_id", "segment"}` | `segment`; answered `503` when absent |
 | INDmoney | `POST /order/cancel` with `{"order_id", "segment"}` | `segment`; when absent, `DERIVATIVE` for an id starting `DRV` and `EQUITY` otherwise |
-| Kotak | `POST {base_url}/quick/order/cancel` with `jData={"on", "am": "NO"}` | none |
+| Kotak | `POST {base_url}/quick/order/cancel` with `jData={"on", "am"}` | `ordGenTp`: `am` is `YES` for `AMO` and `NO` otherwise |
 | Flattrade, Shoonya | `POST …/CancelOrder` with `jData={"uid", "norenordno"}` | none |
 | Stoxkart | `DELETE /orders/{variety}/{order_id}` with the header `X-Algo-Id: 99999` | the entry's top-level `variety`, then `data.variety`, then `normal`, in lower case, because Stoxkart spells it `NORMAL`, `AMO` or `BO` |
 | Wisdom Capital | `DELETE /interactive/orders` with `appOrderID`, `orderUniqueIdentifier` and `clientID` | `OrderUniqueIdentifier`, `ubi` when absent |

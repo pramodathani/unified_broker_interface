@@ -20,6 +20,9 @@ from unified_broker_interface.utilities.broker_orders.utilities.connection_pool 
 from unified_broker_interface.utilities.broker_orders.utilities.order_request import (
     OrderRequest,
 )
+from unified_broker_interface.utilities.broker_orders.utilities.stored_order import (
+    OrderNotReadyError,
+)
 
 
 class BrokerOrders:
@@ -453,6 +456,24 @@ class BrokerOrders:
             NotImplementedError: Always, in the base class.
         """
         raise NotImplementedError
+
+    def stored_value(self, value, field_name):
+        """A value of the order after the change that the broker's modify request sends, which Redis may not hold.
+
+        Args:
+            value (object): The value from the `OrderModification`.
+            field_name (str): The field's name, for the error message.
+
+        Returns:
+            object: The value.
+
+        Raises:
+            OrderNotReadyError: When the value is None.
+        """
+        if value is None:
+            message = f"Redis does not hold this {self.BROKER_NAME} order's {field_name} yet, so try again after the broker's next order book poll"
+            raise OrderNotReadyError(message)
+        return value
 
     def build_modify_request(
         self,
