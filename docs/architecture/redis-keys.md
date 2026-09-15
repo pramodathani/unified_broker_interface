@@ -217,6 +217,7 @@ does not fail the run; the API reads the unified tables until the next warm succ
 | Key | Type | Keyed by | Holds |
 | --- | --- | --- | --- |
 | `unified:catalogue:current_date` | string | - | The mapping date the dated keys below belong to |
+| `unified:catalogue:warm_identifier` | string | - | A random identifier set with `current_date` on every warm, so a process holding catalogue data in memory can tell a re-run warm of the same date from the one it read |
 | `unified:catalogue:<date>:identity` | hash | `instrument_id` | That instrument's exchange, segment, shape and identity fields |
 | `unified:catalogue:<date>:tokens:<broker>` | hash | broker token | The `instrument_id` that token resolves to |
 | `unified:catalogue:<date>:order_handles` | hash | `instrument_id` | What a broker needs to place an order on it |

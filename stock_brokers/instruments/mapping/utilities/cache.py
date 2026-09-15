@@ -14,6 +14,7 @@ import datetime
 import decimal
 import json
 import time
+import uuid
 
 import redis
 from redis.backoff import NoBackoff
@@ -172,6 +173,17 @@ class MappingRedisTier:
             str: The full key.
         """
         return f"{self.KEY_PREFIX}current_date"
+
+    def warm_identifier_key(self):
+        """
+        The key holding an identifier that changes on every warm, even one that re-warms the same date.
+
+        A process that keeps catalogue data in its own memory compares this with the identifier it read the data under, because the mapping date alone does not change when a warm is re-run for the same date.
+
+        Returns:
+            str: The full key.
+        """
+        return f"{self.KEY_PREFIX}warm_identifier"
 
     def identity_key(self, mapping_date):
         """
@@ -623,9 +635,9 @@ class MappingRedisTier:
 
     def write_current_date(self, mapping_date):
         """
-        Publish the mapping date the hashes now cover.
+        Publish the mapping date the hashes now cover, together with a new warm identifier.
 
-        This is written last by a warm, so that a reader sees either the previous complete day or the new complete day and never a half written one.
+        This is written last by a warm, so that a reader sees either the previous complete day or the new complete day and never a half written one. The date and the identifier are set in one transaction, so a reader never sees a new date beside the previous warm's identifier.
 
         Args:
             mapping_date (datetime.date): The date to publish.
@@ -637,7 +649,10 @@ class MappingRedisTier:
         if client is None:
             return False
         try:
-            client.set(self.current_date_key(), mapping_date.isoformat())
+            pipeline = client.pipeline(transaction=True)
+            pipeline.set(self.current_date_key(), mapping_date.isoformat())
+            pipeline.set(self.warm_identifier_key(), uuid.uuid4().hex)
+            pipeline.execute()
         except redis.RedisError:
             return False
         return True
@@ -895,6 +910,8 @@ class MappingRedisTier:
             for key in client.scan_iter(match=f"{self.KEY_PREFIX}*"):
                 name = as_text(key)
                 if name == self.current_date_key():
+                    continue
+                if name == self.warm_identifier_key():
                     continue
                 if name.startswith(keep):
                     continue
