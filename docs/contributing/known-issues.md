@@ -54,12 +54,22 @@ that it never waits on PostgreSQL. Those keys expire at midnight, and the next w
 instrument mapping, so an after-market order sent in between is refused with `404`. Running
 `python -m stock_brokers.instruments.mapping.utilities.warm_cache` refills them for the latest mapping date.
 
-**Placing an order is unconfirmed live.** Each broker's order request is copied from the order builders that
-were removed in commit 4cc8c91, and their responses were checked only against stubbed answers. No order
-has been placed through the endpoint. The removed code also recorded that Kotak's API app refused order
-writes as unauthorised, that Stoxkart had no live session or algo identifier, and that Fyers' API app was
-not approved for placing orders, so those three are rotated through but the least likely to succeed.
-`UNIFIED_BROKER_INTERFACE_API_ORDER_EXCLUDED_BROKERS` takes them out of the rotation.
+**Placing an order is confirmed live at every broker except Stoxkart.** On 2026-09-15 one-share NSE CNC
+limit buys were sent through `POST /api/orders/place`, and Dhan, Flattrade, Fyers, Groww, INDmoney, Kotak,
+Shoonya, Wisdom Capital and Zerodha each accepted and filled theirs. Stoxkart has no live session, so it is
+skipped, and `UNIFIED_BROKER_INTERFACE_API_ORDER_EXCLUDED_BROKERS` takes a broker out of the rotation.
+
+**Kotak refuses every order from an IP address it has not whitelisted.** Kotak first answered
+`{"stCode": 100008, "errMsg": "unauthorized", "stat": "Not_Ok"}`. The removed order code read this as a
+read-only API app, but Kotak's
+[static IP page](https://www.kotakneo.com/platform/kotak-neo-trade-api/static-ip-details/) documents
+`100008` as the answer to a place, modify or cancel request from an IP address that is not whitelisted.
+Since 1 April 2026 Kotak accepts order requests only from the account's registered static IPs, at most two,
+changeable once every seven days under More → Trade API in the Kotak Neo app, and only on a session created
+from the same IP, which is otherwise refused with `stCode` `1037`. Reads carry no IP check, which is why the
+order book, positions and funds scripts kept working while writes were refused. Once the host's public IPv4
+address was registered, the next order was accepted with no code change and no new login. If the host's
+public address changes, Kotak orders fail again with `100008` until the new address is registered.
 
 **Cancelling an order is unconfirmed live, and misses some orders.** `DELETE /api/orders/cancel` finds an
 order's broker in the `<broker>:orders:orders` hashes, so it cannot cancel an order that no order script has

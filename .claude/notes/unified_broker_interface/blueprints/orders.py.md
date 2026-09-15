@@ -94,3 +94,18 @@ The rules are those of `place`, simplified. An HTTP status from 300 to 499 is `r
 ## How `cancel` was checked
 
 On 2026-09-15 the method was run in-process with the Flask test client against Redis database 15, filled with made-up logins, settings and orders and emptied afterwards, with `requests.Session.request` stubbed. The checks covered a dry run for each of the ten brokers, every refusal before the broker call, the two-broker `409`, the Groww `503`, and accepted, rejected and unknown answers from stubbed responses and timeouts. No cancel has been sent to a live broker.
+
+## Why Kotak refuses orders
+
+On 2026-09-15 a live Kotak order was answered `{"stCode": 100008, "errMsg": "unauthorized", "stat": "Not_Ok"}` while Kotak's order book, positions and funds reads with the same stored token kept working. Kotak's static IP page, https://www.kotakneo.com/platform/kotak-neo-trade-api/static-ip-details/, documents `100008` as the answer to a place, modify or cancel request from an IP address that is not whitelisted, and `1037` as the answer when the session was created from a different IP. The token's JWT `scope` is `Trade`, so the stored session is not a view-only one. The host reaches Kotak over IPv4 only, from 122.166.249.222 on that day, and that address has to be registered in the Kotak Neo app under More → Trade API.
+
+Kotak's official SDK, `Kotak-Neo/Kotak-neo-api-v2` (archived on 2026-09-10), builds the place request in `neo_api_client/api/order_api.py` slightly differently from this method, and these differences were not tested:
+
+| Detail | Kotak's SDK | This method |
+| --- | --- | --- |
+| Query string | `sId=<hsServerId>` from the Login Validate response | none; the login does not store `hsServerId` |
+| `neo-fin-key` header | not sent on order calls | sent |
+| Order source | `os: NEOTRADEAPI` in `jData` | not sent |
+| Tag field | `ig` | `rm` |
+
+Registering the IP was enough. Later that day, with 122.166.249.222 whitelisted, the same request, still without `sId` or `os` and on the session logged in at 00:00, was accepted as order 260915000204304 and filled at 41.28, in 90.4 ms at the broker. The differences above are therefore not needed today, but they are the first things to try if Kotak starts refusing this request shape. The order book showed the order's `tag` as empty although `rm` was sent, so Kotak may keep the tag only in `ig`, which has not been checked.
