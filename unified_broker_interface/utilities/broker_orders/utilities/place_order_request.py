@@ -1,5 +1,6 @@
 """The body of `POST /api/orders/place`, validated into one order."""
 
+import copy
 import datetime
 import decimal
 import re
@@ -425,6 +426,37 @@ class PlaceOrderRequest(OrderRequest):
             return None
         lot_text = format(lot_size.normalize(), 'f')
         return f'quantity must be a whole number of lots of {lot_text}'
+
+    def contract_lot_problem(self, units_per_lot):
+        """Checks the quantity and disclosed quantity against a currency or commodity contract's trusted size.
+
+        Args:
+            units_per_lot (decimal.Decimal): Quotation units per lot, from today's contract size decision.
+
+        Returns:
+            str | None: The error message for the first quantity that is not a whole number of lots, or None.
+        """
+        lot_text = format(units_per_lot.normalize(), 'f')
+        if decimal.Decimal(self.quantity) % units_per_lot != 0:
+            return f'quantity must be a whole number of lots of {lot_text}'
+        if decimal.Decimal(self.disclosed_quantity) % units_per_lot != 0:
+            return f'disclosed_quantity must be a whole number of lots of {lot_text}'
+        return None
+
+    def with_quantities(self, quantity, disclosed_quantity):
+        """A copy of the order carrying quantities in a broker's own terms, for building that broker's request.
+
+        Args:
+            quantity (int): The quantity the broker's request carries.
+            disclosed_quantity (int): The disclosed quantity the broker's request carries.
+
+        Returns:
+            PlaceOrderRequest: The copy; this order is unchanged.
+        """
+        broker_order = copy.copy(self)
+        broker_order.quantity = quantity
+        broker_order.disclosed_quantity = disclosed_quantity
+        return broker_order
 
     def agreed_tick_size(self, handles):
         """Finds the tick size most brokers agree on for the instrument.

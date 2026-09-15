@@ -1,5 +1,6 @@
 """What every broker's order class shares: whether it can take an order, the one HTTP call, and the reading of error answers."""
 
+import decimal
 import re
 import threading
 import time
@@ -34,6 +35,7 @@ class BrokerOrders:
         PLACE_SETTINGS_FIELDS (list): The account settings a place request needs.
         CANCEL_SETTINGS_FIELDS (list): The account settings a cancel request needs.
         MARKETS (dict): Each market the broker takes orders in, as `(exchange, asset class, kind)`, to the exchange or segment code its request carries.
+        QUANTITY_UNITS (dict): Each currency or commodity market in `MARKETS` to how the broker's order API counts quantity there: `lots`, `units` (quotation units, as the route takes them) or `broker_lot_size` (lots times the broker's own lot size). A currency or commodity market without an entry passes the broker over.
         TAKES_AFTER_MARKET (bool): Whether the broker takes after-market orders.
         TAKES_TRIGGERED_ORDERS (bool): Whether the broker takes `SL` and `SL-M` orders.
         VERIFY_CERTIFICATE (bool): Whether the broker's TLS certificate is checked.
@@ -56,6 +58,7 @@ class BrokerOrders:
     PLACE_SETTINGS_FIELDS = []
     CANCEL_SETTINGS_FIELDS = []
     MARKETS = {}
+    QUANTITY_UNITS = {}
     TAKES_AFTER_MARKET = True
     TAKES_TRIGGERED_ORDERS = True
     VERIFY_CERTIFICATE = True
@@ -144,10 +147,18 @@ class BrokerOrders:
         market = instrument.market()
         if market not in self.MARKETS:
             return f'does not take {" ".join(market)} orders'
+        if not instrument.is_securities_market():
+            quantity_unit = self.QUANTITY_UNITS.get(market)
+            if quantity_unit is None:
+                return f'does not know how it counts quantity in {" ".join(market)} orders'
         if not isinstance(handle, dict):
             return 'has no mapping for the instrument'
         if not handle.get(self.IDENTIFIER_FIELD):
             return f'its mapping carries no {self.IDENTIFIER_FIELD}'
+        if not instrument.is_securities_market():
+            if self.QUANTITY_UNITS[market] == 'broker_lot_size':
+                if self.broker_lot_size(handle) is None:
+                    return 'its mapping carries no whole lot size'
         handle_reason = self.handle_skip_reason(handle)
         if handle_reason is not None:
             return handle_reason
@@ -165,6 +176,51 @@ class BrokerOrders:
         if order.after_market and not self.TAKES_AFTER_MARKET:
             return 'takes no after-market orders'
         return None
+
+    def broker_lot_size(self, handle):
+        """The broker's own lot size from its order handle, as a whole number.
+
+        Args:
+            handle (dict): The broker's order handle.
+
+        Returns:
+            int | None: The lot size, or None when it is missing, not positive or not whole.
+        """
+        try:
+            lot_size = decimal.Decimal(str(handle.get('lot_size')))
+        except decimal.InvalidOperation:
+            return None
+        if not lot_size.is_finite() or lot_size <= 0:
+            return None
+        if lot_size != lot_size.to_integral_value():
+            return None
+        return int(lot_size)
+
+    def order_quantities(self, order, instrument, handle):
+        """The quantity and disclosed quantity in the broker's own terms.
+
+        For a securities market they are the order's own. For a currency or commodity market the order's quantities are whole lots of the instrument's trusted size, checked before the broker was chosen, and are converted by the broker's `QUANTITY_UNITS` entry for the market, which `place_skip_reason` has made sure exists.
+
+        Args:
+            order (PlaceOrderRequest): The validated order.
+            instrument (Instrument): The tradeable instrument.
+            handle (dict): The broker's order handle for the instrument.
+
+        Returns:
+            tuple: `(quantity, disclosed_quantity)`, both ints.
+        """
+        if instrument.is_securities_market():
+            return order.quantity, order.disclosed_quantity
+        units_per_lot = instrument.trusted_units_per_lot()
+        lots = int(decimal.Decimal(order.quantity) / units_per_lot)
+        disclosed_lots = int(decimal.Decimal(order.disclosed_quantity) / units_per_lot)
+        quantity_unit = self.QUANTITY_UNITS[instrument.market()]
+        if quantity_unit == 'lots':
+            return lots, disclosed_lots
+        if quantity_unit == 'broker_lot_size':
+            lot_size = self.broker_lot_size(handle)
+            return lots * lot_size, disclosed_lots * lot_size
+        return order.quantity, order.disclosed_quantity
 
     def handle_skip_reason(self, handle):
         """Checks what the broker needs from its order handle beyond the identifier field.

@@ -1,5 +1,7 @@
 """The instrument an order is for, as today's mapping describes it."""
 
+import decimal
+
 from unified_broker_interface.utilities.broker_orders.utilities.tradeable_segments import (
     TradeableSegments,
 )
@@ -15,15 +17,17 @@ class Instrument:
         segment (str): The exchange-prefixed segment, such as `nse_equities`, or an empty string when the identity has none.
         exchange (str): The exchange part of the segment, such as `nse`.
         bare_segment (str): The segment without its exchange, such as `equities`.
+        contract_size (dict | None): Today's contract size decision for a currency or commodity derivative, with `units_per_lot`, `status` and `tradeable`, or None when there is none.
     """
 
-    def __init__(self, instrument_id, identity, handles):
-        """Builds the instrument from its decoded identity and handles.
+    def __init__(self, instrument_id, identity, handles, contract_size=None):
+        """Builds the instrument from its decoded identity, handles and contract size decision.
 
         Args:
             instrument_id (str): The instrument id.
             identity (dict): The decoded identity.
             handles (dict): The decoded order handles, by broker name.
+            contract_size (dict | None): The decoded contract size decision, or None when Redis holds none.
 
         Returns:
             None: This method returns nothing.
@@ -35,6 +39,7 @@ class Instrument:
         exchange, _, bare_segment = self.segment.partition('_')
         self.exchange = exchange
         self.bare_segment = bare_segment
+        self.contract_size = contract_size
 
     def is_tradeable(self):
         """Whether orders are sent for this instrument's exchange and segment.
@@ -55,6 +60,42 @@ class Instrument:
         if TradeableSegments.SHAPES[self.bare_segment] == 'security':
             return 'cash'
         return 'derivative'
+
+    def is_securities_market(self):
+        """Whether the instrument trades in the securities markets, whose lot size the brokers agree on, rather than in currencies or commodities; only meaningful when it is tradeable.
+
+        Returns:
+            bool: True for equities, fixed income, funds and trusts and their derivatives.
+        """
+        return TradeableSegments.ASSET_CLASSES[self.bare_segment] == 'securities'
+
+    def trusted_units_per_lot(self):
+        """Today's trusted contract size, when the morning decision made one.
+
+        Returns:
+            decimal.Decimal | None: Quotation units per lot, or None when there is no decision, it is not tradeable, or its size is not a positive number.
+        """
+        if not isinstance(self.contract_size, dict):
+            return None
+        if self.contract_size.get('tradeable') is not True:
+            return None
+        try:
+            units_per_lot = decimal.Decimal(str(self.contract_size.get('units_per_lot')))
+        except decimal.InvalidOperation:
+            return None
+        if not units_per_lot.is_finite() or units_per_lot <= 0:
+            return None
+        return units_per_lot
+
+    def contract_size_status(self):
+        """The status of today's contract size decision, for a refusal's message.
+
+        Returns:
+            str: The decision's status, or `undecided` when Redis holds no decision.
+        """
+        if not isinstance(self.contract_size, dict):
+            return 'undecided'
+        return str(self.contract_size.get('status') or 'undecided')
 
     def market(self):
         """The key a broker's market table is looked up by; only meaningful when the instrument is tradeable.

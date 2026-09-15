@@ -758,22 +758,29 @@ written in capitals, though lower case is accepted.
 
 Orders are accepted for every segment on NSE, BSE, MCX and NCDEX except indices, which cannot be traded,
 and uncategorised instruments, whose segment does not say whether they are cash instruments or derivatives;
-those two are refused with `400`. Accepting an order does not mean a broker takes it. Each broker lists the
-markets it has been confirmed for, as an exchange, an asset class (securities, currency or commodity) and
-cash or derivative, and passes over an order in any other market with a reason such as
-`does not take mcx commodity derivative orders`. Today every broker lists only NSE and BSE securities, so a
-currency or commodity order is answered `503` with every broker in `skipped`.
+those two are refused with `400`.
 
-!!! warning "Currency and commodity orders wait on confirming how each broker counts quantity"
+A currency or commodity order's `quantity` is in quotation units: 100 for one lot of MCX CRUDEOIL (barrels),
+100 for one lot of MCX GOLD (10 grams each), 1000 for one lot of NSE USDINR. Its lot size comes only from the
+morning's [contract size decision](instrument-mapping.md#contract-sizes), never from a broker's own `lot_size`,
+because brokers count a lot in different units. An order on a contract whose size is not trusted today is
+answered `503` with `contract_size_status` (`undecided`, `conflict`, `no_source` or `single_source`), and a
+`quantity` or `disclosed_quantity` that is not a whole number of lots is answered `400`.
 
-    For the same MCX future, brokers disagree about the lot size: on 2026-09-15 CRUDEOIL's October 2026
-    contract had a lot size of 1 at Dhan, Fyers, Wisdom Capital and Zerodha and 100 at Flattrade, Groww,
-    Kotak, Shoonya and Stoxkart. `quantity` is in units, so a broker whose order API counts lots would read
-    100 barrels as 100 lots. A broker's markets are widened only once how its order API counts quantity
-    there has been confirmed. See [Known issues](../contributing/known-issues.md).
+Accepting an order does not mean a broker takes it. Each broker lists the markets it has been confirmed for, as an
+exchange, an asset class (securities, currency or commodity) and cash or derivative, and for a currency or commodity
+market also how its order API counts quantity: in lots, in quotation units, or in lots times the broker's own lot
+size. The route converts the quantity accordingly. A broker passes over an order in a market it does not list,
+with a reason such as `does not take mcx commodity derivative orders`.
 
-The lot is the chosen broker's `lot_size`, and the tick is the `tick_size` most brokers agree on, which is
-what `/api/instruments/details` answers.
+!!! warning "No broker lists a currency or commodity market yet"
+
+    Each broker's convention is being confirmed from its API documentation and then with one small order,
+    before its markets are listed. Until then a currency or commodity order is answered `503` with every
+    broker in `skipped`. See [Known issues](../contributing/known-issues.md).
+
+For a securities order the lot is the chosen broker's `lot_size`. For every order the tick is the `tick_size` most
+brokers agree on, which is what `/api/instruments/details` answers.
 
 ```bash
 curl -s -X POST localhost:8080/api/orders/place -H "access-token: $TOKEN" -H 'Content-Type: application/json' \

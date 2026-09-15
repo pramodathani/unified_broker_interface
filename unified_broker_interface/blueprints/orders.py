@@ -378,6 +378,7 @@ class OrdersBlueprint(BaseBlueprint):
         if kept_texts is None:
             pipeline.hget(catalogue_key_prefix + 'identity', instrument_id)
             pipeline.hget(catalogue_key_prefix + 'order_handles', instrument_id)
+            pipeline.hget(catalogue_key_prefix + 'contract_sizes', instrument_id)
         selector_command_count = self.broker_selector.queue_redis_commands(
             pipeline,
             order,
@@ -392,16 +393,19 @@ class OrdersBlueprint(BaseBlueprint):
         if kept_texts is None:
             identity_text = second_replies[0]
             handles_text = second_replies[1]
-            selector_replies = second_replies[2:]
+            contract_size_text = second_replies[2]
+            selector_replies = second_replies[3:]
         else:
             identity_text = kept_texts[0]
             handles_text = kept_texts[1]
+            contract_size_text = kept_texts[2]
             selector_replies = second_replies
 
         instrument = self.decode_instrument(
             instrument_id,
             identity_text,
             handles_text,
+            contract_size_text,
         )
         if kept_texts is None:
             self.instrument_cache.keep_instrument(
@@ -410,10 +414,12 @@ class OrdersBlueprint(BaseBlueprint):
                 instrument_id,
                 identity_text,
                 handles_text,
+                contract_size_text,
             )
         if not instrument.is_tradeable():
             message = f'orders are not sent for {instrument.segment} instruments'
             raise self.refuse(message, 400)
+        self.check_contract_size(order, instrument)
 
         ranked_brokers = self.broker_selector.ranked_brokers(
             order,
@@ -435,14 +441,22 @@ class OrdersBlueprint(BaseBlueprint):
         login = self.decode_login(login_texts[position])
         settings = self.decode_settings(settings_texts[position])
 
-        size_problem = order.lot_size_problem(handle)
+        size_problem = None
+        if instrument.is_securities_market():
+            size_problem = order.lot_size_problem(handle)
         if size_problem is None:
             size_problem = order.tick_size_problem(instrument.handles)
         if size_problem is not None:
             raise self.refuse(size_problem, 400)
 
-        broker_request = broker_orders.build_place_request(
+        quantity, disclosed_quantity = broker_orders.order_quantities(
             order,
+            instrument,
+            handle,
+        )
+        broker_order = order.with_quantities(quantity, disclosed_quantity)
+        broker_request = broker_orders.build_place_request(
+            broker_order,
             instrument,
             handle,
             login,
@@ -536,13 +550,22 @@ class OrdersBlueprint(BaseBlueprint):
             raise self.refuse(message, 400)
         return str(members[0]).rsplit('|', 1)[1]
 
-    def decode_instrument(self, instrument_id, identity_text, handles_text):
-        """Decodes the instrument from its identity and order handles in Redis.
+    def decode_instrument(
+        self,
+        instrument_id,
+        identity_text,
+        handles_text,
+        contract_size_text,
+    ):
+        """Decodes the instrument from its identity, order handles and contract size decision in Redis.
+
+        A contract size decision that is missing or not a JSON object is decoded as None, which leaves a currency or commodity derivative untradeable rather than refusing an order on any other instrument.
 
         Args:
             instrument_id (str): The instrument id.
             identity_text (str | None): The identity as Redis holds it.
             handles_text (str | None): The order handles as Redis holds them.
+            contract_size_text (str | None): The contract size decision as Redis holds it.
 
         Returns:
             Instrument: The instrument, which may not be tradeable.
@@ -562,7 +585,45 @@ class OrdersBlueprint(BaseBlueprint):
             handles = None
         if not isinstance(identity, dict) or not isinstance(handles, dict):
             raise self.refuse('the instrument is not mapped', 404)
-        return Instrument(instrument_id, identity, handles)
+        contract_size = None
+        if contract_size_text:
+            try:
+                contract_size = json.loads(contract_size_text)
+            except ValueError:
+                contract_size = None
+        if not isinstance(contract_size, dict):
+            contract_size = None
+        return Instrument(instrument_id, identity, handles, contract_size)
+
+    def check_contract_size(self, order, instrument):
+        """Checks a currency or commodity order against the contract size decided this morning.
+
+        Such a contract's lot size is taken only from `unified.contract_sizes`, as the warm copies it to Redis, because the brokers' own lot sizes count lots in different units. An order on a contract whose size is not trusted today is refused.
+
+        Args:
+            order (PlaceOrderRequest): The validated order.
+            instrument (Instrument): The tradeable instrument.
+
+        Returns:
+            None: This method returns nothing.
+
+        Raises:
+            RefusedRequestError: With HTTP 503 when the contract's size is not trusted today, and 400 when a quantity is not a whole number of lots.
+        """
+        if instrument.is_securities_market():
+            return
+        units_per_lot = instrument.trusted_units_per_lot()
+        if units_per_lot is None:
+            status = instrument.contract_size_status()
+            raise self.refuse(
+                f'the contract size of this {instrument.segment} instrument is not trusted today ({status}), so no order is sent',
+                503,
+                instrument_id=instrument.instrument_id,
+                contract_size_status=status,
+            )
+        problem = order.contract_lot_problem(units_per_lot)
+        if problem is not None:
+            raise self.refuse(problem, 400)
 
     def record_outcome(self, broker_name, answer):
         """Hands a sent order's answer to the broker selector, so a selector's failure cannot change the answer to an order already sent.

@@ -7,7 +7,7 @@ import threading
 class InstrumentCache:
     """The catalogue data `POST /api/orders/place` reads from Redis that does not change during a warm, kept in one worker's memory.
 
-    Two things are kept: each instrument's identity and order handles, exactly as Redis held them, and which instrument a segment and identity-field prefix found.
+    Two things are kept: each instrument's identity, order handles and contract size decision, exactly as Redis held them, and which instrument a segment and identity-field prefix found.
     Everything is kept under a marker, the mapping date and warm identifier the data was read under, and is trusted only while the marker Redis holds is the same and it is still before the midnight after the data was first kept, when the catalogue keys expire.
     When either check fails everything is dropped, and the next order reads Redis again.
     Nothing is kept while Redis holds no warm identifier, because without one a re-run warm of the same date could not be told apart.
@@ -19,7 +19,7 @@ class InstrumentCache:
         lock (threading.Lock): Guards every read and write, as a worker's threads share the cache.
         marker (tuple | None): The `(mapping date, warm identifier)` the kept data was read under, or None when nothing is kept.
         valid_until (datetime.datetime | None): The local midnight after which the kept data is dropped.
-        instrument_texts (dict): Instrument ids to `(identity text, order handles text)`.
+        instrument_texts (dict): Instrument ids to `(identity text, order handles text, contract size text)`.
         instrument_lookups (dict): `(catalogue segment, catalogue prefix)` to the instrument id it found.
     """
 
@@ -94,7 +94,7 @@ class InstrumentCache:
         self.instrument_lookups = {}
 
     def instrument(self, mapping_date_text, warm_identifier, instrument_id):
-        """Finds an instrument's identity and order handles.
+        """Finds an instrument's identity, order handles and contract size decision.
 
         Args:
             mapping_date_text (str | None): The mapping date Redis holds now.
@@ -102,7 +102,7 @@ class InstrumentCache:
             instrument_id (str): The instrument id.
 
         Returns:
-            tuple | None: `(identity text, order handles text)` as Redis held them, or None when they are not kept.
+            tuple | None: `(identity text, order handles text, contract size text)` as Redis held them, the last None when Redis held no decision, or None when they are not kept.
         """
         with self.lock:
             if not self.current_marker(mapping_date_text, warm_identifier):
@@ -116,8 +116,9 @@ class InstrumentCache:
         instrument_id,
         identity_text,
         handles_text,
+        contract_size_text,
     ):
-        """Keeps an instrument's identity and order handles, as read from Redis under the given marker.
+        """Keeps an instrument's identity, order handles and contract size decision, as read from Redis under the given marker.
 
         Args:
             mapping_date_text (str | None): The mapping date read in the same request.
@@ -125,6 +126,7 @@ class InstrumentCache:
             instrument_id (str): The instrument id.
             identity_text (str): The identity as Redis held it.
             handles_text (str): The order handles as Redis held them.
+            contract_size_text (str | None): The contract size decision as Redis held it, or None when it held none.
 
         Returns:
             None: This method returns nothing.
@@ -134,7 +136,11 @@ class InstrumentCache:
                 return
             if len(self.instrument_texts) >= self.MAXIMUM_ENTRIES:
                 self.instrument_texts = {}
-            self.instrument_texts[instrument_id] = (identity_text, handles_text)
+            self.instrument_texts[instrument_id] = (
+                identity_text,
+                handles_text,
+                contract_size_text,
+            )
 
     def instrument_lookup(
         self,

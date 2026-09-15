@@ -25,6 +25,9 @@ import requests
 
 from unified_broker_interface.blueprints import base as blueprint_base
 from unified_broker_interface.blueprints import orders as orders_blueprint
+from unified_broker_interface.utilities.broker_orders.utilities.registry import (
+    BROKER_ORDER_CLASSES,
+)
 from utilities.configurations import api_configuration
 
 BROKER_NAMES = [
@@ -599,8 +602,43 @@ class OrderRoutesState:
         fake_redis.hashes['last_login'] = self.logins()
         fake_redis.hashes['settings'] = self.settings()
         self.add_instruments(fake_redis)
+        self.add_contract_sizes(fake_redis)
         self.add_order_books(fake_redis)
         return fake_redis
+
+    def add_contract_sizes(self, fake_redis):
+        """Adds the morning's contract size decisions for the currency and commodity instruments.
+
+        Args:
+            fake_redis (FakeRedis): The stand-in to fill.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        decisions = {
+            'crudeoil_future': {
+                'units_per_lot': '100',
+                'status': 'confirmed',
+                'tradeable': True,
+            },
+            'usdinr_future': {
+                'units_per_lot': '1000',
+                'status': 'confirmed',
+                'tradeable': True,
+            },
+            'gold_option': {
+                'units_per_lot': None,
+                'status': 'conflict',
+                'tradeable': False,
+            },
+        }
+        contract_sizes = fake_redis.hashes.setdefault(
+            CATALOGUE_PREFIX + 'contract_sizes',
+            {},
+        )
+        for name, decision in decisions.items():
+            instrument_id = self.INSTRUMENT_IDENTIFIERS[name]
+            contract_sizes[instrument_id] = json.dumps(decision)
 
     def logins(self):
         """Builds the `last_login` hash: the API's token and every broker's login.
@@ -1577,6 +1615,7 @@ class OrderRoutesScenarios:
         scenarios.extend(self.place_answer_scenarios())
         scenarios.extend(self.place_cache_scenarios())
         scenarios.extend(self.place_selector_scenarios())
+        scenarios.extend(self.place_contract_size_scenarios())
         scenarios.extend(self.cancel_parameter_scenarios())
         scenarios.extend(self.cancel_lookup_scenarios())
         scenarios.extend(self.cancel_broker_scenarios())
@@ -2563,6 +2602,146 @@ class OrderRoutesScenarios:
             ),
         ]
 
+    def open_market(self, broker_name, code, quantity_unit):
+        """Builds a test-only listing of MCX commodity derivatives at a broker, which the suite adds to that broker's class for one scenario.
+
+        Args:
+            broker_name (str): The broker.
+            code (str): The exchange code the broker's request carries.
+            quantity_unit (str): `lots`, `units` or `broker_lot_size`.
+
+        Returns:
+            dict: The listing.
+        """
+        return {
+            'broker': broker_name,
+            'market': (
+                'mcx',
+                'commodity',
+                'derivative',
+            ),
+            'code': code,
+            'quantity_unit': quantity_unit,
+        }
+
+    def place_contract_size_scenarios(self):
+        """Builds the place scenarios about currency and commodity contract sizes and each broker's quantity convention.
+
+        Returns:
+            list: The scenarios.
+        """
+        identifiers = OrderRoutesState.INSTRUMENT_IDENTIFIERS
+        two_crudeoil_lots = self.by_identifier(
+            'crudeoil_future',
+            quantity=200,
+            dry_run=True,
+        )
+        return [
+            self.place(
+                'contract_size_undecided',
+                self.by_identifier('crudeoil_future', quantity=100),
+                changes=[
+                    self.hash_change(
+                        CATALOGUE_PREFIX + 'contract_sizes',
+                        identifiers['crudeoil_future'],
+                        None,
+                    ),
+                ],
+            ),
+            self.place(
+                'contract_size_not_json',
+                self.by_identifier('crudeoil_future', quantity=100),
+                changes=[
+                    self.hash_change(
+                        CATALOGUE_PREFIX + 'contract_sizes',
+                        identifiers['crudeoil_future'],
+                        'not json',
+                    ),
+                ],
+            ),
+            self.place(
+                'contract_quantity_not_whole_lots',
+                self.by_identifier('crudeoil_future', quantity=150),
+            ),
+            self.place(
+                'contract_disclosed_quantity_not_whole_lots',
+                self.by_identifier(
+                    'crudeoil_future',
+                    quantity=200,
+                    disclosed_quantity=50,
+                ),
+            ),
+            self.place(
+                'contract_market_listed_without_quantity_unit',
+                two_crudeoil_lots,
+                counter=self.counter_for('zerodha'),
+                open_markets=[
+                    self.open_market('zerodha', 'MCX', None),
+                ],
+            ),
+            self.place(
+                'contract_quantity_in_lots',
+                self.by_identifier(
+                    'crudeoil_future',
+                    quantity=200,
+                    disclosed_quantity=100,
+                ),
+                counter=self.counter_for('zerodha'),
+                open_markets=[
+                    self.open_market('zerodha', 'MCX', 'lots'),
+                ],
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('zerodha'),
+                ),
+            ),
+            self.place(
+                'contract_quantity_in_broker_lot_size',
+                two_crudeoil_lots,
+                counter=self.counter_for('kotak'),
+                open_markets=[
+                    self.open_market('kotak', 'mcx_fo', 'broker_lot_size'),
+                ],
+            ),
+            self.place(
+                'contract_quantity_in_units',
+                two_crudeoil_lots,
+                counter=self.counter_for('groww'),
+                open_markets=[
+                    self.open_market('groww', 'COMMODITY', 'units'),
+                ],
+            ),
+            self.place(
+                'contract_broker_lot_size_missing',
+                two_crudeoil_lots,
+                counter=self.counter_for('dhan'),
+                open_markets=[
+                    self.open_market('dhan', 'MCX_COMM', 'broker_lot_size'),
+                    self.open_market('groww', 'COMMODITY', 'units'),
+                ],
+                changes=[
+                    self.hash_change(
+                        CATALOGUE_PREFIX + 'order_handles',
+                        identifiers['crudeoil_future'],
+                        json.dumps({
+                            'dhan': {
+                                'broker_token': '569900',
+                                'order_symbol': 'CRUDEOIL',
+                                'lot_size': None,
+                                'tick_size': 1.0,
+                            },
+                            'groww': {
+                                'broker_token': '569900',
+                                'order_symbol': 'CRUDEOIL26OCTFUT',
+                                'lot_size': 100.0,
+                                'tick_size': 1.0,
+                            },
+                        }),
+                    ),
+                ],
+            ),
+        ]
+
     def cancel_parameter_scenarios(self):
         """Builds the cancel scenarios about the token and the parameters.
 
@@ -2968,6 +3147,8 @@ class OrderRoutesSuite:
                 'name': scenario['name'],
                 'construction_error': None,
             }
+        if scenario.get('open_markets'):
+            return self.run_with_open_markets(scenario)
         client = self.build_client()
         if 'steps' not in scenario:
             result = self.send(client, scenario)
@@ -2982,6 +3163,42 @@ class OrderRoutesSuite:
             'name': scenario['name'],
             'steps': step_results,
         }
+
+    def run_with_open_markets(self, scenario):
+        """Runs one scenario with test-only market listings added to broker classes, and removes them afterwards.
+
+        Args:
+            scenario (dict): The scenario, with `open_markets`.
+
+        Returns:
+            dict: The scenario's recorded result.
+        """
+        broker_classes = {}
+        for broker_class in BROKER_ORDER_CLASSES:
+            broker_classes[broker_class.BROKER_NAME] = broker_class
+        originals = []
+        for listing in scenario['open_markets']:
+            broker_class = broker_classes[listing['broker']]
+            originals.append((
+                broker_class,
+                broker_class.MARKETS,
+                broker_class.QUANTITY_UNITS,
+            ))
+            markets = dict(broker_class.MARKETS)
+            markets[listing['market']] = listing['code']
+            quantity_units = dict(broker_class.QUANTITY_UNITS)
+            if listing['quantity_unit'] is not None:
+                quantity_units[listing['market']] = listing['quantity_unit']
+            broker_class.MARKETS = markets
+            broker_class.QUANTITY_UNITS = quantity_units
+        try:
+            plain_scenario = dict(scenario)
+            del plain_scenario['open_markets']
+            return self.run_scenario(plain_scenario)
+        finally:
+            for broker_class, markets, quantity_units in reversed(originals):
+                broker_class.MARKETS = markets
+                broker_class.QUANTITY_UNITS = quantity_units
 
     def run_every_scenario(self):
         """Runs every scenario with Redis, MongoDB, the broker network and `uuid.uuid4` replaced.
