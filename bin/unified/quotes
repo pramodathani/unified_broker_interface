@@ -701,18 +701,15 @@ class IndmoneyNormalizer(Normalizer):
         return FeedKey(token.strip(), segments)
 
 class KotakNormalizer(Normalizer):
-    """Kotak: `exchange_segment|token`; `close` is the previous close; MCX last quantity in Kotak's lots; no trusted times."""
+    """Kotak: `exchange_segment|token`; `close` is the previous close; every MCX quantity in Kotak's lots; both times true."""
     BROKER_NAME = "kotak"
     EXCHANGE_SEGMENTS = {"nse_cm": (("nse",), "cash_or_index"), "bse_cm": (("bse",), "cash_or_index"),
                          "nse_fo": (("nse",), "derivative"), "cde_fo": (("nse",), "derivative"),
                          "nse_com": (("nse",), "derivative"), "bse_fo": (("bse",), "derivative"),
                          "bse_cd": (("bse",), "derivative"), "bse_co": (("bse",), "derivative"),
                          "mcx_fo": (("mcx",), "derivative")}
-    LOT_FIELDS = {"mcx": ALL_QUANTITIES - {"last_quantity"}}
-    BROKER_LOT_FIELDS = {"mcx": frozenset({"last_quantity"})}
+    BROKER_LOT_FIELDS = {"mcx": ALL_QUANTITIES}
     CLOSE_POLICY = {"nse": CLOSE_ALWAYS, "bse": CLOSE_ALWAYS, "mcx": CLOSE_ALWAYS}
-    TRUSTS_LAST_TRADE_TIME = False
-    TRUSTS_EXCHANGE_TIME = False
 
     def __init__(self):
         self._segments = {name: family_segments(exchanges, family) for name, (exchanges, family) in self.EXCHANGE_SEGMENTS.items()}

@@ -96,14 +96,23 @@ with the token as `susertoken` is parsed and refused with `NOT_OK`, which is ind
 from an expired session and is not one - the same token authenticates REST happily. Verified
 against both Flattrade and Shoonya.
 
-**Kotak's `source` must be `NEOTRADEAPI`, not `API`.** Its feed answers an unrecognised source
-with a 1117 saying the session is authenticated and *then* a 1120 saying the client source is
-invalid, so a client that stops reading at the success concludes the opposite of what happened.
-Read `message_code` on every text frame, not just the first.
+**Kotak's `sfeed` answers a subscription with one stale snapshot and then nothing.** Until 2026-09-15
+`bin/kotak/quotes` used `wss://sfeed.kotaksecurities.com/apifeed`, which authenticated, acknowledged the
+subscription, sent one snapshot and stayed connected without a further tick. The snapshot carried
+Friday's prices with zero volume, and more arrived only at session boundaries, so the stream held a few
+dozen ticks a day and looked like a quiet feed rather than a broken one. In the same minute the HSM feed
+of Kotak's SDK, `wss://mlhsm.kotaksecurities.com`, updated every instrument every second. Before trusting
+a feed, compare its last price and volume with another broker's during the session.
 
-**Kotak's price dividers arrive as `{"nse_cm": {"value": 1, "divider": 100}}`.** Looked for under a
-`dividers` key, which the broker never sends, every price falls back to the default hundred - correct
-for most segments and wrong by five orders of magnitude for the currency ones.
+**Kotak's HSM feed asks for acknowledgements.** Its connection reply carries a count (five on
+2026-09-15), and every data frame then starts with a message number; after that many frames the client
+must send an acknowledgement frame with the last number. A decoder that does not expect the message
+number reads it as the packet count.
+
+**Kotak's MCX quantities are all in Kotak's lots.** On the HSM feed volume, open interest, total buy and
+sell quantity, last quantity and every order book quantity are lots times Kotak's own lot size - 100 for
+CRUDEOIL, 1250 for NATURALGAS, 1 for GOLD, whose contract lot is 100 grams. GOLD alone therefore looks
+like plain lots, which is how the older feed's figures were misread.
 
 **Wisdom Capital's interactive socket needs `apiType=INTERACTIVE` in its socket.io query.**
 Without it the namespace answers "Socket joined successfully!" and the server closes the

@@ -5,17 +5,22 @@ Kotak names an instrument as `exchange_segment|token` in its own segment vocabul
 `nse_fo`, `mcx_fo` - and stores the bare token, which collides across segments, so the segment
 narrows the search.
 
-What Kotak's values mean, as measured against the stored ticks of 2026-09-12 and 2026-09-13:
+What Kotak's values mean, as measured on Kotak's HSM feed (`wss://mlhsm.kotaksecurities.com`) against
+Zerodha's ticks received at the same moment during the session of 2026-09-15:
 
-- `close` is the previous session's close at every hour: RELIANCE read 1274.0 in every snapshot,
-  as Zerodha's did, while its last price read Friday's 1257.5.
-- On MCX, open interest is in lots - CRUDEOIL SEP 17552, GOLD OCT 9618, both Zerodha's figures.
-- Kotak's MCX last quantity is not lots and not units but lots times Kotak's own lot size: CRUDEOIL
-  read 100 (Kotak's lot 100), NATURALGAS 1250 and 2500 (Kotak's lot 1250), and GOLD 1 and 3 (Kotak's
-  lot 1, where the contract's is 100). So it is divided by Kotak's lot size and multiplied by the
-  authoritative one. The other MCX quantities are taken to be lots, which a live session checks.
-- The feed's time fields are not usable yet: RELIANCE's last update read 2026-09-11 00:00 India time, a
-  date without a time, and MCX sent none. Both are left out until a live session shows what they are.
+- `close` is the previous session's close: TCS read 2200.80, HDFCBANK 708.25 and CRUDEOIL SEP 9717.0,
+  all Zerodha's figures, while their last prices moved.
+- On MCX every quantity - last quantity, volume, total buy and sell quantity, open interest and every
+  order book quantity - is lots times Kotak's own lot size. GOLD OCT (Kotak's lot 1) read volume 562 and
+  open interest 9474, Zerodha's lots exactly; CRUDEOIL SEP (Kotak's lot 100) read 276900 and 1598900
+  against Zerodha's 2769 and 15989; NATURALGAS SEP (Kotak's lot 1250) read 4943750 and 49037500 against
+  3955 and 39230. So each is divided by Kotak's lot size and multiplied by the authoritative one.
+- On NSE and BSE quantities are units, as at Zerodha.
+- Both times are true instants: the last trade time and the exchange timestamp matched Zerodha's to the
+  second on TCS, HDFCBANK, CRUDEOIL, NATURALGAS and GOLD.
+
+The earlier `sfeed` feed, measured on the weekend snapshots of 2026-09-12 and 2026-09-13, sent a date
+with no time and scaled only the MCX last quantity; `bin/kotak/quotes` no longer uses it.
 """
 
 from stock_brokers.instruments.ticks.base import (CLOSE_ALWAYS, QUANTITY_FIELDS, FeedKey, TickNormalizer,
@@ -41,13 +46,9 @@ class KotakTickNormalizer(TickNormalizer):
         "mcx_fo": (("mcx",), "derivative"),
     }
 
-    LOT_FIELDS = {"mcx": frozenset(QUANTITY_FIELDS) - {"last_quantity"}}
-    BROKER_LOT_FIELDS = {"mcx": frozenset({"last_quantity"})}
+    BROKER_LOT_FIELDS = {"mcx": frozenset(QUANTITY_FIELDS)}
 
     CLOSE_POLICY = {"nse": CLOSE_ALWAYS, "bse": CLOSE_ALWAYS, "mcx": CLOSE_ALWAYS}
-
-    TRUSTS_LAST_TRADE_TIME = False
-    TRUSTS_EXCHANGE_TIME = False
 
     def __init__(self):
         self._segments = {name: family_segments(exchanges, family)

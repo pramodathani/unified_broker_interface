@@ -29,6 +29,10 @@ they did this twice, at 06:36:07 and 06:36:20, before settling on one token. The
 cross-process lock like the market data login in `bin/wisdom_capital/quotes`, and adding one to `WisdomCapitalAPI`
 would change every Wisdom Capital script, so it was left alone.
 
+**Kotak streams no index values.** `bin/kotak/quotes` subscribes scrip and depth topics only. Kotak's HSM
+feed serves indices as separate `if|` topics named by the index's name, which the script's `EXCHANGE|TOKEN`
+validation rejects, and those topics' fields have not been measured live.
+
 **Fyers currency derivatives are left out of the unified quotes.** Fyers scales prices by a precision and
 multiplier per instrument. A fixed divisor of 100 is right for two-decimal instruments and a hundred times
 wrong for four-decimal currency pairs. `bin/fyers/quotes` divides by 10 to the precision times the
@@ -58,11 +62,11 @@ not approved for placing orders, so those three are rotated through but the leas
 `UNIFIED_BROKER_INTERFACE_API_ORDER_EXCLUDED_BROKERS` takes them out of the rotation.
 
 **Most unified tick normalizers are unconfirmed live.** Only Zerodha is verified, and Dhan agrees with it
-on stored in-session MCX ticks but has no in-session NSE ticks stored. What Kotak, Flattrade, Shoonya,
+on stored in-session MCX ticks but has no in-session NSE ticks stored. Kotak agreed with it on every field
+in a live NSE and MCX session on 2026-09-15 but is not yet marked verified. What Flattrade, Shoonya,
 Wisdom Capital, Fyers, Groww and INDmoney send was taken from stored weekend snapshots, a mock session
 or the protocol, and the table in
-[Unified scripts](../guides/unified-scripts.md#what-each-brokers-values-mean) marks which. Kotak's
-timestamps are withheld entirely: its feed stamped RELIANCE's last update with a date and no time.
+[Unified scripts](../guides/unified-scripts.md#what-each-brokers-values-mean) marks which.
 
 ## Broker limits
 

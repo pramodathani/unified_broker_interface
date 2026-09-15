@@ -211,7 +211,7 @@ only when no verified broker streams it, until a live session confirms what is m
 | Zerodha | `close`, always | lots | both true instants | In-session MCX ticks, 2026-09-11 |
 | Dhan | `close` before the session ends; also the previous close packet | lots | trade time only | In-session MCX ticks agree with Zerodha on every field |
 | Flattrade, Shoonya | `c` before the session ends | lots (open interest confirmed) | `ft`; `ltt` parsed since 2026-09-13 | Weekend snapshots and Saturday's mock session |
-| Kotak | `close`, always | lots; last quantity is lots times Kotak's own lot size | not used - date-only | Weekend snapshots agree with Zerodha on close and open interest |
+| Kotak | `close`, always | every quantity is lots times Kotak's own lot size | both true instants | In-session HSM ticks, 2026-09-15, agree with Zerodha on price, close, times and, after lot scaling, every NSE and MCX quantity |
 | Wisdom Capital | not used - XTS `Close` is the last price | lots (unconfirmed) | both true instants | Mock session agrees with Flattrade on price, volume and time |
 | Fyers | `prev_close_price`, always | lots (unconfirmed) | both | Protocol only; nothing stored yet. Currency derivatives left out |
 | Groww | not used until confirmed | NSE and BSE only | exchange time | Protocol only; nothing stored yet |

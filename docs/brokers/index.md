@@ -58,7 +58,7 @@ implementations.
 | Shoonya | Token | Its Noren user id is the account's UCC code, held in the `ucc_code` setting |
 | Fyers | Selenium + TOTP | Streams positions as well as orders; refuses more than a handful of requests a second per app |
 | Groww | Token | NATS transport with protocol buffer payloads; streams derivatives positions |
-| Kotak | Selenium + TOTP | Streams positions; its instrument master URL is stamped with today's date; its feed needs `source` of `NEOTRADEAPI` and sends per-segment price dividers |
+| Kotak | Selenium + TOTP | Streams positions; its instrument master URL is stamped with today's date; its feed is the binary HSM protocol of Kotak's own SDK, which wants data frames acknowledged and sends MCX quantities in Kotak's lots |
 | IND Money | Token | - |
 | Wisdom Capital | Token | XTS; separate market data credentials, REST subscription, socket.io transport, and `apiType=INTERACTIVE` required in the order socket's query |
 | Stoxkart | Broken upstream | Instrument master only |
