@@ -96,11 +96,13 @@ KWIL at ₹33 but refused a modification to ₹32.50, below the lower circuit li
 `InputException`, while Stoxkart accepted the same price that evening. Test prices far from the market must stay
 inside the day's price band.
 
-**Zerodha turns a market-protected MARKET order into a LIMIT order.** Since April 2026 Kite refuses API market
-orders without a non-zero `market_protection`. On 2026-09-15 an after-market MARKET buy of one KWIL share sent with
-`market_protection=-1` was accepted, but Zerodha's order book stored it as `order_type` `LIMIT` at ₹41.65, about 1%
-above the last price, with `market_protection` 0. A script that expects the order to stay `MARKET` after placing it
-will be wrong: the stored order, `GET /api/orders/details` and any modification see a limit order.
+**Zerodha turns a market-protected MARKET order into LIMIT, and SL-M into SL.** Since April 2026 Kite refuses API
+market orders without a non-zero `market_protection`. On 2026-09-15 an after-market MARKET buy of one KWIL share sent
+with `market_protection=-1` was accepted, but Zerodha's order book stored it as `order_type` `LIMIT` at ₹41.65, about
+1% above the last price, with `market_protection` 0. An SL-M buy with a trigger of ₹48 sent the same way was stored as
+`SL` with a limit price of ₹48.96, 2% beyond the trigger. A script that expects the order to stay `MARKET` or `SL-M`
+after placing it will be wrong: the stored order, `GET /api/orders/details` and any modification see a priced order,
+and a modification restates the price Zerodha chose.
 
 ## The candle queue
 

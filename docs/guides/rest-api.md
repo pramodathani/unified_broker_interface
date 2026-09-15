@@ -838,10 +838,11 @@ another broker, whatever the answer, because a second send could place the order
     order to Zerodha, and nothing on LIMIT and SL orders, where Kite says it has no effect. A market order at
     Zerodha can therefore fill at a price inside Zerodha's protection band rather than at any price.
 
-    Zerodha does this by turning the order into a LIMIT order at the edge of the band. On 2026-09-15 an
+    Zerodha does this by turning the order into a priced one at the edge of the band. On 2026-09-15 an
     after-market MARKET buy of one KWIL share, last traded near ₹41.24, was accepted and stored in Zerodha's order
-    book as a LIMIT order at ₹41.65. `GET /api/orders/details` therefore shows such an order as `LIMIT`, and
-    modifying it is an ordinary limit order modification.
+    book as a LIMIT order at ₹41.65, and an SL-M buy with a trigger of ₹48 was stored as an SL order with a limit
+    price of ₹48.96, 2% beyond the trigger. `GET /api/orders/details` therefore shows such orders as `LIMIT` and
+    `SL`, and modifying them is an ordinary limit or stop-loss modification.
 
 ```json
 {

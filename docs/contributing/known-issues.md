@@ -177,7 +177,7 @@ market hours; so do Fyers', Groww's and Wisdom Capital's. Several things are sti
 
 | Broker | Not yet confirmed |
 | --- | --- |
-| Zerodha | Which variety an after-market order's modification needs once the market opens, when Kite treats it as a regular order; and a live SL-M order with `market_protection=-1`, since only a MARKET order has been placed with it |
+| Zerodha | Which variety an after-market order's modification needs once the market opens, when Kite treats it as a regular order |
 | Dhan | The whole modify request, which was refused after hours; whether `legName`, which Dhan documents only for bracket and cover orders, is needed on a regular order; and whether `STOP_LOSS_MARKET` is honoured |
 | Fyers, Groww, Wisdom Capital | The whole modify request |
 | Fyers, Groww, INDmoney, Stoxkart, Wisdom Capital | Whether the quantity is the new total quantity or the pending quantity after a partial fill; Zerodha, Dhan and Noren document the total, and no test order filled |
