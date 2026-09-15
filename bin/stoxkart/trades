@@ -1,0 +1,109 @@
+#!/usr/bin/env python3
+"""Poll the day's Stoxkart trade book every second and write it to the Redis key `stoxkart:orders:trades`.
+
+    bin/stoxkart/trades
+    redis-cli GET stoxkart:orders:trades
+
+Calls `GET https://openapi.stoxkart.com/reports/trade-book` through `StoxkartAPI`, which logs in first if the stored session is dead. Each response is written as one JSON string with SET, replacing the one before: `timestamp`, `status`, `code`, and Stoxkart's trade book under `data` as a list with one row per fill. An empty book is written too, as an empty list.
+
+Stoxkart's documentation gives a trade row as `action`, `trade_id`, `order_id`, `exchange_order_id`, `exchange`, `symbol`, `token`, `product_type`, `price`, `quantity` and `order_date_time`, every value a string, with `order_date_time` holding only a time of day such as `10:54:16`. No populated trade book had been seen by 2026-09-15, so those fields are unconfirmed.
+
+Stoxkart documents a limit of one trade book request a second, so the poll waits a second between requests.
+
+Runs until Ctrl+C. A dead session, which Stoxkart refuses with HTTP 401 and the code `AuthorizationError`, is logged in again before the next request. Any other failed poll is logged and leaves `stoxkart:orders:trades` unchanged. Exits 1 when the first login, or a login after the session died, fails. Reads only - it places no orders.
+"""
+
+import json
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+from stock_brokers.api.stoxkart import StoxkartAPI
+from utilities.configurations import get_cache, get_logger
+from utilities.poll_reporter import PollReporter
+
+TRADES_URL = "https://openapi.stoxkart.com/reports/trade-book"
+REDIS_KEY = "stoxkart:orders:trades"
+DELAY_SECONDS = 1.0
+TIMEOUT_SECONDS = 10
+AUTHENTICATION_CODES = (
+    "AuthorizationError",
+    "401",
+    "Invalid Session",
+)
+
+
+class StoxkartTradesPoller:
+    """A loop that copies Stoxkart's trade book into Redis once a second.
+
+    Attributes:
+        logger (logging.Logger): Where logins and failures are reported.
+        reporter (PollReporter): Where each cycle's outcome is reported without repeating it every second.
+        cache (redis.Redis): The Redis client the trade book is written with.
+    """
+
+    def __init__(self):
+        """Creates the logger, the reporter and the Redis client."""
+        self.logger = get_logger("stoxkart.trades")
+        self.reporter = PollReporter(self.logger)
+        self.cache = get_cache()
+        self._stoxkart = None
+
+    def run(self):
+        """Logs in and polls the trade book until interrupted.
+
+        Returns:
+            int: 0 when stopped with Ctrl+C, and 1 when a login failed.
+        """
+        try:
+            self._stoxkart = StoxkartAPI()
+        except Exception as error:
+            self.logger.error(f"Could not log in to Stoxkart: {type(error).__name__}: {error}")
+            return 1
+
+        try:
+            while True:
+                self._poll_once()
+                time.sleep(DELAY_SECONDS)
+        except KeyboardInterrupt:
+            self.logger.info("Stopped")
+        return 0
+
+    def _poll_once(self):
+        """Fetches the trade book once and writes it, logging in again when the session is dead.
+
+        Raises:
+            StoxkartAPIException: Logging in again after a dead session failed.
+        """
+        try:
+            trades = self._stoxkart.get(url=TRADES_URL, timeout=TIMEOUT_SECONDS)
+            self.cache.set(REDIS_KEY, json.dumps(trades))
+            rows = trades.get("data")
+            count = len(rows) if isinstance(rows, list) else 0
+            self.reporter.info(f"Wrote {count} trade(s) to {REDIS_KEY}")
+        except Exception as error:
+            if self._is_authentication_error(error):
+                self.logger.warning(f"Stoxkart session expired, logging in again: {error}")
+                self._stoxkart = StoxkartAPI()
+            else:
+                self.reporter.error(f"Trades poll failed: {type(error).__name__}: {error}")
+
+    def _is_authentication_error(self, error):
+        """Reports whether Stoxkart refused the request because the session is dead.
+
+        Args:
+            error (Exception): The exception the request raised.
+
+        Returns:
+            bool: True when the exception carries one of Stoxkart's authentication codes.
+        """
+        return str(getattr(error, "code", "")) in AUTHENTICATION_CODES
+
+
+if __name__ == "__main__":
+    raise SystemExit(StoxkartTradesPoller().run())

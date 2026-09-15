@@ -1,0 +1,83 @@
+#!/usr/bin/env python3
+"""Log in to Stoxkart's API, confirm the session works, and record the outcome in `stoxkart:session:status`.
+
+    bin/stoxkart/login
+    redis-cli GET stoxkart:session:status
+
+`StoxkartAPI()` probes `GET https://openapi.stoxkart.com/funds` with the stored access token and only runs the real login when Stoxkart refuses it with `AuthorizationError`. The real login is Stoxkart's version 2 flow: the client id and password, then a TOTP, then the request token exchanged for an access token with an HMAC-SHA256 signature. A new token is written to MongoDB and to the Redis `last_login` hash, where every other process picks it up. The funds are then fetched once more, so a success means a session that has actually been used, not just a constructor that returned.
+
+`stoxkart:session:status` holds one JSON object, replaced on every run:
+
+    {"status": "success", "access-token": "<token>", "last_login": "2026-09-15 08:30:02.123456"}
+    {"status": "failure", "access-token": null, "last_login": "2026-09-15 08:30:02.123456"}
+
+On success `last_login` is when the token in force was issued, which is earlier than this run when the stored session was still good. On failure it is when this attempt was made.
+
+Exits 0 when the session works and 1 when the login, the check or the Redis write fails, so a systemd unit can retry on failure. Logs in to a live broker account. Reads only - it places no orders.
+"""
+
+import json
+import sys
+from datetime import datetime
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+from stock_brokers.api.stoxkart import StoxkartAPI
+from utilities.configurations import get_cache
+
+FUNDS_URL = "https://openapi.stoxkart.com/funds"
+REDIS_KEY = "stoxkart:session:status"
+
+
+class StoxkartLogin:
+    """One run of the Stoxkart login check, which records its outcome in Redis."""
+
+    def run(self):
+        """Logs in when the stored session is dead, confirms the session, and writes the outcome.
+
+        Returns:
+            int: 0 when the session works, and 1 when the login, the check or the Redis write failed.
+        """
+        record = self._check_session()
+        try:
+            get_cache().set(REDIS_KEY, json.dumps(record))
+        except Exception as error:
+            print(f"stoxkart could not write {REDIS_KEY}: {type(error).__name__}: {error}", file=sys.stderr)
+            return 1
+
+        if record["status"] == "success":
+            return 0
+        return 1
+
+    def _check_session(self):
+        """Constructs the API class, which logs in when needed, and uses the session once.
+
+        Returns:
+            dict: The status record, with `status`, `access-token` and `last_login`.
+        """
+        try:
+            stoxkart = StoxkartAPI()
+            stoxkart.get(url=FUNDS_URL)
+        except Exception as error:
+            print(f"stoxkart FAILED {type(error).__name__}: {error}", file=sys.stderr)
+            return {
+                "status": "failure",
+                "access-token": None,
+                "last_login": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"),
+            }
+
+        login = stoxkart._last_login or {}
+        print(f"stoxkart ok logged in at {login.get('last_login')}")
+        return {
+            "status": "success",
+            "access-token": login.get("access_token"),
+            "last_login": login.get("last_login"),
+        }
+
+
+if __name__ == "__main__":
+    raise SystemExit(StoxkartLogin().run())

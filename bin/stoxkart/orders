@@ -1,0 +1,449 @@
+#!/usr/bin/env python3
+"""Poll the day's Stoxkart order book every second and merge it into the Redis hash `stoxkart:orders:orders`.
+
+    bin/stoxkart/orders
+    redis-cli HGETALL stoxkart:orders:orders
+    redis-cli HGET stoxkart:orders:orders <order id>
+
+Calls `GET https://openapi.stoxkart.com/reports/order-book` through `StoxkartAPI`, which logs in first if the stored session is dead.
+
+**One key for orders.** `stoxkart:orders:orders` is a hash keyed by Stoxkart's `order_id`. At the other brokers it is written by two scripts, the REST poller and `order_updates`; Stoxkart's API streams no order updates, so this poller is its only writer. Stoxkart delivers order status only to a postback URL registered on the API app, which needs a public web server. Every value is
+
+    {"observed_at": <epoch>, "source": "rest", "order": <normalized order>, "data": <Stoxkart's own order>}
+
+`data` is the order-book row exactly as Stoxkart sent it, including its `variety` (`NORMAL`, `AMO` or `BO`), which the REST API's cancel endpoint uses to build the cancellation URL. `order` is built from it:
+
+| field | from Stoxkart |
+| --- | --- |
+| `order_id`, `exchange_order_id`, `parent_order_id` | `order_id`, `exch_order_id`, `parent_order_id` |
+| `status`, `status_message` | `status` on the shared vocabulary, `reason` |
+| `id`, `instrument_token`, `tradingsymbol`, `exchange` | `exchange:tradingsymbol`, `token`, `symbol_description` for a future or option whose description begins with its symbol and `symbol` otherwise, `exchange` |
+| `transaction_type`, `product`, `order_type`, `validity` | `action`, `product_type`, `order_type`, `validity`, on the shared vocabulary |
+| `quantity`, `filled_quantity`, `pending_quantity`, `disclosed_quantity` | `quantity`, `traded_quantity`, `pending_quantity`, `disclose_quantity` |
+| `cancelled_quantity` | null, because Stoxkart does not send one |
+| `price`, `trigger_price`, `average_price` | `price`, `trigger_price`, `trade_average_price` |
+| `order_timestamp` | `order_date_time`, `DD-MM-YYYY HH:MM:SS` in India time, as ISO with the IST offset |
+| `exchange_timestamp` | null, because Stoxkart does not send one |
+| `tag` | `tag` |
+
+The shared vocabulary puts status on `PENDING`, `OPEN`, `COMPLETE`, `CANCELLED`, `REJECTED` and `EXPIRED`, and passes an unknown term through uppercased. Stoxkart's documentation shows `order_type` as `RL` and `product_type` as `BRACKET ORDER`, so those spellings and Stoxkart's own order-placement words are in the tables. No populated order book had been seen by 2026-09-15, so the field names come from Stoxkart's documentation and are unconfirmed.
+
+**Which write wins.** A row from this poller replaces an entry only when that entry was observed before this poll's request was sent. The check and the write run together in Redis, as one script. `observed_at` of a polled row is the moment its request was sent. With no second writer this changes nothing today, and it keeps the hash compatible with the other brokers' writers.
+
+**Daily reset.** The hash expires at 06:00 IST, and every write moves that to the next 06:00, so yesterday's orders remain readable overnight. Each successful poll also writes its request time to `stoxkart:orders:orders:polled_at`, expiring with the hash, so an empty order book can be told apart from a poller that is not running.
+
+Stoxkart documents a limit of one order book request a second, so the poll waits a second between requests.
+
+Runs until Ctrl+C. A dead session, which Stoxkart refuses with HTTP 401 and the code `AuthorizationError`, is logged in again before the next request. Any other failed poll is logged and leaves the hash unchanged. Exits 1 when the first login, or a login after the session died, fails. Reads only - it never places, modifies or cancels an order.
+"""
+
+import json
+import sys
+import time
+from datetime import datetime, timedelta
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+from stock_brokers.api.stoxkart import StoxkartAPI
+from utilities.configurations import get_cache, get_logger
+from utilities.poll_reporter import PollReporter
+
+ORDERS_URL = "https://openapi.stoxkart.com/reports/order-book"
+REDIS_KEY = "stoxkart:orders:orders"
+POLLED_KEY = "stoxkart:orders:orders:polled_at"
+DELAY_SECONDS = 1.0
+TIMEOUT_SECONDS = 10
+INDIA = ZoneInfo("Asia/Kolkata")
+RESET_HOUR = 6
+AUTHENTICATION_CODES = (
+    "AuthorizationError",
+    "401",
+    "Invalid Session",
+)
+
+MERGE_SCRIPT = """
+local kind = redis.call('TYPE', KEYS[1])
+if type(kind) == 'table' then kind = kind['ok'] end
+if kind ~= 'hash' and kind ~= 'none' then redis.call('DEL', KEYS[1]) end
+local written = 0
+for i = 4, #ARGV, 2 do
+    local replace = true
+    if ARGV[2] == 'rest' then
+        local current = redis.call('HGET', KEYS[1], ARGV[i])
+        if current then
+            local ok, decoded = pcall(cjson.decode, current)
+            if ok and type(decoded) == 'table' and tonumber(decoded['observed_at'])
+                    and tonumber(decoded['observed_at']) >= tonumber(ARGV[3]) then
+                replace = false
+            end
+        end
+    end
+    if replace then
+        redis.call('HSET', KEYS[1], ARGV[i], ARGV[i + 1])
+        written = written + 1
+    end
+end
+if #ARGV >= 4 then redis.call('EXPIREAT', KEYS[1], ARGV[1]) end
+return written
+"""
+
+
+class StoxkartOrderNormalizer:
+    """Turns a Stoxkart order-book row into the normalized order every broker's scripts share."""
+
+    TRANSACTION_TYPES = {
+        "BUY": "BUY",
+        "B": "BUY",
+        "SELL": "SELL",
+        "S": "SELL",
+    }
+    PRODUCTS = {
+        "DELIVERY": "CNC",
+        "CNC": "CNC",
+        "INTRADAY": "MIS",
+        "MIS": "MIS",
+        "CARRYFORWARD": "NRML",
+        "CARRY FORWARD": "NRML",
+        "NRML": "NRML",
+        "NORMAL": "NRML",
+        "BO": "BO",
+        "BRACKET ORDER": "BO",
+        "CO": "CO",
+        "COVER ORDER": "CO",
+        "MTF": "MTF",
+    }
+    ORDER_TYPES = {
+        "MARKET": "MARKET",
+        "MKT": "MARKET",
+        "RL MKT": "MARKET",
+        "RL-MKT": "MARKET",
+        "LIMIT": "LIMIT",
+        "RL": "LIMIT",
+        "L": "LIMIT",
+        "STOPLOSS LIMIT": "SL",
+        "SL": "SL",
+        "SL LIMIT": "SL",
+        "STOPLOSS MARKET": "SL-M",
+        "SL-M": "SL-M",
+        "SL M": "SL-M",
+        "SL-MKT": "SL-M",
+        "SL MKT": "SL-M",
+    }
+    VALIDITIES = {
+        "DAY": "DAY",
+        "EOTODY": "DAY",
+        "EOSESS": "DAY",
+        "IOC": "IOC",
+        "GTC": "GTC",
+        "GTD": "GTD",
+        "GTT": "GTT",
+    }
+    STATUSES = {
+        "PENDING": "PENDING",
+        "TRANSIT": "PENDING",
+        "TRIGGER PENDING": "PENDING",
+        "AMO REQ RECEIVED": "PENDING",
+        "AFTER MARKET ORDER REQ RECEIVED": "PENDING",
+        "O-PENDING": "PENDING",
+        "OPEN": "OPEN",
+        "NEW": "OPEN",
+        "MODIFIED": "OPEN",
+        "REPLACED": "OPEN",
+        "PARTIALLY EXECUTED": "OPEN",
+        "PARTIALLY FILLED": "OPEN",
+        "PART TRADED": "OPEN",
+        "PARTIALLY TRADED": "OPEN",
+        "COMPLETE": "COMPLETE",
+        "COMPLETED": "COMPLETE",
+        "EXECUTED": "COMPLETE",
+        "FULLY EXECUTED": "COMPLETE",
+        "TRADED": "COMPLETE",
+        "FILLED": "COMPLETE",
+        "CANCELLED": "CANCELLED",
+        "CANCELED": "CANCELLED",
+        "CANCEL": "CANCELLED",
+        "REJECTED": "REJECTED",
+        "REJECT": "REJECTED",
+        "FAILED": "REJECTED",
+        "EXPIRED": "EXPIRED",
+    }
+    DERIVATIVE_TYPE_PREFIXES = (
+        "FUT",
+        "OPT",
+    )
+
+    def normalize(self, row):
+        """Builds the normalized order for one order-book row.
+
+        Args:
+            row (dict): One row of Stoxkart's order book.
+
+        Returns:
+            dict | None: The normalized order, or None when the row has no order id.
+        """
+        if not isinstance(row, dict) or self._text(row.get("order_id")) is None:
+            return None
+
+        exchange = self._text(row.get("exchange"))
+        symbol = self._trading_symbol(row)
+        instrument_name = symbol
+        if exchange and symbol:
+            instrument_name = f"{exchange}:{symbol}"
+
+        return {
+            "order_id": self._text(row.get("order_id")),
+            "exchange_order_id": self._text(row.get("exch_order_id")),
+            "parent_order_id": self._text(row.get("parent_order_id")),
+            "status": self._vocabulary(row.get("status"), self.STATUSES),
+            "status_message": self._text(row.get("reason")),
+            "id": instrument_name,
+            "instrument_token": self._text(row.get("token")),
+            "tradingsymbol": symbol,
+            "exchange": exchange,
+            "transaction_type": self._vocabulary(row.get("action"), self.TRANSACTION_TYPES),
+            "product": self._vocabulary(row.get("product_type"), self.PRODUCTS),
+            "order_type": self._vocabulary(row.get("order_type"), self.ORDER_TYPES),
+            "validity": self._vocabulary(row.get("validity"), self.VALIDITIES),
+            "quantity": self._integer(row.get("quantity")),
+            "filled_quantity": self._integer(row.get("traded_quantity")),
+            "pending_quantity": self._integer(row.get("pending_quantity")),
+            "cancelled_quantity": None,
+            "disclosed_quantity": self._integer(row.get("disclose_quantity")),
+            "price": self._decimal(row.get("price")),
+            "trigger_price": self._decimal(row.get("trigger_price")),
+            "average_price": self._decimal(row.get("trade_average_price")),
+            "order_timestamp": self._india_timestamp(row.get("order_date_time")),
+            "exchange_timestamp": None,
+            "tag": self._text(row.get("tag")),
+        }
+
+    def _trading_symbol(self, row):
+        """Chooses the name that identifies the contract.
+
+        A future or option is named by `symbol_description`, such as `NIFTY23FEBFUT`, when that begins with its `symbol`, because the symbol is only the underlying. A commodity contract's description is only the commodity's name, so it and anything else are named by `symbol`.
+
+        Args:
+            row (dict): One row of Stoxkart's order book.
+
+        Returns:
+            str | None: The trading symbol, or None when the row names none.
+        """
+        symbol = self._text(row.get("symbol"))
+        instrument_type = str(row.get("instrument_type") or "").upper()
+        description = self._text(row.get("symbol_description"))
+        if not instrument_type.startswith(self.DERIVATIVE_TYPE_PREFIXES) or description is None:
+            return symbol
+        if symbol is None or description.startswith(symbol):
+            return description
+        return symbol
+
+    def _vocabulary(self, value, table):
+        """Maps a Stoxkart term onto the shared vocabulary.
+
+        Args:
+            value (object): The term as Stoxkart sent it.
+            table (dict): One of the vocabulary tables on this class.
+
+        Returns:
+            str | None: The shared term, the term uppercased when the table does not know it, or None when it is blank.
+        """
+        text = self._text(value)
+        if text is None:
+            return None
+        key = " ".join(text.upper().replace("_", " ").split())
+        if key in table:
+            return table[key]
+        return key
+
+    def _text(self, value):
+        """Returns a value as a string, treating blanks and Stoxkart's `NA` placeholder as missing.
+
+        Args:
+            value (object): The raw field value.
+
+        Returns:
+            str | None: The value as a stripped string, or None.
+        """
+        if value is None:
+            return None
+        text = str(value).strip()
+        if text in ("", "NA"):
+            return None
+        return text
+
+    def _decimal(self, value):
+        """Returns a value as a float.
+
+        Args:
+            value (object): The raw field value.
+
+        Returns:
+            float | None: The number, or None when the value is missing or not numeric.
+        """
+        text = self._text(value)
+        if text is None:
+            return None
+        try:
+            return float(text)
+        except ValueError:
+            return None
+
+    def _integer(self, value):
+        """Returns a value as an integer.
+
+        Args:
+            value (object): The raw field value.
+
+        Returns:
+            int | None: The number, or None when the value is missing or not numeric.
+        """
+        number = self._decimal(value)
+        if number is None:
+            return None
+        return int(number)
+
+    def _india_timestamp(self, value):
+        """Converts a Stoxkart order time into an ISO timestamp with the IST offset.
+
+        Args:
+            value (object): The time as Stoxkart sent it, such as `16-02-2023 17:15:37`.
+
+        Returns:
+            str | None: The ISO timestamp, or None when the value is missing or in no known format.
+        """
+        text = self._text(value)
+        if text is None:
+            return None
+        for pattern in ("%d-%m-%Y %H:%M:%S", "%d/%m/%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+            try:
+                moment = datetime.strptime(text, pattern)
+            except ValueError:
+                continue
+            return moment.replace(tzinfo=INDIA).isoformat()
+        return None
+
+
+class StoxkartOrdersPoller:
+    """A loop that merges Stoxkart's order book into the shared Redis order hash once a second.
+
+    Attributes:
+        logger (logging.Logger): Where logins and failures are reported.
+        reporter (PollReporter): Where each cycle's outcome is reported without repeating it every second.
+        cache (redis.Redis): The Redis client the orders are written with.
+        normalizer (StoxkartOrderNormalizer): Builds the normalized order from each row.
+    """
+
+    def __init__(self):
+        """Creates the logger, the reporter, the Redis client, the merge script and the normalizer."""
+        self.logger = get_logger("stoxkart.orders")
+        self.reporter = PollReporter(self.logger)
+        self.cache = get_cache()
+        self.normalizer = StoxkartOrderNormalizer()
+        self._merge = self.cache.register_script(MERGE_SCRIPT)
+        self._stoxkart = None
+
+    def run(self):
+        """Logs in and polls the order book until interrupted.
+
+        Returns:
+            int: 0 when stopped with Ctrl+C, and 1 when a login failed.
+        """
+        try:
+            self._stoxkart = StoxkartAPI()
+        except Exception as error:
+            self.logger.error(f"Could not log in to Stoxkart: {type(error).__name__}: {error}")
+            return 1
+
+        try:
+            while True:
+                self._poll_once()
+                time.sleep(DELAY_SECONDS)
+        except KeyboardInterrupt:
+            self.logger.info("Stopped")
+        return 0
+
+    def _poll_once(self):
+        """Fetches the order book once and merges it, logging in again when the session is dead.
+
+        Raises:
+            StoxkartAPIException: Logging in again after a dead session failed.
+        """
+        try:
+            requested_at = time.time()
+            response = self._stoxkart.get(url=ORDERS_URL, timeout=TIMEOUT_SECONDS)
+            rows = response.get("data")
+            if not isinstance(rows, list):
+                rows = []
+            written = self._merge_rows(rows, requested_at)
+            self.reporter.info(f"Merged {written} of {len(rows)} order(s) into {REDIS_KEY}")
+        except Exception as error:
+            if self._is_authentication_error(error):
+                self.logger.warning(f"Stoxkart session expired, logging in again: {error}")
+                self._stoxkart = StoxkartAPI()
+            else:
+                self.reporter.error(f"Orders poll failed: {type(error).__name__}: {error}")
+
+    def _merge_rows(self, rows, requested_at):
+        """Merges the order-book rows into the hash and records when the book was read.
+
+        Args:
+            rows (list): The rows of Stoxkart's order book.
+            requested_at (float): The epoch at which the request was sent.
+
+        Returns:
+            int: How many hash fields were written.
+        """
+        expires_at = self._next_reset()
+        arguments = [
+            expires_at,
+            "rest",
+            repr(requested_at),
+        ]
+        for row in rows:
+            order = self.normalizer.normalize(row)
+            if order is None:
+                continue
+            entry = {
+                "observed_at": requested_at,
+                "source": "rest",
+                "order": order,
+                "data": row,
+            }
+            arguments.append(order["order_id"])
+            arguments.append(json.dumps(entry))
+
+        written = self._merge(keys=[REDIS_KEY], args=arguments)
+        self.cache.set(POLLED_KEY, repr(requested_at), exat=expires_at)
+        return written
+
+    def _next_reset(self):
+        """Returns the epoch of the next 06:00 in India, when the order hash expires.
+
+        Returns:
+            int: The epoch in seconds.
+        """
+        now = datetime.now(INDIA)
+        reset = now.replace(hour=RESET_HOUR, minute=0, second=0, microsecond=0)
+        if reset <= now:
+            reset = reset + timedelta(days=1)
+        return int(reset.timestamp())
+
+    def _is_authentication_error(self, error):
+        """Reports whether Stoxkart refused the request because the session is dead.
+
+        Args:
+            error (Exception): The exception the request raised.
+
+        Returns:
+            bool: True when the exception carries one of Stoxkart's authentication codes.
+        """
+        return str(getattr(error, "code", "")) in AUTHENTICATION_CODES
+
+
+if __name__ == "__main__":
+    raise SystemExit(StoxkartOrdersPoller().run())

@@ -1,0 +1,617 @@
+#!/usr/bin/env python3
+"""Poll Stoxkart market quotes over REST into the Redis hash `stoxkart:quotes:live`, and keep polling until stopped.
+
+    bin/stoxkart/quotes                              # instruments from the Redis set stoxkart:quotes:subscriptions
+    bin/stoxkart/quotes --tokens NSE:760946,MCX:565899
+    bin/stoxkart/quotes --interval 2 --requests-per-second 5
+
+    redis-cli SADD stoxkart:quotes:subscriptions NSE:760946 MCX:565899
+    redis-cli HGET stoxkart:quotes:live NSE:KWIL
+    redis-cli HGETALL stoxkart:quotes:instruments
+
+**Why REST and not a websocket.** Stoxkart documents a binary quote websocket at `ws://inmob.stoxkart.com:7763`. On 2026-09-15 that port refused connections, and the same host on port 443 answered the websocket handshake with HTTP 503 from an AWS load balancer with nothing behind it, so the documented feed cannot be reached. Stoxkart's `POST https://openapi.stoxkart.com/quotes` answers with a full quote, including five levels of depth, for up to 50 instruments of one exchange in about 110 ms, and this script polls it instead. Each tick therefore arrives up to `--interval` seconds after the trade it describes.
+
+**Instruments** are `--tokens` when given, otherwise the members of the Redis set `stoxkart:quotes:subscriptions`. Each is `EXCHANGE:TOKEN`, the field format of `stoxkart:instruments:master`, where the exchange is one of `NSE`, `BSE`, `NFO`, `BFO`, `NSECD`, `BSECD`, `MCX` or `NCDEX`. `BSECD` and `NCDEX` are in Stoxkart's list of exchanges but were refused as invalid on 2026-09-15. Each instrument is named from `stoxkart:instruments:master`: a future or option by its `symbol_description` when that begins with its `symbol` (`NFO:NIFTY26SEPFUT`), a commodity contract, whose description is only the commodity's name, by its symbol, expiry, strike and option type (`MCX:CRUDEOIL21SEP26FUT`), and anything else by its `symbol` (`NSE:KWIL`).
+
+**Polling.** Every cycle asks for every instrument, grouped by exchange in requests of up to 50 tokens, then waits until `--interval` seconds have passed since the cycle began. Requests are spaced so that no more than `--requests-per-second` are sent, below Stoxkart's documented limit of 10 quote requests a second. A quote identical to the previous one for the same instrument is not written again, so a quiet instrument does not fill the stream. The number of ticks written is logged once a minute rather than every cycle. An unknown token comes back as a row with no `token` field, and it is skipped.
+
+**Keys.**
+
+- `stoxkart:quotes:live`, a hash of the latest tick per instrument as JSON, keyed by the instrument's name, such as `NSE:KWIL`, or by `EXCHANGE:TOKEN` when the master does not name it. It is not cleared at startup.
+- `stoxkart:quotes:instruments`, a hash of every subscribed `EXCHANGE:TOKEN` to its name, or to an empty string when unnamed. Replaced whole at startup.
+- `stoxkart:quotes:stream`, a Redis Stream with every changed tick in arrival order as a `tick` field, which `bin/stoxkart/persist_ticks` writes to `stoxkart.ticks`. Capped at about 100,000 entries.
+
+**The tick.**
+
+| field | from Stoxkart |
+| --- | --- |
+| `id` | the instrument's name, or `EXCHANGE:TOKEN` |
+| `broker`, `mode` | `stoxkart`, `full` |
+| `instrument_token`, `exchange` | `EXCHANGE:TOKEN` as subscribed, `exchange` |
+| `last_price`, `last_quantity`, `average_price`, `volume` | `last_trade_price`, `last_trade_quantity`, `average_price`, `volume` |
+| `buy_quantity`, `sell_quantity` | null, because Stoxkart's `buy_quantity` and `sell_quantity` are the best bid and ask sizes, not the totals |
+| `ohlc` | `ohlc.open`, `ohlc.high`, `ohlc.low`, `ohlc.close` |
+| `change` | `percent_change` |
+| `oi` | `open_interest` |
+| `oi_day_high`, `oi_day_low`, `exchange_timestamp` | null, because Stoxkart does not send them |
+| `last_trade_time` | `last_trade_time` plus 315532800, because Stoxkart counts seconds from 1980-01-01 UTC; null when it is 0 |
+| `depth` | `depth.buy` and `depth.sell`, five levels of `price`, `quantity` and `orders` each |
+| `received_at` | when this script received the answer |
+
+Measured against Zerodha's ticks received in the same second on 2026-09-15: `close` is the previous session's close (TCS 2200.80, HDFCBANK 708.25, CRUDEOIL SEP 9717), NSE volume matched exactly, MCX volume and open interest are lots exactly as at Zerodha (CRUDEOIL SEP 6385 and 15677), and the last trade time matched Zerodha's to the second. Stoxkart sends prices as rupee strings, so no divisor is applied.
+
+**Sessions.** A request Stoxkart refuses with `AuthorizationError` logs in again through `StoxkartAPI` before the next request. Any other failed request is logged, and the cycle carries on with the next group.
+
+Exits 0 when stopped with Ctrl+C or SIGTERM, 1 when a login fails, and 2 when there is nothing to subscribe to, an instrument is not `EXCHANGE:TOKEN`, or an option is out of range. Reads only - it places no orders.
+"""
+
+import argparse
+import json
+import signal
+import sys
+import threading
+import time
+from datetime import datetime
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+from stock_brokers.api.stoxkart import StoxkartAPI
+from utilities.configurations import get_cache, get_logger
+from utilities.poll_reporter import PollReporter
+
+QUOTES_URL = "https://openapi.stoxkart.com/quotes"
+LIVE_KEY = "stoxkart:quotes:live"
+INSTRUMENTS_KEY = "stoxkart:quotes:instruments"
+SUBSCRIPTIONS_KEY = "stoxkart:quotes:subscriptions"
+STREAM_KEY = "stoxkart:quotes:stream"
+STREAM_MAX_LENGTH = 100000
+MASTER_KEY = "stoxkart:instruments:master"
+META_KEY = "stoxkart:instruments:meta"
+TOKENS_PER_REQUEST = 50
+MAXIMUM_REQUESTS_PER_SECOND = 10
+TIMEOUT_SECONDS = 10
+REPORT_INTERVAL_SECONDS = 60
+EPOCH_1980_OFFSET_SECONDS = 315532800
+EXCHANGES = (
+    "NSE",
+    "BSE",
+    "NFO",
+    "BFO",
+    "NSECD",
+    "BSECD",
+    "MCX",
+    "NCDEX",
+)
+AUTHENTICATION_CODES = (
+    "AuthorizationError",
+    "401",
+    "Invalid Session",
+)
+
+
+class StoxkartInstrumentNames:
+    """Trading symbols for Stoxkart instruments, read from the instrument master stored in Redis."""
+
+    DERIVATIVE_TYPE_PREFIXES = (
+        "FUT",
+        "OPT",
+    )
+
+    def __init__(self, cache):
+        """Remembers the Redis client.
+
+        Args:
+            cache (redis.Redis): The Redis client holding `stoxkart:instruments:master`.
+        """
+        self._cache = cache
+
+    def names(self, instruments):
+        """Looks up the name of every instrument.
+
+        Args:
+            instruments (list): The `EXCHANGE:TOKEN` strings to name.
+
+        Returns:
+            dict: Each `EXCHANGE:TOKEN` mapped to `EXCHANGE:SYMBOL`, or to an empty string when the master does not name it.
+        """
+        names = {}
+        columns = self._column_positions()
+        rows = []
+        if columns is not None and instruments:
+            rows = self._cache.hmget(MASTER_KEY, instruments)
+        for index, instrument in enumerate(instruments):
+            names[instrument] = ""
+            if index < len(rows) and rows[index]:
+                symbol = self._symbol(rows[index], columns)
+                if symbol:
+                    exchange = instrument.split(":")[0]
+                    names[instrument] = f"{exchange}:{symbol}"
+        return names
+
+    def _symbol(self, stored, columns):
+        """Picks the trading symbol out of one stored master row.
+
+        A future or option whose `symbol_description` begins with its `symbol`, such as `NIFTY26SEPFUT`, is named by that description. A commodity contract's description is only the commodity's name, such as `LIGHT SWEET CRUDE OIL`, so its name is built from the symbol, expiry, strike and option type instead, such as `CRUDEOIL21SEP26FUT`. Anything else is named by `symbol`.
+
+        Args:
+            stored (str): The row as the JSON array the master hash holds.
+            columns (dict): Each column name mapped to its position in a row.
+
+        Returns:
+            str | None: The trading symbol, or None when the row cannot be read.
+        """
+        try:
+            row = json.loads(stored)
+        except ValueError:
+            return None
+        symbol = row[columns["symbol"]]
+        instrument_type = str(row[columns["instrument_type"]] or "").upper()
+        if not symbol or not instrument_type.startswith(self.DERIVATIVE_TYPE_PREFIXES):
+            return symbol
+        description = row[columns["symbol_description"]]
+        if description and str(description).startswith(str(symbol)):
+            return description
+        return self._contract_name(row, columns, symbol)
+
+    def _contract_name(self, row, columns, symbol):
+        """Builds a contract name from the symbol, expiry, strike and option type.
+
+        Args:
+            row (list): The master row.
+            columns (dict): Each column name mapped to its position in a row.
+            symbol (str): The contract's underlying symbol.
+
+        Returns:
+            str: The name, such as `CRUDEOIL21SEP26FUT` or `SILVER24FEB26150000CE`, or the symbol alone when the expiry cannot be read.
+        """
+        try:
+            expiry = datetime.strptime(str(row[columns["expiry_date"]]), "%d-%m-%Y")
+        except ValueError:
+            return symbol
+        name = f"{symbol}{expiry.strftime('%d%b%y').upper()}"
+        option_type = str(row[columns["option_type"]] or "").upper()
+        if option_type not in ("CE", "PE"):
+            return f"{name}FUT"
+        try:
+            strike = float(row[columns["strike_price"]]) / 100
+        except (TypeError, ValueError):
+            return f"{name}{option_type}"
+        return f"{name}{strike:g}{option_type}"
+
+    def _column_positions(self):
+        """Reads the master's column order from its meta key.
+
+        Returns:
+            dict | None: Each column name mapped to its position in a row, or None when the meta key is missing or lacks a needed column.
+        """
+        stored = self._cache.get(META_KEY)
+        if not stored:
+            return None
+        try:
+            columns = json.loads(stored).get("columns") or []
+        except ValueError:
+            return None
+        positions = {}
+        for index, name in enumerate(columns):
+            positions[name] = index
+        for needed in ("instrument_type", "symbol", "symbol_description", "expiry_date", "strike_price", "option_type"):
+            if needed not in positions:
+                return None
+        return positions
+
+
+class StoxkartTickBuilder:
+    """Turns one row of Stoxkart's quote answer into the normalized tick every broker's feed writes."""
+
+    def build(self, row, instrument, name, received_at):
+        """Builds the tick for one quote row.
+
+        Args:
+            row (dict): One row of Stoxkart's quote answer.
+            instrument (str): The instrument as subscribed, `EXCHANGE:TOKEN`.
+            name (str): The instrument's name, or an empty string when it has none.
+            received_at (float): The epoch at which the answer was received.
+
+        Returns:
+            dict: The normalized tick.
+        """
+        ohlc = row.get("ohlc") or {}
+        depth = row.get("depth") or {}
+        return {
+            "id": name or instrument,
+            "broker": "stoxkart",
+            "instrument_token": instrument,
+            "exchange": row.get("exchange"),
+            "mode": "full",
+            "last_price": self._decimal(row.get("last_trade_price")),
+            "last_quantity": self._integer(row.get("last_trade_quantity")),
+            "average_price": self._decimal(row.get("average_price")),
+            "volume": self._integer(row.get("volume")),
+            "buy_quantity": None,
+            "sell_quantity": None,
+            "ohlc": {
+                "open": self._decimal(ohlc.get("open")),
+                "high": self._decimal(ohlc.get("high")),
+                "low": self._decimal(ohlc.get("low")),
+                "close": self._decimal(ohlc.get("close")),
+            },
+            "change": self._decimal(row.get("percent_change")),
+            "oi": self._integer(row.get("open_interest")),
+            "oi_day_high": None,
+            "oi_day_low": None,
+            "last_trade_time": self._last_trade_time(row.get("last_trade_time")),
+            "exchange_timestamp": None,
+            "depth": {
+                "buy": self._levels(depth.get("buy")),
+                "sell": self._levels(depth.get("sell")),
+            },
+            "received_at": received_at,
+        }
+
+    def _levels(self, levels):
+        """Converts one side of Stoxkart's depth into numeric levels.
+
+        Args:
+            levels (object): The list of levels as Stoxkart sent it.
+
+        Returns:
+            list: Up to five dicts of `quantity`, `price` and `orders`.
+        """
+        converted = []
+        if not isinstance(levels, list):
+            return converted
+        for level in levels[:5]:
+            if not isinstance(level, dict):
+                continue
+            converted.append({
+                "quantity": self._integer(level.get("quantity")),
+                "price": self._decimal(level.get("price")),
+                "orders": self._integer(level.get("orders")),
+            })
+        return converted
+
+    def _last_trade_time(self, value):
+        """Converts Stoxkart's last trade time from seconds since 1980 into epoch seconds.
+
+        Args:
+            value (object): The time as Stoxkart sent it, such as `1473924917`.
+
+        Returns:
+            int | None: Epoch seconds, or None when the value is missing, zero or not numeric.
+        """
+        seconds = self._integer(value)
+        if not seconds:
+            return None
+        return seconds + EPOCH_1980_OFFSET_SECONDS
+
+    def _decimal(self, value):
+        """Returns a value as a float.
+
+        Args:
+            value (object): The raw field value.
+
+        Returns:
+            float | None: The number, or None when the value is missing or not numeric.
+        """
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _integer(self, value):
+        """Returns a value as an integer.
+
+        Args:
+            value (object): The raw field value.
+
+        Returns:
+            int | None: The number, or None when the value is missing or not numeric.
+        """
+        number = self._decimal(value)
+        if number is None:
+            return None
+        return int(number)
+
+
+class StoxkartQuotePoller:
+    """A loop that polls Stoxkart's quote endpoint and writes changed ticks to Redis.
+
+    Attributes:
+        logger (logging.Logger): Where logins, progress and failures are reported.
+        reporter (PollReporter): Where failed requests are reported without repeating them every second.
+        cache (redis.Redis): The Redis client the ticks are written with.
+        builder (StoxkartTickBuilder): Builds a tick from each quote row.
+        stop (threading.Event): Set when the loop should end.
+    """
+
+    def __init__(self, instruments, names, interval, requests_per_second):
+        """Remembers what to poll and how fast.
+
+        Args:
+            instruments (list): The `EXCHANGE:TOKEN` strings to poll.
+            names (dict): Each instrument mapped to its name, or to an empty string.
+            interval (float): The shortest time between the starts of two cycles, in seconds.
+            requests_per_second (float): The most requests sent in one second.
+        """
+        self.logger = get_logger("stoxkart.quotes")
+        self.reporter = PollReporter(self.logger)
+        self.cache = get_cache()
+        self.builder = StoxkartTickBuilder()
+        self.stop = threading.Event()
+        self._names = names
+        self._interval = interval
+        self._request_spacing = 1.0 / requests_per_second
+        self._groups = self._group(instruments)
+        self._previous = {}
+        self._last_request_at = 0.0
+        self._written_since_report = 0
+        self._cycles_since_report = 0
+        self._last_report_at = time.monotonic()
+        self._stoxkart = None
+
+    def run(self):
+        """Logs in and polls until stopped.
+
+        Returns:
+            int: 0 when stopped, and 1 when a login failed.
+        """
+        try:
+            self._stoxkart = StoxkartAPI()
+        except Exception as error:
+            self.logger.error(f"Could not log in to Stoxkart: {type(error).__name__}: {error}")
+            return 1
+
+        self.logger.info(f"Polling {sum(len(tokens) for _, tokens in self._groups)} instrument(s) in {len(self._groups)} request(s) a cycle.")
+        try:
+            while not self.stop.is_set():
+                cycle_started = time.monotonic()
+                written = 0
+                for exchange, tokens in self._groups:
+                    if self.stop.is_set():
+                        break
+                    written += self._poll_group(exchange, tokens)
+                self._report(written)
+                remaining = self._interval - (time.monotonic() - cycle_started)
+                if remaining > 0:
+                    self.stop.wait(remaining)
+        except Exception as error:
+            self.logger.error(f"Could not log in to Stoxkart again: {type(error).__name__}: {error}")
+            return 1
+        self.logger.info("Stopped")
+        return 0
+
+    def _report(self, written):
+        """Adds a cycle's count to the running total and logs the total once a minute.
+
+        Args:
+            written (int): How many ticks the cycle wrote.
+        """
+        self._written_since_report += written
+        self._cycles_since_report += 1
+        if time.monotonic() - self._last_report_at < REPORT_INTERVAL_SECONDS:
+            return
+        self.logger.info(f"Wrote {self._written_since_report} changed tick(s) in {self._cycles_since_report} cycle(s) to {LIVE_KEY}")
+        self._written_since_report = 0
+        self._cycles_since_report = 0
+        self._last_report_at = time.monotonic()
+
+    def _group(self, instruments):
+        """Groups the instruments by exchange into requests of at most 50 tokens.
+
+        Args:
+            instruments (list): The `EXCHANGE:TOKEN` strings to poll.
+
+        Returns:
+            list: Pairs of (exchange, list of tokens), one pair per request.
+        """
+        by_exchange = {}
+        for instrument in instruments:
+            exchange, token = instrument.split(":")
+            by_exchange.setdefault(exchange, []).append(token)
+        groups = []
+        for exchange in sorted(by_exchange):
+            tokens = by_exchange[exchange]
+            for start in range(0, len(tokens), TOKENS_PER_REQUEST):
+                groups.append((exchange, tokens[start:start + TOKENS_PER_REQUEST]))
+        return groups
+
+    def _poll_group(self, exchange, tokens):
+        """Sends one quote request and writes the ticks that changed.
+
+        Args:
+            exchange (str): Stoxkart's exchange for every token in the request.
+            tokens (list): Up to 50 tokens on that exchange.
+
+        Returns:
+            int: How many ticks were written.
+
+        Raises:
+            StoxkartAPIException: Logging in again after a dead session failed.
+        """
+        self._wait_for_request_slot()
+        body = {
+            "exchange": exchange,
+            "tokens": tokens,
+        }
+        try:
+            response = self._stoxkart.post(url=QUOTES_URL, json=body, timeout=TIMEOUT_SECONDS)
+        except Exception as error:
+            if str(getattr(error, "code", "")) in AUTHENTICATION_CODES:
+                self.logger.warning(f"Stoxkart session expired, logging in again: {error}")
+                self._stoxkart = StoxkartAPI()
+            else:
+                self.reporter.error(f"Quote request for {exchange} failed: {type(error).__name__}: {error}")
+            return 0
+
+        received_at = time.time()
+        rows = response.get("data")
+        if not isinstance(rows, list):
+            self.reporter.error(f"Quote request for {exchange} answered without a list: {str(rows)[:200]}")
+            return 0
+        return self._write_rows(exchange, rows, received_at)
+
+    def _write_rows(self, exchange, rows, received_at):
+        """Writes a tick for every row whose quote changed since the previous cycle.
+
+        Args:
+            exchange (str): Stoxkart's exchange the rows belong to.
+            rows (list): The rows of Stoxkart's quote answer.
+            received_at (float): The epoch at which the answer was received.
+
+        Returns:
+            int: How many ticks were written.
+        """
+        pipeline = self.cache.pipeline(transaction=False)
+        written = 0
+        for row in rows:
+            if not isinstance(row, dict) or not row.get("token"):
+                continue
+            instrument = f"{exchange}:{row['token']}"
+            fingerprint = json.dumps(row, sort_keys=True)
+            if self._previous.get(instrument) == fingerprint:
+                continue
+            self._previous[instrument] = fingerprint
+            tick = self.builder.build(row, instrument, self._names.get(instrument, ""), received_at)
+            payload = json.dumps(tick)
+            pipeline.hset(LIVE_KEY, tick["id"], payload)
+            pipeline.xadd(STREAM_KEY, {"tick": payload}, maxlen=STREAM_MAX_LENGTH, approximate=True)
+            written += 1
+        if written:
+            try:
+                pipeline.execute()
+            except Exception as error:
+                self.reporter.error(f"Could not write ticks to Redis: {type(error).__name__}: {error}")
+                return 0
+        return written
+
+    def _wait_for_request_slot(self):
+        """Sleeps until sending another request keeps within the request rate."""
+        elapsed = time.monotonic() - self._last_request_at
+        if elapsed < self._request_spacing:
+            self.stop.wait(self._request_spacing - elapsed)
+        self._last_request_at = time.monotonic()
+
+
+class StoxkartQuotesApplication:
+    """The command line entry point: reads the options, resolves the instruments and runs the poller."""
+
+    def run(self):
+        """Parses the options, names the instruments, and polls until stopped.
+
+        Returns:
+            int: 0 when stopped, 1 when a login failed, and 2 for a bad option or nothing to subscribe to.
+        """
+        arguments = self._parse_arguments()
+        logger = get_logger("stoxkart.quotes")
+        if arguments.interval <= 0:
+            logger.error("--interval must be above 0.")
+            return 2
+        if arguments.requests_per_second <= 0 or arguments.requests_per_second > MAXIMUM_REQUESTS_PER_SECOND:
+            logger.error(f"--requests-per-second must be above 0 and at most {MAXIMUM_REQUESTS_PER_SECOND}.")
+            return 2
+
+        cache = get_cache()
+        instruments, source = self._instruments(arguments.tokens, cache)
+        if not instruments:
+            logger.error(f"Nothing to subscribe to. Pass --tokens or add EXCHANGE:TOKEN members to the Redis set {SUBSCRIPTIONS_KEY}.")
+            return 2
+        malformed = self._malformed(instruments)
+        if malformed:
+            logger.error(f"Not EXCHANGE:TOKEN with a known exchange: {', '.join(malformed)}")
+            return 2
+
+        names = StoxkartInstrumentNames(cache).names(instruments)
+        pipeline = cache.pipeline(transaction=True)
+        pipeline.delete(INSTRUMENTS_KEY)
+        pipeline.hset(INSTRUMENTS_KEY, mapping=names)
+        pipeline.execute()
+        unnamed = 0
+        for name in names.values():
+            if not name:
+                unnamed += 1
+        logger.info(f"Subscribing to {len(instruments)} instrument(s) from {source}, {unnamed} without a name in {MASTER_KEY}.")
+
+        poller = StoxkartQuotePoller(instruments, names, arguments.interval, arguments.requests_per_second)
+        self._handle_signals(poller)
+        return poller.run()
+
+    def _parse_arguments(self):
+        """Reads the command line options.
+
+        Returns:
+            argparse.Namespace: The options `tokens`, `interval` and `requests_per_second`.
+        """
+        parser = argparse.ArgumentParser(description="Poll Stoxkart market quotes into stoxkart:quotes:live and stoxkart:quotes:stream.")
+        parser.add_argument("--tokens", help="comma-separated EXCHANGE:TOKEN instruments instead of the subscription set")
+        parser.add_argument("--interval", type=float, default=1.0, help="shortest time between the starts of two cycles, in seconds, default 1")
+        parser.add_argument("--requests-per-second", type=float, default=8.0, help="most quote requests sent in one second, default 8, at most 10")
+        return parser.parse_args()
+
+    def _instruments(self, tokens, cache):
+        """Collects the instruments to poll.
+
+        Args:
+            tokens (str | None): The `--tokens` option, or None.
+            cache (redis.Redis): The Redis client holding the subscription set.
+
+        Returns:
+            tuple: A tuple (instruments, source), where instruments is a sorted list of distinct `EXCHANGE:TOKEN` strings and source names where they came from.
+        """
+        if tokens:
+            wanted = tokens.split(",")
+            source = "--tokens"
+        else:
+            wanted = list(cache.smembers(SUBSCRIPTIONS_KEY))
+            source = SUBSCRIPTIONS_KEY
+        instruments = set()
+        for instrument in wanted:
+            cleaned = instrument.strip().upper()
+            if cleaned:
+                instruments.add(cleaned)
+        return sorted(instruments), source
+
+    def _malformed(self, instruments):
+        """Finds the instruments that are not `EXCHANGE:TOKEN` with a known exchange.
+
+        Args:
+            instruments (list): The instruments to check.
+
+        Returns:
+            list: The malformed instruments, empty when all are well formed.
+        """
+        malformed = []
+        for instrument in instruments:
+            parts = instrument.split(":")
+            if len(parts) != 2 or parts[0] not in EXCHANGES or not parts[1].isdigit():
+                malformed.append(instrument)
+        return malformed
+
+    def _handle_signals(self, poller):
+        """Makes Ctrl+C and SIGTERM stop the poller after the request in flight.
+
+        Args:
+            poller (StoxkartQuotePoller): The poller to stop.
+        """
+        def stop_poller(signal_number, frame):
+            """Sets the poller's stop event.
+
+            Args:
+                signal_number (int): The signal received.
+                frame (frame): The interrupted stack frame, unused.
+            """
+            del frame
+            poller.logger.info(f"Received signal {signal_number}. Stopping.")
+            poller.stop.set()
+
+        signal.signal(signal.SIGINT, stop_poller)
+        signal.signal(signal.SIGTERM, stop_poller)
+
+
+if __name__ == "__main__":
+    raise SystemExit(StoxkartQuotesApplication().run())

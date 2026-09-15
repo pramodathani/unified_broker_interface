@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+"""Poll the Stoxkart user profile every minute and write it to the Redis key `stoxkart:user:details`.
+
+    bin/stoxkart/user-profile
+    redis-cli GET stoxkart:user:details
+
+Calls `GET https://openapi.stoxkart.com/reports/user-details` through `StoxkartAPI`, which logs in first if the stored session is dead. Stoxkart's documentation lists a `getProfile` rate limit but no profile endpoint; this one was found on 2026-09-15, when `/user/profile` and `/profile` answered HTTP 503. Each response is written as one JSON string with SET, replacing the one before: `timestamp`, `status`, `code`, and Stoxkart's profile under `data`, which carries `client_id`, `name` and `email_id`. Stoxkart sends `email_id` encrypted, as `ENC-` followed by hexadecimal, so it is not a readable address.
+
+Runs until Ctrl+C. A dead session, which Stoxkart refuses with HTTP 401 and the code `AuthorizationError`, is logged in again before the next request. Any other failed poll is logged and leaves `stoxkart:user:details` unchanged. Exits 1 when the first login, or a login after the session died, fails. Reads only - it places no orders.
+"""
+
+import json
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+from stock_brokers.api.stoxkart import StoxkartAPI
+from utilities.configurations import get_cache, get_logger
+
+PROFILE_URL = "https://openapi.stoxkart.com/reports/user-details"
+REDIS_KEY = "stoxkart:user:details"
+DELAY_SECONDS = 60
+TIMEOUT_SECONDS = 10
+AUTHENTICATION_CODES = (
+    "AuthorizationError",
+    "401",
+    "Invalid Session",
+)
+
+
+class StoxkartProfilePoller:
+    """A loop that copies the Stoxkart account's profile into Redis once a minute.
+
+    Attributes:
+        logger (logging.Logger): Where each write, login and failure is reported.
+        cache (redis.Redis): The Redis client the profile is written with.
+    """
+
+    def __init__(self):
+        """Creates the logger and the Redis client."""
+        self.logger = get_logger("stoxkart.user_profile")
+        self.cache = get_cache()
+        self._stoxkart = None
+
+    def run(self):
+        """Logs in and polls the profile until interrupted.
+
+        Returns:
+            int: 0 when stopped with Ctrl+C, and 1 when a login failed.
+        """
+        try:
+            self._stoxkart = StoxkartAPI()
+        except Exception as error:
+            self.logger.error(f"Could not log in to Stoxkart: {type(error).__name__}: {error}")
+            return 1
+
+        try:
+            while True:
+                self._poll_once()
+                time.sleep(DELAY_SECONDS)
+        except KeyboardInterrupt:
+            self.logger.info("Stopped")
+        return 0
+
+    def _poll_once(self):
+        """Fetches the profile once and writes it, logging in again when the session is dead.
+
+        Raises:
+            StoxkartAPIException: Logging in again after a dead session failed.
+        """
+        try:
+            profile = self._stoxkart.get(url=PROFILE_URL, timeout=TIMEOUT_SECONDS)
+            self.cache.set(REDIS_KEY, json.dumps(profile))
+            client_id = (profile.get("data") or {}).get("client_id")
+            self.logger.info(f"Wrote the profile of {client_id} to {REDIS_KEY}")
+        except Exception as error:
+            if self._is_authentication_error(error):
+                self.logger.warning(f"Stoxkart session expired, logging in again: {error}")
+                self._stoxkart = StoxkartAPI()
+            else:
+                self.logger.error(f"Profile poll failed: {type(error).__name__}: {error}")
+
+    def _is_authentication_error(self, error):
+        """Reports whether Stoxkart refused the request because the session is dead.
+
+        Args:
+            error (Exception): The exception the request raised.
+
+        Returns:
+            bool: True when the exception carries one of Stoxkart's authentication codes.
+        """
+        return str(getattr(error, "code", "")) in AUTHENTICATION_CODES
+
+
+if __name__ == "__main__":
+    raise SystemExit(StoxkartProfilePoller().run())
