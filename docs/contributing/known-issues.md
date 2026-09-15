@@ -71,8 +71,19 @@ own lot size. That rule comes from Zerodha's and Dhan's staff answers, from Shoo
 derivatives, from XTS documentation whose own examples contradict it, and by inference elsewhere; Fyers and
 Groww are unknown, and Groww's documentation contradicts itself on whether MCX works at all. Zerodha's `NCO` and
 `BCD`, Groww's NSE commodity segment, Wisdom Capital's `NSECO` and Stoxkart's `BSECD` and `NCDEX` codes are not
-confirmed either. A wrong code is refused by the broker; a wrong quantity rule is not. The first live orders were
-planned on MCX CRUDEOILM, whose lot is 1 at Zerodha, Dhan, Fyers and Wisdom Capital and 10 at the other five.
+confirmed either. A wrong code is refused by the broker; a wrong quantity rule is not. Live orders are tested on MCX
+CRUDEOILM, whose lot is 1 at Zerodha, Dhan, Fyers and Wisdom Capital and 10 at the other five, with a limit buy about
+2% below the market. On 2026-09-15 at about 21:30, with CRUDEOILM's 21 September future at 10,043, one lot was sent
+at 9,842:
+
+| Broker | Sent | Answer | What it shows |
+| --- | --- | --- | --- |
+| Zerodha | quantity 1 on `MCX`, NRML | HTTP 422 `InputException`: "MCX is disabled for your account", with a link to activate the segment in Console; nothing was placed | The request is accepted up to the account check; the quantity rule is still unconfirmed |
+| Dhan | quantity 1 on `MCX_COMM`, `MARGIN` | Accepted as order 23826091527008 (`TRANSIT`) in 72 ms, then `REJECTED` by Dhan's risk system: "You have insufficient funds. Please add Rs.25406.10 to trade." | Dhan recorded quantity 1. A shortfall of about Rs 25,400 fits the margin of one lot (about Rs 98,000 of oil) rather than ten, but the account's balance was not known, so this supports the rule without proving it |
+
+No order reached the exchange. The other seven brokers were not tested that evening. An insufficient-funds rejection
+names the margin wanted, which says whether a broker read the quantity as one lot or as ten, so an unfunded account
+can still be used to test the rule.
 
 **BSE currencies and NCDEX trust Stoxkart's lot size alone.** No other broker's instrument file lists them, and on
 2026-09-15 the user chose to trade them on Stoxkart's figure rather than keep them closed. Stoxkart's NCDEX lot sizes

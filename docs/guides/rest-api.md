@@ -792,7 +792,9 @@ Shoonya, Flattrade, Stoxkart and Groww.
 
 !!! danger "These listings were opened on 2026-09-15 before a live order confirmed them"
 
-    The quantity rule is confirmed by broker staff only at Zerodha and Dhan. At every other broker a wrong rule
+    The quantity rule is confirmed by broker staff only at Zerodha and Dhan, and on 2026-09-15 neither live test
+    settled it: Zerodha refused because MCX is not activated on the account, and Dhan recorded quantity 1 for one
+    CRUDEOILM lot before its risk system rejected the order for insufficient funds. At every other broker a wrong rule
     would place an order many times too large or small. Try each broker with `dry_run` and check the quantity
     in the request before sending. An NCDEX `quantity` is in the unit Stoxkart's lot size counts, tonnes, not
     in the quintals prices are quoted in. See [Known issues](../contributing/known-issues.md).
