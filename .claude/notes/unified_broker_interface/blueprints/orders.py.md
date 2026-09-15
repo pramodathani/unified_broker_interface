@@ -1,8 +1,22 @@
 # Notes on `unified_broker_interface/blueprints/orders.py`
 
-## Why `place` is one long method
+## How the order routes are split, and the rule that keeps them fast
 
-The earlier order placement endpoint took about half a second to answer, and most of that time was the API's own work rather than the broker's. It was spread across a write service, a router, rate limits, a funds reader and one builder module per broker, and each layer added reads of its own. The user asked for all of the placement logic to live inside the one `place` method, so that everything an order costs can be read top to bottom in one place and nothing can quietly add a round trip. The per-broker branches are therefore written out in full inside the method rather than shared, which is deliberate duplication.
+The earlier order placement endpoint took about half a second to answer, and most of that time was the API's own work rather than the broker's. It was spread across a write service, a router, rate limits, a funds reader and one builder module per broker, and each layer added reads of its own. The user first asked for all of the placement logic to live inside the one `place` method, so that everything an order costs could be read top to bottom in one place and nothing could quietly add a round trip.
+
+On 2026-09-15 the user asked for the method to be split up again, after measuring that a Python method call costs about 16 nanoseconds against about 122 microseconds for one Redis round trip, so the split costs nothing measurable. The protection the one-method rule gave is kept by a different rule instead: every Redis read the two order routes make is in this module, and the only network call is `BrokerOrders.send` in `unified_broker_interface/utilities/broker_orders/base.py`. The broker classes are handed decoded dictionaries and read no store, so the round trips an order costs can still be counted by reading this file.
+
+| Piece | Holds |
+| --- | --- |
+| `OrdersBlueprint` in this module | The token check, both Redis pipelines, the catalogue lookup, the turn and the answers |
+| `PlaceOrderRequest`, `CancelOrderRequest` | Validation of the body and query string, which costs no I/O |
+| `Instrument` and `TradeableSegments` | The instrument's segment, whether orders are sent for it, and its market key |
+| One `BrokerOrders` subclass per broker | The skip checks, the request, the reading of success answers and which server errors are settled refusals |
+| `BrokerOrders` itself | The HTTP call, error answers, and the accepted, rejected and unknown rules |
+
+The split was checked with `python -m test_runs.order_routes`, whose recording was made before it: all 440 scenarios, including every outgoing request's headers, body, timeout and certificate check, matched unchanged.
+
+A refusal that is answered without calling a broker is raised as `RefusedRequestError` and turned into its JSON answer in `place` and `cancel`, so each step can be a method of its own without every caller checking a returned status.
 
 ## What an order costs
 
@@ -32,7 +46,7 @@ Every item below cost at least one round trip in an earlier version.
 
 ## Connection reuse
 
-`requests.request` opens a new TCP and TLS connection for every call, which alone can cost a hundred milliseconds or more. The blueprint keeps one `requests.Session` per broker, created under a lock on the first order to that broker, so later orders from the same worker reuse the open connection. urllib3's pool is safe to share between the worker's threads, and none of the order calls rely on cookies.
+`requests.request` opens a new TCP and TLS connection for every call, which alone can cost a hundred milliseconds or more. Each broker's `BrokerOrders` instance keeps one `requests.Session`, and the blueprint builds one instance per broker when it is built, so once per gunicorn worker, and later orders from the same worker reuse the open connection. The session used to be created lazily under a lock on the first order to a broker; creating it in the constructor instead opens no connection, so the lock is gone. urllib3's pool is safe to share between the worker's threads, and none of the order calls rely on cookies.
 
 ## The round robin
 
