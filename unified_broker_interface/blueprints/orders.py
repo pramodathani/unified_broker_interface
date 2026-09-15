@@ -47,6 +47,7 @@ from unified_broker_interface.utilities.broker_orders.utilities.stored_order imp
 from unified_broker_interface.utilities.broker_selection.utilities.registry import (
     BROKER_SELECTOR_CLASSES,
 )
+from unified_broker_interface.utilities.instrument_cache import InstrumentCache
 from unified_broker_interface.utilities.unified_documents import read_document
 from utilities.configurations import api_configuration
 from utilities.configurations import get_logger
@@ -82,6 +83,7 @@ class OrdersBlueprint(BaseBlueprint):
         broker_names (list): Every broker's name, in the order the brokers take turns.
         broker_orders (dict): Each broker's name to its order class instance, built once per worker.
         broker_selector (BrokerSelector): The algorithm that orders the brokers an order is offered to, named by `UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_SELECTOR`.
+        instrument_cache (InstrumentCache): This worker's copy of the catalogue data orders have read under the current warm.
         logger (logging.Logger): The logger for failures that do not change an answer.
     """
 
@@ -117,6 +119,7 @@ class OrdersBlueprint(BaseBlueprint):
                 f'unknown order broker selector {selector_name!r}; known selectors are {known_names}'
             )
         self.broker_selector = BROKER_SELECTOR_CLASSES[selector_name]()
+        self.instrument_cache = InstrumentCache()
 
     @authenticated
     def details(self):
@@ -259,7 +262,7 @@ class OrdersBlueprint(BaseBlueprint):
         It gives `transaction_type` (BUY or SELL), `product` (CNC, MIS or NRML), `order_type` (MARKET, LIMIT, SL or SL-M) and `quantity` in units.
         It may give `validity` (DAY or IOC, default DAY), `price`, `trigger_price`, `disclosed_quantity`, `after_market`, `tag` and `dry_run`.
 
-        The method reads Redis in two or three round trips and then sends one request to one broker.
+        The method reads Redis in one to three round trips and then sends one request to one broker: one for the token, logins, settings and mapping marker, one for the instrument's catalogue data unless this worker already holds it under the current warm, and one more to find an instrument named by its fields unless that lookup is held too.
         It never reads MongoDB or PostgreSQL, never calls a broker for anything but the order itself, and never retries a sent order at another broker.
         With `dry_run` it answers with the request it would have sent instead of sending it.
         Every failure is answered with an HTTP status rather than raised.
@@ -295,6 +298,7 @@ class OrdersBlueprint(BaseBlueprint):
             pipeline.get('unified:catalogue:current_date')
             pipeline.hmget('last_login', self.broker_names)
             pipeline.hmget('settings', self.broker_names)
+            pipeline.get('unified:catalogue:warm_identifier')
             first_replies = pipeline.execute()
         except redis.RedisError as error:
             raise self.redis_unreadable(error)
@@ -302,6 +306,7 @@ class OrdersBlueprint(BaseBlueprint):
         mapping_date_text = first_replies[1]
         login_texts = first_replies[2]
         settings_texts = first_replies[3]
+        warm_identifier = first_replies[4]
 
         self.check_access_token(access_token, token_document_text)
 
@@ -317,26 +322,67 @@ class OrdersBlueprint(BaseBlueprint):
 
         instrument_id = order.instrument_id
         if instrument_id is None:
+            instrument_id = self.instrument_cache.instrument_lookup(
+                mapping_date_text,
+                warm_identifier,
+                order.catalogue_segment,
+                order.catalogue_prefix,
+            )
+        if instrument_id is None:
             instrument_id = self.find_instrument_id(order, catalogue_key_prefix)
-
-        try:
-            pipeline = self.cache.pipeline(transaction=False)
-            pipeline.hget(catalogue_key_prefix + 'identity', instrument_id)
-            pipeline.hget(catalogue_key_prefix + 'order_handles', instrument_id)
-            self.broker_selector.queue_redis_commands(
-                pipeline,
-                order,
+            self.instrument_cache.keep_instrument_lookup(
+                mapping_date_text,
+                warm_identifier,
+                order.catalogue_segment,
+                order.catalogue_prefix,
                 instrument_id,
             )
-            second_replies = pipeline.execute()
-        except redis.RedisError as error:
-            raise self.redis_unreadable(error)
+
+        kept_texts = self.instrument_cache.instrument(
+            mapping_date_text,
+            warm_identifier,
+            instrument_id,
+        )
+        pipeline = self.cache.pipeline(transaction=False)
+        if kept_texts is None:
+            pipeline.hget(catalogue_key_prefix + 'identity', instrument_id)
+            pipeline.hget(catalogue_key_prefix + 'order_handles', instrument_id)
+        selector_command_count = self.broker_selector.queue_redis_commands(
+            pipeline,
+            order,
+            instrument_id,
+        )
+        second_replies = []
+        if kept_texts is None or selector_command_count > 0:
+            try:
+                second_replies = pipeline.execute()
+            except redis.RedisError as error:
+                raise self.redis_unreadable(error)
+        if kept_texts is None:
+            identity_text = second_replies[0]
+            handles_text = second_replies[1]
+            selector_replies = second_replies[2:]
+        else:
+            identity_text = kept_texts[0]
+            handles_text = kept_texts[1]
+            selector_replies = second_replies
+
         instrument = self.decode_instrument(
             instrument_id,
-            second_replies[0],
-            second_replies[1],
+            identity_text,
+            handles_text,
         )
-        selector_replies = second_replies[2:]
+        if kept_texts is None:
+            self.instrument_cache.keep_instrument(
+                mapping_date_text,
+                warm_identifier,
+                instrument_id,
+                identity_text,
+                handles_text,
+            )
+        if not instrument.is_tradeable():
+            message = f'orders are not sent for {instrument.segment} instruments'
+            raise self.refuse(message, 400)
 
         ranked_brokers = self.broker_selector.ranked_brokers(
             order,
@@ -460,7 +506,7 @@ class OrdersBlueprint(BaseBlueprint):
         return str(members[0]).rsplit('|', 1)[1]
 
     def decode_instrument(self, instrument_id, identity_text, handles_text):
-        """Decodes the instrument from its identity and order handles in Redis, and checks orders are sent for it.
+        """Decodes the instrument from its identity and order handles in Redis.
 
         Args:
             instrument_id (str): The instrument id.
@@ -468,10 +514,10 @@ class OrdersBlueprint(BaseBlueprint):
             handles_text (str | None): The order handles as Redis holds them.
 
         Returns:
-            Instrument: The tradeable instrument.
+            Instrument: The instrument, which may not be tradeable.
 
         Raises:
-            RefusedRequestError: With HTTP 404 when either is missing or not a JSON object, and 400 when orders are not sent for the instrument's segment.
+            RefusedRequestError: With HTTP 404 when either is missing or not a JSON object.
         """
         identity = None
         handles = None
@@ -485,11 +531,7 @@ class OrdersBlueprint(BaseBlueprint):
             handles = None
         if not isinstance(identity, dict) or not isinstance(handles, dict):
             raise self.refuse('the instrument is not mapped', 404)
-        instrument = Instrument(instrument_id, identity, handles)
-        if not instrument.is_tradeable():
-            message = f'orders are not sent for {instrument.segment} instruments'
-            raise self.refuse(message, 400)
-        return instrument
+        return Instrument(instrument_id, identity, handles)
 
     def record_outcome(self, broker_name, answer):
         """Hands a sent order's answer to the broker selector, so a selector's failure cannot change the answer to an order already sent.

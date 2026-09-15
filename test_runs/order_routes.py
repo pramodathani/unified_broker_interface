@@ -2408,7 +2408,7 @@ class OrderRoutesScenarios:
         changed_handles = OrderRoutesState().every_broker_handle(
             'RELIANCE',
             '2885',
-            5.0,
+            3.0,
             0.05,
         )
         return [
@@ -2440,6 +2440,22 @@ class OrderRoutesScenarios:
                             ),
                         ],
                     ),
+                ],
+            },
+            {
+                'name': 'repeat_order_without_a_warm_identifier',
+                'steps': [
+                    self.place(
+                        'first',
+                        kwil_by_fields,
+                        changes=[
+                            self.string_change(
+                                'unified:catalogue:warm_identifier',
+                                None,
+                            ),
+                        ],
+                    ),
+                    self.place('second', kwil_by_fields),
                 ],
             },
             {

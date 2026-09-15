@@ -24,12 +24,31 @@ A request makes at most three Redis round trips and one broker call.
 
 | Step | I/O |
 | --- | --- |
-| Token check | Pipeline A: the API token, the mapping date, `HMGET last_login` and `HMGET settings` for all ten brokers |
-| Instrument by its fields | One `ZRANGEBYLEX` on the segment's catalogue, only when there is no `instrument_id` |
-| Instrument and turn | Pipeline B: the identity, the order handles and `INCR unified:orders:round_robin` |
+| Token check | Pipeline A: the API token, the mapping date, `HMGET last_login` and `HMGET settings` for all ten brokers, and the warm identifier |
+| Instrument by its fields | One `ZRANGEBYLEX` on the segment's catalogue, only when there is no `instrument_id` and the worker's `InstrumentCache` has not kept the lookup |
+| Instrument and selector | Pipeline B: the identity and the order handles unless the cache holds them, and the selector's commands, such as `INCR unified:orders:round_robin`; the pipeline is not sent when it holds no command |
 | Send | One POST to the chosen broker |
 
-Measured on 2026-09-15 against a local Redis, a dry run took about 0.3 ms of the method's own time in the Flask test client and about 1.5 ms end to end over HTTP through gunicorn. In the same test, patched MongoDB and PostgreSQL entry points were never called.
+Measured on 2026-09-15 against a local Redis, before the split and the cache, a dry run took about 0.3 ms of the method's own time in the Flask test client and about 1.5 ms end to end over HTTP through gunicorn. In the same test, patched MongoDB and PostgreSQL entry points were never called.
+
+## What a worker keeps in memory, and why only that
+
+On 2026-09-15 the user asked for everything the route reads from Redis that does not change during the day to be kept in process memory, falling back to Redis only when the kept copy is not valid. Each read was classified:
+
+| Read | Changes during the day | Kept |
+| --- | --- | --- |
+| The API token | Yes, on every connect | No |
+| Broker logins | Yes, on every login; a new Zerodha login invalidates the previous token | No |
+| Broker settings | Rarely, but `BrokerAPI.__init__` rewrites them from MongoDB on every construction and nothing marks a real change; they ride in pipeline A, which runs anyway, so keeping them would save no round trip | No |
+| Mapping date and warm identifier | Once per warm | No, they are what the copy is checked against |
+| The catalogue lookup, identity and order handles | Only when a warm runs | Yes |
+| The round-robin counter | On every order | No |
+
+The mapping date alone could not validate the copy, for two reasons found while designing it. A warm re-run for the same date rewrites the dated hashes without changing `current_date`, which is why `MappingRedisTier.write_current_date` now also writes a new `warm_identifier` in the same transaction. And the dated keys expire at midnight while `current_date` does not, so without its own midnight check a worker would keep answering from yesterday's mapping through the night while Redis answers `404`. The copy is therefore trusted only under the same date and identifier and only until the midnight after it was first filled, and when Redis holds no identifier nothing is kept at all.
+
+The copy fills one instrument at a time, as orders ask for them, rather than loading the catalogue. On 2026-09-15 the catalogue held 527,779 instruments, whose identity and order handle hashes took 215 MB and 277 MB in Redis, which is too much to hold twice per worker. Each store is emptied when it reaches 10,000 entries. Misses are never kept, because the mapping cache's own fall-through can add an instrument to Redis later in the day. The identity and handles are kept as the text Redis returned and decoded on every order, so no order can change what a later order reads.
+
+A consequence recorded by the `repeat_order_after_handles_change_within_one_warm` scenario of `test_runs/order_routes.py` is that an order handle rewritten in Redis without a new warm is not seen by a worker that already holds the instrument. Nothing in the project rewrites handles in place today.
 
 ## What was deliberately left out, and why
 

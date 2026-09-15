@@ -655,20 +655,38 @@ whichever selector ranks them.
     scripts have recorded it, or at the broker. Try a new body with `dry_run` first, which answers with the exact
     request that would have been sent and sends nothing.
 
-The endpoint is built for latency. Before the broker's own place-order call it reads Redis only, in two
-round trips, or three when the instrument is named by its fields, and it never reads MongoDB or PostgreSQL
-or calls a broker for anything else. It checks no funds, takes no rate-limit slot, checks no market hours,
-and starts no login. Each worker keeps one open HTTPS connection per broker, so only the first order a
-worker sends to a broker pays for the TLS handshake.
+The endpoint is built for latency. Before the broker's own place-order call it reads Redis only, in one to
+three round trips, and it never reads MongoDB or PostgreSQL or calls a broker for anything else. It checks
+no funds, takes no rate-limit slot, checks no market hours, and starts no login. Each worker keeps one open
+HTTPS connection per broker, so only the first order a worker sends to a broker pays for the TLS handshake.
 
 ```text
 request ──► check the body (no I/O)
-        ──► Redis: API token, mapping date, broker logins and settings
-        ──► Redis: the instrument by its fields (only when there is no instrument_id)
-        ──► Redis: the identity, every broker's order handle, and whatever the selector reads
+        ──► Redis: API token, broker logins and settings, mapping date and warm identifier (every order)
+        ──► Redis: the instrument by its fields (only when there is no instrument_id, and the worker has not found it before)
+        ──► Redis: the identity and every broker's order handle (only when the worker does not hold them),
+                   and whatever the selector reads (nothing for fixed_priority)
         ──► rank the brokers, choose the first that can take the order, check lots and ticks (no I/O)
         ──► one POST to the broker
 ```
+
+Each worker keeps the catalogue data it has read, the instrument an identity-field lookup found and the
+instrument's identity and order handles, in its own memory. It trusts that copy only while Redis still
+holds the same `unified:catalogue:current_date` and `unified:catalogue:warm_identifier` it was read under,
+and only until midnight, when the catalogue keys expire. A new warm, a new date or midnight drops the whole
+copy. Logins, settings, the API token and the round-robin counter change during the day and are read from
+Redis on every order.
+
+| Order | Round trips with `round_robin` | With `fixed_priority` |
+| --- | --- | --- |
+| First order for an instrument in a worker, named by its fields | 3 | 3 |
+| First order for an instrument in a worker, named by `instrument_id` | 2 | 2 |
+| A later order for the same instrument in the same worker | 2 | 1 |
+
+!!! note "The warm identifier appears with the first warm after this change"
+
+    Only a warm writes `unified:catalogue:warm_identifier`. Until one has run, the workers keep no catalogue
+    data and every order reads it from Redis, as before.
 
 The body is JSON. The vocabulary is the [shared one](../architecture/contracts.md#the-shared-vocabulary),
 written in capitals, though lower case is accepted.
