@@ -151,7 +151,7 @@ number reads it as the packet count.
 
 **Kotak's MCX quantities are all in Kotak's lots.** On the HSM feed volume, open interest, total buy and
 sell quantity, last quantity and every order book quantity are lots times Kotak's own lot size - 100 for
-CRUDEOIL, 1250 for NATURALGAS, 1 for GOLD, whose contract lot is 100 grams. GOLD alone therefore looks
+CRUDEOIL, 1250 for NATURALGAS, 1 for GOLD, whose 1 kg contract Kotak counts in kilograms. GOLD alone therefore looks
 like plain lots, which is how the older feed's figures were misread.
 
 **Kotak spells a successful `stat` as `ok` on some paths.** The `kotak_request` helper in every
