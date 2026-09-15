@@ -1,0 +1,17 @@
+# Everything that runs stoxkart's bin/stoxkart/ scripts. Enabling it starts them at boot; stopping it stops them all.
+#
+# Install - link every unit in this folder, then enable the target, the login timer and the scripts:
+#
+#     systemctl --user link ~/Projects/unified_broker_interface/services/stoxkart/*
+#     systemctl --user daemon-reload
+#     systemctl --user enable --now stoxkart.target stoxkart-login.timer \
+#         stoxkart@quotes.service stoxkart@persist_ticks.service stoxkart@orders.service stoxkart@trades.service stoxkart@positions.service stoxkart@holdings.service stoxkart@funds.service stoxkart@user-profile.service
+#
+# There is no stoxkart@order_updates.service or stoxkart@persist_orders.service, because Stoxkart's API streams no
+# order updates, and no stoxkart-historical-prices.service, because Stoxkart has no candle endpoint.
+
+[Unit]
+Description=stoxkart scripts
+
+[Install]
+WantedBy=default.target
