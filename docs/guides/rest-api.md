@@ -324,7 +324,7 @@ curl -s localhost:8080/api/portfolio/positions -H "access-token: $TOKEN"
 ### Funds
 
 The client sees one account rather than a set of brokers: every broker's balances are added into the same
-buckets. The brokers are the nine with scripts in `bin/<broker>/` - Stoxkart has none, so it is not included.
+buckets. The brokers are all ten, each read from its own `bin/<broker>/funds` poller.
 
 ```json
 {
@@ -386,15 +386,16 @@ does not, the balance is derived as shown.
 | Groww | `GET /v1/margins/detail/user` | derived: clear cash + collateral available + adhoc margin − net margin used | equity, derivatives, commodity |
 | INDmoney | `GET /funds` | derived: start of day balance + pledge received | equity, derivatives, commodity |
 | Kotak | `POST {base_url}/quick/user/limits` | `Net` | commodity, derivatives, currency margins |
+| Stoxkart | `GET /funds` | `available_limit`; margin used is the absolute `utilized_limit`, which Stoxkart's documentation shows as negative | none |
 | Wisdom Capital | `GET /interactive/user/balance` | `netMarginAvailable` | none |
 
-!!! warning "Stoxkart and Fyers"
+!!! warning "Fyers and Stoxkart"
 
-    Stoxkart has no `bin/stoxkart/` scripts beyond its instrument download, so it is not in the document.
     Fyers allows an app 200 requests a minute and 100,000 a day, so `bin/fyers/` polls funds every thirty
     seconds, trades every fifteen and orders and positions every five, and its history download is held to
     half a request a second. When Fyers rate limits a poller it pauses five minutes, thirty after a
-    Cloudflare ban, and Fyers shows `stale` meanwhile.
+    Cloudflare ban, and Fyers shows `stale` meanwhile. Stoxkart documents a limit of one request a second
+    for funds, trades, orders and positions, so `bin/stoxkart/` polls each of them once a second.
 
 ### Holdings
 
@@ -451,6 +452,7 @@ totals, though its cost is in `total_investment`.
 | Groww | `GET /v1/holdings/user` | `trading_symbol` on the first tradable exchange | `quantity` |
 | INDmoney | `GET /portfolio/holdings` | `security_id`, on NSE | `total_qty` |
 | Kotak | `GET {base_url}/portfolio/v1/holdings` | `exchangeIdentifier`, `exchangeSegment` | `quantity` |
+| Stoxkart | `GET /portfolio/holdings` | `nse_token` or `bse_token`, whichever `exchange` names, else the other | `quantity` |
 | Wisdom Capital | `GET /interactive/portfolio/holdings` | `ExchangeNSEInstrumentId`, else `ExchangeBSEInstrumentId` | `HoldingQuantity` |
 
 !!! warning "Fyers"
@@ -518,6 +520,7 @@ change come from the unified quote, falling back to the broker's price and previ
 | Groww | `GET /v1/positions/user` | `trading_symbol`, `exchange` and `segment` | `quantity`; values from `credit_price` and `debit_price` |
 | INDmoney | `GET /portfolio/positions` | `security_id`, `exchange` | `net_qty` |
 | Kotak | `GET {base_url}/quick/user/positions` | `tok`, `exSeg` | bought less sold, day and carried forward |
+| Stoxkart | `GET /portfolio/positions` | `token`, `exchange` | `net_quantity`; `mark_to_market` read as unrealized profit |
 | Wisdom Capital | `GET /interactive/portfolio/positions`, `NetWise` and `DayWise` | `ExchangeInstrumentId`, `ExchangeSegment` | `Quantity`; `net` and `day` |
 
 !!! warning "No position has been read back yet"
@@ -617,6 +620,7 @@ names the company rather than a trading symbol, so its `tradingsymbol` is the re
 | Groww | `GET /v1/order/list` | `GET /v1/order/trades/{id}` for each filled order, at once | Groww's schema |
 | INDmoney | `GET /order-book` | `GET /trade-book` for `EQUITY` and `DERIVATIVE`, at once | orders checked against a live order; trades unverified |
 | Kotak | `GET {base_url}/quick/user/orders` | `GET {base_url}/quick/user/trades` | the fields of Kotak's order update message |
+| Stoxkart | `GET /reports/order-book` | `GET /reports/trade-book` | Stoxkart's documented schema, unconfirmed |
 | Wisdom Capital | `GET /interactive/orders` | `GET /interactive/orders/trades` | the fields of XTS's order event |
 
 !!! warning "Most row field names are unverified"
@@ -695,6 +699,16 @@ no account settings in Redis, or does not take the order: INDmoney takes no `SL`
 Groww and Wisdom Capital take no after-market orders. Once an order has been sent it is never sent to
 another broker, whatever the answer, because a second send could place the order twice.
 
+!!! warning "Stoxkart refuses every order this endpoint sends"
+
+    On 2026-09-15 two live test orders for one KWIL share, an NSE `DELIVERY` `LIMIT` buy at 39.00 against a
+    last price of 41.18, were refused by Stoxkart with HTTP 400 and
+    `{"message":"invalid algo_id","status":"failed","code":"ValidationError"}`. The first carried no `algo_id`
+    and the second carried `"algo_id": "0"`, which is what this endpoint sends. No order reached the
+    exchange, and the correct algo identifier is not known. Until it is, set
+    `UNIFIED_BROKER_INTERFACE_API_ORDER_EXCLUDED_BROKERS=stoxkart` so that Stoxkart is passed over in the
+    rotation.
+
 ```json
 {
   "broker": "zerodha", "instrument_id": "ead1abb8-3a2d-5952-9552-aa77d27b8619", "tag": null,
@@ -769,13 +783,14 @@ curl -s -X DELETE "localhost:8080/api/orders/cancel?order_id=26091500012345&brok
 ```
 
 An order becomes cancellable only once its broker's scripts have recorded it. The poller reads the order book
-every half second, or every five seconds at Fyers, and the websocket records an order as the broker pushes
-it, so an order placed a moment ago can still be answered `404`. Stoxkart has no order scripts, so a
-Stoxkart order is never found. Flattrade and Shoonya both number orders as the date followed by eight digits,
+every half second, every five seconds at Fyers and every second at Stoxkart, and the websocket records an
+order as the broker pushes it, so an order placed a moment ago can still be answered `404`. Stoxkart streams
+no order updates, so a Stoxkart order is found only after its poller has recorded it, and cancelling one has
+not yet been tried against a live order. Flattrade and Shoonya both number orders as the date followed by eight digits,
 so the same id can turn up at both. Such an id is answered `409` with the brokers listed, and the request is
 sent again with `broker`.
 
-Each broker's cancel request is shown below. Four brokers need a value besides the order id, which is read
+Each broker's cancel request is shown below. Five brokers need a value besides the order id, which is read
 from the broker's own copy of the order kept beside the normalized one in Redis.
 
 | Broker | Request | Value read from the stored order |
@@ -787,7 +802,7 @@ from the broker's own copy of the order kept beside the normalized one in Redis.
 | INDmoney | `POST /order/cancel` with `{"order_id", "segment"}` | `segment`; when absent, `DERIVATIVE` for an id starting `DRV` and `EQUITY` otherwise |
 | Kotak | `POST {base_url}/quick/order/cancel` with `jData={"on", "am": "NO"}` | none |
 | Flattrade, Shoonya | `POST …/CancelOrder` with `jData={"uid", "norenordno"}` | none |
-| Stoxkart | `DELETE /orders/{variety}/{order_id}` | `variety`, `normal` when absent |
+| Stoxkart | `DELETE /orders/{variety}/{order_id}` | `variety` in lower case, because Stoxkart's order book spells it `NORMAL`; `normal` when absent |
 | Wisdom Capital | `DELETE /interactive/orders` with `appOrderID`, `orderUniqueIdentifier` and `clientID` | `OrderUniqueIdentifier`, `ubi` when absent |
 
 Groww's order update websocket does not send an order's segment, so an order the websocket recorded last is

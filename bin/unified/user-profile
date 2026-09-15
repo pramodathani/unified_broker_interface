@@ -15,13 +15,13 @@ value here is its `data`:
 
 | broker | kept by | refreshed |
 | --- | --- | --- |
-| dhan, zerodha, flattrade, shoonya, fyers, indmoney, groww | `bin/<broker>/user-profile` | every minute |
+| dhan, zerodha, flattrade, shoonya, fyers, indmoney, groww, stoxkart | `bin/<broker>/user-profile` | every minute |
 | wisdom_capital | `bin/wisdom_capital/user-profile` | once a day, as Wisdom Capital allows about one profile call a day |
 | kotak | `bin/kotak/login`, from the login response | at each login; Kotak has no profile endpoint |
 
 So a broker's profile here is as fresh as its own script keeps it, and reading every key costs one round trip. A broker
 whose key is missing - its script has not run, or the key has been deleted - or holds something that is not a profile
-is `null`, so every broker in the list is always present as a key. Stoxkart is not in the list: it has no bin scripts.
+is `null`, so every broker in the list is always present as a key.
 
 Written with SET, replacing the object before, once at startup and then every minute. Runs until Ctrl+C or SIGTERM; a
 Redis that cannot be reached is logged and tried again at the next minute. Reads only - it places no orders.
@@ -45,7 +45,7 @@ REDIS_KEY = "unified:user:details"
 DELAY_SECONDS = 60
 
 # The brokers with bin/<broker>/ scripts, each keeping its profile in <broker>:user:details.
-BROKERS = ("dhan", "zerodha", "flattrade", "shoonya", "fyers", "indmoney", "wisdom_capital", "groww", "kotak")
+BROKERS = ("dhan", "zerodha", "flattrade", "shoonya", "fyers", "indmoney", "wisdom_capital", "groww", "kotak", "stoxkart")
 
 def profile_key(broker):
     """

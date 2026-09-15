@@ -57,8 +57,15 @@ instrument mapping, so an after-market order sent in between is refused with `40
 **Placing an order is confirmed live at every broker except Stoxkart.** On 2026-09-15 one-share NSE CNC
 limit buys were sent through `POST /api/orders/place`, and Dhan, Flattrade, Fyers, Groww, INDmoney, Kotak,
 Shoonya, Wisdom Capital and Zerodha each accepted and filled theirs. Stoxkart could not log in that
-morning, so it was skipped; its login has worked since later the same day, but no order has been sent
-through it yet, and `UNIFIED_BROKER_INTERFACE_API_ORDER_EXCLUDED_BROKERS` takes a broker out of the rotation.
+morning, so it was skipped.
+
+**Stoxkart refuses every order with `invalid algo_id`.** Later on 2026-09-15 two live test orders for one
+KWIL share, an NSE `DELIVERY` `LIMIT` buy at 39.00 against a last price of 41.18, were refused by Stoxkart
+with HTTP 400 and `{"message":"invalid algo_id","status":"failed","code":"ValidationError"}`. The first
+carried no `algo_id` and the second carried `"algo_id": "0"`, which is what `POST /api/orders/place` sends.
+No order reached the exchange. The correct algo identifier is not known. The variable
+`UNIFIED_BROKER_INTERFACE_API_ORDER_EXCLUDED_BROKERS` was not set on 2026-09-15, so an order the rotation
+sends to Stoxkart is refused; setting it to `stoxkart` passes Stoxkart over until the identifier is found.
 
 **Kotak refuses every order from an IP address it has not whitelisted.** Kotak first answered
 `{"stCode": 100008, "errMsg": "unauthorized", "stat": "Not_Ok"}`. The removed order code read this as a
@@ -74,7 +81,9 @@ public address changes, Kotak orders fail again with `100008` until the new addr
 
 **Cancelling an order is unconfirmed live, and misses some orders.** `DELETE /api/orders/cancel` finds an
 order's broker in the `<broker>:orders:orders` hashes, so it cannot cancel an order that no order script has
-recorded yet, and it never finds a Stoxkart order, because Stoxkart has no order scripts. Each broker's cancel
+recorded yet. A Stoxkart order is recorded only by `bin/stoxkart/orders`, which polls once a second, and no
+Stoxkart order has existed to cancel, so Stoxkart's cancel, which lowercases the order book's `NORMAL`
+variety into the URL, is untried. Each broker's cancel
 request is copied from the `build_cancel` methods removed in commit 4cc8c91 and was checked only against
 stubbed answers. Kotak's request always sends `am` as `NO`, as the removed code did, so a Kotak after-market
 order may be refused. INDmoney's fallback segment, used when the stored order names none, assumes derivative
@@ -82,8 +91,8 @@ order ids start with `DRV`, which has not been seen on a live order.
 
 **Most unified tick normalizers are unconfirmed live.** Only Zerodha is verified, and Dhan agrees with it
 on stored in-session MCX ticks but has no in-session NSE ticks stored. Kotak agreed with it on every field
-in a live NSE and MCX session on 2026-09-15, and INDmoney on NSE the same day, but neither is yet marked
-verified. What Flattrade, Shoonya, Wisdom Capital, Fyers and Groww send was taken from stored weekend snapshots, a mock session
+in a live NSE and MCX session on 2026-09-15, INDmoney on NSE the same day, and Stoxkart's polled quotes on
+close, NSE volume, MCX lots and last trade time the same day, but none of the three is yet marked verified. What Flattrade, Shoonya, Wisdom Capital, Fyers and Groww send was taken from stored weekend snapshots, a mock session
 or the protocol, and the table in
 [Unified scripts](../guides/unified-scripts.md#what-each-brokers-values-mean) marks which.
 
@@ -95,11 +104,24 @@ happily on the same platform. `flattrade@order_updates` is left out of `flattrad
 `flattrade@quotes` holds the connection, which makes Flattrade the one gap in the live half of the system. Noren can carry
 order updates on the market socket, and that is the way to get both back.
 
-**Stoxkart has no scripts but its instrument download.** Its REST login was blocked on the broker's
-side until the API app was approved, and was confirmed working on 2026-09-15 through Stoxkart's version 2
-login. The quote, order, positions and login scripts and units have not been written yet, so
-`bin/stoxkart/` still holds only `instruments`, whose public file `unified-instruments.service` downloads
-daily.
+**Stoxkart has no order feed.** Stoxkart delivers order status only to a Postback URL registered on the
+API app, which needs a public web server that this project does not run. There is therefore no
+`bin/stoxkart/order_updates` or `persist_orders`, Stoxkart is not in `bin/unified/order_updates`, and its
+orders reach `stoxkart:orders:orders` only through the one-second `orders` poller.
+
+**Stoxkart's quote websocket cannot be reached, so its quotes are polled.** The documented binary feed at
+`ws://inmob.stoxkart.com:7763` refused connections on 2026-09-15, and port 443 on the same host answered
+HTTP 503 from an empty AWS load balancer. `bin/stoxkart/quotes` polls `POST /quotes` once a second instead,
+so a Stoxkart tick arrives up to a second after the trade, and `bin/unified/quotes` ranks Stoxkart last.
+`BSECD` and `NCDEX` instruments were refused as invalid by `/quotes` the same day, although Stoxkart lists
+both exchanges.
+
+**Stoxkart's order, trade and position fields are unconfirmed.** No order, fill or open position has
+existed on the Stoxkart account, so `bin/stoxkart/orders`, `trades` and `positions`, and the unified readers
+of them, use the field names in Stoxkart's documentation. The holdings row seen live already differed from
+that documentation, carrying `nse_symbol`, `nse_token`, `bse_symbol`, `bse_token` and `isin_code` in place
+of a single `symbol` and `token`, so the other books may differ too. The sign of `net_quantity` for a short
+position is also unverified.
 
 ## Instruments deliberately excluded
 

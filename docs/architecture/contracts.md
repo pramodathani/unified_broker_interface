@@ -59,7 +59,7 @@ book and its update stream, and stored as the `order` of each entry in `<broker>
 | `tag` | The order's tag |
 
 `status` is normalized onto one of six values, so a consumer branches on one vocabulary rather
-than nine:
+than ten:
 
 | Status | Meaning |
 | --- | --- |

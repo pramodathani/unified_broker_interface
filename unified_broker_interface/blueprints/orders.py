@@ -1361,7 +1361,7 @@ class OrdersBlueprint(BaseBlueprint):
         With `dry_run` it answers with the request it would have sent instead of sending it.
 
         The broker is found by looking the order id up in every broker's `<broker>:orders:orders` hash, which the broker's order poller and order update websocket keep in Redis.
-        An order can therefore be cancelled only once one of those scripts has recorded it, and a Stoxkart order is never found, because Stoxkart has no order scripts.
+        An order can therefore be cancelled only once one of those scripts has recorded it; a Stoxkart order is recorded only by its once-a-second poller, because Stoxkart streams no order updates.
         The method reads Redis in one round trip and then sends one request to one broker.
         It never reads MongoDB or PostgreSQL and never retries a sent cancel.
         Every failure is answered with an HTTP status rather than raised.
@@ -1717,7 +1717,7 @@ class OrdersBlueprint(BaseBlueprint):
             shown_form = request_data
 
         elif chosen_broker == 'stoxkart':
-            variety = str(order_data.get('variety') or 'normal')
+            variety = str(order_data.get('variety') or 'normal').lower()
             request_method = 'DELETE'
             request_url = (
                 f'https://openapi.stoxkart.com/orders/{variety}/{order_id}'

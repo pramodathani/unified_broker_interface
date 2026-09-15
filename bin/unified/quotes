@@ -11,7 +11,7 @@ the way the project's unified tick layer does, and keep doing it until stopped.
 Nothing here calls a broker. Each broker's ticks arrive on the Redis Stream `<broker>:quotes:stream` (field `tick`),
 written by `bin/<broker>/quotes`, and the instruments come from the unified cache `bin/unified/map_instruments` writes.
 
-**Reading the streams.** The nine streams are read together as the consumer group `unified` - separate from the `persist`
+**Reading the streams.** The ten streams are read together as the consumer group `unified` - separate from the `persist`
 group `bin/<broker>/persist_ticks` reads, so each gets every tick. The group is created at the end of a stream the first
 time, since a live cache has no use for history. Entries are acknowledged only after the batch holding them is written;
 at every start the entries this consumer read but never acknowledged are taken first.
@@ -20,7 +20,7 @@ at every start the entries this consumer read but never acknowledged are taken f
 
 1. **Resolve** its token to an instrument, once per token per mapping date. Each broker's token names an exchange and a
    kind of instrument - Kite's token in its low byte, Dhan's `NSE_EQ:2885` (or `1:2885`), Noren's `NSE|2885`, Kotak's
-   `nse_cm|11536`, Groww's `NSE|CASH|2885`, INDstocks' `NSE:2885`, XTS's `1:2885`, and Fyers' symbol `NSE:SBIN-EQ`,
+   `nse_cm|11536`, Groww's `NSE|CASH|2885`, INDstocks' and Stoxkart's `NSE:2885`, XTS's `1:2885`, and Fyers' symbol `NSE:SBIN-EQ`,
    which is turned into its token through the order symbols in `unified:broker_mappings`. The token is looked up in
    `unified:broker_tokens` and kept only among the segments that exchange and kind allow; an expired contract is ruled
    out, and a token that still names more than one instrument is not guessed at. The instrument's lot size is decided
@@ -30,7 +30,7 @@ at every start the entries this consumer read but never acknowledged are taken f
    commodities to midnight, NCDEX to 21:30, on the exchanges' trading days from the calendars beside the tick layer - is
    dropped, which keeps weekend replays and mock sessions out.
 3. **Ownership:** one broker owns an instrument at a time and only its ticks are written. Priority is Zerodha, Dhan,
-   Kotak, Flattrade, Shoonya, Fyers, Wisdom Capital, Groww, INDmoney (Shoonya and Wisdom Capital on NCDEX), with Zerodha
+   Kotak, Flattrade, Shoonya, Fyers, Wisdom Capital, Groww, INDmoney, Stoxkart (Shoonya and Wisdom Capital on NCDEX), with Zerodha
    the only verified broker. The top verified broker takes an instrument at once; any other waits 5 seconds for a better
    one. A backup takes over when the owner's stream has been silent 45 seconds, or the owner has not sent the instrument
    for 60 seconds while a backup sent it 3 times; a higher-ranked verified broker takes it back after 60 seconds of
@@ -39,7 +39,7 @@ at every start the entries this consumer read but never acknowledged are taken f
 4. **Normalize:** prices rounded to the instrument's places (4 for currency, 2 otherwise), negative prices allowed only for
    commodity derivatives, empty order-book levels dropped, timestamps days away from receipt discarded, and `close` taken
    as the previous close only where the broker's close means that: always at Zerodha, Kotak and Fyers; before the
-   session's close at Dhan and the Noren brokers; never at Groww, INDmoney and Wisdom Capital.
+   session's close at Dhan, Stoxkart and the Noren brokers; never at Groww, INDmoney and Wisdom Capital.
 5. **Previous close** is carried from an earlier owner's tick the same India day when the owner does not send it, and the
    change is recomputed from it.
 6. **De-duplicate:** a tick that changes nothing but the clock is dropped.
@@ -58,7 +58,8 @@ persister. `unified:quotes:stats` holds the counts - received, unresolved, out_o
 written - and `unified:quotes:unresolved` counts each unresolved `broker:token:reason`.
 
 Runs until Ctrl+C or SIGTERM, writing and acknowledging the batch in hand. A Redis that cannot be reached is retried.
-Reads only - it places no orders. Stoxkart has no quotes script, so it has no stream here.
+Reads only - it places no orders. Stoxkart's stream is filled by polling Stoxkart's REST quotes about once a second,
+so its ticks trail the other brokers' feeds by up to a second.
 """
 
 import sys
@@ -95,7 +96,7 @@ BROKER_MAPPINGS_KEY = "unified:broker_mappings"
 INSTRUMENTS_KEY = "unified:instruments"
 META_KEY = "unified:mapping:meta"
 
-BROKERS = ("zerodha", "dhan", "kotak", "flattrade", "shoonya", "fyers", "wisdom_capital", "groww", "indmoney")
+BROKERS = ("zerodha", "dhan", "kotak", "flattrade", "shoonya", "fyers", "wisdom_capital", "groww", "indmoney", "stoxkart")
 GROUP = "unified"
 CONSUMER = "quotes"
 BATCH_SIZE = 500
@@ -116,9 +117,10 @@ CALENDAR_DIRECTORY = PROJECT_ROOT / "stock_brokers" / "instruments" / "ticks" / 
 # ---- which broker owns an instrument --------------------------------------------------------------------------------
 
 # Highest priority first, for every exchange unless overridden.
-DEFAULT_PRIORITY = ("zerodha", "dhan", "kotak", "flattrade", "shoonya", "fyers", "wisdom_capital", "groww", "indmoney")
+DEFAULT_PRIORITY = ("zerodha", "dhan", "kotak", "flattrade", "shoonya", "fyers", "wisdom_capital", "groww", "indmoney",
+                    "stoxkart")
 EXCHANGE_PRIORITY = {
-    "mcx": ("zerodha", "dhan", "kotak", "flattrade", "shoonya", "fyers", "wisdom_capital", "groww"),
+    "mcx": ("zerodha", "dhan", "kotak", "flattrade", "shoonya", "fyers", "wisdom_capital", "groww", "stoxkart"),
     "ncdex": ("shoonya", "wisdom_capital"),
 }
 VERIFIED_BROKERS = frozenset({"zerodha"})
@@ -748,11 +750,43 @@ class WisdomCapitalNormalizer(Normalizer):
             return None
         return FeedKey(instrument_id.strip(), segments)
 
+class StoxkartNormalizer(Normalizer):
+    """Stoxkart's polled REST quotes: `EXCHANGE:TOKEN`; `close` good until the session closes; MCX in lots; last trade time true.
+
+    Measured against Zerodha's ticks in the same second on 2026-09-15: `close` was the previous close, NSE volume matched, MCX volume and open interest were lots as at Zerodha, and the last trade time matched to the second. What `close` means after the session has not been seen, so it is trusted only before the session closes.
+    """
+    BROKER_NAME = "stoxkart"
+    EXCHANGES = {"NSE": (("nse",), "cash_or_index"), "BSE": (("bse",), "cash_or_index"), "NFO": (("nse",), "derivative"),
+                 "NSECD": (("nse",), "derivative"), "BFO": (("bse",), "derivative"), "BSECD": (("bse",), "derivative"),
+                 "MCX": (("mcx",), "derivative"), "NCDEX": (("ncdex",), "derivative")}
+    LOT_FIELDS = {"mcx": ALL_QUANTITIES}
+    CLOSE_POLICY = {exchange: CLOSE_BEFORE_SESSION_END for exchange in ("nse", "bse", "mcx", "ncdex")}
+
+    def __init__(self):
+        """Builds the canonical segments each Stoxkart exchange's tokens may name."""
+        self._segments = {name: family_segments(exchanges, family) for name, (exchanges, family) in self.EXCHANGES.items()}
+
+    def feed_key(self, instrument_token):
+        """Reads the broker token and segments out of a Stoxkart `EXCHANGE:TOKEN`.
+
+        Args:
+            instrument_token (str): The tick's `instrument_token`, such as `NSE:760946`.
+
+        Returns:
+            FeedKey | None: The key, or None for a malformed token or an unknown exchange.
+        """
+        exchange, _, token = str(instrument_token).partition(":")
+        segments = self._segments.get(exchange.strip().upper())
+        if segments is None or not token.strip():
+            return None
+        return FeedKey(token.strip(), segments)
+
 def build_normalizers():
     """One normalizer per broker with a quotes stream."""
     return {"zerodha": ZerodhaNormalizer(), "dhan": DhanNormalizer(), "kotak": KotakNormalizer(),
             "flattrade": NorenNormalizer("flattrade"), "shoonya": NorenNormalizer("shoonya"), "fyers": FyersNormalizer(),
-            "wisdom_capital": WisdomCapitalNormalizer(), "groww": GrowwNormalizer(), "indmoney": IndmoneyNormalizer()}
+            "wisdom_capital": WisdomCapitalNormalizer(), "groww": GrowwNormalizer(), "indmoney": IndmoneyNormalizer(),
+            "stoxkart": StoxkartNormalizer()}
 
 # ---- resolving a token to an instrument plan ------------------------------------------------------------------------
 

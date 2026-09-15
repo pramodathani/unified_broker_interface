@@ -32,6 +32,7 @@ the broker's buckets, and invested value each bucket at its own average price:
 | groww | `data.holdings` | no token, first `tradable_exchanges` | `quantity` at `average_price` | `pledge_quantity` | none |
 | indmoney | `data` | `security_id`, NSE | `total_qty` at `avg_price` | `used_qty` | none |
 | kotak | `data` | `exchangeIdentifier`, `exchangeSegment` | `quantity` at `averagePrice` | none | `closingPrice` as close |
+| stoxkart | `data` | `nse_token` or `bse_token`, whichever `exchange` names, else the other | `quantity` at `average_price` | `collateral_quantity` | `last_trade_price` |
 | wisdom_capital | `data.RMSHoldings.Holdings`, keyed by ISIN | NSE instrument id, else BSE's | `HoldingQuantity` at `BuyAvgPrice` | `CollateralQuantity` or `PledgeQuantity` | none |
 
 A missing or non-numeric quantity reads as zero; a missing or zero price stays unknown.
@@ -62,7 +63,7 @@ its script may have stopped; its holdings are still included), `missing` (no key
 its script stored them.
 
 Written with SET every minute. Runs until Ctrl+C or SIGTERM; a Redis that cannot be reached is logged and tried again.
-Reads only - it places no orders. Stoxkart is not included: it has no bin scripts.
+Reads only - it places no orders.
 """
 
 import sys
@@ -100,7 +101,7 @@ FRESH_SECONDS = 300
 # The exchanges' holiday and special-session calendars, which say when a session has closed.
 CALENDAR_DIRECTORY = PROJECT_ROOT / "stock_brokers" / "instruments" / "ticks" / "utilities" / "calendars"
 
-BROKERS = ("dhan", "flattrade", "fyers", "groww", "indmoney", "kotak", "shoonya", "wisdom_capital", "zerodha")
+BROKERS = ("dhan", "flattrade", "fyers", "groww", "indmoney", "kotak", "shoonya", "stoxkart", "wisdom_capital", "zerodha")
 
 # The exchanges a holding is looked up on when its broker does not say, in the order they are tried.
 DEFAULT_EXCHANGES = ("nse", "bse")
@@ -258,10 +259,46 @@ def wisdom_capital_holdings(data):
             collateral_quantity=row.get("CollateralQuantity") or row.get("PledgeQuantity")))
     return holdings
 
+def stoxkart_holdings(data):
+    """Reads Stoxkart's stored holdings into holdings.
+
+    A Stoxkart row carries the security's token on both exchanges, `nse_token` and `bse_token`, beside the `exchange` it is held on. The token of that exchange is used, or the other exchange's token when that one is blank.
+
+    Args:
+        data (object): The `data` of `stoxkart:portfolio:holdings`, a list of rows.
+
+    Returns:
+        list: The holdings, one per row.
+    """
+    holdings = []
+    for row in data if isinstance(data, list) else []:
+        if not isinstance(row, dict):
+            continue
+        exchange = canonical_exchange(row.get("exchange")) or "nse"
+        nse_token = row.get("nse_token") or row.get("token")
+        bse_token = row.get("bse_token")
+        if exchange == "bse" and bse_token:
+            broker_token = bse_token
+            symbol = row.get("bse_symbol") or row.get("symbol")
+        elif nse_token:
+            broker_token = nse_token
+            symbol = row.get("nse_symbol") or row.get("symbol")
+            exchange = "nse"
+        else:
+            broker_token = bse_token
+            symbol = row.get("bse_symbol") or row.get("symbol")
+            exchange = "bse"
+        quantity = number(row.get("quantity"))
+        holdings.append(holding(
+            broker_token=broker_token, exchange=exchange, isin=row.get("isin_code"), symbol=symbol,
+            quantity=quantity, invested_value=quantity * number(row.get("average_price")),
+            collateral_quantity=row.get("collateral_quantity"), last_price=row.get("last_trade_price")))
+    return holdings
+
 # Each broker's reader of its stored `data`.
 NORMALIZERS = {"zerodha": zerodha_holdings, "dhan": dhan_holdings, "flattrade": noren_holdings, "shoonya": noren_holdings,
                "fyers": fyers_holdings, "groww": groww_holdings, "indmoney": indmoney_holdings, "kotak": kotak_holdings,
-               "wisdom_capital": wisdom_capital_holdings}
+               "stoxkart": stoxkart_holdings, "wisdom_capital": wisdom_capital_holdings}
 
 # The shape each broker's stored `data` must have to be holdings at all.
 DATA_TYPES = {"fyers": dict, "groww": dict, "wisdom_capital": dict}

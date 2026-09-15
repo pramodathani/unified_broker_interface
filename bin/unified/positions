@@ -17,7 +17,8 @@ interprets them.
     {"net": [...], "day": [...], "summary": {"net": {...}, "day": {...}}, "brokers": [...], "as_of": ...}
 
 `net` is every position open now, carried or taken today; `day` is today's activity alone, which only Zerodha and Wisdom
-Capital report - their hash fields start `DAY:` or `NET:` - so `day` holds only theirs. A position is `instrument_id`,
+Capital report - their hash fields start `DAY:` or `NET:` - so `day` holds only theirs. Stoxkart's fields would start `DAY:`
+too if Stoxkart ever sent a day view, which it has not. A position is `instrument_id`,
 `symbol`, `exchange`, `segment`, `expiry_date`, `strike_price`, `option_type`, `product` (`delivery`, `intraday`,
 `carry`, `margin_trading`, `cover`, `bracket`), `quantity` (signed), `buy` and `sell` (`quantity`, `average_price`,
 `value`), `average_price`, `last_price`, `pnl` (`realized`, `unrealized`, `total`), `day_change` and
@@ -39,6 +40,7 @@ websocket entry from Fyers or Groww is read from its normalized `position` inste
 | groww (stream) | no token, `exchange`, derivatives | `quantity` | the NSE and BSE legs, added | none |
 | indmoney | `security_id`, `exchange` or `segment` | `net_qty` | `buy_qty`/`buy_value`, `sell_qty`/`sell_value` | `realized_pnl`, `unrealized_pnl`, `last_price` |
 | kotak | `tok`, `exSeg` | today's and carried buys less sells | `flBuyQty` + `cfBuyQty` at `buyAmt` + `cfBuyAmt`, and sells | none |
+| stoxkart | `token`, `exchange` | `net_quantity` | `buy_quantity`/`buy_value`, `sell_quantity`/`sell_value` | `mark_to_market` as unrealized, `last_trade_price` |
 | wisdom_capital | `ExchangeInstrumentID`, `ExchangeSegment` | `Quantity` | `OpenBuyQuantity`/`BuyAmount`, `OpenSellQuantity`/`SellAmount` | `RealizedMTM`, `UnrealizedMTM` |
 
 **Resolving, merging and pricing** follow the REST API. A token is looked up in `unified:broker_tokens` only among the
@@ -58,7 +60,7 @@ when there is neither a hash nor a recorded poll, so the broker's scripts have n
 is `ok` with no positions; or `unreadable` when no entry could be decoded.
 
 Written with SET every half second. Runs until Ctrl+C or SIGTERM; a Redis that cannot be reached is logged and tried
-again. Reads only - it places no orders. Stoxkart is not included: it has no bin scripts.
+again. Reads only - it places no orders.
 """
 
 import sys
@@ -85,10 +87,10 @@ INSTRUMENTS_KEY = "unified:instruments"
 META_KEY = "unified:mapping:meta"
 QUOTES_KEY = "unified:quotes:live"
 
-BROKERS = ("dhan", "flattrade", "fyers", "groww", "indmoney", "kotak", "shoonya", "wisdom_capital", "zerodha")
+BROKERS = ("dhan", "flattrade", "fyers", "groww", "indmoney", "kotak", "shoonya", "stoxkart", "wisdom_capital", "zerodha")
 
 # The brokers whose hash fields carry the basis, `NET:` or `DAY:`.
-BASIS_BROKERS = ("zerodha", "wisdom_capital")
+BASIS_BROKERS = ("zerodha", "wisdom_capital", "stoxkart")
 
 BASES = ("net", "day")
 
@@ -115,7 +117,7 @@ VENUES = {
 PRODUCTS = {
     "CNC": "delivery", "C": "delivery", "DELIVERY": "delivery",
     "MIS": "intraday", "I": "intraday", "INTRA": "intraday", "INTRADAY": "intraday",
-    "NRML": "carry", "M": "carry", "MARGIN": "carry", "NORMAL": "carry",
+    "NRML": "carry", "M": "carry", "MARGIN": "carry", "NORMAL": "carry", "CARRYFORWARD": "carry",
     "MTF": "margin_trading",
     "CO": "cover", "H": "cover", "BO": "bracket", "B": "bracket",
 }
@@ -284,10 +286,28 @@ def wisdom_capital_position(row):
                     sell_quantity=row.get("OpenSellQuantity"), sell_value=row.get("SellAmount"),
                     realized=row.get("RealizedMTM"), unrealized=row.get("UnrealizedMTM"))
 
+def stoxkart_position(row):
+    """Reads one Stoxkart positions row into a position.
+
+    Stoxkart's row carries no symbol and no split of profit into realized and unrealized, so the symbol is left to resolution and its `mark_to_market` is read as unrealized profit, which keeps the total right. The field names are those of Stoxkart's documentation, since no open position has been seen.
+
+    Args:
+        row (dict): The entry's `data`, one row of Stoxkart's positions.
+
+    Returns:
+        dict: The position.
+    """
+    exchange, kind = venue(row.get("exchange"))
+    return position(broker_token=row.get("token"), exchange=exchange, kind=kind, symbol=row.get("symbol"),
+                    product_code=row.get("product_type"), quantity=row.get("net_quantity"),
+                    buy_quantity=row.get("buy_quantity"), buy_value=row.get("buy_value"),
+                    sell_quantity=row.get("sell_quantity"), sell_value=row.get("sell_value"),
+                    unrealized=row.get("mark_to_market"), last_price=row.get("last_trade_price"))
+
 # Each broker's reader of one stored positions row, the entry's `data`.
 NORMALIZERS = {"zerodha": zerodha_position, "dhan": dhan_position, "flattrade": noren_position, "shoonya": noren_position,
                "fyers": fyers_position, "groww": groww_position, "indmoney": indmoney_position, "kotak": kotak_position,
-               "wisdom_capital": wisdom_capital_position}
+               "stoxkart": stoxkart_position, "wisdom_capital": wisdom_capital_position}
 
 # The brokers whose update stream sends a shape unlike their REST positions, read from the entry's normalized `position`.
 STREAM_NORMALIZERS = {"fyers": fyers_stream_position, "groww": groww_stream_position}

@@ -19,12 +19,12 @@ instrument no verified broker streams. A broker joins the set once its normalize
 
 # Highest priority first. Used for every exchange and kind of instrument unless overridden below.
 DEFAULT_PRIORITY = ("zerodha", "dhan", "kotak", "flattrade", "shoonya", "fyers",
-                    "wisdom_capital", "groww", "indmoney")
+                    "wisdom_capital", "groww", "indmoney", "stoxkart")
 
 # Exchanges some brokers do not stream at all. Absent brokers are simply never candidates, so this
 # only keeps the order honest to read.
 EXCHANGE_PRIORITY = {
-    "mcx": ("zerodha", "dhan", "kotak", "flattrade", "shoonya", "fyers", "wisdom_capital", "groww"),
+    "mcx": ("zerodha", "dhan", "kotak", "flattrade", "shoonya", "fyers", "wisdom_capital", "groww", "stoxkart"),
     "ncdex": ("shoonya", "wisdom_capital"),
 }
 

@@ -37,7 +37,7 @@ systemctl --user enable --now unified@orders.service
 The combiners resolve each broker's token to a unified instrument through the mapping cache
 (`unified:broker_tokens`, and `unified:instrument_symbols` for Groww, which sends no token), and price
 holdings and positions from `unified:quotes:live`. Until `map_instruments` has written that cache nothing
-resolves, and every order, trade and position carries a null `instrument_id`. Stoxkart appears only in the mapping, since it has no scripts beyond `instruments`.
+resolves, and every order, trade and position carries a null `instrument_id`. Stoxkart streams no order updates, so its orders reach `orders` only through `bin/stoxkart/orders`, which polls once a second.
 
 ## The portfolio and order documents
 
@@ -126,7 +126,7 @@ view, and each run's outcome is written to `unified:prices:last_run`.
 
 ## Live quotes: `quotes`
 
-`quotes` reads all nine broker quote streams as the consumer group `unified` - apart from the `persist`
+`quotes` reads all ten broker quote streams as the consumer group `unified` - apart from the `persist`
 group, so each gets every tick - and turns them into one [unified quote](../architecture/contracts.md#the-unified-quote)
 per instrument. Each tick goes through six steps, cheapest refusal first:
 
@@ -159,9 +159,10 @@ hash at start.
 Brokers are never blended. At any moment one broker owns an instrument and only its ticks are written;
 another broker streaming the same instrument is a standby.
 
-- Priority is Zerodha, Dhan, Kotak, Flattrade, Shoonya, Fyers, Wisdom Capital, Groww, INDmoney - without
-  INDmoney on MCX, and only Shoonya and Wisdom Capital on NCDEX - with verified brokers ahead of unverified
-  ones. Zerodha is the only verified broker.
+- Priority is Zerodha, Dhan, Kotak, Flattrade, Shoonya, Fyers, Wisdom Capital, Groww, INDmoney, Stoxkart -
+  without INDmoney on MCX, and only Shoonya and Wisdom Capital on NCDEX - with verified brokers ahead of
+  unverified ones. Zerodha is the only verified broker. Stoxkart is last because its quotes are polled
+  once a second rather than streamed.
 - A new instrument goes at once to the top verified broker; any other waits 5 seconds for a better one.
 - The owner loses it when its stream has been silent for 45 seconds, or when it has sent nothing for that
   instrument for 60 seconds while a standby sent it 3 times. The best healthy standby takes over.
@@ -216,6 +217,7 @@ only when no verified broker streams it, until a live session confirms what is m
 | Fyers | `prev_close_price`, always | lots (unconfirmed) | both | Protocol only; nothing stored yet. Currency derivatives left out |
 | Groww | not used until confirmed | NSE and BSE only | exchange time | Protocol only; nothing stored yet |
 | INDmoney | not used - `close` is the last price | NSE and BSE only | both true instants | In-session NSE ticks, 2026-09-15, agree with Zerodha on price, volume and times; no order book quantities |
+| Stoxkart | `close` before the session ends | lots | trade time only, counted from 1980 and converted by `bin/stoxkart/quotes` | Polled REST quotes, 2026-09-15, agree with Zerodha in the same second on close (TCS 2200.80, HDFCBANK 708.25, CRUDEOIL SEP 9717), NSE volume, MCX volume and open interest in lots (6385 and 15677) and last trade time; no order book totals |
 
 Where a broker's `close` is not used, the previous close carries forward from whichever broker owned
 the instrument earlier that day, and is null if none did. `bin/unified/quotes` carries these normalizers
@@ -224,8 +226,9 @@ itself, in `build_normalizers`; the same facts are stated for the REST API's bro
 
 ## Order and position updates: `order_updates`
 
-`order_updates` reads the nine brokers' order update streams and the four position update streams (Fyers,
-Groww, Kotak, Wisdom Capital) as the group `unified`. An order update is normalized as the broker's own
+`order_updates` reads the order update streams of the nine brokers other than Stoxkart, which streams no
+order updates, and the four position update streams (Fyers, Groww, Kotak, Wisdom Capital) as the group
+`unified`. An order update is normalized as the broker's own
 script normalizes it, then given `broker`, `instrument_id` and `observed_at`; a position update is built
 into the REST position contract as `positions` builds one, with `broker`, `position_key`, `basis` and
 `observed_at`. Neither is merged with anything else.
@@ -242,8 +245,9 @@ The hashes expire at 06:00 IST like the brokers' merged hashes, and an update ob
 
 ## Profiles, details and the session
 
-`user-profile` writes `unified:user:details`, one object with a key for each of the nine brokers and that
-broker's profile `data` as the value, or `null` when its key is missing or holds no profile. Kotak's comes
+`user-profile` writes `unified:user:details`, one object with a key for each of the ten brokers and that
+broker's profile `data` as the value, or `null` when its key is missing or holds no profile. Stoxkart's
+`email_id` arrives encrypted, as `ENC-` followed by hexadecimal, so it is not a readable address. Kotak's comes
 from `bin/kotak/login` and Wisdom Capital's is refreshed once a day, so each is as fresh as its own
 script keeps it.
 

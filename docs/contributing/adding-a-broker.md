@@ -99,7 +99,7 @@ rather than branching in the parser, and keep the broker's own row as `data`.
 ## 5. The stream tables
 
 Add `stock_brokers/instruments/ticks/utilities/sql/ddl/<NNN>_<broker>_streams.sql`, numbered after
-`090_wisdom_capital_streams.sql`, holding the broker's schema, `ticks`,
+`100_stoxkart_streams.sql`, holding the broker's schema, `ticks`,
 `order_updates` and, if it streams them, `positions` - table, hypertable, indexes and compression, every
 statement safe to run again. Each `persist_*` script applies this file by name when it starts, so there is no
 separate step. See [DDL and migrations](../database/ddl.md).

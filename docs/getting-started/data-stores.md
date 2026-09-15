@@ -42,7 +42,7 @@ python -m stock_brokers.instruments.historical.utilities.sql.apply_ddl
 ```
 
 Each broker's tick, order update and position tables are defined in
-`stock_brokers/instruments/ticks/utilities/sql/ddl/010_zerodha_streams.sql` to `090_wisdom_capital_streams.sql`,
+`stock_brokers/instruments/ticks/utilities/sql/ddl/010_zerodha_streams.sql` to `100_stoxkart_streams.sql`,
 and each `bin/<broker>/persist_*` script applies its broker's file when it starts, so they need no step of their
 own. To create them without starting a persister, apply a file directly:
 

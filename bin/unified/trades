@@ -30,6 +30,7 @@ broker's fields are read exactly as the REST API's orders modules read them:
 | groww | `groww_trade_id`, `groww_order_id` | no token, `trading_symbol`, `exchange` | `transaction_type`, `product` | `quantity`, `price` | `trade_date_time` or `created_at` |
 | indmoney | `fill_id` or `trade_id`, `order_id` or `id` | `security_id`, no symbol, `exchange` | `txn_type`, `product` | `quantity` or `traded_qty`, `price` or `traded_price` | `trade_date_time` or `created_at` |
 | kotak | `flId`, `nOrdNo` | `tok`, `trdSym` or `sym`, `exSeg` or `exch` | `trnsTp`, `prod` | `fldQty`, `avgPrc` | `flDt flTm`, `exTm` |
+| stoxkart | `trade_id`, `order_id` | `token`, `symbol`, `exchange` | `action`, `product_type` | `quantity`, `price` | `order_date_time`, a time of day only |
 | wisdom_capital | `ExecutionID`, `AppOrderID` | `ExchangeInstrumentID`, `TradingSymbol`, `ExchangeSegment` | `OrderSide`, `ProductType` | `LastTradedQuantity`, `LastTradedPrice` | `LastExecutionTransactTime`, `ExchangeTransactTime` |
 
 **Resolving** follows the REST API. A broker's exchange code names an exchange and a kind of instrument - cash,
@@ -45,7 +46,7 @@ than a minute ago - its script may have stopped; its trades are still included),
 with `as_of`, when its script stored it.
 
 Written with SET every half second. Runs until Ctrl+C or SIGTERM; a Redis that cannot be reached is logged and tried
-again. Reads only - it places no orders. Stoxkart is not included: it has no bin scripts.
+again. Reads only - it places no orders.
 """
 
 import sys
@@ -71,7 +72,7 @@ INSTRUMENT_SYMBOLS_KEY = "unified:instrument_symbols"
 INSTRUMENTS_KEY = "unified:instruments"
 META_KEY = "unified:mapping:meta"
 
-BROKERS = ("dhan", "flattrade", "fyers", "groww", "indmoney", "kotak", "shoonya", "wisdom_capital", "zerodha")
+BROKERS = ("dhan", "flattrade", "fyers", "groww", "indmoney", "kotak", "shoonya", "stoxkart", "wisdom_capital", "zerodha")
 
 # The shared vocabulary for a trade's side and product. Keys are compared uppercased with underscores levelled to spaces.
 TRANSACTION_TYPES = {
@@ -279,10 +280,31 @@ def wisdom_capital_trade(row):
                  quantity=number(row.get("LastTradedQuantity"), int), price=number(row.get("LastTradedPrice")),
                  trade_timestamp=row.get("LastExecutionTransactTime"), exchange_timestamp=row.get("ExchangeTransactTime"))
 
+def stoxkart_trade(row):
+    """Reads one row of Stoxkart's stored trade book into a trade.
+
+    The field names are those of Stoxkart's documentation, since no populated trade book has been seen. Its `order_date_time` holds only a time of day, and is passed through as the trade time.
+
+    Args:
+        row (dict): One row of `stoxkart:orders:trades`.
+
+    Returns:
+        dict: The trade.
+    """
+    return trade("stoxkart", row.get("exchange"),
+                 trade_id=text(row.get("trade_id")), order_id=text(row.get("order_id")),
+                 exchange_order_id=text(row.get("exchange_order_id")), exchange_trade_id=text(row.get("trade_id")),
+                 instrument_token=text(row.get("token")), tradingsymbol=row.get("symbol"),
+                 transaction_type=normalize(row.get("action"), TRANSACTION_TYPES),
+                 product=normalize(row.get("product_type"), PRODUCTS),
+                 quantity=number(row.get("quantity"), int), price=number(row.get("price")),
+                 trade_timestamp=row.get("order_date_time"))
+
 # Each broker's reader of one stored trade-book row.
 NORMALIZERS = {"zerodha": zerodha_trade, "dhan": dhan_trade, "flattrade": noren_trade("flattrade"),
                "shoonya": noren_trade("shoonya"), "fyers": fyers_trade, "groww": groww_trade,
-               "indmoney": indmoney_trade, "kotak": kotak_trade, "wisdom_capital": wisdom_capital_trade}
+               "indmoney": indmoney_trade, "kotak": kotak_trade, "stoxkart": stoxkart_trade,
+               "wisdom_capital": wisdom_capital_trade}
 
 def stored_rows(broker, stored):
     """

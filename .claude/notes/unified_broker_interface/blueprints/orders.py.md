@@ -65,7 +65,7 @@ The `unified:catalogue:` keys expire at midnight and are warmed after the 07:45 
 
 ## How `cancel` finds the broker
 
-A cancel names only the broker's order id, so the method has to work out which broker holds it. Three ways were weighed with the user on 2026-09-15: look the id up in the `<broker>:orders:orders` hashes that the order scripts already keep, record each order's broker when `place` sends it, or both. The user chose the hashes. They need no change to `place`, and they also hold orders placed outside the API, such as from a broker's own app. The cost is that an order is found only after a poll or a websocket update has recorded it, and that Stoxkart, which has no order scripts, is never found.
+A cancel names only the broker's order id, so the method has to work out which broker holds it. Three ways were weighed with the user on 2026-09-15: look the id up in the `<broker>:orders:orders` hashes that the order scripts already keep, record each order's broker when `place` sends it, or both. The user chose the hashes. They need no change to `place`, and they also hold orders placed outside the API, such as from a broker's own app. The cost is that an order is found only after a poll or a websocket update has recorded it. Stoxkart streams no order updates, so a Stoxkart order is found only once `bin/stoxkart/orders`, which polls once a second, has recorded it.
 
 The lookup is one pipeline: the API token, `HMGET last_login` and `HMGET settings` for all ten brokers, and one `HGET <broker>:orders:orders <order_id>` per broker. The id is looked up at every broker rather than guessed from its shape, because Flattrade's and Shoonya's ids have the same shape, the date followed by eight digits. When two brokers hold the id the method answers `409` and asks for `broker`, rather than cancelling at either.
 
@@ -78,7 +78,7 @@ Four brokers need a second value, and the method reads it from the broker's own 
 | Broker | Value | When the stored order lacks it |
 | --- | --- | --- |
 | Zerodha | `variety`, such as `regular` or `amo` | `regular`. Kite's postback carries `variety`, so the websocket entry has it too. |
-| Stoxkart | `variety` | `normal`, as the removed code did. The branch cannot be reached until a Stoxkart order script exists. |
+| Stoxkart | `variety`, lowercased, because Stoxkart's order book spells it `NORMAL`, `AMO` or `BO` while its cancel path is `/orders/normal/{order_id}` | `normal`, as the removed code did. `bin/stoxkart/orders` has recorded Stoxkart orders since 2026-09-15, but no Stoxkart order has been cancelled through the API. |
 | Groww | `segment`, `CASH` or `FNO` | Answered `503`. Groww's websocket update, `orderDetailUpdateDto`, carries no segment, and a wrong segment would only be refused, so the method waits for the next poll to replace the entry rather than guess. |
 | INDmoney | `segment`, `EQUITY` or `DERIVATIVE` | Guessed from the id. Live equity ids look like `EQ-100072817`; the `DRV` prefix for derivatives comes from the older cancel code and has not been seen live. |
 | Wisdom Capital | `OrderUniqueIdentifier` | `ubi`, the value `place` sends when there is no tag. |

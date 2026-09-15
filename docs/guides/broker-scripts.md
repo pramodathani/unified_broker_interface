@@ -45,11 +45,13 @@ how each is derived from the broker's own names, and its exit codes. Only `quote
 
 | Script | dhan | zerodha | flattrade | shoonya | fyers | indmoney | wisdom_capital | groww | kotak | stoxkart |
 | --- | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: |
-| `login`, `logout` | yes | yes | yes | yes | yes | yes | yes | yes | yes | - |
-| `user-profile` | yes | yes | yes | yes | yes | yes | yes | yes | - | - |
-| `orders`, `trades`, `holdings`, `positions`, `funds` | yes | yes | yes | yes | yes | yes | yes | yes | yes | - |
-| `quotes`, `order_updates` | yes | yes | yes | yes | yes | yes | yes | yes | yes | - |
-| `persist_ticks`, `persist_orders` | yes | yes | yes | yes | yes | yes | yes | yes | yes | - |
+| `login`, `logout` | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
+| `user-profile` | yes | yes | yes | yes | yes | yes | yes | yes | - | yes |
+| `orders`, `trades`, `holdings`, `positions`, `funds` | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
+| `quotes` | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
+| `order_updates` | yes | yes | yes | yes | yes | yes | yes | yes | yes | - |
+| `persist_ticks` | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
+| `persist_orders` | yes | yes | yes | yes | yes | yes | yes | yes | yes | - |
 | `persist_positions` | - | - | - | - | yes | - | yes | yes | yes | - |
 | `instruments` | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
 | `historical_prices` | yes | yes | yes | yes | yes | yes | yes | - | - | - |
@@ -58,13 +60,15 @@ The gaps follow the brokers:
 
 - **Kotak** has no profile endpoint. Its profile arrives only in the login response, so `bin/kotak/login`
   writes `kotak:user:details` on a run that actually logged in, and there is no `user-profile` script.
-- **Groww and Kotak** have no `historical_prices`, and so no `<broker>-historical-prices.service`.
+- **Groww, Kotak and Stoxkart** have no `historical_prices`, and so no `<broker>-historical-prices.service`.
 - **`persist_positions`** exists only for the four brokers whose `order_updates` socket carries
   positions: Fyers, Wisdom Capital, Groww (derivatives positions only) and Kotak. The other five stream
   orders alone, and their positions come only from the `positions` poller.
-- **Stoxkart** has only `instruments`. Its REST login works, but its other scripts have not been
-  written yet. Its instrument master is public, so this one script lets the daily mapping include it. It has no units of its own; it runs as
-  part of `unified-instruments.service`.
+- **Stoxkart** has no `order_updates` and so no `persist_orders`. Stoxkart delivers order status only
+  to a Postback URL registered on the API app, which needs a public web server, so its orders reach
+  `stoxkart:orders:orders` only through the one-second `orders` poller. Its `quotes` is a REST poller
+  rather than a websocket, because the documented quote websocket could not be reached on 2026-09-15;
+  see [Stoxkart's quotes are polled](#stoxkarts-quotes-are-polled).
 
 ## Sessions
 
@@ -107,14 +111,19 @@ limit for five, instead of logging in, because every refused request extends a b
 
 | Script | Interval | Exceptions |
 | --- | --- | --- |
-| `orders` | 0.5 s | Fyers 5 s |
-| `positions` | 0.5 s | Fyers 5 s |
-| `trades` | 0.5 s | Fyers 15 s |
-| `funds` | 0.5 s | Fyers 30 s |
+| `orders` | 0.5 s | Fyers 5 s, Stoxkart 1 s |
+| `positions` | 0.5 s | Fyers 5 s, Stoxkart 1 s |
+| `trades` | 0.5 s | Fyers 15 s, Stoxkart 1 s |
+| `funds` | 0.5 s | Fyers 30 s, Stoxkart 1 s |
 | `holdings` | 60 s | |
 | `user-profile` | 60 s | Wisdom Capital once a day, retried after an hour when a call fails, since it allows about one profile call a day |
 
-Fyers polls more slowly because it refuses more than a handful of requests a second per app.
+Fyers polls more slowly because it refuses more than a handful of requests a second per app. Stoxkart
+documents a limit of one request a second for its order book, positions, trade book and funds, so those
+pollers wait a second between requests. The limit was not enforced on 2026-09-15, when six back-to-back
+requests all succeeded, but the pollers keep to it. A dead Stoxkart session is refused with HTTP 401 and
+the code `AuthorizationError` ("Session token is wrong"), and the script logs in again before its next
+request.
 
 A failed poll is logged and leaves the key as it was. At two cycles a second a line per cycle would be
 about 170,000 lines a day per script, so the half-second pollers report through
@@ -166,7 +175,7 @@ Redis keeps no empty hash, so without it a day with no orders could not be told 
 is not running. The unified combiners judge freshness from it.
 
 Orders are keyed by the broker's order id (`order_id`, `norenordno`, `nOrdNo`, `AppOrderID`,
-`growwOrderId`). Positions are keyed by what identifies a position at that broker:
+`growwOrderId`, and `order_id` at Stoxkart). Positions are keyed by what identifies a position at that broker:
 
 | Broker | Field | Example |
 | --- | --- | --- |
@@ -178,6 +187,7 @@ Orders are keyed by the broker's order id (`order_id`, `norenordno`, `nOrdNo`, `
 | fyers | symbol, product | `NSE:INFY-EQ:INTRADAY` |
 | groww | exchange, contract, product | `NSE:NIFTY26SEP26000CE:NRML` |
 | kotak | segment, token, product | `nse_cm:11536:CNC` |
+| stoxkart | exchange, token, product type; `DAY:` in front for a day list, which Stoxkart has never sent | `NSE:760946:DELIVERY` |
 
 ## Websocket feeds
 
@@ -216,9 +226,33 @@ systemctl --user restart zerodha@quotes
 | wisdom_capital | `SEGMENT:EXCHANGEINSTRUMENTID` - 1 NSECM, 2 NSEFO, 3 NSECD, 4 NSECO, 11 BSECM, 12 BSEFO, 13 BSECD, 21 NCDEX, 51 MCXFO | `1:2885` |
 | groww | `EXCHANGE|SEGMENT|EXCHANGE_TOKEN` - `NSE` or `BSE`, `CASH` or `FNO`; an index by name | `NSE|CASH|2885` |
 | kotak | `EXCHANGE|TOKEN` with lowercase segments - `nse_cm`, `bse_cm`, `nse_fo`, `bse_fo`, `cde_fo`, `nse_com`, `bse_cd`, `bse_co`, `mcx_fo` - and the `pSymbol` | `nse_cm|11536` |
+| stoxkart | `EXCHANGE:TOKEN` - `NSE`, `BSE`, `NFO`, `BFO`, `NSECD`, `BSECD`, `MCX`, `NCDEX`; `BSECD` and `NCDEX` were refused as invalid on 2026-09-15 | `NSE:2885` |
 
 Groww's feed has no subjects for commodities, so `COMMODITY` members are skipped. A feed with nothing to
 subscribe to exits 2, which its unit does not restart.
+
+### Stoxkart's quotes are polled
+
+Stoxkart documents a binary quote websocket at `ws://inmob.stoxkart.com:7763`. On 2026-09-15 that port
+refused connections, and port 443 on the same host answered the handshake with HTTP 503 from an AWS load
+balancer with nothing behind it. `bin/stoxkart/quotes` therefore polls `POST https://openapi.stoxkart.com/quotes`
+instead, which answers for up to 50 instruments of one exchange in about 110 ms. It writes the same three
+keys as the websocket feeds, but only a quote that changed since the last cycle is written, so a quiet
+instrument does not fill the stream. A tick arrives up to one interval after the trade it describes.
+
+The script takes these options instead of `--per-socket`:
+
+| Option | Default | What it sets |
+| --- | --- | --- |
+| `--tokens` | the subscription set | A comma-separated list of `EXCHANGE:TOKEN` instruments |
+| `--interval` | 1 s | The time from the start of one cycle to the start of the next |
+| `--requests-per-second` | 8 | The most requests sent in a second, below Stoxkart's documented limit of 10 |
+
+A tick's `instrument_token` is `EXCHANGE:TOKEN`, and its `id` is `EXCHANGE:SYMBOL` from
+`stoxkart:instruments:master`. A future or option is named by its `symbol_description` when that begins
+with its symbol, as in `NFO:NIFTY26SEPFUT`, and a commodity contract is named from its symbol, expiry,
+strike and option type, as in `MCX:CRUDEOIL21SEP26FUT`. The subscription set was seeded on 2026-09-15 with
+the same 15 instruments as Zerodha's.
 
 ### Order updates
 
@@ -239,8 +273,8 @@ Updates arrive only when an order or position changes, so a quiet socket is not 
 `persist_ticks`, `persist_orders` and `persist_positions` read their stream as the consumer group
 `persist` and write to the broker's hypertable with COPY, a batch at a time. Each applies its broker's
 `<NNN>_<broker>_streams.sql` in `stock_brokers/instruments/ticks/utilities/sql/ddl` when it starts - `010`
-Zerodha through `090` Wisdom Capital, holding that broker's `ticks`, `order_updates` and, where it streams
-them, `positions` - so a new database needs no separate step, and a start that cannot apply it exits 1. Each takes `--batch-size` and `--flush-interval`, and `persist_ticks` writes a batch when it
+Zerodha through `100` Stoxkart, holding that broker's `ticks`, `order_updates` and, where it streams
+them, `positions`, except Stoxkart's, which holds only `ticks` - so a new database needs no separate step, and a start that cannot apply it exits 1. Each takes `--batch-size` and `--flush-interval`, and `persist_ticks` writes a batch when it
 holds `--batch-size` ticks or has waited `--flush-interval` seconds, whichever comes first.
 
 | Script | Stream | Table |
@@ -308,7 +342,7 @@ Each broker's units live in `services/<broker>/`:
 | `<broker>.target` | target | Everything above; stopping it stops them all |
 
 Nothing needs restarting after the morning login: every script reads the current token on each connect
-and request, so the login only has to happen before the market opens. The 30 minutes of jitter keeps nine
+and request, so the login only has to happen before the market opens. The 30 minutes of jitter keeps ten
 headless-browser and TOTP logins from firing in the same second and still lands each before 09:00. A
 machine that was off at 08:15 needs no catch-up, since the first script refused a token logs in then.
 
@@ -326,8 +360,9 @@ systemctl --user enable --now zerodha.target zerodha-login.timer \
 ```
 
 The other targets list the same set adjusted for the matrix above: `@persist_positions` for Fyers, Groww,
-Kotak and Wisdom Capital, no `@user-profile` for Kotak, and no historical prices service for Groww or
-Kotak. `bin/<broker>/instruments` has no unit here; it runs from `unified-instruments.service`.
+Kotak and Wisdom Capital, no `@user-profile` for Kotak, and no historical prices service for Groww,
+Kotak or Stoxkart. `stoxkart.target` also has no `@order_updates` or `@persist_orders`, because Stoxkart
+streams no order updates. `bin/<broker>/instruments` has no unit here; it runs from `unified-instruments.service`.
 
 !!! warning "Flattrade leaves `order_updates` out"
 

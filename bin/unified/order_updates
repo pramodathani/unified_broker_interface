@@ -57,7 +57,8 @@ observed before the latest 06:00 goes to the unified stream but not into the has
 today's. The unified streams are capped at about 50,000 entries each.
 
 Runs until Ctrl+C or SIGTERM; a Redis that cannot be reached is retried with backoff. Reads only - it places no orders.
-Stoxkart is not included: it has no bin scripts.
+Stoxkart is not included: its API streams no order or position updates, so it has neither stream, and its orders and
+positions reach the unified documents only through `bin/unified/orders` and `bin/unified/positions`.
 """
 
 import sys

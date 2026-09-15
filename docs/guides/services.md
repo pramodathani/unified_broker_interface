@@ -11,7 +11,7 @@ One folder per broker and one for the unified layer, each holding every unit tha
 
 ```text
 services/
-├── <broker>/                          one each for the nine brokers with scripts
+├── <broker>/                          one each for the ten brokers
 │   ├── <broker>.target
 │   ├── <broker>@.service              one bin/<broker>/ script that keeps running
 │   ├── <broker>-login.service         bin/<broker>/login, run by the timer
@@ -28,9 +28,9 @@ services/
 ```
 
 Every unit declares `PartOf=` its folder's target, so stopping or restarting `zerodha.target` stops or
-restarts everything Zerodha runs. Groww and Kotak have no `-historical-prices` unit, since neither
-serves candles. Stoxkart has no folder: its only script is `bin/stoxkart/instruments`, which
-`unified-instruments.service` runs.
+restarts everything Zerodha runs. Groww, Kotak and Stoxkart have no `-historical-prices` unit, since none
+of them serves candles. Every broker's `bin/<broker>/instruments` runs from `unified-instruments.service`
+rather than from the broker's own folder.
 
 Every `ExecStart` is `%h/Projects/unified_broker_interface/bin/...`, so the units expect the
 repository at `~/Projects/unified_broker_interface`.
@@ -64,9 +64,9 @@ the unified keys only while that broker's target is running.
 
 ### What each broker enables
 
-Every broker enables `quotes`, `persist_ticks`, `persist_orders`, `orders`, `trades`, `positions`,
-`holdings` and `funds` as `<broker>@` instances, plus its login timer. The rest differ, as the target
-files list them:
+Every broker enables `quotes`, `persist_ticks`, `orders`, `trades`, `positions`, `holdings` and `funds`
+as `<broker>@` instances, plus its login timer. Every broker except Stoxkart also enables
+`persist_orders`. The rest differ, as the target files list them:
 
 | Broker | `@order_updates` | `@persist_positions` | `@user-profile` | `-historical-prices` |
 | --- | --- | --- | --- | --- |
@@ -77,6 +77,7 @@ files list them:
 | indmoney | yes | - | yes | yes |
 | kotak | yes | yes | - | - |
 | shoonya | yes | - | yes | yes |
+| stoxkart | **no** | - | yes | - |
 | wisdom_capital | yes | yes | yes | yes |
 | zerodha | yes | - | yes | yes |
 
@@ -85,6 +86,8 @@ websocket. Kotak has no `user-profile` script because it has no profile endpoint
 writes the profile from the login response instead. Flattrade's `order_updates` is left out on
 purpose: Flattrade permits one websocket per session and `flattrade@quotes` holds it, so enabling both
 would knock one of them off. See [Known issues](../contributing/known-issues.md#broker-limits).
+Stoxkart has no `order_updates` or `persist_orders` script at all, because it delivers order status only
+to a Postback URL registered on its API app, and its `quotes` is a REST poller rather than a websocket.
 
 !!! warning "Linger is not optional"
 
@@ -225,7 +228,7 @@ be in place before the logins and the 09:00 pre-open, when the feeders resolve a
 so a machine that was off at 07:45 runs the job as soon as it starts.
 
 **08:15** is after the overnight token expiry and the instrument download, before the pre-open, and
-well clear of MCX's 23:30 close. `RandomizedDelaySec=1800` spreads nine logins, most of them a headless
+well clear of MCX's 23:30 close. `RandomizedDelaySec=1800` spreads ten logins, most of them a headless
 Chrome and a TOTP, across 08:15 to 08:45 rather than firing them in the same second. A machine that was
 off at 08:15 needs no catch-up, since the first script to find its token refused logs in then - hence
 `Persistent=false`.

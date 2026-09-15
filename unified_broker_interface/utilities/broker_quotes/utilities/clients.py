@@ -51,9 +51,9 @@ API_CLASSES = {
     "stoxkart": ("stock_brokers.api.stoxkart", "StoxkartAPI"),
 }
 
-# The brokers with a login unit. Stoxkart has none yet, so its login is never started.
 LOGIN_UNITS = {broker: f"{broker}-login.service" for broker in
-               ("zerodha", "dhan", "flattrade", "shoonya", "fyers", "groww", "kotak", "indmoney", "wisdom_capital")}
+               ("zerodha", "dhan", "flattrade", "shoonya", "fyers", "groww", "kotak", "indmoney", "wisdom_capital",
+                "stoxkart")}
 
 # How long a worker waits before asking for the same broker's login again.
 LOGIN_REQUEST_FLOOR_SECONDS = 300

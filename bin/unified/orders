@@ -52,7 +52,8 @@ the newer of the newest `observed_at` in it and the last successful poll, which 
 - `unreadable` - the key is not a hash, or no entry in it holds an order.
 
 Written with SET every half second. Runs until Ctrl+C or SIGTERM; a Redis that cannot be reached is logged and tried
-again. Reads only - it never places, modifies or cancels an order. Stoxkart is not included: it has no bin scripts.
+again. Reads only - it never places, modifies or cancels an order. Stoxkart streams no order updates, so its hash has
+only the one writer, `bin/stoxkart/orders`.
 """
 
 import sys
@@ -78,7 +79,7 @@ INSTRUMENT_SYMBOLS_KEY = "unified:instrument_symbols"
 INSTRUMENTS_KEY = "unified:instruments"
 META_KEY = "unified:mapping:meta"
 
-BROKERS = ("dhan", "flattrade", "fyers", "groww", "indmoney", "kotak", "shoonya", "wisdom_capital", "zerodha")
+BROKERS = ("dhan", "flattrade", "fyers", "groww", "indmoney", "kotak", "shoonya", "stoxkart", "wisdom_capital", "zerodha")
 
 # The REST API's order contract, in its order, after `broker` and before `instrument_id`.
 ORDER_FIELDS = ("order_id", "exchange_order_id", "parent_order_id", "status", "status_message", "id", "instrument_token",

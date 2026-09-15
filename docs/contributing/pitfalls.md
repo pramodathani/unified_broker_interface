@@ -98,7 +98,7 @@ of them shows up while only Zerodha is tested.
 **A token is not always a number.** Only Zerodha's subscription tokens are integers; every other broker
 carries a segment - `NSE_EQ:2885`, `NSE|2885`, `NSE|CASH|2885`, `1:2885`, `NSE:SBIN-EQ` - so a feed that
 discards every token it cannot parse as an integer starts, subscribes to nothing, and exits quietly at
-eight of the nine brokers.
+nine of the ten brokers.
 
 **Noren's connect frame is `t` of `a` and the token is named `accesstoken`.** Sending `t` of `c`
 with the token as `susertoken` is parsed and refused with `NOT_OK`, which is indistinguishable
@@ -150,6 +150,27 @@ token's payload, and treats `logout` as a reason to reconnect with whatever logi
 hear from us and how long it will wait, and market data asks every 20s while waiting 60s where
 interactive asks every 25s but waits only 20s. Pacing on `pingInterval` alone heartbeats every
 23s into a 20s patience. Use half the shorter of the two.
+
+**Stoxkart's documented quote websocket is dead while its REST quotes work.** Stoxkart's documentation
+gives a binary quote feed at `ws://inmob.stoxkart.com:7763`. On 2026-09-15 that port refused every
+connection, and the same host on port 443 answered the websocket handshake with HTTP 503 from an AWS load
+balancer with nothing behind it, which reads like a temporary outage rather than a feed that is not there.
+In the same minutes `POST https://openapi.stoxkart.com/quotes` answered full quotes with five levels of
+depth for 50 instruments in about 110 ms, so `bin/stoxkart/quotes` polls that instead of streaming. Two other names were tried the same day and
+failed too: `superapi.stoxkart.com` has no DNS record, and `superrapi.stoxkart.com` is the Superr marketing
+site, whose websocket handshakes timed out on every path tried and whose ports 7763, 9443, 9444 and 9964 are
+closed.
+
+**Stoxkart's `buy_quantity` and `sell_quantity` are the best bid and ask sizes.** At Zerodha and most other
+brokers those names mean the total quantity bid and offered across the whole order book, and a tick's
+`buy_quantity` and `sell_quantity` carry that meaning. Stoxkart's fields of the same name equal the
+quantity at the first level of its depth, so copying them across would put a top-of-book size where every
+reader expects a total. `bin/stoxkart/quotes` stores null for both.
+
+**Stoxkart counts `last_trade_time` from 1980, not 1970.** Its `last_trade_time` is a count of seconds
+from 1980-01-01 UTC, so read as a Unix time it lands ten years in the past and still looks like a
+plausible timestamp. `bin/stoxkart/quotes` adds 315532800 seconds, and the converted time matched
+Zerodha's last trade time to the second on 2026-09-15. A value of 0 is stored as null.
 
 ## Platform notes
 

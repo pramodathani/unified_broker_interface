@@ -42,11 +42,13 @@ implementations.
     data token with `bin/wisdom_capital/historical_prices` through the Redis key
     `wisdom_capital:session:marketdata`.
 
-=== "Not streaming"
+=== "Polled"
 
-    **Stoxkart** has no quote or order scripts yet. Its API login works as of 2026-09-15, but only
-    its instrument master is ingested - that is a public file needing no login - until the rest
-    of its scripts are written.
+    **Stoxkart** streams nothing. Its documented binary quote websocket at `ws://inmob.stoxkart.com:7763`
+    refused connections on 2026-09-15, so `bin/stoxkart/quotes` polls `POST /quotes` once a second
+    instead, asking for up to 50 instruments of one exchange per request. Stoxkart delivers order status
+    only to a Postback URL registered on the API app, so there is no `order_updates` script, and its
+    orders reach Redis only through the one-second `orders` poller.
 
 ## Per-broker notes
 
@@ -61,7 +63,7 @@ implementations.
 | Kotak | Selenium + TOTP | Streams positions; its instrument master URL is stamped with today's date; its feed is the binary HSM protocol of Kotak's own SDK, which wants data frames acknowledged and sends MCX quantities in Kotak's lots |
 | IND Money | Token | - |
 | Wisdom Capital | Token | XTS; separate market data credentials, REST subscription, socket.io transport, and `apiType=INTERACTIVE` required in the order socket's query |
-| Stoxkart | REST + TOTP | Instrument master only; its version 2 login needs a publisher key pair in `publisher_api_key` and `publisher_api_secret` beside the app's own key |
+| Stoxkart | REST + TOTP | Its version 2 login needs a publisher key pair in `publisher_api_key` and `publisher_api_secret` beside the app's own key; quotes are polled over REST and orders arrive only through the poller; placing an order is refused with `invalid algo_id`, so it is kept out of order rotation |
 
 See the [coverage matrix](coverage.md) for what each broker supports subsystem by subsystem,
 and [Pitfalls](../contributing/pitfalls.md#feeds-one-refusal-per-broker) for the way each of

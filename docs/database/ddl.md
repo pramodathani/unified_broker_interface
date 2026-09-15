@@ -46,7 +46,7 @@ file at a time, each file executed in one transaction by the script that needs i
 | `stock_brokers/instruments/sql/ddl` | `000_schemas.sql`, `010` to `100` - the ten broker schemas and their `instruments` tables | `python -m stock_brokers.instruments.sql.apply_ddl` |
 | `stock_brokers/instruments/mapping/utilities/sql/ddl` | `100_unified_schema.sql`, `110_unified_instruments.sql`, `120_unified_broker_mappings.sql` | `bin/unified/map_instruments` and `bin/unified/historical_prices` on every run, or `python -m stock_brokers.instruments.mapping.utilities.sql.apply_ddl` |
 | `stock_brokers/instruments/historical/utilities/sql/ddl` | `000` to `060` - each broker's `price_history` and `price_history_progress`; `200` to `250` - the unified price history | `bin/unified/historical_prices` on every run, or `python -m stock_brokers.instruments.historical.utilities.sql.apply_ddl` |
-| `stock_brokers/instruments/ticks/utilities/sql/ddl` | `010` to `090` - each broker's stream tables; `300` to `330` - `unified.ticks`, `unified.order_updates`, `unified.positions` and `unified.ticks_adjusted` | One file at a time, by the scripts that write the tables - see below |
+| `stock_brokers/instruments/ticks/utilities/sql/ddl` | `010` to `100` - each broker's stream tables; `300` to `330` - `unified.ticks`, `unified.order_updates`, `unified.positions` and `unified.ticks_adjusted` | One file at a time, by the scripts that write the tables - see below |
 
 The tick directory has no runner of its own, because no one step wants all of it: each
 `bin/<broker>/persist_*` script applies its broker's `<NNN>_<broker>_streams.sql` when it starts,
@@ -118,7 +118,7 @@ have, naming the column - which is usually how you find out one is needed.
 !!! note "Each broker's stream tables"
 
     `stock_brokers/instruments/ticks/utilities/sql/ddl/010_zerodha_streams.sql` to
-    `090_wisdom_capital_streams.sql` define every broker's `ticks`, `order_updates` and, for Fyers, Groww,
-    Kotak and Wisdom Capital, `positions` - schema, table, hypertable, index and compression - and each
+    `100_stoxkart_streams.sql` define every broker's `ticks`, every broker's but Stoxkart's `order_updates`,
+    and, for Fyers, Groww, Kotak and Wisdom Capital, `positions` - schema, table, hypertable, index and compression - and each
     `bin/<broker>/persist_*` script applies its broker's file when it starts. The persisters name their columns
     in `COPY`, so they depend on the columns existing, not on their order.

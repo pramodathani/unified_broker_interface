@@ -36,6 +36,7 @@ as zero. A segment appears when any broker reports it.
 | groww | margin detail | available is `clear_cash + collateral_available + adhoc_margin - net_margin_used`; collateral used plus available; commodity M2M | `equity`, `derivatives`, `commodity` |
 | indmoney | funds | available is `sod_balance + pledge_received`; `withdrawal_balance`, P&L, funds added and withdrawn | from `detailed_avl_balance` |
 | kotak | limits | `Net`, `CollateralValue`, `AdhocMargin`, `MarginUsed`, span and exposure present, MTM present, RMS pay-in and pay-out | `derivatives`, `currency`, `commodity` span and exposure, Nrml plus Mis |
+| stoxkart | one pool of strings | `available_limit`, `cash`, `pledge_value` (or `collateral`), `adhoc_limit`, the absolute `utilized_limit`, `withdrawable_funds`; `realised_profit`, `payin_amount`, `payout_amount` | none |
 | wisdom_capital | XTS `BalanceList` | the first balance's `RMSSubLimits`, `marginAvailable` and `marginUtilized` | none |
 
 **Which brokers count.** `brokers` lists every broker with, as the REST API does, a `status`, and `as_of`, when its
@@ -45,8 +46,7 @@ successful answer, or a body of the wrong shape - with an `error` saying why. A 
 nothing, as a broker the REST API could not read adds nothing, so it is never mistaken for a broker holding no money.
 
 Written with SET every half second, the per-broker funds scripts' cadence. Runs until Ctrl+C or SIGTERM; a Redis that
-cannot be reached is logged and tried again. Reads only - it places no orders. Stoxkart is not included: it has no bin
-scripts.
+cannot be reached is logged and tried again. Reads only - it places no orders.
 """
 
 import sys
@@ -67,7 +67,7 @@ REDIS_KEY = "unified:portfolio:funds"
 DELAY_SECONDS = 0.5
 STALE_SECONDS = 60
 
-BROKERS = ("dhan", "flattrade", "fyers", "groww", "indmoney", "kotak", "shoonya", "wisdom_capital", "zerodha")
+BROKERS = ("dhan", "flattrade", "fyers", "groww", "indmoney", "kotak", "shoonya", "stoxkart", "wisdom_capital", "zerodha")
 
 # Zerodha's two margin blocks, which are also its segments.
 ZERODHA_SEGMENTS = ("equity", "commodity")
@@ -311,10 +311,37 @@ def wisdom_capital_funds(data):
         + number(utilized.get("ScripBasketMarginPresent")))
     return record
 
+def stoxkart_funds(data):
+    """Reads Stoxkart's stored funds into a funds record.
+
+    Stoxkart reports one pool with every figure as a string. Its documentation shows `utilized_limit` as a negative number while the live account has only shown zero, so the margin used is taken as its absolute value.
+
+    Args:
+        data (object): The `data` of `stoxkart:portfolio:funds`.
+
+    Returns:
+        dict: The funds record.
+
+    Raises:
+        NotFunds: The stored funds are not an object.
+    """
+    data = a_dict("stoxkart", data)
+    record = funds_record()
+    add(record, "summary", "available_balance", data.get("available_limit"))
+    add(record, "summary", "cash_balance", data.get("cash"))
+    add(record, "summary", "collateral_value", data.get("pledge_value") or data.get("collateral"))
+    add(record, "summary", "adhoc_credit", data.get("adhoc_limit"))
+    add(record, "summary", "margin_utilized", abs(number(data.get("utilized_limit"))))
+    add(record, "summary", "withdrawable_balance", data.get("withdrawable_funds"))
+    add(record, "pnl", "realized", data.get("realised_profit"))
+    add(record, "cash_movement", "pay_in_today", data.get("payin_amount"))
+    add(record, "cash_movement", "pay_out_today", data.get("payout_amount"))
+    return record
+
 # Each broker's reader of its stored funds `data` into a funds record.
 READERS = {"zerodha": zerodha_funds, "dhan": dhan_funds, "flattrade": noren_funds("flattrade"),
            "shoonya": noren_funds("shoonya"), "fyers": fyers_funds, "groww": groww_funds, "indmoney": indmoney_funds,
-           "kotak": kotak_funds, "wisdom_capital": wisdom_capital_funds}
+           "kotak": kotak_funds, "stoxkart": stoxkart_funds, "wisdom_capital": wisdom_capital_funds}
 
 def combine(records):
     """Several brokers' funds records added into one."""

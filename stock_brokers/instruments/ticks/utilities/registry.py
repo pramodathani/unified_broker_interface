@@ -14,10 +14,10 @@ from stock_brokers.instruments.ticks.groww import GrowwTickNormalizer
 from stock_brokers.instruments.ticks.indmoney import IndmoneyTickNormalizer
 from stock_brokers.instruments.ticks.kotak import KotakTickNormalizer
 from stock_brokers.instruments.ticks.shoonya import ShoonyaTickNormalizer
+from stock_brokers.instruments.ticks.stoxkart import StoxkartTickNormalizer
 from stock_brokers.instruments.ticks.wisdom_capital import WisdomCapitalTickNormalizer
 from stock_brokers.instruments.ticks.zerodha import ZerodhaTickNormalizer
 
-# Every broker with a market feed. Stoxkart has none, so it has no normalizer.
 NORMALIZERS = {
     "zerodha": ZerodhaTickNormalizer,
     "dhan": DhanTickNormalizer,
@@ -28,6 +28,7 @@ NORMALIZERS = {
     "wisdom_capital": WisdomCapitalTickNormalizer,
     "groww": GrowwTickNormalizer,
     "indmoney": IndmoneyTickNormalizer,
+    "stoxkart": StoxkartTickNormalizer,
 }
 
 def build_normalizers(brokers=None):
