@@ -52,8 +52,7 @@ the newer of the newest `observed_at` in it and the last successful poll, which 
 - `unreadable` - the key is not a hash, or no entry in it holds an order.
 
 Written with SET every half second. Runs until Ctrl+C or SIGTERM; a Redis that cannot be reached is logged and tried
-again. Reads only - it never places, modifies or cancels an order. Stoxkart streams no order updates, so its hash has
-only the one writer, `bin/stoxkart/orders`.
+again. Reads only - it never places, modifies or cancels an order.
 """
 
 import sys

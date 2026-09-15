@@ -37,7 +37,7 @@ systemctl --user enable --now unified@orders.service
 The combiners resolve each broker's token to a unified instrument through the mapping cache
 (`unified:broker_tokens`, and `unified:instrument_symbols` for Groww, which sends no token), and price
 holdings and positions from `unified:quotes:live`. Until `map_instruments` has written that cache nothing
-resolves, and every order, trade and position carries a null `instrument_id`. Stoxkart streams no order updates, so its orders reach `orders` only through `bin/stoxkart/orders`, which polls once a second.
+resolves, and every order, trade and position carries a null `instrument_id`.
 
 ## The portfolio and order documents
 
@@ -161,8 +161,8 @@ another broker streaming the same instrument is a standby.
 
 - Priority is Zerodha, Dhan, Kotak, Flattrade, Shoonya, Fyers, Wisdom Capital, Groww, INDmoney, Stoxkart -
   without INDmoney on MCX, and only Shoonya and Wisdom Capital on NCDEX - with verified brokers ahead of
-  unverified ones. Zerodha is the only verified broker. Stoxkart is last because its quotes are polled
-  once a second rather than streamed.
+  unverified ones. Zerodha is the only verified broker. Stoxkart is last; its feed is the undocumented
+  broadcast websocket of Stoxkart's trading website, which Stoxkart may change without notice.
 - A new instrument goes at once to the top verified broker; any other waits 5 seconds for a better one.
 - The owner loses it when its stream has been silent for 45 seconds, or when it has sent nothing for that
   instrument for 60 seconds while a standby sent it 3 times. The best healthy standby takes over.
@@ -217,7 +217,7 @@ only when no verified broker streams it, until a live session confirms what is m
 | Fyers | `prev_close_price`, always | lots (unconfirmed) | both | Protocol only; nothing stored yet. Currency derivatives left out |
 | Groww | not used until confirmed | NSE and BSE only | exchange time | Protocol only; nothing stored yet |
 | INDmoney | not used - `close` is the last price | NSE and BSE only | both true instants | In-session NSE ticks, 2026-09-15, agree with Zerodha on price, volume and times; no order book quantities |
-| Stoxkart | `close` before the session ends | lots | trade time only, counted from 1980 and converted by `bin/stoxkart/quotes` | Polled REST quotes, 2026-09-15, agree with Zerodha in the same second on close (TCS 2200.80, HDFCBANK 708.25, CRUDEOIL SEP 9717), NSE volume, MCX volume and open interest in lots (6385 and 15677) and last trade time; no order book totals |
+| Stoxkart | `close` before the session ends, from the previous close packet | lots | both true instants on NSE, counted from 1980 and converted by `bin/stoxkart/quotes`; no exchange time on MCX | Streamed broadcast ticks, 2026-09-15, agree with Zerodha at the same moment on last price, volume, average price, OHLC and previous close (TCS, RELIANCE, HDFCBANK, CRUDEOIL SEP), total bid and offered quantity and first depth level (RELIANCE, HDFCBANK, CRUDEOIL), MCX open interest in lots (15634), last trade time and NSE exchange time |
 
 Where a broker's `close` is not used, the previous close carries forward from whichever broker owned
 the instrument earlier that day, and is null if none did. `bin/unified/quotes` carries these normalizers
@@ -226,11 +226,12 @@ itself, in `build_normalizers`; the same facts are stated for the REST API's bro
 
 ## Order and position updates: `order_updates`
 
-`order_updates` reads the order update streams of the nine brokers other than Stoxkart, which streams no
-order updates, and the four position update streams (Fyers, Groww, Kotak, Wisdom Capital) as the group
-`unified`. An order update is normalized as the broker's own
-script normalizes it, then given `broker`, `instrument_id` and `observed_at`; a position update is built
-into the REST position contract as `positions` builds one, with `broker`, `position_key`, `basis` and
+`order_updates` reads the order update streams of all ten brokers and the four position update streams
+(Fyers, Groww, Kotak, Wisdom Capital), fourteen streams in all, as the group `unified`. Stoxkart streams
+no position updates. An order update is normalized as the broker's own script normalizes it, except that
+Stoxkart's entry already carries the normalized `order` its script built, which is used as it is. The
+order is then given `broker`, `instrument_id` and `observed_at`; a position update is built into the REST
+position contract as `positions` builds one, with `broker`, `position_key`, `basis` and
 `observed_at`. Neither is merged with anything else.
 
 | Key | Type | Holds |

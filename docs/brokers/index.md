@@ -42,13 +42,17 @@ implementations.
     data token with `bin/wisdom_capital/historical_prices` through the Redis key
     `wisdom_capital:session:marketdata`.
 
-=== "Polled"
+=== "Website feeds"
 
-    **Stoxkart** streams nothing. Its documented binary quote websocket at `ws://inmob.stoxkart.com:7763`
-    refused connections on 2026-09-15, so `bin/stoxkart/quotes` polls `POST /quotes` once a second
-    instead, asking for up to 50 instruments of one exchange per request. Stoxkart delivers order status
-    only to a Postback URL registered on the API app, so there is no `order_updates` script, and its
-    orders reach Redis only through the one-second `orders` poller.
+    **Stoxkart** streams through the two websockets its own trading website uses, found by watching
+    `webtrade.stoxkart.com` in Chrome DevTools on 2026-09-15. Its documented binary quote websocket at
+    `ws://inmob.stoxkart.com:7763` refused connections that day, so `bin/stoxkart/quotes` streams the
+    website's broadcast feed at `wss://broadcasting-v2.stoxkart.com/`, which needs no login and uses
+    request codes 12 and 23 rather than the documented 71 to 76. Stoxkart documents only a Postback URL for
+    order status, so `bin/stoxkart/order_updates` authenticates the API session at
+    `https://openapi-v2.stoxkart.com/websocket/authenticate` and opens the website's order socket, which
+    allows one connection per client. Neither feed is documented for API users, so Stoxkart may change
+    them without notice.
 
 ## Per-broker notes
 
@@ -63,7 +67,7 @@ implementations.
 | Kotak | Selenium + TOTP | Streams positions; its instrument master URL is stamped with today's date; its feed is the binary HSM protocol of Kotak's own SDK, which wants data frames acknowledged and sends MCX quantities in Kotak's lots |
 | IND Money | Token | - |
 | Wisdom Capital | Token | XTS; separate market data credentials, REST subscription, socket.io transport, and `apiType=INTERACTIVE` required in the order socket's query |
-| Stoxkart | REST + TOTP | Its version 2 login needs a publisher key pair in `publisher_api_key` and `publisher_api_secret` beside the app's own key; quotes are polled over REST and orders arrive only through the poller; placing an order is refused with `invalid algo_id`, so it is kept out of order rotation |
+| Stoxkart | REST + TOTP | Its version 2 login needs a publisher key pair in `publisher_api_key` and `publisher_api_secret` beside the app's own key; quotes and order updates stream from its trading website's websockets, and the order socket allows one connection per client; placing an order is refused with `invalid algo_id`, so it should be kept out of order rotation |
 
 See the [coverage matrix](coverage.md) for what each broker supports subsystem by subsystem,
 and [Pitfalls](../contributing/pitfalls.md#feeds-one-refusal-per-broker) for the way each of

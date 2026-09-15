@@ -11,9 +11,9 @@ Combine every broker's order and position update streams into unified ones, and 
 
 Nothing here calls a broker. Each broker's `bin/<broker>/order_updates` appends every update its websocket delivers to a
 Redis Stream, as `{"timestamp", "data": <the broker's payload>}`: orders to `<broker>:order-updates:stream` (field
-`update`) for dhan, flattrade, fyers, groww, indmoney, kotak, shoonya, wisdom_capital and zerodha, and positions to
+`update`) for dhan, flattrade, fyers, groww, indmoney, kotak, shoonya, stoxkart, wisdom_capital and zerodha, and positions to
 `<broker>:positions_updates:stream` (field `position`) for the four that stream positions - fyers, groww, kotak and
-wisdom_capital. This reads all thirteen streams as the consumer group `unified`, apart from the `persist` group the
+wisdom_capital. Stoxkart's entries also carry the normalized `order` its script built, which is used as it is. This reads all fourteen streams as the consumer group `unified`, apart from the `persist` group the
 persisters read them with, so neither disturbs the other.
 
 **An order update** is normalized exactly as that broker's own `bin/<broker>/order_updates` normalizes it before merging
@@ -57,8 +57,8 @@ observed before the latest 06:00 goes to the unified stream but not into the has
 today's. The unified streams are capped at about 50,000 entries each.
 
 Runs until Ctrl+C or SIGTERM; a Redis that cannot be reached is retried with backoff. Reads only - it places no orders.
-Stoxkart is not included: its API streams no order or position updates, so it has neither stream, and its orders and
-positions reach the unified documents only through `bin/unified/orders` and `bin/unified/positions`.
+Stoxkart streams order updates but no position updates, so its positions reach the unified documents only through
+`bin/unified/positions`.
 """
 
 import sys
@@ -77,8 +77,35 @@ from utilities.bootstrap import run_under_venv
 
 PROJECT_ROOT = run_under_venv(__file__)
 
-ORDER_BROKERS = ("dhan", "flattrade", "fyers", "groww", "indmoney", "kotak", "shoonya", "wisdom_capital", "zerodha")
+ORDER_BROKERS = ("dhan", "flattrade", "fyers", "groww", "indmoney", "kotak", "shoonya", "stoxkart", "wisdom_capital", "zerodha")
 POSITION_BROKERS = ("fyers", "groww", "kotak", "wisdom_capital")
+
+STOXKART_ORDER_FIELDS = (
+    "order_id",
+    "exchange_order_id",
+    "parent_order_id",
+    "status",
+    "status_message",
+    "id",
+    "instrument_token",
+    "tradingsymbol",
+    "exchange",
+    "transaction_type",
+    "product",
+    "order_type",
+    "validity",
+    "quantity",
+    "filled_quantity",
+    "pending_quantity",
+    "cancelled_quantity",
+    "disclosed_quantity",
+    "price",
+    "trigger_price",
+    "average_price",
+    "order_timestamp",
+    "exchange_timestamp",
+    "tag",
+)
 
 ORDERS_STREAM_KEY = "unified:order-updates:stream"
 ORDERS_HASH_KEY = "unified:order-updates"
@@ -966,13 +993,32 @@ def fyers_venue(symbol, segment):
     prefix = str(symbol or "").partition(":")[0]
     return (prefix.lower() or None, FYERS_SEGMENT_KINDS.get(str(segment)))
 
-def order_update(broker, data, received_at):
+def stoxkart_order_from_entry(normalized):
+    """Returns the normalized order `bin/stoxkart/order_updates` stored in a stream entry.
+
+    Stoxkart's update format had not been seen when its script was written, so the script normalizes each update with field-name fallbacks and stores the result as the entry's `order`, and that order is used here rather than a second copy of the normalizer.
+
+    Args:
+        normalized (object): The entry's `order`.
+
+    Returns:
+        dict | None: The order with every contract field present, or None when the entry holds no order with an order id.
+    """
+    if not isinstance(normalized, dict) or not normalized.get("order_id"):
+        return None
+    order = {}
+    for field in STOXKART_ORDER_FIELDS:
+        order[field] = normalized.get(field)
+    return order
+
+def order_update(broker, data, received_at, normalized=None):
     """
     A broker's order payload as `(order, venue)`, or None when it is not an order.
 
     - `broker` is the broker name.
     - `data` is the payload from the broker's stream.
     - `received_at` is the epoch the broker's script received it.
+    - `normalized` is the normalized order the broker's script stored beside the payload, which only Stoxkart's does.
     """
     if broker == "dhan":
         order = dhan_order_from_update(data)
@@ -988,6 +1034,9 @@ def order_update(broker, data, received_at):
         return order and (order, venue(order["exchange"]))
     if broker == "kotak":
         order = kotak_normalized_order(data)
+        return order and (order, venue(order["exchange"]))
+    if broker == "stoxkart":
+        order = stoxkart_order_from_entry(normalized)
         return order and (order, venue(order["exchange"]))
     if broker == "wisdom_capital":
         order = wisdom_capital_normalized_order(data)
@@ -1522,7 +1571,7 @@ class UnifiedUpdates:
             if not isinstance(data, dict):
                 return None
             if kind == "order":
-                found = order_update(broker, data, observed_at)
+                found = order_update(broker, data, observed_at, entry.get("order"))
                 if not found:
                     return None
                 order, (exchange, venue_kind) = found

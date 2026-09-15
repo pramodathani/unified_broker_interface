@@ -5,10 +5,13 @@
 #     systemctl --user link ~/Projects/unified_broker_interface/services/stoxkart/*
 #     systemctl --user daemon-reload
 #     systemctl --user enable --now stoxkart.target stoxkart-login.timer \
-#         stoxkart@quotes.service stoxkart@persist_ticks.service stoxkart@orders.service stoxkart@trades.service stoxkart@positions.service stoxkart@holdings.service stoxkart@funds.service stoxkart@user-profile.service
+#         stoxkart@quotes.service stoxkart@order_updates.service stoxkart@persist_ticks.service stoxkart@persist_orders.service stoxkart@orders.service stoxkart@trades.service stoxkart@positions.service stoxkart@holdings.service stoxkart@funds.service stoxkart@user-profile.service
 #
-# There is no stoxkart@order_updates.service or stoxkart@persist_orders.service, because Stoxkart's API streams no
-# order updates, and no stoxkart-historical-prices.service, because Stoxkart has no candle endpoint.
+# There is no stoxkart@persist_positions.service, because Stoxkart streams no position updates, and no
+# stoxkart-historical-prices.service, because Stoxkart has no candle endpoint.
+#
+# stoxkart@order_updates holds Stoxkart's one order socket per client, so a Stoxkart website or app logged in to the same
+# account knocks it off; the script then waits five minutes before reclaiming it.
 
 [Unit]
 Description=stoxkart scripts

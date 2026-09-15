@@ -65,8 +65,8 @@ the unified keys only while that broker's target is running.
 ### What each broker enables
 
 Every broker enables `quotes`, `persist_ticks`, `orders`, `trades`, `positions`, `holdings` and `funds`
-as `<broker>@` instances, plus its login timer. Every broker except Stoxkart also enables
-`persist_orders`. The rest differ, as the target files list them:
+as `<broker>@` instances, plus its login timer, and every broker also enables `persist_orders`. The rest
+differ, as the target files list them:
 
 | Broker | `@order_updates` | `@persist_positions` | `@user-profile` | `-historical-prices` |
 | --- | --- | --- | --- | --- |
@@ -77,7 +77,7 @@ as `<broker>@` instances, plus its login timer. Every broker except Stoxkart als
 | indmoney | yes | - | yes | yes |
 | kotak | yes | yes | - | - |
 | shoonya | yes | - | yes | yes |
-| stoxkart | **no** | - | yes | - |
+| stoxkart | yes | - | yes | - |
 | wisdom_capital | yes | yes | yes | yes |
 | zerodha | yes | - | yes | yes |
 
@@ -86,8 +86,9 @@ websocket. Kotak has no `user-profile` script because it has no profile endpoint
 writes the profile from the login response instead. Flattrade's `order_updates` is left out on
 purpose: Flattrade permits one websocket per session and `flattrade@quotes` holds it, so enabling both
 would knock one of them off. See [Known issues](../contributing/known-issues.md#broker-limits).
-Stoxkart has no `order_updates` or `persist_orders` script at all, because it delivers order status only
-to a Postback URL registered on its API app, and its `quotes` is a REST poller rather than a websocket.
+Stoxkart keeps one order socket per client, so `stoxkart@order_updates` and a Stoxkart website or app
+logged in to the same account knock each other off; the script then waits five minutes before reclaiming
+the socket. Stoxkart has no `persist_positions`, because it streams no position updates.
 
 !!! warning "Linger is not optional"
 

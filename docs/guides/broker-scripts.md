@@ -49,9 +49,9 @@ how each is derived from the broker's own names, and its exit codes. Only `quote
 | `user-profile` | yes | yes | yes | yes | yes | yes | yes | yes | - | yes |
 | `orders`, `trades`, `holdings`, `positions`, `funds` | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
 | `quotes` | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
-| `order_updates` | yes | yes | yes | yes | yes | yes | yes | yes | yes | - |
+| `order_updates` | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
 | `persist_ticks` | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
-| `persist_orders` | yes | yes | yes | yes | yes | yes | yes | yes | yes | - |
+| `persist_orders` | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
 | `persist_positions` | - | - | - | - | yes | - | yes | yes | yes | - |
 | `instruments` | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
 | `historical_prices` | yes | yes | yes | yes | yes | yes | yes | - | - | - |
@@ -62,13 +62,13 @@ The gaps follow the brokers:
   writes `kotak:user:details` on a run that actually logged in, and there is no `user-profile` script.
 - **Groww, Kotak and Stoxkart** have no `historical_prices`, and so no `<broker>-historical-prices.service`.
 - **`persist_positions`** exists only for the four brokers whose `order_updates` socket carries
-  positions: Fyers, Wisdom Capital, Groww (derivatives positions only) and Kotak. The other five stream
+  positions: Fyers, Wisdom Capital, Groww (derivatives positions only) and Kotak. The other six stream
   orders alone, and their positions come only from the `positions` poller.
-- **Stoxkart** has no `order_updates` and so no `persist_orders`. Stoxkart delivers order status only
-  to a Postback URL registered on the API app, which needs a public web server, so its orders reach
-  `stoxkart:orders:orders` only through the one-second `orders` poller. Its `quotes` is a REST poller
-  rather than a websocket, because the documented quote websocket could not be reached on 2026-09-15;
-  see [Stoxkart's quotes are polled](#stoxkarts-quotes-are-polled).
+- **Stoxkart**'s `quotes` and `order_updates` use the two websockets Stoxkart's own trading website
+  uses, found by watching `webtrade.stoxkart.com` in Chrome DevTools on 2026-09-15, rather than the
+  documented quote websocket, which could not be reached, and the documented Postback URL, which needs a
+  public web server. See [Stoxkart's quote feed](#stoxkarts-quote-feed) and
+  [Stoxkart's order socket](#stoxkarts-order-socket).
 
 ## Sessions
 
@@ -226,33 +226,70 @@ systemctl --user restart zerodha@quotes
 | wisdom_capital | `SEGMENT:EXCHANGEINSTRUMENTID` - 1 NSECM, 2 NSEFO, 3 NSECD, 4 NSECO, 11 BSECM, 12 BSEFO, 13 BSECD, 21 NCDEX, 51 MCXFO | `1:2885` |
 | groww | `EXCHANGE|SEGMENT|EXCHANGE_TOKEN` - `NSE` or `BSE`, `CASH` or `FNO`; an index by name | `NSE|CASH|2885` |
 | kotak | `EXCHANGE|TOKEN` with lowercase segments - `nse_cm`, `bse_cm`, `nse_fo`, `bse_fo`, `cde_fo`, `nse_com`, `bse_cd`, `bse_co`, `mcx_fo` - and the `pSymbol` | `nse_cm|11536` |
-| stoxkart | `EXCHANGE:TOKEN` - `NSE`, `BSE`, `NFO`, `BFO`, `NSECD`, `BSECD`, `MCX`, `NCDEX`; `BSECD` and `NCDEX` were refused as invalid on 2026-09-15 | `NSE:2885` |
+| stoxkart | `EXCHANGE:TOKEN` - `NSE`, `NFO`, `BSE`, `MCX`; the script refuses `NSECD`, `BSECD`, `BFO` and `NCDEX`, whose broadcast segments are unconfirmed | `NSE:2885` |
 
 Groww's feed has no subjects for commodities, so `COMMODITY` members are skipped. A feed with nothing to
 subscribe to exits 2, which its unit does not restart.
 
-### Stoxkart's quotes are polled
+### Stoxkart's quote feed
 
-Stoxkart documents a binary quote websocket at `ws://inmob.stoxkart.com:7763`. On 2026-09-15 that port
-refused connections, and port 443 on the same host answered the handshake with HTTP 503 from an AWS load
-balancer with nothing behind it. `bin/stoxkart/quotes` therefore polls `POST https://openapi.stoxkart.com/quotes`
-instead, which answers for up to 50 instruments of one exchange in about 110 ms. It writes the same three
-keys as the websocket feeds, but only a quote that changed since the last cycle is written, so a quiet
-instrument does not fill the stream. A tick arrives up to one interval after the trade it describes.
+Stoxkart documents a binary quote websocket at `ws://inmob.stoxkart.com:7763`, which could not be reached
+on 2026-09-15. `bin/stoxkart/quotes` instead streams from `wss://broadcasting-v2.stoxkart.com/` on port
+443, the feed Stoxkart's own trading website uses. The feed takes no login: the token field of the
+connection header is left blank, exactly as the website sends it. It is not documented for API users, so
+Stoxkart may change it without notice, and the REST poller it replaced is kept in git history as a
+fallback.
 
-The script takes these options instead of `--per-socket`:
+The protocol is Stoxkart's little-endian binary broadcast format. Every request starts with an 83-byte
+header of a request code, the message length, a 30-byte client name and a blank 50-byte token. The script
+sends the connection request (code 10), then for each instrument a trade subscription (code 12) and a
+depth subscription (code 23), each 129 bytes long. Every answer is a run of packets, and each packet
+starts with an 11-byte header of segment, scrip id, a second id, length and packet code. The script reads
+these packets and skips the rest:
 
-| Option | Default | What it sets |
+| Code | Packet | Fields used |
 | --- | --- | --- |
-| `--tokens` | the subscription set | A comma-separated list of `EXCHANGE:TOKEN` instruments |
-| `--interval` | 1 s | The time from the start of one cycle to the start of the next |
-| `--requests-per-second` | 8 | The most requests sent in a second, below Stoxkart's documented limit of 10 |
+| 1 | trade | last price, last quantity, volume, average price, open interest, last trade time, last update time |
+| 2 | depth | five levels of bid and ask quantity, orders and price |
+| 3 | OHLC | open, high and low |
+| 6 | top of book | total quantity offered and total quantity bid |
+| 32 | previous close | the previous session's close |
+
+The script sends the text `ping` every five seconds and answers Stoxkart's with `pong`. A socket that is
+silent for 30 seconds, or that sends the text `reconnect`, is closed and opened again, with a backoff from
+1 to 60 seconds between failed connections. Stoxkart sends an instrument's packets together in one frame,
+so the script writes one tick per instrument per frame, and only when the tick has changed. It takes
+`--tokens` as its only option, and no `--per-socket`.
+
+The script accepts four exchanges, whose broadcast segments are NSE 1, NFO 2, BSE 4 and MCX 5. It refuses
+`NSECD`, `BSECD`, `BFO` and `NCDEX` instruments, because no trade packet was seen for them on 2026-09-15
+and their segment numbers are unconfirmed.
+
+The tick's fields that need more than a copy are these:
+
+| Field | How it is made |
+| --- | --- |
+| `buy_quantity`, `sell_quantity` | The total quantity bid and offered, from the top of book packet |
+| `ohlc.close` | The previous close packet |
+| `change` | The percentage change of the last price against the previous close |
+| `last_trade_time` | The trade packet's last trade time plus 315532800, because Stoxkart counts seconds from 1980-01-01 UTC; null when 0 |
+| `exchange_timestamp` | The trade packet's last update time plus 315532800 less 19800, because it counts India wall-clock seconds from 1980; null on MCX, where Stoxkart sends 0 |
+| prices | 32-bit floats in rupees, rounded to four decimal places |
 
 A tick's `instrument_token` is `EXCHANGE:TOKEN`, and its `id` is `EXCHANGE:SYMBOL` from
-`stoxkart:instruments:master`. A future or option is named by its `symbol_description` when that begins
-with its symbol, as in `NFO:NIFTY26SEPFUT`, and a commodity contract is named from its symbol, expiry,
-strike and option type, as in `MCX:CRUDEOIL21SEP26FUT`. The subscription set was seeded on 2026-09-15 with
-the same 15 instruments as Zerodha's.
+`stoxkart:instruments:master`. A future or option is named by its `symbol_description` only when that
+begins with its symbol, is longer than it, has no space and contains a digit, as in `NFO:NIFTY26SEPFUT`.
+Any other contract is named from its symbol, expiry as `DDMONYY`, strike and `CE`, `PE` or `FUT`, as in
+`MCX:CRUDEOIL21SEP26FUT`, `MCX:GOLD05OCT26FUT` and `MCX:COPPER30SEP26FUT`. Earlier on 2026-09-15 the MCX
+GOLD, SILVER, COPPER and ZINC futures were stored under names such as `MCX:GOLD 995` and `MCX:COPPER`, and
+those `stoxkart.ticks` rows were renamed by token. The subscription set was seeded on 2026-09-15 with the
+same 15 instruments as Zerodha's.
+
+On 2026-09-15 the feed was compared with Zerodha's ticks at the same moment. TCS, RELIANCE, HDFCBANK and
+CRUDEOIL SEP matched on last price, volume, average price, OHLC and previous close, and RELIANCE, HDFCBANK
+and CRUDEOIL matched on total bid and offered quantity and on the first depth level. CRUDEOIL's open
+interest read 15634 at both, in MCX lots, the last trade time matched to the second, and the NSE exchange
+time matched for TCS and RELIANCE.
 
 ### Order updates
 
@@ -268,13 +305,40 @@ update is also appended to a stream, so the history the hashes overwrite is kept
 
 Updates arrive only when an order or position changes, so a quiet socket is not a broken one.
 
+### Stoxkart's order socket
+
+Stoxkart's API documentation offers only a Postback URL for order status, which would need a public web
+server. `bin/stoxkart/order_updates` uses the order socket Stoxkart's trading website uses instead, and
+that socket accepted the API app's own session on 2026-09-15. The script connects in three steps:
+
+1. It sends `POST https://openapi-v2.stoxkart.com/websocket/authenticate` with the headers `x-client-id`
+   (the `ucc_code` setting), `x-access-token` (the API access token), `x-platform: api` and `x-api-key`.
+   Stoxkart answers "Authentication successful, server ready to accept WS" with a `data.RequestId`. The
+   same token with `x-platform: web` is refused with `AuthorizationError`, so this is access for the API
+   platform rather than the website's.
+2. It opens `wss://openapi-v2.stoxkart.com/websocket/v2/connect?x-client-id=<client>&x-platform=api&RequestId=<id>`.
+3. It sends `{"type":"heartbeat"}` on connecting and every 30 seconds after. Updates arrive as JSON.
+
+Stoxkart keeps one order socket per client. A new connection closes the older one with a close reason
+containing `new incoming connection`, so the script and a logged-in Stoxkart website or app knock each
+other off. When that happens the script waits five minutes before reclaiming the socket.
+
+No update had arrived by 2026-09-15, because no order could be placed through the API (Stoxkart refused
+each with `invalid algo_id`), so the fields of an update are unconfirmed. The script normalizes an update
+with the order book's field names and fallbacks, such as `status` or `order_status` and `action` or
+`transaction_type`, and logs every message at INFO so the first real update shows its shape in the
+journal. An update carrying an `order_id` is merged into `stoxkart:orders:orders` with source `websocket`
+and appended to `stoxkart:order-updates:stream` as `{"timestamp", "order": <normalized order>, "data": <the update>}`.
+Unlike the other brokers' streams, the entry carries the normalized `order`, which
+`bin/unified/order_updates` uses as it is.
+
 ## Persisters
 
 `persist_ticks`, `persist_orders` and `persist_positions` read their stream as the consumer group
 `persist` and write to the broker's hypertable with COPY, a batch at a time. Each applies its broker's
 `<NNN>_<broker>_streams.sql` in `stock_brokers/instruments/ticks/utilities/sql/ddl` when it starts - `010`
 Zerodha through `100` Stoxkart, holding that broker's `ticks`, `order_updates` and, where it streams
-them, `positions`, except Stoxkart's, which holds only `ticks` - so a new database needs no separate step, and a start that cannot apply it exits 1. Each takes `--batch-size` and `--flush-interval`, and `persist_ticks` writes a batch when it
+them, `positions` - so a new database needs no separate step, and a start that cannot apply it exits 1. Each takes `--batch-size` and `--flush-interval`, and `persist_ticks` writes a batch when it
 holds `--batch-size` ticks or has waited `--flush-interval` seconds, whichever comes first.
 
 | Script | Stream | Table |
@@ -361,8 +425,9 @@ systemctl --user enable --now zerodha.target zerodha-login.timer \
 
 The other targets list the same set adjusted for the matrix above: `@persist_positions` for Fyers, Groww,
 Kotak and Wisdom Capital, no `@user-profile` for Kotak, and no historical prices service for Groww,
-Kotak or Stoxkart. `stoxkart.target` also has no `@order_updates` or `@persist_orders`, because Stoxkart
-streams no order updates. `bin/<broker>/instruments` has no unit here; it runs from `unified-instruments.service`.
+Kotak or Stoxkart. `stoxkart.target` enables `@quotes`, `@order_updates`, `@persist_ticks`,
+`@persist_orders`, `@orders`, `@trades`, `@positions`, `@holdings`, `@funds` and `@user-profile`, plus
+`stoxkart-login.timer`. `bin/<broker>/instruments` has no unit here; it runs from `unified-instruments.service`.
 
 !!! warning "Flattrade leaves `order_updates` out"
 

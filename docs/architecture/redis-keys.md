@@ -19,8 +19,7 @@ The keys come in three kinds:
 ## Per broker
 
 `<broker>` is one of `dhan`, `flattrade`, `fyers`, `groww`, `indmoney`, `kotak`, `shoonya`, `stoxkart`,
-`wisdom_capital` and `zerodha`. Stoxkart has no `order_updates` script, so it writes no
-`order-updates:stream`, and its `orders:orders` hash has the poller as its one writer.
+`wisdom_capital` and `zerodha`.
 
 ### Session and profile
 
@@ -50,7 +49,7 @@ with `wisdom_capital:session:marketdata:lock` held while one of them replaces a 
 | `<broker>:orders:orders` | hash, keyed by the broker's order id | `bin/<broker>/orders` and `bin/<broker>/order_updates` | `{"observed_at", "source", "order", "data"}` per order |
 | `<broker>:orders:orders:polled_at` | string | `bin/<broker>/orders` | When the order book was last read successfully, epoch seconds |
 | `<broker>:orders:trades` | string | `bin/<broker>/trades` | `{"timestamp", "status", "code", "data"}`, the day's trade book under `data` |
-| `<broker>:order-updates:stream` | stream, field `update` | `bin/<broker>/order_updates` | Every order update as `{"timestamp", "data"}`, capped at about 20,000 |
+| `<broker>:order-updates:stream` | stream, field `update` | `bin/<broker>/order_updates` | Every order update as `{"timestamp", "data"}`, with the normalized `order` added at Stoxkart, capped at about 20,000 |
 
 `orders:orders` is the one hash for a broker's orders, merged from two writers. `source` is `rest` or
 `websocket`, `order` is the order normalized onto the shared vocabulary - status `PENDING`, `OPEN`,
@@ -63,7 +62,7 @@ is never overwritten by the older snapshot. The check and the write run together
 was read. Both keys expire at 06:00 IST, and every write moves that to the next 06:00, so yesterday's
 orders stay readable overnight and the first poll of the day starts afresh.
 
-The stream is written by the `order_updates` scripts of the nine brokers other than Stoxkart. It is read by
+The stream is written by the `order_updates` scripts of all ten brokers. It is read by
 `bin/<broker>/persist_orders` into `<broker>.order_updates`, and by `bin/unified/order_updates`.
 Flattrade's `order_updates` script exists but is not run, since Flattrade permits one websocket per
 session and its quotes script holds it.
@@ -97,7 +96,7 @@ at Stoxkart, which documents a limit of one request a second and is polled every
 | Key | Type | Written by | Holds |
 | --- | --- | --- | --- |
 | `<broker>:quotes:subscriptions` | set | you | The instruments `bin/<broker>/quotes` subscribes to when none are passed on its command line |
-| `<broker>:quotes:live` | hash, keyed by instrument name | `bin/<broker>/quotes` | The latest tick per instrument; Stoxkart's poller writes only a quote that changed |
+| `<broker>:quotes:live` | hash, keyed by instrument name | `bin/<broker>/quotes` | The latest tick per instrument; Stoxkart's feed writes a tick only when it changed |
 | `<broker>:quotes:instruments` | hash | `bin/<broker>/quotes` | Every subscribed token to its name, or to an empty string when unnamed; replaced whole at startup |
 | `<broker>:quotes:stream` | stream, field `tick` | `bin/<broker>/quotes` | Every tick in arrival order, capped at about 100,000 |
 

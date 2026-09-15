@@ -151,21 +151,26 @@ hear from us and how long it will wait, and market data asks every 20s while wai
 interactive asks every 25s but waits only 20s. Pacing on `pingInterval` alone heartbeats every
 23s into a 20s patience. Use half the shorter of the two.
 
-**Stoxkart's documented quote websocket is dead while its REST quotes work.** Stoxkart's documentation
-gives a binary quote feed at `ws://inmob.stoxkart.com:7763`. On 2026-09-15 that port refused every
-connection, and the same host on port 443 answered the websocket handshake with HTTP 503 from an AWS load
-balancer with nothing behind it, which reads like a temporary outage rather than a feed that is not there.
-In the same minutes `POST https://openapi.stoxkart.com/quotes` answered full quotes with five levels of
-depth for 50 instruments in about 110 ms, so `bin/stoxkart/quotes` polls that instead of streaming. Two other names were tried the same day and
-failed too: `superapi.stoxkart.com` has no DNS record, and `superrapi.stoxkart.com` is the Superr marketing
-site, whose websocket handshakes timed out on every path tried and whose ports 7763, 9443, 9444 and 9964 are
-closed.
+**Stoxkart's documented quote websocket is dead.** Stoxkart's documentation gives a binary quote feed at
+`ws://inmob.stoxkart.com:7763`. On 2026-09-15 that port refused every connection, and the same host on port
+443 answered the websocket handshake with HTTP 503 from an AWS load balancer with nothing behind it. Two
+other names were tried the same day and failed too: `superapi.stoxkart.com` has no DNS record, and
+`superrapi.stoxkart.com` is the Superr marketing site, whose websocket handshakes timed out on every path
+tried and whose ports 7763, 9443, 9444 and 9964 are closed.
 
-**Stoxkart's `buy_quantity` and `sell_quantity` are the best bid and ask sizes.** At Zerodha and most other
-brokers those names mean the total quantity bid and offered across the whole order book, and a tick's
-`buy_quantity` and `sell_quantity` carry that meaning. Stoxkart's fields of the same name equal the
-quantity at the first level of its depth, so copying them across would put a top-of-book size where every
-reader expects a total. `bin/stoxkart/quotes` stores null for both.
+**Stoxkart's working quote feed is not the documented one.** Stoxkart's own trading website,
+`webtrade.stoxkart.com`, streams quotes from `wss://broadcasting-v2.stoxkart.com/` on port 443, which was
+found by watching the website in Chrome DevTools. It is a different host from the API documentation's, it
+takes a blank token, and it subscribes with request codes 12 (trade) and 23 (depth) rather than the
+documented 71 to 76, so a script written from the documentation alone gets nothing from it.
+`bin/stoxkart/quotes` sends what the website sends.
+
+**Stoxkart's order socket evicts the older connection.** Stoxkart keeps one order socket per client, and a
+new connection closes the older one with a close reason containing `new incoming connection`. A logged-in
+Stoxkart website or app therefore knocks `bin/stoxkart/order_updates` off, and a script that reconnects at
+once knocks the person off in turn, over and over. The script waits five minutes before reclaiming the
+socket. The socket's authentication must also send `x-platform: api`, because the same API token with
+`x-platform: web` is refused with `AuthorizationError`.
 
 **Stoxkart counts `last_trade_time` from 1980, not 1970.** Its `last_trade_time` is a count of seconds
 from 1980-01-01 UTC, so read as a Unix time it lands ten years in the past and still looks like a

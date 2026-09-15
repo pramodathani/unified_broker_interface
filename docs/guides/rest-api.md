@@ -784,9 +784,9 @@ curl -s -X DELETE "localhost:8080/api/orders/cancel?order_id=26091500012345&brok
 
 An order becomes cancellable only once its broker's scripts have recorded it. The poller reads the order book
 every half second, every five seconds at Fyers and every second at Stoxkart, and the websocket records an
-order as the broker pushes it, so an order placed a moment ago can still be answered `404`. Stoxkart streams
-no order updates, so a Stoxkart order is found only after its poller has recorded it, and cancelling one has
-not yet been tried against a live order. Flattrade and Shoonya both number orders as the date followed by eight digits,
+order as the broker pushes it, so an order placed a moment ago can still be answered `404`. A Stoxkart order
+is found once its poller or its order socket has recorded it, and cancelling one has not yet been tried
+against a live order. Flattrade and Shoonya both number orders as the date followed by eight digits,
 so the same id can turn up at both. Such an id is answered `409` with the brokers listed, and the request is
 sent again with `broker`.
 

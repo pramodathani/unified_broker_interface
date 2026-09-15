@@ -118,7 +118,7 @@ have, naming the column - which is usually how you find out one is needed.
 !!! note "Each broker's stream tables"
 
     `stock_brokers/instruments/ticks/utilities/sql/ddl/010_zerodha_streams.sql` to
-    `100_stoxkart_streams.sql` define every broker's `ticks`, every broker's but Stoxkart's `order_updates`,
+    `100_stoxkart_streams.sql` define every broker's `ticks` and `order_updates`,
     and, for Fyers, Groww, Kotak and Wisdom Capital, `positions` - schema, table, hypertable, index and compression - and each
     `bin/<broker>/persist_*` script applies its broker's file when it starts. The persisters name their columns
     in `COPY`, so they depend on the columns existing, not on their order.

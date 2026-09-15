@@ -74,3 +74,56 @@ CALL add_columnstore_policy(
     after => INTERVAL '7 days',
     if_not_exists => TRUE
 );
+
+CREATE TABLE IF NOT EXISTS stoxkart.order_updates (
+    time                timestamptz   not null,
+    order_id            text          not null,
+    exchange_order_id   text,
+    parent_order_id     text,
+    status              text,
+    status_message      text,
+    id                  text,
+    instrument_token    text,
+    tradingsymbol       text,
+    exchange            text,
+    transaction_type    text,
+    product             text,
+    order_type          text,
+    validity            text,
+    quantity            bigint,
+    filled_quantity     bigint,
+    pending_quantity    bigint,
+    cancelled_quantity  bigint,
+    disclosed_quantity  bigint,
+    price               numeric(18,4),
+    trigger_price       numeric(18,4),
+    average_price       numeric(18,4),
+    order_timestamp     timestamptz,
+    exchange_timestamp  timestamptz,
+    tag                 text,
+    raw                 jsonb
+);
+
+SELECT create_hypertable(
+    'stoxkart.order_updates',
+    by_range('time', INTERVAL '1 day'),
+    if_not_exists => TRUE
+);
+
+CREATE INDEX IF NOT EXISTS order_updates_order_time_idx
+    ON stoxkart.order_updates (order_id, "time" DESC);
+
+CREATE INDEX IF NOT EXISTS order_updates_status_time_idx
+    ON stoxkart.order_updates (status, "time" DESC);
+
+ALTER TABLE stoxkart.order_updates SET (
+    timescaledb.enable_columnstore = true,
+    timescaledb.segmentby = 'order_id',
+    timescaledb.orderby = '"time" DESC'
+);
+
+CALL add_columnstore_policy(
+    'stoxkart.order_updates',
+    after => INTERVAL '7 days',
+    if_not_exists => TRUE
+);
