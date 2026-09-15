@@ -4,19 +4,20 @@
 
 The earlier order placement endpoint took about half a second to answer, and most of that time was the API's own work rather than the broker's. It was spread across a write service, a router, rate limits, a funds reader and one builder module per broker, and each layer added reads of its own. The user first asked for all of the placement logic to live inside the one `place` method, so that everything an order costs could be read top to bottom in one place and nothing could quietly add a round trip.
 
-On 2026-09-15 the user asked for the method to be split up again, after measuring that a Python method call costs about 16 nanoseconds against about 122 microseconds for one Redis round trip, so the split costs nothing measurable. The protection the one-method rule gave is kept by a different rule instead: every Redis read the two order routes make is in this module, and the only network call is `BrokerOrders.send` in `unified_broker_interface/utilities/broker_orders/base.py`. The broker classes are handed decoded dictionaries and read no store, so the round trips an order costs can still be counted by reading this file.
+On 2026-09-15 the user asked for the method to be split up again, after measuring that a Python method call costs about 16 nanoseconds against about 122 microseconds for one Redis round trip, so the split costs nothing measurable. The protection the one-method rule gave is kept by a different rule instead: every Redis read the order routes make is in this module, and the only network call is `BrokerOrders.send` in `unified_broker_interface/utilities/broker_orders/base.py`. The broker classes are handed decoded dictionaries and read no store, so the round trips an order costs can still be counted by reading this file.
 
 | Piece | Holds |
 | --- | --- |
 | `OrdersBlueprint` in this module | The token check, both Redis pipelines, the catalogue lookup, the turn and the answers |
-| `PlaceOrderRequest`, `CancelOrderRequest` | Validation of the body and query string, which costs no I/O |
+| `PlaceOrderRequest`, `ModifyOrderRequest`, `CancelOrderRequest` | Validation of the body and query string, which costs no I/O; the checks all three share live in `OrderRequest` |
+| `OrderModification` | A stored order with a modification's changes laid over it, which also costs no I/O |
 | `Instrument` and `TradeableSegments` | The instrument's segment, whether orders are sent for it, and its market key |
 | One `BrokerOrders` subclass per broker | The skip checks, the request, the reading of success answers and which server errors are settled refusals |
 | `BrokerOrders` itself | The HTTP call, error answers, and the accepted, rejected and unknown rules |
 
 The split was checked with `python -m test_runs.order_routes`, whose recording was made before it: all 440 scenarios, including every outgoing request's headers, body, timeout and certificate check, matched unchanged.
 
-A refusal that is answered without calling a broker is raised as `RefusedRequestError` and turned into its JSON answer in `place` and `cancel`, so each step can be a method of its own without every caller checking a returned status.
+A refusal that is answered without calling a broker is raised as `RefusedRequestError` and turned into its JSON answer in `place`, `modify` and `cancel`, so each step can be a method of its own without every caller checking a returned status.
 
 ## What an order costs
 
@@ -172,3 +173,56 @@ Kotak's official SDK, `Kotak-Neo/Kotak-neo-api-v2` (archived on 2026-09-10), bui
 | Tag field | `ig` | `rm` |
 
 Registering the IP was enough. Later that day, with 122.166.249.222 whitelisted, the same request, still without `sId` or `os` and on the session logged in at 00:00, was accepted as order 260915000204304 and filled at 41.28, in 90.4 ms at the broker. The differences above are therefore not needed today, but they are the first things to try if Kotak starts refusing this request shape. The order book showed the order's `tag` as empty although `rm` was sent, so Kotak may keep the tag only in `ig`, which has not been checked.
+
+## How `modify` was designed
+
+On 2026-09-15, straight after the place and cancel refactor, the user asked for a route to modify an order that follows that refactor. An earlier `PUT /api/orders/modify` was removed in commit 4cc8c91. It fetched the broker's live order book before every modification, which is a second broker call, and it checked neither lots nor ticks; none of its requests had been sent live. The new route keeps the rules of the other two: every Redis read is in this module, broker classes only build requests, nothing is retried, and a refusal before the broker call is a `RefusedRequestError`.
+
+The order is found as `cancel` finds it, in the `<broker>:orders:orders` hashes. That hash also supplies every value the caller does not change, because most brokers' modify requests restate the whole order. Values are read from the normalized `order` rather than from the broker's `data`, because a websocket write replaces the whole entry and several brokers' websockets name the raw fields differently from their order books. Only values that exist nowhere else are read from `data`, as `cancel` reads them: Zerodha's and Stoxkart's variety, Groww's and INDmoney's segment, Wisdom Capital's `OrderUniqueIdentifier` and Kotak's `trdSym`.
+
+### Why the quantity is in units, and how the instrument is found
+
+Three meanings for a new `quantity` were weighed with the user: units found automatically, units with the caller naming the `instrument_id`, and the broker's own quantity as `GET /details` shows it. The user chose units found automatically, so a modification means the same as a placement and cannot send an order a hundred times too large at a broker that counts lots. The stored quantity is in the broker's own terms, because orders are stored as the broker sent them, and it carries no `instrument_id`, so the instrument has to be found before a changed quantity can be converted.
+
+`resolve_order_instrument` reads `unified:catalogue:<date>:tokens:<broker>` for the stored `instrument_token` and then the candidates' identity, handles and contract size, both through `InstrumentCache`. The token hash is built from the same `broker_mappings.broker_token` column as the order handles, so matching the handle's token picks nothing out on its own. The real ambiguity is the exchange: Dhan, Noren, Stoxkart, Kotak, XTS and INDmoney number tokens per exchange segment, and Flattrade, Dhan and Stoxkart share one numbering, so one token can name an NSE and a BSE instrument. Candidates are therefore narrowed by `stored_exchange_matches`, which compares the market's code in `MARKETS` with the stored exchange, except at Fyers, Groww and INDmoney, whose order scripts store the bare exchange. The instrument counts as found only when exactly one candidate is left, because picking the first by tie-break could convert a quantity with the wrong lot size.
+
+When the instrument is not found, a price, order type or validity change is still sent without the tick check, and a quantity change is refused unless the broker takes only securities markets, where units are the broker's terms. A Redis failure while finding the instrument answers `503` rather than counting as not found, so a Redis fault can never silently skip the checks.
+
+### Contract sizes, and which checks apply
+
+The user chose that a currency or commodity order whose contract size is not trusted today may still change its price, order type or validity, and only a quantity change needs the trusted size, because only the quantity is converted. Lot checks apply only to the quantities the caller changed, and the tick check only to the prices the caller gave, since a stored value was accepted by the broker already.
+
+### How the changes are laid over the stored order
+
+A stored price is carried over only when the order type after the change takes it and the stored order type took it too. The first rule means a change from `SL` to `LIMIT` drops the trigger price instead of being refused with "a LIMIT order takes no trigger_price". The second means a change from `LIMIT` to `SL` without a trigger price is answered `400` as the caller's mistake, instead of `503` as if Redis were missing a value. A stored product, order type or validity outside the route's words, such as a bracket order or `GTT`, is answered `409`, because the per-broker code tables have no entry for it. A stored value the request needs that is missing is answered `503`, like `cancel`'s missing Groww segment.
+
+A disclosed quantity is compared with the quantity only after both are in the broker's terms, because one may be the caller's units and the other the stored broker quantity.
+
+### Statuses
+
+The same four finished statuses `cancel` refuses are refused. Restricting modifications to `PENDING` and `OPEN`, as the removed code did, was not copied, because an unrecognised status is passed through upper-cased and may still be modifiable, and the broker refuses what it will not change.
+
+### Outcomes
+
+A modification is decided by `decide_instruction_outcome`, the rules `cancel` uses: an HTTP status from 300 to 499 is `rejected`, a 5xx is `unknown`, and a 2xx is `accepted` unless its body carries a refusal. It does not require an order id, because several brokers' modify answers carry none or the same id, and an unknown modification costs the caller only a look at the order book. Zerodha's staff note that Kite's success answer is only an acknowledgement, and the change still passes risk checks afterwards.
+
+## Where each broker's modify request comes from
+
+On 2026-09-15 each broker's current modify documentation and official SDK were read before its builder was written, because the removed builders had known errors: Fyers never sent its required `type` and dropped validity silently, Kotak's used the placement keys `rt` and `pf` instead of the modify keys, and Stoxkart's sent `algo_id` as `"0"`.
+
+| Broker | Sources | What they settled |
+| --- | --- | --- |
+| Zerodha | https://kite.trade/docs/connect/v3/orders/, `pykiteconnect` `connect.py`, forum threads 8292, 1661, 15306, 9231, 11945 and 15912 | Only sent fields change; quantity is the new total, and an omitted quantity leaves the pending quantity alone, so it is sent only when changed; a stop-loss order sent only a quantity was answered success and left unchanged, so prices are restated whenever the order type takes them; `market_protection` is required on MARKET and SL-M placements since April 2026 and staff said it is available on modifications, so `-1` is sent on a change to either (an inference) |
+| Dhan | https://dhanhq.co/docs/v2/orders/, the v2 release notes, `DhanHQ-py` `_order.py` | `orderType` and `validity` are required; quantity is the placed quantity, not the pending one; `legName` is documented only for bracket and cover orders and is not sent |
+| Fyers | The OpenAPI file behind `myapi.fyers.in/docsv3`, `fyers-apiv3` 3.1.17 | `type` is mandatory; limit and stop prices are needed for the types that take them; there is no validity field; whether `qty` is the total or the remaining quantity is unconfirmed, so it is sent only when changed |
+| Groww | https://groww.in/trade-api/docs/curl/orders, `growwapi` 1.5.0 | `order_type` and `segment` are required and the SDK always sends `quantity`; validity and disclosed quantity cannot change; absent prices are sent as null, as the SDK does |
+| INDmoney | https://api-docs.indstocks.com/normal_orders/ | `order_id`, `segment`, `qty` and `limit_price` are all required, and nothing else can change |
+| Flattrade, Shoonya | https://shoonya.com/api-documentation/modify-order, https://pi.flattrade.in/docs, `NorenRestApiPy` 0.0.30 | `prd` and `trantype` are not modify fields; `exch` and `tsym` must match the order; quantity is the total; only `LMT` and `SL-LMT` can be modified to; `trgprc` must be omitted for `LMT`, because a zero trigger price is refused; the order id comes back in `result`, which `read_order_id` already reads |
+| Kotak | `Kotak-Neo/Kotak-neo-api-v2` `modify_order_api.py`, and `marketcalls/openalgo` `broker/kotak`, which modifies orders in production | The path is `quick/order/vr/modify`; validity is `vd`; the token, exchange segment, symbol, side and product are restated. The keys follow OpenAlgo's production set, which leaves out the SDK's `fq`, `am` and `os`; `ts` comes from `trdSym` because the normalized symbol falls back to the underlying's name |
+| Stoxkart | https://developers.stoxkart.com/api-documentation/orders, `StoxKart-Tech/superrapi-dotnet` | The body restates exchange and token but not `action` or `product_type`; the variety is in the path; the `X-Algo-Id` header is kept because placements need it, though the documentation mentions no Algo-ID |
+| Wisdom Capital | https://developers.symphonyfintech.in/doc/interactive/, `xts-pythonclient-api-sdk` `Connect.py` | Every `modified…` field is mandatory, so the whole order is restated |
+
+## How `modify` was checked
+
+`python -m test_runs.order_routes` gained 155 modify scenarios on 2026-09-15, recorded only after a run showed every one as `NEW` and none of the 457 existing scenarios as `CHANGED`. They cover the parameters, finding the order, what each broker can change, laying changes over the stored order, finding the instrument through a token that names instruments on two exchanges, converting commodity quantities at a lots broker and a lot-size broker, an untrusted contract size, Redis failures in each round trip, a repeat that the worker's cache answers in one round trip, and a dry run and every kind of answer at every broker. The answer scenarios give the same status, outcome and message as the matching cancel scenarios. No modification has been sent to a live broker.
+

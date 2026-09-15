@@ -1,4 +1,4 @@
-"""How the Noren platform, which Flattrade and Shoonya run, takes and cancels orders."""
+"""How the Noren platform, which Flattrade and Shoonya run, takes, modifies and cancels orders."""
 
 import json
 
@@ -6,12 +6,15 @@ from unified_broker_interface.utilities.broker_orders.base import BrokerOrders
 from unified_broker_interface.utilities.broker_orders.utilities.broker_request import (
     BrokerRequest,
 )
+from unified_broker_interface.utilities.broker_orders.utilities.stored_order import (
+    OrderNotReadyError,
+)
 
 
 class NorenOrders(BrokerOrders):
     """A Noren broker's order requests, sent as a `jData=...&jKey=...` body.
 
-    A subclass sets `BROKER_NAME`, `BASE_URL`, `ACCOUNT_SETTINGS_FIELD` and the two settings lists.
+    A subclass sets `BROKER_NAME`, `BASE_URL`, `ACCOUNT_SETTINGS_FIELD` and the three settings lists.
 
     Attributes:
         BASE_URL (str): The API's base URL.
@@ -24,6 +27,18 @@ class NorenOrders(BrokerOrders):
     BASE_URL = None
     ACCOUNT_SETTINGS_FIELD = None
     IDENTIFIER_FIELD = 'order_symbol'
+    MODIFIABLE_FIELDS = [
+        'quantity',
+        'disclosed_quantity',
+        'price',
+        'trigger_price',
+        'order_type',
+        'validity',
+    ]
+    MODIFY_ORDER_TYPES = [
+        'LIMIT',
+        'SL',
+    ]
     MARKETS = {
         ('nse', 'securities', 'cash'): 'NSE',
         ('bse', 'securities', 'cash'): 'BSE',
@@ -129,6 +144,61 @@ class NorenOrders(BrokerOrders):
         return BrokerRequest(
             'POST',
             f'{self.BASE_URL}/CancelOrder',
+            {},
+            data=self.encoded_body(noren_fields, login),
+            shown_form=noren_fields,
+        )
+
+    def build_modify_request(
+        self,
+        order_id,
+        stored_order,
+        modification,
+        login,
+        settings,
+    ):
+        """Builds `POST {BASE_URL}/ModifyOrder` with the exchange and trading symbol the order was placed with.
+
+        Noren takes the new total quantity. The trigger price is sent only for a stop-loss order, because a zero trigger price on a limit order is refused, and the disclosed quantity only when the caller changed it.
+
+        Args:
+            order_id (str): The broker's order id.
+            stored_order (StoredOrder): The order as Redis holds it.
+            modification (OrderModification): The order after the change.
+            login (dict): The broker's decoded login.
+            settings (dict): The broker's decoded settings.
+
+        Returns:
+            BrokerRequest: The request.
+
+        Raises:
+            OrderNotReadyError: When Redis does not hold the order's exchange or trading symbol.
+        """
+        if modification.exchange is None or modification.tradingsymbol is None:
+            message = (
+                "Redis does not hold this order's exchange and trading symbol yet, so try again after the broker's next order book poll"
+            )
+            raise OrderNotReadyError(message)
+        account_identifier = str(settings[self.ACCOUNT_SETTINGS_FIELD])
+        noren_fields = {
+            'ordersource': 'API',
+            'uid': account_identifier,
+            'actid': account_identifier,
+            'norenordno': order_id,
+            'exch': modification.exchange,
+            'tsym': modification.tradingsymbol,
+            'qty': str(modification.quantity),
+            'prctyp': self.ORDER_TYPE_CODES[modification.order_type],
+            'prc': modification.price_text,
+            'ret': modification.validity,
+        }
+        if modification.trigger_price is not None:
+            noren_fields['trgprc'] = modification.trigger_price_text
+        if modification.changes('disclosed_quantity'):
+            noren_fields['dscqty'] = str(modification.disclosed_quantity)
+        return BrokerRequest(
+            'POST',
+            f'{self.BASE_URL}/ModifyOrder',
             {},
             data=self.encoded_body(noren_fields, login),
             shown_form=noren_fields,

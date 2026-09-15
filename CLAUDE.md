@@ -83,7 +83,7 @@ Every package implemented once per broker holds exactly three kinds of file: `__
 | `stock_brokers/instruments/historical/` | `BrokerCandles` | Six class attributes, `fetch_candles` and `parse_response` |
 | `stock_brokers/instruments/ticks/` | `TickNormalizer` | `feed_key` and class attributes for lots, close policy and trusted timestamps |
 | `unified_broker_interface/utilities/broker_quotes/` | `BrokerQuoteSource` | Fetching a quote and turning it into a tick |
-| `unified_broker_interface/utilities/broker_orders/` | `BrokerOrders` | `MARKETS`, the place and cancel requests, and reading a success answer; the blueprint does every Redis read |
+| `unified_broker_interface/utilities/broker_orders/` | `BrokerOrders` | `MARKETS`, the place, modify and cancel requests, `MODIFIABLE_FIELDS`, and reading a success answer; the blueprint does every Redis read |
 
 Adding a broker touches many registries (`INGESTERS`, `ADAPTERS`, `MAPPED_BROKERS`, `DOWNLOADERS`, `NORMALIZERS`, `SOURCES`, `API_CLASSES`, `BROKER_ORDER_CLASSES`, and the `BROKERS` lists inside each `bin/unified/` combiner). `docs/contributing/adding-a-broker.md` lists them in order. `MAPPED_BROKERS` in `mapping/utilities/segments.py` is a processing order, not an unordered list.
 

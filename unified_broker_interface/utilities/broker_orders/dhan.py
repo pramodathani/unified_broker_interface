@@ -1,4 +1,4 @@
-"""How Dhan's v2 API takes and cancels orders."""
+"""How Dhan's v2 API takes, modifies and cancels orders."""
 
 from unified_broker_interface.utilities.broker_orders.base import BrokerOrders
 from unified_broker_interface.utilities.broker_orders.utilities.broker_request import (
@@ -21,6 +21,17 @@ class DhanOrders(BrokerOrders):
         'client_id',
     ]
     CANCEL_SETTINGS_FIELDS = []
+    MODIFY_SETTINGS_FIELDS = [
+        'client_id',
+    ]
+    MODIFIABLE_FIELDS = [
+        'quantity',
+        'disclosed_quantity',
+        'price',
+        'trigger_price',
+        'order_type',
+        'validity',
+    ]
     MAXIMUM_IDLE_SECONDS = 180.0
     WARM_URL = 'https://api.dhan.co/'
     WARM_INTERVAL_SECONDS = 60.0
@@ -121,6 +132,43 @@ class DhanOrders(BrokerOrders):
             'DELETE',
             f'https://api.dhan.co/v2/orders/{order_id}',
             self.headers(login),
+        )
+
+    def build_modify_request(
+        self,
+        order_id,
+        stored_order,
+        modification,
+        login,
+        settings,
+    ):
+        """Builds `PUT /v2/orders/{order_id}` with the whole order after the change, since Dhan requires the order type and validity on every modification and reads quantity as the total order quantity.
+
+        Args:
+            order_id (str): Dhan's order id.
+            stored_order (StoredOrder): The order as Redis holds it.
+            modification (OrderModification): The order after the change.
+            login (dict): Dhan's decoded login.
+            settings (dict): Dhan's decoded settings.
+
+        Returns:
+            BrokerRequest: The request.
+        """
+        json_body = {
+            'dhanClientId': str(settings['client_id']),
+            'orderId': order_id,
+            'orderType': self.ORDER_TYPE_CODES[modification.order_type],
+            'quantity': modification.quantity,
+            'price': modification.price_number,
+            'disclosedQuantity': modification.disclosed_quantity,
+            'triggerPrice': modification.trigger_price_number,
+            'validity': modification.validity,
+        }
+        return BrokerRequest(
+            'PUT',
+            f'https://api.dhan.co/v2/orders/{order_id}',
+            self.headers(login),
+            json_body=json_body,
         )
 
     def read_order_id(self, response_fields):

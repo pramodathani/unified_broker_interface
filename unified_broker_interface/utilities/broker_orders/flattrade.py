@@ -1,4 +1,4 @@
-"""How Flattrade's PiConnect API, a Noren platform, takes and cancels orders."""
+"""How Flattrade's PiConnect API, a Noren platform, takes, modifies and cancels orders."""
 
 from unified_broker_interface.utilities.broker_orders.noren import NorenOrders
 
@@ -16,5 +16,8 @@ class FlattradeOrders(NorenOrders):
         'username',
     ]
     CANCEL_SETTINGS_FIELDS = [
+        'username',
+    ]
+    MODIFY_SETTINGS_FIELDS = [
         'username',
     ]

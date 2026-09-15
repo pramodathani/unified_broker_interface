@@ -1,8 +1,11 @@
-"""How Stoxkart's open API takes and cancels orders."""
+"""How Stoxkart's open API takes, modifies and cancels orders."""
 
 from unified_broker_interface.utilities.broker_orders.base import BrokerOrders
 from unified_broker_interface.utilities.broker_orders.utilities.broker_request import (
     BrokerRequest,
+)
+from unified_broker_interface.utilities.broker_orders.utilities.stored_order import (
+    OrderNotReadyError,
 )
 
 
@@ -24,6 +27,18 @@ class StoxkartOrders(BrokerOrders):
     CANCEL_SETTINGS_FIELDS = [
         'ucc_code',
         'api_key',
+    ]
+    MODIFY_SETTINGS_FIELDS = [
+        'ucc_code',
+        'api_key',
+    ]
+    MODIFIABLE_FIELDS = [
+        'quantity',
+        'disclosed_quantity',
+        'price',
+        'trigger_price',
+        'order_type',
+        'validity',
     ]
     MAXIMUM_IDLE_SECONDS = 300.0
     WARM_URL = 'https://openapi.stoxkart.com/'
@@ -116,6 +131,22 @@ class StoxkartOrders(BrokerOrders):
             tag=order.tag,
         )
 
+    def order_variety(self, stored_order):
+        """The variety Stoxkart's cancel and modify paths name: the one the order scripts stored beside the order, then the order's own, then `normal`.
+
+        Args:
+            stored_order (StoredOrder): The order as Redis holds it.
+
+        Returns:
+            str: The variety, lower-cased.
+        """
+        variety = (
+            stored_order.entry.get('variety')
+            or stored_order.data.get('variety')
+            or 'normal'
+        )
+        return str(variety).lower()
+
     def build_cancel_request(self, order_id, stored_order, login, settings):
         """Builds `DELETE /orders/{variety}/{order_id}`, with the variety the order scripts stored beside the order, then the order's own, then `normal`.
 
@@ -128,16 +159,62 @@ class StoxkartOrders(BrokerOrders):
         Returns:
             BrokerRequest: The request.
         """
-        variety = (
-            stored_order.entry.get('variety')
-            or stored_order.data.get('variety')
-            or 'normal'
-        )
-        variety = str(variety).lower()
+        variety = self.order_variety(stored_order)
         return BrokerRequest(
             'DELETE',
             f'https://openapi.stoxkart.com/orders/{variety}/{order_id}',
             self.headers(login, settings),
+        )
+
+    def build_modify_request(
+        self,
+        order_id,
+        stored_order,
+        modification,
+        login,
+        settings,
+    ):
+        """Builds `PUT /orders/{variety}/{order_id}` with the body Stoxkart documents for a modification, which restates the exchange and token but not the side or product.
+
+        Args:
+            order_id (str): Stoxkart's order id.
+            stored_order (StoredOrder): The order as Redis holds it.
+            modification (OrderModification): The order after the change.
+            login (dict): Stoxkart's decoded login.
+            settings (dict): Stoxkart's decoded settings.
+
+        Returns:
+            BrokerRequest: The request.
+
+        Raises:
+            OrderNotReadyError: When Redis does not hold the order's exchange or token.
+        """
+        missing = (
+            modification.exchange is None
+            or modification.instrument_token is None
+        )
+        if missing:
+            message = (
+                "Redis does not hold this Stoxkart order's exchange and token yet, so try again after Stoxkart's next order book poll"
+            )
+            raise OrderNotReadyError(message)
+        variety = self.order_variety(stored_order)
+        json_body = {
+            'exchange': modification.exchange,
+            'token': modification.instrument_token,
+            'order_type': self.ORDER_TYPE_CODES[modification.order_type],
+            'quantity': str(modification.quantity),
+            'disclose_quantity': str(modification.disclosed_quantity),
+            'price': modification.price_text,
+            'trigger_price': modification.trigger_price_text,
+            'stop_loss_price': modification.trigger_price_text,
+            'validity': modification.validity,
+        }
+        return BrokerRequest(
+            'PUT',
+            f'https://openapi.stoxkart.com/orders/{variety}/{order_id}',
+            self.headers(login, settings),
+            json_body=json_body,
         )
 
     def read_order_id(self, response_fields):

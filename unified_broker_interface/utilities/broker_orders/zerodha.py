@@ -1,4 +1,4 @@
-"""How Zerodha's Kite Connect takes and cancels orders."""
+"""How Zerodha's Kite Connect takes, modifies and cancels orders."""
 
 from unified_broker_interface.utilities.broker_orders.base import BrokerOrders
 from unified_broker_interface.utilities.broker_orders.utilities.broker_request import (
@@ -11,6 +11,7 @@ class ZerodhaOrders(BrokerOrders):
 
     Attributes:
         SETTLED_REFUSALS (list): The Kite exception names that settle a server error as a refusal.
+        MARKET_PROTECTED_ORDER_TYPES (list): The order types a modification changing to them sends `market_protection` with.
     """
 
     BROKER_NAME = 'zerodha'
@@ -20,6 +21,21 @@ class ZerodhaOrders(BrokerOrders):
     ]
     CANCEL_SETTINGS_FIELDS = [
         'api_key',
+    ]
+    MODIFY_SETTINGS_FIELDS = [
+        'api_key',
+    ]
+    MODIFIABLE_FIELDS = [
+        'quantity',
+        'disclosed_quantity',
+        'price',
+        'trigger_price',
+        'order_type',
+        'validity',
+    ]
+    MARKET_PROTECTED_ORDER_TYPES = [
+        'MARKET',
+        'SL-M',
     ]
     MAXIMUM_IDLE_SECONDS = 300.0
     WARM_URL = 'https://api.kite.trade/'
@@ -121,6 +137,55 @@ class ZerodhaOrders(BrokerOrders):
             'DELETE',
             f'https://api.kite.trade/orders/{variety}/{order_id}',
             self.headers(login, settings),
+        )
+
+    def build_modify_request(
+        self,
+        order_id,
+        stored_order,
+        modification,
+        login,
+        settings,
+    ):
+        """Builds `PUT /orders/{variety}/{order_id}`, with the variety Kite stored on the order.
+
+        Kite changes only the fields a modification sends. The order type is always sent, and a price or trigger price whenever the order type after the change takes one, because a stop-loss order sent only a new quantity has been answered with success and left unchanged. A quantity, disclosed quantity or validity is sent only when the caller changed it, because Kite reads an omitted quantity as leaving the pending quantity alone. A change to MARKET or SL-M sends `market_protection` of -1, Kite's automatic protection, which Kite has required on such placements since April 2026.
+
+        Args:
+            order_id (str): Zerodha's order id.
+            stored_order (StoredOrder): The order as Redis holds it.
+            modification (OrderModification): The order after the change.
+            login (dict): Zerodha's decoded login.
+            settings (dict): Zerodha's decoded settings.
+
+        Returns:
+            BrokerRequest: The request.
+        """
+        variety = str(stored_order.data.get('variety') or 'regular')
+        form = {
+            'order_type': modification.order_type,
+        }
+        if modification.changes('quantity'):
+            form['quantity'] = modification.quantity
+        if modification.price is not None:
+            form['price'] = modification.price_text
+        if modification.trigger_price is not None:
+            form['trigger_price'] = modification.trigger_price_text
+        if modification.changes('disclosed_quantity'):
+            form['disclosed_quantity'] = modification.disclosed_quantity
+        if modification.changes('validity'):
+            form['validity'] = modification.validity
+        protected = (
+            modification.order_type in self.MARKET_PROTECTED_ORDER_TYPES
+        )
+        if modification.changes('order_type') and protected:
+            form['market_protection'] = '-1'
+        return BrokerRequest(
+            'PUT',
+            f'https://api.kite.trade/orders/{variety}/{order_id}',
+            self.headers(login, settings),
+            data=form,
+            shown_form=form,
         )
 
     def read_order_id(self, response_fields):

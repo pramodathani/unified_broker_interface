@@ -574,6 +574,7 @@ class OrderRoutesState:
         'mahindra': '11111111-1111-5111-8111-000000000015',
         'broken_handles': '11111111-1111-5111-8111-000000000016',
         'gold_option': '11111111-1111-5111-8111-000000000017',
+        'relbse': '11111111-1111-5111-8111-000000000018',
     }
 
     ORDER_IDENTIFIERS = {
@@ -729,7 +730,9 @@ class OrderRoutesState:
         return handles
 
     def add_instrument(self, fake_redis, name, identity, handles, member):
-        """Adds one instrument's identity, handles and catalogue member.
+        """Adds one instrument's identity, handles, catalogue member and each broker's token entry.
+
+        The token entries are kept as the warm keeps them: one `tokens:<broker>` hash per broker, whose fields are broker tokens and whose values are the comma-joined ids of every instrument that token names, in the order the instruments were added.
 
         Args:
             fake_redis (FakeRedis): The stand-in to fill.
@@ -768,6 +771,21 @@ class OrderRoutesState:
             handles_hash[instrument_id] = handles
         else:
             handles_hash[instrument_id] = json.dumps(handles)
+            for broker_name, handle in handles.items():
+                if not isinstance(handle, dict):
+                    continue
+                if not handle.get('broker_token'):
+                    continue
+                tokens_hash = fake_redis.hashes.setdefault(
+                    CATALOGUE_PREFIX + 'tokens:' + broker_name,
+                    {},
+                )
+                broker_token = str(handle['broker_token'])
+                known_ids = tokens_hash.get(broker_token)
+                if known_ids is None:
+                    tokens_hash[broker_token] = instrument_id
+                else:
+                    tokens_hash[broker_token] = known_ids + ',' + instrument_id
         catalogue_key = (
             CATALOGUE_PREFIX + 'catalogue:' + full_identity['segment']
         )
@@ -1022,6 +1040,13 @@ class OrderRoutesState:
             'not json',
             'BROKEN||||',
         )
+        self.add_instrument(
+            fake_redis,
+            'relbse',
+            self.security('bse', 'bse_equities', 'RELBSE'),
+            self.every_broker_handle('RELBSE', '2885', 1.0, 0.05),
+            'RELBSE||||',
+        )
 
     def partial_handles(self):
         """Builds handles that only some brokers carry, some of them unusable.
@@ -1056,21 +1081,25 @@ class OrderRoutesState:
             },
         }
 
-    def order_entry(self, status, data, variety=None):
+    def order_entry(self, status, data, variety=None, order_fields=None):
         """Builds one entry of a `<broker>:orders:orders` hash as JSON text.
 
         Args:
             status (str | None): The normalized order status.
             data (dict): The broker's own copy of the order.
             variety (str | None): The top-level variety Stoxkart's scripts keep, or None to leave it out.
+            order_fields (dict | None): Normalized order fields other than `status`, or None for an order holding only its status.
 
         Returns:
             str: The entry as JSON text.
         """
+        order = {
+            'status': status,
+        }
+        if order_fields is not None:
+            order.update(order_fields)
         entry = {
-            'order': {
-                'status': status,
-            },
+            'order': order,
             'data': data,
         }
         if variety is not None:
@@ -1146,8 +1175,251 @@ class OrderRoutesState:
             )
         )
         books['wisdom_capital']['W-ABC'] = self.order_entry('OPEN', {})
+        self.add_modifiable_orders(books)
         for broker_name, entries in books.items():
             fake_redis.hashes[f'{broker_name}:orders:orders'] = entries
+
+    def limit_order(self, broker_name, exchange, **overrides):
+        """Builds the normalized fields of an open LIMIT buy of ten RELIANCE shares at 2500, as a broker's order scripts store it.
+
+        Args:
+            broker_name (str): The broker, whose trading symbol the order carries.
+            exchange (str | None): The exchange code the broker's order book spells.
+            **overrides: Normalized fields to replace or add.
+
+        Returns:
+            dict: The normalized fields other than `status`.
+        """
+        order_fields = {
+            'order_id': None,
+            'instrument_token': '2885',
+            'tradingsymbol': f'RELIANCE-{broker_name}',
+            'exchange': exchange,
+            'transaction_type': 'BUY',
+            'product': 'MIS',
+            'order_type': 'LIMIT',
+            'validity': 'DAY',
+            'quantity': 10,
+            'filled_quantity': 0,
+            'pending_quantity': 10,
+            'disclosed_quantity': 0,
+            'price': 2500.0,
+            'trigger_price': 0.0,
+            'tag': None,
+        }
+        order_fields.update(overrides)
+        return order_fields
+
+    def add_modifiable_orders(self, books):
+        """Gives the open orders in `ORDER_IDENTIFIERS` their full normalized fields and adds the orders only the modify scenarios use.
+
+        A cancel answers only an order's status, so the added fields change no cancel scenario.
+
+        Args:
+            books (dict): Broker names to their order book entries, changed in place.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        identifiers = self.ORDER_IDENTIFIERS
+        stored_exchanges = {
+            'dhan': 'NSE_EQ',
+            'flattrade': 'NSE',
+            'fyers': 'NSE',
+            'groww': 'NSE',
+            'indmoney': 'NSE',
+            'kotak': 'nse_cm',
+            'shoonya': 'NSE',
+            'stoxkart': 'NSE',
+            'wisdom_capital': 'NSECM',
+            'zerodha': 'NSE',
+        }
+        stored_data = {
+            'dhan': {},
+            'flattrade': {},
+            'fyers': {},
+            'groww': {
+                'segment': 'CASH',
+            },
+            'indmoney': {},
+            'kotak': {
+                'trdSym': 'RELIANCE-EQ',
+            },
+            'shoonya': {},
+            'stoxkart': {
+                'variety': 'NORMAL',
+            },
+            'wisdom_capital': {
+                'OrderUniqueIdentifier': 'T1',
+            },
+            'zerodha': {
+                'variety': 'amo',
+            },
+        }
+        for broker_name in BROKER_NAMES:
+            overrides = {
+                'order_id': identifiers[broker_name],
+            }
+            if broker_name == 'groww':
+                overrides['instrument_token'] = None
+            variety = None
+            if broker_name == 'stoxkart':
+                variety = 'AMO'
+            books[broker_name][identifiers[broker_name]] = self.order_entry(
+                'OPEN',
+                stored_data[broker_name],
+                variety=variety,
+                order_fields=self.limit_order(
+                    broker_name,
+                    stored_exchanges[broker_name],
+                    **overrides,
+                ),
+            )
+
+        zerodha_book = books['zerodha']
+        zerodha_book['MODSTOPLOSS'] = self.order_entry(
+            'PENDING',
+            {},
+            order_fields=self.limit_order(
+                'zerodha',
+                'NSE',
+                order_type='SL',
+                price=2490.0,
+                trigger_price=2495.0,
+            ),
+        )
+        zerodha_book['MODBRACKET'] = self.order_entry(
+            'OPEN',
+            {},
+            order_fields=self.limit_order('zerodha', 'NSE', product='BO'),
+        )
+        zerodha_book['MODNOQUANTITY'] = self.order_entry(
+            'OPEN',
+            {},
+            order_fields=self.limit_order('zerodha', 'NSE', quantity=None),
+        )
+        zerodha_book['MODNOPRICE'] = self.order_entry(
+            'OPEN',
+            {},
+            order_fields=self.limit_order('zerodha', 'NSE', price=0.0),
+        )
+        zerodha_book['MODNOSIDE'] = self.order_entry(
+            'OPEN',
+            {},
+            order_fields=self.limit_order(
+                'zerodha',
+                'NSE',
+                transaction_type=None,
+            ),
+        )
+        zerodha_book['MODUNKNOWNTOKEN'] = self.order_entry(
+            'OPEN',
+            {},
+            order_fields=self.limit_order(
+                'zerodha',
+                'NSE',
+                instrument_token='999999',
+            ),
+        )
+        zerodha_book['MODCRUDE'] = self.order_entry(
+            'OPEN',
+            {},
+            order_fields=self.limit_order(
+                'zerodha',
+                'MCX',
+                instrument_token='569900',
+                tradingsymbol='CRUDEOIL26OCTFUT-zerodha',
+                product='NRML',
+                quantity=2,
+                pending_quantity=2,
+                price=6000.0,
+            ),
+        )
+        zerodha_book['MODGOLD'] = self.order_entry(
+            'OPEN',
+            {},
+            order_fields=self.limit_order(
+                'zerodha',
+                'MCX',
+                instrument_token='480001',
+                tradingsymbol='GOLD26OCT150000CE-zerodha',
+                product='NRML',
+                quantity=1,
+                pending_quantity=1,
+                price=100.0,
+            ),
+        )
+        books['kotak']['MODCRUDEKOTAK'] = self.order_entry(
+            'OPEN',
+            {
+                'trdSym': 'CRUDEOIL26OCTFUT',
+            },
+            order_fields=self.limit_order(
+                'kotak',
+                'mcx_fo',
+                instrument_token='569900',
+                tradingsymbol='CRUDEOIL26OCTFUT-kotak',
+                product='NRML',
+                quantity=200,
+                pending_quantity=200,
+                price=6000.0,
+            ),
+        )
+        books['kotak']['MODKOTAKNOSYMBOL'] = self.order_entry(
+            'OPEN',
+            {},
+            order_fields=self.limit_order('kotak', 'nse_cm'),
+        )
+        books['dhan']['MODFUTURE'] = self.order_entry(
+            'OPEN',
+            {},
+            order_fields=self.limit_order(
+                'dhan',
+                'NSE_FNO',
+                instrument_token='68777',
+                tradingsymbol='RELIANCE26SEPFUT-dhan',
+                product='NRML',
+                quantity=1000,
+                pending_quantity=1000,
+                price=2800.0,
+            ),
+        )
+        books['dhan']['MODNOEXCHANGE'] = self.order_entry(
+            'OPEN',
+            {},
+            order_fields=self.limit_order('dhan', None),
+        )
+        books['groww']['GMKMODNOSEGMENT'] = self.order_entry(
+            'OPEN',
+            {},
+            order_fields=self.limit_order(
+                'groww',
+                'NSE',
+                instrument_token=None,
+            ),
+        )
+        books['flattrade']['MODNORENNOSYMBOL'] = self.order_entry(
+            'OPEN',
+            {},
+            order_fields=self.limit_order(
+                'flattrade',
+                'NSE',
+                tradingsymbol=None,
+            ),
+        )
+        books['stoxkart']['SXMODSTOPLOSS'] = self.order_entry(
+            'OPEN',
+            {
+                'variety': 'NORMAL',
+            },
+            order_fields=self.limit_order(
+                'stoxkart',
+                'NSE',
+                order_type='SL-M',
+                price=0.0,
+                trigger_price=2495.0,
+            ),
+        )
 
 
 class OrderRoutesAnswers:
@@ -1511,6 +1783,17 @@ class OrderRoutesAnswers:
             ),
         ]
 
+    def modify_answers(self, broker_name):
+        """Every kind of answer a sent modification is checked against, which are those a cancel is checked against, since both are decided by the same rules.
+
+        Args:
+            broker_name (str): The broker.
+
+        Returns:
+            list: `(answer name, answer)` tuples.
+        """
+        return self.cancel_answers(broker_name)
+
     def cancel_answers(self, broker_name):
         """Every kind of answer a sent cancel is checked against.
 
@@ -1586,7 +1869,7 @@ class OrderRoutesScenarios:
 
     A scenario is a dictionary with a `name` and either one request or a list of `steps`.
     A scenario may also name `selector` and `priority`, the broker selector configuration its blueprint is built with, or set `expect_construction_error` when building the blueprint should fail.
-    A request has `route` (`place` or `cancel`), and optionally `headers`, `body` (a dictionary), `raw_body` (text), `query`, `counter` (the value the round-robin `INCR` returns), `excluded` (brokers to exclude), `answer` (the stubbed broker answer), `failing_round_trip`, and `changes` (Redis edits made before the request).
+    A request has `route` (`place`, `modify` or `cancel`), and optionally `headers`, `body` (a dictionary), `raw_body` (text), `query`, `counter` (the value the round-robin `INCR` returns), `excluded` (brokers to exclude), `answer` (the stubbed broker answer), `failing_round_trip`, and `changes` (Redis edits made before the request).
 
     Attributes:
         answers (OrderRoutesAnswers): The stubbed broker answers.
@@ -1616,6 +1899,11 @@ class OrderRoutesScenarios:
         scenarios.extend(self.place_cache_scenarios())
         scenarios.extend(self.place_selector_scenarios())
         scenarios.extend(self.place_contract_size_scenarios())
+        scenarios.extend(self.modify_parameter_scenarios())
+        scenarios.extend(self.modify_lookup_scenarios())
+        scenarios.extend(self.modify_merge_scenarios())
+        scenarios.extend(self.modify_instrument_scenarios())
+        scenarios.extend(self.modify_broker_scenarios())
         scenarios.extend(self.cancel_parameter_scenarios())
         scenarios.extend(self.cancel_lookup_scenarios())
         scenarios.extend(self.cancel_broker_scenarios())
@@ -1758,6 +2046,25 @@ class OrderRoutesScenarios:
         scenario = {
             'name': name,
             'route': 'cancel',
+            'body': body,
+        }
+        scenario.update(settings)
+        return scenario
+
+    def modify(self, name, body, **settings):
+        """Builds one modify scenario.
+
+        Args:
+            name (str): The scenario name.
+            body (dict | None): The request body.
+            **settings: Any other scenario keys, such as `query`, `answer` or `changes`.
+
+        Returns:
+            dict: The scenario.
+        """
+        scenario = {
+            'name': name,
+            'route': 'modify',
             'body': body,
         }
         scenario.update(settings)
@@ -2742,6 +3049,429 @@ class OrderRoutesScenarios:
             ),
         ]
 
+    def modify_body(self, order_id, **fields):
+        """Builds a modify request body.
+
+        Args:
+            order_id (object): The order id field.
+            **fields: The fields to change and any other fields, such as `broker` or `dry_run`.
+
+        Returns:
+            dict: The request body.
+        """
+        body = {
+            'order_id': order_id,
+        }
+        body.update(fields)
+        return body
+
+    def modify_parameter_scenarios(self):
+        """Builds the modify scenarios about the token and the parameters.
+
+        Returns:
+            list: The scenarios.
+        """
+        zerodha_order = OrderRoutesState.ORDER_IDENTIFIERS['zerodha']
+        return [
+            self.modify(
+                'modify_token_header_missing',
+                self.modify_body(zerodha_order, price=2501),
+                headers={},
+            ),
+            self.modify('modify_body_is_a_list', None, raw_body='[1]'),
+            self.modify(
+                'modify_order_id_missing',
+                {
+                    'price': 2501,
+                },
+            ),
+            self.modify(
+                'modify_nothing_to_change',
+                self.modify_body(zerodha_order, dry_run=True),
+            ),
+            self.modify(
+                'modify_quantity_not_whole',
+                self.modify_body(zerodha_order, quantity=1.5),
+            ),
+            self.modify(
+                'modify_quantity_zero',
+                self.modify_body(zerodha_order, quantity=0),
+            ),
+            self.modify(
+                'modify_disclosed_more_than_quantity',
+                self.modify_body(
+                    zerodha_order,
+                    quantity=5,
+                    disclosed_quantity=6,
+                ),
+            ),
+            self.modify(
+                'modify_order_type_unknown',
+                self.modify_body(zerodha_order, order_type='STOP'),
+            ),
+            self.modify(
+                'modify_validity_unknown',
+                self.modify_body(zerodha_order, validity='GTC'),
+            ),
+            self.modify(
+                'modify_price_negative',
+                self.modify_body(zerodha_order, price=-1),
+            ),
+            self.modify(
+                'modify_dry_run_invalid',
+                self.modify_body(zerodha_order, price=2501, dry_run='maybe'),
+            ),
+            self.modify(
+                'modify_order_id_in_query',
+                {
+                    'price': '2501.5',
+                },
+                query={
+                    'order_id': zerodha_order,
+                    'dry_run': 'true',
+                },
+            ),
+            self.modify(
+                'modify_redis_fails',
+                self.modify_body(zerodha_order, price=2501),
+                failing_round_trip=1,
+            ),
+            self.modify(
+                'modify_token_wrong',
+                self.modify_body(zerodha_order, price=2501),
+                headers={
+                    'access-token': 'wrong',
+                },
+            ),
+        ]
+
+    def modify_lookup_scenarios(self):
+        """Builds the modify scenarios about finding the order and what its broker needs and can change.
+
+        Returns:
+            list: The scenarios.
+        """
+        identifiers = OrderRoutesState.ORDER_IDENTIFIERS
+        kotak_login_without_sid = json.dumps({
+            'access_token': 'kotak-access-token',
+        })
+        return [
+            self.modify(
+                'modify_order_not_found',
+                self.modify_body('NOSUCHORDER', price=2501),
+            ),
+            self.modify(
+                'modify_order_at_two_brokers',
+                self.modify_body('26091500099999', price=2501),
+            ),
+            self.modify(
+                'modify_order_finished',
+                self.modify_body('250915000000099', price=2501),
+            ),
+            self.modify(
+                'modify_entry_fields_not_dictionaries',
+                self.modify_body('NOORDERFIELD', price=2501),
+            ),
+            self.modify(
+                'modify_broker_without_login',
+                self.modify_body(identifiers['dhan'], price=2501),
+                changes=[
+                    self.hash_change('last_login', 'dhan', None),
+                ],
+            ),
+            self.modify(
+                'modify_kotak_without_sid',
+                self.modify_body(identifiers['kotak'], price=2501),
+                changes=[
+                    self.hash_change(
+                        'last_login',
+                        'kotak',
+                        kotak_login_without_sid,
+                    ),
+                ],
+            ),
+            self.modify(
+                'modify_dhan_without_settings',
+                self.modify_body(identifiers['dhan'], price=2501),
+                changes=[
+                    self.hash_change('settings', 'dhan', None),
+                ],
+            ),
+            self.modify(
+                'modify_field_the_broker_cannot_change',
+                self.modify_body(identifiers['indmoney'], validity='IOC'),
+            ),
+            self.modify(
+                'modify_fyers_validity',
+                self.modify_body(identifiers['fyers'], validity='IOC'),
+            ),
+            self.modify(
+                'modify_groww_disclosed_quantity',
+                self.modify_body(identifiers['groww'], disclosed_quantity=5),
+            ),
+            self.modify(
+                'modify_noren_to_market',
+                self.modify_body(identifiers['shoonya'], order_type='MARKET'),
+            ),
+            self.modify(
+                'modify_groww_without_segment',
+                self.modify_body('GMKMODNOSEGMENT', price=2501),
+            ),
+            self.modify(
+                'modify_noren_without_trading_symbol',
+                self.modify_body('MODNORENNOSYMBOL', price=2501),
+            ),
+            self.modify(
+                'modify_kotak_without_trading_symbol',
+                self.modify_body('MODKOTAKNOSYMBOL', price=2501),
+            ),
+        ]
+
+    def modify_merge_scenarios(self):
+        """Builds the modify scenarios about laying the changes over the stored order.
+
+        Returns:
+            list: The scenarios.
+        """
+        zerodha_order = OrderRoutesState.ORDER_IDENTIFIERS['zerodha']
+        return [
+            self.modify(
+                'modify_stored_product_not_handled',
+                self.modify_body('MODBRACKET', price=2501),
+            ),
+            self.modify(
+                'modify_stored_quantity_missing',
+                self.modify_body('MODNOQUANTITY', price=2501),
+            ),
+            self.modify(
+                'modify_stored_transaction_type_missing',
+                self.modify_body('MODNOSIDE', price=2501),
+            ),
+            self.modify(
+                'modify_stored_price_missing',
+                self.modify_body('MODNOPRICE', quantity=20),
+            ),
+            self.modify(
+                'modify_limit_to_market',
+                self.modify_body(
+                    zerodha_order,
+                    order_type='MARKET',
+                    dry_run=True,
+                ),
+            ),
+            self.modify(
+                'modify_market_with_price',
+                self.modify_body(zerodha_order, order_type='MARKET', price=10),
+            ),
+            self.modify(
+                'modify_limit_to_stop_loss_without_trigger',
+                self.modify_body(zerodha_order, order_type='SL'),
+            ),
+            self.modify(
+                'modify_limit_to_stop_loss',
+                self.modify_body(
+                    zerodha_order,
+                    order_type='SL',
+                    trigger_price=2505,
+                    dry_run=True,
+                ),
+            ),
+            self.modify(
+                'modify_stop_loss_to_limit',
+                self.modify_body(
+                    'MODSTOPLOSS',
+                    order_type='LIMIT',
+                    dry_run=True,
+                ),
+            ),
+            self.modify(
+                'modify_stop_loss_trigger_only',
+                self.modify_body(
+                    'MODSTOPLOSS',
+                    trigger_price=2496,
+                    dry_run=True,
+                ),
+            ),
+            self.modify(
+                'modify_limit_price_given_as_zero',
+                self.modify_body(zerodha_order, price=0),
+            ),
+            self.modify(
+                'modify_stop_loss_market_price_only',
+                self.modify_body('SXMODSTOPLOSS', trigger_price=2496, dry_run=True),
+            ),
+        ]
+
+    def modify_instrument_scenarios(self):
+        """Builds the modify scenarios about finding the order's instrument, converting quantities and checking lots and ticks.
+
+        Returns:
+            list: The scenarios.
+        """
+        identifiers = OrderRoutesState.ORDER_IDENTIFIERS
+        instrument_identifiers = OrderRoutesState.INSTRUMENT_IDENTIFIERS
+        zerodha_order = identifiers['zerodha']
+        return [
+            self.modify(
+                'modify_securities_quantity',
+                self.modify_body(zerodha_order, quantity=20, dry_run=True),
+            ),
+            self.modify(
+                'modify_price_off_tick',
+                self.modify_body(zerodha_order, price='2500.03'),
+            ),
+            self.modify(
+                'modify_trigger_price_off_tick',
+                self.modify_body('MODSTOPLOSS', trigger_price='2495.02'),
+            ),
+            self.modify(
+                'modify_future_quantity_not_whole_lots',
+                self.modify_body('MODFUTURE', quantity=700),
+            ),
+            self.modify(
+                'modify_future_quantity_whole_lots',
+                self.modify_body('MODFUTURE', quantity=1500, dry_run=True),
+            ),
+            self.modify(
+                'modify_token_not_in_catalogue_price_only',
+                self.modify_body('MODUNKNOWNTOKEN', price='2500.03', dry_run=True),
+            ),
+            self.modify(
+                'modify_token_not_in_catalogue_quantity',
+                self.modify_body('MODUNKNOWNTOKEN', quantity=20),
+            ),
+            self.modify(
+                'modify_exchange_narrows_token_candidates',
+                self.modify_body(identifiers['dhan'], quantity=20, dry_run=True),
+            ),
+            self.modify(
+                'modify_token_candidates_tie_quantity',
+                self.modify_body('MODNOEXCHANGE', quantity=20),
+            ),
+            self.modify(
+                'modify_token_candidates_tie_price_only',
+                self.modify_body('MODNOEXCHANGE', price='2500.03', dry_run=True),
+            ),
+            self.modify(
+                'modify_groww_quantity_without_token',
+                self.modify_body(identifiers['groww'], quantity=20, dry_run=True),
+            ),
+            self.modify(
+                'modify_disclosed_more_than_stored_quantity',
+                self.modify_body(zerodha_order, disclosed_quantity=11),
+            ),
+            self.modify(
+                'modify_commodity_quantity_in_broker_lot_size',
+                self.modify_body('MODCRUDE', quantity=300, dry_run=True),
+            ),
+            self.modify(
+                'modify_commodity_quantity_at_kotak',
+                self.modify_body(
+                    'MODCRUDEKOTAK',
+                    quantity=300,
+                    disclosed_quantity=100,
+                    dry_run=True,
+                ),
+            ),
+            self.modify(
+                'modify_commodity_quantity_not_whole_lots',
+                self.modify_body('MODCRUDE', quantity=150),
+            ),
+            self.modify(
+                'modify_commodity_disclosed_not_whole_lots',
+                self.modify_body('MODCRUDE', disclosed_quantity=50),
+            ),
+            self.modify(
+                'modify_commodity_untrusted_size_quantity',
+                self.modify_body('MODGOLD', quantity=2),
+            ),
+            self.modify(
+                'modify_commodity_untrusted_size_price_only',
+                self.modify_body('MODGOLD', price='101.5', dry_run=True),
+            ),
+            self.modify(
+                'modify_commodity_without_quantity_unit',
+                self.modify_body('MODCRUDE', quantity=300),
+                open_markets=[
+                    self.open_market('zerodha', 'MCX', None),
+                ],
+            ),
+            self.modify(
+                'modify_without_mapping_date_price_only',
+                self.modify_body(zerodha_order, price='2500.03', dry_run=True),
+                changes=[
+                    self.string_change('unified:catalogue:current_date', None),
+                ],
+            ),
+            self.modify(
+                'modify_without_mapping_date_quantity',
+                self.modify_body(zerodha_order, quantity=20),
+                changes=[
+                    self.string_change('unified:catalogue:current_date', None),
+                ],
+            ),
+            self.modify(
+                'modify_token_lookup_redis_fails',
+                self.modify_body(zerodha_order, price=2501),
+                failing_round_trip=2,
+            ),
+            self.modify(
+                'modify_candidate_read_redis_fails',
+                self.modify_body(zerodha_order, price=2501),
+                failing_round_trip=3,
+            ),
+            self.modify(
+                'modify_candidate_handles_not_json',
+                self.modify_body(zerodha_order, quantity=20),
+                changes=[
+                    self.hash_change(
+                        CATALOGUE_PREFIX + 'order_handles',
+                        instrument_identifiers['reliance'],
+                        'not json',
+                    ),
+                ],
+            ),
+            {
+                'name': 'modify_repeat_uses_worker_memory',
+                'steps': [
+                    self.modify(
+                        'first_modify',
+                        self.modify_body(zerodha_order, price=2501, dry_run=True),
+                    ),
+                    self.modify(
+                        'second_modify',
+                        self.modify_body(zerodha_order, price=2502, dry_run=True),
+                    ),
+                ],
+            },
+        ]
+
+    def modify_broker_scenarios(self):
+        """Builds a dry run, a sent modification and every kind of answer for every broker.
+
+        Returns:
+            list: The scenarios.
+        """
+        scenarios = []
+        for broker_name in BROKER_NAMES:
+            order_id = OrderRoutesState.ORDER_IDENTIFIERS[broker_name]
+            scenarios.append(self.modify(
+                f'modify_{broker_name}_dry_run',
+                self.modify_body(
+                    order_id,
+                    quantity=20,
+                    price='2501.5',
+                    dry_run=True,
+                ),
+            ))
+            for answer_name, answer in self.answers.modify_answers(broker_name):
+                scenarios.append(self.modify(
+                    f'modify_{broker_name}_answer_{answer_name}',
+                    self.modify_body(order_id, price='2501.5'),
+                    answer=answer,
+                ))
+        return scenarios
+
     def cancel_parameter_scenarios(self):
         """Builds the cancel scenarios about the token and the parameters.
 
@@ -3051,6 +3781,9 @@ class OrderRoutesSuite:
         if request['route'] == 'place':
             method = 'POST'
             path = '/api/orders/place'
+        elif request['route'] == 'modify':
+            method = 'PUT'
+            path = '/api/orders/modify'
         else:
             method = 'DELETE'
             path = '/api/orders/cancel'

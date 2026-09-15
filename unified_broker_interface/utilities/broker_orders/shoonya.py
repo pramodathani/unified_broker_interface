@@ -1,4 +1,4 @@
-"""How Shoonya's Noren API takes and cancels orders."""
+"""How Shoonya's Noren API takes, modifies and cancels orders."""
 
 from unified_broker_interface.utilities.broker_orders.noren import NorenOrders
 
@@ -16,5 +16,8 @@ class ShoonyaOrders(NorenOrders):
         'ucc_code',
     ]
     CANCEL_SETTINGS_FIELDS = [
+        'ucc_code',
+    ]
+    MODIFY_SETTINGS_FIELDS = [
         'ucc_code',
     ]

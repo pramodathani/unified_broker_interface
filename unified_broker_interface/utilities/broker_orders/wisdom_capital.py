@@ -1,4 +1,4 @@
-"""How Wisdom Capital's XTS interactive API takes and cancels orders."""
+"""How Wisdom Capital's XTS interactive API takes, modifies and cancels orders."""
 
 from unified_broker_interface.utilities.broker_orders.base import BrokerOrders
 from unified_broker_interface.utilities.broker_orders.utilities.broker_request import (
@@ -21,6 +21,17 @@ class WisdomCapitalOrders(BrokerOrders):
     ]
     CANCEL_SETTINGS_FIELDS = [
         'ucc_code',
+    ]
+    MODIFY_SETTINGS_FIELDS = [
+        'ucc_code',
+    ]
+    MODIFIABLE_FIELDS = [
+        'quantity',
+        'disclosed_quantity',
+        'price',
+        'trigger_price',
+        'order_type',
+        'validity',
     ]
     MAXIMUM_IDLE_SECONDS = 45.0
     WARM_URL = 'https://trade.wisdomcapital.in/'
@@ -119,6 +130,33 @@ class WisdomCapitalOrders(BrokerOrders):
             tag=order.tag,
         )
 
+    def application_order_id(self, order_id):
+        """The order id as XTS takes it: an integer when it is all digits, and the text otherwise.
+
+        Args:
+            order_id (str): Wisdom Capital's application order id.
+
+        Returns:
+            int | str: The order id.
+        """
+        if order_id.isdigit():
+            return int(order_id)
+        return order_id
+
+    def unique_identifier(self, stored_order):
+        """The `OrderUniqueIdentifier` stored on the order, or `ubi`, the value `place` sends when there is no tag.
+
+        Args:
+            stored_order (StoredOrder): The order as Redis holds it.
+
+        Returns:
+            str: The identifier.
+        """
+        unique_identifier = stored_order.data.get('OrderUniqueIdentifier')
+        if not unique_identifier:
+            unique_identifier = 'ubi'
+        return str(unique_identifier)
+
     def build_cancel_request(self, order_id, stored_order, login, settings):
         """Builds `DELETE /interactive/orders` with the order's ids in the query string.
 
@@ -131,22 +169,55 @@ class WisdomCapitalOrders(BrokerOrders):
         Returns:
             BrokerRequest: The request.
         """
-        if order_id.isdigit():
-            application_order_id = int(order_id)
-        else:
-            application_order_id = order_id
-        unique_identifier = stored_order.data.get('OrderUniqueIdentifier')
-        if not unique_identifier:
-            unique_identifier = 'ubi'
         return BrokerRequest(
             'DELETE',
             'https://trade.wisdomcapital.in/interactive/orders',
             self.headers(login),
             params={
-                'appOrderID': application_order_id,
-                'orderUniqueIdentifier': str(unique_identifier),
+                'appOrderID': self.application_order_id(order_id),
+                'orderUniqueIdentifier': self.unique_identifier(stored_order),
                 'clientID': str(settings['ucc_code']),
             },
+            verify_certificate=self.VERIFY_CERTIFICATE,
+        )
+
+    def build_modify_request(
+        self,
+        order_id,
+        stored_order,
+        modification,
+        login,
+        settings,
+    ):
+        """Builds `PUT /interactive/orders` with every field XTS requires restated for the order after the change.
+
+        Args:
+            order_id (str): Wisdom Capital's application order id.
+            stored_order (StoredOrder): The order as Redis holds it.
+            modification (OrderModification): The order after the change.
+            login (dict): Wisdom Capital's decoded login.
+            settings (dict): Wisdom Capital's decoded settings.
+
+        Returns:
+            BrokerRequest: The request.
+        """
+        json_body = {
+            'appOrderID': self.application_order_id(order_id),
+            'modifiedProductType': modification.product,
+            'modifiedOrderType': self.ORDER_TYPE_CODES[modification.order_type],
+            'modifiedOrderQuantity': modification.quantity,
+            'modifiedDisclosedQuantity': modification.disclosed_quantity,
+            'modifiedLimitPrice': modification.price_number,
+            'modifiedStopPrice': modification.trigger_price_number,
+            'modifiedTimeInForce': modification.validity,
+            'orderUniqueIdentifier': self.unique_identifier(stored_order),
+            'clientID': str(settings['ucc_code']),
+        }
+        return BrokerRequest(
+            'PUT',
+            'https://trade.wisdomcapital.in/interactive/orders',
+            self.headers(login),
+            json_body=json_body,
             verify_certificate=self.VERIFY_CERTIFICATE,
         )
 

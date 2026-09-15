@@ -26,4 +26,11 @@ The stand-in's `INCR` returns the stored value plus one, so a scenario's `counte
 
 ## Why the recording is JSON Lines
 
-One scenario per line keeps a re-recording's diff readable: an intended change shows up as the changed lines only, and each line names its scenario. The file is about 280 kilobytes.
+One scenario per line keeps a re-recording's diff readable: an intended change shows up as the changed lines only, and each line names its scenario. The file is about 380 kilobytes.
+
+## The stored orders and token hashes the modify scenarios need
+
+A modification restates the stored order, so on 2026-09-15 the ten open orders in `ORDER_IDENTIFIERS` were given full normalized fields, and further orders were added under ids no cancel scenario uses. A cancel's answer echoes only the stored status, so the added fields left every recorded cancel unchanged.
+
+`add_instrument` also fills one `tokens:<broker>` hash per broker, as the warm does, and a BSE instrument `RELBSE` shares RELIANCE's token 2885, so the scenarios can show a token naming instruments on two exchanges. Its symbol differs from RELIANCE so that no placement's catalogue range read reaches it, and placements never read the token hashes, which is why none of the 457 earlier scenarios changed.
+

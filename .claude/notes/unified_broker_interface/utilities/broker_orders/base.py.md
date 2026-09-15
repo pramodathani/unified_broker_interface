@@ -49,3 +49,16 @@ Kotak's API host comes from `base_url` in its login (`e43.kotaksecurities.com` o
 ## Wisdom Capital's certificate warning
 
 Wisdom Capital's certificate does not match its host, so its requests are sent with certificate checks off, and urllib3 warns on every such request. That was tolerable for orders, but a warmer pinging every 15 seconds in two workers would write about 11,500 identical warnings a day to the service log. The constructor therefore adds a warnings filter that ignores `InsecureRequestWarning` for the broker's own `WARM_URL` host, and only for a broker that has turned certificate checks off.
+
+## Why `MODIFIABLE_FIELDS` is empty by default
+
+A broker class that lists no modifiable fields is answered `501` by `PUT /api/orders/modify` before anything is built. The default is empty rather than every field so that a new broker, or one whose modify request has not been written, is refused cleanly instead of reaching the base `build_modify_request` and answering `500` from `NotImplementedError`.
+
+## Why `stored_exchange_matches` is a method
+
+Most brokers' order scripts store the same exchange or segment code the broker's `MARKETS` lists, such as Kotak's `nse_cm` or Dhan's `NSE_EQ`, so the base method compares the two ignoring case. Fyers, Groww and INDmoney store the bare exchange, `NSE` or `BSE`, and override it to compare the instrument's exchange instead. It is a method on the broker class, rather than a table in the blueprint, because what a broker's order book stores is a fact about that broker.
+
+## Why `modify_problem` reuses `cancel_login_problem`
+
+A modification and a cancel both instruct the broker about an existing order with the same login, so Kotak's `sid` check applies to both, and one hook keeps the two from drifting apart.
+

@@ -1,4 +1,4 @@
-"""How Groww's trade API takes and cancels orders."""
+"""How Groww's trade API takes, modifies and cancels orders."""
 
 import uuid
 
@@ -23,6 +23,13 @@ class GrowwOrders(BrokerOrders):
     IDENTIFIER_FIELD = 'order_symbol'
     PLACE_SETTINGS_FIELDS = []
     CANCEL_SETTINGS_FIELDS = []
+    MODIFY_SETTINGS_FIELDS = []
+    MODIFIABLE_FIELDS = [
+        'quantity',
+        'price',
+        'trigger_price',
+        'order_type',
+    ]
     MAXIMUM_IDLE_SECONDS = 300.0
     WARM_URL = 'https://api.groww.in/'
     WARM_INTERVAL_SECONDS = 60.0
@@ -127,6 +134,71 @@ class GrowwOrders(BrokerOrders):
             json_body={
                 'groww_order_id': order_id,
                 'segment': str(segment),
+            },
+        )
+
+    def stored_exchange_matches(self, instrument, stored_exchange):
+        """Whether an instrument's exchange is the one Groww's order scripts stored, which is the bare exchange, such as `NSE`, rather than a market code.
+
+        Args:
+            instrument (Instrument): A tradeable instrument whose market is in `MARKETS`.
+            stored_exchange (str | None): The stored normalized order's `exchange`.
+
+        Returns:
+            bool: True when the exchanges agree, ignoring case, or when no exchange is stored.
+        """
+        if stored_exchange is None:
+            return True
+        return stored_exchange.upper() == instrument.exchange.upper()
+
+    def build_modify_request(
+        self,
+        order_id,
+        stored_order,
+        modification,
+        login,
+        settings,
+    ):
+        """Builds `POST /v1/order/modify` with the segment Groww stored on the order.
+
+        Groww requires the order type and segment every time, and its SDK always sends the quantity, so the quantity after the change is sent. A price or trigger price the order type after the change does not take is sent as null, as Groww's SDK sends it.
+
+        Args:
+            order_id (str): Groww's order id.
+            stored_order (StoredOrder): The order as Redis holds it.
+            modification (OrderModification): The order after the change.
+            login (dict): Groww's decoded login.
+            settings (dict): Groww's decoded settings.
+
+        Returns:
+            BrokerRequest: The request.
+
+        Raises:
+            OrderNotReadyError: When the stored order has no segment, as after a websocket update.
+        """
+        segment = stored_order.data.get('segment')
+        if not segment:
+            message = (
+                "Redis does not hold this Groww order's segment yet, so try again after Groww's next order book poll"
+            )
+            raise OrderNotReadyError(message)
+        price = None
+        if modification.price is not None:
+            price = modification.price_number
+        trigger_price = None
+        if modification.trigger_price is not None:
+            trigger_price = modification.trigger_price_number
+        return BrokerRequest(
+            'POST',
+            'https://api.groww.in/v1/order/modify',
+            self.headers(login),
+            json_body={
+                'groww_order_id': order_id,
+                'segment': str(segment),
+                'order_type': self.ORDER_TYPE_CODES[modification.order_type],
+                'quantity': modification.quantity,
+                'price': price,
+                'trigger_price': trigger_price,
             },
         )
 

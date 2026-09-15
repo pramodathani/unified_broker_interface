@@ -1,10 +1,13 @@
-"""How Kotak Neo's trade API takes and cancels orders."""
+"""How Kotak Neo's trade API takes, modifies and cancels orders."""
 
 import json
 
 from unified_broker_interface.utilities.broker_orders.base import BrokerOrders
 from unified_broker_interface.utilities.broker_orders.utilities.broker_request import (
     BrokerRequest,
+)
+from unified_broker_interface.utilities.broker_orders.utilities.stored_order import (
+    OrderNotReadyError,
 )
 
 
@@ -23,6 +26,15 @@ class KotakOrders(BrokerOrders):
     IDENTIFIER_FIELD = 'order_symbol'
     PLACE_SETTINGS_FIELDS = []
     CANCEL_SETTINGS_FIELDS = []
+    MODIFY_SETTINGS_FIELDS = []
+    MODIFIABLE_FIELDS = [
+        'quantity',
+        'disclosed_quantity',
+        'price',
+        'trigger_price',
+        'order_type',
+        'validity',
+    ]
     MAXIMUM_IDLE_SECONDS = 300.0
     WARM_URL = None
     WARM_INTERVAL_SECONDS = 60.0
@@ -176,6 +188,69 @@ class KotakOrders(BrokerOrders):
         return BrokerRequest(
             'POST',
             f'{self.base_url(login)}/quick/order/cancel',
+            self.headers(login),
+            data=form,
+            shown_form=form,
+        )
+
+    def build_modify_request(
+        self,
+        order_id,
+        stored_order,
+        modification,
+        login,
+        settings,
+    ):
+        """Builds `POST {base_url}/quick/order/vr/modify` with the whole order after the change, in the keys Kotak's modification takes.
+
+        A modification names validity `vd` where a placement names it `rt`, and restates the instrument token, exchange segment, trading symbol, side and product. The trading symbol is read from Kotak's own `trdSym`, because the normalized symbol falls back to the underlying's name when Kotak sends none.
+
+        Args:
+            order_id (str): Kotak's order id.
+            stored_order (StoredOrder): The order as Redis holds it.
+            modification (OrderModification): The order after the change.
+            login (dict): Kotak's decoded login.
+            settings (dict): Kotak's decoded settings.
+
+        Returns:
+            BrokerRequest: The request.
+
+        Raises:
+            OrderNotReadyError: When Redis does not hold the order's token, exchange segment or trading symbol.
+        """
+        trading_symbol = stored_order.data.get('trdSym')
+        missing = (
+            modification.instrument_token is None
+            or modification.exchange is None
+            or not trading_symbol
+        )
+        if missing:
+            message = (
+                "Redis does not hold this Kotak order's token, exchange segment and trading symbol yet, so try again after Kotak's next order book poll"
+            )
+            raise OrderNotReadyError(message)
+        kotak_fields = {
+            'no': order_id,
+            'tk': modification.instrument_token,
+            'es': modification.exchange,
+            'ts': str(trading_symbol),
+            'tt': self.SIDE_CODES[modification.transaction_type],
+            'pc': modification.product,
+            'pt': self.ORDER_TYPE_CODES[modification.order_type],
+            'qt': str(modification.quantity),
+            'pr': modification.price_text,
+            'tp': modification.trigger_price_text,
+            'dq': str(modification.disclosed_quantity),
+            'vd': modification.validity,
+            'dd': 'NA',
+            'mp': '0',
+        }
+        form = {
+            'jData': json.dumps(kotak_fields),
+        }
+        return BrokerRequest(
+            'POST',
+            f'{self.base_url(login)}/quick/order/vr/modify',
             self.headers(login),
             data=form,
             shown_form=form,

@@ -59,7 +59,7 @@ observed before the poll's request was sent, so an update that arrived while the
 is never overwritten by the older snapshot. The check and the write run together as one Redis script.
 
 Stoxkart's entries also carry a top-level `variety` beside `data`, such as `NORMAL`, `AMO` or `BO`, which
-`DELETE /api/orders/cancel` builds Stoxkart's cancel URL from. It is stored apart from `data` because
+`PUT /api/orders/modify` and `DELETE /api/orders/cancel` build Stoxkart's modify and cancel URLs from. It is stored apart from `data` because
 Stoxkart's order socket reports `NORMAL` for an after-market order, so `bin/stoxkart/order_updates` keeps
 an `AMO` or `BO` variety already stored rather than taking the socket's.
 
@@ -219,7 +219,7 @@ does not fail the run; the API reads the unified tables until the next warm succ
 | `unified:catalogue:current_date` | string | - | The mapping date the dated keys below belong to |
 | `unified:catalogue:warm_identifier` | string | - | A random identifier set with `current_date` on every warm, so a process holding catalogue data in memory can tell a re-run warm of the same date from the one it read |
 | `unified:catalogue:<date>:identity` | hash | `instrument_id` | That instrument's exchange, segment, shape and identity fields |
-| `unified:catalogue:<date>:tokens:<broker>` | hash | broker token | The `instrument_id` that token resolves to |
+| `unified:catalogue:<date>:tokens:<broker>` | hash | broker token | The comma-joined ids of the instruments that token names; `PUT /api/orders/modify` reads it to find a stored order's instrument |
 | `unified:catalogue:<date>:order_handles` | hash | `instrument_id` | What a broker needs to place an order on it |
 | `unified:catalogue:<date>:contract_sizes` | hash | `instrument_id` | A currency or commodity contract's `units_per_lot`, `status` and `tradeable`, copied from `unified.contract_sizes` |
 | `unified:catalogue:<date>:catalogue:<segment>` | sorted set, scores 0 | lexical | `NAME\|expiry\|strike\|option_type\|instrument_id` per instrument |

@@ -6,8 +6,8 @@ sends that token with every other request.
 
 Six groups of endpoints are served today: the session, the user, broker and exchange details, the
 [instruments](#instruments), the [portfolio](#portfolio) - funds, holdings and positions - and
-[orders](#orders) - today's order book and trade book, [placing an order](#placing-an-order) and
-[cancelling an order](#cancelling-an-order). The API places and cancels orders but does not modify them.
+[orders](#orders) - today's order book and trade book, [placing an order](#placing-an-order),
+[modifying an order](#modifying-an-order) and [cancelling an order](#cancelling-an-order).
 
 ## Running it
 
@@ -48,6 +48,7 @@ come from the environment. All seven variables are optional, and each is read on
 | `GET` | `/api/orders/details` | `access-token` header | Today's orders at every broker, from `unified:orders:orders` |
 | `GET` | `/api/orders/trades` | `access-token` header | Today's trades at every broker, from `unified:orders:trades` |
 | `POST` | `/api/orders/place` | `access-token` header | Places one order at the broker the configured selector chooses, see [Placing an order](#placing-an-order) |
+| `PUT` | `/api/orders/modify` | `access-token` header | Changes one open order at the broker that holds it, see [Modifying an order](#modifying-an-order) |
 | `DELETE` | `/api/orders/cancel` | `access-token` header | Cancels one order at the broker that holds it, see [Cancelling an order](#cancelling-an-order) |
 
 Errors come back as `{"error": "…"}`. A refused token is `401`, with a message saying whether it
@@ -538,14 +539,15 @@ change come from the unified quote, falling back to the broker's price and previ
 ## Orders
 
 Everything under `/api/orders` takes the `access-token` header. The order book and trade book below answer
-`GET`, [placing an order](#placing-an-order) is a `POST` and [cancelling an order](#cancelling-an-order) is a
-`DELETE`. Nothing modifies an order.
+`GET`, [placing an order](#placing-an-order) is a `POST`, [modifying an order](#modifying-an-order) is a `PUT`
+and [cancelling an order](#cancelling-an-order) is a `DELETE`.
 
 | Path | Parameters | Returns | Answered from |
 | --- | --- | --- | --- |
 | `/details` | none | Today's orders at every broker, and how each broker's data was read | `unified:orders:orders`, written by `bin/unified/orders` every half second |
 | `/trades` | none | Today's trades at every broker, and how each broker's data was read | `unified:orders:trades`, written by `bin/unified/trades` every half second |
 | `/place` | a JSON body, below | The broker's answer to one order | one request to the broker whose turn it is |
+| `/modify` | `order_id` and the fields to change, below | The broker's answer to one modification | one request to the broker whose order book holds the order |
 | `/cancel` | `order_id`, below | The broker's answer to one cancel | one request to the broker whose order book holds the order |
 
 ```bash
@@ -862,6 +864,110 @@ restart, because the token is read from Redis on every order.
     midnight and that warm every order is refused with `404`. `python -m
     stock_brokers.instruments.mapping.utilities.warm_cache` warms them by hand. See
     [Known issues](../contributing/known-issues.md).
+
+### Modifying an order
+
+`PUT /api/orders/modify` changes one open order, named by the broker's own `order_id`, at the broker whose
+order book holds it. The order is found the way [cancelling an order](#cancelling-an-order) finds it, in every
+broker's `<broker>:orders:orders` hash in Redis, so an order placed outside the API can be modified too.
+
+!!! danger "This changes real orders on live trading accounts"
+
+    Every request without `"dry_run": true` reaches a broker. Try it with `dry_run` first, which answers with
+    the exact request that would have been sent and sends nothing. No modification has been sent to a live
+    broker yet: every request below is built from the broker's documentation and checked only against stubs.
+
+A modification is checked the way a placement is. A new `quantity` is in units, as `POST /api/orders/place`
+takes it, and is converted into the broker's own terms with this morning's contract size decision, because the
+same number means different sizes at different brokers for currency and commodity contracts. A new price is
+checked against the tick size most brokers agree on. Both checks need the order's instrument, which the API
+finds from the broker token stored on the order, in today's catalogue.
+
+```text
+request ──► check the fields (no I/O)
+        ──► Redis: API token, mapping date, broker logins and settings, and the order id in all ten orders hashes
+        ──► find the one broker holding the order, refuse a finished order, lay the changes over it (no I/O)
+        ──► Redis: the instruments the broker's token names, unless this worker holds them
+        ──► Redis: those instruments' identity, order handles and contract size, unless this worker holds them
+        ──► check lots and ticks and convert the quantity (no I/O)
+        ──► one request to that broker
+```
+
+The body is JSON. `order_id`, `broker` and `dry_run` can also be sent in the query string. At least one
+field to change must be given, and every field left out keeps the order's value in Redis.
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `order_id` | yes | The broker's order id, as `POST /api/orders/place` and `GET /api/orders/details` answer it |
+| `broker` | no | The broker's name, needed only when two brokers hold an order with the same id |
+| `quantity` | no | The new total quantity in units, including what has already filled |
+| `disclosed_quantity` | no | The new disclosed quantity in units |
+| `price` | no | The new limit price, for a `LIMIT` or `SL` order |
+| `trigger_price` | no | The new trigger price, for an `SL` or `SL-M` order |
+| `order_type` | no | `MARKET`, `LIMIT`, `SL` or `SL-M` |
+| `validity` | no | `DAY` or `IOC` |
+| `dry_run` | no | `true` to answer with the request instead of sending it |
+
+```bash
+curl -s -X PUT localhost:8080/api/orders/modify -H "access-token: $TOKEN" -H 'Content-Type: application/json' \
+     -d '{"order_id": "26091500012345", "price": 2501.5, "dry_run": true}'
+```
+
+A stored price is carried into the modification only when the new order type takes it. A change from `SL` to
+`LIMIT` therefore drops the trigger price, and a change from `LIMIT` to `SL` needs a `trigger_price` in the body.
+An order whose stored product, order type or validity is outside the words above, such as a bracket order or a
+`GTT` order, is answered `409`.
+
+The instrument is found only when exactly one instrument in today's catalogue carries the stored token at that
+broker on the stored exchange, because several brokers number tokens per exchange. When it is not found, a
+price, order type or validity change is still sent, without the tick check, but a quantity change is refused
+with `503`, except at Groww and INDmoney, which take only securities, where units already are the broker's
+terms. Groww stores no token on its orders, so its instrument is never found. A currency or commodity order
+whose contract size is not trusted today can still change its price, but not its quantity.
+
+Modifications ignore `UNIFIED_BROKER_INTERFACE_API_ORDER_EXCLUDED_BROKERS`, as cancels do, so the open orders
+of an excluded broker can still be managed.
+
+Each broker's modify request is shown below, as each broker's documentation describes it. A field a broker
+cannot change is answered `400` before anything is sent.
+
+| Broker | Request | Can change | Sent besides the changed fields |
+| --- | --- | --- | --- |
+| Zerodha | `PUT /orders/{variety}/{order_id}` form | every field | `order_type` always, `price` and `trigger_price` whenever the order type takes them, and `market_protection=-1` on a change to `MARKET` or `SL-M`; the quantity only when it changes, because Kite reads an omitted quantity as leaving the pending quantity alone |
+| Dhan | `PUT /v2/orders/{order_id}` JSON | every field | the whole order, with `dhanClientId` |
+| Fyers | `PATCH /api/v3/orders/sync` JSON | every field but `validity` | `id`, `type`, and `limitPrice` and `stopPrice` whenever the order type takes them; the quantity only when it changes |
+| Groww | `POST /v1/order/modify` JSON | `quantity`, `price`, `trigger_price`, `order_type` | `segment` from the stored order (answered `503` when absent), `order_type` and `quantity` |
+| INDmoney | `POST /order/modify` JSON | `quantity`, `price` | `segment`, found as a cancel finds it, `qty` and `limit_price` |
+| Kotak | `POST {base_url}/quick/order/vr/modify` with `jData` | every field | the whole order, with the stored token, exchange segment and Kotak's `trdSym` |
+| Flattrade, Shoonya | `POST …/ModifyOrder` with `jData` | every field, but only to `LIMIT` or `SL` | `uid`, `actid`, the stored `exch` and `tsym`, `qty`, `prctyp`, `prc` and `ret`, and `trgprc` only for `SL` |
+| Stoxkart | `PUT /orders/{variety}/{order_id}` JSON with the header `X-Algo-Id: 99999` | every field | the stored exchange and token, and the whole order but its side and product; the variety is read as a cancel reads it |
+| Wisdom Capital | `PUT /interactive/orders` JSON | every field | every `modified…` field, `appOrderID`, `orderUniqueIdentifier` and `clientID` |
+
+```json
+{
+  "broker": "shoonya", "order_id": "26091500012345", "instrument_id": "0b6f6c4e-…",
+  "status_before_modify": "OPEN", "outcome": "accepted", "status_message": null,
+  "broker_response": { "stat": "Ok", "result": "26091500012345" },
+  "timing_ms": { "preparation": 0.5, "broker": 64.2 }
+}
+```
+
+`instrument_id` is null when the order's instrument was not found. As with a cancel, an `accepted`
+modification means the broker took the request, not that the exchange has changed the order, and the order
+book shows the result within a poll. Zerodha's staff note that Kite's success answer to a modification is
+also only an acknowledgement.
+
+| Status | Outcome | Meaning |
+| --- | --- | --- |
+| `200` | `accepted` | The broker accepted the modification, or it was a dry run |
+| `422` | `rejected` | The broker refused the modification, or it could not be connected to, so nothing was sent |
+| `504` | `unknown` | The broker answered with a server error or did not answer in time: check the order book |
+| `400` | | A field is malformed or not one the broker can change, no field is changed, the prices do not fit the order type, a quantity is not a whole number of lots, or a price is not a whole number of ticks |
+| `401` | | The access token is missing, wrong or expired |
+| `404` | | No broker's order book in Redis holds the order id |
+| `409` | | The order is already `COMPLETE`, `CANCELLED`, `REJECTED` or `EXPIRED`, two brokers hold the id, or the stored order is one the route does not change |
+| `501` | | The broker's modify request is not built |
+| `503` | | Redis cannot be read or does not hold what the modification needs, the broker has no login or settings, or a changed quantity cannot be converted because the instrument was not found or its contract size is not trusted today |
 
 ### Cancelling an order
 

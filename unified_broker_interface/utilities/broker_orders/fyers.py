@@ -1,4 +1,4 @@
-"""How Fyers' v3 API takes and cancels orders."""
+"""How Fyers' v3 API takes, modifies and cancels orders."""
 
 from unified_broker_interface.utilities.broker_orders.base import BrokerOrders
 from unified_broker_interface.utilities.broker_orders.utilities.broker_request import (
@@ -22,6 +22,16 @@ class FyersOrders(BrokerOrders):
     ]
     CANCEL_SETTINGS_FIELDS = [
         'app_id',
+    ]
+    MODIFY_SETTINGS_FIELDS = [
+        'app_id',
+    ]
+    MODIFIABLE_FIELDS = [
+        'quantity',
+        'disclosed_quantity',
+        'price',
+        'trigger_price',
+        'order_type',
     ]
     MAXIMUM_IDLE_SECONDS = 300.0
     WARM_URL = 'https://api-t1.fyers.in/'
@@ -124,6 +134,61 @@ class FyersOrders(BrokerOrders):
             json_body={
                 'id': order_id,
             },
+        )
+
+    def stored_exchange_matches(self, instrument, stored_exchange):
+        """Whether an instrument's exchange is the one Fyers's order scripts stored, which is the bare exchange, such as `NSE`, rather than a market code.
+
+        Args:
+            instrument (Instrument): A tradeable instrument whose market is in `MARKETS`.
+            stored_exchange (str | None): The stored normalized order's `exchange`.
+
+        Returns:
+            bool: True when the exchanges agree, ignoring case, or when no exchange is stored.
+        """
+        if stored_exchange is None:
+            return True
+        return stored_exchange.upper() == instrument.exchange.upper()
+
+    def build_modify_request(
+        self,
+        order_id,
+        stored_order,
+        modification,
+        login,
+        settings,
+    ):
+        """Builds `PATCH /api/v3/orders/sync` with the order id in the JSON body.
+
+        Fyers keeps the original value of every field a modification leaves out, except the order type, which it requires every time. A limit price or stop price is sent whenever the order type after the change takes one, and a quantity or disclosed quantity only when the caller changed it, because whether Fyers reads the quantity as the total or the remaining quantity is not confirmed. Fyers has no field for validity.
+
+        Args:
+            order_id (str): Fyers' order id.
+            stored_order (StoredOrder): The order as Redis holds it.
+            modification (OrderModification): The order after the change.
+            login (dict): Fyers' decoded login.
+            settings (dict): Fyers' decoded settings.
+
+        Returns:
+            BrokerRequest: The request.
+        """
+        json_body = {
+            'id': order_id,
+            'type': self.ORDER_TYPE_CODES[modification.order_type],
+        }
+        if modification.price is not None:
+            json_body['limitPrice'] = modification.price_number
+        if modification.trigger_price is not None:
+            json_body['stopPrice'] = modification.trigger_price_number
+        if modification.changes('quantity'):
+            json_body['qty'] = modification.quantity
+        if modification.changes('disclosed_quantity'):
+            json_body['disclosedQty'] = modification.disclosed_quantity
+        return BrokerRequest(
+            'PATCH',
+            'https://api-t1.fyers.in/api/v3/orders/sync',
+            self.headers(login, settings),
+            json_body=json_body,
         )
 
     def read_order_id(self, response_fields):

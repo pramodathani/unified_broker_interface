@@ -23,7 +23,7 @@ test page, and a login check against the live brokers.
     publications state. Needs no Redis, no database and no broker. Run it after adding or amending a
     year's calendar.
 
-    **`order_routes.py`** - `POST /api/orders/place` and `DELETE /api/orders/cancel` run in-process against an
+    **`order_routes.py`** - `POST /api/orders/place`, `PUT /api/orders/modify` and `DELETE /api/orders/cancel` run in-process against an
     in-memory stand-in for Redis, with every broker call answered by a stub. Each of its scenarios keeps the
     HTTP status, the response body, every request that would have reached a broker, headers included, and the
     number of Redis round trips, and the suite compares them with `test_runs/fixtures/order_routes.jsonl`. It

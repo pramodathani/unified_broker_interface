@@ -65,7 +65,7 @@ string `"99999"`, as the number `99999`, as `"9999999999999999"` and as the stra
 code was sent as the HTTP header `X-Algo-Id: 99999`, and headers named `algo-id` or `algo_id` were
 refused. Stoxkart's documentation does not mention the header. `POST /api/orders/place` now
 sends the header together with `"algo_id": "99999"` in the body, BSE orders accept the same code, and
-`DELETE /api/orders/cancel` sends the same header on Stoxkart's cancel.
+`PUT /api/orders/modify` and `DELETE /api/orders/cancel` send the same header on Stoxkart's modify and cancel.
 
 **Stoxkart's order socket reports an after-market order's variety as `NORMAL`.** Stoxkart's cancel URL
 names the order's variety, as in `DELETE /orders/amo/{order_id}`. On 2026-09-15 the order book said

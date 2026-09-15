@@ -1,4 +1,4 @@
-"""How INDmoney's INDstocks API takes and cancels orders."""
+"""How INDmoney's INDstocks API takes, modifies and cancels orders."""
 
 from unified_broker_interface.utilities.broker_orders.base import BrokerOrders
 from unified_broker_interface.utilities.broker_orders.utilities.broker_request import (
@@ -19,6 +19,11 @@ class IndmoneyOrders(BrokerOrders):
     IDENTIFIER_FIELD = 'broker_token'
     PLACE_SETTINGS_FIELDS = []
     CANCEL_SETTINGS_FIELDS = []
+    MODIFY_SETTINGS_FIELDS = []
+    MODIFIABLE_FIELDS = [
+        'quantity',
+        'price',
+    ]
     MAXIMUM_IDLE_SECONDS = 300.0
     WARM_URL = 'https://api.indstocks.com/'
     WARM_INTERVAL_SECONDS = 60.0
@@ -95,6 +100,24 @@ class IndmoneyOrders(BrokerOrders):
             tag=order.tag,
         )
 
+    def order_segment(self, order_id, stored_order):
+        """The segment INDmoney's cancel and modify requests carry: the stored one or, when there is none, one guessed from the order id.
+
+        Args:
+            order_id (str): INDmoney's order id.
+            stored_order (StoredOrder): The order as Redis holds it.
+
+        Returns:
+            str: `EQUITY`, `DERIVATIVE` or the stored segment.
+        """
+        segment = stored_order.data.get('segment')
+        if not segment:
+            if order_id.upper().startswith('DRV'):
+                segment = 'DERIVATIVE'
+            else:
+                segment = 'EQUITY'
+        return str(segment)
+
     def build_cancel_request(self, order_id, stored_order, login, settings):
         """Builds `POST /order/cancel`, with the stored segment or, when there is none, one guessed from the order id.
 
@@ -107,19 +130,59 @@ class IndmoneyOrders(BrokerOrders):
         Returns:
             BrokerRequest: The request.
         """
-        segment = stored_order.data.get('segment')
-        if not segment:
-            if order_id.upper().startswith('DRV'):
-                segment = 'DERIVATIVE'
-            else:
-                segment = 'EQUITY'
         return BrokerRequest(
             'POST',
             'https://api.indstocks.com/order/cancel',
             self.headers(login),
             json_body={
                 'order_id': order_id,
-                'segment': str(segment),
+                'segment': self.order_segment(order_id, stored_order),
+            },
+        )
+
+    def stored_exchange_matches(self, instrument, stored_exchange):
+        """Whether an instrument's exchange is the one INDmoney's order scripts stored, which is the bare exchange, such as `NSE`, rather than a market code.
+
+        Args:
+            instrument (Instrument): A tradeable instrument whose market is in `MARKETS`.
+            stored_exchange (str | None): The stored normalized order's `exchange`.
+
+        Returns:
+            bool: True when the exchanges agree, ignoring case, or when no exchange is stored.
+        """
+        if stored_exchange is None:
+            return True
+        return stored_exchange.upper() == instrument.exchange.upper()
+
+    def build_modify_request(
+        self,
+        order_id,
+        stored_order,
+        modification,
+        login,
+        settings,
+    ):
+        """Builds `POST /order/modify`, which requires the segment, quantity and limit price every time and can change nothing else.
+
+        Args:
+            order_id (str): INDmoney's order id.
+            stored_order (StoredOrder): The order as Redis holds it.
+            modification (OrderModification): The order after the change.
+            login (dict): INDmoney's decoded login.
+            settings (dict): INDmoney's decoded settings.
+
+        Returns:
+            BrokerRequest: The request.
+        """
+        return BrokerRequest(
+            'POST',
+            'https://api.indstocks.com/order/modify',
+            self.headers(login),
+            json_body={
+                'order_id': order_id,
+                'segment': self.order_segment(order_id, stored_order),
+                'qty': modification.quantity,
+                'limit_price': modification.price_number,
             },
         )
 

@@ -1,4 +1,4 @@
-"""What every broker's order class shares: whether it can take an order, the one HTTP call, and the reading of error answers."""
+"""What every broker's order class shares: whether it can take, modify or cancel an order, the one HTTP call, and the reading of error answers."""
 
 import decimal
 import re
@@ -23,17 +23,20 @@ from unified_broker_interface.utilities.broker_orders.utilities.order_request im
 
 
 class BrokerOrders:
-    """How one broker takes and cancels orders.
+    """How one broker takes, modifies and cancels orders.
 
     One instance is built per broker per gunicorn worker, when the blueprint is built. Its constructor opens no connection, and the class reads no store: the blueprint reads Redis and passes the decoded login, settings, handle and stored order in.
 
-    A subclass sets the class attributes and implements `build_place_request`, `build_cancel_request` and `read_order_id`, and overrides the other methods only where its broker differs.
+    A subclass sets the class attributes and implements `build_place_request`, `build_cancel_request` and `read_order_id`, lists `MODIFIABLE_FIELDS` and implements `build_modify_request` when it modifies orders, and overrides the other methods only where its broker differs.
 
     Attributes:
         BROKER_NAME (str): The broker's name, as the Redis hashes key it.
         IDENTIFIER_FIELD (str): The order handle field the broker's order request names the instrument by: `broker_token` or `order_symbol`.
         PLACE_SETTINGS_FIELDS (list): The account settings a place request needs.
         CANCEL_SETTINGS_FIELDS (list): The account settings a cancel request needs.
+        MODIFY_SETTINGS_FIELDS (list): The account settings a modify request needs.
+        MODIFIABLE_FIELDS (list): The fields of `ModifyOrderRequest.MODIFIABLE_FIELD_NAMES` the broker's modify request can change; empty when the broker's modify request is not built, which is answered with HTTP 501.
+        MODIFY_ORDER_TYPES (list): The order types a modification can change an order to.
         MARKETS (dict): Each market the broker takes orders in, as `(exchange, asset class, kind)`, to the exchange or segment code its request carries.
         QUANTITY_UNITS (dict): Each currency or commodity market in `MARKETS` to how the broker's order API counts quantity there: `lots`, `units` (quotation units, as the route takes them) or `broker_lot_size` (lots times the broker's own lot size). A currency or commodity market without an entry passes the broker over.
         TAKES_AFTER_MARKET (bool): Whether the broker takes after-market orders.
@@ -57,6 +60,14 @@ class BrokerOrders:
     IDENTIFIER_FIELD = 'order_symbol'
     PLACE_SETTINGS_FIELDS = []
     CANCEL_SETTINGS_FIELDS = []
+    MODIFY_SETTINGS_FIELDS = []
+    MODIFIABLE_FIELDS = []
+    MODIFY_ORDER_TYPES = [
+        'MARKET',
+        'LIMIT',
+        'SL',
+        'SL-M',
+    ]
     MARKETS = {}
     QUANTITY_UNITS = {}
     TAKES_AFTER_MARKET = True
@@ -291,7 +302,7 @@ class BrokerOrders:
         return None
 
     def cancel_login_problem(self, login):
-        """Checks what the broker needs from its login beyond the access token, when cancelling an order.
+        """Checks what the broker needs from its login beyond the access token, when cancelling or modifying an order.
 
         Args:
             login (dict): The broker's decoded login.
@@ -300,6 +311,112 @@ class BrokerOrders:
             str | None: The error message, or None.
         """
         del login
+        return None
+
+    def takes_modifications(self):
+        """Whether the broker's modify request is built.
+
+        Returns:
+            bool: True when `MODIFIABLE_FIELDS` lists at least one field.
+        """
+        return len(self.MODIFIABLE_FIELDS) > 0
+
+    def modify_problem(self, login, settings):
+        """Decides whether a modification can be sent with the broker's login and settings.
+
+        Args:
+            login (object): The broker's decoded login, or None.
+            settings (dict): The broker's decoded settings.
+
+        Returns:
+            str | None: The error message answered with HTTP 503, or None when the modification can be sent.
+        """
+        broker_name = self.BROKER_NAME
+        if not isinstance(login, dict) or not login.get('access_token'):
+            return f'{broker_name} has no login in Redis'
+        login_problem = self.cancel_login_problem(login)
+        if login_problem is not None:
+            return login_problem
+        missing = self.missing_settings(settings, self.MODIFY_SETTINGS_FIELDS)
+        if missing:
+            return (
+                f'{broker_name} has no '
+                + ', '.join(missing)
+                + ' in its Redis settings'
+            )
+        return None
+
+    def modify_field_problem(self, modify_request):
+        """Decides whether the broker's modify request can change every field the caller gave.
+
+        Args:
+            modify_request (ModifyOrderRequest): The validated modification.
+
+        Returns:
+            str | None: The error message answered with HTTP 400, or None when every field can be changed.
+        """
+        for field_name in modify_request.changed_fields:
+            if field_name not in self.MODIFIABLE_FIELDS:
+                return f'{self.BROKER_NAME} cannot change {field_name} on an order'
+        order_type = modify_request.order_type
+        if order_type is None:
+            return None
+        triggered = order_type in OrderRequest.TRIGGERED_ORDER_TYPES
+        if triggered and not self.TAKES_TRIGGERED_ORDERS:
+            return f'{self.BROKER_NAME} takes no {order_type} orders'
+        if order_type not in self.MODIFY_ORDER_TYPES:
+            return f'{self.BROKER_NAME} cannot change an order to {order_type}'
+        return None
+
+    def takes_only_securities(self):
+        """Whether every market the broker takes is a securities market, where a quantity in units is already in the broker's own terms.
+
+        Returns:
+            bool: True when no currency or commodity market is listed in `MARKETS`.
+        """
+        for market in self.MARKETS:
+            if market[1] != 'securities':
+                return False
+        return True
+
+    def stored_exchange_matches(self, instrument, stored_exchange):
+        """Whether an instrument's market fits the exchange code the broker's order scripts stored on an order.
+
+        The stored code is the one the broker's order book spells, which for most brokers is the code `MARKETS` lists for the market.
+
+        Args:
+            instrument (Instrument): A tradeable instrument whose market is in `MARKETS`.
+            stored_exchange (str | None): The stored normalized order's `exchange`.
+
+        Returns:
+            bool: True when the codes agree, ignoring case, or when no code is stored.
+        """
+        if stored_exchange is None:
+            return True
+        market_code = str(self.MARKETS[instrument.market()])
+        return stored_exchange.upper() == market_code.upper()
+
+    def quantity_conversion_problem(self, instrument, handle):
+        """Decides whether a quantity in units can be converted into the broker's own terms for an instrument.
+
+        Args:
+            instrument (Instrument): The tradeable instrument.
+            handle (object): The broker's order handle for the instrument, or None.
+
+        Returns:
+            str | None: The error message answered with HTTP 503, or None when the quantity can be converted.
+        """
+        if instrument.is_securities_market():
+            return None
+        market = instrument.market()
+        quantity_unit = self.QUANTITY_UNITS.get(market)
+        if quantity_unit is None:
+            return f'{self.BROKER_NAME} does not know how it counts quantity in {" ".join(market)} orders'
+        if quantity_unit == 'broker_lot_size':
+            if not isinstance(handle, dict):
+                return f"{self.BROKER_NAME}'s mapping carries no whole lot size for the instrument"
+            if self.broker_lot_size(handle) is None:
+                return f"{self.BROKER_NAME}'s mapping carries no whole lot size for the instrument"
         return None
 
     def build_place_request(self, order, instrument, handle, login, settings):
@@ -326,6 +443,31 @@ class BrokerOrders:
         Args:
             order_id (str): The broker's order id.
             stored_order (StoredOrder): The order as the broker's order scripts keep it in Redis.
+            login (dict): The broker's decoded login.
+            settings (dict): The broker's decoded settings.
+
+        Returns:
+            BrokerRequest: The request, not yet sent.
+
+        Raises:
+            NotImplementedError: Always, in the base class.
+        """
+        raise NotImplementedError
+
+    def build_modify_request(
+        self,
+        order_id,
+        stored_order,
+        modification,
+        login,
+        settings,
+    ):
+        """Builds the broker's modify request.
+
+        Args:
+            order_id (str): The broker's order id.
+            stored_order (StoredOrder): The order as the broker's order scripts keep it in Redis.
+            modification (OrderModification): The order after the change, with quantities in the broker's own terms.
             login (dict): The broker's decoded login.
             settings (dict): The broker's decoded settings.
 
@@ -573,6 +715,19 @@ class BrokerOrders:
         """Sends a cancel request and decides whether the broker took it.
 
         An error status below 500 is `rejected` and a server error is `unknown`. A success status is `rejected` when its body carries a refusal and `accepted` otherwise, which means the broker took the request, not that the exchange has cancelled the order.
+
+        Args:
+            broker_request (BrokerRequest): The request.
+
+        Returns:
+            BrokerAnswer: The answer.
+        """
+        answer = self.send(broker_request)
+        self.decide_instruction_outcome(answer)
+        return answer
+
+    def send_modify(self, broker_request):
+        """Sends a modify request and decides whether the broker took it, by the rules a cancel is decided by.
 
         Args:
             broker_request (BrokerRequest): The request.

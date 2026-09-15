@@ -57,7 +57,7 @@ unified combiners read all of them. It still differs from the other brokers in t
   broker quote modules. See [Broker scripts](../guides/broker-scripts.md#stoxkarts-quote-feed).
 - **Orders carry an Algo-ID header.** Stoxkart accepts the exchange-issued Algo-ID `99999` only as an
   `X-Algo-Id` HTTP header, which Stoxkart's documentation does not mention, so
-  `POST /api/orders/place` and `DELETE /api/orders/cancel` send it. On 2026-09-15 two after-market orders
+  `POST /api/orders/place`, `PUT /api/orders/modify` and `DELETE /api/orders/cancel` send it. On 2026-09-15 two after-market orders
   were accepted and then cancelled through the API, but no Stoxkart order has yet filled at the exchange.
   See [Pitfalls](../contributing/pitfalls.md#placing-and-cancelling-orders) and
   [Known issues](../contributing/known-issues.md).

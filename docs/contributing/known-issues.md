@@ -146,6 +146,25 @@ stubbed answers. Kotak's request always sends `am` as `NO`, as the removed code 
 order may be refused. INDmoney's fallback segment, used when the stored order names none, assumes derivative
 order ids start with `DRV`, which has not been seen on a live order.
 
+**Modifying an order is not confirmed live at any broker.** `PUT /api/orders/modify` was added on 2026-09-15.
+Each broker's request is built from that broker's current documentation, its official SDK and, for Kotak,
+which publishes no raw REST documentation, from Kotak's SDK and one production library, and every request was
+checked only against stubbed answers. Several things are still open:
+
+| Broker | Not yet confirmed |
+| --- | --- |
+| Zerodha | Whether `market_protection=-1` is needed on a change to `MARKET` or `SL-M`, which Kite requires on placements since April 2026; and which variety an after-market order's modification needs once the market opens, when Kite treats it as a regular order |
+| Dhan | Whether `legName`, which Dhan documents only for bracket and cover orders, is needed on a regular order, and whether `STOP_LOSS_MARKET` is honoured |
+| Fyers, Groww, INDmoney, Stoxkart, Wisdom Capital | Whether the quantity is the new total quantity or the pending quantity after a partial fill; Zerodha, Dhan and Noren document the total |
+| Kotak | Whether `dd`, `fq` and `am`, which Kotak's SDK sends and a production library leaves out, are needed |
+| Stoxkart | Whether a modification needs the `X-Algo-Id` header, which is sent because placements need it |
+
+The modification finds the order's instrument from the broker token stored on the order, and treats the token as
+text that must equal the token in `unified:catalogue:<date>:tokens:<broker>`. Nothing has checked that the stored
+tokens match at Kotak, whose order book calls it `tok` while the mapping reads `psymbol`, or at INDmoney. Where
+they differ, a price change is sent without the tick check and a quantity change is refused. Groww stores no
+token on its orders, so a Groww modification is never checked against the tick size.
+
 **Most unified tick normalizers are unconfirmed live.** Only Zerodha is verified, and Dhan agrees with it
 on stored in-session MCX ticks but has no in-session NSE ticks stored. Kotak agreed with it on every field
 in a live NSE and MCX session on 2026-09-15, INDmoney on NSE the same day, and Stoxkart's streamed ticks on
