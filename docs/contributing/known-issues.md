@@ -64,19 +64,23 @@ also reach Cloudflare's bot protection at four of those hosts, which set a cooki
 INDmoney answers it `403`; no block has been seen, but a broker's firewall reacting to the pings is why warming
 is off unless `UNIFIED_BROKER_INTERFACE_API_ORDER_WARM_BROKERS` names the broker.
 
-**No broker takes currency or commodity orders yet.** `POST /api/orders/place` accepts orders in every
-segment on NSE, BSE, MCX and NCDEX except indices and uncategorised instruments, and takes a currency or
-commodity contract's lot size from the morning's `unified.contract_sizes` decision. No broker's order class
-lists those markets in `MARKETS` and `QUANTITY_UNITS` yet, so such an order is answered `503` with every broker
-skipped. What each broker's order API expects in its quantity field there - lots, quotation units, or lots times
-its own lot size - is being confirmed from its API documentation and then with one small order per broker. The
-brokers' own lot sizes show why it matters: on 2026-09-15 the October CRUDEOIL future had a lot size of 1 at Dhan,
-Fyers, Wisdom Capital and Zerodha and 100 at Flattrade, Groww, Kotak, Shoonya and Stoxkart.
+**Currency and commodity markets were opened before live orders confirmed them.** On 2026-09-15 the user asked
+for every segment to be ready for orders that evening, and each broker's `MARKETS` and `QUANTITY_UNITS` were given
+every currency and commodity market its documentation supports, all counting quantity as lots times the broker's
+own lot size. That rule comes from Zerodha's and Dhan's staff answers, from Shoonya's documented rule for
+derivatives, from XTS documentation whose own examples contradict it, and by inference elsewhere; Fyers and
+Groww are unknown, and Groww's documentation contradicts itself on whether MCX works at all. Zerodha's `NCO` and
+`BCD`, Groww's NSE commodity segment, Wisdom Capital's `NSECO` and Stoxkart's `BSECD` and `NCDEX` codes are not
+confirmed either. A wrong code is refused by the broker; a wrong quantity rule is not. The first live orders were
+planned on MCX CRUDEOILM, whose lot is 1 at Zerodha, Dhan, Fyers and Wisdom Capital and 10 at the other five.
 
 **BSE currencies and NCDEX trust Stoxkart's lot size alone.** No other broker's instrument file lists them, and on
 2026-09-15 the user chose to trade them on Stoxkart's figure rather than keep them closed. Stoxkart's NCDEX lot sizes
-(JEERAUNJHA 3, GUARSEED10 5) may be in the exchange's trading unit, tonnes, rather than the quotation unit, quintals,
-which has not been checked; if so, a `quantity` in quintals would be read as ten times too many lots.
+(JEERAUNJHA 3, GUARSEED10 5) are in the exchange's trading unit, tonnes, not the quotation unit, quintals: NCDEX's
+specifications give JEERAUNJHA a 3 MT unit priced per quintal and GUARSEED10 a 5 MT unit priced per quintal (from its
+2019 and 2020 circulars and 2023 one-pagers; the 2026 pages could not be loaded). An NCDEX `quantity` is therefore in
+tonnes, and a caller sending quintals would be read as ten times too many lots. Stoxkart's order documentation does
+not list NCDEX or BSECD at all.
 
 **Some contract sizes are conflicts every day.** On 2026-09-15 Kotak gave the 12 NSE SILVER100 futures a contract
 size of 100 where Wisdom Capital and Groww gave 1, and Stoxkart gave 9 NSE GBPINR and JPYINR options 2000 where Kotak

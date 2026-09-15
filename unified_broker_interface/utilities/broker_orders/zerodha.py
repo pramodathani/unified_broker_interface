@@ -29,6 +29,16 @@ class ZerodhaOrders(BrokerOrders):
         ('bse', 'securities', 'cash'): 'BSE',
         ('nse', 'securities', 'derivative'): 'NFO',
         ('bse', 'securities', 'derivative'): 'BFO',
+        ('mcx', 'commodity', 'derivative'): 'MCX',
+        ('nse', 'commodity', 'derivative'): 'NCO',
+        ('nse', 'currency', 'derivative'): 'CDS',
+        ('bse', 'currency', 'derivative'): 'BCD',
+    }
+    QUANTITY_UNITS = {
+        ('mcx', 'commodity', 'derivative'): 'broker_lot_size',
+        ('nse', 'commodity', 'derivative'): 'broker_lot_size',
+        ('nse', 'currency', 'derivative'): 'broker_lot_size',
+        ('bse', 'currency', 'derivative'): 'broker_lot_size',
     }
     SETTLED_REFUSALS = [
         'InputException',

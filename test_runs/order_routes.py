@@ -3187,7 +3187,9 @@ class OrderRoutesSuite:
             markets = dict(broker_class.MARKETS)
             markets[listing['market']] = listing['code']
             quantity_units = dict(broker_class.QUANTITY_UNITS)
-            if listing['quantity_unit'] is not None:
+            if listing['quantity_unit'] is None:
+                quantity_units.pop(listing['market'], None)
+            else:
                 quantity_units[listing['market']] = listing['quantity_unit']
             broker_class.MARKETS = markets
             broker_class.QUANTITY_UNITS = quantity_units

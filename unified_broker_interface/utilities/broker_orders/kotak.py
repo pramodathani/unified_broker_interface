@@ -31,6 +31,10 @@ class KotakOrders(BrokerOrders):
         ('bse', 'securities', 'cash'): 'bse_cm',
         ('nse', 'securities', 'derivative'): 'nse_fo',
         ('bse', 'securities', 'derivative'): 'bse_fo',
+        ('mcx', 'commodity', 'derivative'): 'mcx_fo',
+    }
+    QUANTITY_UNITS = {
+        ('mcx', 'commodity', 'derivative'): 'broker_lot_size',
     }
     DEFAULT_BASE_URL = 'https://gw-napi.kotaksecurities.com'
     ORDER_TYPE_CODES = {

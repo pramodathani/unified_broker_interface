@@ -33,6 +33,16 @@ class StoxkartOrders(BrokerOrders):
         ('bse', 'securities', 'cash'): 'BSE',
         ('nse', 'securities', 'derivative'): 'NFO',
         ('bse', 'securities', 'derivative'): 'BFO',
+        ('mcx', 'commodity', 'derivative'): 'MCX',
+        ('nse', 'currency', 'derivative'): 'NSECD',
+        ('bse', 'currency', 'derivative'): 'BSECD',
+        ('ncdex', 'commodity', 'derivative'): 'NCDEX',
+    }
+    QUANTITY_UNITS = {
+        ('mcx', 'commodity', 'derivative'): 'broker_lot_size',
+        ('nse', 'currency', 'derivative'): 'broker_lot_size',
+        ('bse', 'currency', 'derivative'): 'broker_lot_size',
+        ('ncdex', 'commodity', 'derivative'): 'broker_lot_size',
     }
     ALGO_IDENTIFIER = '99999'
     ORDER_TYPE_CODES = {

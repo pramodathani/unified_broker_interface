@@ -29,6 +29,12 @@ class NorenOrders(BrokerOrders):
         ('bse', 'securities', 'cash'): 'BSE',
         ('nse', 'securities', 'derivative'): 'NFO',
         ('bse', 'securities', 'derivative'): 'BFO',
+        ('mcx', 'commodity', 'derivative'): 'MCX',
+        ('nse', 'currency', 'derivative'): 'CDS',
+    }
+    QUANTITY_UNITS = {
+        ('mcx', 'commodity', 'derivative'): 'broker_lot_size',
+        ('nse', 'currency', 'derivative'): 'broker_lot_size',
     }
     ORDER_TYPE_CODES = {
         'MARKET': 'MKT',

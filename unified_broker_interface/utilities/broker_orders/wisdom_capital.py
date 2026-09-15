@@ -30,6 +30,18 @@ class WisdomCapitalOrders(BrokerOrders):
         ('bse', 'securities', 'cash'): 'BSECM',
         ('nse', 'securities', 'derivative'): 'NSEFO',
         ('bse', 'securities', 'derivative'): 'BSEFO',
+        ('mcx', 'commodity', 'derivative'): 'MCXFO',
+        ('nse', 'commodity', 'derivative'): 'NSECO',
+        ('nse', 'currency', 'derivative'): 'NSECD',
+        ('bse', 'currency', 'derivative'): 'BSECD',
+        ('ncdex', 'commodity', 'derivative'): 'NCDEX',
+    }
+    QUANTITY_UNITS = {
+        ('mcx', 'commodity', 'derivative'): 'broker_lot_size',
+        ('nse', 'commodity', 'derivative'): 'broker_lot_size',
+        ('nse', 'currency', 'derivative'): 'broker_lot_size',
+        ('bse', 'currency', 'derivative'): 'broker_lot_size',
+        ('ncdex', 'commodity', 'derivative'): 'broker_lot_size',
     }
     TAKES_AFTER_MARKET = False
     VERIFY_CERTIFICATE = False

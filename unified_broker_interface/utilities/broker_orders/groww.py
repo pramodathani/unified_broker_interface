@@ -31,6 +31,12 @@ class GrowwOrders(BrokerOrders):
         ('bse', 'securities', 'cash'): 'CASH',
         ('nse', 'securities', 'derivative'): 'FNO',
         ('bse', 'securities', 'derivative'): 'FNO',
+        ('mcx', 'commodity', 'derivative'): 'COMMODITY',
+        ('nse', 'commodity', 'derivative'): 'COMMODITY',
+    }
+    QUANTITY_UNITS = {
+        ('mcx', 'commodity', 'derivative'): 'broker_lot_size',
+        ('nse', 'commodity', 'derivative'): 'broker_lot_size',
     }
     TAKES_AFTER_MARKET = False
     ORDER_TYPE_CODES = {

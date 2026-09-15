@@ -31,6 +31,12 @@ class FyersOrders(BrokerOrders):
         ('bse', 'securities', 'cash'): 'BSE',
         ('nse', 'securities', 'derivative'): 'NSE',
         ('bse', 'securities', 'derivative'): 'BSE',
+        ('mcx', 'commodity', 'derivative'): 'MCX',
+        ('nse', 'currency', 'derivative'): 'NSE',
+    }
+    QUANTITY_UNITS = {
+        ('mcx', 'commodity', 'derivative'): 'broker_lot_size',
+        ('nse', 'currency', 'derivative'): 'broker_lot_size',
     }
     ORDER_TYPE_CODES = {
         'LIMIT': 1,

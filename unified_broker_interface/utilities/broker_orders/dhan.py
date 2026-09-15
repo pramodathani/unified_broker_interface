@@ -29,6 +29,10 @@ class DhanOrders(BrokerOrders):
         ('bse', 'securities', 'cash'): 'BSE_EQ',
         ('nse', 'securities', 'derivative'): 'NSE_FNO',
         ('bse', 'securities', 'derivative'): 'BSE_FNO',
+        ('mcx', 'commodity', 'derivative'): 'MCX_COMM',
+    }
+    QUANTITY_UNITS = {
+        ('mcx', 'commodity', 'derivative'): 'broker_lot_size',
     }
     ORDER_TYPE_CODES = {
         'MARKET': 'MARKET',

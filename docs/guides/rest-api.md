@@ -773,11 +773,29 @@ market also how its order API counts quantity: in lots, in quotation units, or i
 size. The route converts the quantity accordingly. A broker passes over an order in a market it does not list,
 with a reason such as `does not take mcx commodity derivative orders`.
 
-!!! warning "No broker lists a currency or commodity market yet"
+Each broker's currency and commodity markets are listed below. Every listing counts quantity as lots times
+the broker's own lot size, the rule the brokers' documentation and staff give wherever they say anything;
+for CRUDEOILM, one lot of 10 barrels is sent as 1 to Zerodha, Dhan, Fyers and Wisdom Capital and as 10 to Kotak,
+Shoonya, Flattrade, Stoxkart and Groww.
 
-    Each broker's convention is being confirmed from its API documentation and then with one small order,
-    before its markets are listed. Until then a currency or commodity order is answered `503` with every
-    broker in `skipped`. See [Known issues](../contributing/known-issues.md).
+| Broker | Markets listed | How the quantity rule is known |
+| --- | --- | --- |
+| Zerodha | MCX, NSE commodities (`NCO`), NSE currencies (`CDS`), BSE currencies (`BCD`) | Kite forum answers by Zerodha staff |
+| Dhan | MCX | Dhan staff answers; currencies discontinued in April 2024 |
+| Shoonya, Flattrade | MCX, NSE currencies | Shoonya's documented rule for derivatives; Flattrade by the shared Noren platform |
+| Kotak | MCX | Inferred from Kotak's general rule; currencies not supported in its API |
+| Stoxkart | MCX, NSE currencies, BSE currencies, NCDEX | Inferred; BSE currencies and NCDEX are not in its order documentation |
+| Wisdom Capital | MCX, NSE commodities, NSE currencies, BSE currencies, NCDEX | XTS documentation, whose own examples contradict it |
+| Fyers | MCX, NSE currencies | Unknown |
+| Groww | MCX, NSE commodities | Unknown; its documentation contradicts itself on whether MCX is supported |
+| INDmoney | none | Its API supports none of these markets |
+
+!!! danger "These listings were opened on 2026-09-15 before a live order confirmed them"
+
+    The quantity rule is confirmed by broker staff only at Zerodha and Dhan. At every other broker a wrong rule
+    would place an order many times too large or small. Try each broker with `dry_run` and check the quantity
+    in the request before sending. An NCDEX `quantity` is in the unit Stoxkart's lot size counts, tonnes, not
+    in the quintals prices are quoted in. See [Known issues](../contributing/known-issues.md).
 
 For a securities order the lot is the chosen broker's `lot_size`. For every order the tick is the `tick_size` most
 brokers agree on, which is what `/api/instruments/details` answers.
