@@ -22,6 +22,9 @@ class WisdomCapitalOrders(BrokerOrders):
     CANCEL_SETTINGS_FIELDS = [
         'ucc_code',
     ]
+    MAXIMUM_IDLE_SECONDS = 45.0
+    WARM_URL = 'https://trade.wisdomcapital.in/'
+    WARM_INTERVAL_SECONDS = 15.0
     MARKETS = {
         ('nse', 'securities', 'cash'): 'NSECM',
         ('bse', 'securities', 'cash'): 'BSECM',

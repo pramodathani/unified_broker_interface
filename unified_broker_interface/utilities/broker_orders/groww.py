@@ -23,6 +23,9 @@ class GrowwOrders(BrokerOrders):
     IDENTIFIER_FIELD = 'order_symbol'
     PLACE_SETTINGS_FIELDS = []
     CANCEL_SETTINGS_FIELDS = []
+    MAXIMUM_IDLE_SECONDS = 300.0
+    WARM_URL = 'https://api.groww.in/'
+    WARM_INTERVAL_SECONDS = 60.0
     MARKETS = {
         ('nse', 'securities', 'cash'): 'CASH',
         ('bse', 'securities', 'cash'): 'CASH',

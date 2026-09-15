@@ -26,6 +26,9 @@ from unified_broker_interface.blueprints.base import authenticated
 from unified_broker_interface.utilities.broker_orders.utilities.cancel_order_request import (
     CancelOrderRequest,
 )
+from unified_broker_interface.utilities.broker_orders.utilities.connection_warmer import (
+    ConnectionWarmer,
+)
 from unified_broker_interface.utilities.broker_orders.utilities.instrument import (
     Instrument,
 )
@@ -84,6 +87,7 @@ class OrdersBlueprint(BaseBlueprint):
         broker_orders (dict): Each broker's name to its order class instance, built once per worker.
         broker_selector (BrokerSelector): The algorithm that orders the brokers an order is offered to, named by `UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_SELECTOR`.
         instrument_cache (InstrumentCache): This worker's copy of the catalogue data orders have read under the current warm.
+        connection_warmers (list): One `ConnectionWarmer` per broker named in `UNIFIED_BROKER_INTERFACE_API_ORDER_WARM_BROKERS`, each running on its own daemon thread.
         logger (logging.Logger): The logger for failures that do not change an answer.
     """
 
@@ -120,6 +124,33 @@ class OrdersBlueprint(BaseBlueprint):
             )
         self.broker_selector = BROKER_SELECTOR_CLASSES[selector_name]()
         self.instrument_cache = InstrumentCache()
+        self.connection_warmers = []
+        self.start_connection_warmers()
+
+    def start_connection_warmers(self):
+        """Starts a connection warmer for each broker named in `UNIFIED_BROKER_INTERFACE_API_ORDER_WARM_BROKERS`.
+
+        Warming only saves time, so nothing about it may stop the API: an unknown broker name is logged and ignored, and any other failure is logged and leaves warming off. A broker without a `WARM_URL`, such as Kotak, is pinged only once a request has named its host.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        try:
+            for broker_name in api_configuration['order_warm_brokers']:
+                if not broker_name:
+                    continue
+                broker_orders = self.broker_orders.get(broker_name)
+                if broker_orders is None:
+                    self.logger.warning(
+                        'not warming order connections to %r, which is not a broker',
+                        broker_name,
+                    )
+                    continue
+                warmer = ConnectionWarmer(broker_orders, self.logger)
+                warmer.start()
+                self.connection_warmers.append(warmer)
+        except Exception:
+            self.logger.exception('order connection warming could not start')
 
     @authenticated
     def details(self):

@@ -11,6 +11,8 @@ from unified_broker_interface.utilities.broker_orders.utilities.broker_request i
 class KotakOrders(BrokerOrders):
     """Kotak's order requests, sent as a `jData` form field to the host its login names.
 
+    Kotak's host comes from its login and differs between accounts and logins, so `WARM_URL` is None: a warmer pings nothing until the first Kotak request of the worker has named the host, and then keeps that host's connection warm.
+
     Attributes:
         DEFAULT_BASE_URL (str): The host used when the stored login names none.
         ORDER_TYPE_CODES (dict): The shared order types to Kotak's.
@@ -21,6 +23,9 @@ class KotakOrders(BrokerOrders):
     IDENTIFIER_FIELD = 'order_symbol'
     PLACE_SETTINGS_FIELDS = []
     CANCEL_SETTINGS_FIELDS = []
+    MAXIMUM_IDLE_SECONDS = 300.0
+    WARM_URL = None
+    WARM_INTERVAL_SECONDS = 60.0
     MARKETS = {
         ('nse', 'securities', 'cash'): 'nse_cm',
         ('bse', 'securities', 'cash'): 'bse_cm',

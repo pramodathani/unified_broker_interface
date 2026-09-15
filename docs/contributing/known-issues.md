@@ -54,6 +54,16 @@ that it never waits on PostgreSQL. Those keys expire at midnight, and the next w
 instrument mapping, so an after-market order sent in between is refused with `404`. Running
 `python -m stock_brokers.instruments.mapping.utilities.warm_cache` refills them for the latest mapping date.
 
+**The order connections' idle limits come from one measurement.** Each broker's `MAXIMUM_IDLE_SECONDS` in
+`unified_broker_interface/utilities/broker_orders/` is set below the idle timeout its server showed on
+2026-09-15, measured once from this host: 65 seconds at Shoonya and Wisdom Capital, 240 at Dhan, 400 at the
+Cloudflare-fronted Zerodha, Fyers, Groww, INDmoney and Flattrade, 600 at Kotak's `e43` host and more than 600
+at Stoxkart. A broker that later shortens its timeout below the limit brings back the failure the limit
+prevents: an order sent on a connection the server has already closed is answered `unknown`. Warming pings
+also reach Cloudflare's bot protection at four of those hosts, which set a cookie on a plain `HEAD /`, and
+INDmoney answers it `403`; no block has been seen, but a broker's firewall reacting to the pings is why warming
+is off unless `UNIFIED_BROKER_INTERFACE_API_ORDER_WARM_BROKERS` names the broker.
+
 **No broker takes currency or commodity orders yet.** `POST /api/orders/place` accepts orders in every
 segment on NSE, BSE, MCX and NCDEX except indices and uncategorised instruments, but each broker's order
 class lists only NSE and BSE securities in its `MARKETS`, so a currency or commodity order is answered `503`

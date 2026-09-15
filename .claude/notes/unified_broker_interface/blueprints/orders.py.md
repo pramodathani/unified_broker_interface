@@ -65,7 +65,9 @@ Every item below cost at least one round trip in an earlier version.
 
 ## Connection reuse
 
-`requests.request` opens a new TCP and TLS connection for every call, which alone can cost a hundred milliseconds or more. Each broker's `BrokerOrders` instance keeps one `requests.Session`, and the blueprint builds one instance per broker when it is built, so once per gunicorn worker, and later orders from the same worker reuse the open connection. The session used to be created lazily under a lock on the first order to a broker; creating it in the constructor instead opens no connection, so the lock is gone. urllib3's pool is safe to share between the worker's threads, and none of the order calls rely on cookies.
+`requests.request` opens a new TCP and TLS connection for every call. Each broker's `BrokerOrders` instance keeps one `requests.Session`, and the blueprint builds one instance per broker when it is built, so once per gunicorn worker, and later orders from the same worker reuse the open connection. The session used to be created lazily under a lock on the first order to a broker; creating it in the constructor opens no connection, so the lock is gone.
+
+On 2026-09-15 the user asked for connections to be kept warm, with the hard condition that warming must never make an order fail in any case, such as a closed connection. The idle limit, the warming pings and the measurement behind their numbers are described in the note on `unified_broker_interface/utilities/broker_orders/base.py`. `start_connection_warmers` catches everything and ignores unknown names, because a warming setting that stopped the API would itself make orders fail.
 
 ## Choosing the broker
 

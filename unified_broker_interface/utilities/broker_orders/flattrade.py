@@ -9,6 +9,9 @@ class FlattradeOrders(NorenOrders):
     BROKER_NAME = 'flattrade'
     BASE_URL = 'https://piconnect.flattrade.in/PiConnectAPI'
     ACCOUNT_SETTINGS_FIELD = 'username'
+    MAXIMUM_IDLE_SECONDS = 300.0
+    WARM_URL = 'https://piconnect.flattrade.in/'
+    WARM_INTERVAL_SECONDS = 60.0
     PLACE_SETTINGS_FIELDS = [
         'username',
     ]

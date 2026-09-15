@@ -1,11 +1,20 @@
 """What every broker's order class shares: whether it can take an order, the one HTTP call, and the reading of error answers."""
 
+import re
+import threading
 import time
+import urllib.parse
+import warnings
 
 import requests
+import urllib3.exceptions
+import urllib3.util.wait
 
 from unified_broker_interface.utilities.broker_orders.utilities.broker_answer import (
     BrokerAnswer,
+)
+from unified_broker_interface.utilities.broker_orders.utilities.connection_pool import (
+    IdleLimitedAdapter,
 )
 from unified_broker_interface.utilities.broker_orders.utilities.place_order_request import (
     PlaceOrderRequest,
@@ -31,7 +40,15 @@ class BrokerOrders:
         TIMEOUT_SECONDS (tuple): The connect and read timeouts of the HTTP call.
         ERROR_CODE_KEYS (list): The body fields an error answer's code is read from, in order.
         ERROR_MESSAGE_KEYS (list): The body fields an error answer's message is read from, in order.
+        MAXIMUM_IDLE_SECONDS (float): How long a pooled connection may sit idle and still carry a request; an older one is closed and a new connection opened instead, well before the broker's server would close it.
+        WARM_URL (str | None): The public URL a warming ping is sent to when no request has named this broker's host yet, or None when the broker cannot be warmed.
+        WARM_INTERVAL_SECONDS (float): How often a warming ping is sent, shorter than `MAXIMUM_IDLE_SECONDS`.
+        WARM_TIMEOUT_SECONDS (tuple): The connect and read timeouts of a warming ping.
+        WARM_SETTLE_SECONDS (float): How long a ping's connection is watched after its answer before it is returned to the pool, so a connection the server closes straight after answering never reaches an order.
         session (requests.Session): The session every request to this broker is sent through, so later requests reuse its open connection.
+        adapter (IdleLimitedAdapter): The session's adapter, whose pools refuse connections idle longer than `MAXIMUM_IDLE_SECONDS`.
+        origin_lock (threading.Lock): Guards `last_origin`.
+        last_origin (str | None): The scheme and host of the latest request sent to this broker, such as `https://api.kite.trade/`.
     """
 
     BROKER_NAME = None
@@ -63,13 +80,37 @@ class BrokerOrders:
         'errMsg',
     ]
 
+    MAXIMUM_IDLE_SECONDS = 30.0
+    WARM_URL = None
+    WARM_INTERVAL_SECONDS = 20.0
+    WARM_TIMEOUT_SECONDS = (
+        3.05,
+        5,
+    )
+    WARM_SETTLE_SECONDS = 1.0
+
     def __init__(self):
         """Builds the broker's order class with a session that has no connection open yet.
+
+        The session's adapter is requests' default adapter except that its pools close a connection idle longer than `MAXIMUM_IDLE_SECONDS` instead of reusing it.
+        For a broker whose certificate is deliberately not checked, urllib3's warning about that host is silenced, because a warmer would otherwise log it on every ping.
 
         Returns:
             None: This method returns nothing.
         """
         self.session = requests.Session()
+        self.adapter = IdleLimitedAdapter(self.MAXIMUM_IDLE_SECONDS)
+        self.session.mount('https://', self.adapter)
+        self.session.mount('http://', self.adapter)
+        self.origin_lock = threading.Lock()
+        self.last_origin = None
+        if not self.VERIFY_CERTIFICATE and self.WARM_URL is not None:
+            host = urllib.parse.urlsplit(self.WARM_URL).hostname
+            warnings.filterwarnings(
+                'ignore',
+                message=f'.*{re.escape(host)}.*',
+                category=urllib3.exceptions.InsecureRequestWarning,
+            )
 
     def missing_settings(self, settings, settings_fields):
         """Lists the account settings a request needs that the broker's settings lack.
@@ -270,6 +311,7 @@ class BrokerOrders:
         Returns:
             BrokerAnswer: The answer, with `status_code` and `response_body` set when the broker answered.
         """
+        self.remember_origin(broker_request.url)
         answer = BrokerAnswer(time.perf_counter())
         response = None
         try:
@@ -299,6 +341,72 @@ class BrokerOrders:
             except ValueError:
                 answer.response_body = response.text[:300]
         return answer
+
+    def remember_origin(self, url):
+        """Remembers the scheme and host a request is sent to, so warming pings reach the same connection pool.
+
+        Args:
+            url (str): The request's URL.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        parts = urllib.parse.urlsplit(url)
+        with self.origin_lock:
+            self.last_origin = f'{parts.scheme}://{parts.netloc}/'
+
+    def warm_url(self):
+        """The URL a warming ping is sent to: the host of the latest request, or `WARM_URL` before there has been one.
+
+        Returns:
+            str | None: The URL, or None when there is nothing to warm.
+        """
+        with self.origin_lock:
+            last_origin = self.last_origin
+        if last_origin is not None:
+            return last_origin
+        return self.WARM_URL
+
+    def warm_connection(self):
+        """Sends one `HEAD` request with no credentials to the broker's host, so a connection in the order pool is freshly used.
+
+        The ping goes straight to the session's adapter, so it shares the order requests' connection pool but never reads or writes the session's cookies or headers. After the answer, the connection is watched for `WARM_SETTLE_SECONDS`; it is returned to the pool only if the server has not closed it or sent anything in that time, and otherwise it is closed.
+
+        Returns:
+            str: `kept` when a healthy connection went back to the pool, `discarded` when the connection was closed instead, or `skipped` when there is no URL to warm.
+
+        Raises:
+            requests.exceptions.RequestException: When the ping fails; the pool has already closed that connection.
+        """
+        url = self.warm_url()
+        if url is None:
+            return 'skipped'
+        prepared_request = requests.Request('HEAD', url).prepare()
+        response = self.adapter.send(
+            prepared_request,
+            stream=True,
+            timeout=self.WARM_TIMEOUT_SECONDS,
+            verify=self.VERIFY_CERTIFICATE,
+        )
+        raw_response = response.raw
+        connection = raw_response.connection
+        healthy = False
+        try:
+            if connection is not None and connection.sock is not None:
+                closed_or_talking = urllib3.util.wait.wait_for_read(
+                    connection.sock,
+                    timeout=self.WARM_SETTLE_SECONDS,
+                )
+                healthy = not closed_or_talking
+            if healthy:
+                raw_response.read()
+        finally:
+            if not healthy and connection is not None:
+                connection.close()
+            raw_response.release_conn()
+        if healthy:
+            return 'kept'
+        return 'discarded'
 
     def error_code(self, response_fields):
         """Reads the code from an error answer.

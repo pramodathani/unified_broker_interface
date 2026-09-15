@@ -19,6 +19,9 @@ class IndmoneyOrders(BrokerOrders):
     IDENTIFIER_FIELD = 'broker_token'
     PLACE_SETTINGS_FIELDS = []
     CANCEL_SETTINGS_FIELDS = []
+    MAXIMUM_IDLE_SECONDS = 300.0
+    WARM_URL = 'https://api.indstocks.com/'
+    WARM_INTERVAL_SECONDS = 60.0
     MARKETS = {
         ('nse', 'securities', 'cash'): 'EQUITY',
         ('bse', 'securities', 'cash'): 'EQUITY',

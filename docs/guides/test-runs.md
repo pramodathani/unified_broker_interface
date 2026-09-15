@@ -1,6 +1,6 @@
 # Test runs
 
-`test_runs/` holds the manual scripts: three offline suites, the instrument download runner, the REST API
+`test_runs/` holds the manual scripts: four offline suites, the instrument download runner, the REST API
 test page, and a login check against the live brokers.
 
 !!! warning "`broker_login_test.py` logs in to live broker accounts"
@@ -31,9 +31,17 @@ test page, and a login check against the live brokers.
     order routes; after an intended change, `--record` rewrites the recording, and the diff of that file is the
     change to review.
 
+    **`connection_warming.py`** - the broker connection idle limit and connection warming, against a local
+    HTTP server on 127.0.0.1 that answers warming pings by resetting the connection, closing it straight after
+    answering or a moment later, answering with an error or a cookie, or answering too slowly, and that drops
+    a request arriving on a connection it has already timed out. Every check requires every order to be
+    accepted. It takes about 40 seconds and sends nothing beyond the machine. Run it after touching
+    `broker_orders/base.py`, `connection_pool.py` or `connection_warmer.py`.
+
     ```bash
     python -m test_runs.candle_parse
     python -m test_runs.unified_ticks_sessions
+    python -m test_runs.connection_warming
     python -m test_runs.order_routes
     python -m test_runs.order_routes --record   # after an intended change
     ```

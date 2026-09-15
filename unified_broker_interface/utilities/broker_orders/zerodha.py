@@ -21,6 +21,9 @@ class ZerodhaOrders(BrokerOrders):
     CANCEL_SETTINGS_FIELDS = [
         'api_key',
     ]
+    MAXIMUM_IDLE_SECONDS = 300.0
+    WARM_URL = 'https://api.kite.trade/'
+    WARM_INTERVAL_SECONDS = 60.0
     MARKETS = {
         ('nse', 'securities', 'cash'): 'NSE',
         ('bse', 'securities', 'cash'): 'BSE',

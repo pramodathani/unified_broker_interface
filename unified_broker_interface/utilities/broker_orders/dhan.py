@@ -21,6 +21,9 @@ class DhanOrders(BrokerOrders):
         'client_id',
     ]
     CANCEL_SETTINGS_FIELDS = []
+    MAXIMUM_IDLE_SECONDS = 180.0
+    WARM_URL = 'https://api.dhan.co/'
+    WARM_INTERVAL_SECONDS = 60.0
     MARKETS = {
         ('nse', 'securities', 'cash'): 'NSE_EQ',
         ('bse', 'securities', 'cash'): 'BSE_EQ',

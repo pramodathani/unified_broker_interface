@@ -25,6 +25,9 @@ class StoxkartOrders(BrokerOrders):
         'ucc_code',
         'api_key',
     ]
+    MAXIMUM_IDLE_SECONDS = 300.0
+    WARM_URL = 'https://openapi.stoxkart.com/'
+    WARM_INTERVAL_SECONDS = 60.0
     MARKETS = {
         ('nse', 'securities', 'cash'): 'NSE',
         ('bse', 'securities', 'cash'): 'BSE',

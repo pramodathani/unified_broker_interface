@@ -19,7 +19,7 @@ rest-api --dev           # Flask's development server, for local debugging
 
 The workers are threaded, so a long stream or a slow broker quote holds one thread rather than a whole
 worker, and is not cut off by gunicorn's timeout for a hung worker. The address and the token lifetime
-come from the environment. All six variables are optional, and each is read once when a worker starts.
+come from the environment. All seven variables are optional, and each is read once when a worker starts.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -28,6 +28,7 @@ come from the environment. All six variables are optional, and each is read once
 | `UNIFIED_BROKER_INTERFACE_API_TOKEN_TTL_SECONDS` | `86400` | How long an access token is accepted |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_EXCLUDED_BROKERS` | empty | Comma-separated broker names that `POST /api/orders/place` never sends to, such as `kotak,groww` |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_SELECTOR` | `round_robin` | How `POST /api/orders/place` orders the brokers: `round_robin` or `fixed_priority`; any other name stops the API from starting |
+| `UNIFIED_BROKER_INTERFACE_API_ORDER_WARM_BROKERS` | empty | Comma-separated broker names whose order connection each worker keeps warm, such as `zerodha,dhan`; see [Broker connections](#broker-connections). Unknown names are logged and ignored |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_PRIORITY` | empty | For `fixed_priority`, comma-separated broker names in order of preference, such as `zerodha,kotak`; brokers not named follow in the usual order |
 
 ## Endpoints
@@ -657,8 +658,9 @@ whichever selector ranks them.
 
 The endpoint is built for latency. Before the broker's own place-order call it reads Redis only, in one to
 three round trips, and it never reads MongoDB or PostgreSQL or calls a broker for anything else. It checks
-no funds, takes no rate-limit slot, checks no market hours, and starts no login. Each worker keeps one open
-HTTPS connection per broker, so only the first order a worker sends to a broker pays for the TLS handshake.
+no funds, takes no rate-limit slot, checks no market hours, and starts no login. Each worker keeps its HTTPS
+connections to each broker open, so an order usually does not pay for a new TLS handshake; see
+[Broker connections](#broker-connections).
 
 ```text
 request ──► check the body (no I/O)
@@ -687,6 +689,50 @@ Redis on every order.
 
     Only a warm writes `unified:catalogue:warm_identifier`. Until one has run, the workers keep no catalogue
     data and every order reads it from Redis, as before.
+
+#### Broker connections
+
+A new HTTPS connection to a broker costs a TCP and TLS handshake before the order itself. Measured from this
+host on 2026-09-15 with `HEAD /` and no login, a request on a new connection took 54 to 109 ms (median of three)
+and the same request on an open connection 23 to 43 ms, so an open connection saves roughly 15 to 75 ms.
+
+Brokers' servers close a connection that has been idle for a while. An order sent on a connection the server
+has just closed fails with a connection error and is answered `unknown` (504), although the broker never saw
+it. To rule that out, each broker's connections are never reused once they have been idle longer than a limit
+set well below the server's timeout; an older connection is closed and a new one opened, which costs a
+handshake and never an order. This applies whether or not warming is on.
+
+| Broker | Server's idle timeout (measured) | Idle limit | Warming ping every |
+| --- | --- | --- | --- |
+| Shoonya, Wisdom Capital | 65 s (nginx) | 45 s | 15 s |
+| Dhan | 240 s (AWS load balancer) | 180 s | 60 s |
+| Zerodha, Fyers, Groww, INDmoney, Flattrade | 400 s (Cloudflare) | 300 s | 60 s |
+| Kotak | 600 s | 300 s | 60 s |
+| Stoxkart | more than 600 s (AWS load balancer) | 300 s | 60 s |
+
+Warming is off unless `UNIFIED_BROKER_INTERFACE_API_ORDER_WARM_BROKERS` names brokers. For each one, every
+worker runs a background thread that sends `HEAD /` to the broker's host, with no credentials, more often than
+the idle limit, so an order finds a connection that is open and recently used. Nothing a ping does can make an
+order fail:
+
+- A ping never carries or stores cookies or login headers; it bypasses the session, so the order requests are
+  exactly what they were without warming.
+- After a ping's answer its connection is watched for a second, and goes back to the pool only if the server
+  has not closed it in that time. A connection a server closes straight after answering never reaches an order.
+- Any error a ping raises is caught in its thread and logged when a broker starts and stops failing.
+- A ping in progress holds its own connection; an order arriving at that moment uses another or opens one.
+- A misspelt name in the variable is logged and ignored rather than stopping the API.
+
+Kotak's host comes from its login, so its warmer starts pinging only after the worker's first Kotak request.
+`python -m test_runs.connection_warming` checks all of this against a local server that misbehaves on
+purpose; see [Test runs](test-runs.md).
+
+!!! warning "The idle limits come from one measurement"
+
+    If a broker shortens its server's idle timeout below the limit above, an order can again be answered
+    `unknown` after a quiet spell. The measurement is described in the note on
+    `unified_broker_interface/utilities/broker_orders/base.py` and in
+    [Known issues](../contributing/known-issues.md).
 
 The body is JSON. The vocabulary is the [shared one](../architecture/contracts.md#the-shared-vocabulary),
 written in capitals, though lower case is accepted.

@@ -51,7 +51,8 @@ api_configuration = {
     'token_ttl_seconds': int(os.getenv('UNIFIED_BROKER_INTERFACE_API_TOKEN_TTL_SECONDS', '86400')),
     'order_excluded_brokers': os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_EXCLUDED_BROKERS', '').replace(' ', '').lower().split(','),
     'order_broker_selector': os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_SELECTOR', 'round_robin').strip().lower(),
-    'order_broker_priority': os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_PRIORITY', '').replace(' ', '').lower().split(',')
+    'order_broker_priority': os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_PRIORITY', '').replace(' ', '').lower().split(','),
+    'order_warm_brokers': os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_WARM_BROKERS', '').replace(' ', '').lower().split(',')
 }
 
 logging.basicConfig(format='%(asctime)s %(levelname)-8s %(name)s %(message)s', level=logging.INFO, datefmt="%Y-%m-%d %H:%M:%S")

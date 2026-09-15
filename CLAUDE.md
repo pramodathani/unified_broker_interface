@@ -19,6 +19,7 @@ There is no `pyproject.toml`, no build step and no pytest suite. The project roo
 | Offline candle parser tests | `python -m test_runs.candle_parse` |
 | Offline session calendar tests | `python -m test_runs.unified_ticks_sessions` |
 | Offline order route tests | `python -m test_runs.order_routes` (`--record` rewrites `test_runs/fixtures/order_routes.jsonl` after an intended change) |
+| Offline connection warming tests | `python -m test_runs.connection_warming` (a local HTTP server that misbehaves; about 40 seconds) |
 | Download instrument masters | `python -m test_runs.download_instruments zerodha dhan` (no arguments means every broker) |
 | Apply broker schema and instrument DDL | `python -m stock_brokers.instruments.sql.apply_ddl` |
 | Apply price history DDL | `python -m stock_brokers.instruments.historical.utilities.sql.apply_ddl` |
@@ -28,7 +29,7 @@ There is no `pyproject.toml`, no build step and no pytest suite. The project roo
 | Docs, live reload | `mkdocs serve` |
 | Docs, as CI should build them | `mkdocs build --strict` |
 
-The three offline suites are plain scripts, not pytest files, so there is no way to run a single case other than editing or importing the module. They need no Redis, database, credentials or network, though `order_routes` imports the API and so reads `.env`. `order_routes` compares the order routes' statuses, bodies, outgoing broker requests and Redis round trips with a recording, so a refactor of `unified_broker_interface/blueprints/orders.py` must leave it unchanged.
+The four offline suites are plain scripts, not pytest files, so there is no way to run a single case other than editing or importing the module. They need no Redis, database, credentials or network, though `order_routes` imports the API and so reads `.env`. `order_routes` compares the order routes' statuses, bodies, outgoing broker requests and Redis round trips with a recording, so a refactor of `unified_broker_interface/blueprints/orders.py` must leave it unchanged.
 
 `test_runs/broker_login_test.py` logs in to live broker accounts, and anything under `bin/<broker>/` reaches real trading accounts, so do not run them without the user's say-so.
 

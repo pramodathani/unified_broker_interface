@@ -23,6 +23,9 @@ class FyersOrders(BrokerOrders):
     CANCEL_SETTINGS_FIELDS = [
         'app_id',
     ]
+    MAXIMUM_IDLE_SECONDS = 300.0
+    WARM_URL = 'https://api-t1.fyers.in/'
+    WARM_INTERVAL_SECONDS = 60.0
     MARKETS = {
         ('nse', 'securities', 'cash'): 'NSE',
         ('bse', 'securities', 'cash'): 'BSE',

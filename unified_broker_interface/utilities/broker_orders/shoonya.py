@@ -9,6 +9,9 @@ class ShoonyaOrders(NorenOrders):
     BROKER_NAME = 'shoonya'
     BASE_URL = 'https://api.shoonya.com/NorenWClientAPI'
     ACCOUNT_SETTINGS_FIELD = 'ucc_code'
+    MAXIMUM_IDLE_SECONDS = 45.0
+    WARM_URL = 'https://api.shoonya.com/'
+    WARM_INTERVAL_SECONDS = 15.0
     PLACE_SETTINGS_FIELDS = [
         'ucc_code',
     ]
