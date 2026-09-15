@@ -776,7 +776,7 @@ with a reason such as `does not take mcx commodity derivative orders`.
 Each broker's currency and commodity markets are listed below. Every listing counts quantity as lots times
 the broker's own lot size, the rule the brokers' documentation and staff give wherever they say anything;
 for CRUDEOILM, one lot of 10 barrels is sent as 1 to Zerodha, Dhan, Fyers and Wisdom Capital and as 10 to Kotak,
-Shoonya, Flattrade, Stoxkart and Groww.
+Shoonya, Flattrade and Stoxkart.
 
 | Broker | Markets listed | How the quantity rule is known |
 | --- | --- | --- |
@@ -787,7 +787,7 @@ Shoonya, Flattrade, Stoxkart and Groww.
 | Stoxkart | MCX, NSE currencies, BSE currencies, NCDEX | Inferred; BSE currencies and NCDEX are not in its order documentation |
 | Wisdom Capital | MCX, NSE commodities, NSE currencies, BSE currencies, NCDEX | XTS documentation, whose own examples contradict it |
 | Fyers | MCX, NSE currencies | Unknown |
-| Groww | MCX, NSE commodities | Unknown; its documentation contradicts itself on whether MCX is supported |
+| Groww | none | A live MCX order on 2026-09-15 was refused with `GA001` "Orders are currently not supported for commodity segment."; its order documentation lists only `CASH` and `FNO` |
 | INDmoney | none | Its API supports none of these markets |
 
 !!! danger "These listings were opened on 2026-09-15 before a live order confirmed them"

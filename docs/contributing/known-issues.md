@@ -68,20 +68,27 @@ is off unless `UNIFIED_BROKER_INTERFACE_API_ORDER_WARM_BROKERS` names the broker
 for every segment to be ready for orders that evening, and each broker's `MARKETS` and `QUANTITY_UNITS` were given
 every currency and commodity market its documentation supports, all counting quantity as lots times the broker's
 own lot size. That rule comes from Zerodha's and Dhan's staff answers, from Shoonya's documented rule for
-derivatives, from XTS documentation whose own examples contradict it, and by inference elsewhere; Fyers and
-Groww are unknown, and Groww's documentation contradicts itself on whether MCX works at all. Zerodha's `NCO` and
-`BCD`, Groww's NSE commodity segment, Wisdom Capital's `NSECO` and Stoxkart's `BSECD` and `NCDEX` codes are not
-confirmed either. A wrong code is refused by the broker; a wrong quantity rule is not. Live orders are tested on MCX
-CRUDEOILM, whose lot is 1 at Zerodha, Dhan, Fyers and Wisdom Capital and 10 at the other five, with a limit buy about
-2% below the market. On 2026-09-15 at about 21:30, with CRUDEOILM's 21 September future at 10,043, one lot was sent
-at 9,842:
+derivatives, from XTS documentation whose own examples contradict it, and by inference elsewhere; Fyers is unknown.
+Groww's commodity markets were listed too and were removed the same evening, after a live order showed Groww's API
+takes no commodity orders. Zerodha's `NCO` and `BCD`, Wisdom Capital's `NSECO` and Stoxkart's `BSECD` and `NCDEX`
+codes are not confirmed either. A wrong code is refused by the broker; a wrong quantity rule is not. Live orders are
+tested on MCX CRUDEOILM, whose lot is 1 at Zerodha, Dhan, Fyers and Wisdom Capital and 10 at Kotak, Shoonya,
+Flattrade and Stoxkart, with a limit buy about 2% below the market. On 2026-09-15 at about 21:30, with CRUDEOILM's
+21 September future at 10,043, one lot was sent at 9,842:
 
 | Broker | Sent | Answer | What it shows |
 | --- | --- | --- | --- |
 | Zerodha | quantity 1 on `MCX`, NRML | HTTP 422 `InputException`: "MCX is disabled for your account", with a link to activate the segment in Console; nothing was placed | The request is accepted up to the account check; the quantity rule is still unconfirmed |
 | Dhan | quantity 1 on `MCX_COMM`, `MARGIN` | Accepted as order 23826091527008 (`TRANSIT`) in 72 ms, then `REJECTED` by Dhan's risk system: "You have insufficient funds. Please add Rs.25406.10 to trade." | Dhan recorded quantity 1. A shortfall of about Rs 25,400 fits the margin of one lot (about Rs 98,000 of oil) rather than ten, but the account's balance was not known, so this supports the rule without proving it |
 
-No order reached the exchange. The other seven brokers were not tested that evening. An insufficient-funds rejection
+At about 21:50 the same evening one lot of GOLDPETAL's 30 September future, whose lot is one gram at Groww and in
+the morning's contract size decision, was sent to Groww as quantity 1 on segment `COMMODITY`, a limit buy at 14,820
+with the market at 15,124. Groww answered HTTP 422 with `GA001` "Orders are currently not supported for commodity
+segment." in 85 ms, and `groww:orders:orders` gained no entry, so Groww created no order. Groww's order documentation
+lists only `CASH` and `FNO` for placing, listing and cancelling orders, so its `MARKETS` no longer lists MCX or NSE
+commodities, and a commodity order now passes Groww over instead of being refused there.
+
+No order reached the exchange. The other six brokers were not tested that evening. An insufficient-funds rejection
 names the margin wanted, which says whether a broker read the quantity as one lot or as ten, so an unfunded account
 can still be used to test the rule.
 
