@@ -65,8 +65,7 @@ def kotak_request(kotak, method, path, body=None):
     Call a Kotak path on the session's host and return the response in the API client's shape.
 
     Made here rather than through the API client, because the client drops `timeout`. Kotak's "No Data"
-    answer comes back with `data` as `[]`; any other `Not_Ok` body, and any HTTP error, raises
-    KotakAPIException.
+    answer comes back with `data` as `[]`; any other body whose `stat` is not `ok`, compared without regard to letter case, and any HTTP error, raises KotakAPIException.
 
     - `kotak` is the KotakAPI whose stored login supplies the host, `Auth` and `Sid`.
     - `method` is the HTTP method.
@@ -90,7 +89,8 @@ def kotak_request(kotak, method, path, body=None):
                'code': response.status_code}
     if isinstance(payload, dict) and payload.get('stCode') == NO_DATA_STATUS_CODE:
         return {**content, 'data': []}
-    if isinstance(payload, dict) and payload.get('stat') not in (None, 'Ok'):
+    status_text = payload.get('stat') if isinstance(payload, dict) else None
+    if status_text is not None and str(status_text).lower() != 'ok':
         message = str(payload.get('errMsg') or payload.get('emsg') or payload)
         raise KotakAPIException(code=payload.get('stCode'), message=message[:300])
     return {**content, 'data': payload.get('data') if isinstance(payload, dict) and 'data' in payload else payload}

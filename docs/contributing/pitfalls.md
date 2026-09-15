@@ -154,6 +154,16 @@ sell quantity, last quantity and every order book quantity are lots times Kotak'
 CRUDEOIL, 1250 for NATURALGAS, 1 for GOLD, whose contract lot is 100 grams. GOLD alone therefore looks
 like plain lots, which is how the older feed's figures were misread.
 
+**Kotak spells a successful `stat` as `ok` on some paths.** The `kotak_request` helper in every
+`bin/kotak/` REST script accepted only a `stat` of `Ok`, or no `stat` at all. The positions and trades
+paths answer `{"stat": "ok", "stCode": 200, "data": [...]}`, so every successful answer that carried rows
+was raised as `KotakAPIException: (200, "{'stat': 'ok', ...")`, logged as a failed poll and thrown away.
+An empty book never reached the check, because Kotak answers it with `stCode` 5203 ("No Data"), so the
+scripts looked healthy until the first trade of 2026-09-15 filled at 12:03. `kotak:portfolio:positions`
+and `kotak:orders:trades` then stayed stale for four hours while their services kept running; orders,
+funds and holdings kept working. The helpers now compare `stat` without regard to letter case. Test a
+Kotak poller with a non-empty book before trusting it.
+
 **Wisdom Capital's interactive socket needs `apiType=INTERACTIVE` in its socket.io query.**
 Without it the namespace answers "Socket joined successfully!" and the server closes the
 connection exactly ten seconds later, every time, at every heartbeat rate and with every user
