@@ -1288,6 +1288,17 @@ class OrderRoutesState:
                 trigger_price=2495.0,
             ),
         )
+        zerodha_book['MODSTOPLOSSMARKET'] = self.order_entry(
+            'PENDING',
+            {},
+            order_fields=self.limit_order(
+                'zerodha',
+                'NSE',
+                order_type='SL-M',
+                price=0.0,
+                trigger_price=2495.0,
+            ),
+        )
         zerodha_book['MODBRACKET'] = self.order_entry(
             'OPEN',
             {},
@@ -3343,6 +3354,14 @@ class OrderRoutesScenarios:
                 'modify_stop_loss_trigger_only',
                 self.modify_body(
                     'MODSTOPLOSS',
+                    trigger_price=2496,
+                    dry_run=True,
+                ),
+            ),
+            self.modify(
+                'modify_stop_loss_market_keeps_market_protection',
+                self.modify_body(
+                    'MODSTOPLOSSMARKET',
                     trigger_price=2496,
                     dry_run=True,
                 ),

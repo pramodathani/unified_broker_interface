@@ -11,7 +11,8 @@ class ZerodhaOrders(BrokerOrders):
 
     Attributes:
         SETTLED_REFUSALS (list): The Kite exception names that settle a server error as a refusal.
-        MARKET_PROTECTED_ORDER_TYPES (list): The order types a modification changing to them sends `market_protection` with.
+        MARKET_PROTECTED_ORDER_TYPES (list): The order types Kite refuses through its API without a non-zero `market_protection`, so placements and modifications of them send it.
+        AUTOMATIC_MARKET_PROTECTION (str): The `market_protection` value asking Kite to apply its own automatic protection.
     """
 
     BROKER_NAME = 'zerodha'
@@ -37,6 +38,7 @@ class ZerodhaOrders(BrokerOrders):
         'MARKET',
         'SL-M',
     ]
+    AUTOMATIC_MARKET_PROTECTION = '-1'
     MAXIMUM_IDLE_SECONDS = 300.0
     WARM_URL = 'https://api.kite.trade/'
     WARM_INTERVAL_SECONDS = 60.0
@@ -82,7 +84,7 @@ class ZerodhaOrders(BrokerOrders):
         }
 
     def build_place_request(self, order, instrument, handle, login, settings):
-        """Builds `POST /orders/{variety}`, where the variety is `amo` for an after-market order and `regular` otherwise.
+        """Builds `POST /orders/{variety}`, where the variety is `amo` for an after-market order and `regular` otherwise, with Kite's automatic `market_protection` on a MARKET or SL-M order, which Kite has refused without it since April 2026.
 
         Args:
             order (PlaceOrderRequest): The validated order.
@@ -109,6 +111,8 @@ class ZerodhaOrders(BrokerOrders):
             'trigger_price': order.trigger_price_text,
             'disclosed_quantity': order.disclosed_quantity,
         }
+        if order.order_type in self.MARKET_PROTECTED_ORDER_TYPES:
+            form['market_protection'] = self.AUTOMATIC_MARKET_PROTECTION
         if order.tag:
             form['tag'] = order.tag
         return BrokerRequest(
@@ -149,7 +153,7 @@ class ZerodhaOrders(BrokerOrders):
     ):
         """Builds `PUT /orders/{variety}/{order_id}`, with the variety Kite stored on the order.
 
-        Kite changes only the fields a modification sends. The order type is always sent, and a price or trigger price whenever the order type after the change takes one, because a stop-loss order sent only a new quantity has been answered with success and left unchanged. A quantity, disclosed quantity or validity is sent only when the caller changed it, because Kite reads an omitted quantity as leaving the pending quantity alone. A change to MARKET or SL-M sends `market_protection` of -1, Kite's automatic protection, which Kite has required on such placements since April 2026.
+        Kite changes only the fields a modification sends. The order type is always sent, and a price or trigger price whenever the order type after the change takes one, because a stop-loss order sent only a new quantity has been answered with success and left unchanged. A quantity, disclosed quantity or validity is sent only when the caller changed it, because Kite reads an omitted quantity as leaving the pending quantity alone. A modification that leaves the order MARKET or SL-M sends `market_protection` of -1, Kite's automatic protection, which Kite has required on such orders since April 2026 and which its staff say should be set again when an order is changed to market.
 
         Args:
             order_id (str): Zerodha's order id.
@@ -175,11 +179,8 @@ class ZerodhaOrders(BrokerOrders):
             form['disclosed_quantity'] = modification.disclosed_quantity
         if modification.changes('validity'):
             form['validity'] = modification.validity
-        protected = (
-            modification.order_type in self.MARKET_PROTECTED_ORDER_TYPES
-        )
-        if modification.changes('order_type') and protected:
-            form['market_protection'] = '-1'
+        if modification.order_type in self.MARKET_PROTECTED_ORDER_TYPES:
+            form['market_protection'] = self.AUTOMATIC_MARKET_PROTECTION
         return BrokerRequest(
             'PUT',
             f'https://api.kite.trade/orders/{variety}/{order_id}',

@@ -829,6 +829,15 @@ another broker, whatever the answer, because a second send could place the order
     accepted with status `AMO PENDING` and then cancelled, but no Stoxkart order has yet been placed during
     market hours or filled. See [Pitfalls](../contributing/pitfalls.md#placing-and-cancelling-orders).
 
+!!! note "Zerodha's MARKET and SL-M orders carry automatic market protection"
+
+    Since 1 April 2026 Kite refuses a MARKET or SL-M order sent through its API without a non-zero
+    `market_protection`, with `Market orders without market protection are not allowed via API. Please set
+    market protection or use a Limit order`, on every exchange including MCX. This endpoint therefore sends
+    `market_protection=-1`, which asks Zerodha to apply its own automatic protection, on every MARKET and SL-M
+    order to Zerodha, and nothing on LIMIT and SL orders, where Kite says it has no effect. A market order at
+    Zerodha can therefore fill at a price inside Zerodha's protection band rather than at any price.
+
 ```json
 {
   "broker": "zerodha", "instrument_id": "ead1abb8-3a2d-5952-9552-aa77d27b8619", "tag": null,
@@ -935,7 +944,7 @@ cannot change is answered `400` before anything is sent.
 
 | Broker | Request | Can change | Sent besides the changed fields |
 | --- | --- | --- | --- |
-| Zerodha | `PUT /orders/{variety}/{order_id}` form | every field | `order_type` always, `price` and `trigger_price` whenever the order type takes them, and `market_protection=-1` on a change to `MARKET` or `SL-M`; the quantity only when it changes, because Kite reads an omitted quantity as leaving the pending quantity alone |
+| Zerodha | `PUT /orders/{variety}/{order_id}` form | every field | `order_type` always, `price` and `trigger_price` whenever the order type takes them, and `market_protection=-1` whenever the order is `MARKET` or `SL-M` after the change; the quantity only when it changes, because Kite reads an omitted quantity as leaving the pending quantity alone |
 | Dhan | `PUT /v2/orders/{order_id}` JSON | every field | the whole order, with `dhanClientId` |
 | Fyers | `PATCH /api/v3/orders/sync` JSON | every field but `validity` | `id`, `type`, and `limitPrice` and `stopPrice` whenever the order type takes them; the quantity only when it changes |
 | Groww | `POST /v1/order/modify` JSON | `quantity`, `price`, `trigger_price`, `order_type` | `segment` from the stored order (answered `503` when absent), `order_type` and `quantity` |
