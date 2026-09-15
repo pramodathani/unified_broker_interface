@@ -19,7 +19,7 @@ rest-api --dev           # Flask's development server, for local debugging
 
 The workers are threaded, so a long stream or a slow broker quote holds one thread rather than a whole
 worker, and is not cut off by gunicorn's timeout for a hung worker. The address and the token lifetime
-come from the environment. All four variables are optional, and each is read once when a worker starts.
+come from the environment. All six variables are optional, and each is read once when a worker starts.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -27,6 +27,8 @@ come from the environment. All four variables are optional, and each is read onc
 | `UNIFIED_BROKER_INTERFACE_API_PORT` | `8080` | Port to bind |
 | `UNIFIED_BROKER_INTERFACE_API_TOKEN_TTL_SECONDS` | `86400` | How long an access token is accepted |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_EXCLUDED_BROKERS` | empty | Comma-separated broker names that `POST /api/orders/place` never sends to, such as `kotak,groww` |
+| `UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_SELECTOR` | `round_robin` | How `POST /api/orders/place` orders the brokers: `round_robin` or `fixed_priority`; any other name stops the API from starting |
+| `UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_PRIORITY` | empty | For `fixed_priority`, comma-separated broker names in order of preference, such as `zerodha,kotak`; brokers not named follow in the usual order |
 
 ## Endpoints
 
@@ -44,7 +46,7 @@ come from the environment. All four variables are optional, and each is read onc
 | `GET` | `/api/portfolio/positions` | `access-token` header | The account's open positions, net and day, merged across every broker, from `unified:portfolio:positions` |
 | `GET` | `/api/orders/details` | `access-token` header | Today's orders at every broker, from `unified:orders:orders` |
 | `GET` | `/api/orders/trades` | `access-token` header | Today's trades at every broker, from `unified:orders:trades` |
-| `POST` | `/api/orders/place` | `access-token` header | Places one order at the next broker in a round robin, see [Placing an order](#placing-an-order) |
+| `POST` | `/api/orders/place` | `access-token` header | Places one order at the broker the configured selector chooses, see [Placing an order](#placing-an-order) |
 | `DELETE` | `/api/orders/cancel` | `access-token` header | Cancels one order at the broker that holds it, see [Cancelling an order](#cancelling-an-order) |
 
 Errors come back as `{"error": "…"}`. A refused token is `401`, with a message saying whether it
@@ -632,9 +634,19 @@ names the company rather than a trading symbol, so its `tradingsymbol` is the re
 
 ### Placing an order
 
-`POST /api/orders/place` sends one order to one broker. The API chooses the broker, not the caller: the ten
-brokers take turns in a fixed order, and the turn is kept in a Redis counter that every gunicorn worker
-shares, so consecutive orders go to consecutive brokers.
+`POST /api/orders/place` sends one order to one broker. The API chooses the broker, not the caller. A
+broker selector ranks the brokers, and the order goes to the first one in that ranking that can take it.
+The selector is named by `UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_SELECTOR`:
+
+| Selector | How the brokers are ranked | Redis it reads |
+| --- | --- | --- |
+| `round_robin` (the default) | The brokers take turns in a fixed order, and the turn is kept in a Redis counter that every gunicorn worker shares, so consecutive orders go to consecutive brokers | `INCR unified:orders:round_robin`, in the same round trip as the instrument |
+| `fixed_priority` | Every order goes first to the brokers named in `UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_PRIORITY`, in that order, and then to the rest in the usual order | none |
+
+A new algorithm is a class of its own in `unified_broker_interface/utilities/broker_selection/`, added to the
+registry there; see [`BrokerSelector`][unified_broker_interface.utilities.broker_selection.base.BrokerSelector].
+Brokers excluded by `UNIFIED_BROKER_INTERFACE_API_ORDER_EXCLUDED_BROKERS` are never offered an order,
+whichever selector ranks them.
 
 !!! danger "This places real orders on live trading accounts"
 
@@ -653,8 +665,8 @@ worker sends to a broker pays for the TLS handshake.
 request ──► check the body (no I/O)
         ──► Redis: API token, mapping date, broker logins and settings
         ──► Redis: the instrument by its fields (only when there is no instrument_id)
-        ──► Redis: the identity, every broker's order handle, and the round-robin counter
-        ──► choose the broker, check lots and ticks (no I/O)
+        ──► Redis: the identity, every broker's order handle, and whatever the selector reads
+        ──► rank the brokers, choose the first that can take the order, check lots and ticks (no I/O)
         ──► one POST to the broker
 ```
 
@@ -692,8 +704,8 @@ curl -s -X POST localhost:8080/api/orders/place -H "access-token: $TOKEN" -H 'Co
           "product": "CNC", "order_type": "LIMIT", "quantity": 1, "price": "500.10", "dry_run": true}'
 ```
 
-When the broker whose turn it is cannot take the order, the next broker in the list is tried, and every
-broker passed over is listed in `skipped` with its reason. A broker is passed over when it is excluded by
+When the first broker in the ranking cannot take the order, the next one is tried, and every broker passed
+over is listed in `skipped` with its reason. A broker is passed over when it is excluded by
 `UNIFIED_BROKER_INTERFACE_API_ORDER_EXCLUDED_BROKERS`, has no mapping for the instrument, has no login or
 no account settings in Redis, or does not take the order: INDmoney takes no `SL` or `SL-M` orders, and
 Groww and Wisdom Capital take no after-market orders. Once an order has been sent it is never sent to

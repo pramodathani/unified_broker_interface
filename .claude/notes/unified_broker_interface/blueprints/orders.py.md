@@ -48,11 +48,23 @@ Every item below cost at least one round trip in an earlier version.
 
 `requests.request` opens a new TCP and TLS connection for every call, which alone can cost a hundred milliseconds or more. Each broker's `BrokerOrders` instance keeps one `requests.Session`, and the blueprint builds one instance per broker when it is built, so once per gunicorn worker, and later orders from the same worker reuse the open connection. The session used to be created lazily under a lock on the first order to a broker; creating it in the constructor instead opens no connection, so the lock is gone. urllib3's pool is safe to share between the worker's threads, and none of the order calls rely on cookies.
 
-## The round robin
+## Choosing the broker
 
-The turn is `INCR unified:orders:round_robin` modulo the number of brokers not excluded. A Redis counter was chosen over an in-process one because gunicorn runs two workers, and a counter in each would let the same broker take two orders in a row. The counter is incremented only after the body has passed its checks, so a malformed request does not use up a turn. It is incremented before the broker is chosen, though, so an order refused for its lot size or tick size still uses up a turn.
+On 2026-09-15 the user asked for the round robin to be replaceable by other selection methods, which can be plugged in and out. The choice is split in two. A `BrokerSelector` from `unified_broker_interface/utilities/broker_selection/` only ranks the brokers, and the blueprint walks that ranking and asks each broker's `BrokerOrders.place_skip_reason` whether it can take the order. The skip reasons therefore stay with the brokers they describe, whichever selector is configured, and `skipped` lists the brokers passed over before the chosen one exactly as it did before selectors existed. The blueprint also ignores any ranked name that is not in the rotation, so no selector can send an order to an excluded broker.
+
+A selector reads no store itself. `queue_redis_commands` adds its commands to the pipeline that also reads the instrument, so a selector never adds a round trip of its own. The selector is chosen by name from configuration when a worker starts, and an unknown name raises `ValueError` so the worker does not start, rather than routing orders some other way. The registry is a plain dictionary of classes, not an import by name, following the user's rule against dynamic power features.
+
+`record_outcome` runs after the broker has answered. The blueprint catches and logs any exception from it, because by then the order has been sent and a selector's bug must not turn a placed order into an HTTP 500.
+
+### The round robin
+
+`RoundRobinSelector` keeps the original algorithm. The turn is `INCR unified:orders:round_robin` modulo the number of brokers not excluded. A Redis counter was chosen over an in-process one because gunicorn runs two workers, and a counter in each would let the same broker take two orders in a row. The counter is incremented only after the body has passed its checks, so a malformed request does not use up a turn. It is incremented before the broker is chosen, though, so an order refused for its lot size or tick size still uses up a turn.
 
 When the broker whose turn it is cannot take the order, the method walks forward to the next broker, which means the broker after a skipped one takes two turns in a row. Nothing is retried once a request has been sent, because a timeout or a server error does not prove the order was not placed.
+
+### Fixed priority
+
+`FixedPrioritySelector` is the second algorithm, written so that there is more than one to plug in. It reads the preference once, when the worker starts, and queues no Redis command.
 
 ## Where each broker's request comes from
 

@@ -1547,6 +1547,7 @@ class OrderRoutesScenarios:
     """Builds the list of scenarios the suite runs.
 
     A scenario is a dictionary with a `name` and either one request or a list of `steps`.
+    A scenario may also name `selector` and `priority`, the broker selector configuration its blueprint is built with, or set `expect_construction_error` when building the blueprint should fail.
     A request has `route` (`place` or `cancel`), and optionally `headers`, `body` (a dictionary), `raw_body` (text), `query`, `counter` (the value the round-robin `INCR` returns), `excluded` (brokers to exclude), `answer` (the stubbed broker answer), `failing_round_trip`, and `changes` (Redis edits made before the request).
 
     Attributes:
@@ -1575,6 +1576,7 @@ class OrderRoutesScenarios:
         scenarios.extend(self.place_broker_request_scenarios())
         scenarios.extend(self.place_answer_scenarios())
         scenarios.extend(self.place_cache_scenarios())
+        scenarios.extend(self.place_selector_scenarios())
         scenarios.extend(self.cancel_parameter_scenarios())
         scenarios.extend(self.cancel_lookup_scenarios())
         scenarios.extend(self.cancel_broker_scenarios())
@@ -2475,6 +2477,76 @@ class OrderRoutesScenarios:
             },
         ]
 
+    def place_selector_scenarios(self):
+        """Builds the place scenarios about which broker selector a blueprint is built with.
+
+        Returns:
+            list: The scenarios.
+        """
+        return [
+            self.place(
+                'fixed_priority_without_a_preference',
+                self.market_order(),
+                selector='fixed_priority',
+            ),
+            self.place(
+                'fixed_priority_with_a_preference',
+                self.market_order(),
+                selector='fixed_priority',
+                priority=[
+                    'zerodha',
+                    'kotak',
+                ],
+            ),
+            self.place(
+                'fixed_priority_passes_over_a_broker_that_cannot_take_it',
+                self.market_order(),
+                selector='fixed_priority',
+                priority=[
+                    'fyers',
+                    'kotak',
+                ],
+                changes=[
+                    self.hash_change('last_login', 'fyers', None),
+                ],
+            ),
+            self.place(
+                'fixed_priority_never_offers_an_excluded_broker',
+                self.market_order(),
+                selector='fixed_priority',
+                priority=[
+                    'zerodha',
+                ],
+                excluded=[
+                    'zerodha',
+                ],
+            ),
+            self.place(
+                'fixed_priority_ignores_unknown_names',
+                self.market_order(),
+                selector='fixed_priority',
+                priority=[
+                    'upstox',
+                    'groww',
+                ],
+            ),
+            self.place(
+                'fixed_priority_sends_a_sequence_to_one_broker',
+                None,
+                selector='fixed_priority',
+                steps=[
+                    self.place('first', self.market_order()),
+                    self.place('second', self.market_order()),
+                ],
+            ),
+            self.place(
+                'unknown_selector_stops_the_blueprint',
+                self.market_order(),
+                selector='random_choice',
+                expect_construction_error=True,
+            ),
+        ]
+
     def cancel_parameter_scenarios(self):
         """Builds the cancel scenarios about the token and the parameters.
 
@@ -2858,6 +2930,28 @@ class OrderRoutesSuite:
             dict: The scenario's recorded result.
         """
         self.fake_redis = OrderRoutesState().build()
+        api_configuration['order_broker_selector'] = scenario.get(
+            'selector',
+            'round_robin',
+        )
+        priority = scenario.get('priority')
+        if priority is None:
+            priority = [
+                '',
+            ]
+        api_configuration['order_broker_priority'] = priority
+        if scenario.get('expect_construction_error'):
+            try:
+                self.build_client()
+            except ValueError as error:
+                return {
+                    'name': scenario['name'],
+                    'construction_error': str(error),
+                }
+            return {
+                'name': scenario['name'],
+                'construction_error': None,
+            }
         client = self.build_client()
         if 'steps' not in scenario:
             result = self.send(client, scenario)
@@ -2884,6 +2978,8 @@ class OrderRoutesSuite:
         original_request = requests.Session.request
         original_uuid4 = uuid.uuid4
         original_excluded = api_configuration['order_excluded_brokers']
+        original_selector = api_configuration['order_broker_selector']
+        original_priority = api_configuration['order_broker_priority']
         blueprint_base.get_cache = self.fake_cache
         blueprint_base.get_mongo_db = self.fake_mongo_database
         requests.Session.request = self.network.request
@@ -2898,6 +2994,8 @@ class OrderRoutesSuite:
             requests.Session.request = original_request
             uuid.uuid4 = original_uuid4
             api_configuration['order_excluded_brokers'] = original_excluded
+            api_configuration['order_broker_selector'] = original_selector
+            api_configuration['order_broker_priority'] = original_priority
         return results
 
     def encode(self, result):

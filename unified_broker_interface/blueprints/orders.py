@@ -5,7 +5,7 @@
 | --- | --- |
 | `GET /details` | Every broker's orders, from `unified:orders:orders`, kept by `bin/unified/orders` every half second |
 | `GET /trades` | Every broker's trades, from `unified:orders:trades`, kept by `bin/unified/trades` every half second |
-| `POST /place` | Places one order at the next broker in a round robin, reading only Redis before the broker's place-order call |
+| `POST /place` | Places one order at the first broker the configured selector ranks that can take it, reading only Redis before the broker's place-order call |
 | `DELETE /cancel` | Cancels one order at the broker whose order book in Redis holds its order id |
 
 `GET /details` and `GET /trades` ask no broker. `POST /place` and `DELETE /cancel` each send exactly one request to one broker and never read MongoDB or PostgreSQL, so that the API's own work adds as little as possible to the time the broker takes.
@@ -44,8 +44,12 @@ from unified_broker_interface.utilities.broker_orders.utilities.stored_order imp
 from unified_broker_interface.utilities.broker_orders.utilities.stored_order import (
     StoredOrder,
 )
+from unified_broker_interface.utilities.broker_selection.utilities.registry import (
+    BROKER_SELECTOR_CLASSES,
+)
 from unified_broker_interface.utilities.unified_documents import read_document
 from utilities.configurations import api_configuration
+from utilities.configurations import get_logger
 
 
 class RefusedRequestError(Exception):
@@ -77,6 +81,8 @@ class OrdersBlueprint(BaseBlueprint):
     Attributes:
         broker_names (list): Every broker's name, in the order the brokers take turns.
         broker_orders (dict): Each broker's name to its order class instance, built once per worker.
+        broker_selector (BrokerSelector): The algorithm that orders the brokers an order is offered to, named by `UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_SELECTOR`.
+        logger (logging.Logger): The logger for failures that do not change an answer.
     """
 
     name = 'orders'
@@ -88,18 +94,29 @@ class OrdersBlueprint(BaseBlueprint):
     ]
 
     def __init__(self):
-        """Builds the blueprint and one order class per broker, with no broker connection open yet.
+        """Builds the blueprint, one order class per broker with no broker connection open yet, and the configured broker selector.
 
         Returns:
             None: This method returns nothing.
+
+        Raises:
+            ValueError: When the configured broker selector is not a known one, so a misspelt name stops the worker from starting rather than routing orders some other way.
         """
         super().__init__()
+        self.logger = get_logger('rest_api.orders')
         self.broker_names = []
         self.broker_orders = {}
         for broker_order_class in BROKER_ORDER_CLASSES:
             broker_orders = broker_order_class()
             self.broker_names.append(broker_orders.BROKER_NAME)
             self.broker_orders[broker_orders.BROKER_NAME] = broker_orders
+        selector_name = api_configuration['order_broker_selector']
+        if selector_name not in BROKER_SELECTOR_CLASSES:
+            known_names = ', '.join(BROKER_SELECTOR_CLASSES)
+            raise ValueError(
+                f'unknown order broker selector {selector_name!r}; known selectors are {known_names}'
+            )
+        self.broker_selector = BROKER_SELECTOR_CLASSES[selector_name]()
 
     @authenticated
     def details(self):
@@ -236,7 +253,7 @@ class OrdersBlueprint(BaseBlueprint):
         return self.refuse(f'Redis could not be read: {error}', 503)
 
     def place(self):
-        """Places one order at the next broker in the round robin.
+        """Places one order at the first broker the configured broker selector ranks that can take it.
 
         The JSON body names the instrument by `instrument_id`, or by `exchange`, `segment` and the segment's identity fields (`symbol`, or `underlying_symbol` and `expiry_date`, and for an option `strike_price` and `option_type`).
         It gives `transaction_type` (BUY or SELL), `product` (CNC, MIS or NRML), `order_type` (MARKET, LIMIT, SL or SL-M) and `quantity` in units.
@@ -306,7 +323,11 @@ class OrdersBlueprint(BaseBlueprint):
             pipeline = self.cache.pipeline(transaction=False)
             pipeline.hget(catalogue_key_prefix + 'identity', instrument_id)
             pipeline.hget(catalogue_key_prefix + 'order_handles', instrument_id)
-            pipeline.incr('unified:orders:round_robin')
+            self.broker_selector.queue_redis_commands(
+                pipeline,
+                order,
+                instrument_id,
+            )
             second_replies = pipeline.execute()
         except redis.RedisError as error:
             raise self.redis_unreadable(error)
@@ -315,13 +336,19 @@ class OrdersBlueprint(BaseBlueprint):
             second_replies[0],
             second_replies[1],
         )
-        round_robin_counter = second_replies[2]
+        selector_replies = second_replies[2:]
 
+        ranked_brokers = self.broker_selector.ranked_brokers(
+            order,
+            instrument,
+            rotation,
+            selector_replies,
+        )
         broker_orders, skipped = self.choose_broker(
             order,
             instrument,
             rotation,
-            round_robin_counter,
+            ranked_brokers,
             login_texts,
             settings_texts,
         )
@@ -360,6 +387,7 @@ class OrdersBlueprint(BaseBlueprint):
             }), 200
 
         answer = broker_orders.send_place(broker_request)
+        self.record_outcome(broker_name, answer)
         preparation_milliseconds = (answer.sent_at - started_at) * 1000
         return jsonify({
             'broker': broker_name,
@@ -463,22 +491,41 @@ class OrdersBlueprint(BaseBlueprint):
             raise self.refuse(message, 400)
         return instrument
 
+    def record_outcome(self, broker_name, answer):
+        """Hands a sent order's answer to the broker selector, so a selector's failure cannot change the answer to an order already sent.
+
+        Args:
+            broker_name (str): The broker the order was sent to.
+            answer (BrokerAnswer): The broker's answer.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        try:
+            self.broker_selector.record_outcome(broker_name, answer)
+        except Exception:
+            self.logger.exception(
+                'broker selector %s failed to record an outcome from %s',
+                self.broker_selector.NAME,
+                broker_name,
+            )
+
     def choose_broker(
         self,
         order,
         instrument,
         rotation,
-        round_robin_counter,
+        ranked_brokers,
         login_texts,
         settings_texts,
     ):
-        """Chooses the broker whose turn it is, walking forward past every broker that cannot take the order.
+        """Offers the order to the brokers in the selector's order, passing over every broker that cannot take it.
 
         Args:
             order (PlaceOrderRequest): The validated order.
             instrument (Instrument): The tradeable instrument.
-            rotation (list): The brokers taking turns, in order.
-            round_robin_counter (int): The round-robin counter after this order's increment.
+            rotation (list): The broker names not excluded by configuration.
+            ranked_brokers (list): The broker names in the order the selector ranked them; a name not in `rotation` is ignored.
             login_texts (list): Every broker's login as Redis holds it, in `broker_names` order.
             settings_texts (list): Every broker's settings as Redis holds them, in `broker_names` order.
 
@@ -489,9 +536,11 @@ class OrdersBlueprint(BaseBlueprint):
             RefusedRequestError: With HTTP 503 when no broker can take the order.
         """
         skipped = []
-        start_index = round_robin_counter % len(rotation)
-        for offset in range(len(rotation)):
-            broker_name = rotation[(start_index + offset) % len(rotation)]
+        offered = []
+        for broker_name in ranked_brokers:
+            if broker_name not in rotation or broker_name in offered:
+                continue
+            offered.append(broker_name)
             position = self.broker_names.index(broker_name)
             broker_orders = self.broker_orders[broker_name]
             reason = broker_orders.place_skip_reason(
