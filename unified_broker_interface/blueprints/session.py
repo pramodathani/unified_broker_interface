@@ -58,7 +58,7 @@ class SessionBlueprint(BaseBlueprint):
         if issued:
             logger.info(f"issued an access token to {request.remote_addr}, expiring {document['expires_at']}")
         else:
-            logger.info(f"returned today's access token to {request.remote_addr}, expiring {document['expires_at']}")
+            logger.info(f"returned the current access token to {request.remote_addr}, issued {document['last_login']}, expiring {document['expires_at']}")
         return jsonify({'access-token': document['access_token'], 'expires_at': document['expires_at']}), 200
 
     @authenticated
