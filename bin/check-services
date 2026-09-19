@@ -1,0 +1,731 @@
+#!/usr/bin/env python3
+"""Checks that every systemd user unit of this project is running, and starts the ones that are not.
+
+    check-services                # check every unit and start the ones that should be running
+    check-services --check-only   # report only, start nothing
+    check-services --all          # list every unit, not only the ones that needed attention
+
+The units are found from the `services/` directory rather than from a list in this script, so a new broker is checked as soon as its folder exists and its units are installed. Each subdirectory, such as `services/zerodha/`, is one group, and the script sorts the group's units into four kinds:
+
+| Kind | Which units | Healthy when | What the script does when it is not healthy |
+| --- | --- | --- | --- |
+| Target | `<group>.target` | active | starts it |
+| Timer | every `*.timer` file in the folder | active, which systemd shows as waiting | starts it |
+| Long-running service | every service the target wants whose `Restart=` is `always`, such as `zerodha@quotes.service`, `zerodha-historical-prices.service` and `unified-rest-api.service` | running, starting, or waiting for systemd to restart it | clears a failed state and starts it |
+| Scheduled job | every other service file in the folder that is not a template, such as `zerodha-login.service` and `unified-prices.service` | anything except failed | reports the failure and never starts it |
+
+Scheduled jobs are never started, because starting a login service logs in to a live broker account, and at Zerodha every login invalidates the token that every other running script holds. Their timers run them at the right time.
+
+A target or timer that is not enabled, and every unit of a group whose target is not enabled, is reported as skipped rather than started, because it was never installed to run at boot.
+
+Within a group the long-running services are started first, then the timers, then the target, so starting a target never races the services it wants. After starting anything, the script waits ten seconds and reads every state again, so a script that crashes the moment it starts is reported as down rather than as started.
+
+The script also checks that linger is on for the current user, because without it the user's systemd manager exits at logout and takes every service with it.
+
+Exit codes: 0 when every checked unit is healthy at the end and linger is on; 1 when something is still down, a scheduled job has failed, or linger is off; 2 for a bad argument or when the user's systemd manager cannot be reached.
+"""
+
+import argparse
+import getpass
+import pathlib
+import subprocess
+import sys
+import time
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+
+from utilities import bootstrap
+
+PROJECT_ROOT = bootstrap.run_under_venv(__file__)
+SERVICES_DIRECTORY = PROJECT_ROOT / "services"
+SETTLE_SECONDS = 10
+COMMAND_TIMEOUT_SECONDS = 120
+
+
+class SystemdUnreachableError(RuntimeError):
+    """The current user's systemd manager could not be reached."""
+
+
+class SystemdClient:
+    """A thin wrapper around the `systemctl --user` and `loginctl` commands."""
+
+    def check_reachable(self) -> None:
+        """Confirms that the current user's systemd manager answers.
+
+        Raises:
+            SystemdUnreachableError: `systemctl --user` could not talk to the user's manager.
+        """
+        completed = self._run_systemctl(
+            [
+                "show",
+                "--property=Version",
+            ],
+        )
+        if completed.returncode != 0:
+            message = completed.stderr.strip()
+            raise SystemdUnreachableError(
+                f"systemctl --user failed: {message!r}"
+            )
+
+    def show(self, unit_name: str, property_names: list[str]) -> dict[str, str]:
+        """Reads some properties of one unit.
+
+        Args:
+            unit_name (str): The unit's full name, such as `zerodha@quotes.service`.
+            property_names (list[str]): The systemd property names to read, such as `ActiveState`.
+
+        Returns:
+            dict[str, str]: Each requested property name mapped to its value, which is an empty string when systemd did not report it.
+
+        Raises:
+            None.
+        """
+        arguments = [
+            "show",
+            unit_name,
+            "--property=" + ",".join(property_names),
+        ]
+        completed = self._run_systemctl(arguments)
+        values = {}
+        for property_name in property_names:
+            values[property_name] = ""
+        for line in completed.stdout.splitlines():
+            name, separator, value = line.partition("=")
+            if separator:
+                values[name] = value
+        return values
+
+    def wanted_units(self, target_name: str) -> list[str]:
+        """Lists the units a target wants, which are the services enabled under it.
+
+        Args:
+            target_name (str): The target's full name, such as `zerodha.target`.
+
+        Returns:
+            list[str]: The wanted unit names, sorted.
+
+        Raises:
+            None.
+        """
+        values = self.show(
+            target_name,
+            [
+                "Wants",
+            ],
+        )
+        return sorted(values["Wants"].split())
+
+    def start(self, unit_name: str, clear_failed_state: bool) -> str:
+        """Starts one unit, first clearing its failed state if asked to.
+
+        Args:
+            unit_name (str): The unit's full name.
+            clear_failed_state (bool): Whether to run `systemctl --user reset-failed` on the unit first.
+
+        Returns:
+            str: An empty string when systemd accepted the start, or systemd's error message when it did not.
+
+        Raises:
+            None.
+        """
+        if clear_failed_state:
+            self._run_systemctl(
+                [
+                    "reset-failed",
+                    unit_name,
+                ],
+            )
+        completed = self._run_systemctl(
+            [
+                "start",
+                unit_name,
+            ],
+        )
+        if completed.returncode == 0:
+            return ""
+        message = completed.stderr.strip()
+        if not message:
+            message = f"exit status {completed.returncode}"
+        return message
+
+    def linger_enabled(self, user_name: str) -> bool:
+        """Reports whether linger is on for a user.
+
+        Args:
+            user_name (str): The login name to check.
+
+        Returns:
+            bool: True when `loginctl` reports `Linger=yes` for the user.
+
+        Raises:
+            None.
+        """
+        command = [
+            "loginctl",
+            "show-user",
+            user_name,
+            "--property=Linger",
+            "--value",
+        ]
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+        )
+        return completed.stdout.strip() == "yes"
+
+    def _run_systemctl(
+        self,
+        arguments: list[str],
+    ) -> subprocess.CompletedProcess:
+        """Runs `systemctl --user` with the given arguments.
+
+        Args:
+            arguments (list[str]): The arguments that follow `systemctl --user`.
+
+        Returns:
+            subprocess.CompletedProcess: The finished command, with its output captured as text.
+
+        Raises:
+            None.
+        """
+        command = [
+            "systemctl",
+            "--user",
+        ]
+        command.extend(arguments)
+        return subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+        )
+
+
+class ProjectUnit:
+    """One systemd user unit of this project and the state it was last seen in.
+
+    Each kind of unit is a subclass that decides what healthy means for it and whether this script may start it.
+
+    Attributes:
+        name: The unit's full name, such as `zerodha@quotes.service`.
+        load_state: The unit's `LoadState`, which is `not-found` when the unit was never installed.
+        active_state: The unit's `ActiveState`, such as `active`, `inactive` or `failed`.
+        sub_state: The unit's `SubState`, such as `running`, `dead` or `waiting`.
+        unit_file_state: The unit's `UnitFileState`, such as `enabled` or `linked`.
+        state_before: The state text seen at the first check, before anything was started.
+        action: What this script did about the unit, or an empty string when nothing was needed.
+    """
+
+    KIND = "unit"
+    PROPERTY_NAMES = [
+        "LoadState",
+        "ActiveState",
+        "SubState",
+        "UnitFileState",
+    ]
+
+    def __init__(self, name: str, systemd_client: SystemdClient):
+        """Creates the unit without reading its state yet.
+
+        Args:
+            name (str): The unit's full name.
+            systemd_client (SystemdClient): The client used to read and start the unit.
+
+        Raises:
+            None.
+        """
+        self.name = name
+        self.load_state = ""
+        self.active_state = ""
+        self.sub_state = ""
+        self.unit_file_state = ""
+        self.state_before = ""
+        self.action = ""
+        self._systemd_client = systemd_client
+
+    def refresh(self) -> None:
+        """Reads the unit's current state from systemd.
+
+        Raises:
+            None.
+        """
+        values = self._systemd_client.show(self.name, self.PROPERTY_NAMES)
+        self.load_state = values["LoadState"]
+        self.active_state = values["ActiveState"]
+        self.sub_state = values["SubState"]
+        self.unit_file_state = values["UnitFileState"]
+
+    def describe_state(self) -> str:
+        """Describes the unit's current state as systemd shows it.
+
+        Returns:
+            str: The active state and sub state joined by a slash, such as `active/running`.
+
+        Raises:
+            None.
+        """
+        return f"{self.active_state}/{self.sub_state}"
+
+    def is_installed(self) -> bool:
+        """Reports whether systemd knows the unit at all.
+
+        Returns:
+            bool: False when the unit was never linked into the user's manager.
+
+        Raises:
+            None.
+        """
+        return self.load_state != "not-found"
+
+    def is_enabled(self) -> bool:
+        """Reports whether the unit is enabled to start at boot.
+
+        Returns:
+            bool: True when the unit file state is `enabled`.
+
+        Raises:
+            None.
+        """
+        return self.unit_file_state == "enabled"
+
+    def must_be_enabled(self) -> bool:
+        """Reports whether the unit is only checked when it is enabled.
+
+        Returns:
+            bool: True for targets and timers, which are skipped when not enabled.
+
+        Raises:
+            None.
+        """
+        return False
+
+    def is_healthy(self) -> bool:
+        """Reports whether the unit is in a state this project expects.
+
+        Returns:
+            bool: True when nothing needs to be done about the unit.
+
+        Raises:
+            NotImplementedError: A subclass did not define what healthy means.
+        """
+        raise NotImplementedError(f"{type(self).__name__} must define is_healthy")
+
+    def may_be_started(self) -> bool:
+        """Reports whether this script is allowed to start the unit.
+
+        Returns:
+            bool: True when starting the unit is safe and is what the unit expects.
+
+        Raises:
+            None.
+        """
+        return True
+
+    def start(self) -> str:
+        """Starts the unit, clearing a failed state first.
+
+        Returns:
+            str: An empty string when systemd accepted the start, or systemd's error message when it did not.
+
+        Raises:
+            None.
+        """
+        clear_failed_state = self.active_state == "failed"
+        return self._systemd_client.start(self.name, clear_failed_state)
+
+
+class TargetUnit(ProjectUnit):
+    """A group's target, such as `zerodha.target`, which must be active."""
+
+    KIND = "target"
+
+    def must_be_enabled(self) -> bool:
+        """Reports that a target is only checked when it is enabled.
+
+        Returns:
+            bool: Always True.
+
+        Raises:
+            None.
+        """
+        return True
+
+    def is_healthy(self) -> bool:
+        """Reports whether the target is active.
+
+        Returns:
+            bool: True when the target's active state is `active`.
+
+        Raises:
+            None.
+        """
+        return self.active_state == "active"
+
+
+class TimerUnit(ProjectUnit):
+    """A daily timer, such as `zerodha-login.timer`, which must be active and waiting."""
+
+    KIND = "timer"
+
+    def must_be_enabled(self) -> bool:
+        """Reports that a timer is only checked when it is enabled.
+
+        Returns:
+            bool: Always True.
+
+        Raises:
+            None.
+        """
+        return True
+
+    def is_healthy(self) -> bool:
+        """Reports whether the timer is active.
+
+        Returns:
+            bool: True when the timer's active state is `active`.
+
+        Raises:
+            None.
+        """
+        return self.active_state == "active"
+
+
+class LongRunningService(ProjectUnit):
+    """A service with `Restart=always` that should always be running, such as `zerodha@quotes.service`."""
+
+    KIND = "long-running"
+
+    def is_healthy(self) -> bool:
+        """Reports whether the service is running or on its way to running.
+
+        A service that has exited and is waiting out its `RestartSec` is `activating/auto-restart`, and counts as healthy because systemd will start it again by itself.
+
+        Returns:
+            bool: True when the active state is `active` or `activating`.
+
+        Raises:
+            None.
+        """
+        if self.active_state == "active":
+            return True
+        return self.active_state == "activating"
+
+
+class ScheduledJob(ProjectUnit):
+    """A service that a timer runs and that finishes, such as `zerodha-login.service`."""
+
+    KIND = "scheduled job"
+
+    def is_healthy(self) -> bool:
+        """Reports whether the job's last run did not fail.
+
+        Returns:
+            bool: True unless the active state is `failed`.
+
+        Raises:
+            None.
+        """
+        return self.active_state != "failed"
+
+    def may_be_started(self) -> bool:
+        """Reports that this script never starts a scheduled job, because a login job logs in to a live broker account.
+
+        Returns:
+            bool: Always False.
+
+        Raises:
+            None.
+        """
+        return False
+
+
+class ServiceGroup:
+    """One folder under `services/`, such as `services/zerodha/`, and the units it installs.
+
+    Attributes:
+        name: The folder's name, which is also the name of its target.
+        directory: The folder's path.
+    """
+
+    def __init__(self, directory: pathlib.Path, systemd_client: SystemdClient):
+        """Creates the group for one folder.
+
+        Args:
+            directory (pathlib.Path): The folder under `services/`.
+            systemd_client (SystemdClient): The client used to read the group's units.
+
+        Raises:
+            None.
+        """
+        self.name = directory.name
+        self.directory = directory
+        self._systemd_client = systemd_client
+
+    def discover_units(self) -> list[ProjectUnit]:
+        """Finds every unit of the group, in the order they should be started.
+
+        Returns:
+            list[ProjectUnit]: The long-running services, then the scheduled jobs, then the timers, then the target.
+
+        Raises:
+            None.
+        """
+        target = TargetUnit(f"{self.name}.target", self._systemd_client)
+        wanted_names = self._systemd_client.wanted_units(target.name)
+        units = []
+        for unit_name in wanted_names:
+            units.append(self._create_service(unit_name))
+        for unit_file in sorted(self.directory.glob("*.service")):
+            is_template = "@" in unit_file.name
+            if not is_template and unit_file.name not in wanted_names:
+                units.append(ScheduledJob(unit_file.name, self._systemd_client))
+        for unit_file in sorted(self.directory.glob("*.timer")):
+            units.append(TimerUnit(unit_file.name, self._systemd_client))
+        units.append(target)
+        return units
+
+    def _create_service(self, unit_name: str) -> ProjectUnit:
+        """Creates the right kind of unit for a service the target wants.
+
+        Args:
+            unit_name (str): The service's full name.
+
+        Returns:
+            ProjectUnit: A LongRunningService when the service restarts always, otherwise a ScheduledJob.
+
+        Raises:
+            None.
+        """
+        values = self._systemd_client.show(
+            unit_name,
+            [
+                "Restart",
+            ],
+        )
+        if values["Restart"] == "always":
+            return LongRunningService(unit_name, self._systemd_client)
+        return ScheduledJob(unit_name, self._systemd_client)
+
+
+class ServiceChecker:
+    """The command that checks every project unit and starts the ones that are down."""
+
+    def __init__(self):
+        """Creates the checker with a fresh systemd client.
+
+        Raises:
+            None.
+        """
+        self._systemd_client = SystemdClient()
+        self._check_only = False
+        self._list_all = False
+        self._units = []
+        self._skipped_names = set()
+
+    def run(self) -> int:
+        """Runs the whole check and prints the report.
+
+        Returns:
+            int: The exit code, which is 0 when all is well, 1 when something needs attention, and 2 when systemd cannot be reached.
+
+        Raises:
+            None.
+        """
+        self._parse_arguments()
+        try:
+            self._systemd_client.check_reachable()
+        except SystemdUnreachableError as error:
+            print(f"Cannot reach the user's systemd manager: {error}")
+            return 2
+        self._discover_units()
+        started_any = self._start_units_that_are_down()
+        if started_any:
+            print(f"Waiting {SETTLE_SECONDS} seconds for started units to settle.")
+            time.sleep(SETTLE_SECONDS)
+            for unit in self._units:
+                unit.refresh()
+        linger_enabled = self._systemd_client.linger_enabled(getpass.getuser())
+        self._print_report()
+        return self._print_summary(linger_enabled)
+
+    def _parse_arguments(self) -> None:
+        """Reads the command-line options.
+
+        Raises:
+            SystemExit: The arguments were invalid, with exit status 2.
+        """
+        parser = argparse.ArgumentParser(
+            description="Check every systemd user unit of this project and start the ones that should be running.",
+        )
+        parser.add_argument(
+            "--check-only",
+            action="store_true",
+            help="report only and start nothing",
+        )
+        parser.add_argument(
+            "--all",
+            action="store_true",
+            help="list every unit, not only the ones that needed attention",
+        )
+        arguments = parser.parse_args()
+        self._check_only = arguments.check_only
+        self._list_all = arguments.all
+
+    def _discover_units(self) -> None:
+        """Finds every unit of every group and reads its first state.
+
+        Raises:
+            None.
+        """
+        for directory in sorted(SERVICES_DIRECTORY.iterdir()):
+            if not directory.is_dir():
+                continue
+            group = ServiceGroup(directory, self._systemd_client)
+            group_units = group.discover_units()
+            target = group_units[-1]
+            target.refresh()
+            group_is_enabled = target.is_enabled()
+            for unit in group_units:
+                unit.refresh()
+                unit.state_before = unit.describe_state()
+                if not group_is_enabled:
+                    self._skipped_names.add(unit.name)
+                self._units.append(unit)
+
+    def _start_units_that_are_down(self) -> bool:
+        """Decides what to do about each unit and starts the ones that are down.
+
+        Returns:
+            bool: True when at least one unit was started.
+
+        Raises:
+            None.
+        """
+        started_any = False
+        for unit in self._units:
+            if unit.name in self._skipped_names:
+                unit.action = "skipped, its target is not enabled"
+            elif not unit.is_installed():
+                unit.action = "skipped, not installed"
+                self._skipped_names.add(unit.name)
+            elif unit.must_be_enabled() and not unit.is_enabled():
+                unit.action = "skipped, not enabled"
+                self._skipped_names.add(unit.name)
+            elif unit.is_healthy():
+                unit.action = ""
+            elif not unit.may_be_started():
+                unit.action = "not started, its timer runs it"
+            elif self._check_only:
+                unit.action = "would start"
+            else:
+                error_message = unit.start()
+                if error_message:
+                    unit.action = f"start failed: {error_message}"
+                else:
+                    unit.action = "started"
+                    started_any = True
+        return started_any
+
+    def _print_report(self) -> None:
+        """Prints a table of the units that needed attention, or of every unit with `--all`.
+
+        Raises:
+            None.
+        """
+        header = [
+            "UNIT",
+            "KIND",
+            "BEFORE",
+            "ACTION",
+            "NOW",
+        ]
+        rows = []
+        for unit in self._units:
+            needs_listing = self._list_all or unit.action
+            if not needs_listing and unit.is_healthy():
+                continue
+            action = unit.action
+            if not action:
+                action = "none"
+            row = [
+                unit.name,
+                unit.KIND,
+                unit.state_before,
+                action,
+                unit.describe_state(),
+            ]
+            rows.append(row)
+        if not rows:
+            return
+        widths = []
+        for column_index in range(len(header)):
+            width = len(header[column_index])
+            for row in rows:
+                width = max(width, len(row[column_index]))
+            widths.append(width)
+        print(self._format_row(header, widths))
+        for row in rows:
+            print(self._format_row(row, widths))
+        print()
+
+    def _format_row(self, cells: list[str], widths: list[int]) -> str:
+        """Pads each cell of a table row to its column's width.
+
+        Args:
+            cells (list[str]): The row's cells, in column order.
+            widths (list[int]): The width of each column.
+
+        Returns:
+            str: The padded cells joined by two spaces, without trailing spaces.
+
+        Raises:
+            None.
+        """
+        padded_cells = []
+        for cell, width in zip(cells, widths):
+            padded_cells.append(cell.ljust(width))
+        return "  ".join(padded_cells).rstrip()
+
+    def _print_summary(self, linger_enabled: bool) -> int:
+        """Prints the counts and the linger state, and works out the exit code.
+
+        Args:
+            linger_enabled (bool): Whether linger is on for the current user.
+
+        Returns:
+            int: 0 when every checked unit is healthy and linger is on, otherwise 1.
+
+        Raises:
+            None.
+        """
+        checked_count = 0
+        healthy_count = 0
+        started_count = 0
+        for unit in self._units:
+            if unit.name in self._skipped_names:
+                continue
+            checked_count += 1
+            if unit.is_healthy():
+                healthy_count += 1
+            if unit.action == "started":
+                started_count += 1
+        unhealthy_count = checked_count - healthy_count
+        skipped_count = len(self._skipped_names)
+        print(
+            f"{checked_count} units checked: {healthy_count} healthy, {unhealthy_count} need attention, {started_count} started by this run, {skipped_count} skipped."
+        )
+        if linger_enabled:
+            print("Linger is on, so the services start at boot without a login.")
+        else:
+            print("Linger is off, so the services stop at logout; turn it on with: loginctl enable-linger $USER")
+        if unhealthy_count or not linger_enabled:
+            return 1
+        return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(ServiceChecker().run())

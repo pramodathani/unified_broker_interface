@@ -27,6 +27,7 @@ There is no `pyproject.toml`, no build step and no pytest suite. The project roo
 | Apply price history DDL | `python -m stock_brokers.instruments.historical.utilities.sql.apply_ddl` |
 | Apply unified mapping DDL | `python -m stock_brokers.instruments.mapping.utilities.sql.apply_ddl` |
 | Run the REST API | `bin/rest-api` (gunicorn on 127.0.0.1:8080), or `bin/rest-api --dev` for Flask's development server |
+| Check every systemd unit and start the ones that are down | `bin/check-services` (`--check-only` to report without starting) |
 | REST API test page | `bin/rest-api-app` (Streamlit on port 8501; start the API first) |
 | Docs, live reload | `mkdocs serve` |
 | Docs, as CI should build them | `mkdocs build --strict` |

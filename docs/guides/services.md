@@ -258,6 +258,21 @@ systemctl --user list-units 'zerodha*' 'unified*'
 systemctl --user status zerodha.target
 ```
 
+After a reboot, `bin/check-services` checks every unit in one go and starts the ones that should be
+running but are not. It finds the units from the `services/` folders, so it needs no list of its own:
+
+```bash
+bin/check-services                # check, and start what is down
+bin/check-services --check-only   # report only
+bin/check-services --all          # list every unit, not only the ones that needed attention
+```
+
+It starts targets, timers and every `Restart=always` service a target wants, including the candle
+downloaders and the REST API. It never starts a login, instrument or price job, because a login
+reaches a live broker account and at Zerodha cancels the token every running script holds; it only
+reports those when they have failed. It also reports whether linger is on. It exits 0 when
+everything is healthy and 1 when something still needs attention.
+
 The scripts record their own state in Redis as well - `<broker>:session:status` after every login,
 `unified:prices:last_run` after every price run, `unified:mapping:meta` after every mapping - and a
 persister's lag is on its stream's consumer group:
