@@ -16,8 +16,9 @@ Redis `last_login` hash under the same field. The application's `broker_name` is
 }
 ```
 
-Each connect replaces the token, so a second client connecting ends the first client's session.
-Disconnecting sets `access_token` to null, and a token is refused once `expires_at` has passed. A
+A connect hands back the token in force when it was issued at or after the most recent 07:00 and has
+not expired or been revoked. Otherwise the connect mints a new token, which replaces the old one, so
+the first connect after 07:00 each day ends the previous day's session. Disconnecting sets `access_token` to null, and a token is refused once `expires_at` has passed. A
 document without `expires_at` - one written before tokens expired - is treated as expired.
 
 MongoDB is the record and Redis the copy read on every request. Writes go to MongoDB first and
@@ -29,7 +30,7 @@ replaced or revoked.
 import hmac
 import json
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 
 from utilities.configurations import get_logger
 
@@ -41,6 +42,8 @@ CACHE_KEY = 'last_login'
 
 # The timestamp format every login document in `last_login` uses.
 TIME_FORMAT = "%Y-%m-%d %H:%M:%S.%f"
+
+DAILY_RENEWAL_TIME = time(7, 0)
 
 logger = get_logger('rest_api.tokens')
 
@@ -78,6 +81,22 @@ class TokenStore:
             except Exception:
                 pass
         return document
+
+    def connect(self, ttl_seconds):
+        """
+        The login document a connecting client receives, and whether it was newly minted.
+
+        Returns a pair `(document, issued)`. The stored token is returned unchanged, with `issued`
+        False, when it was issued at or after the most recent 07:00 and is still accepted. Otherwise
+        a new token replaces it and `issued` is True. The stored token is read from MongoDB, the
+        record, rather than from its Redis copy.
+
+        - `ttl_seconds` is how long a newly minted token is accepted for.
+        """
+        document = self._mongo_db[COLLECTION].find_one({'broker_name': APP_NAME}, {'_id': 0})
+        if self._issued_today(document):
+            return document, False
+        return self.issue(ttl_seconds), True
 
     def issue(self, ttl_seconds):
         """
@@ -127,6 +146,31 @@ class TokenStore:
         if expires_at is None or expires_at <= datetime.now():
             return None, 'Access token has expired'
         return document, None
+
+    def _issued_today(self, document):
+        """
+        Whether a login document holds a live token issued at or after the most recent 07:00.
+
+        Before 07:00 the most recent 07:00 is yesterday's, so a token issued after midnight is kept.
+
+        - `document` is a login document from `last_login`, or None.
+        """
+        if not document or not document.get('access_token'):
+            return False
+        try:
+            issued_at = datetime.strptime(document['last_login'], TIME_FORMAT)
+        except (KeyError, TypeError, ValueError):
+            return False
+
+        now = datetime.now()
+        renewal_at = datetime.combine(now.date(), DAILY_RENEWAL_TIME)
+        if now < renewal_at:
+            renewal_at = renewal_at - timedelta(days=1)
+
+        expires_at = expiry_of(document)
+        if expires_at is None or expires_at <= now:
+            return False
+        return issued_at >= renewal_at
 
     def _store(self, document):
         """

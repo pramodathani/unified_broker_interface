@@ -72,7 +72,9 @@ credentials. Both are compared in constant time and never logged.
 { "broker_name": "unified_broker_interface", "api_key": "…", "api_secret": "…" }
 ```
 
-A successful connect mints a UUID and stores it the way a broker login is stored: in `last_login`
+A successful connect returns the token already stored in MongoDB when that token was issued at or
+after the most recent 07:00 (yesterday's 07:00 before 07:00) and has not expired or been revoked.
+Otherwise it mints a new UUID and stores it the way a broker login is stored: in `last_login`
 under the same `broker_name`, MongoDB first and then the Redis `last_login` hash. Every request
 reads the token from Redis, falling back to MongoDB, so a token issued by one gunicorn worker is
 accepted by all of them.
@@ -88,8 +90,9 @@ accepted by all of them.
 
 !!! warning "One session at a time"
 
-    There is one token for the whole application. Each connect replaces it, so a second client
-    connecting ends the first client's session, and a disconnect ends it for everyone.
+    There is one token for the whole application. Clients connecting on the same day share it, the
+    first connect after 07:00 replaces it and so ends the previous day's session, and a disconnect
+    ends it for everyone.
 
 ## The detail collections
 

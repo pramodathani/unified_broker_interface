@@ -37,9 +37,11 @@ class SessionBlueprint(BaseBlueprint):
 
     def connect(self):
         """
-        Issue a new access token for the `api-key` and `api-secret` request headers.
+        Return an access token for the `api-key` and `api-secret` request headers.
 
-        Replaces the token in force, so any other client's session ends.
+        The token stored in MongoDB is returned when it was issued at or after the most recent 07:00
+        and is still accepted. Otherwise a new token is minted and stored, which replaces the old one,
+        so any other client's session ends.
         """
         settings = self.mongo_db['settings'].find_one({'broker_name': APP_NAME}, {'_id': 0})
         if not settings:
@@ -52,8 +54,11 @@ class SessionBlueprint(BaseBlueprint):
             logger.warning(f"refused a connect from {request.remote_addr}: invalid api key or secret")
             return jsonify({'error': 'Invalid API key or secret'}), 401
 
-        document = self.tokens.issue(api_configuration['token_ttl_seconds'])
-        logger.info(f"issued an access token to {request.remote_addr}, expiring {document['expires_at']}")
+        document, issued = self.tokens.connect(api_configuration['token_ttl_seconds'])
+        if issued:
+            logger.info(f"issued an access token to {request.remote_addr}, expiring {document['expires_at']}")
+        else:
+            logger.info(f"returned today's access token to {request.remote_addr}, expiring {document['expires_at']}")
         return jsonify({'access-token': document['access_token'], 'expires_at': document['expires_at']}), 200
 
     @authenticated
