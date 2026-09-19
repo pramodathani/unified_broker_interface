@@ -30,3 +30,7 @@ SELECT create_hypertable(
     by_range('download_date', INTERVAL '1 month'),
     if_not_exists => TRUE
 );
+
+ALTER TABLE indmoney.instruments ADD COLUMN IF NOT EXISTS "intraday_leverage" TEXT;
+ALTER TABLE indmoney.instruments ADD COLUMN IF NOT EXISTS "haircut_percentage" TEXT;
+ALTER TABLE indmoney.instruments ADD COLUMN IF NOT EXISTS "pledge_eligible" TEXT;
