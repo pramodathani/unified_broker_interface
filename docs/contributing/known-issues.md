@@ -265,6 +265,25 @@ containing `new incoming connection`, so `stoxkart@order_updates` and a Stoxkart
 the same account knock each other off. The script waits five minutes before reclaiming the socket, and
 order updates are missed while the website or app holds it; the `orders` poller still records the orders.
 
+**Stoxkart refuses logins from 23:40 to midnight, and the pollers crash-loop through it.** On 2026-09-18 and
+2026-09-19, Stoxkart ended the session at exactly 23:40:00, and every login until just after 00:00 was refused
+in `_exchange_request_token` with `('AuthorizationError', 'Session is expired')`, the same message as the
+expired session itself. The six REST pollers (`orders`, `trades`, `positions`, `holdings`, `funds` and
+`user-profile`) build `StoxkartAPI` when their session is refused, the login raises, the script exits 1, and
+systemd restarts it 15 seconds later. Each poller therefore fails about 70 times in those 20 minutes, which is
+roughly 420 refused logins a night across the six, each with a full traceback in the journal. On 2026-09-20 the
+first login that worked was at 00:00:03, and every poller ran cleanly from then on. No data is lost, because MCX
+closes at 23:30 and nothing trades in the window, but so many refused logins could lead Stoxkart to rate-limit
+or lock the account. A poller that waited a few minutes after a refused login instead of exiting would avoid
+this. The four other Stoxkart scripts, `quotes`, `order_updates`, `persist_orders` and `persist_ticks`, are
+unaffected.
+
+**Stoxkart's servers fail briefly in the early morning.** Around 05:30 and 06:20 on 2026-09-18 and 2026-09-19,
+Stoxkart's login answered `('E-999', 'Stoxkart rejected /auth/v2/login with HTTP 500: System error')` or
+`('GeneralError', 'Something went wrong')`, and polls to `openapi.stoxkart.com` timed out after 10 seconds.
+Each episode lasted a few minutes, restarted the pollers a handful of times, and cleared on its own well
+before the 09:00 pre-open.
+
 **Stoxkart's trade and position fields, and its open and filled orders, are unconfirmed.** No fill or
 open position has existed on the Stoxkart account, so `bin/stoxkart/trades` and `positions`, and the
 unified readers of them, use the field names in Stoxkart's documentation. The order book and the order
