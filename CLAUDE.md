@@ -102,7 +102,7 @@ Schemas live only in numbered `.sql` files under four `sql/ddl/` directories, ap
 
 ### Services
 
-Everything runs as systemd **user** units in `services/<broker>/` and `services/unified/`, installed with `systemctl --user link`, so the units expect the repository at `~/Projects/unified_broker_interface`. `<broker>@<script>.service` is a template that runs one long-lived `bin/<broker>/<script>`. Timers run the instrument download and mapping at 07:45 IST, broker logins at 08:15 IST and unified price history at 08:30 IST. Targets use `WantedBy=default.target`, never `multi-user.target`, which does not exist in the user manager. Each target file's header carries its install commands.
+Everything runs as systemd **user** units in `services/<broker>/` and `services/unified/`, installed with `systemctl --user link`, so the units expect the repository at `~/Projects/unified_broker_interface`. `<broker>@<script>.service` is a template that runs one long-lived `bin/<broker>/<script>`. Timers run the instrument download and mapping at 07:45 IST, broker logins at 07:00 IST every day and unified price history at 08:30 IST. Targets use `WantedBy=default.target`, never `multi-user.target`, which does not exist in the user manager. Each target file's header carries its install commands.
 
 ## Documentation
 

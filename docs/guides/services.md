@@ -19,7 +19,7 @@ services/
 │   ├── <broker>.target
 │   ├── <broker>@.service              one bin/<broker>/ script that keeps running
 │   ├── <broker>-login.service         bin/<broker>/login, run by the timer
-│   ├── <broker>-login.timer           08:15 Mon-Fri
+│   ├── <broker>-login.timer           07:00 daily
 │   └── <broker>-historical-prices.service   bin/<broker>/historical_prices, where the broker serves candles
 └── unified/
     ├── unified.target
@@ -230,21 +230,21 @@ See [REST API](rest-api.md).
 
 | Timer | `OnCalendar` | Jitter | `Persistent` | Starts |
 | --- | --- | --- | --- | --- |
+| `<broker>-login.timer` | `*-*-* 07:00 Asia/Kolkata` | up to 30 minutes | `false` | `<broker>-login.service` |
 | `unified-instruments.timer` | `Mon..Fri 07:45 Asia/Kolkata` | - | `true` | `unified-instruments.service` |
-| `<broker>-login.timer` | `Mon..Fri 08:15 Asia/Kolkata` | up to 30 minutes | `false` | `<broker>-login.service` |
 | `unified-prices.timer` | `Mon..Sat 08:30 Asia/Kolkata` | - | `true` | `unified-prices.service` |
 
 The timezone is written into each schedule so it survives a change to the machine's timezone.
 
 **07:45** comes first because the brokers publish the day's masters overnight and the mapping has to
-be in place before the logins and the 09:00 pre-open, when the feeders resolve against it. It is
+be in place before the 09:00 pre-open, when the feeders resolve against it. It is
 `Persistent`: a snapshot missed can never be fetched later - the brokers publish only today's file -
 so a machine that was off at 07:45 runs the job as soon as it starts.
 
-**08:15** is after the overnight token expiry and the instrument download, before the pre-open, and
+**07:00**, every day including weekends, is before the instrument download and the pre-open, and
 well clear of MCX's 23:30 close. `RandomizedDelaySec=1800` spreads ten logins, nine of them with a TOTP and two
-of those through a headless Chrome, across 08:15 to 08:45 rather than firing them in the same second. A machine that was
-off at 08:15 needs no catch-up, since the first script to find its token refused logs in then - hence
+of those through a headless Chrome, across 07:00 to 07:30 rather than firing them in the same second. A machine that was
+off at 07:00 needs no catch-up, since the first script to find its token refused logs in then - hence
 `Persistent=false`.
 
 **08:30**, Monday to Saturday, comes after the night's candle downloads and the instrument job, and on

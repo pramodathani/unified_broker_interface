@@ -1,6 +1,6 @@
 # When to log fyers in each morning.
 #
-# 08:15 IST is after the overnight token expiry and the 07:45 instrument download, before the 09:00 pre-open, and well
+# 07:00 IST every day, weekends included, is before the 07:45 instrument download and the 09:00 pre-open, and well
 # clear of MCX's 23:30 close.
 
 [Unit]
@@ -9,12 +9,12 @@ PartOf=fyers.target
 
 [Timer]
 # The timezone is stated so the schedule survives a change to the machine's timezone.
-OnCalendar=Mon..Fri 08:15 Asia/Kolkata
+OnCalendar=*-*-* 07:00 Asia/Kolkata
 AccuracySec=1s
 # Nine brokers log in with a TOTP, and Zerodha and Shoonya through a headless Chrome; half an hour of jitter keeps the
-# ten logins from firing in the same second, and still lands every one before 09:00.
+# ten logins from firing in the same second, and still lands every one before the 07:45 instrument download.
 RandomizedDelaySec=1800
-# A machine that was off at 08:15 needs no catch-up: the first script to find its token refused logs in then.
+# A machine that was off at 07:00 needs no catch-up: the first script to find its token refused logs in then.
 Persistent=false
 Unit=fyers-login.service
 

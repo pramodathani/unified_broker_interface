@@ -446,14 +446,14 @@ Each broker's units live in `services/<broker>/`:
 | --- | --- | --- |
 | `<broker>@.service` | template | Runs one long-lived script: `zerodha@quotes` runs `bin/zerodha/quotes`. `Restart=always` after 15 s, never giving up, except on exit 2 |
 | `<broker>-login.service` | oneshot | Runs `login`, retried on failure after two minutes, three attempts an hour |
-| `<broker>-login.timer` | timer | 08:15 IST Monday to Friday, with up to 30 minutes of random delay |
+| `<broker>-login.timer` | timer | 07:00 IST every day, with up to 30 minutes of random delay |
 | `<broker>-historical-prices.service` | service | Runs `historical_prices`, restarted ten minutes after it exits, at low CPU and idle IO priority |
 | `<broker>.target` | target | Everything above; stopping it stops them all |
 
 Nothing needs restarting after the morning login: every script reads the current token on each connect
 and request, so the login only has to happen before the market opens. The 30 minutes of jitter keeps ten
-logins, nine of them with a TOTP and two through a headless browser, from firing in the same second and still lands each before 09:00. A
-machine that was off at 08:15 needs no catch-up, since the first script refused a token logs in then.
+logins, nine of them with a TOTP and two through a headless browser, from firing in the same second and still lands each before the 07:45 instrument download. A
+machine that was off at 07:00 needs no catch-up, since the first script refused a token logs in then.
 
 To install a broker, link its units and enable the target, the login timer and the scripts. The commands
 are in each target file's comments:

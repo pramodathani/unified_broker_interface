@@ -1,6 +1,6 @@
 # When the daily instrument job runs.
 #
-# 07:45 IST on weekdays: the brokers publish the day's masters overnight, and the mapping has to be done before the 08:15 logins and the 09:00 pre-open, when the feeders resolve against it.
+# 07:45 IST on weekdays: the brokers publish the day's masters overnight, and the mapping has to be done before the 09:00 pre-open, when the feeders resolve against it.
 
 [Unit]
 Description=Daily instrument download and unified mapping

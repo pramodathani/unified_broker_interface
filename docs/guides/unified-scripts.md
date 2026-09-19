@@ -374,8 +374,8 @@ The unified scripts only have data to combine while each broker's target is runn
 | IST | What happens |
 | --- | --- |
 | 06:00 | The brokers' merged order and position hashes and the unified update hashes reset |
+| 07:00-07:30 daily | Each `<broker>-login.timer` fires at 07:00 plus up to 30 minutes of random delay |
 | 07:45 Mon-Fri | `unified-instruments`: ten instrument downloads, then `map_instruments` and the cache warm - about three quarters of an hour |
-| 08:15-08:45 Mon-Fri | Each `<broker>-login.timer` fires at 08:15 plus up to 30 minutes of random delay |
 | 08:30 Mon-Sat | `unified-prices`: `historical_prices daily`; on Saturday it picks up Friday's last bars and the week's corporate actions. When the 07:45 job is still running, it waits for that to finish first |
 | 09:00 | Pre-open. The feeds resolve against the day's mapping |
 
