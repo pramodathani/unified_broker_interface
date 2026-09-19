@@ -25,8 +25,9 @@ hypertable by `mapping_date`.
 mapping stage, pointed at the unified tables: each broker's rows are classified by its rules file, given a computed
 `instrument_id`, and upserted into `unified.instruments` (seen dates only widen) and `unified.broker_mappings` (the
 broker's rows for the date replaced). Brokers run in the fixed order the mapping needs, because later brokers read
-index rows earlier ones wrote; one without rows stored for the date is skipped. When every broker with rows mapped
-cleanly, stale duplicate instruments are merged away, unless `--skip-collisions`. A date older than the newest date
+index rows earlier ones wrote; one without rows stored for the date is skipped. When all ten brokers had rows stored
+for the date, stale duplicate instruments are merged away afterwards, even if one of them failed to map, unless
+`--skip-collisions`. A date older than the newest date
 already in `unified.broker_mappings` is refused: mapping an older date on top of newer data leaves seen dates and index
 names resolved in the wrong order, and a backfill has to start from empty tables instead.
 
