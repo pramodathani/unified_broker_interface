@@ -11,6 +11,12 @@ Create `stock_brokers/api/<broker>.py` with a `BrokerAPIException` subclass and 
 subclass. Implement `__init__` (the login flow) and `_request`; `get`, `post`, `put`, `patch` and
 `delete` come from the base.
 
+Write the whole login inside `__init__`, from the stored-token check to the token write, rather than
+splitting it into private helper methods, so that every broker's login reads from top to bottom in one
+place. Some repetition between login steps is acceptable. Add another method only when code outside the
+class calls it, as the Kotak scripts call [`KotakAPI.url`][stock_brokers.api.kotak.KotakAPI.url] to build
+URLs on the host that Kotak assigned to the session.
+
 Follow the pattern of trying an authenticated call first and only logging in when it fails, so
 constructing the object is cheap while a token from earlier in the day is still valid. On a
 successful login, upsert `last_login` in MongoDB and mirror it into the Redis `last_login` hash. Append a
