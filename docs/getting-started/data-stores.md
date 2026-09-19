@@ -8,6 +8,24 @@ Three stores, each doing one job.
 | Redis | Sessions, polled snapshots, current state hashes, instrument masters, the unified documents, and the streams the persisters drain | Keeps the database off the websocket scripts entirely |
 | TimescaleDB | `ticks`, `order_updates`, `positions`, `instruments` and `price_history` per broker, and the `unified` schema | Hypertables, columnar compression and retention on time series |
 
+## Running the stores with Docker
+
+`docker-compose.yml` in the project root runs all three stores as containers, each with a named volume so the data survives a container being recreated:
+
+```bash
+docker compose up -d
+```
+
+| Service | Image | Host port | Volume |
+| --- | --- | --- | --- |
+| `redis` | `redis:trixie` | `UNIFIED_BROKER_INTERFACE_REDIS_PORT` (default 1002) | `unified_broker_interface_redis_volume` |
+| `mongodb` | `mongo:8.0.4` | `UNIFIED_BROKER_INTERFACE_MONGODB_PORT` (default 1003) | `unified_broker_interface_mongodb_volume` |
+| `timescaledb` | `timescale/timescaledb:latest-pg18` | `UNIFIED_BROKER_INTERFACE_POSTGRES_PORT` (default 1004) | `unified_broker_interface_timescaledb_volume` |
+
+Docker Compose reads the same `.env` as the scripts, so the ports, usernames, passwords and PostgreSQL database name come from the `UNIFIED_BROKER_INTERFACE_*` variables described in [Configuration](configuration.md). Each port is published on every interface of the host, which is why the `*_HOST` variables can name the host's LAN address.
+
+The MongoDB and PostgreSQL credentials are applied only when their volume is first initialised. Changing `UNIFIED_BROKER_INTERFACE_MONGODB_PASSWORD` or `UNIFIED_BROKER_INTERFACE_POSTGRES_PASSWORD` in `.env` afterwards does not change the password inside the database, and the scripts then fail to log in. Redis is different: it takes `UNIFIED_BROKER_INTERFACE_REDIS_PASSWORD` on every start, so a changed value takes effect the next time the container is recreated.
+
 ## Redis as the buffer
 
 No websocket script ever writes to PostgreSQL. Ticks are appended to a Redis stream and a separate

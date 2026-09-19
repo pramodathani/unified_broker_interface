@@ -1,0 +1,72 @@
+name: unified_broker_interface
+
+services:
+  redis:
+    image: redis:trixie
+    command: redis-server --requirepass ${UNIFIED_BROKER_INTERFACE_REDIS_PASSWORD} --appendonly yes
+    environment:
+      REDIS_PASSWORD: "${UNIFIED_BROKER_INTERFACE_REDIS_PASSWORD}"
+    ports:
+      - "0.0.0.0:${UNIFIED_BROKER_INTERFACE_REDIS_PORT:-1002}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - network
+
+  mongodb:
+    image: mongo:8.0.4
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: "${UNIFIED_BROKER_INTERFACE_MONGODB_USERNAME:-unified_broker_interface}"
+      MONGO_INITDB_ROOT_PASSWORD: "${UNIFIED_BROKER_INTERFACE_MONGODB_PASSWORD}"
+    ports:
+      - "0.0.0.0:${UNIFIED_BROKER_INTERFACE_MONGODB_PORT:-1003}:27017"
+    volumes:
+      - mongodb_data:/data/db
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --username \"$${MONGO_INITDB_ROOT_USERNAME}\" --password \"$${MONGO_INITDB_ROOT_PASSWORD}\" --authenticationDatabase admin --eval 'db.runCommand({ping:1})' --quiet"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - network
+
+  timescaledb:
+    image: timescale/timescaledb:latest-pg18
+    shm_size: 1g
+    environment:
+      PGDATA: /pgdata
+      POSTGRES_DB: "${UNIFIED_BROKER_INTERFACE_POSTGRES_DB:-unified_broker_interface}"
+      POSTGRES_USER: "${UNIFIED_BROKER_INTERFACE_POSTGRES_USERNAME:-unified_broker_interface}"
+      POSTGRES_PASSWORD: "${UNIFIED_BROKER_INTERFACE_POSTGRES_PASSWORD}"
+    ports:
+      - "0.0.0.0:${UNIFIED_BROKER_INTERFACE_POSTGRES_PORT:-1004}:5432"
+    volumes:
+      - timescaledb_data:/pgdata
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - network
+
+volumes:
+  redis_data:
+    name: unified_broker_interface_redis_volume
+  mongodb_data:
+    name: unified_broker_interface_mongodb_volume
+  timescaledb_data:
+    name: unified_broker_interface_timescaledb_volume
+
+networks:
+  network:
+    name: unified_broker_interface_network
+    driver: bridge
