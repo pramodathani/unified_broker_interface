@@ -4,18 +4,18 @@ TimescaleDB, with one PostgreSQL schema per broker.
 
 ## One schema per broker
 
-Zerodha's data lives in `zerodha.ticks`, `zerodha.order_updates`, `zerodha.positions` and
-`zerodha.instruments`. There is no table named `ticks_zerodha` in `public`.
+Zerodha's data lives in `zerodha.ticks`, `zerodha.order_updates`, `zerodha.instruments` and
+`zerodha.price_history`. There is no table named `ticks_zerodha` in `public`.
 
 The reason is operational. Each stream compresses, retains and drops independently; a broker
 being re-ingested never locks another broker's chunks; and dropping a broker entirely is one
 `DROP SCHEMA` rather than ten qualified deletes. Tables are named for their content, so the same
-four names appear in every schema and a query reads the same whichever broker it is against.
+names appear in every schema that has the table and a query reads the same whichever broker it is against. Only the four brokers that stream positions have a `positions` table, and only the seven with price history a `price_history`.
 
 ### The one exception
 
 The rule governs a broker's own observations. Data that belongs to no single broker sits in a schema of
-its own, `unified`, starting with the two tables of the
+its own, `unified`, starting with the tables of the
 [instrument mapping](../guides/instrument-mapping.md) layer:
 
 | Table | What it holds |
@@ -63,7 +63,7 @@ are written by the `bin/unified/persist_*` scripts. See [Unified scripts](../gui
 === "instruments"
 
     One row per contract per day, `download_date` being part of the key. Hypertable on
-    `download_date`, chunked by month. Every column is `TEXT`, because the file is stored as the
+    `download_date`, chunked by month. Every column but `download_date`, a `DATE`, is `TEXT`, because the file is stored as the
     broker published it and typing happens on read.
 
 ## Compression and chunking

@@ -147,7 +147,7 @@ journalctl --user -u zerodha-login
 It is tried up to three times. The script exits non-zero when the login fails or the session it
 produced does not answer an authenticated request, and `Restart=on-failure` runs it again after two
 minutes; `StartLimitBurst=3` within `StartLimitIntervalSec=1h` counts the first attempt, so that is the
-first try and two retries. `TimeoutStartSec` is 300 seconds, because several brokers log in by driving
+first try and two retries. `TimeoutStartSec` is 300 seconds, because Zerodha and Shoonya log in by driving
 a headless Chrome and waiting on a TOTP - and for the same reason the unit deliberately has no
 `PrivateTmp`, `ProtectHome` or `NoNewPrivileges`: Chrome needs a writable home and `/dev/shm`.
 
@@ -242,8 +242,8 @@ be in place before the logins and the 09:00 pre-open, when the feeders resolve a
 so a machine that was off at 07:45 runs the job as soon as it starts.
 
 **08:15** is after the overnight token expiry and the instrument download, before the pre-open, and
-well clear of MCX's 23:30 close. `RandomizedDelaySec=1800` spreads ten logins, most of them a headless
-Chrome and a TOTP, across 08:15 to 08:45 rather than firing them in the same second. A machine that was
+well clear of MCX's 23:30 close. `RandomizedDelaySec=1800` spreads ten logins, nine of them with a TOTP and two
+of those through a headless Chrome, across 08:15 to 08:45 rather than firing them in the same second. A machine that was
 off at 08:15 needs no catch-up, since the first script to find its token refused logs in then - hence
 `Persistent=false`.
 
@@ -284,7 +284,7 @@ It starts targets, timers and every `Restart=always` service a target wants, inc
 downloaders and the REST API. It never starts a login, instrument or price job, because a login
 reaches a live broker account and at Zerodha cancels the token every running script holds; it only
 reports those when they have failed. It also reports whether linger is on. It exits 0 when
-everything is healthy and 1 when something still needs attention.
+everything is healthy, 1 when something still needs attention, and 2 for a bad argument or when the user's systemd manager cannot be reached.
 
 The scripts record their own state in Redis as well - `<broker>:session:status` after every login,
 `unified:prices:last_run` after every price run, `unified:mapping:meta` after every mapping - and a

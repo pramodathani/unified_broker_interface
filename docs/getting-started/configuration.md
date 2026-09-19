@@ -7,8 +7,8 @@ and are rewritten by the login flow itself.
 ## The environment
 
 `utilities/configurations.py` calls `load_dotenv()` on import, so a `.env` file at the project
-root is read automatically. Every store variable is required; the port variables are cast with
-`int()` at import time and a missing one raises immediately. The REST API's variables are the
+root is read automatically. Every store variable is required; the port variables and
+`UNIFIED_BROKER_INTERFACE_REDIS_DB` are cast with `int()` at import time and a missing one raises immediately. The REST API's variables and the login interval are the
 exception: they are optional, with the defaults shown.
 
 ```bash title=".env"
@@ -40,6 +40,9 @@ UNIFIED_BROKER_INTERFACE_API_ORDER_EXCLUDED_BROKERS=
 UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_SELECTOR=round_robin
 UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_PRIORITY=
 UNIFIED_BROKER_INTERFACE_API_ORDER_WARM_BROKERS=
+
+# Optional: the shortest time, in seconds, between ensure_session login attempts for one broker
+UNIFIED_BROKER_INTERFACE_LOGIN_MIN_INTERVAL=300
 ```
 
 !!! danger "`.env` holds live trading credentials"

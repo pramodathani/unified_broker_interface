@@ -60,6 +60,7 @@ test page, and a login check against the live brokers.
     ```bash
     python -m test_runs.download_instruments                 # every broker
     python -m test_runs.download_instruments zerodha dhan    # only these
+    python -m test_runs.download_instruments --bootstrap zerodha  # replace today's snapshot
     ```
 
 === "Safe - web page"

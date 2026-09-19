@@ -10,7 +10,7 @@ Three steps, in order. Nothing in the project runs until the environment is fill
 !!! tip "Order matters"
 
     `utilities/configurations.py` calls `int(os.getenv(...))` on the port numbers at module
-    import. A missing or empty `UNIFIED_BROKER_INTERFACE_REDIS_PORT` therefore fails with a
-    `TypeError` on the very first import, not later at connection time. If an import of anything
+    import. A missing `UNIFIED_BROKER_INTERFACE_REDIS_PORT` therefore fails with a `TypeError`, and an empty one with a
+    `ValueError`, on the very first import, not later at connection time. If an import of anything
     under `stock_brokers` raises before your own code runs, the `.env` file is the first place to
     look.

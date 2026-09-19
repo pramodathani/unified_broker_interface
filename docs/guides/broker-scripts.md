@@ -210,8 +210,7 @@ Orders are keyed by the broker's order id (`order_id`, `norenordno`, `nOrdNo`, `
 | `<broker>:quotes:instruments` | hash | Every subscribed token to its name. Replaced whole at startup |
 | `<broker>:quotes:stream` | stream | Every tick in arrival order as a `tick` field, capped at about 1,000,000 entries |
 
-At nine brokers `--per-socket` sets how many instruments one connection carries, and `--tokens` subscribes to
-a list instead of the subscription set.
+At eight brokers `--per-socket` sets how many instruments one connection carries; Zerodha takes `--sockets` instead and Stoxkart neither. At every broker `--tokens` subscribes to a list instead of the subscription set.
 
 Zerodha is the exception. `bin/zerodha/quotes` reads no subscription set at all: it subscribes to every
 instrument in today's `zerodha:instruments:master` and splits them equally across `--sockets` connections, 24
@@ -453,7 +452,7 @@ Each broker's units live in `services/<broker>/`:
 
 Nothing needs restarting after the morning login: every script reads the current token on each connect
 and request, so the login only has to happen before the market opens. The 30 minutes of jitter keeps ten
-headless-browser and TOTP logins from firing in the same second and still lands each before 09:00. A
+logins, nine of them with a TOTP and two through a headless browser, from firing in the same second and still lands each before 09:00. A
 machine that was off at 08:15 needs no catch-up, since the first script refused a token logs in then.
 
 To install a broker, link its units and enable the target, the login timer and the scripts. The commands

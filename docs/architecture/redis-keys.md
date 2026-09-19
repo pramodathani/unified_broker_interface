@@ -120,7 +120,7 @@ Ticks trimmed from it while the persister is stopped are lost to the database.
 | Key | Type | Written by | Holds |
 | --- | --- | --- | --- |
 | `<broker>:instruments:master` | hash, keyed by the table's natural key | `bin/<broker>/instruments` | Each instrument's row as a JSON array in column order |
-| `<broker>:instruments:meta` | string | `bin/<broker>/instruments` | `{"download_date", "rows", "columns", "source_last_modified", "written_at"}` |
+| `<broker>:instruments:meta` | string | `bin/<broker>/instruments` | `{"download_date", "rows", "columns", "source_last_modified", "written_at"}`, with Kotak's `source` (the day's scrip master URL) and Wisdom Capital's `segments` in place of `source_last_modified` |
 
 Written for all ten brokers, Stoxkart included, each morning by `unified-instruments.service`. The
 field is the broker's own key for an instrument - Zerodha's `instrument_token`, Stoxkart's
@@ -167,7 +167,7 @@ the hash.
 | `unified:quotes:stream` | stream, field `quote` | `bin/unified/quotes` | Every quote written to the hash, capped at about 1,000,000 |
 | `unified:quotes:fetched` | hash, per-field expiry of two days | the REST API | Quotes fetched from a broker when the live quote was not good enough, in the same document shape |
 | `unified:quotes:stats` | string | `bin/unified/quotes` | The counts: received, unresolved, out of session, not owner, no price, duplicate, written |
-| `unified:quotes:unresolved` | hash, keyed `broker:token:reason` | `bin/unified/quotes` | How many ticks could not be resolved to one instrument |
+| `unified:quotes:unresolved` | hash, keyed `broker:token:reason` | `bin/unified/quotes` | How many times a token failed to resolve to one instrument: once when first seen, then once per ten-minute retry |
 
 A quote is the [unified quote](contracts.md#the-unified-quote) document. A quote whose
 owner went silent with no healthy backup stays in `quotes:live` with `stale` true; quotes stale for a
@@ -271,6 +271,7 @@ redis-cli HGET unified:broker_tokens dhan:2885
 | --- | --- | --- | --- |
 | `ubi:login:<broker>` | string, 300 s TTL | `ensure_session` | The lock held while one process logs a broker in, recording the holder's pid |
 | `ubi:login-attempt:<broker>`, `ubi:login-ok:<broker>` | string | `ensure_session` | When a login was last attempted and last succeeded, so only genuine retries are rate limited |
+| `ubi:session:wisdom_capital:marketdata`, and `:lock` beside it | string, 300 s TTL | `shared_application_session`, for `WisdomCapitalCandles` | Wisdom Capital's market data session as JSON, minted once and read by every process that downloads candles through that class |
 | `broker_api_calls` | list | every broker's API class, only when called with `verbose` | Each request made |
 
 `ensure_session` in `stock_brokers/api/utilities/session.py` is the login `BrokerCandles` uses by default and the one

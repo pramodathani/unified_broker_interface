@@ -274,13 +274,13 @@ service, in the order they are tried:
 
 An instrument none of them carries answers `503` when the cache cannot.
 
-!!! warning "Fyers and Groww are not in service, and Wisdom Capital has no module"
+!!! warning "Fyers and Groww are not in service, and Wisdom Capital and Stoxkart have no module"
 
     Fyers' and Groww's modules exist but are not registered. Fyers' field mapping could not be verified,
     because its request limit was used up by the candle downloader. Groww's account is not entitled to live
     data. Wisdom Capital has no quote module: its quotes need the market data session,
     and XTS issues one per application key, which `bin/wisdom_capital/quotes` and
-    `bin/wisdom_capital/historical_prices` share.
+    `bin/wisdom_capital/historical_prices` share. Stoxkart has no quote module either; its quotes reach the API only through `bin/stoxkart/quotes` and the quote cache.
 
 A broker client in the API is built without its constructor's probe, and the API never logs a broker in:
 logins belong to each broker's `<broker>-login.service`. When a broker refuses the session, the API retries
@@ -406,7 +406,7 @@ does not, the balance is derived as shown.
 Holdings are served the way funds are - from `unified:portfolio:holdings`, written by `bin/unified/holdings` from
 each broker's `<broker>:portfolio:holdings`, with the same `brokers` list and the same `503` and `502` answers - and
 combined into one row per instrument. The document is written every minute, so one up to five minutes old is
-served.
+served, and a broker is `stale` only when its holdings were stored more than three minutes ago.
 
 ```json
 {
@@ -440,10 +440,10 @@ pledged quantities add up, and `average_price` is the invested value over the qu
 **Everything held.** A quantity is every bucket a broker reports - settled, bought and not yet settled
 (T1), and funded by margin trading - so a stock bought yesterday counts before it settles.
 
-**Priced by the unified quote.** A resolved row's `last_price` is the instrument's unified quote, as
-`/api/instruments/ltp` answers it - the quote cache, or a broker's REST quote when the cache is not recent
-enough - and `day_change` is measured from that quote's previous close. A row without an instrument, or
-whose quote was not had in time, uses the last price a broker sent, or its previous close. A row with
+**Priced by the unified quote.** A resolved row's `last_price` is the instrument's quote in `unified:quotes:live`,
+used by the rule `/api/instruments/ltp` serves its cache by, and `day_change` is measured from that quote's previous
+close. No broker is asked for a quote. A row without an instrument, or whose cached quote is not recent enough,
+uses the last price a broker sent, or its previous close. A row with
 no price at all has `current_value` and `pnl.unrealized` null and is left out of the value and profit
 totals, though its cost is in `total_investment`.
 
@@ -579,7 +579,7 @@ same [shared vocabulary](../architecture/contracts.md#the-shared-vocabulary), an
       "status": "OPEN", "status_message": null,
       "quantity": 10, "filled_quantity": 0, "pending_quantity": 10, "cancelled_quantity": 0,
       "disclosed_quantity": 0, "price": 805.0, "trigger_price": null, "average_price": null,
-      "order_timestamp": "10:12:15 12-09-2026", "exchange_timestamp": null, "tag": null
+      "order_timestamp": "2026-09-12T10:12:15+05:30", "exchange_timestamp": null, "tag": null
     }
   ],
   "summary": { "count": 1, "by_status": { "OPEN": 1 }, "filled_value": 0.0 },
@@ -589,8 +589,9 @@ same [shared vocabulary](../architecture/contracts.md#the-shared-vocabulary), an
 ```
 
 `exchange` is the broker's own exchange or segment code, as the order contract has it - `NSE`, `NSE_EQ`,
-`NSECM`, `nse_cm`. Timestamps are passed through as each broker writes them, so orders are sorted by broker
-and then by time. `filled_value` is the filled quantity times the average price, over every order.
+`NSECM`, `nse_cm`. Timestamps are ISO 8601 with the India offset, as the broker order scripts store them, and
+orders are sorted by broker, then by time, then by order id. `filled_value` is the filled quantity times the
+average price, over every order.
 
 ### The trade book
 
@@ -1054,10 +1055,11 @@ Stoxkart's variety is read first from a `variety` field that its two order scrip
 each `stoxkart:orders:orders` entry, rather than from `data` alone, because Stoxkart's order socket
 reported `NORMAL` for after-market orders whose order book row said `AMO`. The poller stores the order
 book row's variety, and `bin/stoxkart/order_updates` keeps an `AMO` or `BO` variety already stored.
-Stoxkart's cancel is the only one confirmed live: on 2026-09-15 it cancelled two after-market KWIL orders,
-one on NSE and one on BSE, each answered HTTP 200 with outcome `accepted` and
-`Order Submitted For Cancellation` in about 178 ms of broker time, and the order book then showed
-`AMO CANCELLED`.
+Cancels are confirmed live on after-market orders at Dhan, Flattrade, INDmoney, Kotak, Shoonya, Stoxkart and
+Zerodha; Fyers', Groww's and Wisdom Capital's are checked only against stubs. The first was Stoxkart's: on
+2026-09-15 it cancelled two after-market KWIL orders, one on NSE and one on BSE, each answered HTTP 200 with
+outcome `accepted` and `Order Submitted For Cancellation` in about 178 ms of broker time, and the order book
+then showed `AMO CANCELLED`. See [Known issues](../contributing/known-issues.md).
 
 ```json
 {

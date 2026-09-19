@@ -103,7 +103,7 @@ dates in each module's docstring.
 | Broker | Intervals | Daily back to | Intraday back to | Rate | Open interest |
 | --- | --- | --- | --- | --- | --- |
 | Zerodha | 8 | 2005 | 2005 | 3/s | yes |
-| Dhan | 6 | 2002 | 2017 | 5/s, 100k/day | yes |
+| Dhan | 6 | 2002 | 2017 | 3/s, 100k/day | yes |
 | Fyers | 16 | 2000 | 2019 | 3/s | yes |
 | IND Money | 14 | 2014 | a year or more | 3/s, 100k/day | no |
 | Flattrade | 11 | 2019-12 | a rolling year | 10/s | yes |
@@ -151,7 +151,7 @@ by mistake produces a rising series that looks plausible on a chart and is wrong
 
     Both split the request body on `&` before parsing the JSON inside it, so a trading symbol
     containing one - `M&M`, `ARE&M`, `L&T` - ends the `jData` field early and comes back as
-    `jData is not valid json object`. The shared API class escapes it as a JSON `\u0026`, which
+    `jData is not valid json object`. Each broker's API class escapes it as a JSON `\u0026`, which
     Noren decodes back; percent-encoding the field instead is refused outright. This affects every
     Noren request naming such a symbol, not only candles.
 
@@ -182,7 +182,7 @@ class DhanCandles(BrokerCandles):
     BROKER_NAME = "dhan"
     INTERVALS = {"1minute": "1", "day": "D"}          # stored name -> the broker's code
     MAXIMUM_WINDOW_DAYS = {"1minute": 90, "day": 5000}
-    REQUESTS_PER_SECOND = 5.0
+    REQUESTS_PER_SECOND = 3.0
     REQUESTS_PER_DAY = 100000
     EARLIEST_AVAILABLE_DATE = datetime.date(2000, 1, 1)
 

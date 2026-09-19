@@ -164,18 +164,21 @@ copies must agree with this page.
     The Noren brokers abbreviate to a single letter - `C` cash, `M` margin, `I` intraday,
     `H` cover, `B` bracket. `B` is a product here and a side in the transaction table; they are
     different tables, so the letters do not collide.
+    Stoxkart's scripts also read `CARRY FORWARD` as `NRML`, `COVER ORDER` as `CO` and `BRACKET ORDER` as `BO`.
 
 === "Order types"
 
     `MARKET`, `LIMIT`, `SL`, `SL-M`
 
     Spelled variously `MKT`, `LMT`, `L`, `SL-LMT`, `STOPMARKET`, or as the numbers 1 to 4.
+    Stoxkart's scripts also read `RL` as `LIMIT`, `RL MKT` and `RL-MKT` as `MARKET`, `STOPLOSS LIMIT` as `SL`, and `STOPLOSS MARKET` and `SL MKT` as `SL-M`.
 
 === "Validities"
 
     `DAY`, `IOC`, `GTT`, `GTC`, `GTD`
 
     `EOS` and `0` normalize to `DAY`; `IMMEDIATE` and `1` to `IOC`.
+    Stoxkart's scripts also read `EOTODY` and `EOSESS` as `DAY`.
 
 === "Statuses"
 
@@ -205,6 +208,6 @@ copies must agree with this page.
 ## Where the contracts are enforced
 
 Nowhere, structurally - there is no schema validation at runtime. Each script builds its dictionaries with
-every key written out, and its docstring states where each field comes from. The offline checks are
-`python -m test_runs.candle_parse` for the candle parsers and `python -m test_runs.unified_ticks_sessions`
-for the session calendar. See [Test runs](../guides/test-runs.md).
+every key written out, and its docstring states where each field comes from.
+None of the offline checks tests these dictionaries; they are `python -m test_runs.candle_parse` for the candle parsers, `python -m test_runs.unified_ticks_sessions` for the session calendar, `python -m test_runs.order_routes` for the REST API's order routes, `python -m test_runs.contract_sizes` for the contract size rules and `python -m test_runs.connection_warming` for broker connection warming.
+See [Test runs](../guides/test-runs.md).

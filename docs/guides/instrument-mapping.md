@@ -20,7 +20,8 @@ snapshots, caches the day's rows in Redis under `unified:` and warms the REST AP
 bin/unified/map_instruments                          # every broker, today
 bin/unified/map_instruments dhan kotak               # only these
 bin/unified/map_instruments --date 2026-09-14        # a date already downloaded, not older than one already mapped
-bin/unified/map_instruments --cache-only --date 2026-09-14   # only rewrite the Redis cache for a mapped date
+bin/unified/map_instruments --skip-collisions               # leave stale duplicate instruments alone
+bin/unified/map_instruments --cache-only --date 2026-09-14   # only the contract sizes, Redis cache and catalogue, for a mapped date
 ```
 
 A date older than the newest date already in `unified.broker_mappings` is refused. Mapping an older date on
@@ -97,7 +98,6 @@ segments:
     broker_fields:
       token: security_id
       broker_symbol: display_name
-      order_symbol: tradingsymbol
       lot_size: lot_size
       tick_size: {column: tick_size, transform: divide_by_100}
 ```
@@ -168,7 +168,7 @@ publishing two rows for one scrip, where the other brokers agree on which name i
 independent tests must both agree before anything is deleted, and only `broker_mappings` rows are
 ever deleted - master rows are not.
 
-A run covering a subset of brokers skips this step, since one broker cannot vote on itself.
+A run in which fewer than all ten brokers had rows to map - a subset of brokers, or a day one download failed - skips this step, since one broker cannot vote on itself. `--skip-collisions` skips it too.
 
 ## Contract sizes
 
@@ -267,7 +267,7 @@ reader sees either the previous complete day or the new complete day and never a
 !!! warning "Redis is built differently here than for the feeds"
 
     `MappingRedisConnection` does not use `get_cache()` from `utilities.configurations`. That client
-    is built for long-lived connections: no `socket_timeout`, because a blocking pub/sub read would otherwise
+    is built for long-lived connections: no `socket_timeout`, because a blocking stream read would otherwise
     raise on every idle period, and redis-py's default retry left in place. Both are right for a
     subscriber sitting silent overnight and wrong here, where a refused port takes about six seconds
     to be declared refused - and those six seconds land on whichever lookup happens to be first,

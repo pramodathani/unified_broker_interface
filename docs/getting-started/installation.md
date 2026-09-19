@@ -6,8 +6,8 @@
 | --- | --- | --- |
 | Python | 3.14 | The virtual environment in `.venv` is built against it |
 | Redis | 6 or later | Queues and current state |
-| MongoDB | 6 or later | Broker credentials and login tokens |
-| PostgreSQL + TimescaleDB | 15 + TimescaleDB 2 | Ticks, order updates, positions, instruments |
+| MongoDB | 8.0.4 (`mongo:8.0.4`) | Broker credentials and login tokens |
+| PostgreSQL + TimescaleDB | 18 + TimescaleDB (`timescale/timescaledb:latest-pg18`) | Ticks, order updates, positions, instruments, price history |
 | Google Chrome + chromedriver | current stable | Several brokers log in through Selenium |
 | TA-Lib C library | 0.6 or later | `TA-Lib` in `requirements.txt` wraps it |
 
@@ -33,7 +33,7 @@ python -m stock_brokers.instruments.sql.apply_ddl
 
 ## The documentation toolchain
 
-The MkDocs packages are in the same `requirements.txt`, in a commented block at the end, so the
+The MkDocs packages are in the same `requirements.txt`, in a block under a comment at the end, so the
 install above already has them.
 
 ```bash

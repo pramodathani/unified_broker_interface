@@ -43,7 +43,7 @@ select * from unified.price_history where instrument_id = $1 and "interval" = 'd
 select * from unified.price_history_adjusted where instrument_id = $1 and "interval" = 'day';
 
 -- adjusted as it would have been on a date: no look-ahead in a backtest
-select * from unified.adjusted_bars($1, 'day', '2023-01-01', '2024-01-01', known_as_of => '2023-06-30');
+select * from unified.adjusted_bars($1, 'day', '2023-01-01', '2024-01-01', p_known_as_of => '2023-06-30');
 ```
 
 `adjusted_bars` is a single SQL `SELECT` marked `STABLE`, so PostgreSQL inlines it and the instrument,

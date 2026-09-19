@@ -142,7 +142,11 @@ is the previous close and which timestamps are true. See [Unified scripts](../gu
   also overrides `stored_exchange_matches`. Add it to `BROKER_ORDER_CLASSES` in
   `broker_orders/utilities/registry.py`, whose order is the round robin's turn order, and add a dry run and
   a sent order for it to `test_runs/order_routes.py` before recording. List a market only once the broker's
-  order API has been confirmed to take it and to count quantity in units there.
+  order API has been confirmed to take it, and give every currency or commodity market an entry in
+  `QUANTITY_UNITS` saying how the broker counts quantity there (`lots`, `units` or `broker_lot_size`); a
+  currency or commodity market without one passes the broker over.
+- If the broker appears in the `broker_details` export, add its display name to `BROKER_CODES` in
+  `unified_broker_interface/utilities/import_details.py`, which stops the import on a display name it does not know.
 
 ## 9. Documentation
 

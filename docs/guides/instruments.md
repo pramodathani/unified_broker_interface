@@ -41,8 +41,8 @@ flowchart LR
 ```
 
 A subclass supplies `download()` and the dedupe key. Everything else comes from
-[`BrokerInstruments`][stock_brokers.instruments.base.BrokerInstruments], so a broker module is
-usually under thirty lines:
+[`BrokerInstruments`][stock_brokers.instruments.base.BrokerInstruments], so the simplest broker
+module, Zerodha's, is under thirty lines:
 
 ```python
 class ZerodhaInstruments(BrokerInstruments):
@@ -82,4 +82,4 @@ resolves them against each other into `unified.instruments` and `unified.broker_
 Each broker's snapshots go to `<broker>.instruments`, a hypertable partitioned on `download_date`
 by month. Columns are `TEXT` for the same reason the download is: the file is stored as
 published, and any typing happens when it is read. Ten brokers have a table, Stoxkart included -
-its instrument master is public and needs no login, so it works even though its API does not.
+its instrument master is public and needs no login.

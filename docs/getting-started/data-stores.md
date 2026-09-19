@@ -16,7 +16,7 @@ Three stores, each doing one job.
 docker compose up -d
 ```
 
-The `databases` systemd units run the same command every minute, so a container that is stopped or removed comes back on its own. See [Running it as a service](../guides/services.md#installing).
+The `databases` systemd units run `docker compose up -d --wait` every minute, so a container that is stopped or removed comes back on its own. See [Running it as a service](../guides/services.md#installing).
 
 | Service | Image | Host port | Data folder |
 | --- | --- | --- | --- |
@@ -46,8 +46,8 @@ by `bin/<broker>/persist_ticks`. See [Broker scripts](../guides/broker-scripts.m
 ## Creating the PostgreSQL objects
 
 Each broker gets its own PostgreSQL schema, named after the broker, holding tables named for
-their content - `zerodha.ticks`, `zerodha.order_updates`, `zerodha.positions`,
-`zerodha.instruments`, `zerodha.price_history`. There is no shared table with a broker column. Data that
+their content - `zerodha.ticks`, `zerodha.order_updates`, `zerodha.instruments`,
+`zerodha.price_history`, plus a `positions` table such as `fyers.positions` at the four brokers that stream positions. There is no shared table with a broker column. Data that
 belongs to no single broker is in the `unified` schema. See [Database](../database/index.md).
 
 The broker schemas and instrument tables come from `.sql` files applied in filename order:

@@ -59,14 +59,14 @@ implementations.
 | Broker | Login | Worth knowing |
 | --- | --- | --- |
 | Zerodha | Selenium + TOTP | Tries an authenticated call first and only logs in when it fails, so most constructions are cheap; every login invalidates the token before it |
-| Dhan | Token | - |
-| Flattrade | Token | Permits one websocket per session, so `flattrade@order_updates` is not run and `flattrade@quotes` holds the connection |
-| Shoonya | Token | Its Noren user id is the account's UCC code, held in the `ucc_code` setting |
-| Fyers | Selenium + TOTP | Streams positions as well as orders; refuses more than a handful of requests a second per app |
-| Groww | Token | NATS transport with protocol buffer payloads; streams derivatives positions |
-| Kotak | Selenium + TOTP | Streams positions; its instrument master URL is stamped with today's date; its feed is the binary HSM protocol of Kotak's own SDK, which wants data frames acknowledged and sends MCX quantities in Kotak's lots |
-| IND Money | Token | - |
-| Wisdom Capital | Token | XTS; separate market data credentials, REST subscription, socket.io transport, and `apiType=INTERACTIVE` required in the order socket's query; a stored-token check refused for rate (HTTP 429 or an `e-apirl` code) still counts as a working session, so it does not trigger a login |
+| Dhan | REST + TOTP | - |
+| Flattrade | REST + TOTP | Permits one websocket per session, so `flattrade@order_updates` is not run and `flattrade@quotes` holds the connection |
+| Shoonya | Selenium + TOTP | Its Noren user id is the account's UCC code, held in the `ucc_code` setting |
+| Fyers | REST + TOTP | Streams positions as well as orders; refuses more than a handful of requests a second per app |
+| Groww | REST + TOTP | NATS transport with protocol buffer payloads; streams derivatives positions |
+| Kotak | REST + TOTP | Streams positions; its instrument master URL is stamped with today's date; its feed is the binary HSM protocol of Kotak's own SDK, which wants data frames acknowledged and sends MCX quantities in Kotak's lots |
+| IND Money | REST + TOTP | - |
+| Wisdom Capital | REST | XTS; separate market data credentials, REST subscription, socket.io transport, and `apiType=INTERACTIVE` required in the order socket's query; a stored-token check refused for rate (HTTP 429 or an `e-apirl` code) still counts as a working session, so it does not trigger a login |
 | Stoxkart | REST + TOTP | Its version 2 login needs a publisher key pair in `publisher_api_key` and `publisher_api_secret` beside the app's own key, and that pair must stay in the settings document when the API key is changed; quotes and order updates stream from its trading website's websockets, and the order socket allows one connection per client; orders and cancellations must carry the Algo-ID `99999` in an `X-Algo-Id` header, because the body's `algo_id` alone is refused with `invalid algo_id` |
 
 See the [coverage matrix](coverage.md) for what each broker supports subsystem by subsystem,

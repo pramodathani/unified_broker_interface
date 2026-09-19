@@ -11,7 +11,7 @@ others.
 | Broker scripts | `bin/<broker>/` | The only code that talks to a broker: sessions, pollers, quote and order update feeds, persisters, instrument masters and candles. See [Broker scripts](../guides/broker-scripts.md) |
 | Unified scripts | `bin/unified/` | Every broker combined from Redis and the database: instruments, price history, quotes, orders and the portfolio. See [Unified scripts](../guides/unified-scripts.md) |
 | REST API | `unified_broker_interface` | One HTTP interface over the unified layer. See [REST API](../guides/rest-api.md) |
-| Services | `services/<broker>/`, `services/unified/` | The systemd user units that run all of it. See [Running it as a service](../guides/services.md) |
+| Services | `services/<broker>/`, `services/unified/`, `services/databases/` | The systemd user units that run all of it, and the ones that keep the database containers up. See [Running it as a service](../guides/services.md) |
 
 ## Package layout
 
@@ -22,7 +22,8 @@ bin/
 └── rest-api, rest-api-app, search-instruments, zerodha-quote, check-broker-connections, check-services, import-api-details
 services/
 ├── <broker>/                 the systemd user units that run bin/<broker>/
-└── unified/                  the units that run bin/unified/ and the REST API
+├── unified/                  the units that run bin/unified/ and the REST API
+└── databases/                the units that start any stopped container from docker-compose.yml
 
 stock_brokers/
 ├── api/                      REST: login, then authenticated requests
@@ -52,8 +53,8 @@ stock_brokers/
 unified_broker_interface/     the REST API
 ├── api.py, wsgi.py           the Flask application and the gunicorn entry point
 ├── blueprints/               one module per group of endpoints
-└── utilities/                the token store, instrument lookups, and per-broker funds, holdings, orders,
-                              positions and quote modules
+└── utilities/                the token store, instrument lookups, the per-broker order and quote modules,
+                              and the order route's broker selectors
 
 utilities/
 ├── configurations.py         the environment, and the clients built from it
@@ -71,9 +72,9 @@ A package that implements something once per broker holds exactly three kinds of
 Everything else the subsystem needs - an orchestrator or registry, SQL and its runner, schema
 definitions, helpers - goes in a `utilities/` subpackage inside that same package.
 
-`instruments/mapping/`, `instruments/historical/`, `instruments/ticks/` and the REST API's `broker_quotes/`
-all read this way, which is what makes "which brokers are implemented here" a question answered by listing the
-directory. In `historical/` and `ticks/` the module Flattrade and Shoonya share, as deployments of one
+`api/`, `instruments/mapping/`, `instruments/historical/`, `instruments/ticks/` and the REST API's `broker_quotes/`
+and `broker_orders/` all read this way, which is what makes "which brokers are implemented here" a question answered by listing the
+directory. In `historical/`, `ticks/` and `broker_orders/` the module Flattrade and Shoonya share, as deployments of one
 platform, sits beside them as `noren.py`.
 
 The top level of the repository is deliberately small - `stock_brokers/`, `unified_broker_interface/`,
@@ -119,3 +120,5 @@ broker-specific.
 | Mapping | `BROKER_NAME` and a rules file; `classify`, `to_identity` or `read_raw_rows` only where the rules cannot say it | Classification, identity, the upsert |
 | Price history | Six class attributes, `fetch_candles` and `parse_response` | The rate limiter, the queue, the watermarks, the backoff, the upsert |
 | Tick normalization | `feed_key` and the class attributes stating lots, close policy and trusted timestamps | Resolution plans, unit conversion, rounding, instants |
+| Broker quotes | `fetch` and `is_authentication_error` | The cache check, the order brokers are tried in, normalization through the broker's `TickNormalizer` |
+| Broker orders | `MARKETS`, `build_place_request`, `build_cancel_request` and `read_order_id`; `MODIFIABLE_FIELDS` and `build_modify_request` where the broker modifies orders | Settings and quantity checks, the pooled session, sending, reading refusals, connection warming; the blueprint does every Redis read |

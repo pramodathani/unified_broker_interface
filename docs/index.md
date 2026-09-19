@@ -72,7 +72,7 @@ flowchart LR
 | Broker scripts | `bin/<broker>/` | Sessions, profiles, orders, trades, holdings, positions and funds polled into Redis; quote and order update feeds; instrument masters and candles in each broker's schema. See [Broker scripts](guides/broker-scripts.md) |
 | Unified scripts | `bin/unified/` | Every broker combined in one shape, the unified instruments and price history, and the streams persisted into the `unified` schema. See [Unified scripts](guides/unified-scripts.md) |
 | REST API | `unified_broker_interface` | One HTTP interface over the unified layer. See [REST API](guides/rest-api.md) |
-| Services | `services/<broker>/`, `services/unified/` | The systemd units and timers that run all of it. See [Running it as a service](guides/services.md) |
+| Services | `services/<broker>/`, `services/unified/`, `services/databases/` | The systemd units and timers that run all of it, and keep the database containers up. See [Running it as a service](guides/services.md) |
 
 ## The two ideas worth knowing first
 

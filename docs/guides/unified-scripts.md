@@ -18,7 +18,7 @@ systemctl --user enable --now unified@orders.service
 
 | Script | Runs | Reads | Writes |
 | --- | --- | --- | --- |
-| `map_instruments` | daily, once | `<broker>.instruments` | `unified.instruments`, `unified.broker_mappings`, the mapping cache |
+| `map_instruments` | daily, once | `<broker>.instruments` | `unified.instruments`, `unified.broker_mappings`, `unified.contract_sizes`, the mapping cache |
 | `historical_prices` | daily, once | `<broker>.price_history` | `unified.price_history` and its companion tables |
 | `quotes` | continuously | `<broker>:quotes:stream` | `unified:quotes:live`, `unified:quotes:stream` |
 | `order_updates` | continuously | `<broker>:order-updates:stream`, `<broker>:positions_updates:stream` | `unified:order-updates`, `unified:positions_updates` and their streams |
@@ -90,8 +90,9 @@ bin/unified/map_instruments --skip-collisions    # leave stale duplicate instrum
 bin/unified/map_instruments --cache-only --date 2026-09-13   # only rewrite the Redis cache for a mapped date
 ```
 
-Each run applies the mapping DDL, maps the date's broker snapshots with the
-[instrument mapping](instrument-mapping.md) stage, and then writes the cache.
+Each run applies the mapping DDL, maps the date's broker snapshots with the [instrument mapping](instrument-mapping.md) stage, decides the date's currency and commodity [contract sizes](instrument-mapping.md#contract-sizes) into `unified.contract_sizes`, and then writes the cache and warms the REST API's catalogue.
+`--cache-only` skips the DDL and the mapping, and only decides the contract sizes, writes the cache and warms the catalogue.
+A contract size decision that fails is logged without failing the run.
 A date older than the newest date already in `unified.broker_mappings` is refused with exit 2: a backfill
 has to start from empty tables instead.
 
@@ -102,7 +103,7 @@ has to start from empty tables instead.
 | `unified:broker_tokens` | hash | The reverse lookup, keyed `broker:broker_token`, each a JSON array of the instrument ids that token names on the date |
 | `unified:instrument_symbols` | hash | Securities by symbol, keyed `segment:SYMBOL` (`nse_equities:RELIANCE`), each an instrument id as a JSON string |
 | `unified:mapping:meta` | string | `mapping_date`, the four counts, `columns` and `written_at` |
-| `unified:catalogue:*` | various | The REST API's instrument cache - identities, tokens, order handles and a browsable catalogue per segment - warmed for the date |
+| `unified:catalogue:*` | various | The REST API's instrument cache - identities, tokens, order handles, contract size decisions and a browsable catalogue per segment - warmed for the date |
 
 The four hashes are built under `:staging` keys and swapped in together with the meta, so a reader sees
 the previous day's complete cache or the new one, never a mix. The catalogue warm clears every other
@@ -161,8 +162,8 @@ lists. Running the resolver's own rules over that day's master, 112,422 of the 1
 exactly one unified instrument and 235 do not, so `unified:quotes:live` should hold about 112,400 instruments
 rather than the sixteen it held before. At a measured 823 bytes per quote document that hash is roughly 92 MB.
 
-The 235 that do not resolve fall into three groups, and every one of them logs a warning the first time it is
-seen and again every ten minutes after:
+The 235 that do not resolve fall into three groups.
+Every one of them logs a warning the first time it is seen under a mapping date, and is tried again every ten minutes, each failed attempt counted in `unified:quotes:unresolved`:
 
 | Why it fails | Count | Which instruments |
 | --- | ---: | --- |
@@ -310,6 +311,7 @@ from its `.sql` file. Run one instance of each.
 | --- | --- | --- |
 | `unified.instruments` | table | `map_instruments` |
 | `unified.broker_mappings` | hypertable by `mapping_date` | `map_instruments` |
+| `unified.contract_sizes` | hypertable by `mapping_date` | `map_instruments` |
 | `unified.price_history`, `unified.price_history_sources`, `unified.price_history_corrections`, `unified.adjustment_factors`, `unified.yahoo_fetch_state` | tables | `historical_prices` |
 | `unified.adjustment_ranges`, `unified.correction_ranges`, `unified.price_history_adjusted` | views | - |
 | `unified.adjusted_bars` | function | - |
@@ -323,7 +325,7 @@ scripts that need them (see [DDL and migrations](../database/ddl.md)):
 
 | Directory | Files |
 | --- | --- |
-| `stock_brokers/instruments/mapping/utilities/sql/ddl` | `100_unified_schema.sql`, `110_unified_instruments.sql`, `120_unified_broker_mappings.sql` |
+| `stock_brokers/instruments/mapping/utilities/sql/ddl` | `100_unified_schema.sql`, `110_unified_instruments.sql`, `120_unified_broker_mappings.sql`, `130_unified_contract_sizes.sql` |
 | `stock_brokers/instruments/historical/utilities/sql/ddl` | `200_unified_price_history.sql` to `250_unified_price_history_corrections.sql` |
 | `stock_brokers/instruments/ticks/utilities/sql/ddl` | `300_unified_ticks.sql`, `310_unified_order_updates.sql`, `320_unified_positions.sql`, `330_unified_ticks_adjusted.sql` |
 
@@ -333,8 +335,8 @@ scripts that need them (see [DDL and migrations](../database/ddl.md)):
 ### Table names
 
 The mapping and price history packages name their tables in two modules rather than in each query:
-`stock_brokers/instruments/mapping/utilities/tables.py` - `unified.instruments`, `unified.broker_mappings`
-and the catalogue's Redis prefix, `unified:catalogue:` - and
+`stock_brokers/instruments/mapping/utilities/tables.py` - `unified.instruments`, `unified.broker_mappings`,
+`unified.contract_sizes` and the catalogue's Redis prefix, `unified:catalogue:` - and
 `stock_brokers/instruments/historical/utilities/unified/tables.py` - the price history tables, views and
 function, and `unified.ticks` and `unified.ticks_adjusted`. Both name only the `unified` schema.
 

@@ -1,7 +1,7 @@
 # Known issues
 
 Things that are wrong, unfinished or deliberately left alone, recorded so they are not
-rediscovered from scratch. Everything here was true as of 2026-09-14.
+rediscovered from scratch. Everything here was checked against the code on 2026-09-19.
 
 ## Storage
 
@@ -49,16 +49,17 @@ leave Fyers currency derivatives out until that scaling is confirmed on a live c
 
 **Tick sizes of uncategorised rows are not in one unit.** The uncategorised catch-alls mix paise, rupees
 and Stoxkart's ten-million scaling within a single broker, so one conversion per segment would be wrong
-for some rows. They are left as sent, and the order price check does not check an uncategorised
-instrument's price. A few tradeable instruments also disagree by a factor other than 100 (about 25 of
+for some rows. They are left as sent, and `POST /api/orders/place` refuses an uncategorised instrument with
+`400` before any price check. A few tradeable instruments also disagree by a factor other than 100 (about 25 of
 300,000 on 2026-09-13, mostly Stoxkart equities at 20 or 500 times Zerodha's), which looks like stale
 broker files rather than a unit problem. Index ticks were brought into rupees on 2026-09-14, as the
 [mapping guide](../guides/instrument-mapping.md) describes, but Dhan's and Fyers' figures still disagree
 for a few indices, such as INDIA VIX (0.05 and 0.01), and `/details` answers a null `tick_size` for them.
 
 **Orders are refused between midnight and the morning cache warm.** `POST /api/orders/place` reads the
-instrument, its broker tokens and its lots and ticks only from the `unified:catalogue:` keys in Redis, so
-that it never waits on PostgreSQL. Those keys expire at midnight, and the next warm runs after the 07:45
+instrument, its broker tokens and its lots and ticks only from the `unified:catalogue:` keys in Redis, or
+from the API worker's own copy of them, so that it never waits on PostgreSQL. Those keys expire at midnight,
+the worker's copy is dropped at the same moment, and the next warm runs after the 07:45
 instrument mapping, so an after-market order sent in between is refused with `404`. Running
 `python -m stock_brokers.instruments.mapping.utilities.warm_cache` refills them for the latest mapping date.
 
