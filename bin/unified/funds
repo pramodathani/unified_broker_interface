@@ -25,7 +25,7 @@ No broker reports a total, so `total_balance` is what is free to trade plus what
 does not report contributes nothing, and a missing, blank or non-numeric one - Wisdom Capital's "NaN" included - is read
 as zero. A segment appears when any broker reports it.
 
-**Each broker's funds** are read exactly as the REST API's funds modules read them:
+**Each broker's funds** are read like this:
 
 | broker | stored `data` | summary from | segments |
 | --- | --- | --- | --- |
@@ -39,11 +39,11 @@ as zero. A segment appears when any broker reports it.
 | stoxkart | one pool of strings | `available_limit`, `cash`, `pledge_value` (or `collateral`), `adhoc_limit`, the absolute `utilized_limit`, `withdrawable_funds`; `realised_profit`, `payin_amount`, `payout_amount` | none |
 | wisdom_capital | XTS `BalanceList` | the first balance's `RMSSubLimits`, `marginAvailable` and `marginUtilized` | none |
 
-**Which brokers count.** `brokers` lists every broker with, as the REST API does, a `status`, and `as_of`, when its
+**Which brokers count.** `brokers` lists every broker with a `status`, and `as_of`, when its
 script stored the funds: `ok`; `stale`, stored more than a minute ago - its script may have stopped - and still added
 in; `missing`, no key; or `unreadable`, a stored value that is not funds - a refusal Fyers, Noren or Kotak carried in a
 successful answer, or a body of the wrong shape - with an `error` saying why. A missing or unreadable broker adds
-nothing, as a broker the REST API could not read adds nothing, so it is never mistaken for a broker holding no money.
+nothing, and its status says so, so it is never mistaken for a broker holding no money.
 
 Written with SET every half second, the per-broker funds scripts' cadence. Runs until Ctrl+C or SIGTERM; a Redis that
 cannot be reached is logged and tried again. Reads only - it places no orders.

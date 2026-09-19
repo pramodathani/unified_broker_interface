@@ -20,7 +20,7 @@ A holding is `instrument_id`, `isin`, `symbol`, `exchange`, `segment`, `quantity
 `last_price`, `current_value`, `pnl` (`unrealized`, `day_change`, `day_change_percentage`) and `collateral_quantity`,
 sorted by symbol.
 
-**Each broker's holding** is read exactly as the REST API's holdings modules read it. Quantity is everything held, across
+**Each broker's holding** is read like this. Quantity is everything held, across
 the broker's buckets, and invested value each bucket at its own average price:
 
 | broker | stored rows | token, exchange | quantity, invested at | pledged | prices |
@@ -37,26 +37,25 @@ the broker's buckets, and invested value each bucket at its own average price:
 
 A missing or non-numeric quantity reads as zero; a missing or zero price stays unknown.
 
-**Resolving** follows the REST API's holdings rules, from the Redis cache. A holding's token is looked up in
+**Resolving** uses the Redis cache. A holding's token is looked up in
 `unified:broker_tokens` among the cash segments - equities, exchange traded funds, investment trusts, mutual funds,
 fixed income, uncategorised - on the exchange the broker names, or on NSE then BSE when it names none, and several
 candidates are taken in that segment order. Groww sends no token, so a Groww holding is looked up by its symbol in
 `unified:instrument_symbols` over the same segments. A holding nothing resolves keeps the broker's symbol and no id.
 
-**Merging** follows the REST API: brokers in name order, and two holdings are one row when they share an ISIN or an
+**Merging** takes brokers in name order, and two holdings are one row when they share an ISIN or an
 instrument id, so Kotak, which sends no ISIN, joins the row another broker's ISIN started once its token resolves.
 Quantities, invested values and pledged quantities add up, the row keeps the first instrument it resolved to, and a
 price from any broker is the instrument's, the latest one read winning.
 
-**Pricing** follows the REST API. A resolved holding is priced by its instrument's live quote in `unified:quotes:live`,
+**Pricing.** A resolved holding is priced by its instrument's live quote in `unified:quotes:live`,
 kept by `bin/unified/quotes`: the quote's `last_price`, and its `previous_close` for the day change, or a broker's previous
 close when the quote has none. A quote is used by the rule the REST API's quote service serves its cache by - not when it
 is marked `stale`, and only when it was received in the last five minutes or the instrument's trading window has closed
-since and not reopened, judged against the exchanges' calendars. Where the REST API would then ask a broker for a quote,
-nothing here calls one, so such a holding - and one with no instrument or no quote - is priced as the REST API prices a
-holding it could not quote: by the last price a broker sent and its previous close, or failing a last price by the
-previous close, with no day change. Groww, INDmoney and Wisdom Capital send neither, so a holding only they carry and with
-no usable quote has no `last_price`, `current_value`, `unrealized` or day change.
+since and not reopened, judged against the exchanges' calendars. Nothing here asks a broker for a quote, so a holding
+whose quote is not usable - and one with no instrument or no quote - is priced by the last price a broker sent and its
+previous close, or failing a last price by the previous close, with no day change.
+Groww, INDmoney and Wisdom Capital send neither, so a holding only they carry and with no usable quote has no `last_price`, `current_value`, `unrealized` or day change.
 
 `brokers` says, for each broker, how its stored holdings were read: `ok`, `stale` (stored more than three minutes ago -
 its script may have stopped; its holdings are still included), `missing` (no key) or `unreadable`, with `as_of`, when
@@ -536,7 +535,7 @@ def rounded(value):
 
 def merged(read, resolver):
     """
-    Every broker's holdings merged into one row per instrument, as the REST API merges them.
+    Every broker's holdings merged into one row per instrument.
 
     - `read` maps each readable broker to its holdings.
     - `resolver` is the Resolver.
@@ -607,7 +606,7 @@ def holdings_document(cache, resolver, now, gate):
     holdings, total_investment, total_current_value, total_unrealized_pnl = [], 0.0, 0.0, 0.0
     for row in rows:
         identity = row["identity"]
-        # As the REST API prices a row: its quote, then the last price a broker sent, then a broker's previous close.
+        # A row is priced by its quote, then the last price a broker sent, then a broker's previous close.
         quote = quotes.get(identity["instrument_id"]) if identity else None
         if quote and quote.get("last_price") is not None:
             last_price, previous_close = quote["last_price"], quote.get("previous_close") or row["close_price"]

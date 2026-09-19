@@ -23,16 +23,16 @@ keyed by the broker's order id and written by two scripts - `bin/<broker>/orders
 `raw` and `received_at`. The stored `order` already carries every one of those fields under the same name, normalized onto
 the same vocabulary - status `PENDING`, `OPEN`, `COMPLETE`, `CANCELLED`, `REJECTED` or `EXPIRED`, `BUY`/`SELL`, `CNC`,
 `MIS`, `NRML`, `MARKET`, `LIMIT`, `SL`, `SL-M` - with `exchange` the broker's own code, so an order is copied across field
-for field. Three things differ from what the REST API answers:
+for field, with three things to know:
 
-- Timestamps. The REST API passes each broker's time through as the broker wrote it; the stored orders carry them as ISO
-  timestamps with the IST offset, so they are answered that way, and sort correctly within a broker.
-- INDmoney's `id`. INDstocks names no trading symbol, and the stored order builds `id` from the security id; the REST API
-  leaves it null until the instrument supplies a symbol, so it is cleared here to do the same.
-- Freshness. The REST API asks each broker at request time; this answers with what the two writers last stored, which is
-  at most a poll - half a second - behind while `bin/<broker>/orders` runs.
+- Timestamps. The stored orders carry them as ISO timestamps with the IST offset, so they are answered that way, and
+  sort correctly within a broker.
+- INDmoney's `id`. INDstocks names no trading symbol, and the stored order builds `id` from the security id, so it is
+  cleared here and left null until the instrument supplies a symbol.
+- Freshness. This answers with what the two writers last stored, which is at most a poll - half a second - behind while
+  `bin/<broker>/orders` runs.
 
-**Venue and resolving** follow the REST API. A broker's exchange code names an exchange and a kind of instrument - `NFO`,
+**Venue and resolving.** A broker's exchange code names an exchange and a kind of instrument - `NFO`,
 `NSE_EQ`, `NSECM`, `nse_fo` - read the same way; Fyers' kind comes from its numeric `segment`, Groww's and INDmoney's from
 their `segment`, all read from the stored `data`. The token is looked up in `unified:broker_tokens` among the segments its
 venue's kind trades on that exchange, several survivors taken in vocabulary order, then by symbol and id; Groww sends no
@@ -40,7 +40,7 @@ token, so a Groww cash order is looked up by its symbol in `unified:instrument_s
 null `instrument_id`; a resolved order the broker gave no symbol takes the instrument's, and its `id` with it. Resolutions
 are remembered until the cache's mapping date changes.
 
-**Sorted** by broker, then order time, then order id, as the REST API sorts. `summary` counts orders by status and adds
+**Sorted** by broker, then order time, then order id. `summary` counts orders by status and adds
 `filled_value`, filled quantity times average price. `brokers` says, for each broker, how its hash was read, with `as_of`,
 the newer of the newest `observed_at` in it and the last successful poll, which `bin/<broker>/orders` records in
 `<broker>:orders:orders:polled_at`:
@@ -124,7 +124,7 @@ def canonical_exchange(value):
 
 def order_venue(broker, order, data):
     """
-    An order's `(exchange, kind)`, read from its broker's exchange code as the REST API reads it.
+    An order's `(exchange, kind)`, read from its broker's exchange code.
 
     - `broker` is the broker name.
     - `order` is the stored normalized order.
@@ -154,7 +154,7 @@ def order_row(broker, stored):
     row.update({field: order.get(field) for field in ORDER_FIELDS})
     row["instrument_id"] = None
     if broker == "indmoney" and not row["tradingsymbol"]:
-        # The REST API leaves INDstocks' id null until the instrument names a symbol.
+        # INDstocks' id stays null until the instrument names a symbol.
         row["id"] = None
     data = stored.get("data") if isinstance(stored.get("data"), dict) else {}
     row["venue"] = order_venue(broker, order, data)

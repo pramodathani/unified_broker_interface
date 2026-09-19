@@ -19,7 +19,7 @@ Nothing here calls a broker. Each broker's trade book is already kept in Redis b
 `transaction_type`, `product`, `quantity`, `price`, `value`, `trade_timestamp` and `exchange_timestamp`. Side and
 product are on the shared vocabulary (`BUY`/`SELL`; `CNC`, `MIS`, `NRML`...), `value` is quantity times price rounded to
 paise, `exchange` stays the broker's own code, and timestamps are passed through as each broker writes them. Each
-broker's fields are read exactly as the REST API's orders modules read them:
+broker's fields are read like this:
 
 | broker | trade id, order id | token, symbol, exchange | side, product | quantity, price | times |
 | --- | --- | --- | --- | --- | --- |
@@ -33,7 +33,7 @@ broker's fields are read exactly as the REST API's orders modules read them:
 | stoxkart | `trade_id`, `order_id` | `token`, `symbol`, `exchange` | `action`, `product_type` | `quantity`, `price` | `order_date_time`, a time of day only |
 | wisdom_capital | `ExecutionID`, `AppOrderID` | `ExchangeInstrumentID`, `TradingSymbol`, `ExchangeSegment` | `OrderSide`, `ProductType` | `LastTradedQuantity`, `LastTradedPrice` | `LastExecutionTransactTime`, `ExchangeTransactTime` |
 
-**Resolving** follows the REST API. A broker's exchange code names an exchange and a kind of instrument - cash,
+**Resolving.** A broker's exchange code names an exchange and a kind of instrument - cash,
 derivative, currency or commodity - and a token is only unique within one of an exchange's scrip files, so a token is
 looked up in `unified:broker_tokens` and kept only among the segments its venue's kind trades on that exchange; several
 survivors are taken in vocabulary order, then by symbol and id. Groww sends no token, so a Groww cash trade is looked up by

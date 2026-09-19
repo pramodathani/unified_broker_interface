@@ -25,7 +25,7 @@ too if Stoxkart ever sent a day view, which it has not. A position is `instrumen
 `day_change_percentage`, sorted by symbol, expiry, strike, option type and product. Each summary is `count`,
 `realized_pnl`, `unrealized_pnl` and `total_pnl`.
 
-**Each broker's position** is read exactly as the REST API's positions modules read a positions row, from the entry's
+**Each broker's position** is read from the entry's
 `data`, the broker's own row. Two brokers' update streams send a different shape from their REST positions, so a
 websocket entry from Fyers or Groww is read from its normalized `position` instead:
 
@@ -43,14 +43,14 @@ websocket entry from Fyers or Groww is read from its normalized `position` inste
 | stoxkart | `token`, `exchange` | `net_quantity` | `buy_quantity`/`buy_value`, `sell_quantity`/`sell_value` | `mark_to_market` as unrealized, `last_trade_price` |
 | wisdom_capital | `ExchangeInstrumentID`, `ExchangeSegment` | `Quantity` | `OpenBuyQuantity`/`BuyAmount`, `OpenSellQuantity`/`SellAmount` | `RealizedMTM`, `UnrealizedMTM` |
 
-**Resolving, merging and pricing** follow the REST API. A token is looked up in `unified:broker_tokens` only among the
+**Resolving, merging and pricing.** A token is looked up in `unified:broker_tokens` only among the
 segments its venue's kind trades on that exchange - cash, equity/index/fixed income derivatives, currency or commodity -
 and several survivors are taken in vocabulary order, then by symbol and id; a Groww cash position, with no token, is
 looked up by symbol in `unified:instrument_symbols`. Positions are one row when they share an instrument and a product,
 or, unresolved, an exchange, a symbol and a product; quantities, values and profits add up, and averages come from the
 sums. A resolved row's last price comes from its instrument's quote in `unified:quotes:live`, with the quote's
-`previous_close` as the previous close, falling back to the price and previous close a broker sent, as the REST API falls
-back when it has no quote. Profit stays the brokers' own.
+`previous_close` as the previous close, falling back to the price and previous close a broker sent when
+there is no quote. Profit stays the brokers' own.
 
 **Brokers.** `brokers` says, for each broker, how its hash was read, with `as_of` the newer of the newest entry's
 `observed_at` and the last successful poll, which `bin/<broker>/positions` records in
@@ -427,7 +427,7 @@ def rounded(value):
 
 def merged(read, basis, resolver):
     """
-    Every broker's positions on one basis merged into one row per instrument and product, as the REST API merges them.
+    Every broker's positions on one basis merged into one row per instrument and product.
 
     - `read` maps each readable broker to its positions by basis.
     - `basis` is `net` or `day`.
