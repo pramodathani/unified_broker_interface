@@ -15,8 +15,8 @@ class KotakAPI(BrokerAPI):
     Kotak assigns each session its own API host and returns it as `baseUrl` in the Login Validate
     response - `e21`, `e22`, `e43` and so on. A call made to any other host is refused with
     stCode 200032, "Invalid URL. Please verify the 'baseUrl' in the Login Validate API response",
-    even when the token is perfectly valid. So no host is hard coded: `base_url` reads the one the
-    login stored and `url()` builds every request path on top of it.
+    even when the token is perfectly valid. So no host is hard coded: `url()` reads the one the
+    login stored and builds every request path on top of it.
 
     The order update feed, `bin/kotak/order_updates`, does the same thing with the same stored value.
     """
@@ -26,38 +26,27 @@ class KotakAPI(BrokerAPI):
     # the host Kotak actually assigned is stored and used from then on.
     _FALLBACK_BASE_URL = "https://gw-napi.kotaksecurities.com"
 
-    @staticmethod
-    def normalize_base_url(base_url):
-        """
-        A stored `baseUrl` as an origin with no trailing slash.
-
-        Kotak has returned this value with and without a scheme and with and without a trailing
-        slash, so it is normalized on the way in and on the way out rather than trusted.
-
-        - `base_url` is the value from the Login Validate response.
-        """
-        base_url = str(base_url).strip().rstrip("/")
-        if not base_url.startswith(("http://", "https://")):
-            base_url = f"https://{base_url}"
-        return base_url
-
-    @property
-    def base_url(self):
-        """
-        The API host this session must use, from the stored login.
-        """
-        stored = (self._last_login or {}).get("base_url")
-        if not stored or stored == "None":
-            return self._FALLBACK_BASE_URL
-        return self.normalize_base_url(stored)
-
     def url(self, path):
-        """
-        Absolute URL for a Kotak API path, on the host this session was assigned.
+        """Builds the absolute URL for a Kotak API path, on the host this session was assigned.
 
-        - `path` is the path part, with or without a leading slash.
+        The host is the `base_url` of the stored login. Kotak has returned it with and without a scheme and with and without a trailing slash, so it is normalized here as well as when the login stores it, rather than trusted. An account that has never logged in has no stored host yet and gets `_FALLBACK_BASE_URL`.
+
+        This stays a separate method because the Kotak scripts in `bin/kotak/`, `bin/check-broker-connections` and the Kotak quote source build their request URLs with it.
+
+        Args:
+            path (str): The path part, with or without a leading slash.
+
+        Returns:
+            str: The absolute URL.
         """
-        return f"{self.base_url}/{str(path).lstrip('/')}"
+        base_url = (self._last_login or {}).get("base_url")
+        if not base_url or base_url == "None":
+            base_url = self._FALLBACK_BASE_URL
+        else:
+            base_url = str(base_url).strip().rstrip("/")
+            if not base_url.startswith(("http://", "https://")):
+                base_url = f"https://{base_url}"
+        return f"{base_url}/{str(path).lstrip('/')}"
 
     def __init__(self):
         """
@@ -132,11 +121,15 @@ class KotakAPI(BrokerAPI):
                     message="Kotak's Login Validate response carried no baseUrl, so there is no "
                             "host to send API calls to.")
 
+            base_url = str(data["baseUrl"]).strip().rstrip("/")
+            if not base_url.startswith(("http://", "https://")):
+                base_url = f"https://{base_url}"
+
             last_login = {
                 "broker_name": "kotak",
                 "access_token": data["token"],
                 "sid": data["sid"],
-                "base_url": self.normalize_base_url(data["baseUrl"]),
+                "base_url": base_url,
                 "last_login": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
             }
             self._mongo_db["last_login"].replace_one({"broker_name": "kotak"}, last_login, upsert=True)

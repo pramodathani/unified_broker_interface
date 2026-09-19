@@ -95,7 +95,7 @@ The request bodies, exchange codes and response readers were copied from the `bu
 A few details matter:
 
 - Flattrade's and Shoonya's body is `jData=<json>&jKey=<token>`, with `&` in the JSON escaped as `&`, because Noren splits the body on the ampersand before parsing the JSON, so a symbol such as `M&M` would otherwise end the field early.
-- Kotak's host comes from `base_url` in its stored login, normalized the way `KotakAPI.base_url` does it.
+- Kotak's host comes from `base_url` in its stored login, normalized the way `KotakAPI.url` does it.
 - Wisdom Capital is sent with certificate verification off, as its API class does, because its certificate does not match its host.
 - Groww's `order_reference_id` must be 8 to 20 characters with at most two hyphens, which is why it is the tag's first seven characters, a hyphen and twelve hex digits.
 

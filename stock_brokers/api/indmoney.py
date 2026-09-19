@@ -120,20 +120,19 @@ class INDMoneyAPI(BrokerAPI):
             # {"status":"error","message":"...","error_type":"RequestValidationException"}),
             # NOT `error_code`. Some older paths may still use `error_code`, so both
             # are accepted as the exception code; the message comes from `message`.
-            def _err_code(jc):
-                return jc.get("error_type") or jc.get("error_code")
-
             if "json" in response.headers["Content-Type"]:
                 json_content = response.json()
-                if _err_code(json_content) is not None and "message" in json_content:
-                    raise INDMoneyAPIException(code=_err_code(json_content), message=json_content["message"])
+                error_code = json_content.get("error_type") or json_content.get("error_code")
+                if error_code is not None and "message" in json_content:
+                    raise INDMoneyAPIException(code=error_code, message=json_content["message"])
                 else:
                     raise INDMoneyAPIException(code=response.status_code, message=json_content)
             elif "text" in response.headers["Content-Type"]:
                 try:
                     json_content = json_lib.loads(response.content.decode("utf-8").strip())
-                    if _err_code(json_content) is not None and "message" in json_content:
-                        raise INDMoneyAPIException(code=_err_code(json_content), message=json_content["message"])
+                    error_code = json_content.get("error_type") or json_content.get("error_code")
+                    if error_code is not None and "message" in json_content:
+                        raise INDMoneyAPIException(code=error_code, message=json_content["message"])
                     else:
                         raise INDMoneyAPIException(code=response.status_code, message=json_content)
                 except json_lib.JSONDecodeError:

@@ -30,7 +30,7 @@ class WisdomCapitalAPI(BrokerAPI):
 
     # Wisdom Capital logs in through a direct session request (POST
     # appKey+secretKey to /interactive/user/session, no Selenium/PIN flow
-    # needed). A Selenium-driven login through the web UI (_connect_legacy)
+    # needed). A Selenium-driven login through the web UI (in __init__)
     # is kept as a fallback - flip this to True to use it if the direct
     # endpoint stops working.
     _USE_LEGACY_LOGIN = False
@@ -46,21 +46,105 @@ class WisdomCapitalAPI(BrokerAPI):
     _VERIFY_SSL = False
 
     def __init__(self):
-        """
-        Wisdom Capital API class
+        """Checks the stored access token and logs in again when Wisdom Capital no longer accepts it.
+
+        The stored token is checked with `GET /user/balance`, the funds endpoint. It is not `/user/profile`, because Wisdom Capital allows only about one profile call a day, which is a budget an object that is constructed several times a day cannot live inside. The funds endpoint authenticates identically, so it proves the same thing about the token without spending that allowance.
+
+        Wisdom Capital rate limits on a rolling window regardless of endpoint, and a rate-limit rejection (HTTP 429, or an error code containing `e-apirl`) is not a reason to log in again. The rate limiter runs only after the request has authenticated, and its error names the authenticated user, so a throttled check still proves the token is good. An expired or missing token instead comes back as `e-token-0002` ("Please Provide token to Authenticate"), which does mean a fresh login is needed. A previously failed login stored the string "None" rather than a token, which also means a fresh login.
+
+        The login posts the app key and secret to `/interactive/user/session`. When `_USE_LEGACY_LOGIN` is True, it first logs in through the web login page with Selenium, using the client code, password and PIN, and adds the access token it finds there and a unique key from Symphony's host lookup to that request. Either way, the session token is stored in MongoDB first and Redis second.
+
+        Raises:
+            WisdomCapitalAPIException: The legacy login found no access token on the login page, the host lookup returned no unique key, or the session request returned no token.
         """
         super().__init__(broker_name="wisdom_capital")
 
-        if self._has_valid_session():
-            return
+        stored_token = (self._last_login or {}).get("access_token")
+        if stored_token and stored_token != "None":
+            try:
+                self.get(url=f"https://trade.wisdomcapital.in/interactive/user/balance?clientID={self._settings['ucc_code']}")
+            except Exception as exception:
+                if getattr(exception, "code", None) == 429 or "e-apirl" in str(getattr(exception, "message", "")):
+                    return
+            else:
+                return
+
+        session_request = {
+            "appKey": self._settings['api_key'],
+            "secretKey": self._settings['api_secret'],
+        }
 
         if self._USE_LEGACY_LOGIN:
-            return self._connect_legacy()
+            chrome_options = Options()
+            chrome_options.add_argument('--headless')
+            chrome_options.add_argument('--no-sandbox')
+            chrome_options.add_argument('--disable-dev-shm-usage')
+            chrome_options.add_argument('--ignore-certificate-errors')
+            driver = Chrome(options=chrome_options)
+            login_url = f'https://trade.wisdomcapital.in/interactive/thirdparty?appKey={self._settings["api_key"]}&returnURL=https://trade.wisdomcapital.in/interactive/testapi#!/logIn'
+            driver.get(login_url)
+            time.sleep(2)
+
+            user_id = driver.find_element(By.XPATH, '//*[@id="loginPart"]/div/div/div[2]/div[2]/form/div/input')
+            user_id.send_keys(self._settings['ucc_code'])
+            btn_validate = driver.find_element(By.XPATH, '//*[@id="loginPart"]/div/div/div[2]/div[2]/form/button')
+            btn_validate.click()
+            time.sleep(2)
+
+            password = driver.find_element(By.XPATH, '//*[@id="login_password_field"]')
+            password.send_keys(f'{self._settings["password"]}')
+            chk_confirm = driver.find_element(By.XPATH, '//*[@id="confirmimage"]')
+            chk_confirm.click()
+            btn_submit = driver.find_element(By.XPATH, '//*[@id="loginPart"]/div/div/div/div[2]/form/div[4]/div[2]/button')
+            btn_submit.click()
+            time.sleep(2)
+
+            pin = driver.find_element(By.XPATH, '//*[@id="efirstPin"]')
+            pin.send_keys(f'{self._settings["pin"]}')
+            btn_submit = driver.find_element(By.XPATH, '//*[@id="loginPart"]/div/div/div/div[2]/form/div[2]/button')
+            btn_submit.click()
+            time.sleep(2)
+
+            try:
+                soup = BeautifulSoup(driver.page_source, 'html.parser')
+                pre_tag = soup.find('pre')
+                if not pre_tag:
+                    raise ValueError("Could not find the <pre> tag in the HTML.")
+                outer_data = json.loads(pre_tag.get_text().strip())
+                session_str = outer_data.get("session")
+                if not session_str:
+                    raise KeyError("Key 'session' not found in the JSON.")
+                inner_data = json.loads(session_str)
+                access_token = inner_data.get("accessToken")
+                if not access_token:
+                    raise KeyError("Key 'accessToken' not found in the nested session JSON.")
+            except (json.JSONDecodeError, TypeError, ValueError, KeyError) as e:
+                print(f"Error parsing token: {e}")
+                access_token = None
+
+            driver.quit()
+
+            if not access_token:
+                raise WisdomCapitalAPIException(
+                    code="500",
+                    message="Could not extract an access token from the Wisdom Capital login page. The credentials/PIN may have been rejected or the login page changed.",
+                )
+
+            response = requests.post('https://developers.symphonyfintech.in/hostlookup', headers={'Content-Type': 'application/json'}, data=json.dumps({"accesspassword": "2021HostLookUpAccess", "version": "interactive_1.0.2"}))
+            hostlookup_data = response.json()
+            if "result" not in hostlookup_data or "uniqueKey" not in (hostlookup_data.get("result") or {}):
+                raise WisdomCapitalAPIException(
+                    code=response.status_code,
+                    message=f"Wisdom Capital hostlookup did not return a uniqueKey: {hostlookup_data}",
+                )
+
+            session_request["uniqueKey"] = hostlookup_data['result']['uniqueKey']
+            session_request["accessToken"] = access_token
 
         response = requests.post(
             'https://trade.wisdomcapital.in/interactive/user/session',
             headers={'Content-Type': 'application/json'},
-            json={"appKey": self._settings['api_key'], "secretKey": self._settings['api_secret']},
+            json=session_request,
             verify=self._VERIFY_SSL
         )
         login_data = response.json()
@@ -80,45 +164,6 @@ class WisdomCapitalAPI(BrokerAPI):
         self._cache.hset("last_login", "wisdom_capital", json_lib.dumps(last_login))
         self._last_login = last_login
 
-    @staticmethod
-    def _is_rate_limited(exception):
-        """
-        True if `exception` is Wisdom Capital's per-endpoint rate-limit rejection
-        (HTTP 429 / error code e-apirl-xxxx).
-        """
-        if getattr(exception, "code", None) == 429:
-            return True
-        return "e-apirl" in str(getattr(exception, "message", ""))
-
-    def _has_valid_session(self):
-        """
-        Check whether the stored access token still works, so a usable session is
-        not thrown away and replaced on every instantiation.
-
-        The probe is GET /user/balance, the funds endpoint. It is not
-        /user/profile, because Wisdom Capital allows only about one profile call a day,
-        which is a budget an object that gets constructed several times a day cannot
-        live inside. The funds endpoint authenticates identically, so it proves the
-        same thing about the token without spending that allowance.
-
-        Wisdom Capital rate limits on a rolling window regardless of endpoint, and a
-        429 is NOT a reason to log in again: the rate limiter runs only after the
-        request has authenticated - its error names the authenticated user - so a
-        throttled probe still proves the token is good. An expired or missing token
-        instead comes back as e-token-0002 ("Please Provide token to Authenticate"),
-        which does mean a fresh login is needed.
-        """
-        access_token = (self._last_login or {}).get("access_token")
-        # A previously failed login persists the string "None" rather than a token.
-        if not access_token or access_token == "None":
-            return False
-
-        try:
-            self.get(url=f"https://trade.wisdomcapital.in/interactive/user/balance?clientID={self._settings['ucc_code']}")
-            return True
-        except Exception as exception:
-            return self._is_rate_limited(exception)
-        
     def _request(self, method, url, params=None, data=None, headers=None, cookies=None, files=None, auth=None, timeout=None, allow_redirects=None, proxies=None, hooks=None, stream=None, verify=None, cert=None, json=None, verbose=False):
         """
         Private generic REST API request to Broker API server.
@@ -208,112 +253,3 @@ class WisdomCapitalAPI(BrokerAPI):
                     raise WisdomCapitalAPIException(code=response.status_code, message=response.content.decode("utf-8").strip())
             else:
                 raise WisdomCapitalAPIException(code=response.status_code, message=response.content.decode("utf-8").strip())
-
-    def _connect_legacy(self):
-        """
-        Selenium fallback login (UCC/password/PIN through the web UI, then
-        hostlookup + session exchange), used in place of the direct session
-        login when that stops working - see _USE_LEGACY_LOGIN.
-        """
-        chrome_options = Options()
-        chrome_options.add_argument('--headless')
-        chrome_options.add_argument('--no-sandbox')
-        chrome_options.add_argument('--disable-dev-shm-usage')
-        # Same mismatched certificate as above - Chrome would otherwise stop at an
-        # interstitial instead of loading the login page.
-        chrome_options.add_argument('--ignore-certificate-errors')
-        driver = Chrome(options=chrome_options)
-        login_url = f'https://trade.wisdomcapital.in/interactive/thirdparty?appKey={self._settings["api_key"]}&returnURL=https://trade.wisdomcapital.in/interactive/testapi#!/logIn'
-        driver.get(login_url)
-        time.sleep(2)
-
-        user_id = driver.find_element(By.XPATH, '//*[@id="loginPart"]/div/div/div[2]/div[2]/form/div/input')
-        user_id.send_keys(self._settings['ucc_code'])
-        btn_validate = driver.find_element(By.XPATH, '//*[@id="loginPart"]/div/div/div[2]/div[2]/form/button')
-        btn_validate.click()
-        time.sleep(2)
-
-        password = driver.find_element(By.XPATH, '//*[@id="login_password_field"]')
-        password.send_keys(f'{self._settings["password"]}')
-        chk_confirm = driver.find_element(By.XPATH, '//*[@id="confirmimage"]')
-        chk_confirm.click()
-        btn_submit = driver.find_element(By.XPATH, '//*[@id="loginPart"]/div/div/div/div[2]/form/div[4]/div[2]/button')
-        btn_submit.click()
-        time.sleep(2)
-
-        pin = driver.find_element(By.XPATH, '//*[@id="efirstPin"]')
-        pin.send_keys(f'{self._settings["pin"]}')
-        btn_submit = driver.find_element(By.XPATH, '//*[@id="loginPart"]/div/div/div/div[2]/form/div[2]/button')
-        btn_submit.click()
-        time.sleep(2)
-
-        try:
-            # 1. Parse the HTML
-            soup = BeautifulSoup(driver.page_source, 'html.parser')
-
-            # 2. Locate the <pre> tag and get its text content
-            pre_tag = soup.find('pre')
-            if not pre_tag:
-                raise ValueError("Could not find the <pre> tag in the HTML.")
-
-            json_string = pre_tag.get_text().strip()
-
-            # 3. Parse the outer JSON
-            outer_data = json.loads(json_string)
-
-            # 4. Get the serialized session string
-            session_str = outer_data.get("session")
-            if not session_str:
-                raise KeyError("Key 'session' not found in the JSON.")
-
-            # 5. Parse the inner nested JSON
-            inner_data = json.loads(session_str)
-
-            # 6. Extract the access token
-            access_token = inner_data.get("accessToken")
-            if not access_token:
-                raise KeyError("Key 'accessToken' not found in the nested session JSON.")
-
-        except (json.JSONDecodeError, TypeError, ValueError, KeyError) as e:
-            print(f"Error parsing token: {e}")
-            access_token = None
-
-        driver.quit()
-
-        if not access_token:
-            raise WisdomCapitalAPIException(
-                code="500",
-                message="Could not extract an access token from the Wisdom Capital login page. The credentials/PIN may have been rejected or the login page changed.",
-            )
-
-        response = requests.post('https://developers.symphonyfintech.in/hostlookup', headers={'Content-Type': 'application/json'}, data=json.dumps({"accesspassword": "2021HostLookUpAccess", "version": "interactive_1.0.2"}))
-        hostlookup_data = response.json()
-        if "result" not in hostlookup_data or "uniqueKey" not in (hostlookup_data.get("result") or {}):
-            raise WisdomCapitalAPIException(
-                code=response.status_code,
-                message=f"Wisdom Capital hostlookup did not return a uniqueKey: {hostlookup_data}",
-            )
-        unique_key = hostlookup_data['result']['uniqueKey']
-
-        response = requests.post(
-            'https://trade.wisdomcapital.in/interactive/user/session',
-            headers={'Content-Type': 'application/json'},
-            data=json.dumps({"appKey": self._settings['api_key'], "secretKey": self._settings['api_secret'], "uniqueKey": unique_key, "accessToken": access_token}),
-            verify=self._VERIFY_SSL
-        )
-        login_data = response.json()
-        if "result" not in login_data or "token" not in (login_data.get("result") or {}):
-            raise WisdomCapitalAPIException(
-                code=response.status_code,
-                message=f"Wisdom Capital session login did not return a token: {login_data}",
-            )
-        token = login_data['result']['token']
-
-        last_login = {
-            "broker_name": "wisdom_capital",
-            "access_token": token,
-            "last_login": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        }
-        self._mongo_db["last_login"].replace_one({"broker_name": "wisdom_capital"}, last_login, upsert=True)
-        self._cache.hset("last_login", "wisdom_capital", json_lib.dumps(last_login))
-        return True

@@ -87,7 +87,7 @@ class KotakOrders(BrokerOrders):
         return None
 
     def base_url(self, login):
-        """The host from the stored login, normalized the way `KotakAPI.base_url` does it.
+        """The host from the stored login, normalized the way `KotakAPI.url` does it.
 
         Args:
             login (dict): Kotak's decoded login.
