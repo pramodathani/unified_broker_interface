@@ -41,7 +41,7 @@ UNADJUSTED = {
 
 # Minutes in each intraday interval name the brokers store.
 INTRADAY_MINUTES = {
-    "minute": 1, "2minute": 2, "3minute": 3, "4minute": 4, "5minute": 5, "10minute": 10,
+    "1minute": 1, "2minute": 2, "3minute": 3, "4minute": 4, "5minute": 5, "10minute": 10,
     "15minute": 15, "20minute": 20, "25minute": 25, "30minute": 30, "45minute": 45,
     "60minute": 60, "120minute": 120, "180minute": 180, "240minute": 240,
 }
