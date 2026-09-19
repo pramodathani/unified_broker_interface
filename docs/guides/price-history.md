@@ -4,7 +4,7 @@ Seven of the ten brokers serve historical candles. This subsystem downloads ever
 of them offers, for every instrument in its instrument master, as far back as it will go, into
 `<broker>.price_history`.
 
-Nothing is derived. A five minute bar is the broker's five minute bar, not six one minute bars
+Nothing is derived. A five minute bar is the broker's five minute bar, not five one minute bars
 added together. That costs roughly three times the requests and it is the point: the stored data
 can be compared against the broker's own charts without an argument about aggregation boundaries,
 and the seven brokers can be compared against each other.

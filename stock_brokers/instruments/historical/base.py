@@ -21,7 +21,7 @@ night, while the long tail of expired option minute bars drains for as long as i
 
 ## Nothing is derived
 
-A five minute bar is whatever the broker returned for five minutes. It is not six one minute bars
+A five minute bar is whatever the broker returned for five minutes. It is not five one minute bars
 added together. That costs roughly three times the requests, and it means the stored data can be
 compared against the broker's own charts without an argument about aggregation boundaries.
 """

@@ -3,7 +3,7 @@
 -- One row per instrument, interval and bar. The interval is a column rather than a table per
 -- interval because a broker's interval set is its own business and changes without notice; a
 -- new one then needs no DDL. Candles are stored as received - nothing is derived here, so a
--- five minute bar is the broker's five minute bar and not six one minute bars added up.
+-- five minute bar is the broker's five minute bar and not five one minute bars added up.
 --
 -- dhan serves history from around 2000.
 
