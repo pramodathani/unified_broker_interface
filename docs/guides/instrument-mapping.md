@@ -9,8 +9,8 @@ It writes two tables. `unified.instruments` holds one row per instrument, whoeve
 for it. With both in place, one instrument id is enough to place an order at any broker, or to
 compare a price series from one against a position held at another.
 
-The mapping runs as `bin/unified/map_instruments`, started by `unified-instruments.service` at 07:45 on
-weekdays after every broker's instrument download. It applies the mapping DDL, maps the day's broker
+The mapping runs as `bin/unified/map_instruments`, started by `unified-instruments.service` at 07:45 every
+day after every broker's instrument download. It applies the mapping DDL, maps the day's broker
 snapshots, caches the day's rows in Redis under `unified:` and warms the REST API's catalogue under
 `unified:catalogue:`. See [Unified scripts](unified-scripts.md#instruments-map_instruments).
 

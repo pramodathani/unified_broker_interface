@@ -25,7 +25,7 @@ services/
     ├── unified.target
     ├── unified@.service               one bin/unified/ script that keeps running
     ├── unified-instruments.service    every broker's instrument download, then bin/unified/map_instruments
-    ├── unified-instruments.timer      07:45 Mon-Fri
+    ├── unified-instruments.timer      07:45 daily
     ├── unified-prices.service         bin/unified/historical_prices daily
     ├── unified-prices.timer           08:30 Mon-Sat
     └── unified-rest-api.service       bin/rest-api
@@ -231,12 +231,12 @@ See [REST API](rest-api.md).
 | Timer | `OnCalendar` | Jitter | `Persistent` | Starts |
 | --- | --- | --- | --- | --- |
 | `<broker>-login.timer` | `*-*-* 07:00 Asia/Kolkata` | up to 30 minutes | `false` | `<broker>-login.service` |
-| `unified-instruments.timer` | `Mon..Fri 07:45 Asia/Kolkata` | - | `true` | `unified-instruments.service` |
+| `unified-instruments.timer` | `*-*-* 07:45 Asia/Kolkata` | - | `true` | `unified-instruments.service` |
 | `unified-prices.timer` | `Mon..Sat 08:30 Asia/Kolkata` | - | `true` | `unified-prices.service` |
 
 The timezone is written into each schedule so it survives a change to the machine's timezone.
 
-**07:45** comes first because the brokers publish the day's masters overnight and the mapping has to
+**07:45**, every day including weekends, comes after the logins because the brokers publish the day's masters overnight and the mapping has to
 be in place before the 09:00 pre-open, when the feeders resolve against it. It is
 `Persistent`: a snapshot missed can never be fetched later - the brokers publish only today's file -
 so a machine that was off at 07:45 runs the job as soon as it starts.

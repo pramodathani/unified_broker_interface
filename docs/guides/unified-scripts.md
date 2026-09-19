@@ -348,7 +348,7 @@ The units live in `services/unified/`:
 | --- | --- | --- |
 | `unified@.service` | template | Runs one long-lived script: `unified@quotes` runs `bin/unified/quotes`. Restarted 15 s after exiting, except on exit 2 |
 | `unified-instruments.service` | oneshot | Every broker's `instruments`, Stoxkart's included, then `map_instruments`. A failed download does not stop the others or the mapping; the mapping's exit status is the unit's |
-| `unified-instruments.timer` | timer | 07:45 IST Monday to Friday, `Persistent=true` - a missed snapshot can never be fetched later |
+| `unified-instruments.timer` | timer | 07:45 IST every day, `Persistent=true` - a missed snapshot can never be fetched later |
 | `unified-prices.service` | oneshot | `historical_prices daily`, ordered after `unified-instruments.service` |
 | `unified-prices.timer` | timer | 08:30 IST Monday to Saturday, `Persistent=true` |
 | `unified-rest-api.service` | service | `bin/rest-api`; a route whose key is missing answers 503 rather than the service failing to start |
@@ -375,7 +375,7 @@ The unified scripts only have data to combine while each broker's target is runn
 | --- | --- |
 | 06:00 | The brokers' merged order and position hashes and the unified update hashes reset |
 | 07:00-07:30 daily | Each `<broker>-login.timer` fires at 07:00 plus up to 30 minutes of random delay |
-| 07:45 Mon-Fri | `unified-instruments`: ten instrument downloads, then `map_instruments` and the cache warm - about three quarters of an hour |
+| 07:45 daily | `unified-instruments`: ten instrument downloads, then `map_instruments` and the cache warm - about three quarters of an hour |
 | 08:30 Mon-Sat | `unified-prices`: `historical_prices daily`; on Saturday it picks up Friday's last bars and the week's corporate actions. When the 07:45 job is still running, it waits for that to finish first |
 | 09:00 | Pre-open. The feeds resolve against the day's mapping |
 
