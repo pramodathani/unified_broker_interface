@@ -1,4 +1,4 @@
-"""How each broker takes and cancels orders, for `POST /api/orders/place` and `DELETE /api/orders/cancel`.
+"""How each broker takes, modifies and cancels orders, for `POST /api/orders/place`, `PUT /api/orders/modify` and `DELETE /api/orders/cancel`.
 
 `base.py` holds `BrokerOrders`, the mechanism every broker shares: the checks that decide whether a broker can take an order, the one HTTP call, and the reading of error answers.
 Each `<broker>.py` holds one broker's class, which builds that broker's request and reads its success answers, and `noren.py` holds what Flattrade and Shoonya share.

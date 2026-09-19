@@ -142,7 +142,7 @@ Six brokers need a second value, and the method reads it from the broker's own c
 | Broker | Value | When the stored order lacks it |
 | --- | --- | --- |
 | Zerodha | `variety`, such as `regular` or `amo` | `regular`. Kite's postback carries `variety`, so the websocket entry has it too. |
-| Stoxkart | `variety`, lowercased, because Stoxkart's order book spells it `NORMAL`, `AMO` or `BO` while its cancel path is `/orders/normal/{order_id}` | `normal`, as the removed code did. `bin/stoxkart/orders` has recorded Stoxkart orders since 2026-09-15, but no Stoxkart order has been cancelled through the API. |
+| Stoxkart | `variety`, lowercased, because Stoxkart's order book spells it `NORMAL`, `AMO` or `BO` while its cancel path is `/orders/normal/{order_id}` | `normal`, as the removed code did. `bin/stoxkart/orders` has recorded Stoxkart orders since 2026-09-15, and two after-market Stoxkart orders were cancelled through the API that evening, as the section on Stoxkart's `X-Algo-Id` header above describes. |
 | Groww | `segment`, `CASH` or `FNO` | Answered `503`. Groww's websocket update, `orderDetailUpdateDto`, carries no segment, and a wrong segment would only be refused, so the method waits for the next poll to replace the entry rather than guess. |
 | INDmoney | `segment`, `EQUITY` or `DERIVATIVE` | Guessed from the id. Live equity ids look like `EQ-100072817`; the `DRV` prefix for derivatives comes from the older cancel code and has not been seen live. |
 | Wisdom Capital | `OrderUniqueIdentifier` | `ubi`, the value `place` sends when there is no tag. |
@@ -158,7 +158,7 @@ The rules are those of `place`, simplified. An HTTP status from 300 to 499 is `r
 
 ## How `cancel` was checked
 
-On 2026-09-15 the method was run in-process with the Flask test client against Redis database 15, filled with made-up logins, settings and orders and emptied afterwards, with `requests.Session.request` stubbed. The checks covered a dry run for each of the ten brokers, every refusal before the broker call, the two-broker `409`, the Groww `503`, and accepted, rejected and unknown answers from stubbed responses and timeouts. No cancel has been sent to a live broker.
+On 2026-09-15 the method was run in-process with the Flask test client against Redis database 15, filled with made-up logins, settings and orders and emptied afterwards, with `requests.Session.request` stubbed. The checks covered a dry run for each of the ten brokers, every refusal before the broker call, the two-broker `409`, the Groww `503`, and accepted, rejected and unknown answers from stubbed responses and timeouts. Those checks sent no cancel to a live broker. The first live cancels, of two Stoxkart after-market orders, followed the same evening, and the round of place, modify and cancel described below confirmed cancels at Dhan, Flattrade, INDmoney, Kotak, Shoonya, Stoxkart and Zerodha.
 
 ## Why Kotak refuses orders
 

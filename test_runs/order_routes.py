@@ -1,6 +1,6 @@
 """Offline check of the order routes against a recording of their behaviour.
 
-Runs `POST /api/orders/place` and `DELETE /api/orders/cancel` in-process through Flask's test client, with Redis replaced by an in-memory stand-in and every broker call answered by a stub.
+Runs `POST /api/orders/place`, `PUT /api/orders/modify` and `DELETE /api/orders/cancel` in-process through Flask's test client, with Redis replaced by an in-memory stand-in and every broker call answered by a stub.
 For each scenario it keeps the HTTP status, the response body, every request that would have reached a broker (method, URL, parameters, body, headers, timeout and certificate check) and the number of Redis round trips, and compares them with `test_runs/fixtures/order_routes.jsonl`.
 
 No Redis, database, credentials or network are used, and no request leaves the process.

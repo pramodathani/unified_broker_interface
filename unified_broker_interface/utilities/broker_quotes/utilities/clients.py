@@ -18,8 +18,8 @@ sending the dead token. `relogin` keeps that rule without a login of its own:
 - when the stored session has changed since the refused request was sent, another process has already logged
   in, and the request is sent once more with that session;
 - otherwise it starts `<broker>-login.service` without waiting for it and raises `SessionUnavailable`, so this
-  broker fails this request - a quote falls through to the next broker, a write is rejected with nothing sent -
-  and the requests after the login use its session.
+  broker fails this request - the quote falls through to the next broker - and the requests after the login use
+  its session.
 
 systemd runs one instance of a unit at a time, so any number of refused requests, in any number of workers, start
 at most one login, and `bin/<broker>/login` probes the stored session before logging in, so a login asked for
