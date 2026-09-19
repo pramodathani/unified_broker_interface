@@ -20,9 +20,6 @@ from stock_brokers.instruments.indmoney import IndMoneyInstruments
 from stock_brokers.instruments.wisdom_capital import WisdomCapitalInstruments
 from stock_brokers.instruments.stoxkart import StoxkartInstruments
 
-# All ten brokers, Stoxkart included. Its API login is broken, but its instrument master is a public
-# file that needs no login at all, so it is downloadable today and will be ready the day the broker
-# fixes their side.
 INGESTERS = {
     "zerodha": ZerodhaInstruments,
     "dhan": DhanInstruments,
