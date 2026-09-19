@@ -10,7 +10,7 @@ Three stores, each doing one job.
 
 ## Running the stores with Docker
 
-`docker-compose.yml` in the project root runs all three stores as containers, each with a named volume so the data survives a container being recreated:
+`docker-compose.yml` in the project root runs all three stores as containers. Each keeps its data in a folder under `/mnt/ubi/docker-volumes/` on a separate NVMe drive, bind-mounted into the container, so the data survives a container being recreated:
 
 ```bash
 docker compose up -d
@@ -18,15 +18,17 @@ docker compose up -d
 
 The `databases` systemd units run the same command every minute, so a container that is stopped or removed comes back on its own. See [Running it as a service](../guides/services.md#installing).
 
-| Service | Image | Host port | Volume |
+| Service | Image | Host port | Data folder |
 | --- | --- | --- | --- |
-| `redis` | `redis:trixie` | `UNIFIED_BROKER_INTERFACE_REDIS_PORT` (default 1002) | `unified_broker_interface_redis_volume` |
-| `mongodb` | `mongo:8.0.4` | `UNIFIED_BROKER_INTERFACE_MONGODB_PORT` (default 1003) | `unified_broker_interface_mongodb_volume` |
-| `timescaledb` | `timescale/timescaledb:latest-pg18` | `UNIFIED_BROKER_INTERFACE_POSTGRES_PORT` (default 1004) | `unified_broker_interface_timescaledb_volume` |
+| `redis` | `redis:trixie` | `UNIFIED_BROKER_INTERFACE_REDIS_PORT` (default 1002) | `/mnt/ubi/docker-volumes/redis` |
+| `mongodb` | `mongo:8.0.4` | `UNIFIED_BROKER_INTERFACE_MONGODB_PORT` (default 1003) | `/mnt/ubi/docker-volumes/mongodb` |
+| `timescaledb` | `timescale/timescaledb:latest-pg18` | `UNIFIED_BROKER_INTERFACE_POSTGRES_PORT` (default 1004) | `/mnt/ubi/docker-volumes/timescaledb` |
+
+The drive is mounted at `/mnt/ubi` by an `/etc/fstab` entry that names it by UUID, and a drop-in at `/etc/systemd/system/docker.service.d/ubi-mount.conf` sets `RequiresMountsFor=/mnt/ubi`, so Docker does not start at boot until the drive is mounted. Each bind mount also sets `create_host_path: false`. Together they stop a store from starting on an empty folder when the drive is missing: PostgreSQL and MongoDB would initialise a new, empty database there, and the scripts would write into it.
 
 Docker Compose reads the same `.env` as the scripts, so the ports, usernames, passwords and PostgreSQL database name come from the `UNIFIED_BROKER_INTERFACE_*` variables described in [Configuration](configuration.md). Each port is published on every interface of the host, which is why the `*_HOST` variables can name the host's LAN address.
 
-The MongoDB and PostgreSQL credentials are applied only when their volume is first initialised. Changing `UNIFIED_BROKER_INTERFACE_MONGODB_PASSWORD` or `UNIFIED_BROKER_INTERFACE_POSTGRES_PASSWORD` in `.env` afterwards does not change the password inside the database, and the scripts then fail to log in. Redis is different: it takes `UNIFIED_BROKER_INTERFACE_REDIS_PASSWORD` on every start, so a changed value takes effect the next time the container is recreated.
+The MongoDB and PostgreSQL credentials are applied only when their data folder is first initialised. Changing `UNIFIED_BROKER_INTERFACE_MONGODB_PASSWORD` or `UNIFIED_BROKER_INTERFACE_POSTGRES_PASSWORD` in `.env` afterwards does not change the password inside the database, and the scripts then fail to log in. Redis is different: it takes `UNIFIED_BROKER_INTERFACE_REDIS_PASSWORD` on every start, so a changed value takes effect the next time the container is recreated.
 
 ## Redis as the buffer
 

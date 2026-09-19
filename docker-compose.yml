@@ -9,7 +9,11 @@ services:
     ports:
       - "0.0.0.0:${UNIFIED_BROKER_INTERFACE_REDIS_PORT:-1002}:6379"
     volumes:
-      - redis_data:/data
+      - type: bind
+        source: /mnt/ubi/docker-volumes/redis
+        target: /data
+        bind:
+          create_host_path: false
     healthcheck:
       test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" ping"]
       interval: 5s
@@ -27,7 +31,11 @@ services:
     ports:
       - "0.0.0.0:${UNIFIED_BROKER_INTERFACE_MONGODB_PORT:-1003}:27017"
     volumes:
-      - mongodb_data:/data/db
+      - type: bind
+        source: /mnt/ubi/docker-volumes/mongodb
+        target: /data/db
+        bind:
+          create_host_path: false
     healthcheck:
       test: ["CMD-SHELL", "mongosh --username \"$${MONGO_INITDB_ROOT_USERNAME}\" --password \"$${MONGO_INITDB_ROOT_PASSWORD}\" --authenticationDatabase admin --eval 'db.runCommand({ping:1})' --quiet"]
       interval: 5s
@@ -48,7 +56,11 @@ services:
     ports:
       - "0.0.0.0:${UNIFIED_BROKER_INTERFACE_POSTGRES_PORT:-1004}:5432"
     volumes:
-      - timescaledb_data:/pgdata
+      - type: bind
+        source: /mnt/ubi/docker-volumes/timescaledb
+        target: /pgdata
+        bind:
+          create_host_path: false
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 5s
@@ -57,14 +69,6 @@ services:
     restart: unless-stopped
     networks:
       - network
-
-volumes:
-  redis_data:
-    name: unified_broker_interface_redis_volume
-  mongodb_data:
-    name: unified_broker_interface_mongodb_volume
-  timescaledb_data:
-    name: unified_broker_interface_timescaledb_volume
 
 networks:
   network:
