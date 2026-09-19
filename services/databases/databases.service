@@ -1,0 +1,21 @@
+# Brings the Redis, MongoDB and TimescaleDB containers up: docker compose up -d --wait against the project's
+# docker-compose.yml, which starts whatever is stopped or missing and leaves running containers alone. Driven by
+# databases.timer.
+#
+#     systemctl --user start databases                # run it now
+#     journalctl --user -u databases -f
+#     docker compose -f ~/Projects/unified_broker_interface/docker-compose.yml ps
+
+[Unit]
+Description=Start any stopped unified broker interface database container
+PartOf=databases.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Projects/unified_broker_interface
+# .env sets PYTHONPATH to itself plus $PYTHONPATH, and Docker Compose warns on every run when that is unset.
+Environment=PYTHONPATH=
+SyslogIdentifier=databases
+# --wait fails the run unless every container reports healthy, so a store that starts but cannot serve shows as failed.
+ExecStart=/usr/bin/docker compose up -d --wait --wait-timeout 120
+TimeoutStartSec=180

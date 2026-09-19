@@ -1,0 +1,22 @@
+# The Redis, MongoDB and TimescaleDB containers from docker-compose.yml. Enabling it keeps them up: every minute,
+# databases.timer runs databases.service, which starts any container that is missing or stopped.
+#
+# Install - link every unit in this folder, then enable the target and the timer:
+#
+#     systemctl --user link ~/Projects/unified_broker_interface/services/databases/*
+#     systemctl --user daemon-reload
+#     systemctl --user enable --now databases.target databases.timer
+#
+# Every other target reads from these stores, so this one should be running first. Docker restarts a crashed container
+# on its own through restart: unless-stopped; the timer covers the cases Docker leaves alone - a container stopped by
+# hand, removed, or never created. To stop the databases on purpose, stop the timer first or it starts them again
+# within a minute:
+#
+#     systemctl --user stop databases.timer
+#     docker compose -f ~/Projects/unified_broker_interface/docker-compose.yml stop
+
+[Unit]
+Description=Unified broker interface databases
+
+[Install]
+WantedBy=default.target

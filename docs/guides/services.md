@@ -2,15 +2,19 @@
 
 Everything that runs does so as a systemd **user** unit: every script in `bin/<broker>/` and
 `bin/unified/` that keeps running, each broker's morning login, the daily instrument and price jobs,
-and the REST API. The scripts themselves are described in [Broker scripts](broker-scripts.md) and
+the REST API, and the check that keeps the database containers up. The scripts themselves are described in [Broker scripts](broker-scripts.md) and
 [Unified scripts](unified-scripts.md); this page is about the units that run them.
 
 ## Layout
 
-One folder per broker and one for the unified layer, each holding every unit that runs its scripts:
+One folder per broker, one for the unified layer and one for the databases, each holding every unit that runs its part:
 
 ```text
 services/
+├── databases/
+│   ├── databases.target
+│   ├── databases.service              docker compose up -d --wait, run by the timer
+│   └── databases.timer                every minute
 ├── <broker>/                          one each for the ten brokers
 │   ├── <broker>.target
 │   ├── <broker>@.service              one bin/<broker>/ script that keeps running
@@ -37,8 +41,17 @@ repository at `~/Projects/unified_broker_interface`.
 
 ## Installing
 
-Each target file carries its own install commands in its header comment. For a broker - Zerodha
-here:
+Each target file carries its own install commands in its header comment. Install the databases first, because every other unit reads from them:
+
+```bash
+systemctl --user link ~/Projects/unified_broker_interface/services/databases/*
+systemctl --user daemon-reload
+systemctl --user enable --now databases.target databases.timer
+```
+
+`databases.service` runs `docker compose up -d --wait` against the project's `docker-compose.yml` every minute. It starts any of the Redis, MongoDB and TimescaleDB containers that is stopped or missing, leaves running ones alone, and fails unless all three report healthy. Docker already restarts a crashed container through `restart: unless-stopped`, so the timer is for the cases Docker leaves alone: a container stopped by hand, removed, or never created. To stop the databases on purpose, stop `databases.timer` first, or it starts them again within a minute. See [Data stores](../getting-started/data-stores.md#running-the-stores-with-docker).
+
+For a broker - Zerodha here:
 
 ```bash
 systemctl --user link ~/Projects/unified_broker_interface/services/zerodha/*

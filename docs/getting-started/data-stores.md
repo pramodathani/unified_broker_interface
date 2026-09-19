@@ -16,6 +16,8 @@ Three stores, each doing one job.
 docker compose up -d
 ```
 
+The `databases` systemd units run the same command every minute, so a container that is stopped or removed comes back on its own. See [Running it as a service](../guides/services.md#installing).
+
 | Service | Image | Host port | Volume |
 | --- | --- | --- | --- |
 | `redis` | `redis:trixie` | `UNIFIED_BROKER_INTERFACE_REDIS_PORT` (default 1002) | `unified_broker_interface_redis_volume` |
