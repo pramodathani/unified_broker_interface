@@ -145,7 +145,7 @@ per instrument. Each tick goes through six steps, cheapest refusal first:
 | Key | Holds |
 | --- | --- |
 | `unified:quotes:live` | Hash keyed by `instrument_id`: the unified quote document, quantities in units, times in epoch seconds, with `stale` and `stale_since` when the owner went silent without a healthy backup |
-| `unified:quotes:stream` | Every quote written, as field `quote`, capped at about 200,000 entries |
+| `unified:quotes:stream` | Every quote written, as field `quote`, capped at about 1,000,000 entries |
 | `unified:quotes:stats` | Counts of received, unresolved, out_of_session, not_owner, no_price, duplicate and written ticks |
 | `unified:quotes:unresolved` | Counts per unresolved `broker:token:reason` |
 
@@ -153,6 +153,31 @@ The group is created at the end of each stream the first time, since a live cach
 Only instruments some broker's `quotes` script is subscribed to are in the hash; an instrument nobody streams
 is simply absent. A quote stale for a week is removed, and today's previous closes are recovered from the
 hash at start.
+
+There is no instrument list here to keep in step with the brokers': this script writes a quote for whatever
+arrives on the ten streams, so its coverage is exactly the coverage of the feeds. Since `bin/zerodha/quotes`
+began carrying Zerodha's whole instrument master on 2026-09-16, that is close to every instrument Zerodha
+lists. Running the resolver's own rules over that day's master, 112,422 of the 112,657 instruments resolve to
+exactly one unified instrument and 235 do not, so `unified:quotes:live` should hold about 112,400 instruments
+rather than the sixteen it held before. At a measured 823 bytes per quote document that hash is roughly 92 MB.
+
+The 235 that do not resolve fall into three groups, and every one of them logs a warning the first time it is
+seen and again every ten minutes after:
+
+| Why it fails | Count | Which instruments |
+| --- | ---: | --- |
+| `ambiguous` - the token names more than one unified instrument, which is never guessed at | 170 | BSE |
+| `unmapped` - the token's segment code allows segments the instrument was not filed under | 64 | 28 NCO securities filed as `nse_commodities` rather than a derivative segment, 12 GLOBAL and 1 NSEIX index filed as `uncategorised` on exchange `unknown`, 11 MCX and 12 NSE indices filed outside the index segments |
+| `unmapped` - no entry in `unified:broker_tokens` at all | 1 | NSE:ELECTCAST |
+
+!!! warning "The unified feed has not been run at this size"
+
+    `bin/unified/quotes` is one process reading all ten streams 500 entries at a time, and it had 4.6 million
+    ticks through it when the feeds carried fifteen instruments each. Whether it keeps up with Zerodha's whole
+    master has not been measured. Its hourly stale purge also reads and parses every field of
+    `unified:quotes:live` on the same thread that processes ticks, which is a scan of about 112,400 documents
+    rather than sixteen. Watch `unified:quotes:stats` and the `unified` group's lag on
+    `zerodha:quotes:stream` after a restart.
 
 ### One broker per instrument
 

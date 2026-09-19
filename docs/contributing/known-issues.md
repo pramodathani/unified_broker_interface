@@ -207,6 +207,40 @@ or the protocol, and the table in
 
 ## Broker limits
 
+**Zerodha's quote feed runs past Kite's documented websocket limits, and has not been tried live.** On
+2026-09-16 `bin/zerodha/quotes` was changed to subscribe to every instrument in today's
+`zerodha:instruments:master` - 112,657 that day - split equally across 24 websockets, one part of 4,695 and
+twenty-three of 4,694. Kite documents three websockets per api key, one of which `bin/zerodha/order_updates`
+holds, and 3,000 instruments per websocket, so this exceeds both, and the connection budget and the
+per-connection cap that used to refuse it were removed. What Kite does with the connections past its limit is
+unknown: it is expected to refuse them, and a refused socket reconnects with backoff and leaves the others
+streaming, but no run against the live feed has confirmed that. Two further consequences are expected rather
+than measured. Full-mode ticks for 112,657 instruments outrun `zerodha:quotes:stream`, whose cap was raised
+from 100,000 entries to 1,000,000 the same day for that reason, so `bin/zerodha/persist_ticks` still has to
+keep up or Redis will trim ticks before it has persisted them into `zerodha.ticks`. Every login also
+invalidates the last at Zerodha, so 24 sockets reconnecting after a dead token lean much harder on the
+one-socket-at-a-time login lock than two ever did.
+
+**The unified quote layer has never been run at the size Zerodha's feed now gives it.** `bin/unified/quotes`
+keeps no instrument list of its own - it writes a unified quote for every tick that arrives on the ten broker
+streams - so Zerodha's 24-socket feed raises its coverage from sixteen instruments to about 112,400 without
+any change to it. Nothing about that is configured, and nothing about it has been measured either. It is one
+process reading all ten streams 500 entries at a time; its hourly stale purge reads and JSON-parses every
+field of `unified:quotes:live`, now about 112,400 documents, on the same thread that processes ticks; and its
+start-up recovery of today's previous closes does the same scan once. `unified:quotes:stream` was raised from
+200,000 entries to 1,000,000 alongside the broker streams, which at a measured 823 bytes per quote document is
+about 820 MB, and `unified:quotes:live` itself comes to roughly 92 MB. Watch `unified:quotes:stats` and the
+`unified` consumer group's lag on `zerodha:quotes:stream` the first time this runs during market hours.
+
+**Every broker's tick stream now holds ten times as much.** On 2026-09-16 `STREAM_MAX_LENGTH` in all ten
+`bin/<broker>/quotes` scripts went from 100,000 to 1,000,000 entries. The stored ticks were measured that day:
+a Zerodha tick averages 940 bytes of JSON and the ten brokers range from 504 bytes at Fyers to 1,071 at Groww,
+so Zerodha's stream at the new cap is about 940 MB of payload and all ten brokers' streams full at once come
+to about 7.8 GB, before Redis's own stream overhead. That host has 123 GB of memory, was using 3 GB, and has `maxmemory` unset with
+`noeviction`, so there is room, but nothing now bounds Redis below the machine's memory. Only Zerodha
+subscribes to enough instruments to approach the cap: the other nine carry between five and fifteen
+instruments each and will never come near it.
+
 **Flattrade permits one websocket per session.** Its market and order sockets each kicked the
 other off on connect, both flapping in lockstep at close code 1000, while Shoonya runs both
 happily on the same platform. `flattrade@order_updates` is left out of `flattrade.target` so

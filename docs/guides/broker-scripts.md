@@ -208,11 +208,25 @@ Orders are keyed by the broker's order id (`order_id`, `norenordno`, `nOrdNo`, `
 | --- | --- | --- |
 | `<broker>:quotes:live` | hash | The latest tick per instrument as JSON, keyed by the instrument's name (or its token when unnamed). Not cleared at startup |
 | `<broker>:quotes:instruments` | hash | Every subscribed token to its name. Replaced whole at startup |
-| `<broker>:quotes:stream` | stream | Every tick in arrival order as a `tick` field, capped at about 100,000 entries |
+| `<broker>:quotes:stream` | stream | Every tick in arrival order as a `tick` field, capped at about 1,000,000 entries |
 
-`--per-socket` sets how many instruments one connection carries, and `--tokens` subscribes to a list
-instead of the subscription set. Kite allows three connections per api key and `order_updates` holds one,
-so `bin/zerodha/quotes` uses at most two.
+At nine brokers `--per-socket` sets how many instruments one connection carries, and `--tokens` subscribes to
+a list instead of the subscription set.
+
+Zerodha is the exception. `bin/zerodha/quotes` reads no subscription set at all: it subscribes to every
+instrument in today's `zerodha:instruments:master` and splits them equally across `--sockets` connections, 24
+by default. On 2026-09-16 that was 112,657 instruments, one socket of 4,695 and twenty-three of 4,694.
+
+!!! danger "Zerodha's feed asks Kite for more than Kite documents"
+
+    Kite documents three websockets per api key, one of which `bin/zerodha/order_updates` holds, and 3,000
+    instruments per websocket. Twenty-four sockets of about 4,700 instruments exceeds both limits, and the
+    script no longer refuses to start when it does. Kite is expected to refuse the connections past its limit;
+    a refused socket reconnects with backoff and leaves the others streaming. The tick volume also outruns
+    `zerodha:quotes:stream`, whose cap was raised from 100,000 entries to 1,000,000 on 2026-09-16 for that
+    reason, so `bin/zerodha/persist_ticks` still has to keep up or Redis will trim ticks before it has
+    persisted them into `zerodha.ticks`. See
+    [Known issues](../contributing/known-issues.md#broker-limits).
 
 ### Adding a subscription
 
@@ -220,13 +234,21 @@ Without `--tokens`, a feed subscribes to the members of the set `<broker>:quotes
 it starts. Add the instrument in the broker's own format, then restart the feed:
 
 ```bash
-redis-cli SADD zerodha:quotes:subscriptions 738561 408065
+redis-cli SADD dhan:quotes:subscriptions NSE_EQ:2885
+systemctl --user restart dhan@quotes
+```
+
+Zerodha has no such set. Its feed subscribes to today's whole instrument master, so an instrument is added by
+downloading the day's master rather than by editing a set:
+
+```bash
+bin/zerodha/instruments
 systemctl --user restart zerodha@quotes
 ```
 
 | Broker | Member format | Example |
 | --- | --- | --- |
-| zerodha | Kite `instrument_token` | `738561` |
+| zerodha | No set: every instrument in `zerodha:instruments:master` | `738561` is NSE RELIANCE |
 | dhan | `SEGMENT:SECURITY_ID` - `NSE_EQ`, `NSE_FNO`, `NSE_CURRENCY`, `BSE_EQ`, `BSE_FNO`, `BSE_CURRENCY`, `MCX_COMM`, `IDX_I` | `NSE_EQ:2885` |
 | flattrade | `EXCHANGE|TOKEN` - `NSE`, `NFO`, `CDS`, `MCX`, `BSE`, `BFO` | `NSE|2885` |
 | shoonya | `EXCHANGE|TOKEN` - as Flattrade, plus `NCX` | `MCX|565899` |
@@ -238,7 +260,8 @@ systemctl --user restart zerodha@quotes
 | stoxkart | `EXCHANGE:TOKEN` - `NSE`, `NFO`, `BSE`, `MCX`; the script refuses `NSECD`, `BSECD`, `BFO` and `NCDEX`, whose broadcast segments are unconfirmed | `NSE:2885` |
 
 Groww's feed has no subjects for commodities, so `COMMODITY` members are skipped. A feed with nothing to
-subscribe to exits 2, which its unit does not restart.
+subscribe to exits 2, which its unit does not restart, and for Zerodha that means an empty
+`zerodha:instruments:master`.
 
 ### Stoxkart's quote feed
 

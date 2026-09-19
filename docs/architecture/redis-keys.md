@@ -100,10 +100,10 @@ at Stoxkart, which documents a limit of one request a second and is polled every
 
 | Key | Type | Written by | Holds |
 | --- | --- | --- | --- |
-| `<broker>:quotes:subscriptions` | set | you | The instruments `bin/<broker>/quotes` subscribes to when none are passed on its command line |
+| `<broker>:quotes:subscriptions` | set | you | The instruments `bin/<broker>/quotes` subscribes to when none are passed on its command line. Zerodha has none: its feed subscribes to every instrument in `zerodha:instruments:master` |
 | `<broker>:quotes:live` | hash, keyed by instrument name | `bin/<broker>/quotes` | The latest tick per instrument; Stoxkart's feed writes a tick only when it changed |
 | `<broker>:quotes:instruments` | hash | `bin/<broker>/quotes` | Every subscribed token to its name, or to an empty string when unnamed; replaced whole at startup |
-| `<broker>:quotes:stream` | stream, field `tick` | `bin/<broker>/quotes` | Every tick in arrival order, capped at about 100,000 |
+| `<broker>:quotes:stream` | stream, field `tick` | `bin/<broker>/quotes` | Every tick in arrival order, capped at about 1,000,000 |
 
 Subscription members and hash fields are in the broker's own vocabulary: a Kite instrument token for
 Zerodha, `EXCHANGE|TOKEN` for the Noren brokers and Kotak, a Fyers symbol, `EXCHANGE:TOKEN` for
@@ -164,7 +164,7 @@ the hash.
 | Key | Type | Written by | Holds |
 | --- | --- | --- | --- |
 | `unified:quotes:live` | hash, keyed by `instrument_id` | `bin/unified/quotes` | The latest unified quote per instrument, from the one broker that owns it |
-| `unified:quotes:stream` | stream, field `quote` | `bin/unified/quotes` | Every quote written to the hash, capped at about 200,000 |
+| `unified:quotes:stream` | stream, field `quote` | `bin/unified/quotes` | Every quote written to the hash, capped at about 1,000,000 |
 | `unified:quotes:fetched` | hash, per-field expiry of two days | the REST API | Quotes fetched from a broker when the live quote was not good enough, in the same document shape |
 | `unified:quotes:stats` | string | `bin/unified/quotes` | The counts: received, unresolved, out of session, not owner, no price, duplicate, written |
 | `unified:quotes:unresolved` | hash, keyed `broker:token:reason` | `bin/unified/quotes` | How many ticks could not be resolved to one instrument |

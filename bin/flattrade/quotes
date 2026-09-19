@@ -37,7 +37,7 @@ Every value arrives as a string and is coerced.
 - `flattrade:quotes:instruments`, a hash of every subscribed `EXCHANGE|TOKEN` to its name, or to an empty
   string when unnamed. Replaced whole at startup; a name Noren supplies later is added as it arrives.
 - `flattrade:quotes:stream`, a Redis Stream with every tick in arrival order as a `tick` field, which
-  `bin/flattrade/persist_ticks` writes to `flattrade.ticks`. Capped at about 100,000 entries, so ticks that arrive
+  `bin/flattrade/persist_ticks` writes to `flattrade.ticks`. Capped at about 1,000,000 entries, so ticks that arrive
   while the persister is down for long enough are trimmed before they are persisted.
 
 A tick has the same fields as Dhan's: `id`, `broker`, `instrument_token`, `exchange`, `mode`, `last_price`,
@@ -95,7 +95,7 @@ SUBSCRIPTIONS_KEY = "flattrade:quotes:subscriptions"
 # Every tick is also appended here for bin/flattrade/persist_ticks, which reads it with a consumer group. The cap
 # bounds Redis memory when the persister is down; ticks trimmed before it returns are not persisted.
 STREAM_KEY = "flattrade:quotes:stream"
-STREAM_MAX_LENGTH = 100000
+STREAM_MAX_LENGTH = 1000000
 
 EXCHANGES = ("NSE", "NFO", "CDS", "MCX", "BSE", "BFO")
 DEFAULT_INSTRUMENTS_PER_CONNECTION = 1000

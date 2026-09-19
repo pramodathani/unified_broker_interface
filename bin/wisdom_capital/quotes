@@ -43,8 +43,9 @@ depth (1502), and its answer carries the current snapshot, which is written stra
 - `wisdom_capital:quotes:instruments`, a hash of every subscribed token to its name, or to an empty string when
   unnamed. Replaced whole at startup.
 - `wisdom_capital:quotes:stream`, a Redis Stream with every tick written to the live hash, in arrival order, as a
-  `tick` field, which `bin/wisdom_capital/persist_ticks` writes to `wisdom_capital.ticks`. Capped at about 100,000
-  entries, so ticks that arrive while the persister is down for long enough are trimmed before they are persisted.
+  `tick` field, which `bin/wisdom_capital/persist_ticks` writes to `wisdom_capital.ticks`. Capped at about
+  1,000,000 entries, so ticks that arrive while the persister is down for long enough are trimmed before they
+  are persisted.
 
 A tick has the same fields as Dhan's: `id`, `broker`, `instrument_token`, `exchange` (the XTS segment name),
 `mode` (`full` with a book, `quote` without), `last_price`, `last_quantity`, `average_price`, `volume`,
@@ -95,7 +96,7 @@ SUBSCRIPTIONS_KEY = "wisdom_capital:quotes:subscriptions"
 # Every tick is also appended here for bin/wisdom_capital/persist_ticks, which reads it with a consumer group. The cap
 # bounds Redis memory when the persister is down; ticks trimmed before it returns are not persisted.
 STREAM_KEY = "wisdom_capital:quotes:stream"
-STREAM_MAX_LENGTH = 100000
+STREAM_MAX_LENGTH = 1000000
 
 MARKET_DATA_SESSION_KEY = "wisdom_capital:session:marketdata"
 MARKET_DATA_LOCK_KEY = "wisdom_capital:session:marketdata:lock"

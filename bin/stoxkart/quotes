@@ -28,7 +28,7 @@ Circuit limits (33), 52-week range (36) and any other packet are skipped. The te
 
 - `stoxkart:quotes:live`, a hash of the latest tick per instrument as JSON, keyed by the instrument's name, or by `EXCHANGE:TOKEN` when the master does not name it. It is not cleared at startup.
 - `stoxkart:quotes:instruments`, a hash of every subscribed `EXCHANGE:TOKEN` to its name, or to an empty string when unnamed. Replaced whole at startup.
-- `stoxkart:quotes:stream`, a Redis Stream with every tick in arrival order as a `tick` field, which `bin/stoxkart/persist_ticks` writes to `stoxkart.ticks`. Capped at about 100,000 entries.
+- `stoxkart:quotes:stream`, a Redis Stream with every tick in arrival order as a `tick` field, which `bin/stoxkart/persist_ticks` writes to `stoxkart.ticks`. Capped at about 1,000,000 entries.
 
 **The tick.** Stoxkart sends each instrument's packets together in one frame, so one tick is written per instrument per frame, and only when it differs from the previous tick apart from `received_at`.
 
@@ -76,7 +76,7 @@ LIVE_KEY = "stoxkart:quotes:live"
 INSTRUMENTS_KEY = "stoxkart:quotes:instruments"
 SUBSCRIPTIONS_KEY = "stoxkart:quotes:subscriptions"
 STREAM_KEY = "stoxkart:quotes:stream"
-STREAM_MAX_LENGTH = 100000
+STREAM_MAX_LENGTH = 1000000
 MASTER_KEY = "stoxkart:instruments:master"
 META_KEY = "stoxkart:instruments:meta"
 CLIENT_NAME = b"unified_broker_interface"

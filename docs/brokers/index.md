@@ -77,10 +77,19 @@ these refuses a connection when it is got wrong.
 
 A broker with more instruments than one connection can carry is split across several connections by its
 own `quotes` script: `--per-socket` sets how many instruments one connection carries, and each connection
-runs on its own thread, writing to the same `<broker>:quotes:live` and `<broker>:quotes:stream`. Kite allows
-three connections per api key and `bin/zerodha/order_updates` holds one, so `bin/zerodha/quotes` uses at most
-two - 6000 instruments.
+runs on its own thread, writing to the same `<broker>:quotes:live` and `<broker>:quotes:stream`.
 
 ```bash
-bin/zerodha/quotes --per-socket 2000
+bin/dhan/quotes --per-socket 2000
 ```
+
+Zerodha splits the other way round. `bin/zerodha/quotes` takes every instrument in today's
+`zerodha:instruments:master` and divides it into `--sockets` equal parts, 24 by default, one websocket each:
+
+```bash
+bin/zerodha/quotes --sockets 24
+```
+
+That is far past what Kite documents - three connections per api key, one of which `bin/zerodha/order_updates`
+holds, and 3,000 instruments per connection - and the script no longer refuses to start when it is. See
+[Known issues](../contributing/known-issues.md#broker-limits).

@@ -17,7 +17,7 @@ Self-contained: it logs in with `KotakAPI` and carries its own connection, authe
 
 - `kotak:quotes:live`, a hash of the latest tick per instrument as JSON, keyed by the instrument's trading symbol (`TCS-EQ`), or by its `EXCHANGE|TOKEN` while it has no name. A tick is replaced as the next one arrives. It is not cleared at startup, so an instrument no longer subscribed keeps its last tick.
 - `kotak:quotes:instruments`, a hash of every subscribed `EXCHANGE|TOKEN` to its trading symbol, or to an empty string when unnamed. Replaced whole at startup, and filled in when a snapshot names an instrument.
-- `kotak:quotes:stream`, a Redis Stream with every tick in arrival order as a `tick` field, which `bin/kotak/persist_ticks` writes to `kotak.ticks`. Capped at about 100,000 entries, so ticks that arrive while the persister is down for long enough are trimmed before they are persisted.
+- `kotak:quotes:stream`, a Redis Stream with every tick in arrival order as a `tick` field, which `bin/kotak/persist_ticks` writes to `kotak.ticks`. Capped at about 1,000,000 entries, so ticks that arrive while the persister is down for long enough are trimmed before they are persisted.
 
 **The tick.** Every instrument is subscribed twice: as a scrip topic (`sf|EXCHANGE|TOKEN`) for its prices and quantities, and as a depth topic (`dp|EXCHANGE|TOKEN`) for its five-level order book. A topic arrives once as a snapshot and then as updates carrying only the fields that changed, so the script keeps each topic's latest values and writes a whole tick for an instrument every time either of its topics changes. A tick is written only once the scrip snapshot has arrived.
 
@@ -76,7 +76,7 @@ LIVE_KEY = "kotak:quotes:live"
 INSTRUMENTS_KEY = "kotak:quotes:instruments"
 SUBSCRIPTIONS_KEY = "kotak:quotes:subscriptions"
 STREAM_KEY = "kotak:quotes:stream"
-STREAM_MAX_LENGTH = 100000
+STREAM_MAX_LENGTH = 1000000
 
 SEGMENTS = (
     "nse_cm",

@@ -3,34 +3,46 @@
 Stream Zerodha (Kite) market quotes over websockets into the Redis hash `zerodha:quotes:live`, and keep
 streaming until stopped.
 
-    bin/zerodha/quotes                               # instruments from the Redis set zerodha:quotes:subscriptions
+    bin/zerodha/quotes                               # today's whole instrument master over 24 websockets
+    bin/zerodha/quotes --sockets 8
     bin/zerodha/quotes --tokens 738561,408065
-    bin/zerodha/quotes --per-socket 2000
 
-    redis-cli SADD zerodha:quotes:subscriptions 738561 408065
     redis-cli HGET zerodha:quotes:live "NSE:RELIANCE"
-    redis-cli HGETALL zerodha:quotes:instruments
+    redis-cli HLEN zerodha:quotes:instruments
 
 Self-contained: it logs in with `ZerodhaAPI` and carries its own connection, subscription and binary packet
 decoding for Kite's ticker at `wss://ws.kite.trade`, so it needs no other feed process or key.
 
-**Instruments** are `--tokens` when given, otherwise the members of the Redis set
-`zerodha:quotes:subscriptions`, each a Kite instrument token - the number in the `instrument_token` column
-of Kite's instrument file, whose low byte names the exchange segment (738561 is NSE RELIANCE). Each is named
-from Kite's public instrument file, downloaded at startup. One websocket carries up to `--per-socket`
-instruments, at most 3000. Kite allows 3 connections per api_key and `bin/zerodha/order_updates` holds one,
-so this uses at most 2 - 6000 instruments.
+**Instruments** are `--tokens` when given, otherwise every instrument in today's `zerodha:instruments:master`,
+the hash `bin/zerodha/instruments` fills at 07:45 IST - 112,657 instruments on 2026-09-16, across NFO, NCO,
+MCX, BSE, NSE, CDS, BFO, GLOBAL and NSEIX. Each is keyed by its Kite instrument token, the number in the
+`instrument_token` column of Kite's instrument file, whose low byte names the exchange segment (738561 is NSE
+RELIANCE), and is named `EXCHANGE:TRADINGSYMBOL` from the master's own row. When the master is empty, only
+`--tokens` works, and those instruments are named from Kite's public instrument file instead.
+
+**Sockets.** The instruments are sorted by token and split into `--sockets` parts of as near the same size as
+they divide into, 24 parts by default, and each part is subscribed on its own websocket running on its own
+thread. The first `count % sockets` parts carry one instrument more than the rest, so today's master splits
+into one part of 4,695 and twenty-three of 4,694.
+
+**This asks Kite for far more than Kite documents.** Kite documents three websockets per api_key, one of which
+`bin/zerodha/order_updates` holds, and 3,000 instruments per websocket. Twenty-four sockets of about 4,700
+instruments each exceeds both, so Kite is expected to refuse the connections past its limit; a refused socket
+reconnects with backoff and leaves the others streaming rather than stopping the feed. The tick volume is also
+far above what the feed was built for: `zerodha:quotes:stream` was raised from 100,000 entries to 1,000,000 on
+2026-09-16 to give `bin/zerodha/persist_ticks` ten times the room to catch up, which buys minutes rather than
+hours at this subscription size. Nothing here is capped or budgeted: the script opens as many sockets as it is
+asked for.
 
 **Keys.**
 
 - `zerodha:quotes:live`, a hash of the latest tick per instrument as JSON, keyed by the instrument's name from
-  the instrument file (`NSE:RELIANCE`), or by its token when the file does not name it. A tick is replaced as
-  the next one arrives. It is not cleared at startup, so an instrument no longer subscribed keeps its last
-  tick.
+  the master (`NSE:RELIANCE`), or by its token when the master does not name it. A tick is replaced as the next
+  one arrives. It is not cleared at startup, so an instrument no longer subscribed keeps its last tick.
 - `zerodha:quotes:instruments`, a hash of every subscribed token to its name, or to an empty string when
-  unnamed. Replaced whole at startup.
+  unnamed. Replaced whole at startup, 5,000 fields at a time.
 - `zerodha:quotes:stream`, a Redis Stream with every tick in arrival order as a `tick` field, which
-  `bin/zerodha/persist_ticks` writes to `zerodha.ticks`. Capped at about 100,000 entries, so ticks that arrive
+  `bin/zerodha/persist_ticks` writes to `zerodha.ticks`. Capped at about 1,000,000 entries, so ticks that arrive
   while the persister is down for long enough are trimmed before they are persisted.
 
 A tick has `id`, `broker`, `instrument_token`, `exchange`, `mode`, `last_price`, `last_quantity`,
@@ -47,7 +59,8 @@ replaced the token, because Kite issues one token per session and every login in
 reconnecting. A reconnect otherwise backs off from 1 to 60 seconds.
 
 Exits 0 when stopped with Ctrl+C or SIGTERM, 1 when a login fails or a socket still cannot open after logging
-in again, and 2 when there is nothing to subscribe to. Reads only - it places no orders.
+in again, and 2 when `--sockets` is below 1 or there is nothing to subscribe to. Reads only - it places no
+orders.
 """
 
 import sys
@@ -73,19 +86,20 @@ INSTRUMENTS_URL = "https://api.kite.trade/instruments"
 
 LIVE_KEY = "zerodha:quotes:live"
 INSTRUMENTS_KEY = "zerodha:quotes:instruments"
-SUBSCRIPTIONS_KEY = "zerodha:quotes:subscriptions"
+MASTER_KEY = "zerodha:instruments:master"
+MASTER_META_KEY = "zerodha:instruments:meta"
 
 # Every tick is also appended here for bin/zerodha/persist_ticks, which reads it with a consumer group. The cap
 # bounds Redis memory when the persister is down; ticks trimmed before it returns are not persisted.
 STREAM_KEY = "zerodha:quotes:stream"
-STREAM_MAX_LENGTH = 100000
+STREAM_MAX_LENGTH = 1000000
 
 # The exchange segment in the low byte of a Kite instrument token.
 SEGMENTS = {1: "nse", 2: "nfo", 3: "cds", 4: "bse", 5: "bfo", 6: "bcd", 7: "mcx", 8: "mcxsx", 9: "indices"}
 
-MAX_INSTRUMENTS_PER_CONNECTION = 3000
-# Kite allows three connections per api_key; bin/zerodha/order_updates holds one of them.
-CONNECTION_BUDGET = 2
+DEFAULT_SOCKETS = 24
+
+FIELDS_PER_BATCH = 5000
 
 # HTTP statuses Kite answers a refused token with at the handshake.
 AUTHENTICATION_STATUSES = (401, 403)
@@ -378,27 +392,104 @@ def apply_change(tick):
     close = tick["ohlc"]["close"]
     tick["change"] = (tick["last_price"] - close) * 100 / close if close else None
 
-def resolve_tokens(tokens, cache, logger):
+def master_instruments(cache, logger):
     """
-    The Kite instrument tokens to subscribe to, as integers: `--tokens` when given, otherwise the subscription set.
+    Today's instruments from `zerodha:instruments:master`, as a dict of instrument token text to name.
 
-    - `tokens` is a comma separated list of instrument tokens, or None.
-    - `cache` is the Redis client.
-    - `logger` is where the resolution is reported.
+    The hash's field is the Kite instrument token and its value is the instrument's row as a JSON array, whose
+    column order is in `zerodha:instruments:meta`. An instrument the row does not name, or a row that cannot be
+    read, is mapped to an empty string, so every instrument in the master is still subscribed to.
+
+    Args:
+        cache (redis.Redis): The Redis client.
+        logger (logging.Logger): Where a missing or unreadable master is reported.
+
+    Returns:
+        dict[str, str]: Each instrument token as text to `EXCHANGE:TRADINGSYMBOL`, or to an empty string when
+        the master does not name it. Empty when the master has not been downloaded.
+    """
+    meta = cache.get(MASTER_META_KEY)
+    try:
+        columns = json.loads(meta).get('columns', []) if meta else []
+    except (TypeError, json.JSONDecodeError):
+        columns = []
+    if 'tradingsymbol' in columns and 'exchange' in columns:
+        symbol_index, exchange_index = columns.index('tradingsymbol'), columns.index('exchange')
+    else:
+        symbol_index, exchange_index = None, None
+        logger.warning(f"{MASTER_META_KEY} does not say where the trading symbol and exchange are, so instruments "
+                       f"are keyed by token.")
+
+    names = {}
+    for token, payload in cache.hscan_iter(MASTER_KEY, count=FIELDS_PER_BATCH):
+        names[token] = ""
+        if symbol_index is None:
+            continue
+        try:
+            row = json.loads(payload)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if row[exchange_index] and row[symbol_index]:
+            names[token] = f"{row[exchange_index]}:{row[symbol_index]}"
+
+    if names:
+        download_date = json.loads(meta).get('download_date') if meta else None
+        logger.info(f"Read {len(names)} instrument(s) from {MASTER_KEY}, downloaded {download_date}.")
+    return names
+
+def resolve_tokens(tokens, master, logger):
+    """
+    The Kite instrument tokens to subscribe to, as integers, in ascending order.
+
+    Args:
+        tokens (str | None): A comma separated list of instrument tokens from `--tokens`, or None for every
+            instrument in today's master.
+        master (dict[str, str]): Today's instruments from `master_instruments`.
+        logger (logging.Logger): Where the resolution and any unusable token are reported.
+
+    Returns:
+        list[int]: The instrument tokens to subscribe to, de-duplicated and sorted.
     """
     if tokens:
         wanted, source = [token.strip() for token in tokens.split(",")], "--tokens"
     else:
-        wanted, source = list(cache.smembers(SUBSCRIPTIONS_KEY)), SUBSCRIPTIONS_KEY
+        wanted, source = list(master), MASTER_KEY
 
     resolved = []
-    for token in sorted({str(token).strip() for token in wanted if str(token).strip()}):
+    for token in {str(token).strip() for token in wanted if str(token).strip()}:
         if token.isdigit():
             resolved.append(int(token))
         else:
             logger.warning(f"Skipping {token}: expected a Kite instrument token, a number such as 738561.")
+    resolved.sort()
     logger.info(f"Subscribing to {len(resolved)} instrument(s) from {source}.")
     return resolved
+
+def split_into_parts(tokens, parts):
+    """
+    The instrument tokens split into as many equal parts as there are websockets to carry them.
+
+    The first `len(tokens) % parts` parts carry one instrument more than the others, which is as equal as a
+    split can be when the count does not divide. A part that would be empty, because there are fewer
+    instruments than parts, is left out rather than opening a websocket that subscribes to nothing.
+
+    Args:
+        tokens (list[int]): The instrument tokens to split.
+        parts (int): How many parts to split them into.
+
+    Returns:
+        list[list[int]]: One list of instrument tokens per websocket.
+    """
+    size, remainder = divmod(len(tokens), parts)
+    batches = []
+    start = 0
+    for index in range(parts):
+        length = size + 1 if index < remainder else size
+        if length == 0:
+            continue
+        batches.append(tokens[start:start + length])
+        start += length
+    return batches
 
 def instrument_names(tokens, logger):
     """
@@ -422,12 +513,39 @@ def instrument_names(tokens, logger):
     return {row['instrument_token']: f"{row['exchange']}:{row['tradingsymbol']}"
             for row in csv.DictReader(StringIO(response.text)) if row.get('instrument_token') in wanted}
 
+def write_subscribed_instruments(tokens, names, cache, logger):
+    """
+    Replace `zerodha:quotes:instruments` with every subscribed token and its name.
+
+    The hash is written in batches, because a subscription covering the whole instrument master is more fields
+    than belong in one Redis command.
+
+    Args:
+        tokens (list[int]): The subscribed instrument tokens.
+        names (dict[str, str]): Each instrument token as text to its name.
+        cache (redis.Redis): The Redis client.
+        logger (logging.Logger): Where the write and any unnamed instruments are reported.
+
+    Returns:
+        None
+    """
+    cache.delete(INSTRUMENTS_KEY)
+    for start in range(0, len(tokens), FIELDS_PER_BATCH):
+        batch = tokens[start:start + FIELDS_PER_BATCH]
+        cache.hset(INSTRUMENTS_KEY, mapping={str(token): names.get(str(token), "") for token in batch})
+    logger.info(f"Wrote {len(tokens)} subscribed instrument(s) to {INSTRUMENTS_KEY}.")
+
+    unnamed = [str(token) for token in tokens if not names.get(str(token))]
+    if unnamed:
+        logger.warning(f"{len(unnamed)} instrument(s) are unnamed and are keyed by token: "
+                       f"{', '.join(unnamed[:20])}{' ...' if len(unnamed) > 20 else ''}")
+
 def main():
     """Stream Zerodha quotes into zerodha:quotes:live until stopped."""
     parser = argparse.ArgumentParser(description="Stream Zerodha market quotes into zerodha:quotes:live until stopped.")
     parser.add_argument("--tokens", help="comma separated Kite instrument tokens, for example 738561,408065")
-    parser.add_argument("--per-socket", type=int, default=MAX_INSTRUMENTS_PER_CONNECTION,
-                        help=f"instruments per websocket connection, at most {MAX_INSTRUMENTS_PER_CONNECTION}")
+    parser.add_argument("--sockets", type=int, default=DEFAULT_SOCKETS,
+                        help=f"websockets to split the instruments equally across, default {DEFAULT_SOCKETS}")
     arguments = parser.parse_args()
 
     from utilities.configurations import get_cache, get_logger
@@ -435,20 +553,17 @@ def main():
     logger = get_logger("zerodha.quotes")
     cache = get_cache()
 
-    if not 1 <= arguments.per_socket <= MAX_INSTRUMENTS_PER_CONNECTION:
-        logger.error(f"--per-socket must be between 1 and {MAX_INSTRUMENTS_PER_CONNECTION}.")
+    if arguments.sockets < 1:
+        logger.error("--sockets must be at least 1.")
         return 2
 
-    tokens = resolve_tokens(arguments.tokens, cache, logger)
+    master = master_instruments(cache, logger)
+    tokens = resolve_tokens(arguments.tokens, master, logger)
     if not tokens:
-        logger.error(f"Nothing to subscribe to. Pass --tokens or add instrument tokens to the Redis set {SUBSCRIPTIONS_KEY}.")
+        logger.error(f"Nothing to subscribe to. Pass --tokens, or run bin/zerodha/instruments to fill {MASTER_KEY}.")
         return 2
 
-    batches = [tokens[start:start + arguments.per_socket] for start in range(0, len(tokens), arguments.per_socket)]
-    if len(batches) > CONNECTION_BUDGET:
-        logger.error(f"{len(tokens)} instruments at {arguments.per_socket} per socket needs {len(batches)} connections, "
-                     f"but Kite allows 3 per api_key and bin/zerodha/order_updates holds one.")
-        return 2
+    batches = split_into_parts(tokens, arguments.sockets)
 
     try:
         session = ZerodhaSession(logger)
@@ -456,16 +571,14 @@ def main():
         logger.error(f"Could not log in to Zerodha: {type(exception).__name__}: {exception}")
         return 1
 
-    names = instrument_names(tokens, logger)
-    pipeline = cache.pipeline()
-    pipeline.delete(INSTRUMENTS_KEY)
-    pipeline.hset(INSTRUMENTS_KEY, mapping={str(token): names.get(str(token), "") for token in tokens})
-    pipeline.execute()
-    unnamed = [str(token) for token in tokens if str(token) not in names]
-    logger.info(f"Wrote {len(tokens)} subscribed instrument(s) to {INSTRUMENTS_KEY}.")
-    if unnamed:
-        logger.warning(f"{len(unnamed)} instrument(s) are not in Kite's instrument file and are keyed by token: "
-                       f"{', '.join(unnamed[:20])}{' ...' if len(unnamed) > 20 else ''}")
+    names = {}
+    for token in tokens:
+        name = master.get(str(token), "")
+        if name:
+            names[str(token)] = name
+    if not names:
+        names = instrument_names(tokens, logger)
+    write_subscribed_instruments(tokens, names, cache, logger)
 
     sockets = [QuotesSocket(f"socket_{index}", batch, names, session, cache, logger) for index, batch in enumerate(batches)]
 

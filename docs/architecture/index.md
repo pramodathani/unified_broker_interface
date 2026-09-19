@@ -102,7 +102,9 @@ shape.
 Each broker's `order_updates` script holds its own connection, separate from `quotes`, even where the broker
 would allow both on one. A quote feed reconnect then can never drop an order event, and the order stream can
 run without spending any market data quota. Flattrade permits only one websocket per session, so there
-`flattrade@order_updates` is not run and its orders come from the poller alone. See
+`flattrade@order_updates` is not run and its orders come from the poller alone. Zerodha is the other
+exception, in the opposite direction: `bin/zerodha/quotes` splits today's whole instrument master across 24
+websockets, so Zerodha holds 25 connections rather than two. See
 [Known issues](../contributing/known-issues.md#broker-limits).
 
 ## What a subclass has to write

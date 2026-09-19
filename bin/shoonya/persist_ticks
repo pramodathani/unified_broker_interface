@@ -18,7 +18,7 @@ committed. A crash, a refused write or a lost connection leaves the batch pendin
 next read - after a reconnect, or at the next start - takes the pending entries first. The price is that a
 batch committed just before a crash, and not yet acknowledged, is written a second time; `shoonya.ticks` has no
 unique key to stop that. The one way ticks are lost is the stream's cap: `bin/shoonya/quotes` trims it at about
-100,000 entries, so ticks trimmed while this is stopped are gone, and are counted as skipped when their
+1,000,000 entries, so ticks trimmed while this is stopped are gone, and are counted as skipped when their
 pending ids come back empty.
 
 The consumer group is created at the start of the stream the first time, so the first run persists

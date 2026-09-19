@@ -38,7 +38,7 @@ startup. One websocket carries up to `--per-socket` instruments, default 1000.
 - `groww:quotes:instruments`, a hash of every subscribed `EXCHANGE|SEGMENT|EXCHANGE_TOKEN` to its name, or to an
   empty string when the instrument file does not name it. Replaced whole at startup.
 - `groww:quotes:stream`, a Redis Stream with every tick in arrival order as a `tick` field, which
-  `bin/groww/persist_ticks` writes to `groww.ticks`. Capped at about 100,000 entries, so ticks that arrive while
+  `bin/groww/persist_ticks` writes to `groww.ticks`. Capped at about 1,000,000 entries, so ticks that arrive while
   the persister is down for long enough are trimmed before they are persisted.
 
 A tick has `id`, `broker`, `instrument_token`, `exchange`, `mode` (`full` once depth has arrived, else `quote`),
@@ -87,7 +87,7 @@ SUBSCRIPTIONS_KEY = "groww:quotes:subscriptions"
 # Every tick is also appended here for bin/groww/persist_ticks, which reads it with a consumer group. The cap
 # bounds Redis memory when the persister is down; ticks trimmed before it returns are not persisted.
 STREAM_KEY = "groww:quotes:stream"
-STREAM_MAX_LENGTH = 100000
+STREAM_MAX_LENGTH = 1000000
 
 # NATS subject prefixes, by segment and exchange.
 PRICE_SUBJECTS = {("CASH", "NSE"): "/ld/eq/nse/price_detailed.", ("CASH", "BSE"): "/ld/eq/bse/price_detailed.",

@@ -53,7 +53,13 @@ at every start the entries this consumer read but never acknowledged are taken f
 went silent with no healthy backup stays, with `stale` true and `stale_since` set; quotes stale for a week are removed.
 Today's previous closes are recovered from the hash at start.
 
-**`unified:quotes:stream`** gets every quote written, as field `quote`, capped at about 200,000 entries, for a unified tick
+**Which instruments are covered** is not decided here. There is no instrument list: a quote is written for whatever
+arrives on the ten streams, so the coverage is the feeds' coverage. Since `bin/zerodha/quotes` began carrying Zerodha's
+whole instrument master on 2026-09-16, that is about 112,400 instruments - 112,422 of that day's 112,657 resolve to
+exactly one unified instrument, 170 name more than one and are not guessed at, 64 are filed under a segment the
+token's segment code does not allow, and 1 has no mapping at all.
+
+**`unified:quotes:stream`** gets every quote written, as field `quote`, capped at about 1,000,000 entries, for a unified tick
 persister. `unified:quotes:stats` holds the counts - received, unresolved, out_of_session, not_owner, no_price, duplicate,
 written - and `unified:quotes:unresolved` counts each unresolved `broker:token:reason`.
 
@@ -86,7 +92,7 @@ from stock_brokers.instruments.mapping.utilities.segments import (CASH_SEGMENTS,
 
 LIVE_KEY = "unified:quotes:live"
 QUOTES_STREAM_KEY = "unified:quotes:stream"
-QUOTES_STREAM_MAX_LENGTH = 200000
+QUOTES_STREAM_MAX_LENGTH = 1000000
 STATS_KEY = "unified:quotes:stats"
 UNRESOLVED_KEY = "unified:quotes:unresolved"
 
