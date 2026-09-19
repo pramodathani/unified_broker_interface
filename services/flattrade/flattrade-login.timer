@@ -11,8 +11,8 @@ PartOf=flattrade.target
 # The timezone is stated so the schedule survives a change to the machine's timezone.
 OnCalendar=Mon..Fri 08:15 Asia/Kolkata
 AccuracySec=1s
-# Most brokers log in with a headless Chrome and a TOTP; half an hour of jitter keeps nine of them from doing it in the
-# same second, and still lands every one before 09:00.
+# Nine brokers log in with a TOTP, and Zerodha and Shoonya through a headless Chrome; half an hour of jitter keeps the
+# ten logins from firing in the same second, and still lands every one before 09:00.
 RandomizedDelaySec=1800
 # A machine that was off at 08:15 needs no catch-up: the first script to find its token refused logs in then.
 Persistent=false

@@ -24,6 +24,6 @@ SyslogIdentifier=flattrade-login
 ExecStart=%h/Projects/unified_broker_interface/bin/flattrade/login
 Restart=on-failure
 RestartSec=2min
-# Several brokers log in by driving a headless Chrome and waiting on a TOTP.
+# Zerodha and Shoonya log in by driving a headless Chrome and waiting on a TOTP.
 TimeoutStartSec=300
 # Deliberately no PrivateTmp, ProtectHome or NoNewPrivileges: Chrome needs a writable home and /dev/shm.
