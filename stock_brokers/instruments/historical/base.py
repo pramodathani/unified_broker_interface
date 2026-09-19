@@ -521,7 +521,7 @@ class BrokerCandles:
         Raises:
             CandleAuthenticationError: If no working session could be established.
         """
-        from stock_brokers.api.session import ensure_session
+        from stock_brokers.api.utilities.session import ensure_session
 
         try:
             ensure_session(self.BROKER_NAME, logger=self._logger)
@@ -542,7 +542,7 @@ class BrokerCandles:
         The broker's own class from `api_class_for`, which is what every downloader builds. A
         downloader that builds its API differently overrides this.
         """
-        from stock_brokers.api.session import api_class_for
+        from stock_brokers.api.utilities.session import api_class_for
 
         return api_class_for(self.BROKER_NAME)()
 

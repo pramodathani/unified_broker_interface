@@ -10,7 +10,7 @@ Download INDmoney's historical candles into `indmoney.price_history`, working a 
 
 Built on `IndMoneyCandles`, with one difference: every login - at startup and after INDstocks refuses the
 session - goes straight through `INDMoneyAPI`, which logs in when the stored token is dead, rather than through
-the shared session helper `stock_brokers.api.session.ensure_session`.
+the shared session helper `stock_brokers.api.utilities.session.ensure_session`.
 
 **Seeding** reads the latest row per instrument from `indmoney.instruments` (filled by `bin/indmoney/instruments`) and
 registers one row per instrument and interval in `indmoney.price_history_progress`, leaving existing rows alone, so

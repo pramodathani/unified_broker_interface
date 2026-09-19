@@ -12,7 +12,7 @@ stopped.
 Built on `WisdomCapitalCandles`, with two differences: every login of the trading session goes straight through
 `WisdomCapitalAPI`, and the market data session is shared through the Redis key
 `wisdom_capital:session:marketdata`, not through the shared session helper
-`stock_brokers.api.session.ensure_session`.
+`stock_brokers.api.utilities.session.ensure_session`.
 
 **Two sessions.** Wisdom Capital runs Symphony's XTS, which splits a broker into two applications. The trading
 (interactive) token `WisdomCapitalAPI` holds is refused by the chart endpoint, which lives under

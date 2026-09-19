@@ -112,7 +112,7 @@ class DhanCandles(BrokerCandles):
         """
         super().__init__()
         if api is None:
-            from stock_brokers.api.session import ensure_session
+            from stock_brokers.api.utilities.session import ensure_session
             from stock_brokers.api.dhan import DhanAPI
 
             # Through ensure_session rather than straight to DhanAPI, so this shares the Redis

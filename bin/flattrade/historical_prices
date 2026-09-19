@@ -10,7 +10,7 @@ Download Flattrade's historical candles into `flattrade.price_history`, working 
 
 Built on `FlattradeCandles`, with one difference: every login - at startup and after Flattrade refuses the
 session - goes straight through `FlattradeAPI`, which logs in when the stored token is dead, rather than
-through the shared session helper `stock_brokers.api.session.ensure_session`.
+through the shared session helper `stock_brokers.api.utilities.session.ensure_session`.
 
 **Seeding** reads the latest row per instrument from `flattrade.instruments` (filled by
 `bin/flattrade/instruments`) and registers one row per instrument and interval in

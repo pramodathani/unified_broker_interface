@@ -110,7 +110,7 @@ class NorenCandles(BrokerCandles):
         """
         super().__init__()
         if api is None:
-            from stock_brokers.api.session import ensure_session
+            from stock_brokers.api.utilities.session import ensure_session
 
             # Through ensure_session, so this shares the Redis lock and the login rate limiter
             # with any other process using ensure_session. A backfill runs for weeks and will be

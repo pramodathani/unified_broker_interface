@@ -27,8 +27,8 @@ services/
 stock_brokers/
 ├── api/                      REST: login, then authenticated requests
 │   ├── base.py               BrokerAPI, BrokerAPIException
-│   ├── session.py            ensure_session: log in once, safely, from any process
-│   └── <broker>.py           one per broker
+│   ├── <broker>.py           one per broker
+│   └── utilities/session.py  ensure_session: log in once, safely, from any process
 └── instruments/              daily instrument masters
     ├── base.py               BrokerInstruments: clean, dedupe, write
     ├── orchestrator.py       run every broker, one try/except each

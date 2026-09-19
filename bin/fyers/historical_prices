@@ -10,7 +10,7 @@ Download Fyers' historical candles into `fyers.price_history`, working a resumab
 
 Built on `FyersCandles`, with one difference: every login - at startup and after Fyers refuses the session - goes
 straight through `FyersAPI`, confirmed against the profile, rather than through the shared session helper
-`stock_brokers.api.session.ensure_session`.
+`stock_brokers.api.utilities.session.ensure_session`.
 
 **Seeding** reads the latest row per ticker from `fyers.instruments` (filled by `bin/fyers/instruments`) and
 registers one row per instrument and interval in `fyers.price_history_progress`, leaving existing rows alone, so

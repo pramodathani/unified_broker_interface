@@ -10,7 +10,7 @@ Download Dhan's historical candles into `dhan.price_history`, working a resumabl
 
 Built on `DhanCandles`, with one difference: every login - at startup and after Dhan refuses the session - goes
 straight through `DhanAPI`, which logs in when the stored token is dead, rather than through the shared session
-helper `stock_brokers.api.session.ensure_session`.
+helper `stock_brokers.api.utilities.session.ensure_session`.
 
 **Seeding** reads the latest row per instrument from `dhan.instruments` (filled by `bin/dhan/instruments`)
 and registers one row per instrument and interval in `dhan.price_history_progress`, leaving existing rows

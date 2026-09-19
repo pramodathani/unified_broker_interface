@@ -10,7 +10,7 @@ Download Shoonya's historical candles into `shoonya.price_history`, working a re
 
 Built on `ShoonyaCandles`, with one difference: every login - at startup and after Shoonya refuses the session -
 goes straight through `ShoonyaAPI`, which logs in with a headless Chrome when the stored token is dead, rather
-than through the shared session helper `stock_brokers.api.session.ensure_session`.
+than through the shared session helper `stock_brokers.api.utilities.session.ensure_session`.
 
 **Seeding** reads the latest row per instrument from `shoonya.instruments` (filled by `bin/shoonya/instruments`)
 and registers one row per instrument and interval in `shoonya.price_history_progress`, leaving existing rows

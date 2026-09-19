@@ -273,7 +273,7 @@ redis-cli HGET unified:broker_tokens dhan:2885
 | `ubi:login-attempt:<broker>`, `ubi:login-ok:<broker>` | string | `ensure_session` | When a login was last attempted and last succeeded, so only genuine retries are rate limited |
 | `broker_api_calls` | list | every broker's API class, only when called with `verbose` | Each request made |
 
-`ensure_session` in `stock_brokers/api/session.py` is the login `BrokerCandles` uses by default and the one
+`ensure_session` in `stock_brokers/api/utilities/session.py` is the login `BrokerCandles` uses by default and the one
 IND Money's instrument ingester uses; the `bin/<broker>/` scripts log in through the broker's API class.
 
 Nothing is published on pub/sub. A process that wants live data reads the latest values from the hashes

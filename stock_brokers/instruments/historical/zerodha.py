@@ -78,7 +78,7 @@ class ZerodhaCandles(BrokerCandles):
         """
         super().__init__()
         if api is None:
-            from stock_brokers.api.session import ensure_session
+            from stock_brokers.api.utilities.session import ensure_session
             from stock_brokers.api.zerodha import ZerodhaAPI
 
             # Through ensure_session rather than straight to ZerodhaAPI, so this shares the Redis

@@ -10,7 +10,7 @@ Download Zerodha's historical candles into `zerodha.price_history`, working a re
 
 Built on `ZerodhaCandles`, with one difference: every login - at startup and after Kite refuses the session - goes
 straight through `ZerodhaAPI`, which logs in when the stored token is dead, rather than through the shared session
-helper `stock_brokers.api.session.ensure_session`. Kite issues one token per session and a login invalidates the
+helper `stock_brokers.api.utilities.session.ensure_session`. Kite issues one token per session and a login invalidates the
 one before, so a refusal caused by another process's login is recovered without a second login: `ZerodhaAPI`
 probes with the newest stored token first and only logs in when that fails too.
 

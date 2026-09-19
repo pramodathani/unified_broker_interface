@@ -152,7 +152,7 @@ class WisdomCapitalCandles(BrokerCandles):
         """
         super().__init__()
         if api is None:
-            from stock_brokers.api.session import ensure_session
+            from stock_brokers.api.utilities.session import ensure_session
             from stock_brokers.api.wisdom_capital import WisdomCapitalAPI
 
             ensure_session(self.BROKER_NAME, logger=self._logger)
@@ -175,7 +175,7 @@ class WisdomCapitalCandles(BrokerCandles):
         - `refresh` mints a new one even though a session is stored, for a token that has stopped
           working. Rotating it is not destructive: whoever reads it next gets the new one.
         """
-        from stock_brokers.api.session import shared_application_session
+        from stock_brokers.api.utilities.session import shared_application_session
 
         session = shared_application_session(self.BROKER_NAME, "marketdata",
                                              self._mint_market_data_session,

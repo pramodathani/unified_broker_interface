@@ -89,7 +89,7 @@ class IndMoneyInstruments(BrokerInstruments):
         Returns:
             str | None: Today's token, or None when the login did not produce one.
         """
-        from stock_brokers.api.session import SessionException, ensure_session
+        from stock_brokers.api.utilities.session import SessionException, ensure_session
 
         try:
             ensure_session("indmoney")

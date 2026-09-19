@@ -115,7 +115,7 @@ class IndMoneyCandles(BrokerCandles):
         """
         super().__init__()
         if api is None:
-            from stock_brokers.api.session import ensure_session
+            from stock_brokers.api.utilities.session import ensure_session
             from stock_brokers.api.indmoney import INDMoneyAPI
 
             # Through ensure_session, so this shares the Redis lock and the login rate limiter
