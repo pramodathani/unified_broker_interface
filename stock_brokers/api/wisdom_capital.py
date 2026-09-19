@@ -64,7 +64,7 @@ class WisdomCapitalAPI(BrokerAPI):
             try:
                 self.get(url=f"https://trade.wisdomcapital.in/interactive/user/balance?clientID={self._settings['ucc_code']}")
             except Exception as exception:
-                if getattr(exception, "code", None) == 429 or "e-apirl" in str(getattr(exception, "message", "")):
+                if getattr(exception, "code", None) in (429, "429") or "e-apirl" in str(exception).lower():
                     return
             else:
                 return
