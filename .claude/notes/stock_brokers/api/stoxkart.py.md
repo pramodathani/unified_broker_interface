@@ -14,7 +14,7 @@ The version 2 login answers the password step with `register_token` rather than 
 
 ## Why the publisher key pair is in MongoDB rather than in the code
 
-The publisher key pair is not issued to the account. It is written in plain text in the JavaScript of Stoxkart's public login page. It is kept in the `stoxkart` settings document as `publisher_api_key` and `publisher_api_secret`, so that it stays out of git history and can be replaced without a code change if Stoxkart rebuilds its login page with a different pair. `_login_headers` raises a clear error when either field is missing, rather than sending an empty header and getting an unexplained refusal.
+The publisher key pair is not issued to the account. It is written in plain text in the JavaScript of Stoxkart's public login page. It is kept in the `stoxkart` settings document as `publisher_api_key` and `publisher_api_secret`, so that it stays out of git history and can be replaced without a code change if Stoxkart rebuilds its login page with a different pair. The login raises a clear error when either field is missing, rather than sending an empty header and getting an unexplained refusal.
 
 ## Why the password and TOTP checks raise instead of branching
 
@@ -22,7 +22,15 @@ The login page shows a TOTP dialog when `is_2fa_enabled` is true and an SMS OTP 
 
 ## Why the TOTP waits near the end of a window
 
-A TOTP code generated in the last moments of its 30-second window can expire before Stoxkart checks it. How much clock drift Stoxkart tolerates is unknown, so `_current_totp` waits for the next code when fewer than five seconds are left.
+A TOTP code generated in the last moments of its 30-second window can expire before Stoxkart checks it. How much clock drift Stoxkart tolerates is unknown, so the login waits for the next code when fewer than five seconds are left.
+
+## How the token exchange is signed
+
+The `/auth/token` request carries a signature that is an HMAC-SHA256 whose key is the app's API key followed by the request token, and whose message is the app's API secret.
+
+## Why the whole login is written out in `__init__`
+
+On 2026-09-19 the login's nine helper methods were folded into `__init__`, so that the class has only `__init__` and `_request` like most of the other brokers and the login reads from top to bottom. The price is that the two version 2 steps each write out their own post, JSON decode and status check, rather than sharing one helper.
 
 ## Why the Selenium fallback was removed
 
