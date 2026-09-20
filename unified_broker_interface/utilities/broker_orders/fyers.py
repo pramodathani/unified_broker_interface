@@ -48,6 +48,7 @@ class FyersOrders(BrokerOrders):
         ('mcx', 'commodity', 'derivative'): 'broker_lot_size',
         ('nse', 'currency', 'derivative'): 'broker_lot_size',
     }
+    TAKES_AFTER_MARKET = False
     ORDER_TYPE_CODES = {
         'LIMIT': 1,
         'MARKET': 2,
