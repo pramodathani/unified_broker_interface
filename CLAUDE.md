@@ -15,6 +15,7 @@ There is no `pyproject.toml`, no build step and no pytest suite. The project roo
 | Task | Command |
 | --- | --- |
 | Install dependencies | `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt` |
+| Start Redis, MongoDB and TimescaleDB | `docker compose up -d --wait` (the containers in `docker-compose.yml`) |
 | Lint | `.venv/bin/ruff check .` (ruff 0.11.2, no config file, so default rules) |
 | Offline candle parser tests | `python -m test_runs.candle_parse` |
 | Offline session calendar tests | `python -m test_runs.unified_ticks_sessions` |
@@ -29,12 +30,18 @@ There is no `pyproject.toml`, no build step and no pytest suite. The project roo
 | Run the REST API | `bin/rest-api` (gunicorn on 127.0.0.1:8080), or `bin/rest-api --dev` for Flask's development server |
 | Check every systemd unit and start the ones that are down | `bin/check-services` (`--check-only` to report without starting) |
 | REST API test page | `bin/rest-api-app` (Streamlit on port 8501; start the API first) |
+| Check every broker API is reachable | `bin/check-broker-connections` (logs in to live accounts) |
+| Search a broker's instrument master | `bin/search-instruments zerodha INFY` (`--show-columns` lists what that broker is searched on) |
+| Load the REST API's detail collections | `bin/import-api-details /path/to/exports` (`--calendars-only` re-copies trading hours and holidays) |
+| Show one Zerodha symbol's master row, LTP, OHLC and book | `bin/zerodha-quote INFY` (a live Zerodha account) |
 | Docs, live reload | `mkdocs serve` |
 | Docs, as CI should build them | `mkdocs build --strict` |
 
+Lint is not clean on an untouched tree. `ruff check .` reports 41 findings on `main`, almost all of them in `stock_brokers/api/` and `test_runs/`: star imports and the names they hide (`F403`, `F405`), assigned but unused variables (`F841`), comparisons to `True` and `False` with `==` (`E712`), unused imports (`F401`) and one lambda bound to a name (`E731`). Treat that as the baseline, and judge a change by whether it adds a finding rather than by whether the run is silent.
+
 The five offline suites are plain scripts, not pytest files, so there is no way to run a single case other than editing or importing the module. They need no Redis, database, credentials or network, though `order_routes` imports the API and so reads `.env`. `order_routes` compares the order routes' statuses, bodies, outgoing broker requests and Redis round trips with a recording, so a refactor of `unified_broker_interface/blueprints/orders.py` must leave it unchanged.
 
-`test_runs/broker_login_test.py` logs in to live broker accounts, and anything under `bin/<broker>/` reaches real trading accounts, so do not run them without the user's say-so.
+`test_runs/broker_login_test.py` logs in to live broker accounts, and anything under `bin/<broker>/` reaches real trading accounts, so do not run them without the user's say-so. Two scripts at the top of `bin/` do the same from outside that directory pattern: `bin/check-broker-connections` authenticates to every broker in turn, and `bin/zerodha-quote` calls three live Kite endpoints. Both only read, but several brokers log in by driving a headless Chrome and consuming a TOTP, so running either one repeatedly means authenticating for real each time.
 
 ## Architecture
 
@@ -62,6 +69,8 @@ MongoDB holds broker credentials (`settings`) and login tokens (`last_login`), k
 
 Every file in `bin/` is an executable, extensionless Python script. Each one starts by calling `utilities.bootstrap.run_under_venv(__file__)`, which re-executes it under `.venv/bin/python`. That is why the scripts work from cron and systemd without an activated environment. The guard compares `sys.prefix`, not interpreter paths, because `.venv/bin/python` is a symlink to the system interpreter.
 
+The `bin/<broker>/` and `bin/unified/` subdirectories hold the long-lived scripts that systemd runs. The scripts at the top of `bin/` are standalone tools meant to be typed by hand: `rest-api`, `rest-api-app`, `check-services`, `check-broker-connections`, `search-instruments`, `import-api-details` and `zerodha-quote`.
+
 Each script is deliberately self-contained: its own connection, decoding and normalization, with no shared socket or poller base class. Its module docstring is its full reference, including the field-by-field mapping from the broker's names and its exit codes. Exit code 2 means a bad argument or configuration, and the systemd units deliberately do not restart on it.
 
 Websocket scripts never write to PostgreSQL. They write a Redis hash of current state plus a capped Redis Stream, and a separate `persist_*` script drains the stream with `COPY` through the consumer group `persist`. The unified scripts read the same streams through the group `unified`.
@@ -76,6 +85,8 @@ Four dictionary shapes keep every broker's output identical: the tick, the order
 
 Every package implemented once per broker holds exactly three kinds of file: `__init__.py`, a `base.py` with the class the brokers subclass, and one `<broker>.py` per broker. Everything else that subsystem needs (orchestrators, registries, SQL and its runner, rules files) goes in a `utilities/` subpackage inside that package. Listing the directory therefore answers "which brokers does this support". `noren.py` sits beside Flattrade and Shoonya where they share the Noren platform.
 
+Six packages read this way: `api/`, `instruments/mapping/`, `instruments/historical/`, `instruments/ticks/`, `broker_quotes/` and `broker_orders/`. `stock_brokers/instruments/` itself is the exception, and keeps `orchestrator.py` and `sql/` at its own root rather than under `utilities/`.
+
 | Subsystem | Base class | A broker module implements |
 | --- | --- | --- |
 | `stock_brokers/api/` | `BrokerAPI` | `__init__` (the login flow) and `_request` |
@@ -87,6 +98,12 @@ Every package implemented once per broker holds exactly three kinds of file: `__
 | `unified_broker_interface/utilities/broker_orders/` | `BrokerOrders` | `MARKETS`, the place, modify and cancel requests, `MODIFIABLE_FIELDS`, and reading a success answer; the blueprint does every Redis read |
 
 Adding a broker touches many registries (`INGESTERS`, `ADAPTERS`, `MAPPED_BROKERS`, `DOWNLOADERS`, `NORMALIZERS`, `SOURCES`, `API_CLASSES`, `BROKER_ORDER_CLASSES`, and the `BROKERS` lists inside each `bin/unified/` combiner). `docs/contributing/adding-a-broker.md` lists them in order. `MAPPED_BROKERS` in `mapping/utilities/segments.py` is a processing order, not an unordered list.
+
+### Choosing a broker for an order
+
+`POST /api/orders/place` names an instrument, not a broker, so something has to decide which broker receives it. That decision is a class of its own in `unified_broker_interface/utilities/broker_selection/`, subclassing `BrokerSelector` and registered in `BROKER_SELECTOR_CLASSES` in `utilities/registry.py`. Two exist: `round_robin.py`, which is the default and keeps its turn counter in the Redis key `unified:orders:round_robin` so every gunicorn worker shares one rotation, and `fixed_priority.py`, which puts the brokers named in `UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_PRIORITY` first and needs no Redis at all. `UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_SELECTOR` picks between them, and an unknown name stops the API from starting rather than falling back.
+
+A selector reads Redis by queueing commands onto the pipeline the blueprint is already sending, through `queue_redis_commands`, instead of opening a round trip of its own. `docs/guides/rest-api.md` counts the round trips each one costs.
 
 ### Sessions and logins
 
@@ -102,7 +119,9 @@ Schemas live only in numbered `.sql` files under four `sql/ddl/` directories, ap
 
 ### Services
 
-Everything runs as systemd **user** units in `services/<broker>/` and `services/unified/`, installed with `systemctl --user link`, so the units expect the repository at `~/Projects/unified_broker_interface`. `<broker>@<script>.service` is a template that runs one long-lived `bin/<broker>/<script>`. Timers run the instrument download and mapping at 07:45 IST every day, broker logins at 07:00 IST every day and unified price history at 08:30 IST. Targets use `WantedBy=default.target`, never `multi-user.target`, which does not exist in the user manager. Each target file's header carries its install commands.
+Everything runs as systemd **user** units in `services/<broker>/`, `services/unified/` and `services/databases/`, installed with `systemctl --user link`, so the units expect the repository at `~/Projects/unified_broker_interface`. `<broker>@<script>.service` is a template that runs one long-lived `bin/<broker>/<script>`. Timers run the instrument download and mapping at 07:45 IST every day, broker logins at 07:00 IST every day and unified price history at 08:30 IST from Monday to Saturday. Targets use `WantedBy=default.target`, never `multi-user.target`, which does not exist in the user manager. Each target file's header carries its install commands.
+
+`services/databases/` is the odd group out. It runs `docker compose up -d --wait` once a minute, which starts whatever container is stopped or missing and leaves running ones alone, so the three data stores come back without anyone watching. Its timer repeats on `OnUnitInactiveSec` rather than a clock time, and it is the one unit that sets `Environment=PYTHONPATH=`, because Docker Compose reads the same `.env`, which sets `PYTHONPATH` to the project plus `$PYTHONPATH`, and warns on every run while `$PYTHONPATH` itself is unset.
 
 ## Documentation
 
