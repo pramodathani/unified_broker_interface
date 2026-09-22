@@ -47,6 +47,18 @@ and every other process waits it out. The lock records the holder's pid, and a l
 released rather than waited for. `ensure_session` is what `BrokerCandles` and IND Money's instrument
 ingester log in through by default; the `bin/<broker>/` scripts log in through the broker's API class.
 
+**Login-only data belongs to whoever logs in, not to the session script.** Kotak has no profile
+endpoint, so the account's profile arrives once, inside the Login Validate response. `bin/kotak/session/connect`
+was the only writer of `kotak:user:details`, and only on a run that actually logged in, which read as
+correct and never once fired. Kotak's token expires at midnight, the pollers are running then, and on
+2026-09-22 `kotak-positions`, `kotak-orders`, `kotak-funds` and `kotak-trades` all saw
+`{"stCode":100010,"errMsg":"invalid session token"}` at 00:00:28 and re-logged in themselves, throwing
+the profile away; `kotak-login.service` ran at 07:11 and reported `kotak session was still good, so no
+login response`, and `bin/unified/user/details` logged `Wrote 9 profile(s) to unified:user:details; none for
+kotak`. The key had never existed since the script was written on 2026-09-14. `KotakAPI._store_profile`
+now writes it on every login, whichever process performs it. When a broker serves a value only at login,
+store it where the login happens.
+
 **An error code prefix is not a diagnosis.** Wisdom Capital's quotes feed classified a refusal by looking
 for `e-session` in the body, and XTS answers instruments that are still subscribed from an earlier
 connection with `{"code":"e-session-0002","description":"Instrument Already Subscribed !","result":

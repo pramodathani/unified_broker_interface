@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
-Log in to the Kotak Neo API by constructing `KotakAPI`, confirm the session works, record the outcome in the
-Redis key `kotak:session:status`, and, when a login happened, write the account's profile to
-`kotak:user:details`.
+Log in to the Kotak Neo API by constructing `KotakAPI`, confirm the session works, and record the outcome in
+the Redis key `kotak:session:status`. A login also refreshes `kotak:user:details`, which `KotakAPI` writes.
 
     bin/kotak/session/connect
     redis-cli GET kotak:session:status
@@ -24,14 +23,14 @@ On success `last_login` is when the token in force was issued, which is earlier 
 stored session was still good. On failure it is when this attempt was made.
 
 Kotak has no profile endpoint: the profile arrives only in the Login Validate response, beside the tokens.
-So `kotak:user:details` is written only on a run that actually logged in, as one JSON object in the shape
-the other brokers' keys use - `timestamp`, `status`, `code` and the profile under `data` - holding the
-fields named in PROFILE_FIELDS and never the tokens. When the stored session was still good there is no
-login response, and the key keeps the profile from the last login. `kId` appears to be the account's PAN.
+`KotakAPI` therefore writes `kotak:user:details` itself whenever it logs in, so the key is refreshed by
+whichever process happened to perform the login. That matters, because Kotak's token expires at midnight
+and the running pollers meet the expiry hours before this script's 07:00 timer does, which left the key
+empty for as long as this script was the only writer. This run reports which of the two happened but writes
+nothing itself. `kId` appears to be the account's PAN.
 
 Exits 0 when the session works and 1 when the login, the check or the session status write fails, so a
-systemd unit can retry on failure. A failed profile write is reported but does not change the exit code: a
-retry would find the new session good, not log in, and have no profile to write. Logs in to a live broker account. Reads only - it places no orders.
+systemd unit can retry on failure. Logs in to a live broker account. Reads only - it places no orders.
 """
 
 import sys
@@ -50,12 +49,6 @@ POSITIONS_PATH = "/quick/user/positions"
 REDIS_KEY = "kotak:session:status"
 PROFILE_REDIS_KEY = "kotak:user:details"
 TIMEOUT_SECONDS = 10
-
-# The Login Validate fields that describe the account, per Kotak's Totp_validate documentation. Named rather
-# than filtered so a token Kotak adds to the response later can never land in the profile.
-PROFILE_FIELDS = ("ucc", "greetingName", "clientType", "isNRI", "isTrialAccount", "dormancyStatus", "mfAccess",
-                  "asbaStatus", "clientGroup", "kId", "isUserPwdExpired", "derivativesRiskDisclosure", "incRange",
-                  "incUpdFlag")
 
 # Kotak's status code for an answer with nothing in it.
 NO_DATA_STATUS_CODE = 5203
@@ -100,15 +93,13 @@ def main():
     from stock_brokers.api.kotak import KotakAPI
     from utilities.configurations import get_cache
 
-    profile = None
+    logged_in = False
     try:
         kotak = KotakAPI()
         kotak_request(kotak, 'GET', POSITIONS_PATH)
         login = kotak._last_login or {}
         record = {'status': 'success', 'access-token': login.get('access_token'), 'last_login': login.get('last_login')}
-        if kotak.login_response:
-            profile = {'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"), 'status': 'success', 'code': 200,
-                       'data': {field: kotak.login_response.get(field) for field in PROFILE_FIELDS}}
+        logged_in = bool(kotak.login_response)
         print(f"kotak ok logged in at {record['last_login']}")
     except Exception as exception:
         record = {'status': 'failure', 'access-token': None, 'last_login': datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")}
@@ -121,12 +112,8 @@ def main():
         print(f"kotak could not write {REDIS_KEY}: {type(exception).__name__}: {exception}", file=sys.stderr)
         return 1
 
-    if profile:
-        try:
-            cache.set(PROFILE_REDIS_KEY, json.dumps(profile))
-            print(f"kotak wrote the profile of {profile['data'].get('ucc')} to {PROFILE_REDIS_KEY}")
-        except Exception as exception:
-            print(f"kotak could not write {PROFILE_REDIS_KEY}: {type(exception).__name__}: {exception}", file=sys.stderr)
+    if logged_in:
+        print(f"kotak logged in here, so KotakAPI refreshed {PROFILE_REDIS_KEY}")
     elif record['status'] == 'success':
         print(f"kotak session was still good, so no login response: {PROFILE_REDIS_KEY} left unchanged")
 
