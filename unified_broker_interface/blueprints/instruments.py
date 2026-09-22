@@ -5,7 +5,7 @@
 | --- | --- |
 | `/segments`, `/master`, `/search`, `/details`, `/additional_details` | The Redis instrument mapping cache |
 | `/ltp`, `/ohlc`, `/quote` | The unified quote cache, or a broker's REST API when that is not recent enough |
-| `/prices` | unified.price_history, adjusted on read for equities, ETFs and investment trusts |
+| `/prices` | The Redis copy of the series, or unified.price_history, adjusted on read for equities, ETFs and investment trusts |
 | `/ticks` | unified.ticks, likewise, streamed |
 
 Every route except the first three takes one instrument, as `instrument_id` or as `exchange`, `segment`
@@ -182,6 +182,9 @@ class InstrumentsBlueprint(BaseBlueprint):
     def prices(self):
         """
         Candles between two dates, or for the last `days` days.
+
+        Answered from the Redis copy of the series when it covers the range, and from the database
+        otherwise; `source` in the answer says which.
         """
         catalogue, _ = self._services()
         instrument = parse_instrument(request.args)
@@ -202,7 +205,7 @@ class InstrumentsBlueprint(BaseBlueprint):
 
         identity, _, _ = catalogue.resolve(instrument, mapped_only=False)
         answer = instrument_history.candles(
-            catalogue.engine, identity, interval, from_date, to_date,
+            catalogue.engine, self.cache, identity, interval, from_date, to_date,
             parse_bool(request.args.get('adjusted'), 'adjusted', True),
             parse_date(request.args.get('known_as_of'), 'known_as_of'))
         return jsonify(answer), 200

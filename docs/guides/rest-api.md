@@ -192,7 +192,7 @@ Everything under `/api/instruments` takes the `access-token` header and answers 
 | `/ltp` | an instrument | Identity, `last_price`, `last_trade_time`, `received_at`, `source` | Quote cache or broker |
 | `/ohlc` | an instrument | The above with `ohlc`, `previous_close`, `change_percent` | Quote cache or broker |
 | `/quote` | an instrument | The whole [unified quote](../architecture/contracts.md#the-unified-quote), depth included, with `source` | Quote cache or broker |
-| `/prices` | an instrument, `interval`, `from` and `to` or `days`, `adjusted` (true), `known_as_of` | `{identity, interval, adjustable, price_basis, columns, candles}` | `unified.price_history` |
+| `/prices` | an instrument, `interval`, `from` and `to` or `days`, `adjusted` (true), `known_as_of` | `{identity, interval, adjustable, price_basis, source, columns, candles}` | The Redis copy of the series, or `unified.price_history` |
 | `/ticks` | an instrument, `start`, `end`, `adjusted` (true) | **Streamed** JSON array of stored ticks, `start <= time < end`, oldest first; `X-Price-Basis` header | `unified.ticks` |
 
 **An instrument** is either `instrument_id`, or `exchange`, `segment` and the identity fields its shape
@@ -352,6 +352,43 @@ whatever `adjusted` says. Every answer states which it is:
 
 `interval` is any interval `bin/unified/historical_prices load` accepts; `day` is loaded for every instrument,
 intraday intervals only where they have been loaded by hand. An intraday range may span at most 366 days.
+
+### Candles are cached in Redis
+
+Every answer `/prices` reads from the database is kept in Redis, and a later request that the copy can
+answer makes no database query at all. `source` in the answer is `cache` or `database`, so a caller can
+always tell which it got. `/ticks` is not cached, because a period of ticks is far too large to keep.
+
+A copy is kept per series - one instrument, one interval, one price basis and one `known_as_of` - under
+`unified:prices:cache:<instrument_id>:<interval>:<basis>:<known_as_of or latest>`, and it holds the
+**widest date range read for that series so far**:
+
+| The request's range against the copy | What happens |
+| --- | --- |
+| Inside it | The candles are sliced out of the copy; no query |
+| Reaching outside it | The union of the two ranges is read in one query, and that wider answer replaces the copy |
+| Reaching outside it, union longer than an intraday request may ask for | Only the range asked for is read, and it replaces the copy |
+
+So a caller that asks for a year, then five years, then a month inside them makes two queries rather
+than three, and the month is answered from the copy. The date range is not part of the key, which is
+what makes that possible - `days=365` and an explicit `from` and `to` share one copy.
+
+**A copy stops being used** when the price history loader has run since it was made. Each copy records
+the `finished` time from `unified:prices:last_run`, and a copy stamped with an earlier run is ignored and
+read again. That keeps the promise [the adjustment DDL](../database/ddl.md) makes, that correcting a
+factor corrects every query at once: `bin/unified/historical_prices` writes that key on every run, so a
+nightly load, a correction or a rebuilt adjustment factor drops every copy. Running the script's
+read-only `status` or `sources` step records a run too, and so also drops them, which costs one query
+per series and nothing else. A copy is dropped as well when its columns are not the ones the answer now
+carries, and each key expires after a day whatever the loader does.
+
+**An answer larger than two megabytes is served and not stored.** A twenty year daily series is about
+400 KB, but 366 days of one minute bars is some eleven megabytes, and this Redis also holds the live
+quote feed and the instrument catalogue. When an oversized answer would have replaced a narrower copy,
+the narrower copy is left in place rather than lost.
+
+A Redis that cannot be reached, or a stored copy that cannot be decoded, is logged and the request is
+answered from the database, so the cache can never make `/prices` fail.
 
 ## Portfolio
 

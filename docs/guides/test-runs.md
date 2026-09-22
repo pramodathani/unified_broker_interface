@@ -1,6 +1,6 @@
 # Test runs
 
-`test_runs/` holds the manual scripts: five offline suites, the instrument download runner, the REST API
+`test_runs/` holds the manual scripts: six offline suites, the instrument download runner, the REST API
 test page, and a login check against the live brokers.
 
 !!! warning "`broker_login_test.py` logs in to live broker accounts"
@@ -42,9 +42,18 @@ test page, and a login check against the live brokers.
     run on made-up source figures. Run it after touching
     `stock_brokers/instruments/mapping/utilities/contract_sizes.py`.
 
+    **`price_cache.py`** - the Redis copy of candles `/api/instruments/prices` serves, run against a
+    stand-in Redis that keeps its keys in a dictionary. It checks that a stored copy is sliced for a
+    sub-range, that a request reaching past the copy reads the union of the two ranges, that the union is
+    refused when it would outgrow the intraday span, and that a copy is thrown away when the price
+    history loader has run since, when the columns differ, or when it is too large to keep. Needs no
+    Redis, database or network. Run it after touching
+    `unified_broker_interface/utilities/price_cache.py` or the `/prices` route.
+
     ```bash
     python -m test_runs.candle_parse
     python -m test_runs.contract_sizes
+    python -m test_runs.price_cache
     python -m test_runs.unified_ticks_sessions
     python -m test_runs.connection_warming
     python -m test_runs.order_routes

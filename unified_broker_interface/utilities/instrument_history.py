@@ -14,6 +14,11 @@ Every other instrument - futures and options, including those on an adjustable e
 currencies, commodities and mutual funds - is stored exactly as the broker served it, and is read from
 the raw tables whatever `adjusted` says. Both responses say which they are: `adjustable`, and
 `price_basis` of `adjusted`, `unadjusted` or `as_served`.
+
+**Candles are cached, ticks are not.** `candles()` keeps every answer in Redis through
+`utilities/price_cache.py`, which holds the widest range read for each series and slices later requests
+out of it, so a repeated request makes no database query; `source` in the answer says which it was.
+`tick_stream()` streams straight from the database, because a period of ticks is far too large to keep.
 """
 
 from datetime import datetime, time, timedelta, timezone
@@ -25,11 +30,23 @@ from stock_brokers.instruments.historical.utilities.unified.sources import LOADE
 from stock_brokers.instruments.mapping.utilities.segments import is_adjustable
 from stock_brokers.instruments.ticks.utilities.pipeline import TICK_COLUMNS
 from unified_broker_interface.utilities.instrument_identity import INDIA, RequestError, identity_to_json
+from unified_broker_interface.utilities.price_cache import PriceCache
 
 # A plain JSON answer holds every candle in memory, so an intraday range is capped; daily is not.
 MAX_INTRADAY_DAYS = 366
 
 TICK_STREAM_ROWS = 5000
+
+# The columns every candle answer carries, with price_factor added when the prices are adjusted.
+CANDLE_COLUMNS = [
+    "time",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "oi",
+]
 
 def price_basis(segment, adjusted):
     """
@@ -53,27 +70,19 @@ def _india_midnight(day):
     """
     return datetime.combine(day, time.min, tzinfo=INDIA)
 
-def candles(engine, identity, interval, from_date, to_date, adjusted, known_as_of):
+def _read_candles(engine, instrument_id, interval, basis, from_date, to_date, known_as_of):
     """
-    One instrument's candles between two dates, inclusive, as a JSON-ready answer.
+    One series' candles between two dates, read from the database in the shape the answer sends them.
 
     - `engine` is the SQLAlchemy engine.
-    - `identity` is the instrument's identity.
-    - `interval` is one of `LOADED_INTERVALS`.
+    - `instrument_id` is the unified instrument id, as text.
+    - `interval` is the stored interval name.
+    - `basis` is the price basis, which decides whether the adjusted function or the raw table is read.
     - `from_date` and `to_date` bound the range, both inclusive, as India calendar days.
-    - `adjusted` asks for adjusted prices, which only an adjustable instrument has.
     - `known_as_of` limits the factors applied to those known by that date, or None for all.
     """
-    if interval not in LOADED_INTERVALS:
-        raise RequestError(f"interval must be one of {', '.join(LOADED_INTERVALS)}")
-    if to_date < from_date:
-        raise RequestError("to must not be before from")
-    if interval != "day" and (to_date - from_date).days > MAX_INTRADAY_DAYS:
-        raise RequestError(f"an intraday range may span at most {MAX_INTRADAY_DAYS} days")
-
-    adjustable, basis = price_basis(identity["segment"], adjusted)
     parameters = {
-        "instrument_id": str(identity["instrument_id"]),
+        "instrument_id": instrument_id,
         "interval": interval,
         "start": _india_midnight(from_date),
         "end": _india_midnight(to_date + timedelta(days=1)),
@@ -103,10 +112,46 @@ def candles(engine, identity, interval, from_date, to_date, adjusted, known_as_o
         if basis == "adjusted":
             candle.append(number(row.price_factor))
         series.append(candle)
+    return series
 
-    columns = ["time", "open", "high", "low", "close", "volume", "oi"]
+def candles(engine, cache, identity, interval, from_date, to_date, adjusted, known_as_of):
+    """
+    One instrument's candles between two dates, inclusive, as a JSON-ready answer.
+
+    Served from the Redis copy when it covers the range asked for, and from the database otherwise,
+    which leaves a copy behind for the next request. `source` in the answer says which happened.
+
+    - `engine` is the SQLAlchemy engine.
+    - `cache` is the Redis client the copy is kept in.
+    - `identity` is the instrument's identity.
+    - `interval` is one of `LOADED_INTERVALS`.
+    - `from_date` and `to_date` bound the range, both inclusive, as India calendar days.
+    - `adjusted` asks for adjusted prices, which only an adjustable instrument has.
+    - `known_as_of` limits the factors applied to those known by that date, or None for all.
+    """
+    if interval not in LOADED_INTERVALS:
+        raise RequestError(f"interval must be one of {', '.join(LOADED_INTERVALS)}")
+    if to_date < from_date:
+        raise RequestError("to must not be before from")
+    maximum_days = None if interval == "day" else MAX_INTRADAY_DAYS
+    if maximum_days is not None and (to_date - from_date).days > maximum_days:
+        raise RequestError(f"an intraday range may span at most {maximum_days} days")
+
+    adjustable, basis = price_basis(identity["segment"], adjusted)
+    columns = list(CANDLE_COLUMNS)
     if basis == "adjusted":
         columns.append("price_factor")
+
+    instrument_id = str(identity["instrument_id"])
+    cached = PriceCache(cache, instrument_id, interval, basis,
+                        known_as_of if basis == "adjusted" else None, columns)
+    cached.load()
+    if not cached.covers(from_date, to_date):
+        query_from, query_to = cached.query_range(from_date, to_date, maximum_days)
+        cached.replace(query_from, query_to,
+                       _read_candles(engine, instrument_id, interval, basis, query_from, query_to, known_as_of))
+    series = cached.between(_india_midnight(from_date), _india_midnight(to_date + timedelta(days=1)))
+
     return {
         **identity_to_json(identity),
         "interval": interval,
@@ -115,6 +160,7 @@ def candles(engine, identity, interval, from_date, to_date, adjusted, known_as_o
         "adjustable": adjustable,
         "price_basis": basis,
         "known_as_of": known_as_of.isoformat() if basis == "adjusted" and known_as_of else None,
+        "source": "cache" if cached.loaded else "database",
         "columns": columns,
         "candles": series,
     }

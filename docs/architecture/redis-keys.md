@@ -231,11 +231,19 @@ does not fail the run; the API reads the unified tables until the next warm succ
 The prefix is not `unified:mapping:` because a warm deletes every key under its prefix but the current
 date's, and `unified:mapping:meta` belongs to `bin/unified/map_instruments`' own cache.
 
-### Runs
+### Runs and the candle cache
 
 | Key | Type | Written by | Holds |
 | --- | --- | --- | --- |
 | `unified:prices:last_run` | string | `bin/unified/historical_prices` | The outcome of the last run, as JSON |
+| `unified:prices:cache:<instrument_id>:<interval>:<basis>:<known_as_of or latest>` | string, 86400 s TTL | The REST API's `/api/instruments/prices` | `{last_run, built_at, from, to, columns, candles}` - the widest range of candles read for that series |
+
+The API keeps a copy of every answer `/prices` reads from the database, and serves a later request by
+slicing that copy when its range falls inside the copy's. `basis` is `adjusted`, `unadjusted` or
+`as_served`, so adjusted and raw prices, and each `known_as_of` cut-off, are cached apart. `last_run` is
+the `finished` time the price history run had when the copy was made: a copy stamped with an earlier run
+is ignored and read again, so a load, a correction or a rebuilt adjustment factor drops every copy. An
+entry over two megabytes is not stored at all. See [the REST API guide](../guides/rest-api.md#candles-are-cached-in-redis).
 
 ## Shared with MongoDB
 
