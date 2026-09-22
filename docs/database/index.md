@@ -21,7 +21,7 @@ its own, `unified`, starting with the tables of the
 | Table | What it holds |
 | --- | --- |
 | `unified.instruments` | One row per real-world instrument, whoever lists it |
-| `unified.broker_mappings` | The token each broker uses for that instrument, per day |
+| `unified.broker_mappings` | The token each broker uses for that instrument, per day, and the extra attributes that broker's file publishes for it |
 | `unified.contract_sizes` | Each live currency and commodity contract's lot size in quotation units, how it was decided and whether orders may be sent, per day |
 
 `unified.broker_mappings` does carry a `broker` column, and that is its content rather than a

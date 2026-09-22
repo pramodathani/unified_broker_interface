@@ -317,6 +317,17 @@ bucket. The uncategorised design exists precisely so an unhandled row stays visi
 identity failure sidesteps it. Falling back to uncategorised on that failure would close it for
 every broker at once, and is the shape of the fix if this ever matters more than five rows.
 
+**`MappingResolver.raw_row` joins on the broker token alone.** It looks a broker's raw instrument row
+up by `WHERE <token column> = :token`, which does not identify one row for seven of the ten brokers: on
+2026-09-22 Dhan's snapshot held 207,159 rows under 196,001 distinct security ids, and Kotak, Groww,
+Stoxkart, Wisdom Capital, Flattrade and Shoonya all reuse tokens the same way. Only Fyers, INDmoney and
+Zerodha are unique. The method has no callers, so nothing is wrong today, but a caller added now would
+silently get a row from the wrong exchange or segment. Adding the broker's own exchange and segment
+columns to the condition fixes six of the seven; Flattrade needs `tradingsymbol` as well, because its
+BSE file lists one token under several trading symbols. This is why
+[`raw_attributes.py`][stock_brokers.instruments.mapping.utilities.raw_attributes] reads its columns at
+mapping time rather than joining back later.
+
 ## Unverified
 
 **Linger has to be proven across a reboot.** Every unit depends on `loginctl enable-linger` to keep

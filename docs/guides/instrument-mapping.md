@@ -9,6 +9,14 @@ It writes two tables. `unified.instruments` holds one row per instrument, whoeve
 for it. With both in place, one instrument id is enough to place an order at any broker, or to
 compare a price series from one against a position held at another.
 
+That second table also carries an `attributes` column, holding the extra columns a broker's own
+instrument file publishes beyond the token, the symbols, the lot size and the tick size: the ISIN,
+the series, the freeze quantity, the price band and so on, under the shared names
+[`raw_attributes.py`][stock_brokers.instruments.mapping.utilities.raw_attributes] gives them. They
+are read here, while the raw row is in hand, because a broker's token is not unique within its own
+daily snapshot for seven of the ten brokers, so there is no reliable way to find that row again
+later. `GET /api/instruments/additional_details` serves them.
+
 The mapping runs as `bin/unified/map_instruments`, started by `unified-instruments.service` at 07:45 every
 day after every broker's instrument download. It applies the mapping DDL, maps the day's broker
 snapshots, caches the day's rows in Redis under `unified:` and warms the REST API's catalogue under

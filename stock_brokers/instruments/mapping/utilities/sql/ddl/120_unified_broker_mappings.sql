@@ -29,3 +29,11 @@ SELECT create_hypertable(
     by_range('mapping_date', INTERVAL '1 month'),
     if_not_exists => TRUE
 );
+
+-- `attributes` holds the extra columns the broker's own instrument file carries beyond the five the mapping keeps:
+-- the ISIN, the series, the freeze quantity, the price band and so on, under the shared names
+-- `mapping/utilities/raw_attributes.py` gives them. They are read at mapping time because there is no stable key to
+-- find the raw row again afterwards: a token is not unique within a broker's snapshot for seven of the ten brokers,
+-- and the symbol columns stored above change from segment to segment. A broker that publishes none of them has null.
+
+ALTER TABLE unified.broker_mappings ADD COLUMN IF NOT EXISTS "attributes" JSONB;

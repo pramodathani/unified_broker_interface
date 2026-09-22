@@ -8,6 +8,7 @@ The design: an instrument's unified identity is the composite natural key ``(exc
 Rows that no segment's rules match are not dropped. They land in the uncategorised catch-all segments — ``nse_uncategorised``, ``bse_uncategorised``, ``mcx_uncategorised``, ``ncdex_uncategorised``, or the unprefixed ``uncategorised`` when the exchange itself cannot be determined — so classification coverage stays measurable and the raw row stays recoverable through the broker table by broker, date, and token.
 """
 
+import json
 import uuid
 from datetime import date as date_class
 from decimal import Decimal
@@ -24,6 +25,7 @@ from stock_brokers.instruments.mapping.utilities.segments import (
     segment_value,
 )
 from stock_brokers.instruments.mapping.utilities import tables
+from stock_brokers.instruments.mapping.utilities.raw_attributes import RawAttributes
 from utilities.configurations import get_postgres_engine
 
 RULES_DIRECTORY = Path(__file__).parent / "utilities" / "rules"
@@ -236,6 +238,7 @@ class BrokerMappingAdapter:
             self.config = yaml.safe_load(rules_file)
         self._validate_config()
         self.engine = get_postgres_engine()
+        self.raw_attributes = RawAttributes()
 
     def _validate_config(self):
         """
@@ -573,6 +576,7 @@ class BrokerMappingAdapter:
                     "first_seen_date": mapping_date,
                     "last_seen_date": mapping_date,
                 }
+                attributes = self.raw_attributes.extract(self.BROKER_NAME, raw_row)
                 broker_rows[computed_id] = {
                     "instrument_id": computed_id,
                     "broker": self.BROKER_NAME,
@@ -582,6 +586,7 @@ class BrokerMappingAdapter:
                     "order_symbol": broker_fields["order_symbol"],
                     "lot_size": broker_fields["lot_size"],
                     "tick_size": broker_fields["tick_size"],
+                    "attributes": json.dumps(attributes) if attributes else None,
                 }
 
         self._write_results(instrument_rows, broker_rows, mapping_date)
@@ -652,13 +657,14 @@ class BrokerMappingAdapter:
                     text(
                         f"""
                         INSERT INTO {tables.BROKER_MAPPINGS}
-                            (instrument_id, broker, broker_token, broker_symbol, order_symbol, lot_size, tick_size, mapping_date)
+                            (instrument_id, broker, broker_token, broker_symbol, order_symbol, lot_size, tick_size, mapping_date, attributes)
                         VALUES
-                            (:instrument_id, :broker, :broker_token, :broker_symbol, :order_symbol, :lot_size, :tick_size, :mapping_date)
+                            (:instrument_id, :broker, :broker_token, :broker_symbol, :order_symbol, :lot_size, :tick_size, :mapping_date, CAST(:attributes AS jsonb))
                         ON CONFLICT (instrument_id, broker, mapping_date) DO UPDATE SET
                             broker_token = EXCLUDED.broker_token, broker_symbol = EXCLUDED.broker_symbol,
                             order_symbol = EXCLUDED.order_symbol,
-                            lot_size = EXCLUDED.lot_size, tick_size = EXCLUDED.tick_size
+                            lot_size = EXCLUDED.lot_size, tick_size = EXCLUDED.tick_size,
+                            attributes = EXCLUDED.attributes
                         """
                     ),
                     sorted_brokers,
