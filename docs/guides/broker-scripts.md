@@ -74,8 +74,8 @@ how each is derived from the broker's own names, and its exit codes. Only `webso
 
 The gaps follow the brokers:
 
-- **Kotak** has no profile endpoint. Its profile arrives only in the login response, so `bin/kotak/session/connect`
-  writes `kotak:user:details` on a run that actually logged in, and there is no `details` script.
+- **Kotak** has no profile endpoint. Its profile arrives only in the login response, so `KotakAPI` writes
+  `kotak:user:details` whenever it logs in, whichever process that is, and there is no `details` script.
 - **Groww, Kotak and Stoxkart** have no `price_history`, and so no `<broker>-historical-prices.service`.
 - **`store_positions_to_db`** exists only for the four brokers whose `websocket_order_details` socket carries
   positions: Fyers, Wisdom Capital, Groww (derivatives positions only) and Kotak. The other six stream

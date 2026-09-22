@@ -19,12 +19,33 @@ class KotakAPI(BrokerAPI):
     login stored and builds every request path on top of it.
 
     The order update feed, `bin/kotak/orders/websocket_order_details`, does the same thing with the same stored value.
+
+    Kotak also has no profile endpoint. The account's profile arrives only in the Login Validate response, so a login here keeps it on `login_response` and writes it to the Redis key `kotak:user:details` through `_store_profile`, in the shape the other brokers' `user/details` scripts write. `_PROFILE_FIELDS` names the fields Kotak's Totp_validate documentation describes, rather than filtering the response, so a token Kotak adds to it later can never land in the profile.
     """
 
     # Only a starting point for the first probe on an account that has never logged in and so has
     # no stored host yet. A wrong guess here costs nothing: the probe fails, the login runs, and
     # the host Kotak actually assigned is stored and used from then on.
     _FALLBACK_BASE_URL = "https://gw-napi.kotaksecurities.com"
+
+    _PROFILE_REDIS_KEY = "kotak:user:details"
+
+    _PROFILE_FIELDS = (
+        "ucc",
+        "greetingName",
+        "clientType",
+        "isNRI",
+        "isTrialAccount",
+        "dormancyStatus",
+        "mfAccess",
+        "asbaStatus",
+        "clientGroup",
+        "kId",
+        "isUserPwdExpired",
+        "derivativesRiskDisclosure",
+        "incRange",
+        "incUpdFlag",
+    )
 
     def url(self, path):
         """Builds the absolute URL for a Kotak API path, on the host this session was assigned.
@@ -136,6 +157,37 @@ class KotakAPI(BrokerAPI):
             self._cache.hset("last_login", "kotak", json_lib.dumps(last_login))
             self._last_login = last_login
             self.login_response = data
+            self._store_profile(data)
+
+    def _store_profile(self, login_data):
+        """Stores the account's profile from a Login Validate response in Redis.
+
+        Kotak serves the profile nowhere else. It arrives once, beside the tokens, in the answer to Login Validate, so every process that logs in writes `kotak:user:details` itself rather than leaving it to the one script that happens to be a session script. The value has the shape the other brokers' `user/details` scripts write, with `timestamp`, `status`, `code` and the profile under `data`, and holds only the fields named in `_PROFILE_FIELDS`.
+
+        A failed write is logged and then ignored, because the login itself succeeded and the caller's session is usable without the profile.
+
+        Args:
+            login_data (dict): The `data` object of the Login Validate response.
+
+        Returns:
+            None: Nothing is returned; the profile is written to Redis.
+        """
+        account = {}
+        for field in self._PROFILE_FIELDS:
+            account[field] = login_data.get(field)
+        profile = {
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"),
+            "status": "success",
+            "code": 200,
+            "data": account,
+        }
+        try:
+            self._cache.set(self._PROFILE_REDIS_KEY, json_lib.dumps(profile))
+        except Exception as exception:
+            self._logger.warning(f"Could not write {self._PROFILE_REDIS_KEY}: "
+                                 f"{type(exception).__name__}: {exception}")
+        else:
+            self._logger.info(f"Wrote the profile of {account.get('ucc')} to {self._PROFILE_REDIS_KEY}")
 
     def _request(self, method, url, params=None, data=None, headers=None, cookies=None, files=None, auth=None, timeout=None, allow_redirects=None, proxies=None, hooks=None, stream=None, verify=None, cert=None, json=None, verbose=False):
         """

@@ -115,8 +115,8 @@ as the target files list them:
 | zerodha | yes | - | yes | yes |
 
 `portfolio@store_positions_to_db` runs for the four brokers that stream positions over their order update
-websocket. Kotak has no `user/details` script because it has no profile endpoint; `bin/kotak/session/connect`
-writes the profile from the login response instead. Flattrade's order update feed is left out on
+websocket. Kotak has no `user/details` script because it has no profile endpoint; `KotakAPI` writes the profile from
+the login response instead, in whichever process logged in. Flattrade's order update feed is left out on
 purpose: Flattrade permits one websocket per session and `flattrade-instruments@websocket_quotes` holds it, so enabling both
 would knock one of them off. See [Known issues](../contributing/known-issues.md#broker-limits).
 Stoxkart keeps one order socket per client, so `stoxkart-orders@websocket_order_details` and a Stoxkart website or app

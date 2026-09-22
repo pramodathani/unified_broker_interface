@@ -26,7 +26,7 @@ The keys come in three kinds:
 | Key | Type | Written by | Holds |
 | --- | --- | --- | --- |
 | `<broker>:session:status` | string | `bin/<broker>/session/connect`, `disconnect` | `{"status", "access-token", "last_login"}`, replaced on every run. Wisdom Capital's also carries `market-data-access-token` |
-| `<broker>:user:details` | string | `bin/<broker>/user/details` | `{"timestamp", "status", "code", "data"}`, the broker's profile under `data` |
+| `<broker>:user:details` | string | `bin/<broker>/user/details`, and `KotakAPI` for Kotak | `{"timestamp", "status", "code", "data"}`, the broker's profile under `data` |
 
 `status` is `success`, `failure` or `logged out`. On success `last_login` is when the token in force was
 issued, which is earlier than the run when the stored session was still good; on failure it is when the
@@ -35,8 +35,11 @@ key - nothing is sent to the broker, because its logout endpoint would invalidat
 other process is using.
 
 The profile is polled every minute. Wisdom Capital's is fetched once a day, since it allows about one
-profile call a day, and Kotak, which has no profile endpoint, has its profile written by
-`bin/kotak/session/connect` from the login response, on a run that actually logged in.
+profile call a day. Kotak has no profile endpoint at all: its profile arrives only in the Login Validate
+response, so `KotakAPI` writes `kotak:user:details` itself every time it logs in. Any process can therefore
+be the one that refreshes it, which is the point - Kotak's token expires at midnight, the running pollers
+re-login the moment it does, and `bin/kotak/session/connect` finds a healthy session hours later when its
+07:00 timer fires.
 
 Wisdom Capital needs two sessions, because Symphony XTS splits a broker into an interactive application
 and a market data one with separate credentials. Both tokens live in the `last_login` hash, as
