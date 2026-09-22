@@ -53,8 +53,12 @@ A tick has the same fields as Dhan's: `id`, `broker`, `instrument_token`, `excha
 `exchange_timestamp`, `depth` and `received_at`. XTS counts seconds from 1980 in IST; the times are shifted onto
 the true Unix epoch.
 
-**Sessions.** A socket whose handshake or subscription is refused for its token (`e-session`, `e-token`,
-"Invalid Token"), or that fails to open six times running, replaces the market data token - one process and one
+**Sessions.** XTS reports instruments that are still subscribed from an earlier connection as `e-session-0002
+Instrument Already Subscribed`, which carries the same prefix as a refused token although the request plainly
+authenticated, so such an answer is met by dropping that subscription and asking again rather than by replacing
+a perfectly good token. A socket whose handshake or subscription is then still refused for its token
+(`e-session`, `e-token`, "Invalid Token"), or that fails to open six times running, replaces the market data
+token - one process and one
 socket at a time - before reconnecting. A reconnect otherwise backs off from 1 to 60 seconds.
 
 Exits 0 when stopped with Ctrl+C or SIGTERM, 1 when a login fails or a socket still cannot open after the token
@@ -110,6 +114,10 @@ EPOCH_OFFSET_SECONDS = 315513000
 
 # What XTS says when a token is refused, lowercased.
 AUTHENTICATION_MARKERS = ("e-session", "e-token", "invalid token")
+
+# What it says when the instruments are already subscribed on this session, which it reports with a code carrying
+# the same e-session prefix as a refused token. See the note beside this script.
+ALREADY_SUBSCRIBED_MARKER = "already subscribed"
 
 DEFAULT_INSTRUMENTS_PER_SOCKET = 1000
 DEFAULT_HEARTBEAT_SECONDS = 25.0
@@ -174,6 +182,14 @@ def is_authentication_refusal(text):
     - `text` is the response body.
     """
     return any(marker in str(text).lower() for marker in AUTHENTICATION_MARKERS)
+
+def is_already_subscribed(text):
+    """
+    Whether a response body says the instruments are subscribed already, rather than that the token was refused.
+
+    - `text` is the response body.
+    """
+    return ALREADY_SUBSCRIBED_MARKER in str(text).lower()
 
 def first_json_object(text):
     """
@@ -350,9 +366,13 @@ class QuotesSocket:
                        for token in self._tokens]
         seeded = set()
         for code in (TOUCHLINE, MARKET_DEPTH):
-            response = pinned_request("POST", f"{APPLICATION_PATH}/instruments/subscription", token=self._token,
-                                      body={"instruments": instruments, "xtsMessageCode": code})
-            body = response.data.decode('utf-8', errors='replace')
+            response, body = self._ask_to_subscribe(instruments, code)
+            if response.status >= 300 and is_already_subscribed(body):
+                self._logger.info(f"{self.name}: message code {code} is still subscribed from an earlier connection. "
+                                  f"Dropping that subscription and asking again.")
+                pinned_request("PUT", f"{APPLICATION_PATH}/instruments/subscription", token=self._token,
+                               body={"instruments": instruments, "xtsMessageCode": code})
+                response, body = self._ask_to_subscribe(instruments, code)
             if response.status >= 300:
                 if is_authentication_refusal(body):
                     self._logger.warning(f"{self.name}: subscription refused the market data token: {body[:200]}")
@@ -371,6 +391,19 @@ class QuotesSocket:
                     seeded.add(token)
         self._write([self._tick(token) for token in seeded])
         self._logger.info(f"{self.name} subscribed to {len(self._tokens)} instrument(s).")
+
+    def _ask_to_subscribe(self, instruments, code):
+        """
+        Ask for one message code's subscription and return the answer.
+
+        - `instruments` is the batch as XTS wants it, segment and instrument id per entry.
+        - `code` is the XTS message code, touchline or market depth.
+
+        Returns the response and its decoded body.
+        """
+        response = pinned_request("POST", f"{APPLICATION_PATH}/instruments/subscription", token=self._token,
+                                  body={"instruments": instruments, "xtsMessageCode": code})
+        return response, response.data.decode('utf-8', errors='replace')
 
     def _apply_events(self, message):
         """

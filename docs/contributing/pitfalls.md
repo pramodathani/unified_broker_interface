@@ -47,6 +47,17 @@ and every other process waits it out. The lock records the holder's pid, and a l
 released rather than waited for. `ensure_session` is what `BrokerCandles` and IND Money's instrument
 ingester log in through by default; the `bin/<broker>/` scripts log in through the broker's API class.
 
+**An error code prefix is not a diagnosis.** Wisdom Capital's quotes feed classified a refusal by looking
+for `e-session` in the body, and XTS answers instruments that are still subscribed from an earlier
+connection with `{"code":"e-session-0002","description":"Instrument Already Subscribed !","result":
+{"Remaining_Subscription_Count":45}}` - a code carrying that prefix, alongside a result that shows the
+request plainly authenticated. On the restart at 22:19:13 on 2026-09-22 the feed read that as a dead token
+and minted a new market data session, which invalidated the token the candle downloader was using in the
+same second, so both had to log in again to recover. XTS issues one market data session per application
+key, so throwing a good token away is never local to one process. The feed now drops the stale
+subscription with `PUT /apimarketdata/instruments/subscription` and asks again, and only treats the answer
+as a refused token if that fails too.
+
 **Stoxkart's documented login stops at the TOTP.** Once the API app was approved, `/auth/login` accepted
 the password and asked for a TOTP, but `/auth/twofa/verify` answered every attempt with HTTP 400 and a
 body of only `{"status":"error"}`. Stoxkart's documentation does not describe the TOTP step at all.
