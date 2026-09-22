@@ -236,6 +236,20 @@ class MappingRedisTier:
         """
         return f"{self.KEY_PREFIX}{mapping_date.isoformat()}:contract_sizes"
 
+    def additional_attributes_key(self, mapping_date):
+        """
+        The key of the hash holding one date's additional broker attributes, keyed by instrument id.
+
+        This is a hash of its own rather than more fields on the order handles, because an order needs the handle on every request and nothing needs these attributes to place one. Keeping them apart is what lets the order path stay at the 521 bytes per instrument it costs today.
+
+        Args:
+            mapping_date (datetime.date): The mapping date the hash covers.
+
+        Returns:
+            str: The full key.
+        """
+        return f"{self.KEY_PREFIX}{mapping_date.isoformat()}:additional_attributes"
+
     def encode_contract_size(self, units_per_lot, status, tradeable):
         """
         Encode one contract size decision as the JSON the order route reads.
@@ -649,6 +663,92 @@ class MappingRedisTier:
             if not isinstance(handle, dict):
                 return None
         return handles_by_broker
+
+    def encode_additional_attributes(self, attributes_by_broker):
+        """
+        Encode one instrument's additional broker attributes as the JSON text Redis stores.
+
+        Args:
+            attributes_by_broker (dict): Mapping of broker name to that broker's attributes, itself a dict of the names in raw_attributes.ATTRIBUTE_NAMES to a string value or None.
+
+        Returns:
+            str: The attributes as JSON.
+        """
+        return json.dumps(attributes_by_broker)
+
+    def decode_additional_attributes(self, encoded):
+        """
+        Decode one instrument's additional broker attributes out of the JSON text Redis stores.
+
+        A value that is not a dictionary of dictionaries reads as a miss, the same way order handles do, so a Redis left holding an older shape is refilled rather than returned.
+
+        Args:
+            encoded (bytes | str): The JSON text written by encode_additional_attributes.
+
+        Returns:
+            dict | None: Mapping of broker name to that broker's attributes, or None when the text is not usable.
+        """
+        try:
+            attributes_by_broker = json.loads(encoded)
+        except (ValueError, TypeError):
+            return None
+        if not isinstance(attributes_by_broker, dict):
+            return None
+        for attributes in attributes_by_broker.values():
+            if not isinstance(attributes, dict):
+                return None
+        return attributes_by_broker
+
+    def read_additional_attributes(self, mapping_date, instrument_identifiers):
+        """
+        Read instruments' additional broker attributes out of the additional attribute hash.
+
+        Args:
+            mapping_date (datetime.date): The mapping date to read.
+            instrument_identifiers (list[str]): The instrument ids to read.
+
+        Returns:
+            dict: Mapping of instrument id to a dict of broker name to that broker's attributes. Instruments Redis did not hold, and instruments held in an older shape, are absent.
+        """
+        client = self.connection.client()
+        if client is None:
+            return {}
+        if not instrument_identifiers:
+            return {}
+
+        try:
+            stored = client.hmget(self.additional_attributes_key(mapping_date), instrument_identifiers)
+        except redis.RedisError:
+            return {}
+
+        attributes_by_instrument = {}
+        for position, instrument_identifier in enumerate(instrument_identifiers):
+            if stored[position] is None:
+                continue
+            attributes_by_broker = self.decode_additional_attributes(stored[position])
+            if attributes_by_broker is not None:
+                attributes_by_instrument[instrument_identifier] = attributes_by_broker
+        return attributes_by_instrument
+
+    def has_additional_attributes(self, mapping_date):
+        """
+        Say whether the date's additional attribute hash is in Redis at all.
+
+        An instrument whose brokers publish nothing extra and a hash that was never warmed both read as no attributes, and only this tells them apart. It is asked only when a read came back empty, which is the rare case, so the extra round trip is not on the ordinary path.
+
+        Args:
+            mapping_date (datetime.date): The mapping date to check.
+
+        Returns:
+            bool: True when the hash exists, False when it does not or Redis is unreachable.
+        """
+        client = self.connection.client()
+        if client is None:
+            return False
+        try:
+            return bool(client.exists(self.additional_attributes_key(mapping_date)))
+        except redis.RedisError:
+            return False
 
     def read_current_date(self):
         """
@@ -1221,6 +1321,64 @@ class MappingPostgresTier:
         with self.streaming_connection() as connection:
             for row in connection.execute(statement, {"mapping_date": mapping_date}):
                 yield str(row.instrument_id), row.units_per_lot, row.status, row.tradeable
+
+    def stream_additional_attributes(self, mapping_date):
+        """
+        Yield every instrument's additional broker attributes for the date, ordered so one instrument's rows arrive together.
+
+        Rows whose attributes are null are left out, because a broker that publishes nothing beyond the handle has nothing to say here and an entry of sixteen nulls is not worth the bytes.
+
+        Args:
+            mapping_date (datetime.date): The mapping date to read.
+
+        Yields:
+            tuple: The instrument id as text, the broker name, and that broker's attributes dict.
+        """
+        statement = text(
+            "SELECT instrument_id, broker, attributes "
+            f"FROM {tables.BROKER_MAPPINGS} "
+            "WHERE mapping_date = :mapping_date AND attributes IS NOT NULL "
+            "ORDER BY instrument_id ASC, broker ASC"
+        )
+        with self.streaming_connection() as connection:
+            for row in connection.execute(statement, {"mapping_date": mapping_date}):
+                yield str(row.instrument_id), row.broker, row.attributes
+
+    def read_additional_attributes(self, mapping_date, instrument_identifiers):
+        """
+        Read instruments' additional broker attributes straight from the mapping table.
+
+        This is the answer for a past date and for a cache that has not been warmed, the two cases the Redis tier cannot serve.
+
+        Args:
+            mapping_date (datetime.date): The mapping date to read.
+            instrument_identifiers (list[str]): The instrument ids to read.
+
+        Returns:
+            dict: Mapping of instrument id to a dict of broker name to that broker's attributes. Instruments with no attributes on the date are absent.
+        """
+        if not instrument_identifiers:
+            return {}
+
+        statement = text(
+            "SELECT instrument_id, broker, attributes "
+            f"FROM {tables.BROKER_MAPPINGS} "
+            "WHERE mapping_date = :mapping_date AND attributes IS NOT NULL "
+            "  AND instrument_id = ANY(CAST(:instrument_identifiers AS uuid[])) "
+            "ORDER BY instrument_id ASC, broker ASC"
+        )
+        attributes_by_instrument = {}
+        with self.engine.connect() as connection:
+            rows = connection.execute(statement, {
+                "mapping_date": mapping_date,
+                "instrument_identifiers": list(instrument_identifiers),
+            }).all()
+        for row in rows:
+            instrument_identifier = str(row.instrument_id)
+            if instrument_identifier not in attributes_by_instrument:
+                attributes_by_instrument[instrument_identifier] = {}
+            attributes_by_instrument[instrument_identifier][row.broker] = row.attributes
+        return attributes_by_instrument
 
     def stream_catalogue(self, mapping_date):
         """

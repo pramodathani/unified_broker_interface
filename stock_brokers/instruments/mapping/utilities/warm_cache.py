@@ -6,7 +6,7 @@ Populate the Redis tier of the instrument mapping cache for one mapping date.
 
 This runs once a day, straight after the instrument mapping it caches, and exists so that no process ever has to pay Postgres or a bulk load for a mapping that every process wants. Without it the cache still works, filling itself from Postgres as processes touch instruments; with it, the first process of the morning is already fast.
 
-Three passes stream out of Postgres and write in pipelined batches, so the command's memory stays flat rather than holding the 829 megabytes the whole map costs in one process. The key naming the current date is written last, so a reader sees either the previous complete day or the new complete day and never a half written one.
+Six passes stream out of Postgres and write in pipelined batches, so the command's memory stays flat rather than holding the 829 megabytes the whole map costs in one process. The key naming the current date is written last, so a reader sees either the previous complete day or the new complete day and never a half written one.
 
 Every field written goes through the same ``MappingRedisTier`` the cache reads through, and every row is built by the same ``MappingPostgresTier`` methods the cache's own fall-through uses. That is deliberate. Were this command to encode the fields itself, a change to the reader's shape, such as the four field order handle, not made here as well would leave Redis holding a value that decodes successfully into something no caller could use.
 """
@@ -140,6 +140,39 @@ class CacheWarmer:
         written += self.redis_tier.write_fields(key, fields, self.expiry_seconds)
         return written
 
+    def warm_additional_attributes(self):
+        """
+        Write every instrument's additional broker attributes for the date, keyed by instrument id.
+
+        This is what `/api/instruments/additional_details` serves: the columns each broker's own instrument file carries beyond the handle an order needs, under the shared names `raw_attributes.py` gives them. A database whose mapping table has no attributes column yet, because its DDL has not been applied, writes nothing and the endpoint reads Postgres until it has.
+
+        Returns:
+            int: The number of instruments written.
+        """
+        key = self.redis_tier.additional_attributes_key(self.mapping_date)
+        written = 0
+        fields = {}
+        current_instrument = None
+        current_attributes = {}
+        try:
+            for instrument_identifier, broker, attributes in self.postgres_tier.stream_additional_attributes(self.mapping_date):
+                if instrument_identifier != current_instrument:
+                    if current_instrument is not None:
+                        fields[current_instrument] = self.redis_tier.encode_additional_attributes(current_attributes)
+                    current_instrument = instrument_identifier
+                    current_attributes = {}
+                current_attributes[broker] = attributes
+                if len(fields) >= self.WRITE_BATCH_FIELDS:
+                    written += self.redis_tier.write_fields(key, fields, self.expiry_seconds)
+                    fields = {}
+        except ProgrammingError as error:
+            print(f"  additional attributes could not be read, so none were warmed: {error.orig}")
+            return written
+        if current_instrument is not None:
+            fields[current_instrument] = self.redis_tier.encode_additional_attributes(current_attributes)
+        written += self.redis_tier.write_fields(key, fields, self.expiry_seconds)
+        return written
+
     def warm_contract_sizes(self):
         """
         Write every contract size decision for the date, keyed by instrument id.
@@ -215,7 +248,7 @@ class CacheWarmer:
             clear (bool): Whether to delete the cached keys of every other date.
 
         Returns:
-            dict: The counts written, with keys "identities", "tokens", "instruments", "contract_sizes", "catalogued" and "cleared".
+            dict: The counts written, with keys "identities", "tokens", "instruments", "contract_sizes", "additional_attributes", "catalogued" and "cleared".
 
         Raises:
             SystemExit: If Redis cannot be reached.
@@ -241,6 +274,9 @@ class CacheWarmer:
         contract_sizes = self.warm_contract_sizes()
         print(f"  contract sizes            {contract_sizes:>10}")
 
+        additional_attributes = self.warm_additional_attributes()
+        print(f"  additional attributes     {additional_attributes:>10}")
+
         catalogued = self.warm_catalogue()
         print(f"  catalogue                 {catalogued:>10}")
 
@@ -259,6 +295,7 @@ class CacheWarmer:
             "tokens": tokens,
             "instruments": instruments,
             "contract_sizes": contract_sizes,
+            "additional_attributes": additional_attributes,
             "catalogued": catalogued,
             "cleared": cleared,
         }

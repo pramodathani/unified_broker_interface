@@ -103,7 +103,7 @@ has to start from empty tables instead.
 | `unified:broker_tokens` | hash | The reverse lookup, keyed `broker:broker_token`, each a JSON array of the instrument ids that token names on the date |
 | `unified:instrument_symbols` | hash | Securities by symbol, keyed `segment:SYMBOL` (`nse_equities:RELIANCE`), each an instrument id as a JSON string |
 | `unified:mapping:meta` | string | `mapping_date`, the four counts, `columns` and `written_at` |
-| `unified:catalogue:*` | various | The REST API's instrument cache - identities, tokens, order handles, contract size decisions and a browsable catalogue per segment - warmed for the date |
+| `unified:catalogue:*` | various | The REST API's instrument cache - identities, tokens, order handles, contract size decisions, each broker's additional instrument attributes and a browsable catalogue per segment - warmed for the date |
 
 The four hashes are built under `:staging` keys and swapped in together with the meta, so a reader sees
 the previous day's complete cache or the new one, never a mix. The catalogue warm clears every other
