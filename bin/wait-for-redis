@@ -1,0 +1,137 @@
+#!/usr/bin/env python3
+"""Waits until Redis is serving, so a unit that cannot survive the loading window starts after it.
+
+    wait-for-redis                          # wait up to five minutes
+    wait-for-redis --timeout-seconds 60     # give up sooner
+
+Redis refuses ordinary commands with `BusyLoadingError` while it reads its saved dataset back into memory, which is what it does for the first seconds after the machine or the container comes back. A script that reads its broker token out of Redis as it starts sees that refusal, cannot tell it apart from a session the broker has rejected, and exits. This script is the `ExecStartPre=` of the units that behave that way, and it returns as soon as Redis is serving, so the unit's own process never meets the loading state.
+
+The readiness test is `INFO persistence` rather than `PING`. `INFO` is one of the few commands Redis answers while it is loading, and its `loading` field is the server's own statement about whether the dataset is in memory yet, so a server that is up but not yet usable is reported as not ready rather than as an error.
+
+Every reason for waiting is logged once, when it changes, so the journal shows a container that has not started yet and a dataset still being read as two different waits rather than as one silent pause.
+
+Exit codes: 0 when Redis is serving, 1 when the timeout passed and it still was not, and 2 for a bad argument.
+"""
+
+import argparse
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+import redis
+
+from utilities import configurations
+
+POLL_SECONDS = 1
+DEFAULT_TIMEOUT_SECONDS = 300
+
+
+class RedisWaiter:
+    """A wait for Redis to answer and to finish loading its saved dataset."""
+
+    def __init__(self):
+        """Creates the waiter and its logger."""
+        self._logger = configurations.get_logger("wait_for_redis")
+
+    def run(self) -> int:
+        """Waits for Redis and reports whether it arrived.
+
+        Returns:
+            int: 0 when Redis is serving, and 1 when the timeout passed first.
+
+        Raises:
+            SystemExit: argparse raises it with code 2 for a bad argument.
+        """
+        arguments = self._parse_arguments()
+        client = configurations.get_cache()
+        try:
+            return self._wait_until_serving(client, arguments.timeout_seconds)
+        finally:
+            client.close()
+
+    def _parse_arguments(self) -> argparse.Namespace:
+        """Reads the command line.
+
+        Returns:
+            argparse.Namespace: The parsed arguments, holding `timeout_seconds`.
+
+        Raises:
+            SystemExit: argparse raises it with code 2 for a bad argument.
+        """
+        parser = argparse.ArgumentParser(
+            description="Wait until Redis answers and has loaded its dataset.",
+        )
+        parser.add_argument(
+            "--timeout-seconds",
+            type=int,
+            default=DEFAULT_TIMEOUT_SECONDS,
+            help=f"How long to wait before giving up (default {DEFAULT_TIMEOUT_SECONDS}).",
+        )
+        return parser.parse_args()
+
+    def _wait_until_serving(
+        self,
+        client: redis.Redis,
+        timeout_seconds: int,
+    ) -> int:
+        """Polls Redis until it is serving or the timeout passes.
+
+        Args:
+            client (redis.Redis): The client to ask, which need not be connected yet.
+            timeout_seconds (int): How long to keep polling before giving up, in seconds.
+
+        Returns:
+            int: 0 when Redis is serving, and 1 when the timeout passed first.
+
+        Raises:
+            None.
+        """
+        deadline = time.monotonic() + timeout_seconds
+        reported_reason = None
+        while True:
+            reason = self._reason_not_serving(client)
+            if reason is None:
+                self._logger.info("Redis is serving.")
+                return 0
+            if reason != reported_reason:
+                self._logger.info("Waiting for Redis: %s", reason)
+                reported_reason = reason
+            if time.monotonic() >= deadline:
+                self._logger.error(
+                    "Redis was not serving after %s seconds: %s",
+                    timeout_seconds,
+                    reason,
+                )
+                return 1
+            time.sleep(POLL_SECONDS)
+
+    def _reason_not_serving(self, client: redis.Redis) -> str | None:
+        """Asks Redis once whether it is ready to serve ordinary commands.
+
+        Args:
+            client (redis.Redis): The client to ask, which need not be connected yet.
+
+        Returns:
+            str | None: None when Redis is serving, otherwise a sentence saying what it is doing instead.
+
+        Raises:
+            None.
+        """
+        try:
+            persistence = client.info("persistence")
+        except redis.exceptions.RedisError as error:
+            return f"{type(error).__name__}: {error}"
+        if int(persistence.get("loading", 0)):
+            return "the saved dataset is still being read into memory"
+        if int(persistence.get("async_loading", 0)):
+            return "a replica is still loading its dataset"
+        return None
+
+
+if __name__ == "__main__":
+    raise SystemExit(RedisWaiter().run())

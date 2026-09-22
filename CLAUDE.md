@@ -29,6 +29,7 @@ There is no `pyproject.toml`, no build step and no pytest suite. The project roo
 | Apply unified mapping DDL | `python -m stock_brokers.instruments.mapping.utilities.sql.apply_ddl` |
 | Run the REST API | `bin/rest-api` (gunicorn on 127.0.0.1:8080), or `bin/rest-api --dev` for Flask's development server |
 | Check every systemd unit and start the ones that are down | `bin/check-services` (`--check-only` to report without starting) |
+| Wait until Redis has finished loading its dataset | `bin/wait-for-redis` (`--timeout-seconds` to wait other than five minutes) |
 | REST API test page | `bin/rest-api-app` (Streamlit on port 8501; start the API first) |
 | Check every broker API is reachable | `bin/check-broker-connections` (logs in to live accounts) |
 | Search a broker's instrument master | `bin/search-instruments zerodha INFY` (`--show-columns` lists what that broker is searched on) |
@@ -69,9 +70,9 @@ MongoDB holds broker credentials (`settings`) and login tokens (`last_login`), k
 
 Every file in `bin/` is an executable, extensionless Python script. Each one starts by calling `utilities.bootstrap.run_under_venv(__file__)`, which re-executes it under `.venv/bin/python`. That is why the scripts work from cron and systemd without an activated environment. The guard compares `sys.prefix`, not interpreter paths, because `.venv/bin/python` is a symlink to the system interpreter.
 
-The `bin/<broker>/` and `bin/unified/` subdirectories hold the long-lived scripts that systemd runs. The scripts at the top of `bin/` are standalone tools meant to be typed by hand: `rest-api`, `rest-api-app`, `check-services`, `check-broker-connections`, `search-instruments`, `import-api-details` and `zerodha-quote`.
+The `bin/<broker>/` and `bin/unified/` subdirectories hold the long-lived scripts that systemd runs. The scripts at the top of `bin/` are standalone tools meant to be typed by hand: `rest-api`, `rest-api-app`, `check-services`, `check-broker-connections`, `search-instruments`, `import-api-details`, `wait-for-redis` and `zerodha-quote`. `wait-for-redis` is also the `ExecStartPre=` of the candle units.
 
-Each script is deliberately self-contained: its own connection, decoding and normalization, with no shared socket or poller base class. Its module docstring is its full reference, including the field-by-field mapping from the broker's names and its exit codes. Exit code 2 means a bad argument or configuration, and the systemd units deliberately do not restart on it.
+Each script is deliberately self-contained: its own connection, decoding and normalization, with no shared socket or poller base class. Its module docstring is its full reference, including the field-by-field mapping from the broker's names and its exit codes. Exit code 2 means a bad argument or configuration, and the systemd units deliberately do not restart on it. The seven `<broker>-historical-prices.service` units are the exception: they restart on every exit, because their exit 2 is usually a first login that ran before a data store was ready.
 
 Websocket scripts never write to PostgreSQL. They write a Redis hash of current state plus a capped Redis Stream, and a separate `persist_*` script drains the stream with `COPY` through the consumer group `persist`. The unified scripts read the same streams through the group `unified`.
 

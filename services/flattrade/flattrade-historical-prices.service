@@ -7,6 +7,10 @@
 # worker exits 0 when the queue is drained or only backing off, so it is restarted ten minutes later rather than at
 # once, and at low priority. Run only one: the queue is not locked between workers. Seed new instruments with
 # `bin/flattrade/historical_prices --seed-only` after a new master.
+#
+# The `ExecStartPre` waits for Redis before the worker starts. After a reboot the units start while Redis is still
+# reading its saved dataset from disk, it refuses every command until it has finished, and a first login that cannot
+# read the stored token exits 2. Every exit is now retried ten minutes later, exit 2 included.
 
 [Unit]
 Description=Historical candle download for flattrade
@@ -19,11 +23,16 @@ StartLimitIntervalSec=0
 Type=simple
 Environment=PYTHONUNBUFFERED=1
 SyslogIdentifier=flattrade-historical-prices
+# Redis refuses commands while it reads its saved dataset back after a restart, so the worker waits for it rather than
+# meeting the refusal in its first login. Returns at once when Redis is already serving.
+ExecStartPre=%h/Projects/unified_broker_interface/bin/wait-for-redis
 ExecStart=%h/Projects/unified_broker_interface/bin/flattrade/historical_prices
+# Restarts on every exit, exit 2 included: ten minutes is slow enough that a real misconfiguration shows as an obvious
+# slow loop in the journal, and a first login that failed because a store was not ready yet gets another go.
 Restart=always
 RestartSec=600
-# Exit 2 is a failed first login or a bad argument; the morning login timer is the remedy, not a restart loop.
-RestartPreventExitStatus=2
+# Outlasts the wait for Redis above, which gives up after five minutes.
+TimeoutStartSec=420
 TimeoutStopSec=120
 Nice=10
 IOSchedulingClass=idle

@@ -21,6 +21,17 @@ themselves under the virtualenv, and a guard that decides whether the re-exec al
 by comparing resolved interpreter paths finds them equal, so the switch silently never happens and
 the commands run against system site-packages. Compare `sys.prefix`.
 
+**A store that is still starting is not a dead session.** After a reboot the seven
+`<broker>-historical-prices.service` units started while Redis was still reading its saved dataset back
+from disk. Redis refuses every ordinary command with `BusyLoadingError` until it has finished, the
+worker's first login reads the stored token out of Redis, and each one logged `Could not log in to
+<Broker>: BusyLoadingError: Redis is loading the dataset in memory` and exited 2 - which the units read
+as a bad configuration and would not restart, so all seven stayed down until someone ran
+`bin/check-services`. It happened on 2026-09-18 and again on 2026-09-22, before
+`ExecStartPre=%h/Projects/unified_broker_interface/bin/wait-for-redis` was put in front of them and
+`RestartPreventExitStatus=2` was dropped. A temporary refusal from a store that has not finished
+starting reads exactly like a broker refusing a session, and only a real reboot tells the two apart.
+
 ## Sessions and logins
 
 **A login attempt is not a login success.** A rate limiter keyed off a single

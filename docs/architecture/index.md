@@ -19,7 +19,7 @@ others.
 bin/
 ├── <broker>/                 self-contained scripts: login, pollers, feeds, persisters, instruments, history
 ├── unified/                  scripts that combine every broker from Redis and the database
-└── rest-api, rest-api-app, search-instruments, zerodha-quote, check-broker-connections, check-services, import-api-details
+└── rest-api, rest-api-app, search-instruments, zerodha-quote, check-broker-connections, check-services, import-api-details, wait-for-redis
 services/
 ├── <broker>/                 the systemd user units that run bin/<broker>/
 ├── unified/                  the units that run bin/unified/ and the REST API

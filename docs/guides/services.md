@@ -163,15 +163,25 @@ the feeds:
 
 | Setting | Value | Why |
 | --- | --- | --- |
+| `ExecStartPre` | `bin/wait-for-redis` | Redis refuses every command while it reads its saved dataset back after a restart, and the worker's first login reads the stored token out of Redis |
 | `Restart` | `always`, after 600 seconds | The worker exits 0 when the queue is drained or only backing off, so it starts again ten minutes later rather than at once |
-| `RestartPreventExitStatus` | `2` | A failed first login or a bad argument; the morning login timer is the remedy, not a restart loop |
+| `RestartPreventExitStatus` | unset, unlike every other unit | Every exit is retried, exit 2 included: ten minutes is slow enough that a real misconfiguration reads as an obvious slow loop in the journal, and a first login that failed because a store was not ready yet gets another go |
+| `TimeoutStartSec` | 420 seconds | Longer than the five minutes `bin/wait-for-redis` waits, so the wait decides when to give up rather than systemd |
 | `TimeoutStopSec` | 120 seconds | Each window is committed with its progress in one transaction, so stopping costs at most the request in flight |
 | `Nice`, `IOSchedulingClass`, `CPUWeight` | `10`, `idle`, `20` | A background backfill, at low priority |
 
 The queue is not locked between workers, so run exactly one per broker. Seed newly listed
 instruments after a new master with `bin/<broker>/historical_prices --seed-only`, and see how far it
 has got with `bin/<broker>/historical_prices --status`. Fyers' unit carries the same random start
-delay as `fyers@.service`.
+delay as `fyers@.service`, after the wait for Redis rather than before it, so the delay still spreads
+the Fyers scripts apart once Redis lets them all go at once.
+
+`bin/wait-for-redis` polls `INFO persistence` rather than `PING`, because `INFO` is one of the few
+commands Redis answers while it is loading and its `loading` field is the server's own statement about
+whether the dataset is in memory yet. It returns in about a quarter of a second when Redis is already
+serving, logs each reason it is waiting once, and exits 1 after five minutes so the unit fails visibly
+rather than hanging. It is a plain script, so it can be run by hand and put in front of any other unit
+that reads Redis as it starts.
 
 ### `unified-instruments.service`
 

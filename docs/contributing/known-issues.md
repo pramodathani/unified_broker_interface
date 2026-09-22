@@ -29,14 +29,6 @@ they did this twice, at 06:36:07 and 06:36:20, before settling on one token. The
 cross-process lock like the market data login in `bin/wisdom_capital/quotes`, and adding one to `WisdomCapitalAPI`
 would change every Wisdom Capital script, so it was left alone.
 
-**The candle downloaders stay down when they start before Redis has loaded.** After the reboot on
-2026-09-18, all seven `<broker>-historical-prices.service` units started at 10:22 while Redis was still
-loading its dataset from disk. Each logged `Could not log in to <Broker>: BusyLoadingError: Redis is
-loading the dataset in memory` and exited 2, which the units treat as a failed login that a restart
-cannot fix (`RestartPreventExitStatus=2`), so none of them came back by itself. `bin/check-services`
-starts them again. The lasting fix is to treat `BusyLoadingError` as a temporary error rather than a
-failed login, or to order the units after Redis, and neither has been done.
-
 **Kotak streams no index values.** `bin/kotak/quotes` subscribes scrip and depth topics only. Kotak's HSM
 feed serves indices as separate `if|` topics named by the index's name, which the script's `EXCHANGE|TOKEN`
 validation rejects, and those topics' fields have not been measured live.
