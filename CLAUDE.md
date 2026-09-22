@@ -53,13 +53,13 @@ The system is three independent layers over shared stores. Each layer can run wi
 broker APIs and websockets
         │
         ▼
-bin/<broker>/*          the only code that talks to a broker
+bin/<broker>/*/*        the only code that talks to a broker
         │  writes <broker>:* keys and Redis Streams
         ▼
-Redis ──── bin/<broker>/persist_* ───► TimescaleDB schema <broker>.*
+Redis ──── bin/<broker>/*/store_*_to_db ──► TimescaleDB schema <broker>.*
         │
         ▼
-bin/unified/*           reads only Redis and the database, never a broker
+bin/unified/*/*         reads only Redis and the database, never a broker
         │  writes unified:* keys and the unified.* schema
         ▼
 unified_broker_interface/   Flask REST API over the unified layer
@@ -71,13 +71,13 @@ MongoDB holds broker credentials (`settings`) and login tokens (`last_login`), k
 
 Every file in `bin/` is an executable, extensionless Python script. Each one starts by calling `utilities.bootstrap.run_under_venv(__file__)`, which re-executes it under `.venv/bin/python`. That is why the scripts work from cron and systemd without an activated environment. The guard compares `sys.prefix`, not interpreter paths, because `.venv/bin/python` is a symlink to the system interpreter.
 
-The `bin/<broker>/` and `bin/unified/` subdirectories hold the long-lived scripts that systemd runs. The scripts at the top of `bin/` are standalone tools meant to be typed by hand: `rest-api`, `rest-api-app`, `check-services`, `check-broker-connections`, `search-instruments`, `import-api-details`, `wait-for-redis` and `zerodha-quote`. `wait-for-redis` is also the `ExecStartPre=` of the candle units.
+The `bin/<broker>/` and `bin/unified/` subdirectories hold the long-lived scripts that systemd runs. Each broker's folder is split into five subfolders by subject - `session/` (`connect`, `disconnect`), `user/` (`details`), `orders/` (`api_order_details`, `api_trade_details`, `websocket_order_details`, `store_orders_to_db`), `portfolio/` (`positions`, `holdings`, `funds`, `store_positions_to_db`) and `instruments/` (`daily_feed`, `price_history`, `websocket_quotes`, `store_quotes_to_db`) - and no name repeats within a broker, so a script can be named without its folder. `bin/unified/` is split the same way, with `brokers/` and `exchanges/` added, each holding one `unified_details` script that caches a MongoDB detail collection; `unified_details` is the only name used in more than one folder. Because every script now sits four levels below the project root, its bootstrap line is `sys.path.insert(0, str(Path(__file__).resolve().parents[3]))`, and a script put at the wrong depth cannot import `utilities`. The scripts at the top of `bin/` are standalone tools meant to be typed by hand: `rest-api`, `rest-api-app`, `check-services`, `check-broker-connections`, `search-instruments`, `import-api-details`, `wait-for-redis` and `zerodha-quote`. `wait-for-redis` is also the `ExecStartPre=` of the candle units.
 
 Each script is deliberately self-contained: its own connection, decoding and normalization, with no shared socket or poller base class. Its module docstring is its full reference, including the field-by-field mapping from the broker's names and its exit codes. Exit code 2 means a bad argument or configuration, and the systemd units deliberately do not restart on it. The seven `<broker>-historical-prices.service` units are the exception: they restart on every exit, because their exit 2 is usually a first login that ran before a data store was ready.
 
-Websocket scripts never write to PostgreSQL. They write a Redis hash of current state plus a capped Redis Stream, and a separate `persist_*` script drains the stream with `COPY` through the consumer group `persist`. The unified scripts read the same streams through the group `unified`.
+Websocket scripts never write to PostgreSQL. They write a Redis hash of current state plus a capped Redis Stream, and a separate `store_*_to_db` script drains the stream with `COPY` through the consumer group `persist`. The unified scripts read the same streams through the group `unified`.
 
-Orders and positions are written to one hash per broker by two scripts, the REST poller and `order_updates`. A polled row only replaces an entry observed before the poll's request was sent, and that check and write happen together in one Redis Lua script.
+Orders and positions are written to one hash per broker by two scripts, the REST poller and `websocket_order_details`. A polled row only replaces an entry observed before the poll's request was sent, and that check and write happen together in one Redis Lua script.
 
 ### Normalized contracts
 
@@ -121,7 +121,7 @@ Schemas live only in numbered `.sql` files under four `sql/ddl/` directories, ap
 
 ### Services
 
-Everything runs as systemd **user** units in `services/<broker>/`, `services/unified/` and `services/databases/`, installed with `systemctl --user link`, so the units expect the repository at `~/Projects/unified_broker_interface`. `<broker>@<script>.service` is a template that runs one long-lived `bin/<broker>/<script>`. Timers run the instrument download and mapping at 07:45 IST every day, broker logins at 07:00 IST every day and unified price history at 08:30 IST from Monday to Saturday. Targets use `WantedBy=default.target`, never `multi-user.target`, which does not exist in the user manager. Each target file's header carries its install commands.
+Everything runs as systemd **user** units in `services/<broker>/`, `services/unified/` and `services/databases/`, installed with `systemctl --user link`, so the units expect the repository at `~/Projects/unified_broker_interface`. Each broker has one template per script folder - `<broker>-instruments@.service`, `<broker>-orders@.service`, `<broker>-portfolio@.service` and `<broker>-user@.service` - so `zerodha-orders@api_order_details.service` runs `bin/zerodha/orders/api_order_details`, and the unified layer has the same six for its own folders. Nothing in `session/` runs as a long-lived service. The daily instrument download and mapping job is `unified-mapping.service`, named apart from the `unified-instruments@.service` template that runs the live feeds. Timers run the instrument download and mapping at 07:45 IST every day, broker logins at 07:00 IST every day and unified price history at 08:30 IST from Monday to Saturday. Targets use `WantedBy=default.target`, never `multi-user.target`, which does not exist in the user manager. Each target file's header carries its install commands.
 
 `services/databases/` is the odd group out. It runs `docker compose up -d --wait` once a minute, which starts whatever container is stopped or missing and leaves running ones alone, so the three data stores come back without anyone watching. Its timer repeats on `OnUnitInactiveSec` rather than a clock time, and it is the one unit that sets `Environment=PYTHONPATH=`, because Docker Compose reads the same `.env`, which sets `PYTHONPATH` to the project plus `$PYTHONPATH`, and warns on every run while `$PYTHONPATH` itself is unset.
 

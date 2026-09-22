@@ -17,23 +17,31 @@ services/
 │   └── databases.timer                every minute
 ├── <broker>/                          one each for the ten brokers
 │   ├── <broker>.target
-│   ├── <broker>@.service              one bin/<broker>/ script that keeps running
-│   ├── <broker>-login.service         bin/<broker>/login, run by the timer
+│   ├── <broker>-instruments@.service  one bin/<broker>/instruments/ script that keeps running
+│   ├── <broker>-orders@.service       one bin/<broker>/orders/ script that keeps running
+│   ├── <broker>-portfolio@.service    one bin/<broker>/portfolio/ script that keeps running
+│   ├── <broker>-user@.service         one bin/<broker>/user/ script that keeps running
+│   ├── <broker>-login.service         bin/<broker>/session/connect, run by the timer
 │   ├── <broker>-login.timer           07:00 daily
-│   └── <broker>-historical-prices.service   bin/<broker>/historical_prices, where the broker serves candles
+│   └── <broker>-historical-prices.service   bin/<broker>/instruments/price_history, where the broker serves candles
 └── unified/
     ├── unified.target
-    ├── unified@.service               one bin/unified/ script that keeps running
-    ├── unified-instruments.service    every broker's instrument download, then bin/unified/map_instruments
-    ├── unified-instruments.timer      07:45 daily
-    ├── unified-prices.service         bin/unified/historical_prices daily
+    ├── unified-instruments@.service   one bin/unified/instruments/ script that keeps running
+    ├── unified-orders@.service        one bin/unified/orders/ script that keeps running
+    ├── unified-portfolio@.service     one bin/unified/portfolio/ script that keeps running
+    ├── unified-user@.service          one bin/unified/user/ script that keeps running
+    ├── unified-brokers@.service       one bin/unified/brokers/ script that keeps running
+    ├── unified-exchanges@.service     one bin/unified/exchanges/ script that keeps running
+    ├── unified-mapping.service        every broker's instrument download, then bin/unified/instruments/map
+    ├── unified-mapping.timer          07:45 daily
+    ├── unified-prices.service         bin/unified/instruments/price_history daily
     ├── unified-prices.timer           08:30 Mon-Sat
     └── unified-rest-api.service       bin/rest-api
 ```
 
 Every unit declares `PartOf=` its folder's target, so stopping or restarting `zerodha.target` stops or
 restarts everything Zerodha runs. Groww, Kotak and Stoxkart have no `-historical-prices` unit, since none
-of them serves candles. Every broker's `bin/<broker>/instruments` runs from `unified-instruments.service`
+of them serves candles. Every broker's `bin/<broker>/instruments/daily_feed` runs from `unified-mapping.service`
 rather than from the broker's own folder.
 
 Every `ExecStart` is `%h/Projects/unified_broker_interface/bin/...`, so the units expect the
@@ -57,7 +65,11 @@ For a broker - Zerodha here:
 systemctl --user link ~/Projects/unified_broker_interface/services/zerodha/*
 systemctl --user daemon-reload
 systemctl --user enable --now zerodha.target zerodha-login.timer \
-    zerodha@quotes.service zerodha@order_updates.service zerodha@persist_ticks.service zerodha@persist_orders.service zerodha@orders.service zerodha@trades.service zerodha@positions.service zerodha@holdings.service zerodha@funds.service zerodha@user-profile.service zerodha-historical-prices.service
+    zerodha-instruments@websocket_quotes.service zerodha-instruments@store_quotes_to_db.service \
+    zerodha-orders@websocket_order_details.service zerodha-orders@store_orders_to_db.service \
+    zerodha-orders@api_order_details.service zerodha-orders@api_trade_details.service \
+    zerodha-portfolio@positions.service zerodha-portfolio@holdings.service zerodha-portfolio@funds.service \
+    zerodha-user@details.service zerodha-historical-prices.service
 ```
 
 And for the unified layer:
@@ -65,8 +77,15 @@ And for the unified layer:
 ```bash
 systemctl --user link ~/Projects/unified_broker_interface/services/unified/*
 systemctl --user daemon-reload
-systemctl --user enable --now unified.target unified-instruments.timer unified-prices.timer \
-    unified@quotes.service unified@order_updates.service unified@orders.service unified@trades.service unified@positions.service unified@holdings.service unified@funds.service unified@user-profile.service unified@details.service unified-rest-api.service unified@persist_ticks.service unified@persist_orders.service unified@persist_positions.service
+systemctl --user enable --now unified.target unified-mapping.timer unified-prices.timer \
+    unified-instruments@websocket_quotes.service unified-instruments@store_quotes_to_db.service \
+    unified-orders@api_order_details.service unified-orders@api_trade_details.service \
+    unified-orders@websocket_order_details.service unified-orders@store_orders_to_db.service \
+    unified-portfolio@positions.service unified-portfolio@holdings.service \
+    unified-portfolio@funds.service unified-portfolio@store_positions_to_db.service \
+    unified-user@details.service unified-user@unified_details.service \
+    unified-brokers@unified_details.service unified-exchanges@unified_details.service \
+    unified-rest-api.service
 ```
 
 `systemctl --user link` symlinks the files, so editing a unit in `services/` takes effect after a
@@ -77,11 +96,12 @@ the unified keys only while that broker's target is running.
 
 ### What each broker enables
 
-Every broker enables `quotes`, `persist_ticks`, `orders`, `trades`, `positions`, `holdings` and `funds`
-as `<broker>@` instances, plus its login timer, and every broker also enables `persist_orders`. The rest
-differ, as the target files list them:
+Every broker enables `instruments@websocket_quotes`, `instruments@store_quotes_to_db`,
+`orders@store_orders_to_db`, `orders@api_order_details`, `orders@api_trade_details`,
+`portfolio@positions`, `portfolio@holdings` and `portfolio@funds`, plus its login timer. The rest differ,
+as the target files list them:
 
-| Broker | `@order_updates` | `@persist_positions` | `@user-profile` | `-historical-prices` |
+| Broker | `orders@websocket_order_details` | `portfolio@store_positions_to_db` | `user@details` | `-historical-prices` |
 | --- | --- | --- | --- | --- |
 | dhan | yes | - | yes | yes |
 | flattrade | **no** | - | yes | yes |
@@ -94,14 +114,14 @@ differ, as the target files list them:
 | wisdom_capital | yes | yes | yes | yes |
 | zerodha | yes | - | yes | yes |
 
-`persist_positions` runs for the four brokers that stream positions over their order update
-websocket. Kotak has no `user-profile` script because it has no profile endpoint; `bin/kotak/login`
-writes the profile from the login response instead. Flattrade's `order_updates` is left out on
-purpose: Flattrade permits one websocket per session and `flattrade@quotes` holds it, so enabling both
+`portfolio@store_positions_to_db` runs for the four brokers that stream positions over their order update
+websocket. Kotak has no `user/details` script because it has no profile endpoint; `bin/kotak/session/connect`
+writes the profile from the login response instead. Flattrade's order update feed is left out on
+purpose: Flattrade permits one websocket per session and `flattrade-instruments@websocket_quotes` holds it, so enabling both
 would knock one of them off. See [Known issues](../contributing/known-issues.md#broker-limits).
-Stoxkart keeps one order socket per client, so `stoxkart@order_updates` and a Stoxkart website or app
+Stoxkart keeps one order socket per client, so `stoxkart-orders@websocket_order_details` and a Stoxkart website or app
 logged in to the same account knock each other off; the script then waits five minutes before reclaiming
-the socket. Stoxkart has no `persist_positions`, because it streams no position updates.
+the socket. Stoxkart has no `portfolio@store_positions_to_db`, because it streams no position updates.
 
 !!! warning "Linger is not optional"
 
@@ -111,10 +131,14 @@ the socket. Stoxkart has no `persist_positions`, because it streams no position 
 
 ## The units
 
-### `<broker>@.service` and `unified@.service`
+### The per-folder templates
 
-A template whose instance name is the script: `zerodha@quotes.service` runs `bin/zerodha/quotes`,
-`unified@user-profile.service` runs `bin/unified/user-profile`. The polling scripts, the websocket
+A template per folder, whose instance name is the script inside it: `zerodha-instruments@websocket_quotes.service`
+runs `bin/zerodha/instruments/websocket_quotes`, and `unified-user@details.service` runs
+`bin/unified/user/details`. Each broker has four of these, one for `instruments/`, `orders/`, `portfolio/`
+and `user/`, and the unified layer has six, adding `brokers/` and `exchanges/`; nothing in `session/` runs
+as a long-lived service, since the login has its own oneshot unit and the logout is run by hand. The
+polling scripts, the websocket
 feeders, the combiners and the persisters all fit it, because each one looks after itself - a broker
 script logs in by itself and logs in again when its token is refused, and a unified script reads only
 Redis and the database and retries a store it cannot reach.
@@ -127,15 +151,15 @@ Redis and the database and retries a store it cannot reach.
 | `TimeoutStopSec` | 60 seconds | On SIGTERM a persister first writes and acknowledges the batch in hand |
 | `Environment` | `PYTHONUNBUFFERED=1` | Python block-buffers stdout when it is not a terminal, and the journal would stay empty |
 
-The broker template is ordered after `network-online.target`; the unified one, which calls no broker,
-is not. `fyers@.service` alone adds an `ExecStartPre` that sleeps a random 0 to 30 seconds: Fyers
+The broker templates are ordered after `network-online.target`; the unified one, which calls no broker,
+is not. The four Fyers templates alone add an `ExecStartPre` that sleeps a random 0 to 30 seconds: Fyers
 refuses more than a handful of requests a second per app, and eleven Fyers scripts each checking their
 session at once when `fyers.target` starts was refused, and one script's login then spoiled another's
 auth code.
 
 ### `<broker>-login.service`
 
-A oneshot running `bin/<broker>/login`, which checks the stored session, logs in only when it is
+A oneshot running `bin/<broker>/session/connect`, which checks the stored session, logs in only when it is
 dead, and writes the outcome to `<broker>:session:status`. It has no `[Install]` section: the timer
 starts it, or you do.
 
@@ -157,7 +181,7 @@ only has to happen before the market opens.
 
 ### `<broker>-historical-prices.service`
 
-`bin/<broker>/historical_prices`, working the broker's candle queue into `<broker>.price_history`. A
+`bin/<broker>/instruments/price_history`, working the broker's candle queue into `<broker>.price_history`. A
 unit of its own rather than a `<broker>@historical_prices` instance, because it paces differently from
 the feeds:
 
@@ -171,9 +195,9 @@ the feeds:
 | `Nice`, `IOSchedulingClass`, `CPUWeight` | `10`, `idle`, `20` | A background backfill, at low priority |
 
 The queue is not locked between workers, so run exactly one per broker. Seed newly listed
-instruments after a new master with `bin/<broker>/historical_prices --seed-only`, and see how far it
-has got with `bin/<broker>/historical_prices --status`. Fyers' unit carries the same random start
-delay as `fyers@.service`, after the wait for Redis rather than before it, so the delay still spreads
+instruments after a new master with `bin/<broker>/instruments/price_history --seed-only`, and see how far it
+has got with `bin/<broker>/instruments/price_history --status`. Fyers' unit carries the same random start
+delay as its four templates, after the wait for Redis rather than before it, so the delay still spreads
 the Fyers scripts apart once Redis lets them all go at once.
 
 `bin/wait-for-redis` polls `INFO persistence` rather than `PING`, because `INFO` is one of the few
@@ -183,30 +207,30 @@ serving, logs each reason it is waiting once, and exits 1 after five minutes so 
 rather than hanging. It is a plain script, so it can be run by hand and put in front of any other unit
 that reads Redis as it starts.
 
-### `unified-instruments.service`
+### `unified-mapping.service`
 
-The daily instrument job: `bin/<broker>/instruments` for all ten brokers, Stoxkart included, then
-`bin/unified/map_instruments`. Every download line is prefixed with `-`, so one broker's file not
-arriving does not cost the others their mapping - `map_instruments` skips a broker with no rows stored
+The daily instrument job: `bin/<broker>/instruments/daily_feed` for all ten brokers, Stoxkart included, then
+`bin/unified/instruments/map`. Every download line is prefixed with `-`, so one broker's file not
+arriving does not cost the others their mapping - `map` skips a broker with no rows stored
 for the date - and the mapping's own exit status is the unit's. `TimeoutStartSec` is three hours; a
 run is about three quarters of an hour. It runs at low priority, like the candle workers.
 
 ```bash
-systemctl --user start unified-instruments      # run it now
-journalctl --user -u unified-instruments
+systemctl --user start unified-mapping      # run it now
+journalctl --user -u unified-mapping
 ```
 
 ### `unified-prices.service`
 
-`bin/unified/historical_prices daily`: `load`, `corrections`, `load` again, `factors --stale-days 14`
+`bin/unified/instruments/price_history daily`: `load`, `corrections`, `load` again, `factors --stale-days 14`
 and `verify`, with a failed verify reported but not fatal. It is ordered after
-`unified-instruments.service`, has a four hour `TimeoutStartSec` - the first factors run over every
+`unified-mapping.service`, has a four hour `TimeoutStartSec` - the first factors run over every
 instrument is thousands of Yahoo requests at about one a second - and runs at low priority. See
 [Unified price history](unified-price-history.md).
 
 ```bash
 systemctl --user start unified-prices           # run it now
-bin/unified/historical_prices status
+bin/unified/instruments/price_history status
 ```
 
 ### `unified-rest-api.service`
@@ -223,7 +247,7 @@ journalctl --user -u unified-rest-api -f
 curl -s localhost:8080/api/
 ```
 
-It answers from what the `unified@` scripts keep in Redis and from the unified tables, so it is useful
+It answers from what the `unified-*@` scripts keep in Redis and from the unified tables, so it is useful
 once `unified.target` is up, but it does not require it: a route whose document is missing answers 503
 and names the key, rather than the service failing to start. The address, port and token lifetime come
 from the environment; override them with a drop-in:
@@ -241,7 +265,7 @@ See [REST API](rest-api.md).
 | Timer | `OnCalendar` | Jitter | `Persistent` | Starts |
 | --- | --- | --- | --- | --- |
 | `<broker>-login.timer` | `*-*-* 07:00 Asia/Kolkata` | up to 30 minutes | `false` | `<broker>-login.service` |
-| `unified-instruments.timer` | `*-*-* 07:45 Asia/Kolkata` | - | `true` | `unified-instruments.service` |
+| `unified-mapping.timer` | `*-*-* 07:45 Asia/Kolkata` | - | `true` | `unified-mapping.service` |
 | `unified-prices.timer` | `Mon..Sat 08:30 Asia/Kolkata` | - | `true` | `unified-prices.service` |
 
 The timezone is written into each schedule so it survives a change to the machine's timezone.
@@ -259,7 +283,7 @@ off at 07:00 needs no catch-up, since the first script to find its token refused
 
 **08:30**, Monday to Saturday, comes after the night's candle downloads and the instrument job, and on
 Saturday picks up Friday's last bars and the week's corporate actions. The instrument job can outlast
-08:30, and `unified-prices.service` is ordered `After=unified-instruments.service`: a start queued while
+08:30, and `unified-prices.service` is ordered `After=unified-mapping.service`: a start queued while
 that job is still running waits, as `start waiting` in `systemctl --user list-jobs`, and begins the moment
 it finishes, so the history always loads against the day's mapping.
 
@@ -269,12 +293,12 @@ systemctl --user list-timers 'unified-*' '*-login.timer'
 
 ## Watching it
 
-Every unit sets `SyslogIdentifier` to its own name - `zerodha-quotes`, `unified-persist_ticks`,
-`zerodha-login`, `unified-instruments` - so the journal can be read by unit or by identifier:
+Every unit sets `SyslogIdentifier` to its own name - `zerodha-instruments-websocket_quotes`, `unified-persist_ticks`,
+`zerodha-login`, `unified-mapping` - so the journal can be read by unit or by identifier:
 
 ```bash
-journalctl --user -u zerodha@quotes -f
-journalctl --user -u unified@persist_ticks --since today
+journalctl --user -u zerodha-instruments@websocket_quotes -f
+journalctl --user -u unified-instruments@store_quotes_to_db --since today
 journalctl --user -u 'zerodha*' --since today              # everything Zerodha ran today
 journalctl --user -t unified-prices --since today
 systemctl --user list-units 'zerodha*' 'unified*'

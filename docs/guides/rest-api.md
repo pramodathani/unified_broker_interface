@@ -112,7 +112,7 @@ import-api-details /path/to/exports --replace   # also reload user_details over 
 Exchanges and brokers are upserted under a unique index on their key, so the import is safe to
 re-run. An unrecognised broker display name stops the import before anything is written.
 
-MongoDB is the store of record, and `bin/unified/details` copies the three collections into Redis every
+MongoDB is the store of record, and `bin/unified/user/unified_details` copies the three collections into Redis every
 minute - `unified:details:users`, `unified:details:brokers` and `unified:details:exchanges`, each a JSON
 array of the documents - which is what the detail endpoints serve. So an import reaches the API within a
 minute, and when a copy is missing the endpoints read MongoDB instead.
@@ -246,7 +246,7 @@ Capital's `instrument_type` as the numeric codes `0` and `8` rather than text. N
 the way in, so compare across brokers with care.
 
 A `date` mapped before the attributes column existed has none stored, so `carried_by` comes back empty
-rather than as an error. Re-running `bin/unified/map_instruments --date <date>` fills it in, as long as
+rather than as an error. Re-running `bin/unified/instruments/map --date <date>` fills it in, as long as
 that date's raw broker snapshots are still in `<broker>.instruments`.
 
 ```bash
@@ -266,7 +266,7 @@ stream's status is settled before it starts: a bad parameter or an unknown instr
 
 `/segments`, `/master`, `/search`, `/details` and `/additional_details` read the Redis tier of the
 [instrument mapping cache](instrument-mapping.md), kept under `unified:catalogue:` for the unified tables
-`unified.instruments` and `unified.broker_mappings`, and run no database query. `bin/unified/map_instruments`
+`unified.instruments` and `unified.broker_mappings`, and run no database query. `bin/unified/instruments/map`
 warms it each day after mapping, from those tables: besides the identity, order handle and additional attribute
 hashes, a catalogue per segment - a sorted set of every instrument in name, expiry, strike order and a set of its distinct names -
 plus every instrument's seen dates and a count per segment. See
@@ -283,11 +283,11 @@ Postgres is read, and a line logged, in three cases only:
 !!! note "A cache warmed before the catalogue existed"
 
     Until the next warm, today's catalogue keys are missing and the lookups fall back to Postgres. Run
-    `bin/unified/map_instruments --cache-only --date <mapping date>` once to write them now.
+    `bin/unified/instruments/map --cache-only --date <mapping date>` once to write them now.
 
 ### Live quotes
 
-`/ltp`, `/ohlc` and `/quote` serve the unified quote cache - `unified:quotes:live`, which `bin/unified/quotes`
+`/ltp`, `/ohlc` and `/quote` serve the unified quote cache - `unified:quotes:live`, which `bin/unified/instruments/websocket_quotes`
 writes from every broker's quote feed, or `unified:quotes:fetched`, quotes this API fetched earlier - whichever
 arrived later, when it is not stale and either:
 
@@ -323,8 +323,8 @@ An instrument none of them carries answers `503` when the cache cannot.
     Fyers' and Groww's modules exist but are not registered. Fyers' field mapping could not be verified,
     because its request limit was used up by the candle downloader. Groww's account is not entitled to live
     data. Wisdom Capital has no quote module: its quotes need the market data session,
-    and XTS issues one per application key, which `bin/wisdom_capital/quotes` and
-    `bin/wisdom_capital/historical_prices` share. Stoxkart has no quote module either; its quotes reach the API only through `bin/stoxkart/quotes` and the quote cache.
+    and XTS issues one per application key, which `bin/wisdom_capital/instruments/websocket_quotes` and
+    `bin/wisdom_capital/instruments/price_history` share. Stoxkart has no quote module either; its quotes reach the API only through `bin/stoxkart/instruments/websocket_quotes` and the quote cache.
 
 A broker client in the API is built without its constructor's probe, and the API never logs a broker in:
 logins belong to each broker's `<broker>-login.service`. When a broker refuses the session, the API retries
@@ -338,7 +338,7 @@ Splits, bonuses and demergers apply only to **equities, exchange traded funds an
 Those are stored unadjusted, and `adjusted=true` (the default) applies the confirmed factors on read:
 `/prices` through `unified.adjusted_bars()`, where `known_as_of` restricts them to the factors known
 by a date, and `/ticks` through `unified.ticks_adjusted`. `adjusted=false` reads the raw rows. Both are kept
-by `bin/unified/historical_prices`, and the ticks by `bin/unified/persist_ticks`.
+by `bin/unified/instruments/price_history`, and the ticks by `bin/unified/instruments/store_quotes_to_db`.
 
 Everything else - futures and options, including those on an adjustable equity, indices, bonds,
 currencies, commodities and mutual funds - is stored as the broker served it and returned the same
@@ -350,7 +350,7 @@ whatever `adjusted` says. Every answer states which it is:
 | `true` | `unadjusted` | Raw prices, as traded |
 | `false` | `as_served` | Nothing to adjust |
 
-`interval` is any interval `bin/unified/historical_prices load` accepts; `day` is loaded for every instrument,
+`interval` is any interval `bin/unified/instruments/price_history load` accepts; `day` is loaded for every instrument,
 intraday intervals only where they have been loaded by hand. An intraday range may span at most 366 days.
 
 ### Candles are cached in Redis
@@ -376,7 +376,7 @@ what makes that possible - `days=365` and an explicit `from` and `to` share one 
 **A copy stops being used** when the price history loader has run since it was made. Each copy records
 the `finished` time from `unified:prices:last_run`, and a copy stamped with an earlier run is ignored and
 read again. That keeps the promise [the adjustment DDL](../database/ddl.md) makes, that correcting a
-factor corrects every query at once: `bin/unified/historical_prices` writes that key on every run, so a
+factor corrects every query at once: `bin/unified/instruments/price_history` writes that key on every run, so a
 nightly load, a correction or a rebuilt adjustment factor drops every copy. Running the script's
 read-only `status` or `sources` step records a run too, and so also drops them, which costs one query
 per series and nothing else. A copy is dropped as well when its columns are not the ones the answer now
@@ -396,9 +396,9 @@ Everything under `/api/portfolio` takes the `access-token` header and answers `G
 
 | Path | Parameters | Returns | Answered from |
 | --- | --- | --- | --- |
-| `/funds` | none | The account's funds summed across every broker, and how each broker's data was read | `unified:portfolio:funds`, written by `bin/unified/funds` every half second |
-| `/holdings` | none | The account's holdings, one row per instrument across every broker, priced, and how each broker's data was read | `unified:portfolio:holdings`, written by `bin/unified/holdings` every minute; prices from `unified:quotes:live` |
-| `/positions` | none | The account's open positions, net and day, one row per instrument and product across every broker, and how each broker's data was read | `unified:portfolio:positions`, written by `bin/unified/positions` every half second; prices from `unified:quotes:live` |
+| `/funds` | none | The account's funds summed across every broker, and how each broker's data was read | `unified:portfolio:funds`, written by `bin/unified/portfolio/funds` every half second |
+| `/holdings` | none | The account's holdings, one row per instrument across every broker, priced, and how each broker's data was read | `unified:portfolio:holdings`, written by `bin/unified/portfolio/holdings` every minute; prices from `unified:quotes:live` |
+| `/positions` | none | The account's open positions, net and day, one row per instrument and product across every broker, and how each broker's data was read | `unified:portfolio:positions`, written by `bin/unified/portfolio/positions` every half second; prices from `unified:quotes:live` |
 
 ```bash
 curl -s localhost:8080/api/portfolio/funds -H "access-token: $TOKEN"
@@ -409,7 +409,7 @@ curl -s localhost:8080/api/portfolio/positions -H "access-token: $TOKEN"
 ### Funds
 
 The client sees one account rather than a set of brokers: every broker's balances are added into the same
-buckets. The brokers are all ten, each read from its own `bin/<broker>/funds` poller.
+buckets. The brokers are all ten, each read from its own `bin/<broker>/portfolio/funds` poller.
 
 ```json
 {
@@ -438,7 +438,7 @@ buckets. The brokers are all ten, each read from its own `bin/<broker>/funds` po
   time on this machine.
 
 **Nothing is asked at request time.** Each broker's own scripts poll it and keep its answer in Redis -
-`bin/<broker>/funds` as `<broker>:portfolio:funds` - and `bin/unified/funds` combines them into this document
+`bin/<broker>/portfolio/funds` as `<broker>:portfolio:funds` - and `bin/unified/portfolio/funds` combines them into this document
 every half second, which the route returns as it stands. A request therefore costs one Redis read, however many
 brokers there are, and the figures are at most a poll behind the brokers. Logging in again after a refused
 session is the broker scripts' job, not the request's.
@@ -453,13 +453,13 @@ rather than dropped, so it is never mistaken for a broker holding no money:
 | `missing` | Nothing stored: its script has not run today |
 | `unreadable` | Something is stored but it could not be read |
 
-**When the document is not served.** A missing or unreadable document - `bin/unified/funds` is not running - is
+**When the document is not served.** A missing or unreadable document - `bin/unified/portfolio/funds` is not running - is
 `503`. So is a document whose `as_of` is more than thirty seconds old, with its `as_of` and `brokers`, so an old
 balance is never passed off as today's. A document in which no broker is `ok` or `stale` is `502` with an `error`
 and the `brokers` list. The same rules hold for holdings (five minutes, since it is written every minute),
 positions, orders and trades.
 
-Each broker's `bin/<broker>/funds` script reads its own response into these buckets. Where a broker states what can back a new order, that figure is the available balance; where it
+Each broker's `bin/<broker>/portfolio/funds` script reads its own response into these buckets. Where a broker states what can back a new order, that figure is the available balance; where it
 does not, the balance is derived as shown.
 
 | Broker | Endpoint | `available_balance` | `segments` |
@@ -484,7 +484,7 @@ does not, the balance is derived as shown.
 
 ### Holdings
 
-Holdings are served the way funds are - from `unified:portfolio:holdings`, written by `bin/unified/holdings` from
+Holdings are served the way funds are - from `unified:portfolio:holdings`, written by `bin/unified/portfolio/holdings` from
 each broker's `<broker>:portfolio:holdings`, with the same `brokers` list and the same `503` and `502` answers - and
 combined into one row per instrument. The document is written every minute, so one up to five minutes old is
 served, and a broker is `stale` only when its holdings were stored more than three minutes ago.
@@ -549,7 +549,7 @@ totals, though its cost is in `total_investment`.
 ### Positions
 
 Positions are served the way funds are - from `unified:portfolio:positions`, written every half second by
-`bin/unified/positions` from each broker's `<broker>:portfolio:positions`, which its REST poller and, for Fyers,
+`bin/unified/portfolio/positions` from each broker's `<broker>:portfolio:positions`, which its REST poller and, for Fyers,
 Groww, Kotak and Wisdom Capital, its position update websocket keep - with the same `brokers` list and the same
 `503` and `502` answers, on two bases:
 
@@ -625,8 +625,8 @@ and [cancelling an order](#cancelling-an-order) is a `DELETE`.
 
 | Path | Parameters | Returns | Answered from |
 | --- | --- | --- | --- |
-| `/details` | none | Today's orders at every broker, and how each broker's data was read | `unified:orders:orders`, written by `bin/unified/orders` every half second |
-| `/trades` | none | Today's trades at every broker, and how each broker's data was read | `unified:orders:trades`, written by `bin/unified/trades` every half second |
+| `/details` | none | Today's orders at every broker, and how each broker's data was read | `unified:orders:orders`, written by `bin/unified/orders/api_order_details` every half second |
+| `/trades` | none | Today's trades at every broker, and how each broker's data was read | `unified:orders:trades`, written by `bin/unified/orders/api_trade_details` every half second |
 | `/place` | a JSON body, below | The broker's answer to one order | one request to the broker whose turn it is |
 | `/modify` | `order_id` and the fields to change, below | The broker's answer to one modification | one request to the broker whose order book holds the order |
 | `/cancel` | `order_id`, below | The broker's answer to one cancel | one request to the broker whose order book holds the order |
@@ -950,7 +950,7 @@ headers) and `dry_run: true` in place of the outcome.
 | `503` | | Redis cannot be read, nothing has been mapped, or no broker can take the order, with `skipped` |
 
 A broker that refuses the session, because its token has expired, answers `rejected` with its own
-message. Nothing logs in again: run `bin/<broker>/login`, and the next order uses the new token without a
+message. Nothing logs in again: run `bin/<broker>/session/connect`, and the next order uses the new token without a
 restart, because the token is read from Redis on every order.
 
 !!! warning "Orders need the mapping cache warmed for today"
@@ -1135,7 +1135,7 @@ answered `503` until the next order book poll replaces its entry, within about h
 Stoxkart's variety is read first from a `variety` field that its two order scripts keep beside `data` in
 each `stoxkart:orders:orders` entry, rather than from `data` alone, because Stoxkart's order socket
 reported `NORMAL` for after-market orders whose order book row said `AMO`. The poller stores the order
-book row's variety, and `bin/stoxkart/order_updates` keeps an `AMO` or `BO` variety already stored.
+book row's variety, and `bin/stoxkart/orders/websocket_order_details` keeps an `AMO` or `BO` variety already stored.
 Cancels are confirmed live on after-market orders at Dhan, Flattrade, INDmoney, Kotak, Shoonya, Stoxkart and
 Zerodha; Fyers', Groww's and Wisdom Capital's are checked only against stubs. The first was Stoxkart's: on
 2026-09-15 it cancelled two after-market KWIL orders, one on NSE and one on BSE, each answered HTTP 200 with
