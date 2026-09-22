@@ -1,0 +1,25 @@
+# The one bin/unified/exchanges/ script that keeps running: unified-exchanges@unified_details.service caches the
+# MongoDB exchange_details collection in unified:details:exchanges, once a minute. It fits the template because it
+# reads MongoDB and writes Redis only, and logs a store it cannot reach and tries again at the next minute rather than
+# exiting.
+#
+#     systemctl --user enable --now unified-exchanges@unified_details.service
+#     journalctl --user -u unified-exchanges@unified_details -f
+
+[Unit]
+Description=Unified exchanges %i
+PartOf=unified.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Environment=PYTHONUNBUFFERED=1
+SyslogIdentifier=unified-exchanges-%i
+ExecStart=%h/Projects/unified_broker_interface/bin/unified/exchanges/%i
+Restart=always
+RestartSec=15
+RestartPreventExitStatus=2
+TimeoutStopSec=60
+
+[Install]
+WantedBy=unified.target

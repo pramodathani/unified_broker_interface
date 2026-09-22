@@ -3,14 +3,14 @@
 Combine every broker's orders from Redis into one orders document, the way the REST API's `/api/orders/details` answers,
 and write it to the Redis key `unified:orders:orders` every half second.
 
-    bin/unified/orders
+    bin/unified/orders/api_order_details
     redis-cli GET unified:orders:orders
 
 Nothing here calls a broker. Each broker's orders are already kept in Redis as one merged hash, `<broker>:orders:orders`,
-keyed by the broker's order id and written by two scripts - `bin/<broker>/orders` from the order book and
-`bin/<broker>/order_updates` from the order update websocket - each value
+keyed by the broker's order id and written by two scripts - `bin/<broker>/orders/api_order_details` from the order book and
+`bin/<broker>/orders/websocket_order_details` from the order update websocket - each value
 `{"observed_at", "source", "order": <normalized order>, "data": <the broker's own order>}`. The instruments are kept by
-`bin/unified/map_instruments`. This reads those and interprets them.
+`bin/unified/instruments/map`. This reads those and interprets them.
 
 **The document** has the REST API's shape:
 
@@ -30,7 +30,7 @@ for field, with three things to know:
 - INDmoney's `id`. INDstocks names no trading symbol, and the stored order builds `id` from the security id, so it is
   cleared here and left null until the instrument supplies a symbol.
 - Freshness. This answers with what the two writers last stored, which is at most a poll - half a second - behind while
-  `bin/<broker>/orders` runs.
+  `bin/<broker>/orders/api_order_details` runs.
 
 **Venue and resolving.** A broker's exchange code names an exchange and a kind of instrument - `NFO`,
 `NSE_EQ`, `NSECM`, `nse_fo` - read the same way; Fyers' kind comes from its numeric `segment`, Groww's and INDmoney's from
@@ -42,10 +42,10 @@ are remembered until the cache's mapping date changes.
 
 **Sorted** by broker, then order time, then order id. `summary` counts orders by status and adds
 `filled_value`, filled quantity times average price. `brokers` says, for each broker, how its hash was read, with `as_of`,
-the newer of the newest `observed_at` in it and the last successful poll, which `bin/<broker>/orders` records in
+the newer of the newest `observed_at` in it and the last successful poll, which `bin/<broker>/orders/api_order_details` records in
 `<broker>:orders:orders:polled_at`:
 
-- `ok` - within a minute, which it always is while `bin/<broker>/orders` runs, since every poll re-observes every order in
+- `ok` - within a minute, which it always is while `bin/<broker>/orders/api_order_details` runs, since every poll re-observes every order in
   the book and records itself, a day with no orders included;
 - `stale` - older than a minute: the poller has probably stopped. Its orders are still included;
 - `missing` - no hash and no poll recorded: the broker's scripts have not run today. It contributes nothing;
@@ -64,7 +64,7 @@ from pathlib import Path
 
 # Run under the project's virtual environment, and put the project on sys.path. See
 # utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from utilities.bootstrap import run_under_venv
 
 PROJECT_ROOT = run_under_venv(__file__)
@@ -261,7 +261,7 @@ def broker_orders(cache):
 
     - `cache` is the Redis client.
 
-    `bin/<broker>/orders` records each successful poll in `<broker>:orders:orders:polled_at`, which is what says a
+    `bin/<broker>/orders/api_order_details` records each successful poll in `<broker>:orders:orders:polled_at`, which is what says a
     broker with no orders today is being read at all: Redis keeps no empty hash.
     """
     pipeline = cache.pipeline(transaction=False)
@@ -351,7 +351,7 @@ def main():
     from utilities.configurations import get_cache, get_logger
     from utilities.poll_reporter import PollReporter
 
-    logger = get_logger("unified.orders")
+    logger = get_logger("unified.api_order_details")
     report = PollReporter(logger)
     cache = get_cache()
     resolver = Resolver(cache)

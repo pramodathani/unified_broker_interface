@@ -2,21 +2,21 @@
 """
 Combine every broker's order and position update streams into unified ones, and keep combining until stopped.
 
-    bin/unified/order_updates
+    bin/unified/orders/websocket_order_details
 
     redis-cli XREVRANGE unified:order-updates:stream + - COUNT 5
     redis-cli HGET unified:order-updates dhan:<order id>
     redis-cli XREVRANGE unified:positions_updates:stream + - COUNT 5
     redis-cli HGETALL unified:positions_updates
 
-Nothing here calls a broker. Each broker's `bin/<broker>/order_updates` appends every update its websocket delivers to a
+Nothing here calls a broker. Each broker's `bin/<broker>/orders/websocket_order_details` appends every update its websocket delivers to a
 Redis Stream, as `{"timestamp", "data": <the broker's payload>}`: orders to `<broker>:order-updates:stream` (field
 `update`) for dhan, flattrade, fyers, groww, indmoney, kotak, shoonya, stoxkart, wisdom_capital and zerodha, and positions to
 `<broker>:positions_updates:stream` (field `position`) for the four that stream positions - fyers, groww, kotak and
 wisdom_capital. Stoxkart's entries also carry the normalized `order` its script built, which is used as it is. This reads all fourteen streams as the consumer group `unified`, apart from the `persist` group the
 persisters read them with, so neither disturbs the other.
 
-**An order update** is normalized exactly as that broker's own `bin/<broker>/order_updates` normalizes it before merging
+**An order update** is normalized exactly as that broker's own `bin/<broker>/orders/websocket_order_details` normalizes it before merging
 it into `<broker>:orders:orders` - the same function, carried here under a broker prefix - so its fields are the REST order
 contract's: `order_id`, `exchange_order_id`, `parent_order_id`, `status`, `status_message`, `id`, `instrument_token`,
 `tradingsymbol`, `exchange`, `transaction_type`, `product`, `order_type`, `validity`, the five quantities, `price`,
@@ -25,25 +25,25 @@ contract's: `order_id`, `exchange_order_id`, `parent_order_id`, `status`, `statu
 `unified:order-updates:stream` as field `update`, and the latest per order kept in the hash `unified:order-updates`,
 keyed `broker:order_id`.
 
-**A position update** is one position in the shape `bin/unified/positions` gives each position in
+**A position update** is one position in the shape `bin/unified/portfolio/positions` gives each position in
 `unified:portfolio:positions` - the REST position contract: `instrument_id`, `symbol`, `exchange`, `segment`,
 `expiry_date`, `strike_price`, `option_type`, `product` (`delivery`, `intraday`, `carry`, `margin_trading`, `cover`,
 `bracket`), `quantity` (signed), `buy` and `sell` (`quantity`, `average_price`, `value`), `average_price`, `last_price`,
 `pnl` (`realized`, `unrealized`, `total`), `day_change` and `day_change_percentage`. It is read by the same functions,
 carried here: the update is first built into the entry the broker's script merges into `<broker>:portfolio:positions`,
 keyed the same way; a Fyers or Groww update is then read from that entry's normalized `position`, and a Kotak or Wisdom
-Capital one from its raw `data`, as `bin/unified/positions` reads a websocket entry. It is resolved as positions are, and
+Capital one from its raw `data`, as `bin/unified/portfolio/positions` reads a websocket entry. It is resolved as positions are, and
 not merged with any other position. No quote is read: `last_price` and the day change come from the prices the broker
 sent, which none of the four streams carries, so they are null. To the position it adds `broker`, `position_key` (the
 field the broker's script keys the position by), `basis` (`day` for a Wisdom Capital `DAY:` field, `net` otherwise) and
 `observed_at`. It is appended to `unified:positions_updates:stream` as field `position`, and the latest per position kept
 in the hash `unified:positions_updates`, keyed `broker:position_key`.
 
-**Resolving** follows the REST API and `bin/unified/trades`: the broker's exchange code, with the segment where the code
+**Resolving** follows the REST API and `bin/unified/orders/api_trade_details`: the broker's exchange code, with the segment where the code
 alone does not say the kind (Fyers, Groww, INDmoney), names an exchange and a kind of instrument; the token is looked up in
 `unified:broker_tokens` and kept among that venue's segments, several survivors taken in vocabulary order, then by symbol
 and id. Groww sends no token, so a Groww cash order or position is looked up by symbol in `unified:instrument_symbols`.
-A position's venue is the one `bin/unified/positions` reads from it, so both resolve a position alike. Nothing
+A position's venue is the one `bin/unified/portfolio/positions` reads from it, so both resolve a position alike. Nothing
 resolves to a null `instrument_id`. Answers are remembered until the cache's mapping date changes.
 
 **Delivery.** An entry is acknowledged only after its unified stream entry and hash field are written, in one pipeline;
@@ -58,7 +58,7 @@ today's. The unified streams are capped at about 50,000 entries each.
 
 Runs until Ctrl+C or SIGTERM; a Redis that cannot be reached is retried with backoff. Reads only - it places no orders.
 Stoxkart streams order updates but no position updates, so its positions reach the unified documents only through
-`bin/unified/positions`.
+`bin/unified/portfolio/positions`.
 """
 
 import sys
@@ -72,7 +72,7 @@ from zoneinfo import ZoneInfo
 
 # Run under the project's virtual environment, and put the project on sys.path. See
 # utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from utilities.bootstrap import run_under_venv
 
 PROJECT_ROOT = run_under_venv(__file__)
@@ -156,7 +156,7 @@ def venue(value):
 
 # ---- each broker's normalizers ------------------------------------------------------------------------------------------
 #
-# Carried from each bin/<broker>/order_updates, where they normalize the same payloads before merging them into the broker's
+# Carried from each bin/<broker>/orders/websocket_order_details, where they normalize the same payloads before merging them into the broker's
 # own hashes; a name that differs between brokers carries the broker's prefix, and the vocabulary every broker shares keeps
 # its own name.
 
@@ -360,7 +360,7 @@ def flattrade_order_from_noren(row):
     A Noren order - an order-book row or an `om` order update, which carry the same fields - as a normalized order,
     or None when it has no order number.
 
-    The same function in bin/flattrade/orders and bin/flattrade/order_updates, so both writers of the orders hash
+    The same function in bin/flattrade/orders/api_order_details and bin/flattrade/orders/websocket_order_details, so both writers of the orders hash
     produce the same `order`.
 
     - `row` is one order-book row, or one `om` frame.
@@ -922,8 +922,8 @@ def wisdom_capital_normalized_order(row):
     """
     An XTS order as a normalized order, or None when it has no `AppOrderID`.
 
-    XTS's order-book row and its interactive socket's order event are the same object, so `bin/wisdom_capital/orders`
-    and `bin/wisdom_capital/order_updates` both build `order` with this function.
+    XTS's order-book row and its interactive socket's order event are the same object, so `bin/wisdom_capital/orders/api_order_details`
+    and `bin/wisdom_capital/orders/websocket_order_details` both build `order` with this function.
 
     - `row` is one order-book row or one order event payload.
     """
@@ -994,7 +994,7 @@ def fyers_venue(symbol, segment):
     return (prefix.lower() or None, FYERS_SEGMENT_KINDS.get(str(segment)))
 
 def stoxkart_order_from_entry(normalized):
-    """Returns the normalized order `bin/stoxkart/order_updates` stored in a stream entry.
+    """Returns the normalized order `bin/stoxkart/orders/websocket_order_details` stored in a stream entry.
 
     Stoxkart's update format had not been seen when its script was written, so the script normalizes each update with field-name fallbacks and stores the result as the entry's `order`, and that order is used here rather than a second copy of the normalizer.
 
@@ -1055,7 +1055,7 @@ def order_update(broker, data, received_at, normalized=None):
                                   GROWW_SEGMENT_KINDS.get(str(detail.get("segment") or "").upper())))
     return None
 
-# ---- what each broker's position means, as bin/unified/positions reads it ------------------------------------------------
+# ---- what each broker's position means, as bin/unified/portfolio/positions reads it ------------------------------------------------
 
 # The brokers whose hash fields carry the basis, `NET:` or `DAY:`.
 BASIS_BROKERS = ("zerodha", "wisdom_capital")
@@ -1337,7 +1337,7 @@ def position_update(broker, data):
 
 def position_row(identity, contract):
     """
-    One position as the row `emitted` reads, the way bin/unified/positions merges a lone position into one.
+    One position as the row `emitted` reads, the way bin/unified/portfolio/positions merges a lone position into one.
 
     - `identity` is the resolved instrument, or None.
     - `contract` is the position in the contract, from `entry_position`.
@@ -1608,7 +1608,7 @@ def main():
     """Combine the brokers' order and position update streams until stopped."""
     from utilities.configurations import get_cache, get_logger
 
-    logger = get_logger("unified.order_updates")
+    logger = get_logger("unified.websocket_order_details")
     cache = get_cache()
     stop = threading.Event()
 

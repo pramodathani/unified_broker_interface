@@ -1,28 +1,27 @@
 #!/usr/bin/env python3
 """
-Persist unified order updates from the Redis Stream `unified:order-updates:stream` into `unified.order_updates`, and keep
-persisting until stopped.
+Persist unified position updates from the Redis Stream `unified:positions_updates:stream` into `unified.positions`, and
+keep persisting until stopped.
 
-    bin/unified/persist_orders
-    redis-cli XINFO GROUPS unified:order-updates:stream   # lag and pending count
+    bin/unified/portfolio/store_positions_to_db
+    redis-cli XINFO GROUPS unified:positions_updates:stream  # lag and pending count
 
-`bin/unified/order_updates` appends every order update from every broker's order websocket to the stream as field
-`update`, normalized to the REST API's order contract with `broker`, `instrument_id` and `observed_at`; this reads it as
-the `persist` consumer group, apart from the `unified` group the producer's own sources use, and writes one row per
-update - every transition of an order, not only its latest state - to `unified.order_updates` with COPY, a batch at a
-time.
+`bin/unified/orders/websocket_order_details` appends every position update from the brokers that stream positions - fyers, groww, kotak
+and wisdom_capital - to the stream as field `position`: one position in the REST API's position contract, as
+`bin/unified/portfolio/positions` emits a single broker's position, with `broker`, `position_key`, `basis` and `observed_at`. This
+reads it as the `persist` consumer group and writes one row per snapshot to `unified.positions` with COPY, a batch at a
+time; the history of a position is the series of its rows.
 
-**The table** is created on start from `310_unified_order_updates.sql` beside the per-broker stream DDL - safe to apply
-again: a hypertable with an index on `(broker, order_id, time desc)`. There is nothing to import: no unified order table
-existed before it.
+**The table** is created on start from `320_unified_positions.sql` beside the per-broker stream DDL - safe to apply
+again: a hypertable with an index on `(broker, position_key, time desc)`. There is nothing to import: no unified
+position table existed before it.
 
-**Columns:** `time` is the update's `observed_at`, when the broker's script received it; then `broker`, `order_id`,
-`exchange_order_id`, `parent_order_id`, `status`, `status_message`, `id`, `instrument_id`, `instrument_token`,
-`tradingsymbol`, `exchange`, `transaction_type`, `product`, `order_type`, `validity`, the five quantities, `price`,
-`trigger_price`, `average_price`, `order_timestamp` and `exchange_timestamp` as instants, `tag`, and `raw` when an update
-carries the broker's payload. A value a column cannot take - a time that is not a time, a malformed id, a float for an
-integer - becomes NULL or is rounded rather than failing the batch. An update without `broker` or `order_id`, or not JSON,
-is skipped and acknowledged.
+**Columns:** `time` is the update's `observed_at`; then `broker`, `position_key`, `basis`, `instrument_id`, `symbol`,
+`exchange`, `segment`, `expiry_date`, `strike_price`, `option_type`, `product`, `quantity`, the nested `buy` and `sell`
+flattened into `buy_quantity`, `buy_average_price`, `buy_value` and the same for sells, `average_price`, `last_price`,
+`pnl` flattened into `realized_pnl`, `unrealized_pnl` and `total_pnl`, `day_change` and `day_change_percentage`. A value
+a column cannot take becomes NULL rather than failing the batch. An update without `broker` or `position_key`, or not
+JSON, is skipped and acknowledged.
 
 **Nothing is lost across a restart.** An entry is acknowledged only after the batch holding it has been committed; pending
 entries are read first at the next start or after a failure, so a batch committed just before a crash can be written a
@@ -46,17 +45,17 @@ from pathlib import Path
 
 # Run under the project's virtual environment, and put the project on sys.path. See
 # utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from utilities.bootstrap import run_under_venv
 
 PROJECT_ROOT = run_under_venv(__file__)
 
-STREAM_KEY = "unified:order-updates:stream"
-STREAM_FIELD = "update"
-TABLE = "unified.order_updates"
+STREAM_KEY = "unified:positions_updates:stream"
+STREAM_FIELD = "position"
+TABLE = "unified.positions"
 GROUP = "persist"
-CONSUMER = "persist_orders"
-DDL_FILE = "310_unified_order_updates.sql"
+CONSUMER = "persist_positions"
+DDL_FILE = "320_unified_positions.sql"
 
 MIN_BACKOFF_SECONDS = 1
 MAX_BACKOFF_SECONDS = 60
@@ -143,57 +142,49 @@ def apply_table(connect, ddl_file, logger):
 
 # The table's columns in the order each row is built.
 COLUMNS = [
-    "time", "broker", "order_id", "exchange_order_id", "parent_order_id", "status", "status_message", "id",
-    "instrument_id", "instrument_token", "tradingsymbol", "exchange", "transaction_type", "product", "order_type",
-    "validity", "quantity", "filled_quantity", "pending_quantity", "cancelled_quantity", "disclosed_quantity",
-    "price", "trigger_price", "average_price", "order_timestamp", "exchange_timestamp", "tag", "raw",
+    "time", "broker", "position_key", "basis", "instrument_id", "symbol", "exchange", "segment", "expiry_date",
+    "strike_price", "option_type", "product", "quantity",
+    "buy_quantity", "buy_average_price", "buy_value", "sell_quantity", "sell_average_price", "sell_value",
+    "average_price", "last_price", "realized_pnl", "unrealized_pnl", "total_pnl", "day_change", "day_change_percentage",
 ]
-
-def instant(value):
-    """
-    An order time as an ISO timestamp with its offset, or None.
-
-    The order contract's times are ISO strings with the IST offset; an epoch is taken as seconds, or milliseconds past
-    10^11, and anything else is None rather than a value COPY would refuse.
-
-    - `value` is the time as the update carries it.
-    """
-    if value is None or value == "" or isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        return epoch_timestamp(value / 1000 if value > 1e11 else value)
-    try:
-        moment = datetime.fromisoformat(str(value).strip())
-    except ValueError:
-        return None
-    return moment.isoformat() if moment.year > 1970 else None
 
 def text(value):
     """A value for a text column: a string, or None when missing."""
     return None if value is None or value == "" else str(value)
 
-def order_row(update):
+def calendar_date(value):
     """
-    A unified order update flattened into COLUMNS order, or None when it names no broker or order.
+    A value for a date column: the ISO date, or None when missing or not a date.
 
-    - `update` is the decoded stream entry.
+    - `value` is the date as the position carries it.
     """
-    if not isinstance(update, dict) or not update.get("broker") or text(update.get("order_id")) is None:
+    try:
+        return date.fromisoformat(str(value)[:10]).isoformat() if value else None
+    except ValueError:
         return None
-    raw = update.get("raw")
+
+def position_row(position):
+    """
+    A unified position update flattened into COLUMNS order, or None when it names no broker or position.
+
+    - `position` is the decoded stream entry.
+    """
+    if not isinstance(position, dict) or not position.get("broker") or text(position.get("position_key")) is None:
+        return None
+    buy = position.get("buy") if isinstance(position.get("buy"), dict) else {}
+    sell = position.get("sell") if isinstance(position.get("sell"), dict) else {}
+    pnl = position.get("pnl") if isinstance(position.get("pnl"), dict) else {}
     return [
-        epoch_timestamp(update.get("observed_at")) or datetime.now(tz=timezone.utc).isoformat(),
-        update["broker"], text(update["order_id"]),
-        text(update.get("exchange_order_id")), text(update.get("parent_order_id")), text(update.get("status")),
-        text(update.get("status_message")), text(update.get("id")), instrument(update.get("instrument_id")),
-        text(update.get("instrument_token")), text(update.get("tradingsymbol")), text(update.get("exchange")),
-        text(update.get("transaction_type")), text(update.get("product")), text(update.get("order_type")),
-        text(update.get("validity")),
-        whole(update.get("quantity")), whole(update.get("filled_quantity")), whole(update.get("pending_quantity")),
-        whole(update.get("cancelled_quantity")), whole(update.get("disclosed_quantity")),
-        decimal(update.get("price")), decimal(update.get("trigger_price")), decimal(update.get("average_price")),
-        instant(update.get("order_timestamp")), instant(update.get("exchange_timestamp")), text(update.get("tag")),
-        json.dumps(raw) if raw is not None else None,
+        epoch_timestamp(position.get("observed_at")) or datetime.now(tz=timezone.utc).isoformat(),
+        position["broker"], text(position["position_key"]), text(position.get("basis")),
+        instrument(position.get("instrument_id")), text(position.get("symbol")), text(position.get("exchange")),
+        text(position.get("segment")), calendar_date(position.get("expiry_date")), decimal(position.get("strike_price")),
+        text(position.get("option_type")), text(position.get("product")), decimal(position.get("quantity")),
+        decimal(buy.get("quantity")), decimal(buy.get("average_price")), decimal(buy.get("value")),
+        decimal(sell.get("quantity")), decimal(sell.get("average_price")), decimal(sell.get("value")),
+        decimal(position.get("average_price")), decimal(position.get("last_price")),
+        decimal(pnl.get("realized")), decimal(pnl.get("unrealized")), decimal(pnl.get("total")),
+        decimal(position.get("day_change")), decimal(position.get("day_change_percentage")),
     ]
 
 def copy_value(value):
@@ -210,7 +201,7 @@ class StreamPersister:
     """
     Reads one Redis Stream as a consumer group and writes its entries to one table, acknowledging after commit.
 
-    The same class in every bin/<broker>/persist_* script; only the constants and the row function differ.
+    The same class in every bin/<broker>/*/store_*_to_db script; only the constants and the row function differ.
     """
 
     def __init__(self, cache, connect, logger, batch_size, flush_interval, row, noun, stream=STREAM_KEY,
@@ -354,17 +345,17 @@ class StreamPersister:
             self._connection = None
 
 def main():
-    """Persist unified order updates from unified:order-updates:stream into unified.order_updates until stopped."""
-    parser = argparse.ArgumentParser(description="Persist unified order updates from unified:order-updates:stream into unified.order_updates until stopped.")
+    """Persist unified position updates from unified:positions_updates:stream into unified.positions until stopped."""
+    parser = argparse.ArgumentParser(description="Persist unified position updates from unified:positions_updates:stream into unified.positions until stopped.")
     parser.add_argument("--batch-size", type=int, default=200,
-                        help="most order updates written in one COPY, default 200")
+                        help="most position updates written in one COPY, default 200")
     parser.add_argument("--flush-interval", type=float, default=1.0,
-                        help="longest an order update waits before its batch is written, in seconds, default 1")
+                        help="longest a position update waits before its batch is written, in seconds, default 1")
     arguments = parser.parse_args()
 
     from utilities.configurations import get_cache, get_logger, get_postgres
 
-    logger = get_logger("unified.persist_orders")
+    logger = get_logger("unified.store_positions_to_db")
     if arguments.batch_size < 1 or arguments.flush_interval <= 0:
         logger.error("--batch-size must be at least 1 and --flush-interval above 0.")
         return 2
@@ -372,7 +363,7 @@ def main():
     try:
         apply_table(get_postgres, DDL_FILE, logger)
     except Exception as exception:
-        logger.error(f"Could not prepare unified.order_updates: {type(exception).__name__}: {exception}")
+        logger.error(f"Could not prepare unified.positions: {type(exception).__name__}: {exception}")
         return 1
 
     stop = threading.Event()
@@ -386,7 +377,7 @@ def main():
 
     logger.info(f"Persisting {STREAM_KEY} into {TABLE}.")
     StreamPersister(get_cache(), get_postgres, logger, arguments.batch_size, arguments.flush_interval,
-                    row=order_row, noun="order update").run(stop)
+                    row=position_row, noun="position update").run(stop)
     return 0
 
 if __name__ == "__main__":

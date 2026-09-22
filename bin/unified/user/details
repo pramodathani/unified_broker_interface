@@ -2,7 +2,7 @@
 """
 Combine every broker's user profile into one JSON object in the Redis key `unified:user:details`, every minute.
 
-    bin/unified/user-profile
+    bin/unified/user/details
     redis-cli GET unified:user:details
 
 The value is one object with a key per broker and that broker's profile as the value:
@@ -15,9 +15,9 @@ value here is its `data`:
 
 | broker | kept by | refreshed |
 | --- | --- | --- |
-| dhan, zerodha, flattrade, shoonya, fyers, indmoney, groww, stoxkart | `bin/<broker>/user-profile` | every minute |
-| wisdom_capital | `bin/wisdom_capital/user-profile` | once a day, as Wisdom Capital allows about one profile call a day |
-| kotak | `bin/kotak/login`, from the login response | at each login; Kotak has no profile endpoint |
+| dhan, zerodha, flattrade, shoonya, fyers, indmoney, groww, stoxkart | `bin/<broker>/user/details` | every minute |
+| wisdom_capital | `bin/wisdom_capital/user/details` | once a day, as Wisdom Capital allows about one profile call a day |
+| kotak | `bin/kotak/session/connect`, from the login response | at each login; Kotak has no profile endpoint |
 
 So a broker's profile here is as fresh as its own script keeps it, and reading every key costs one round trip. A broker
 whose key is missing - its script has not run, or the key has been deleted - or holds something that is not a profile
@@ -36,7 +36,7 @@ from pathlib import Path
 
 # Run under the project's virtual environment, and put the project on sys.path. See
 # utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from utilities.bootstrap import run_under_venv
 
 PROJECT_ROOT = run_under_venv(__file__)
@@ -82,7 +82,7 @@ def main():
     """Write the combined profiles to unified:user:details every minute, until stopped."""
     from utilities.configurations import get_cache, get_logger
 
-    logger = get_logger("unified.user_profile")
+    logger = get_logger("unified.details")
     cache = get_cache()
     stop = threading.Event()
 

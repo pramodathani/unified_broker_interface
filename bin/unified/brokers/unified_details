@@ -1,0 +1,112 @@
+#!/usr/bin/env python3
+"""
+Cache the MongoDB `broker_details` collection in Redis as `unified:details:brokers`, every minute.
+
+    bin/unified/brokers/unified_details
+    bin/unified/brokers/unified_details --once  # copy once and exit
+    redis-cli GET unified:details:brokers
+
+The value is the collection's documents as one JSON array, without `_id`, in MongoDB's natural order -
+exactly what `GET /api/brokers/details` returned when the REST API read the collection itself. An empty
+collection is cached as `[]`, so the API still answers 404 for it. Anything JSON cannot hold, such as a
+datetime, is written as its string.
+
+MongoDB stays the store of record. The collection changes only when `import-api-details` loads or re-copies it, so a
+change reaches the cache within a minute of an import. The REST API reads the cache and falls back to MongoDB when the
+key is missing, so it serves the same documents whether or not this is running.
+
+Two sibling scripts cache the other two detail collections the same way, each writing its own key:
+
+| script | collection | Redis key | served by |
+| --- | --- | --- | --- |
+| `bin/unified/user/unified_details` | `user_details` | `unified:details:users` | `GET /api/users/details` |
+| `bin/unified/brokers/unified_details` | `broker_details` | `unified:details:brokers` | `GET /api/brokers/details` |
+| `bin/unified/exchanges/unified_details` | `exchange_details` | `unified:details:exchanges` | `GET /api/exchanges/details` |
+
+The three run as separate processes, so each key is written on its own rather than in the one MULTI that carried all
+three when a single script cached them. A reader can therefore find one key already updated while another still holds
+the copy from the minute before. The three collections describe different things and no route reads more than one of
+them, so nothing depends on them changing together. When MongoDB cannot be read, nothing is written and the cached copy
+stays as it was, to be tried again at the next minute.
+
+Runs until Ctrl+C or SIGTERM. Exits 0 when stopped, or with `--once` when the copy succeeded, and 1 when a `--once`
+copy failed. Reads only - it places no orders and never writes to MongoDB.
+"""
+
+import sys
+import json
+import signal
+import argparse
+import threading
+from pathlib import Path
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+DELAY_SECONDS = 60
+
+COLLECTION = "broker_details"
+REDIS_KEY = "unified:details:brokers"
+
+def read_documents(mongo_db):
+    """
+    The collection's documents, without `_id`, in MongoDB's natural order.
+
+    - `mongo_db` is the MongoDB database.
+    """
+    return list(mongo_db[COLLECTION].find({}, {"_id": 0}))
+
+def copy_once(mongo_db, cache, logger):
+    """
+    Copy the collection into Redis once, and say whether it worked.
+
+    - `mongo_db` is the MongoDB database.
+    - `cache` is the Redis client.
+    - `logger` is where the outcome is reported.
+    """
+    try:
+        documents = read_documents(mongo_db)
+        cache.set(REDIS_KEY, json.dumps(documents, default=str))
+    except Exception as exception:
+        logger.error(f"Could not cache {COLLECTION}: {type(exception).__name__}: {exception}")
+        return False
+    logger.info(f"Cached {len(documents)} {COLLECTION} in {REDIS_KEY}")
+    return True
+
+def main():
+    """Copy the broker detail collection into Redis every minute until stopped, or once with --once."""
+    parser = argparse.ArgumentParser(description="Cache the MongoDB broker_details collection in Redis.")
+    parser.add_argument("--once", action="store_true", help="copy once and exit")
+    arguments = parser.parse_args()
+
+    from utilities.configurations import get_cache, get_logger, get_mongo_db
+    from utilities.poll_reporter import PollReporter
+
+    logger = get_logger("unified.broker_details")
+    mongo_db, cache = get_mongo_db(), get_cache()
+    if arguments.once:
+        return 0 if copy_once(mongo_db, cache, logger) else 1
+
+    # The same line every minute says nothing new; log changes, and an unchanged outcome once an hour.
+    report = PollReporter(logger, interval=3600)
+    stop = threading.Event()
+
+    def _handle_signal(signal_number, frame):
+        logger.info(f"Received signal {signal_number}. Stopping.")
+        stop.set()
+
+    for signal_number in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(signal_number, _handle_signal)
+
+    while not stop.is_set():
+        copy_once(mongo_db, cache, report)
+        stop.wait(DELAY_SECONDS)
+    logger.info("Stopped")
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())

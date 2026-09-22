@@ -3,12 +3,12 @@
 Combine every broker's holdings from Redis into one holdings document, the way the REST API's `/api/portfolio/holdings`
 answers, and write it to the Redis key `unified:portfolio:holdings` every minute.
 
-    bin/unified/holdings
+    bin/unified/portfolio/holdings
     redis-cli GET unified:portfolio:holdings
 
-Nothing here calls a broker. Each broker's holdings are already kept in Redis by `bin/<broker>/holdings`, as
+Nothing here calls a broker. Each broker's holdings are already kept in Redis by `bin/<broker>/portfolio/holdings`, as
 `{"timestamp", "status", "code", "data"}` under `<broker>:portfolio:holdings`, the instruments by
-`bin/unified/map_instruments`, and live prices by `bin/unified/quotes` in `unified:quotes:live`, so this reads those and
+`bin/unified/instruments/map`, and live prices by `bin/unified/instruments/websocket_quotes` in `unified:quotes:live`, so this reads those and
 interprets them.
 
 **The document** has the REST API's shape:
@@ -49,7 +49,7 @@ Quantities, invested values and pledged quantities add up, the row keeps the fir
 price from any broker is the instrument's, the latest one read winning.
 
 **Pricing.** A resolved holding is priced by its instrument's live quote in `unified:quotes:live`,
-kept by `bin/unified/quotes`: the quote's `last_price`, and its `previous_close` for the day change, or a broker's previous
+kept by `bin/unified/instruments/websocket_quotes`: the quote's `last_price`, and its `previous_close` for the day change, or a broker's previous
 close when the quote has none. A quote is used by the rule the REST API's quote service serves its cache by - not when it
 is marked `stale`, and only when it was received in the last five minutes or the instrument's trading window has closed
 since and not reopened, judged against the exchanges' calendars. Nothing here asks a broker for a quote, so a holding
@@ -75,7 +75,7 @@ from pathlib import Path
 
 # Run under the project's virtual environment, and put the project on sys.path. See
 # utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from utilities.bootstrap import run_under_venv
 
 PROJECT_ROOT = run_under_venv(__file__)
@@ -369,7 +369,7 @@ class Resolver:
                                "segment": instrument[position["segment"]], "symbol": instrument[position["symbol"]]})
         return identities
 
-# ---- session windows, as bin/unified/quotes carries them -------------------------------------------------------------
+# ---- session windows, as bin/unified/instruments/websocket_quotes carries them -------------------------------------------------------------
 
 INDIA_OFFSET_SECONDS = 19800
 SECONDS_PER_DAY = 86400

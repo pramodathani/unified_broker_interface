@@ -3,12 +3,12 @@
 Combine every broker's trade book from Redis into one trades document, the way the REST API's `/api/orders/trades`
 answers, and write it to the Redis key `unified:orders:trades` every half second.
 
-    bin/unified/trades
+    bin/unified/orders/api_trade_details
     redis-cli GET unified:orders:trades
 
-Nothing here calls a broker. Each broker's trade book is already kept in Redis by `bin/<broker>/trades`, as
+Nothing here calls a broker. Each broker's trade book is already kept in Redis by `bin/<broker>/orders/api_trade_details`, as
 `{"timestamp", "status", "code", "data"}` under `<broker>:orders:trades`, and the instruments by
-`bin/unified/map_instruments`, so this reads those and interprets them.
+`bin/unified/instruments/map`, so this reads those and interprets them.
 
 **The document** has the REST API's shape:
 
@@ -58,7 +58,7 @@ from pathlib import Path
 
 # Run under the project's virtual environment, and put the project on sys.path. See
 # utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from utilities.bootstrap import run_under_venv
 
 PROJECT_ROOT = run_under_venv(__file__)
@@ -461,7 +461,7 @@ def main():
     from utilities.configurations import get_cache, get_logger
     from utilities.poll_reporter import PollReporter
 
-    logger = get_logger("unified.trades")
+    logger = get_logger("unified.api_trade_details")
     report = PollReporter(logger)
     cache = get_cache()
     resolver = Resolver(cache)

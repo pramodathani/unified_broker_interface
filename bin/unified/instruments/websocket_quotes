@@ -3,16 +3,16 @@
 Combine every broker's live ticks into one live quote per unified instrument, in the Redis hash `unified:quotes:live`,
 the way the project's unified tick layer does, and keep doing it until stopped.
 
-    bin/unified/quotes
+    bin/unified/instruments/websocket_quotes
     redis-cli HGET unified:quotes:live <instrument id>
-    redis-cli XINFO GROUPS dhan:quotes:stream               # the unified group's lag on one broker
+    redis-cli XINFO GROUPS dhan:quotes:stream           # the unified group's lag on one broker
     redis-cli GET unified:quotes:stats
 
 Nothing here calls a broker. Each broker's ticks arrive on the Redis Stream `<broker>:quotes:stream` (field `tick`),
-written by `bin/<broker>/quotes`, and the instruments come from the unified cache `bin/unified/map_instruments` writes.
+written by `bin/<broker>/instruments/websocket_quotes`, and the instruments come from the unified cache `bin/unified/instruments/map` writes.
 
 **Reading the streams.** The ten streams are read together as the consumer group `unified` - separate from the `persist`
-group `bin/<broker>/persist_ticks` reads, so each gets every tick. The group is created at the end of a stream the first
+group `bin/<broker>/instruments/store_quotes_to_db` reads, so each gets every tick. The group is created at the end of a stream the first
 time, since a live cache has no use for history. Entries are acknowledged only after the batch holding them is written;
 at every start the entries this consumer read but never acknowledged are taken first.
 
@@ -54,7 +54,7 @@ went silent with no healthy backup stays, with `stale` true and `stale_since` se
 Today's previous closes are recovered from the hash at start.
 
 **Which instruments are covered** is not decided here. There is no instrument list: a quote is written for whatever
-arrives on the ten streams, so the coverage is the feeds' coverage. Since `bin/zerodha/quotes` began carrying Zerodha's
+arrives on the ten streams, so the coverage is the feeds' coverage. Since `bin/zerodha/instruments/websocket_quotes` began carrying Zerodha's
 whole instrument master on 2026-09-16, that is about 112,400 instruments - 112,422 of that day's 112,657 resolve to
 exactly one unified instrument, 170 name more than one and are not guessed at, 64 are filed under a segment the
 token's segment code does not allow, and 1 has no mapping at all.
@@ -79,7 +79,7 @@ from pathlib import Path
 
 # Run under the project's virtual environment, and put the project on sys.path. See
 # utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from utilities.bootstrap import run_under_venv
 
 PROJECT_ROOT = run_under_venv(__file__)
@@ -1332,7 +1332,7 @@ def main():
     """Keep unified:quotes:live current from every broker's tick stream until stopped."""
     from utilities.configurations import get_cache, get_logger
 
-    logger = get_logger("unified.quotes")
+    logger = get_logger("unified.websocket_quotes")
     stop = threading.Event()
 
     def _handle_signal(signal_number, frame):

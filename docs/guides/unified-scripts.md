@@ -1,47 +1,67 @@
 # Unified scripts
 
 The scripts in `bin/unified/` build one account-wide view out of what the
-[broker scripts](broker-scripts.md) keep for each broker. They read **only Redis and the database** -
-never a broker - so none of them logs in to a broker, places an order or spends a broker's rate limit, and
-each one can be stopped, restarted or run by hand without disturbing a broker session.
+[broker scripts](broker-scripts.md) keep for each broker. They read **only Redis, MongoDB and the
+database** - never a broker - so none of them logs in to a broker, places an order or spends a broker's
+rate limit, and each one can be stopped, restarted or run by hand without disturbing a broker session.
+
+They are grouped into folders by subject, the same way each broker's scripts are:
+
+```text
+bin/unified/
+├── session/        connect, disconnect
+├── user/           details, unified_details
+├── brokers/        unified_details
+├── exchanges/      unified_details
+├── orders/         api_order_details, api_trade_details, websocket_order_details, store_orders_to_db
+├── portfolio/      positions, holdings, funds, store_positions_to_db
+└── instruments/    map, price_history, websocket_quotes, store_quotes_to_db
+```
+
+`unified_details` is the one name used more than once: three sibling scripts cache the three MongoDB
+detail collections, one per folder, and the folder says which collection. Every other name is unique, so
+it can be written on its own.
 
 What they write is what the [REST API](rest-api.md) serves: the portfolio, order and detail routes read
 the `unified:*` Redis keys, and the instrument, price and tick routes read the `unified` schema.
 
 ```bash
-bin/unified/orders                         # combine every broker's orders every half second
+bin/unified/orders/api_order_details    # combine every broker's orders every half second
 redis-cli GET unified:orders:orders
-systemctl --user enable --now unified@orders.service
+systemctl --user enable --now unified-orders@api_order_details.service
 ```
 
 ## The scripts
 
 | Script | Runs | Reads | Writes |
 | --- | --- | --- | --- |
-| `map_instruments` | daily, once | `<broker>.instruments` | `unified.instruments`, `unified.broker_mappings`, `unified.contract_sizes`, the mapping cache |
-| `historical_prices` | daily, once | `<broker>.price_history` | `unified.price_history` and its companion tables |
-| `quotes` | continuously | `<broker>:quotes:stream` | `unified:quotes:live`, `unified:quotes:stream` |
-| `order_updates` | continuously | `<broker>:order-updates:stream`, `<broker>:positions_updates:stream` | `unified:order-updates`, `unified:positions_updates` and their streams |
-| `orders` | every 0.5 s | `<broker>:orders:orders` | `unified:orders:orders` |
-| `trades` | every 0.5 s | `<broker>:orders:trades` | `unified:orders:trades` |
+| `map` | daily, once | `<broker>.instruments` | `unified.instruments`, `unified.broker_mappings`, `unified.contract_sizes`, the mapping cache |
+| `price_history` | daily, once | `<broker>.price_history` | `unified.price_history` and its companion tables |
+| `websocket_quotes` | continuously | `<broker>:quotes:stream` | `unified:quotes:live`, `unified:quotes:stream` |
+| `websocket_order_details` | continuously | `<broker>:order-updates:stream`, `<broker>:positions_updates:stream` | `unified:order-updates`, `unified:positions_updates` and their streams |
+| `api_order_details` | every 0.5 s | `<broker>:orders:orders` | `unified:orders:orders` |
+| `api_trade_details` | every 0.5 s | `<broker>:orders:trades` | `unified:orders:trades` |
 | `positions` | every 0.5 s | `<broker>:portfolio:positions` | `unified:portfolio:positions` |
 | `funds` | every 0.5 s | `<broker>:portfolio:funds` | `unified:portfolio:funds` |
 | `holdings` | every 60 s | `<broker>:portfolio:holdings` | `unified:portfolio:holdings` |
-| `user-profile` | every 60 s | `<broker>:user:details` | `unified:user:details` |
-| `details` | every 60 s | MongoDB detail collections | `unified:details:users`, `:brokers`, `:exchanges` |
-| `login`, `logout` | by hand | MongoDB `settings` | the application's token, `unified:session:status` |
-| `persist_ticks` | continuously | `unified:quotes:stream` | `unified.ticks` |
-| `persist_orders` | continuously | `unified:order-updates:stream` | `unified.order_updates` |
-| `persist_positions` | continuously | `unified:positions_updates:stream` | `unified.positions` |
+| `details` | every 60 s | `<broker>:user:details` | `unified:user:details` |
+| `user/unified_details` | every 60 s | MongoDB `user_details` | `unified:details:users` |
+| `brokers/unified_details` | every 60 s | MongoDB `broker_details` | `unified:details:brokers` |
+| `exchanges/unified_details` | every 60 s | MongoDB `exchange_details` | `unified:details:exchanges` |
+| `connect`, `disconnect` | by hand | MongoDB `settings` | the application's token, `unified:session:status` |
+| `store_quotes_to_db` | continuously | `unified:quotes:stream` | `unified.ticks` |
+| `store_orders_to_db` | continuously | `unified:order-updates:stream` | `unified.order_updates` |
+| `store_positions_to_db` | continuously | `unified:positions_updates:stream` | `unified.positions` |
 
 The combiners resolve each broker's token to a unified instrument through the mapping cache
 (`unified:broker_tokens`, and `unified:instrument_symbols` for Groww, which sends no token), and price
-holdings and positions from `unified:quotes:live`. Until `map_instruments` has written that cache nothing
+holdings and positions from `unified:quotes:live`. Until `map` has written that cache nothing
 resolves, and every order, trade and position carries a null `instrument_id`.
 
 ## The portfolio and order documents
 
-`orders`, `trades`, `positions`, `holdings` and `funds` each write one JSON document with SET, in the shape
+`api_order_details`, `api_trade_details`, `positions`, `holdings` and `funds` each write one JSON document
+with SET, in the shape
 the matching REST route answers:
 
 | Key | Document |
@@ -80,14 +100,14 @@ orders and positions `as_of` is the newer of the newest entry's `observed_at` an
 or a flat account, is still `ok` while the poller runs. A missing or unreadable broker contributes nothing,
 so it is never mistaken for a broker holding no money or no positions.
 
-## Instruments: `map_instruments`
+## Instruments: `map`
 
 ```bash
-bin/unified/map_instruments                      # every broker, today
-bin/unified/map_instruments dhan kotak           # only these
-bin/unified/map_instruments --date 2026-09-14    # a date already downloaded, not older than one already mapped
-bin/unified/map_instruments --skip-collisions    # leave stale duplicate instruments alone
-bin/unified/map_instruments --cache-only --date 2026-09-13   # only rewrite the Redis cache for a mapped date
+bin/unified/instruments/map                      # every broker, today
+bin/unified/instruments/map dhan kotak           # only these
+bin/unified/instruments/map --date 2026-09-14    # a date already downloaded, not older than one already mapped
+bin/unified/instruments/map --skip-collisions    # leave stale duplicate instruments alone
+bin/unified/instruments/map --cache-only --date 2026-09-13   # only rewrite the Redis cache for a mapped date
 ```
 
 Each run applies the mapping DDL, maps the date's broker snapshots with the [instrument mapping](instrument-mapping.md) stage, decides the date's currency and commodity [contract sizes](instrument-mapping.md#contract-sizes) into `unified.contract_sizes`, and then writes the cache and warms the REST API's catalogue.
@@ -110,13 +130,13 @@ the previous day's complete cache or the new one, never a mix. The catalogue war
 date's `unified:catalogue:` keys; a warm that fails is logged without failing the run, and the API reads
 the unified tables until the next warm succeeds.
 
-## Price history: `historical_prices`
+## Price history: `price_history`
 
 ```bash
-bin/unified/historical_prices daily                  # load, corrections, load, factors, verify
-bin/unified/historical_prices load --symbols RELIANCE,NIFTY
-bin/unified/historical_prices factors --stale-days 14
-bin/unified/historical_prices status
+bin/unified/instruments/price_history daily                  # load, corrections, load, factors, verify
+bin/unified/instruments/price_history load --symbols RELIANCE,NIFTY
+bin/unified/instruments/price_history factors --stale-days 14
+bin/unified/instruments/price_history status
 redis-cli GET unified:prices:last_run
 ```
 
@@ -125,9 +145,9 @@ The steps, the options and the rules they follow are described in
 failing the job. Every run first applies the mapping and price DDL and `unified.ticks` with its adjusted
 view, and each run's outcome is written to `unified:prices:last_run`.
 
-## Live quotes: `quotes`
+## Live quotes: `websocket_quotes`
 
-`quotes` reads all ten broker quote streams as the consumer group `unified` - apart from the `persist`
+`websocket_quotes` reads all ten broker quote streams as the consumer group `unified` - apart from the `persist`
 group, so each gets every tick - and turns them into one [unified quote](../architecture/contracts.md#the-unified-quote)
 per instrument. Each tick goes through six steps, cheapest refusal first:
 
@@ -151,12 +171,12 @@ per instrument. Each tick goes through six steps, cheapest refusal first:
 | `unified:quotes:unresolved` | Counts per unresolved `broker:token:reason` |
 
 The group is created at the end of each stream the first time, since a live cache has no use for history.
-Only instruments some broker's `quotes` script is subscribed to are in the hash; an instrument nobody streams
+Only instruments some broker's `websocket_quotes` script is subscribed to are in the hash; an instrument nobody streams
 is simply absent. A quote stale for a week is removed, and today's previous closes are recovered from the
 hash at start.
 
 There is no instrument list here to keep in step with the brokers': this script writes a quote for whatever
-arrives on the ten streams, so its coverage is exactly the coverage of the feeds. Since `bin/zerodha/quotes`
+arrives on the ten streams, so its coverage is exactly the coverage of the feeds. Since `bin/zerodha/instruments/websocket_quotes`
 began carrying Zerodha's whole instrument master on 2026-09-16, that is close to every instrument Zerodha
 lists. Running the resolver's own rules over that day's master, 112,422 of the 112,657 instruments resolve to
 exactly one unified instrument and 235 do not, so `unified:quotes:live` should hold about 112,400 instruments
@@ -173,7 +193,7 @@ Every one of them logs a warning the first time it is seen under a mapping date,
 
 !!! warning "The unified feed has not been run at this size"
 
-    `bin/unified/quotes` is one process reading all ten streams 500 entries at a time, and it had 4.6 million
+    `bin/unified/instruments/websocket_quotes` is one process reading all ten streams 500 entries at a time, and it had 4.6 million
     ticks through it when the feeds carried fifteen instruments each. Whether it keeps up with Zerodha's whole
     master has not been measured. Its hourly stale purge also reads and parses every field of
     `unified:quotes:live` on the same thread that processes ticks, which is a scan of about 112,400 documents
@@ -243,16 +263,16 @@ only when no verified broker streams it, until a live session confirms what is m
 | Fyers | `prev_close_price`, always | lots (unconfirmed) | both | Protocol only; nothing stored yet. Currency derivatives left out |
 | Groww | not used until confirmed | NSE and BSE only | exchange time | Protocol only; nothing stored yet |
 | INDmoney | not used - `close` is the last price | NSE and BSE only | both true instants | In-session NSE ticks, 2026-09-15, agree with Zerodha on price, volume and times; no order book quantities |
-| Stoxkart | `close` before the session ends, from the previous close packet | lots | both true instants on NSE, counted from 1980 and converted by `bin/stoxkart/quotes`; no exchange time on MCX | Streamed broadcast ticks, 2026-09-15, agree with Zerodha at the same moment on last price, volume, average price, OHLC and previous close (TCS, RELIANCE, HDFCBANK, CRUDEOIL SEP), total bid and offered quantity and first depth level (RELIANCE, HDFCBANK, CRUDEOIL), MCX open interest in lots (15634), last trade time and NSE exchange time |
+| Stoxkart | `close` before the session ends, from the previous close packet | lots | both true instants on NSE, counted from 1980 and converted by `bin/stoxkart/instruments/websocket_quotes`; no exchange time on MCX | Streamed broadcast ticks, 2026-09-15, agree with Zerodha at the same moment on last price, volume, average price, OHLC and previous close (TCS, RELIANCE, HDFCBANK, CRUDEOIL SEP), total bid and offered quantity and first depth level (RELIANCE, HDFCBANK, CRUDEOIL), MCX open interest in lots (15634), last trade time and NSE exchange time |
 
 Where a broker's `close` is not used, the previous close carries forward from whichever broker owned
-the instrument earlier that day, and is null if none did. `bin/unified/quotes` carries these normalizers
+the instrument earlier that day, and is null if none did. `bin/unified/instruments/websocket_quotes` carries these normalizers
 itself, in `build_normalizers`; the same facts are stated for the REST API's broker quotes in
 `stock_brokers/instruments/ticks/<broker>.py`.
 
-## Order and position updates: `order_updates`
+## Order and position updates: `websocket_order_details`
 
-`order_updates` reads the order update streams of all ten brokers and the four position update streams
+`websocket_order_details` reads the order update streams of all ten brokers and the four position update streams
 (Fyers, Groww, Kotak, Wisdom Capital), fourteen streams in all, as the group `unified`. Stoxkart streams
 no position updates. An order update is normalized as the broker's own script normalizes it, except that
 Stoxkart's entry already carries the normalized `order` its script built, which is used as it is. The
@@ -272,53 +292,64 @@ The hashes expire at 06:00 IST like the brokers' merged hashes, and an update ob
 
 ## Profiles, details and the session
 
-`user-profile` writes `unified:user:details`, one object with a key for each of the ten brokers and that
+`details` writes `unified:user:details`, one object with a key for each of the ten brokers and that
 broker's profile `data` as the value, or `null` when its key is missing or holds no profile. Stoxkart's
 `email_id` arrives encrypted, as `ENC-` followed by hexadecimal, so it is not a readable address. Kotak's comes
-from `bin/kotak/login` and Wisdom Capital's is refreshed once a day, so each is as fresh as its own
+from `bin/kotak/session/connect` and Wisdom Capital's is refreshed once a day, so each is as fresh as its own
 script keeps it.
 
-`details` copies the MongoDB `user_details`, `broker_details` and `exchange_details` collections into
-`unified:details:users`, `unified:details:brokers` and `unified:details:exchanges` every minute, each a JSON
-array of the documents, written together in one MULTI. MongoDB stays the store of record; `--once` copies
-and exits.
+Three sibling scripts named `unified_details` copy the MongoDB detail collections into Redis every minute,
+each a JSON array of the collection's documents without `_id`. MongoDB stays the store of record, and
+`--once` copies and exits.
 
-`login` and `logout` are the command-line equivalents of the REST API's connect and disconnect, taking the
+| Script | Collection | Key | Served by |
+| --- | --- | --- | --- |
+| `bin/unified/user/unified_details` | `user_details` | `unified:details:users` | `GET /api/users/details` |
+| `bin/unified/brokers/unified_details` | `broker_details` | `unified:details:brokers` | `GET /api/brokers/details` |
+| `bin/unified/exchanges/unified_details` | `exchange_details` | `unified:details:exchanges` | `GET /api/exchanges/details` |
+
+One script used to cache all three keys in a single MULTI, so a reader never saw a new
+`unified:details:exchanges` beside an old `unified:details:brokers`. Three processes cannot do that, so a
+reader can now find one key updated while another still holds the copy from the minute before. Nothing
+depends on the three changing together: they describe different things, and no route reads more than one
+of them.
+
+`connect` and `disconnect` are the command-line equivalents of the REST API's connect and disconnect, taking the
 api key from `--api-key` or `UNIFIED_BROKER_INTERFACE_API_KEY` and the secret from
-`UNIFIED_BROKER_INTERFACE_API_SECRET` or a prompt - never from an argument. `login` issues the one
+`UNIFIED_BROKER_INTERFACE_API_SECRET` or a prompt - never from an argument. `connect` issues the one
 application-wide token and writes
 `{"status": "success", "access-token": …, "last_login": …, "expires_at": …}` to `unified:session:status`;
-`logout` revokes the token for every client and writes `"status": "logged out"` with the token,
+`disconnect` revokes the token for every client and writes `"status": "logged out"` with the token,
 `last_login` and `expires_at` null. Unlike a
 broker's logout, this one does end the session, since the token is this application's own.
 
 ## Persisters
 
-`persist_ticks`, `persist_orders` and `persist_positions` read their stream as the group `persist` and COPY
+`store_quotes_to_db`, `store_orders_to_db` and `store_positions_to_db` read their stream as the group `persist` and COPY
 a batch at a time, acknowledging an entry only after its batch is committed - so nothing is lost across a
 restart, and a batch committed just before a crash can be written twice. Each creates its table on start
 from its `.sql` file. Run one instance of each.
 
 | Script | Table | One row per |
 | --- | --- | --- |
-| `persist_ticks` | `unified.ticks` | Accepted quote; stale quotes and those without an instrument are skipped |
-| `persist_orders` | `unified.order_updates` | Transition of an order |
-| `persist_positions` | `unified.positions` | Snapshot of a position |
+| `store_quotes_to_db` | `unified.ticks` | Accepted quote; stale quotes and those without an instrument are skipped |
+| `store_orders_to_db` | `unified.order_updates` | Transition of an order |
+| `store_positions_to_db` | `unified.positions` | Snapshot of a position |
 
 ## The unified schema
 
 | Object | Kind | Written by |
 | --- | --- | --- |
-| `unified.instruments` | table | `map_instruments` |
-| `unified.broker_mappings` | hypertable by `mapping_date` | `map_instruments` |
-| `unified.contract_sizes` | hypertable by `mapping_date` | `map_instruments` |
-| `unified.price_history`, `unified.price_history_sources`, `unified.price_history_corrections`, `unified.adjustment_factors`, `unified.yahoo_fetch_state` | tables | `historical_prices` |
+| `unified.instruments` | table | `map` |
+| `unified.broker_mappings` | hypertable by `mapping_date` | `map` |
+| `unified.contract_sizes` | hypertable by `mapping_date` | `map` |
+| `unified.price_history`, `unified.price_history_sources`, `unified.price_history_corrections`, `unified.adjustment_factors`, `unified.yahoo_fetch_state` | tables | `price_history` |
 | `unified.adjustment_ranges`, `unified.correction_ranges`, `unified.price_history_adjusted` | views | - |
 | `unified.adjusted_bars` | function | - |
-| `unified.ticks` | hypertable, compressed after 7 days | `persist_ticks` |
+| `unified.ticks` | hypertable, compressed after 7 days | `store_quotes_to_db` |
 | `unified.ticks_adjusted` | view | - |
-| `unified.order_updates` | hypertable | `persist_orders` |
-| `unified.positions` | hypertable | `persist_positions` |
+| `unified.order_updates` | hypertable | `store_orders_to_db` |
+| `unified.positions` | hypertable | `store_positions_to_db` |
 
 The DDL lives in numbered `.sql` files, every statement safe to re-run, applied in filename order by the
 scripts that need them (see [DDL and migrations](../database/ddl.md)):
@@ -329,8 +360,8 @@ scripts that need them (see [DDL and migrations](../database/ddl.md)):
 | `stock_brokers/instruments/historical/utilities/sql/ddl` | `200_unified_price_history.sql` to `250_unified_price_history_corrections.sql` |
 | `stock_brokers/instruments/ticks/utilities/sql/ddl` | `300_unified_ticks.sql`, `310_unified_order_updates.sql`, `320_unified_positions.sql`, `330_unified_ticks_adjusted.sql` |
 
-`330` reads `unified.adjustment_ranges` from the price DDL, so it is applied by `historical_prices`, not by
-`persist_ticks`.
+`330` reads `unified.adjustment_ranges` from the price DDL, so it is applied by `price_history`, not by
+`store_quotes_to_db`.
 
 ### Table names
 
@@ -346,25 +377,28 @@ The units live in `services/unified/`:
 
 | Unit | Type | What it does |
 | --- | --- | --- |
-| `unified@.service` | template | Runs one long-lived script: `unified@quotes` runs `bin/unified/quotes`. Restarted 15 s after exiting, except on exit 2 |
-| `unified-instruments.service` | oneshot | Every broker's `instruments`, Stoxkart's included, then `map_instruments`. A failed download does not stop the others or the mapping; the mapping's exit status is the unit's |
-| `unified-instruments.timer` | timer | 07:45 IST every day, `Persistent=true` - a missed snapshot can never be fetched later |
-| `unified-prices.service` | oneshot | `historical_prices daily`, ordered after `unified-instruments.service` |
+| `unified-instruments@.service`, `unified-orders@.service`, `unified-portfolio@.service`, `unified-user@.service`, `unified-brokers@.service`, `unified-exchanges@.service` | templates | One per folder, running one long-lived script from it: `unified-instruments@websocket_quotes` runs `bin/unified/instruments/websocket_quotes`. Restarted 15 s after exiting, except on exit 2 |
+| `unified-mapping.service` | oneshot | Every broker's `daily_feed`, Stoxkart's included, then `map`. A failed download does not stop the others or the mapping; the mapping's exit status is the unit's |
+| `unified-mapping.timer` | timer | 07:45 IST every day, `Persistent=true` - a missed snapshot can never be fetched later |
+| `unified-prices.service` | oneshot | `price_history daily`, ordered after `unified-mapping.service` |
 | `unified-prices.timer` | timer | 08:30 IST Monday to Saturday, `Persistent=true` |
 | `unified-rest-api.service` | service | `bin/rest-api`; a route whose key is missing answers 503 rather than the service failing to start |
 | `unified.target` | target | Everything above |
 
-`login` and `logout` have no units. Install from the comments in `unified.target`:
+`connect` and `disconnect` have no units. Install from the comments in `unified.target`:
 
 ```bash
 systemctl --user link ~/Projects/unified_broker_interface/services/unified/*
 systemctl --user daemon-reload
-systemctl --user enable --now unified.target unified-instruments.timer unified-prices.timer \
-    unified@quotes.service unified@order_updates.service unified@orders.service \
-    unified@trades.service unified@positions.service unified@holdings.service \
-    unified@funds.service unified@user-profile.service unified@details.service \
-    unified-rest-api.service unified@persist_ticks.service unified@persist_orders.service \
-    unified@persist_positions.service
+systemctl --user enable --now unified.target unified-mapping.timer unified-prices.timer \
+    unified-instruments@websocket_quotes.service unified-instruments@store_quotes_to_db.service \
+    unified-orders@api_order_details.service unified-orders@api_trade_details.service \
+    unified-orders@websocket_order_details.service unified-orders@store_orders_to_db.service \
+    unified-portfolio@positions.service unified-portfolio@holdings.service \
+    unified-portfolio@funds.service unified-portfolio@store_positions_to_db.service \
+    unified-user@details.service unified-user@unified_details.service \
+    unified-brokers@unified_details.service unified-exchanges@unified_details.service \
+    unified-rest-api.service
 ```
 
 The unified scripts only have data to combine while each broker's target is running.
@@ -375,19 +409,19 @@ The unified scripts only have data to combine while each broker's target is runn
 | --- | --- |
 | 06:00 | The brokers' merged order and position hashes and the unified update hashes reset |
 | 07:00-07:30 daily | Each `<broker>-login.timer` fires at 07:00 plus up to 30 minutes of random delay |
-| 07:45 daily | `unified-instruments`: ten instrument downloads, then `map_instruments` and the cache warm - about three quarters of an hour |
-| 08:30 Mon-Sat | `unified-prices`: `historical_prices daily`; on Saturday it picks up Friday's last bars and the week's corporate actions. When the 07:45 job is still running, it waits for that to finish first |
+| 07:45 daily | `unified-mapping`: ten instrument downloads, then `map` and the cache warm - about three quarters of an hour |
+| 08:30 Mon-Sat | `unified-prices`: `price_history daily`; on Saturday it picks up Friday's last bars and the week's corporate actions. When the 07:45 job is still running, it waits for that to finish first |
 | 09:00 | Pre-open. The feeds resolve against the day's mapping |
 
 Everything else runs continuously: the pollers, feeds, combiners, persisters and each broker's
-`historical_prices` worker.
+`price_history` worker.
 
 ## Looking at it
 
 ```bash
 systemctl --user list-timers 'unified*'
-journalctl --user -u unified-instruments --since today
-journalctl --user -u unified@orders -f
+journalctl --user -u unified-mapping --since today
+journalctl --user -u unified-orders@api_order_details -f
 redis-cli GET unified:mapping:meta
 redis-cli GET unified:orders:orders | jq '.brokers'
 redis-cli XINFO GROUPS unified:quotes:stream

@@ -3,10 +3,10 @@
 Combine every broker's funds from Redis into one funds document, the way the REST API's `/api/portfolio/funds`
 answers, and write it to the Redis key `unified:portfolio:funds` every half second.
 
-    bin/unified/funds
+    bin/unified/portfolio/funds
     redis-cli GET unified:portfolio:funds
 
-Nothing here calls a broker. Each broker's funds are already kept in Redis by `bin/<broker>/funds`, as
+Nothing here calls a broker. Each broker's funds are already kept in Redis by `bin/<broker>/portfolio/funds`, as
 `{"timestamp", "status", "code", "data"}` under `<broker>:portfolio:funds`, so this reads those and interprets them.
 
 **The document** has the REST API's shape, every figure the sum across brokers, rounded to paise:
@@ -58,7 +58,7 @@ from pathlib import Path
 
 # Run under the project's virtual environment, and put the project on sys.path. See
 # utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from utilities.bootstrap import run_under_venv
 
 PROJECT_ROOT = run_under_venv(__file__)

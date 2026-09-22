@@ -3,11 +3,11 @@
 Map every broker's instrument snapshot into `unified.instruments` and `unified.broker_mappings`, and cache the day's rows
 in Redis as `unified:instruments` and `unified:broker_mappings`.
 
-    bin/unified/map_instruments                      # every broker, today
-    bin/unified/map_instruments dhan kotak           # only these
-    bin/unified/map_instruments --date 2026-09-14    # a date already downloaded, not older than one already mapped
-    bin/unified/map_instruments --skip-collisions    # leave stale duplicate instruments alone
-    bin/unified/map_instruments --cache-only --date 2026-09-13   # only rewrite the Redis cache for a mapped date
+    bin/unified/instruments/map                                      # every broker, today
+    bin/unified/instruments/map dhan kotak                           # only these
+    bin/unified/instruments/map --date 2026-09-14                    # a date already downloaded, not older than one already mapped
+    bin/unified/instruments/map --skip-collisions                    # leave stale duplicate instruments alone
+    bin/unified/instruments/map --cache-only --date 2026-09-13       # only rewrite the Redis cache for a mapped date
 
     redis-cli HGET unified:instruments <instrument id>
     redis-cli HGET unified:broker_mappings dhan:<instrument id>
@@ -76,7 +76,7 @@ from pathlib import Path
 
 # Run under the project's virtual environment, and put the project on sys.path. See
 # utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from utilities.bootstrap import run_under_venv
 
 PROJECT_ROOT = run_under_venv(__file__)
@@ -285,7 +285,7 @@ def main():
                         help="only rewrite the Redis cache for the date from the unified tables; no mapping")
     arguments = parser.parse_args()
 
-    logger = get_logger("unified.map_instruments")
+    logger = get_logger("unified.map")
     unknown = [broker for broker in arguments.brokers if broker not in MAPPED_BROKERS]
     if unknown:
         logger.error(f"Unknown broker(s): {', '.join(unknown)}. Known: {', '.join(MAPPED_BROKERS)}")
@@ -326,7 +326,7 @@ def main():
     if not results:
         # The daily job expects today's snapshots; none at all usually means the downloads did not run.
         logger.error(f"No broker has instrument rows stored for {mapping_date}; nothing was mapped. "
-                     f"Download the instruments first, with bin/<broker>/instruments.")
+                     f"Download the instruments first, with bin/<broker>/instruments/daily_feed.")
     if results:
         decide_contract_sizes(mapping_date, logger)
 

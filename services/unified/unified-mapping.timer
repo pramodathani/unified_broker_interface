@@ -12,7 +12,7 @@ AccuracySec=1min
 # A snapshot missed is a snapshot that can never be fetched later - the brokers publish only today's file - so a machine
 # that was off at 07:45 runs the job as soon as it starts.
 Persistent=true
-Unit=unified-instruments.service
+Unit=unified-mapping.service
 
 [Install]
 WantedBy=timers.target

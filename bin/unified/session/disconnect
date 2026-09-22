@@ -2,13 +2,13 @@
 """
 Log out of the unified broker interface: revoke the access token in force and mark `unified:session:status` logged out.
 
-    bin/unified/logout                                   # asks for the key and secret
-    UNIFIED_BROKER_INTERFACE_API_KEY=... UNIFIED_BROKER_INTERFACE_API_SECRET=... bin/unified/logout
+    bin/unified/session/disconnect                                                                               # asks for the key and secret
+    UNIFIED_BROKER_INTERFACE_API_KEY=... UNIFIED_BROKER_INTERFACE_API_SECRET=... bin/unified/session/disconnect
 
     redis-cli GET unified:session:status
 
 The equivalent of the REST API's `DELETE /api/session/disconnect`. The REST API authenticates that with the token in
-force; this takes the api key and secret instead, the same way `bin/unified/login` does - `--api-key`, or
+force; this takes the api key and secret instead, the same way `bin/unified/session/connect` does - `--api-key`, or
 `UNIFIED_BROKER_INTERFACE_API_KEY`, or a prompt, and the secret from `UNIFIED_BROKER_INTERFACE_API_SECRET` or a prompt
 that does not echo - checked in constant time against the `unified_broker_interface` document in `settings`.
 
@@ -36,7 +36,7 @@ from pathlib import Path
 
 # Run under the project's virtual environment, and put the project on sys.path. See
 # utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from utilities.bootstrap import run_under_venv
 
 PROJECT_ROOT = run_under_venv(__file__)
@@ -104,7 +104,7 @@ def main():
 
     from utilities.configurations import get_cache, get_logger, get_mongo_db
 
-    logger = get_logger("unified.logout")
+    logger = get_logger("unified.disconnect")
     api_key, api_secret = credentials(arguments)
     if not api_key or not api_secret:
         logger.error(f"An api key and secret are needed: pass --api-key or set {API_KEY_VARIABLE}, and set "

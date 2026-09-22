@@ -3,9 +3,9 @@
 Log in to the unified broker interface with its api key and secret, issue an access token, and record the session in
 the Redis key `unified:session:status`.
 
-    bin/unified/login                                    # asks for the key and secret
-    UNIFIED_BROKER_INTERFACE_API_KEY=... UNIFIED_BROKER_INTERFACE_API_SECRET=... bin/unified/login
-    bin/unified/login --api-key <key>                     # asks for the secret only
+    bin/unified/session/connect                                                                               # asks for the key and secret
+    UNIFIED_BROKER_INTERFACE_API_KEY=... UNIFIED_BROKER_INTERFACE_API_SECRET=... bin/unified/session/connect
+    bin/unified/session/connect --api-key <key>                                                               # asks for the secret only
 
     redis-cli GET unified:session:status
 
@@ -48,7 +48,7 @@ from pathlib import Path
 
 # Run under the project's virtual environment, and put the project on sys.path. See
 # utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from utilities.bootstrap import run_under_venv
 
 PROJECT_ROOT = run_under_venv(__file__)
@@ -116,7 +116,7 @@ def main():
 
     from utilities.configurations import api_configuration, get_cache, get_logger, get_mongo_db
 
-    logger = get_logger("unified.login")
+    logger = get_logger("unified.connect")
     api_key, api_secret = credentials(arguments)
     if not api_key or not api_secret:
         logger.error(f"An api key and secret are needed: pass --api-key or set {API_KEY_VARIABLE}, and set "

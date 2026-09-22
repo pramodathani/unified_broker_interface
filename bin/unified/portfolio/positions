@@ -3,13 +3,13 @@
 Combine every broker's positions from Redis into one positions document, the way the REST API's
 `/api/portfolio/positions` answers, and write it to the Redis key `unified:portfolio:positions` every half second.
 
-    bin/unified/positions
+    bin/unified/portfolio/positions
     redis-cli GET unified:portfolio:positions
 
 Nothing here calls a broker. Each broker's open positions are already kept in Redis, merged from its REST positions and,
 for Fyers, Groww, Kotak and Wisdom Capital, its position update stream, as the hash `<broker>:portfolio:positions`: one
 field per position, each value `{"observed_at", "source", "position", "data"}`. The instruments are kept by
-`bin/unified/map_instruments` and live prices by `bin/unified/quotes` in `unified:quotes:live`, so this reads those and
+`bin/unified/instruments/map` and live prices by `bin/unified/instruments/websocket_quotes` in `unified:quotes:live`, so this reads those and
 interprets them.
 
 **The document** has the REST API's shape:
@@ -53,7 +53,7 @@ sums. A resolved row's last price comes from its instrument's quote in `unified:
 there is no quote. Profit stays the brokers' own.
 
 **Brokers.** `brokers` says, for each broker, how its hash was read, with `as_of` the newer of the newest entry's
-`observed_at` and the last successful poll, which `bin/<broker>/positions` records in
+`observed_at` and the last successful poll, which `bin/<broker>/portfolio/positions` records in
 `<broker>:portfolio:positions:polled_at`: `ok`; `stale` when that is more than a minute ago - the poller refreshes every
 entry and records itself on every poll, so its scripts may have stopped, and its positions are still included; `missing`
 when there is neither a hash nor a recorded poll, so the broker's scripts have not run today - a flat account being read
@@ -72,7 +72,7 @@ from pathlib import Path
 
 # Run under the project's virtual environment, and put the project on sys.path. See
 # utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from utilities.bootstrap import run_under_venv
 
 PROJECT_ROOT = run_under_venv(__file__)
