@@ -2,7 +2,7 @@
 --
 -- Stored prices stay as streamed, and every confirmed factor whose ex-date falls after the tick's trading day is applied
 -- on read, through unified.adjustment_ranges. That view is created by the historical DDL (240), so this file is applied after it, by
--- bin/unified/historical_prices, together with 300_unified_ticks.sql for the table it reads; bin/unified/persist_ticks
+-- bin/unified/instruments/price_history, together with 300_unified_ticks.sql for the table it reads; bin/unified/instruments/store_quotes_to_db
 -- applies only 300 and never needs this.
 --
 -- Prices are multiplied by price_factor and every quantity except open interest by volume_factor. Open interest is left

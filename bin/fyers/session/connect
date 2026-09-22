@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+"""
+Log in to the Fyers API by constructing `FyersAPI`, confirm the session works, and record the outcome in
+the Redis key `fyers:session:status`.
+
+    bin/fyers/session/connect
+    redis-cli GET fyers:session:status
+
+`FyersAPI()` probes `GET /api/v3/profile` with the stored token and only runs the real login - through
+Fyers' API alone: a login OTP for the Fyers ID, verified with a TOTP, then the PIN, an auth code, and the
+auth code exchanged for the day's access token - when that probe raises. A new token is written to MongoDB
+and to the Redis `last_login` hash, where every other process picks it up. The profile is then asked once
+more and its body checked, because Fyers can refuse a dead session inside an HTTP 200 (`s` other than `ok`,
+code -8, -15, -16 or -17): a success means a profile actually served, not just a constructor that returned.
+
+`fyers:session:status` holds one JSON object, replaced on every run:
+
+    {"status": "success", "access-token": "<token>", "last_login": "2026-09-14 08:30:02"}
+    {"status": "failure", "access-token": null, "last_login": "2026-09-14 08:30:02"}
+
+On success `last_login` is when the token in force was issued, which is earlier than this run when the
+stored session was still good. On failure it is when this attempt was made.
+
+Exits 0 when the session works and 1 when the login, the check or the Redis write fails, so a systemd
+unit can retry on failure. Logs in to a live broker account. Reads only - it places no orders.
+"""
+
+import sys
+import json
+from datetime import datetime
+from pathlib import Path
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+PROFILE_URL = "https://api-t1.fyers.in/api/v3/profile"
+REDIS_KEY = "fyers:session:status"
+TIMEOUT_SECONDS = 10
+
+def main():
+    """Construct FyersAPI, which logs in when the stored session is dead, confirm it, and record the outcome."""
+    from stock_brokers.api.fyers import FyersAPI
+    from utilities.configurations import get_cache
+
+    try:
+        fyers = FyersAPI()
+        profile = (fyers.get(url=PROFILE_URL, timeout=TIMEOUT_SECONDS) or {}).get('data')
+        if not isinstance(profile, dict) or profile.get('s') not in (None, 'ok'):
+            raise RuntimeError(f"the profile request refused the session: {str(profile)[:200]}")
+        login = fyers._last_login or {}
+        record = {'status': 'success', 'access-token': login.get('access_token'), 'last_login': login.get('last_login')}
+        print(f"fyers ok logged in at {record['last_login']}")
+    except Exception as exception:
+        record = {'status': 'failure', 'access-token': None, 'last_login': datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+        print(f"fyers FAILED {type(exception).__name__}: {exception}", file=sys.stderr)
+
+    try:
+        get_cache().set(REDIS_KEY, json.dumps(record))
+    except Exception as exception:
+        print(f"fyers could not write {REDIS_KEY}: {type(exception).__name__}: {exception}", file=sys.stderr)
+        return 1
+
+    return 0 if record['status'] == 'success' else 1
+
+if __name__ == "__main__":
+    raise SystemExit(main())

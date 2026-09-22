@@ -4,7 +4,7 @@ broker when it is not.
 
 **The cache.** Two Redis hashes hold quotes, both in the unified quote document's shape:
 
-- `unified:quotes:live`, written by `bin/unified/quotes` from every broker's quote feed, keyed by instrument id;
+- `unified:quotes:live`, written by `bin/unified/instruments/websocket_quotes` from every broker's quote feed, keyed by instrument id;
 - `unified:quotes:fetched`, written here with quotes fetched from brokers, each field expiring after two days.
 
 The more recently received of the two is used when it is not marked stale and either:
@@ -19,9 +19,9 @@ nothing is fetched after hours for an instrument that was quoted during the day.
 **A broker.** Otherwise the brokers that carry the instrument and have a REST quote module are tried in
 the unified tick service's priority order, verified brokers first. The response becomes a contract
 tick, is resolved to the instrument's plan and normalized by that broker's `TickNormalizer`, and is
-built into a document in the same shape `bin/unified/quotes` writes - so a fetched quote and a streamed one are
+built into a document in the same shape `bin/unified/instruments/websocket_quotes` writes - so a fetched quote and a streamed one are
 indistinguishable but for `source`. The fetched quote is stored in `unified:quotes:fetched`, never in
-`unified:quotes:live`, whose ownership rules belong to `bin/unified/quotes`.
+`unified:quotes:live`, whose ownership rules belong to `bin/unified/instruments/websocket_quotes`.
 """
 
 import json
@@ -46,7 +46,7 @@ from utilities.configurations import get_logger
 
 logger = get_logger("rest_api.quotes")
 
-# The live quotes bin/unified/quotes keeps, and the quotes fetched from brokers here.
+# The live quotes bin/unified/instruments/websocket_quotes keeps, and the quotes fetched from brokers here.
 LIVE_QUOTES_KEY = "unified:quotes:live"
 BROKER_QUOTES_KEY = "unified:quotes:fetched"
 

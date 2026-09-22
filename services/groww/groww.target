@@ -5,7 +5,10 @@
 #     systemctl --user link ~/Projects/unified_broker_interface/services/groww/*
 #     systemctl --user daemon-reload
 #     systemctl --user enable --now groww.target groww-login.timer \
-#         groww@quotes.service groww@order_updates.service groww@persist_ticks.service groww@persist_orders.service groww@orders.service groww@trades.service groww@positions.service groww@holdings.service groww@funds.service groww@user-profile.service groww@persist_positions.service
+#         groww-instruments@websocket_quotes.service groww-instruments@store_quotes_to_db.service \
+#         groww-orders@websocket_order_details.service groww-orders@store_orders_to_db.service groww-orders@api_order_details.service groww-orders@api_trade_details.service \
+#         groww-portfolio@positions.service groww-portfolio@holdings.service groww-portfolio@funds.service groww-portfolio@store_positions_to_db.service \
+#         groww-user@details.service
 
 [Unit]
 Description=groww scripts

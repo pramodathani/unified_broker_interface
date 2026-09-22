@@ -5,10 +5,15 @@
 #     systemctl --user link ~/Projects/unified_broker_interface/services/flattrade/*
 #     systemctl --user daemon-reload
 #     systemctl --user enable --now flattrade.target flattrade-login.timer \
-#         flattrade@quotes.service flattrade@persist_ticks.service flattrade@persist_orders.service flattrade@orders.service flattrade@trades.service flattrade@positions.service flattrade@holdings.service flattrade@funds.service flattrade@user-profile.service flattrade-historical-prices.service
+#         flattrade-instruments@websocket_quotes.service flattrade-instruments@store_quotes_to_db.service \
+#         flattrade-orders@store_orders_to_db.service flattrade-orders@api_order_details.service flattrade-orders@api_trade_details.service \
+#         flattrade-portfolio@positions.service flattrade-portfolio@holdings.service flattrade-portfolio@funds.service \
+#         flattrade-user@details.service \
+#         flattrade-historical-prices.service
 #
-# order_updates is left out: Flattrade permits one websocket per session and quotes holds it, so enabling
-# flattrade@order_updates.service beside flattrade@quotes.service would knock one of them off.
+# The order update feed is left out: Flattrade permits one websocket per session and the quote feed holds it, so
+# enabling flattrade-orders@websocket_order_details.service beside
+# flattrade-instruments@websocket_quotes.service would knock one of them off.
 
 [Unit]
 Description=flattrade scripts

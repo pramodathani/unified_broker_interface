@@ -1,0 +1,29 @@
+# One bin/zerodha/portfolio/ script that keeps running: the positions, holdings and funds pollers. So
+# zerodha-portfolio@positions.service runs bin/zerodha/portfolio/positions. They all fit, because every one of them
+# logs in by itself, logs in again when its token is refused, and exits non-zero only when it cannot recover.
+#
+#     systemctl --user enable --now zerodha-portfolio@positions.service
+#     journalctl --user -u zerodha-portfolio@positions -f
+
+[Unit]
+Description=zerodha portfolio %i
+PartOf=zerodha.target
+Wants=network-online.target
+After=network-online.target
+# Never give up restarting: a broker outage can outlast any start limit, and each script paces its own logins.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+# Python block-buffers stdout when it is not a terminal; without this the journal stays empty.
+Environment=PYTHONUNBUFFERED=1
+SyslogIdentifier=zerodha-portfolio-%i
+ExecStart=%h/Projects/unified_broker_interface/bin/zerodha/portfolio/%i
+Restart=always
+RestartSec=15
+# Exit 2 is a bad argument or configuration - nothing to subscribe to, say - which a restart cannot fix.
+RestartPreventExitStatus=2
+TimeoutStopSec=60
+
+[Install]
+WantedBy=zerodha.target

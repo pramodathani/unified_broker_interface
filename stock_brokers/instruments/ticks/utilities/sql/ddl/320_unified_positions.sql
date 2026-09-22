@@ -1,8 +1,8 @@
 -- Every position snapshot a broker's websocket delivered, one table across all brokers.
 --
--- Written by bin/unified/persist_positions from the unified position update stream bin/unified/order_updates fills,
+-- Written by bin/unified/portfolio/store_positions_to_db from the unified position update stream bin/unified/orders/websocket_order_details fills,
 -- for the brokers that stream positions (fyers, groww, kotak, wisdom_capital). Each row is one position at one broker at
--- one moment, in the REST API's position contract as bin/unified/positions emits a single broker's position: resolved to
+-- one moment, in the REST API's position contract as bin/unified/portfolio/positions emits a single broker's position: resolved to
 -- its unified.instruments id where the unified cache names one, product on the API's words (delivery, intraday, carry,
 -- margin_trading, cover, bracket), quantity signed, buy and sell each as quantity, average price and value, and profit
 -- as the broker reported it. A position is a snapshot rather than an event, so the history is the series of rows.

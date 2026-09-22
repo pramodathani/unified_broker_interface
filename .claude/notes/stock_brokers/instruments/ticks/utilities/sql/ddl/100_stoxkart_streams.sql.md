@@ -2,7 +2,7 @@
 
 ## What the file creates
 
-The file creates the `stoxkart` schema and two tables as TimescaleDB hypertables: `stoxkart.ticks`, which `bin/stoxkart/persist_ticks` fills from `stoxkart:quotes:stream`, and `stoxkart.order_updates`, which `bin/stoxkart/persist_orders` fills from `stoxkart:order-updates:stream`. Each persister applies the file every time it starts, so a new database needs no separate step. Every statement is safe to run again.
+The file creates the `stoxkart` schema and two tables as TimescaleDB hypertables: `stoxkart.ticks`, which `bin/stoxkart/instruments/store_quotes_to_db` fills from `stoxkart:quotes:stream`, and `stoxkart.order_updates`, which `bin/stoxkart/orders/store_orders_to_db` fills from `stoxkart:order-updates:stream`. Each persister applies the file every time it starts, so a new database needs no separate step. Every statement is safe to run again.
 
 ## Why there is no `positions` table
 

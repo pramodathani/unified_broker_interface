@@ -1,6 +1,6 @@
 -- Every order transition at every broker, one table across all brokers.
 --
--- Written by bin/unified/persist_orders from the unified order update stream bin/unified/order_updates fills. Each row
+-- Written by bin/unified/orders/store_orders_to_db from the unified order update stream bin/unified/orders/websocket_order_details fills. Each row
 -- is one update a broker's order websocket delivered, normalized to the REST API's order contract - status, side,
 -- product, order type and validity on the shared vocabulary, times as instants - and resolved to its
 -- unified.instruments id where the unified cache names one. The table is an append-only audit trail rather than a

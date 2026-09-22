@@ -3,8 +3,8 @@
 
 | Route | Does |
 | --- | --- |
-| `GET /details` | Every broker's orders, from `unified:orders:orders`, kept by `bin/unified/orders` every half second |
-| `GET /trades` | Every broker's trades, from `unified:orders:trades`, kept by `bin/unified/trades` every half second |
+| `GET /details` | Every broker's orders, from `unified:orders:orders`, kept by `bin/unified/orders/api_order_details` every half second |
+| `GET /trades` | Every broker's trades, from `unified:orders:trades`, kept by `bin/unified/orders/api_trade_details` every half second |
 | `POST /place` | Places one order at the first broker the configured selector ranks that can take it, reading only Redis before the broker's place-order call |
 | `PUT /modify` | Changes one open order at the broker whose order book in Redis holds its order id |
 | `DELETE /cancel` | Cancels one order at the broker whose order book in Redis holds its order id |

@@ -7,12 +7,12 @@ missing. Consumers can therefore rely on the shape without asking which broker a
 The first three are built by each broker's own [scripts](../guides/broker-scripts.md) in `bin/<broker>/`,
 each of which carries its own decoding and normalization. Every script's module docstring has the table of
 how each field is derived from that broker's own names. The unified quote is built from the ticks by
-`bin/unified/quotes`.
+`bin/unified/instruments/websocket_quotes`.
 
 ## The tick
 
-Written by every `bin/<broker>/quotes` to the hash `<broker>:quotes:live` and the stream
-`<broker>:quotes:stream`, which `bin/<broker>/persist_ticks` writes to `<broker>.ticks` with the order book
+Written by every `bin/<broker>/instruments/websocket_quotes` to the hash `<broker>:quotes:live` and the stream
+`<broker>:quotes:stream`, which `bin/<broker>/instruments/store_quotes_to_db` writes to `<broker>.ticks` with the order book
 flattened into columns. The REST API's quote modules build the same shape from a broker's quote response
 with [`contract_tick`][unified_broker_interface.utilities.broker_quotes.base.contract_tick], so a fetched
 quote is normalized exactly as a streamed one.
@@ -43,7 +43,7 @@ everywhere.
 
 ## The order
 
-Built by `bin/<broker>/orders` from the order book and by `bin/<broker>/order_updates` from the broker's
+Built by `bin/<broker>/orders/api_order_details` from the order book and by `bin/<broker>/orders/websocket_order_details` from the broker's
 websocket, onto the same fields on both sides even where the broker names things differently in its order
 book and its update stream, and stored as the `order` of each entry in `<broker>:orders:orders`.
 
@@ -74,16 +74,16 @@ An unrecognised status is passed through uppercased rather than being forced int
 so a broker inventing a new one is visible instead of silently mislabelled.
 
 The broker's untouched payload is never thrown away. In the Redis hash it is the `data` beside `order`, and
-`bin/<broker>/persist_orders` stores the whole update in the `raw` column of `<broker>.order_updates`. Order
+`bin/<broker>/orders/store_orders_to_db` stores the whole update in the `raw` column of `<broker>.order_updates`. Order
 events are financial records, so a field mapped wrongly has to stay recoverable from the stored row.
 
-The REST API's orders are the same contract, copied field for field by `bin/unified/orders`: with `broker`
-and the order's `instrument_id`, and without `raw` and `received_at`. `bin/unified/order_updates`
+The REST API's orders are the same contract, copied field for field by `bin/unified/orders/api_order_details`: with `broker`
+and the order's `instrument_id`, and without `raw` and `received_at`. `bin/unified/orders/websocket_order_details`
 adds `broker`, `instrument_id` and `observed_at` to each update it combines. See [REST API](../guides/rest-api.md).
 
 ## The position
 
-Built by `bin/<broker>/positions` from the broker's positions, and by `bin/<broker>/order_updates` at the four
+Built by `bin/<broker>/portfolio/positions` from the broker's positions, and by `bin/<broker>/orders/websocket_order_details` at the four
 brokers that stream them - Fyers, Groww, Kotak and Wisdom Capital - and stored as the `position` of each
 entry in `<broker>:portfolio:positions`. A position is a snapshot rather than an event: each one is the state
 of an instrument at a moment, and the history in `<broker>.positions` is the series of snapshots.
@@ -108,7 +108,7 @@ with products such as `delivery`, `intraday` and `carry`. See [REST API](../guid
 
 ## The unified quote
 
-One quote per unified instrument, whichever broker streams it, written by `bin/unified/quotes` to
+One quote per unified instrument, whichever broker streams it, written by `bin/unified/instruments/websocket_quotes` to
 `unified:quotes:live` and `unified:quotes:stream` and served by the REST API's `/api/instruments/quote`. The
 REST API builds a quote fetched from a broker into the same document.
 
@@ -142,7 +142,7 @@ their common value is used.
 Prices are stored as streamed. Splits and bonuses are applied on read through `unified.ticks_adjusted`,
 from the same factors as the [unified price history](../guides/unified-price-history.md). How a tick becomes
 a quote - resolution, session windows and which broker owns an instrument - is in
-[Unified scripts](../guides/unified-scripts.md#live-quotes-quotes).
+[Unified scripts](../guides/unified-scripts.md#live-quotes-websocket_quotes).
 
 ## The shared vocabulary
 

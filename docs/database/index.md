@@ -32,14 +32,14 @@ across a schema boundary to find them.
 The tables built on that identity sit in the same schema for the same reason: they hold one instrument's
 data whichever broker supplied it, each row naming the broker it came from. `unified.price_history`, with its
 sources, corrections and adjustment factors, is the [unified price history](../guides/unified-price-history.md)
-that `bin/unified/historical_prices` builds; `unified.ticks`, `unified.order_updates` and `unified.positions`
-are written by the `bin/unified/persist_*` scripts. See [Unified scripts](../guides/unified-scripts.md#the-unified-schema).
+that `bin/unified/instruments/price_history` builds; `unified.ticks`, `unified.order_updates` and `unified.positions`
+are written by the `bin/unified/*/store_*_to_db` scripts. See [Unified scripts](../guides/unified-scripts.md#the-unified-schema).
 
 ## The four tables
 
 === "ticks"
 
-    One row per [normalized tick](../architecture/contracts.md#the-tick), written by `bin/<broker>/persist_ticks`. Hypertable on `time`, chunked by day - a trading day's ticks for
+    One row per [normalized tick](../architecture/contracts.md#the-tick), written by `bin/<broker>/instruments/store_quotes_to_db`. Hypertable on `time`, chunked by day - a trading day's ticks for
     one broker sit in one chunk, which is the unit most queries scan and the unit compression and
     retention act on.
 
@@ -50,13 +50,13 @@ are written by the `bin/unified/persist_*` scripts. See [Unified scripts](../gui
 
 === "order_updates"
 
-    One row per state transition, not one row per order, written by `bin/<broker>/persist_orders`. An
+    One row per state transition, not one row per order, written by `bin/<broker>/orders/store_orders_to_db`. An
     append-only audit trail, so an order's whole history can be reconstructed. `raw` holds the broker's
     untouched payload.
 
 === "positions"
 
-    One row per snapshot, written by `bin/<broker>/persist_positions` at the four brokers that stream
+    One row per snapshot, written by `bin/<broker>/portfolio/store_positions_to_db` at the four brokers that stream
     positions. A position is state rather than an event, so the history is the series of snapshots
     rather than a series of changes.
 

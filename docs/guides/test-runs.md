@@ -63,7 +63,7 @@ test page, and a login check against the live brokers.
 === "Safe - infrastructure"
 
     **`download_instruments.py`** - downloads the instrument masters into each broker's `instruments`
-    table, as `bin/<broker>/instruments` does but without the Redis copy. IND Money's ingester logs in
+    table, as `bin/<broker>/instruments/daily_feed` does but without the Redis copy. IND Money's ingester logs in
     through `ensure_session` when no usable token is stored.
 
     ```bash

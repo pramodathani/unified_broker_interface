@@ -1,0 +1,433 @@
+#!/usr/bin/env python3
+"""
+Stream Dhan order updates over a websocket and merge them into the Redis hash `dhan:orders:orders`, and keep streaming
+until stopped.
+
+    bin/dhan/orders/websocket_order_details
+    redis-cli HGETALL dhan:orders:orders
+    redis-cli HGET dhan:orders:orders <order number>
+
+Self-contained: it logs in with `DhanAPI` and carries its own connection to Dhan's order update stream at
+`wss://api-order-update.dhan.co`, so it needs no other feed process or key.
+
+**The stream.** After connecting it sends Dhan's login message - `{"LoginReq": {"MsgCode": 42, "ClientId": ...,
+"Token": ...}, "UserType": "SELF"}` - and from then on every change to an order in the account arrives as a
+JSON message whose `Type` is `order_alert` and whose `Data` is the order: `OrderNo`, `ExchOrderNo`, `Status`,
+`ReasonDescription`, `Exchange`, `Segment`, `SecurityId`, `Symbol`, `DisplayName`, `TxnType`, `Product`,
+`OrderType`, `Validity`, `Quantity`, `TradedQty`, `RemainingQuantity`, `Price`, `TriggerPrice`,
+`AvgTradedPrice`, `OrderDateTime`, `ExchOrderTime`, `LastUpdatedTime`, `CorrelationId` and more.
+
+**The key.** `dhan:orders:orders` is the one hash for Dhan's orders, keyed by order number and shared with
+`bin/dhan/orders/api_order_details`, which merges the polled order book into it. Each update is written as
+`{"observed_at": <epoch received>, "source": "websocket", "order": <normalized order>, "data": <Data>}`, with Dhan's
+order exactly as sent in `data` and the same normalized `order` the poller builds from an order-book row - see
+`bin/dhan/orders/api_order_details` for its fields. Dhan's update names the segment in two fields, `Exchange` and `Segment` (`NSE`, `E`),
+which are combined into the order book's `NSE_EQ` so both writers agree. A websocket update always replaces its
+order's entry; a polled row replaces it only when the entry was observed before the poll's request was sent. The hash
+expires at 06:00 IST, moved to the next 06:00 by every write.
+
+**The stream.** Every update is also appended, in arrival order, to the Redis Stream `dhan:order-updates:stream`
+as an `update` field holding the same JSON, which `bin/dhan/orders/store_orders_to_db` writes to `dhan.order_updates` - so
+the history the hash overwrites is kept there. Capped at about 20,000 entries.
+
+**Positions.** Dhan's order update stream carries orders only - its documentation describes `order_alert`
+messages and nothing for positions - so this script writes no positions; `bin/dhan/portfolio/positions` fills
+`dhan:portfolio:positions` from the REST positions. A message of any other `Type` is logged, so one appearing would be noticed.
+
+**Sessions.** Dhan does not answer a successful login: a good token holds the socket open and a bad one is
+answered with a binary rejection frame and a disconnect. So a binary frame, or a socket that fails to open six
+times running, is taken as a dead session: it logs in again through `DhanAPI` before reconnecting. The token
+is read afresh on every connect, so a login made by any process is picked up. A reconnect otherwise backs off
+from 1 to 60 seconds. Updates arrive only when an order changes, so a quiet socket is not a broken one.
+
+Exits 0 when stopped with Ctrl+C or SIGTERM, and 1 when a login fails or the socket still cannot open after
+logging in again. Reads only - it never places, modifies or cancels an order.
+"""
+
+import sys
+import json
+import signal
+import threading
+from datetime import datetime, timedelta
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+ORDER_UPDATES_URL = "wss://api-order-update.dhan.co"
+ORDERS_KEY = "dhan:orders:orders"
+
+# Every update is also appended here for bin/dhan/orders/store_orders_to_db, which reads it with a consumer group.
+STREAM_KEY = "dhan:order-updates:stream"
+STREAM_MAX_LENGTH = 20000
+
+LOGIN_MESSAGE_CODE = 42
+ORDER_ALERT = "order_alert"
+
+PING_INTERVAL_SECONDS = 30
+PING_TIMEOUT_SECONDS = 10
+MIN_BACKOFF_SECONDS = 1
+MAX_BACKOFF_SECONDS = 60
+MAX_FAILED_CONNECTS = 6
+
+INDIA = ZoneInfo("Asia/Kolkata")
+RESET_HOUR = 6
+
+# Merges entries into a hash. KEYS[1] is the hash; ARGV is the expiry epoch, the source, the observed-at epoch, then
+# field and value pairs. A "rest" value replaces an entry only when the entry was observed before ARGV[3]; any other
+# source always replaces. A key of another type - the order book stored whole before this hash - is replaced.
+MERGE_SCRIPT = """
+local kind = redis.call('TYPE', KEYS[1])
+if type(kind) == 'table' then kind = kind['ok'] end
+if kind ~= 'hash' and kind ~= 'none' then redis.call('DEL', KEYS[1]) end
+local written = 0
+for i = 4, #ARGV, 2 do
+    local replace = true
+    if ARGV[2] == 'rest' then
+        local current = redis.call('HGET', KEYS[1], ARGV[i])
+        if current then
+            local ok, decoded = pcall(cjson.decode, current)
+            if ok and type(decoded) == 'table' and tonumber(decoded['observed_at'])
+                    and tonumber(decoded['observed_at']) >= tonumber(ARGV[3]) then
+                replace = false
+            end
+        end
+    end
+    if replace then
+        redis.call('HSET', KEYS[1], ARGV[i], ARGV[i + 1])
+        written = written + 1
+    end
+end
+if #ARGV >= 4 then redis.call('EXPIREAT', KEYS[1], ARGV[1]) end
+return written
+"""
+
+# The shared vocabulary: each broker's spelling of an order's side, product, type, validity and status mapped onto
+# one set. Keys are compared uppercased with underscores levelled to spaces.
+TRANSACTION_TYPES = {
+    "BUY": "BUY", "B": "BUY", "1": "BUY", "BUY ORDER": "BUY",
+    "SELL": "SELL", "S": "SELL", "-1": "SELL", "2": "SELL", "SELL ORDER": "SELL",
+}
+PRODUCTS = {
+    "CNC": "CNC", "C": "CNC", "DELIVERY": "CNC", "CASH": "CNC",
+    "MIS": "MIS", "I": "MIS", "INTRADAY": "MIS", "M": "NRML",
+    "NRML": "NRML", "NORMAL": "NRML", "MARGIN": "NRML", "CARRYFORWARD": "NRML",
+    "CO": "CO", "BO": "BO", "MTF": "MTF", "ARB": "ARB", "H": "CO", "B": "BO",
+}
+ORDER_TYPES = {
+    "MARKET": "MARKET", "MKT": "MARKET", "MKT ORDER": "MARKET", "2": "MARKET",
+    "LIMIT": "LIMIT", "LMT": "LIMIT", "L": "LIMIT", "1": "LIMIT",
+    "SL": "SL", "SL-LMT": "SL", "STOPLIMIT": "SL", "SL LIMIT": "SL", "4": "SL",
+    "SL-M": "SL-M", "SL-MKT": "SL-M", "STOPMARKET": "SL-M", "SL MARKET": "SL-M", "3": "SL-M", "SL M": "SL-M",
+    "SLM": "SL-M", "STOP LOSS": "SL", "STOP LOSS MARKET": "SL-M",
+}
+VALIDITIES = {
+    "DAY": "DAY", "EOS": "DAY", "0": "DAY", "IOC": "IOC", "IMMEDIATE": "IOC", "1": "IOC",
+    "GTT": "GTT", "GTC": "GTC", "GTD": "GTD",
+}
+STATUSES = {
+    "PENDING": "PENDING", "TRANSIT": "PENDING", "VALIDATION PENDING": "PENDING", "PUT ORDER REQ RECEIVED": "PENDING",
+    "TRIGGER PENDING": "PENDING", "AMO REQ RECEIVED": "PENDING", "PENDINGNEW": "PENDING", "O-PENDING": "PENDING",
+    "MODIFY AMO REQ RECEIVED": "PENDING", "AFTER MARKET ORDER REQ RECEIVED": "PENDING", "AMO PENDING": "PENDING",
+    "MODIFY AFTER MARKET ORDER REQ RECEIVED": "PENDING", "QUEUED": "PENDING", "PROCESSING": "PENDING",
+    "SL-PENDING": "PENDING",
+    "OPEN": "OPEN", "OPEN PENDING": "OPEN", "NEW": "OPEN", "REPLACED": "OPEN", "ACKED": "OPEN", "APPROVED": "OPEN",
+    "MODIFICATION REQUESTED": "OPEN", "MODIFIED": "OPEN", "MODIFY VALIDATION PENDING": "OPEN", "MODIFY PENDING": "OPEN",
+    "PARTIALLY FILLED": "OPEN", "PARTIALLY EXECUTED": "OPEN", "PLACED": "OPEN", "PART TRADED": "OPEN",
+    "PARTIALLYFILLED": "OPEN", "PENDINGREPLACE": "OPEN", "CONFIRMED": "OPEN", "PARTIALLY TRADED": "OPEN",
+    "INITIATED": "OPEN",
+    "COMPLETE": "COMPLETE", "COMPLETED": "COMPLETE", "TRADED": "COMPLETE", "FILLED": "COMPLETE",
+    "EXECUTED": "COMPLETE", "FULLY EXECUTED": "COMPLETE", "DELIVERY AWAITED": "COMPLETE", "SUCCESS": "COMPLETE",
+    "CANCELLED": "CANCELLED", "CANCELED": "CANCELLED", "CANCEL": "CANCELLED", "CANCEL PENDING": "CANCELLED",
+    "CANCELLATION REQUESTED": "CANCELLED", "PENDINGCANCEL": "CANCELLED", "CANCELLED AFTER MARKET ORDER": "CANCELLED",
+    "AMO CANCELLED": "CANCELLED", "PARTIALLY FILLED - CANCELLED": "CANCELLED",
+    "REJECTED": "REJECTED", "REJECT": "REJECTED", "FAILED": "REJECTED", "ABORTED": "REJECTED",
+    "EXPIRED": "EXPIRED", "PARTIALLY FILLED - EXPIRED": "EXPIRED",
+}
+
+def normalize(value, mapping):
+    """
+    A broker's term on the shared vocabulary, or the term uppercased when the vocabulary does not know it.
+
+    - `value` is the broker's term.
+    - `mapping` is one of the vocabulary tables.
+    """
+    if value is None or value == "":
+        return None
+    key = str(value).strip().upper().replace("_", " ")
+    if key in mapping:
+        return mapping[key]
+    collapsed = " ".join(key.split())
+    return mapping.get(collapsed, collapsed)
+
+def present(value):
+    """A value, or None for Dhan's blanks and `NA` placeholders."""
+    return None if value is None or str(value).strip() in ("", "NA") else value
+
+def number(value, cast=float):
+    """
+    A value as a number, or None when it is missing or not numeric.
+
+    - `value` is the raw field value.
+    - `cast` is the number type.
+    """
+    value = present(value)
+    try:
+        return None if value is None else int(float(value)) if cast is int else float(value)
+    except (TypeError, ValueError):
+        return None
+
+def text(value):
+    """A value as a string, or None when it is missing."""
+    value = present(value)
+    return None if value is None else str(value)
+
+def dhan_timestamp(value):
+    """
+    A Dhan order time, IST wall clock, as an ISO timestamp with the IST offset, or None.
+
+    Dhan's placeholder for a time it has not set - `0001-01-01 00:00:00` and the like - reads as None.
+
+    - `value` is the time as Dhan sent it.
+    """
+    value = present(value)
+    if value is None:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%d/%m/%Y %H:%M:%S", "%d-%b-%Y %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            moment = datetime.strptime(str(value).strip(), fmt)
+        except ValueError:
+            continue
+        return None if moment.year < 1971 else moment.replace(tzinfo=INDIA).isoformat()
+    return None
+
+def next_reset():
+    """The epoch of the next 06:00 IST, when the merged hash expires."""
+    now = datetime.now(INDIA)
+    reset = now.replace(hour=RESET_HOUR, minute=0, second=0, microsecond=0)
+    return int((reset if reset > now else reset + timedelta(days=1)).timestamp())
+
+# Dhan's order update names the segment as an exchange and a one letter segment; the order book as one name.
+EXCHANGE_SEGMENTS = {("NSE", "E"): "NSE_EQ", ("NSE", "D"): "NSE_FNO", ("NSE", "C"): "NSE_CURRENCY",
+                     ("BSE", "E"): "BSE_EQ", ("BSE", "D"): "BSE_FNO", ("BSE", "C"): "BSE_CURRENCY",
+                     ("MCX", "M"): "MCX_COMM", ("NSE", "I"): "IDX_I", ("BSE", "I"): "IDX_I"}
+
+def order_from_update(data):
+    """
+    A Dhan order update's `Data` as a normalized order, or None when it has no order number.
+
+    - `data` is the `Data` object of an `order_alert` message.
+    """
+    if not isinstance(data, dict) or text(data.get('OrderNo')) is None:
+        return None
+    exchange_name, segment = text(data.get('Exchange')), text(data.get('Segment'))
+    exchange = (text(data.get('ExchangeSegment')) or EXCHANGE_SEGMENTS.get((exchange_name, segment))
+                or (f"{exchange_name}_{segment}" if exchange_name and segment else exchange_name))
+    symbol = text(data.get('Symbol')) or text(data.get('DisplayName'))
+    quantity, filled = number(data.get('Quantity'), int), number(data.get('TradedQty'), int)
+    pending = number(data.get('RemainingQuantity'), int)
+    if pending is None and quantity is not None and filled is not None:
+        pending = quantity - filled
+    disclosed = data.get('DiscQuantity') if present(data.get('DiscQuantity')) is not None else data.get('DisclosedQuantity')
+    return {
+        "order_id": text(data.get('OrderNo')),
+        "exchange_order_id": text(data.get('ExchOrderNo')),
+        "parent_order_id": text(data.get('ParentOrderNo')),
+        "status": normalize(present(data.get('Status')), STATUSES),
+        # Not `Remarks`: Dhan fills it with remarks such as "NR", which the order book has no counterpart for.
+        "status_message": text(data.get('ReasonDescription')),
+        "id": f"{exchange}:{symbol}" if exchange and symbol else symbol,
+        "instrument_token": text(data.get('SecurityId')),
+        "tradingsymbol": symbol,
+        "exchange": exchange,
+        "transaction_type": normalize(present(data.get('TxnType')) or present(data.get('TransactionType')), TRANSACTION_TYPES),
+        "product": normalize(present(data.get('Product')) or present(data.get('ProductType')), PRODUCTS),
+        "order_type": normalize(present(data.get('OrderType')), ORDER_TYPES),
+        "validity": normalize(present(data.get('Validity')), VALIDITIES),
+        "quantity": quantity,
+        "filled_quantity": filled,
+        "pending_quantity": pending,
+        "cancelled_quantity": number(data.get('CancelledQty'), int),
+        "disclosed_quantity": number(disclosed, int),
+        "price": number(data.get('Price')),
+        "trigger_price": number(data.get('TriggerPrice')),
+        "average_price": number(data.get('AvgTradedPrice')),
+        "order_timestamp": dhan_timestamp(data.get('OrderDateTime') or data.get('CreateTime')),
+        "exchange_timestamp": dhan_timestamp(data.get('ExchOrderTime') or data.get('LastUpdatedTime')),
+        "tag": text(data.get('CorrelationId')),
+    }
+
+class OrderUpdatesSocket:
+    """
+    Dhan's order update websocket, reconnecting and logging in again until stopped.
+    """
+
+    def __init__(self, cache, logger):
+        """
+        Construct DhanAPI, which logs in when the stored session is dead.
+
+        - `cache` is the Redis client.
+        - `logger` is where the connection reports.
+        """
+        from stock_brokers.api.dhan import DhanAPI
+
+        self._api_class = DhanAPI
+        self._dhan = DhanAPI()
+        self._cache = cache
+        self._merge = cache.register_script(MERGE_SCRIPT)
+        self._logger = logger
+        self._stop = threading.Event()
+        self._ws = None
+        self._opened = False
+        self._authentication_rejected = False
+        self.gave_up = False
+
+    def close(self):
+        """Close the websocket and stop reconnecting."""
+        self._stop.set()
+        if self._ws is not None:
+            self._ws.close()
+
+    def run_forever(self):
+        """Connect, and reconnect with backoff, until closed or unable to recover."""
+        backoff = MIN_BACKOFF_SECONDS
+        failed_connects = 0
+        logged_in_again = False
+        while not self._stop.is_set():
+            self._opened = False
+            self._authentication_rejected = False
+            try:
+                self._connect()
+            except Exception as exception:
+                self._logger.error(f"Order updates connection failed: {type(exception).__name__}: {exception}")
+            if self._stop.is_set():
+                break
+
+            if self._opened and not self._authentication_rejected:
+                failed_connects, logged_in_again, backoff = 0, False, MIN_BACKOFF_SECONDS
+            else:
+                failed_connects += 1
+
+            if self._authentication_rejected or failed_connects >= MAX_FAILED_CONNECTS:
+                if logged_in_again and (self._authentication_rejected or failed_connects >= MAX_FAILED_CONNECTS):
+                    self.gave_up = True
+                    self._logger.error("Order updates are still refused after logging in again. Giving up.")
+                    break
+                try:
+                    # A dead session: log in again before connecting again.
+                    self._logger.warning("Logging in to Dhan again.")
+                    self._dhan = self._api_class()
+                except Exception as exception:
+                    self.gave_up = True
+                    self._logger.error(f"Could not log in to Dhan again: {type(exception).__name__}: {exception}")
+                    break
+                failed_connects, logged_in_again = 0, True
+
+            self._logger.warning(f"Order updates disconnected. Reconnecting in {backoff} seconds.")
+            self._stop.wait(backoff)
+            backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
+        self._logger.info("Order updates socket stopped.")
+
+    def _connect(self):
+        """Open the websocket and block until it closes."""
+        import websocket
+
+        self._ws = websocket.WebSocketApp(ORDER_UPDATES_URL, on_open=self._on_open, on_message=self._on_message,
+                                          on_error=self._on_error, on_close=self._on_close)
+        self._ws.run_forever(ping_interval=PING_INTERVAL_SECONDS, ping_timeout=PING_TIMEOUT_SECONDS)
+
+    def _on_open(self, ws):
+        """Send the login message with the token in force now."""
+        self._opened = True
+        login = self._dhan._current_login() or {}
+        ws.send(json.dumps({"LoginReq": {"MsgCode": LOGIN_MESSAGE_CODE, "ClientId": str(self._dhan._settings.get('client_id')),
+                                         "Token": login.get('access_token')},
+                            "UserType": "SELF"}))
+        self._logger.info("Order updates socket opened and logged in. Waiting for order updates.")
+
+    def _on_error(self, ws, error):
+        self._logger.error(f"Order updates error: {error}")
+
+    def _on_close(self, ws, status_code, message):
+        self._logger.info(f"Order updates socket closed with status {status_code}: {message}")
+
+    def _on_message(self, ws, message):
+        """Merge each order alert into the orders hash, keyed by order number, and append it to the stream."""
+        if isinstance(message, (bytes, bytearray)):
+            # Order updates are JSON text; Dhan answers a refused login with a binary frame and a disconnect.
+            self._logger.warning(f"Dhan sent a binary frame, taken as a refused login: {bytes(message)[:80]!r}")
+            self._authentication_rejected = True
+            ws.close()
+            return
+
+        try:
+            payload = json.loads(message)
+        except (TypeError, json.JSONDecodeError):
+            self._logger.debug(f"Ignoring a frame that is not JSON: {str(message)[:160]}")
+            return
+
+        received_at = datetime.now()
+        received = received_at.strftime("%Y-%m-%d %H:%M:%S.%f")
+        observed_at = received_at.timestamp()
+        merged, appended = [], []
+        for entry in (payload if isinstance(payload, list) else [payload]):
+            if not isinstance(entry, dict):
+                continue
+            data = entry.get('Data')
+            order = order_from_update(data) if entry.get('Type') == ORDER_ALERT else None
+            if order is None:
+                self._logger.info(f"Ignoring a message of type {entry.get('Type')!r}: {json.dumps(entry)[:200]}")
+                continue
+            merged += [order["order_id"], json.dumps({"observed_at": observed_at, "source": "websocket", "order": order,
+                                                      "data": data})]
+            appended.append(json.dumps({'timestamp': received, 'data': data}))
+        if merged:
+            # The hash keeps each order's latest state; the stream keeps every transition, even two of one order in the
+            # same message, in the shape bin/dhan/orders/store_orders_to_db reads.
+            self._merge(keys=[ORDERS_KEY], args=[next_reset(), "websocket", repr(observed_at)] + merged)
+            pipeline = self._cache.pipeline(transaction=False)
+            for update in appended:
+                pipeline.xadd(STREAM_KEY, {"update": update}, maxlen=STREAM_MAX_LENGTH, approximate=True)
+            pipeline.execute()
+            self._logger.info(f"Merged {len(appended)} order update(s) into {ORDERS_KEY}: {', '.join(merged[0::2])}")
+
+def main():
+    """Stream Dhan order updates into dhan:orders:orders until stopped."""
+    from utilities.configurations import get_cache, get_logger
+
+    logger = get_logger("dhan.websocket_order_details")
+    try:
+        socket = OrderUpdatesSocket(get_cache(), logger)
+    except Exception as exception:
+        logger.error(f"Could not log in to Dhan: {type(exception).__name__}: {exception}")
+        return 1
+
+    # Installed before the thread starts: systemd stops a unit with SIGTERM, and the default action would kill
+    # the process without closing the connection.
+    def _handle_signal(signal_number, frame):
+        logger.info(f"Received signal {signal_number}. Closing the order updates feed.")
+        socket.close()
+
+    for signal_number in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(signal_number, _handle_signal)
+
+    thread = threading.Thread(target=socket.run_forever, name="dhan_order_updates", daemon=True)
+    logger.info("Starting the order updates feed.")
+    thread.start()
+
+    # Block in the main thread so the signal handlers above can run.
+    while thread.is_alive():
+        thread.join(timeout=1)
+
+    if socket.gave_up:
+        return 1
+    logger.info("Order updates feed stopped.")
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())

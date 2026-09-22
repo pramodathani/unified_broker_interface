@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+"""
+Poll the INDmoney user profile every minute and write it to the Redis key `indmoney:user:details`.
+
+    bin/indmoney/user/details
+    redis-cli GET indmoney:user:details
+
+Calls `GET https://api.indstocks.com/user/profile` through `INDMoneyAPI`, which logs in first if the stored
+session is dead. Each response - `timestamp`, `status`, `code` and INDstocks' profile under `data` - is
+written as one JSON string with SET, replacing the one before.
+
+Runs until Ctrl+C. A dead session (a refusal naming the access token, asking to re-authenticate, or
+unauthorized) is logged in again before the next request; any other failed poll is logged and leaves
+`indmoney:user:details` unchanged. Exits 1 when the first login, or a login after the session died, fails.
+Reads only - it places no orders.
+"""
+
+import sys
+import json
+import time
+from pathlib import Path
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+PROFILE_URL = "https://api.indstocks.com/user/profile"
+REDIS_KEY = "indmoney:user:details"
+DELAY_SECONDS = 60
+TIMEOUT_SECONDS = 10
+
+# What INDstocks says when the session is no good, lowercased.
+AUTHENTICATION_MARKERS = ("access_token", "re-authenticate", "unauthorized")
+
+def is_authentication_error(exception):
+    """Whether INDstocks refused the request because the session is dead."""
+    return any(marker in str(exception).lower() for marker in AUTHENTICATION_MARKERS)
+
+def main():
+    """Fetch the profile and write it to indmoney:user:details every minute, until interrupted."""
+    from stock_brokers.api.indmoney import INDMoneyAPI
+    from utilities.configurations import get_cache, get_logger
+
+    logger = get_logger("indmoney.details")
+    cache = get_cache()
+    try:
+        indmoney = INDMoneyAPI()
+    except Exception as exception:
+        logger.error(f"Could not log in to INDmoney: {type(exception).__name__}: {exception}")
+        return 1
+
+    try:
+        while True:
+            try:
+                profile = indmoney.get(url=PROFILE_URL, timeout=TIMEOUT_SECONDS)
+                cache.set(REDIS_KEY, json.dumps(profile))
+                logger.info(f"Wrote the profile to {REDIS_KEY}")
+            except Exception as exception:
+                if is_authentication_error(exception):
+                    # A dead session: log in again before sending anything more.
+                    logger.warning(f"INDmoney session expired, logging in again: {exception}")
+                    indmoney = INDMoneyAPI()
+                else:
+                    logger.error(f"Profile poll failed: {type(exception).__name__}: {exception}")
+            time.sleep(DELAY_SECONDS)
+    except KeyboardInterrupt:
+        logger.info("Stopped")
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())

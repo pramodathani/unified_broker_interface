@@ -1,7 +1,7 @@
 """
 The tables and views the unified price history reads and writes.
 
-`bin/unified/historical_prices` builds one price history per unified instrument in the `unified` schema, and the REST
+`bin/unified/instruments/price_history` builds one price history per unified instrument in the `unified` schema, and the REST
 API's `/prices` and `/ticks` read it. The names live here rather than in each query: the loader, the corrections, the
 factors, the resolver, the checks and the API read them from this module. Resolving a series also goes through the
 mapping resolver, whose tables are named by `stock_brokers.instruments.mapping.utilities.tables`.

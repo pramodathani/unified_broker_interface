@@ -1,4 +1,4 @@
--- Historical prices for every unified instrument, one table across all brokers, which `bin/unified/historical_prices`
+-- Historical prices for every unified instrument, one table across all brokers, which `bin/unified/instruments/price_history`
 -- builds. Its sources, factors and corrections (210-250) follow it, resolving against `unified.instruments`, which the
 -- mapping DDL creates.
 --

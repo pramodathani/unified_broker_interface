@@ -1,6 +1,6 @@
 """
 `/api/users`: the account holder's profile - the MongoDB `user_details` collection, served from its Redis copy
-`unified:details:users` when `bin/unified/details` keeps one, and every broker's own profile of the account from the
+`unified:details:users` when `bin/unified/user/unified_details` keeps one, and every broker's own profile of the account from the
 Redis key `unified:user:details`.
 """
 
@@ -10,7 +10,7 @@ from flask import jsonify
 
 from unified_broker_interface.blueprints.base import BaseBlueprint, authenticated
 
-# Kept by bin/unified/user-profile: one object with a key per broker and that broker's profile, or null, as the value.
+# Kept by bin/unified/user/details: one object with a key per broker and that broker's profile, or null, as the value.
 BROKER_PROFILES_KEY = 'unified:user:details'
 
 class UsersBlueprint(BaseBlueprint):

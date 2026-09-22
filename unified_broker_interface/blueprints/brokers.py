@@ -1,7 +1,7 @@
 """
 `/api/brokers`: each broker's registration and contact details, from the MongoDB `broker_details`
 collection, one document per `broker_name`, served from its Redis copy
-`unified:details:brokers` when `bin/unified/details` keeps one.
+`unified:details:brokers` when `bin/unified/user/unified_details` keeps one.
 """
 
 from unified_broker_interface.blueprints.base import BaseBlueprint, authenticated

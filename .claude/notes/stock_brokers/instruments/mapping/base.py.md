@@ -32,4 +32,4 @@ For MCX indices, Kotak's figures (1, 5, 100) and Stoxkart's (1, 100) are a hundr
 
 Stoxkart's `1.0` on every NSE and BSE index row and Wisdom Capital's `1.0` on every BSE index row are placeholders rather than paise: the same constant appears on NSE, where dividing by 100 would give 0.01 against the real 0.05. Those are dropped in each broker's own `to_broker_fields`, through `NULL_TICK_SEGMENTS`.
 
-The earlier dates in `unified.broker_mappings` were corrected on 2026-09-14 with one `UPDATE` applying the same three rules, because `bin/unified/map_instruments` refuses to re-map a date older than the newest one mapped.
+The earlier dates in `unified.broker_mappings` were corrected on 2026-09-14 with one `UPDATE` applying the same three rules, because `bin/unified/instruments/map` refuses to re-map a date older than the newest one mapped.

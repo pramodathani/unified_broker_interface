@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""
+Poll the Wisdom Capital funds every half second and write them to the Redis key
+`wisdom_capital:portfolio:funds`.
+
+    bin/wisdom_capital/portfolio/funds
+    redis-cli GET wisdom_capital:portfolio:funds
+
+Calls `GET https://trade.wisdomcapital.in/interactive/user/balance` for the account in Wisdom Capital's
+settings (`ucc_code`, sent as `clientID`) through `WisdomCapitalAPI`, which logs in first if the stored
+session is dead. Each response - `timestamp`, `status`, `code` and XTS's balance under `data` - is written as
+one JSON string with SET, replacing the one before. `data.BalanceList` has one entry per limit header (this
+account has one, `ALL|ALL|ALL`), whose `limitObject` holds `RMSSubLimits` (`netMarginAvailable`,
+`cashAvailable`, `collateral`, `marginUtilized`, `RealizedMTM`, `UnrealizedMTM`), `marginAvailable` (adhoc
+margin, pay-in, payout) and `marginUtilized` (SPAN, exposure, VaR and extreme loss, scrip basket). Some
+figures arrive as the string "NaN".
+
+Runs until Ctrl+C. A dead session (an XTS `e-session` or `e-token` code, or "Invalid Token") is logged in
+again before the next request; any other failed poll, including a rate-limit refusal, is logged and leaves
+`wisdom_capital:portfolio:funds` unchanged. Exits 1 when the first login, or a login after the session died,
+fails. Reads only - it places no orders.
+"""
+
+import sys
+import json
+import time
+from pathlib import Path
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+BALANCE_URL = "https://trade.wisdomcapital.in/interactive/user/balance"
+REDIS_KEY = "wisdom_capital:portfolio:funds"
+DELAY_SECONDS = 0.5
+TIMEOUT_SECONDS = 10
+
+# What XTS says when the session is no good, lowercased.
+AUTHENTICATION_MARKERS = ("e-session", "e-token", "invalid token")
+
+def is_authentication_error(exception):
+    """Whether XTS refused the request because the session is dead."""
+    text = f"{getattr(exception, 'code', '')} {getattr(exception, 'message', '')} {exception}".lower()
+    return any(marker in text for marker in AUTHENTICATION_MARKERS)
+
+def net_margin_available(funds):
+    """The first limit header's stated net margin available, or None."""
+    data = funds.get('data') if isinstance(funds.get('data'), dict) else {}
+    balances = data.get('BalanceList') or []
+    first = balances[0] if balances and isinstance(balances[0], dict) else {}
+    return ((first.get('limitObject') or {}).get('RMSSubLimits') or {}).get('netMarginAvailable')
+
+def main():
+    """Fetch the balance and write it to wisdom_capital:portfolio:funds every half second, until interrupted."""
+    from stock_brokers.api.wisdom_capital import WisdomCapitalAPI
+    from utilities.configurations import get_cache, get_logger
+    from utilities.poll_reporter import PollReporter
+
+    logger = get_logger("wisdom_capital.funds")
+    report = PollReporter(logger)
+    cache = get_cache()
+    try:
+        wisdom_capital = WisdomCapitalAPI()
+    except Exception as exception:
+        logger.error(f"Could not log in to Wisdom Capital: {type(exception).__name__}: {exception}")
+        return 1
+
+    try:
+        while True:
+            try:
+                funds = wisdom_capital.get(url=BALANCE_URL, params={'clientID': wisdom_capital._settings.get('ucc_code', '')},
+                                           timeout=TIMEOUT_SECONDS)
+                cache.set(REDIS_KEY, json.dumps(funds))
+                report.info(f"Wrote funds (net margin available {net_margin_available(funds)}) to {REDIS_KEY}")
+            except Exception as exception:
+                if is_authentication_error(exception):
+                    # A dead session: log in again before sending anything more.
+                    logger.warning(f"Wisdom Capital session expired, logging in again: {exception}")
+                    wisdom_capital = WisdomCapitalAPI()
+                else:
+                    report.error(f"Funds poll failed: {type(exception).__name__}: {exception}")
+            time.sleep(DELAY_SECONDS)
+    except KeyboardInterrupt:
+        logger.info("Stopped")
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())

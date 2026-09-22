@@ -1,0 +1,548 @@
+#!/usr/bin/env python3
+"""
+Stream Kotak Neo order and position updates over a websocket and merge them into the Redis hashes `kotak:orders:orders`
+and `kotak:portfolio:positions`, and keep streaming until stopped.
+
+    bin/kotak/orders/websocket_order_details
+    redis-cli HGETALL kotak:orders:orders
+    redis-cli HGET kotak:orders:orders <order number>
+    redis-cli HGETALL kotak:portfolio:positions
+
+Self-contained: it logs in with `KotakAPI` and carries its own connection to Kotak's order update stream, so it
+needs no other feed process or key.
+
+**The stream.** The host is account specific: `wss://<host>/realtime`, where the host is the `base_url` Kotak
+assigned the session at login - `e21`, `e43` and so on - read afresh on every connect. After connecting it sends
+Kotak's connection frame, which is a raw unquoted string and deliberately not JSON:
+`{type:cn,Authorization:<access token>,Sid:<session id>,src:WEB}`. Kotak acknowledges it with `{"ak":"ok",
+"type":"cn",...}` or refuses it with `{"ak":"nk","type":"failed to connect","msg":...}`. From then on the same
+connection carries two kinds of JSON message:
+
+- `{"type": "order", "data": {...}}`, an order with Kotak's abbreviated fields: `nOrdNo`, `exOrdId`, `ordSt`,
+  `rejRsn`, `trdSym`, `sym`, `exSeg`, `tok`, `trnsTp`, `prcTp`, `prod`, `vldt`, `qty`, `fldQty`, `unFldSz`, `prc`,
+  `trgPrc`, `avgPrc`, `ordDtTm`, `exCfmTm` and more.
+- `{"type": "position", "data": {...}}`, a position: `trdSym`, `sym`, `exSeg`, `tok`, `prod`, `flBuyQty`,
+  `flSellQty`, `buyAmt`, `sellAmt`, `lotSz`, `multiplier`, `hsUpTm` and more.
+
+**The keys.** Orders and positions from this socket are merged into the same hashes the REST pollers fill, so each has
+one key:
+
+- `kotak:orders:orders`, keyed by order number (`nOrdNo`), shared with `bin/kotak/orders/api_order_details`.
+- `kotak:portfolio:positions`, keyed `exSeg:tok:prod` - segment, instrument token and product, as Kotak holds a
+  separate position per product on the same instrument; the trading symbol stands in for a missing token - shared with
+  `bin/kotak/portfolio/positions`.
+
+Each update is written as `{"observed_at": <epoch received>, "source": "websocket", "order" | "position": <normalized>,
+"data": <Kotak's payload exactly as sent>}`. Kotak's order message and order-book row carry the same fields, as do its
+position message and positions row, so `order` and `position` are built with the same functions as the pollers' - see
+`bin/kotak/orders/api_order_details` and `bin/kotak/portfolio/positions` for their fields. A websocket update always replaces its entry; a polled
+row replaces it only when the entry was observed before the poll's request was sent. Both hashes expire at 06:00 IST,
+moved to the next 06:00 by every write.
+
+**The streams.** Every update is also appended, in arrival order and with the same JSON, to a Redis Stream, so the
+history the hashes overwrite is kept there - in the shape `{"timestamp": ..., "data": <Kotak's payload>}`: orders to `kotak:order-updates:stream` as an `update` field, which
+`bin/kotak/orders/store_orders_to_db` writes to `kotak.order_updates`, and positions to `kotak:positions_updates:stream` as a
+`position` field, which `bin/kotak/portfolio/store_positions_to_db` writes to `kotak.positions`. Each is capped at about 20,000
+entries.
+
+**Sessions.** A refused connection frame, or a socket that fails to open six times running, is taken as a dead
+session: it logs in again through `KotakAPI` before reconnecting, which also refreshes the host. A reconnect
+otherwise backs off from 1 to 60 seconds. Updates arrive only when an order or position changes, so a quiet socket
+is not a broken one.
+
+Exits 0 when stopped with Ctrl+C or SIGTERM, and 1 when a login fails or the socket is still refused after logging
+in again. Reads only - it never places, modifies or cancels an order.
+"""
+
+import sys
+import json
+import signal
+import threading
+from datetime import datetime, timedelta
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+REALTIME_PATH = "/realtime"
+ORDERS_KEY = "kotak:orders:orders"
+POSITIONS_KEY = "kotak:portfolio:positions"
+
+# Every order and position update is also appended to a stream, for bin/kotak/orders/store_orders_to_db and
+# bin/kotak/portfolio/store_positions_to_db, which read them with a consumer group.
+ORDER_STREAM_KEY = "kotak:order-updates:stream"
+POSITION_STREAM_KEY = "kotak:positions_updates:stream"
+STREAM_MAX_LENGTH = 20000
+
+ORDER, POSITION, CONNECT_ACK = "order", "position", "cn"
+
+PING_INTERVAL_SECONDS = 30
+PING_TIMEOUT_SECONDS = 10
+MIN_BACKOFF_SECONDS = 1
+MAX_BACKOFF_SECONDS = 60
+MAX_FAILED_CONNECTS = 6
+
+INDIA = ZoneInfo("Asia/Kolkata")
+RESET_HOUR = 6
+
+# Merges entries into a hash. KEYS[1] is the hash; ARGV is the expiry epoch, the source, the observed-at epoch, then
+# field and value pairs. A "rest" value replaces an entry only when the entry was observed before ARGV[3]; any other
+# source always replaces. A key of another type - the order book stored whole before this hash - is replaced.
+MERGE_SCRIPT = """
+local kind = redis.call('TYPE', KEYS[1])
+if type(kind) == 'table' then kind = kind['ok'] end
+if kind ~= 'hash' and kind ~= 'none' then redis.call('DEL', KEYS[1]) end
+local written = 0
+for i = 4, #ARGV, 2 do
+    local replace = true
+    if ARGV[2] == 'rest' then
+        local current = redis.call('HGET', KEYS[1], ARGV[i])
+        if current then
+            local ok, decoded = pcall(cjson.decode, current)
+            if ok and type(decoded) == 'table' and tonumber(decoded['observed_at'])
+                    and tonumber(decoded['observed_at']) >= tonumber(ARGV[3]) then
+                replace = false
+            end
+        end
+    end
+    if replace then
+        redis.call('HSET', KEYS[1], ARGV[i], ARGV[i + 1])
+        written = written + 1
+    end
+end
+if #ARGV >= 4 then redis.call('EXPIREAT', KEYS[1], ARGV[1]) end
+return written
+"""
+
+# The shared vocabulary: each broker's spelling of an order's side, product, type, validity and status mapped onto
+# one set. Keys are compared uppercased with underscores levelled to spaces.
+TRANSACTION_TYPES = {
+    "BUY": "BUY", "B": "BUY", "1": "BUY", "BUY ORDER": "BUY",
+    "SELL": "SELL", "S": "SELL", "-1": "SELL", "2": "SELL", "SELL ORDER": "SELL",
+}
+PRODUCTS = {
+    "CNC": "CNC", "C": "CNC", "DELIVERY": "CNC", "CASH": "CNC",
+    "MIS": "MIS", "I": "MIS", "INTRADAY": "MIS", "M": "NRML",
+    "NRML": "NRML", "NORMAL": "NRML", "MARGIN": "NRML", "CARRYFORWARD": "NRML",
+    "CO": "CO", "BO": "BO", "MTF": "MTF", "ARB": "ARB", "H": "CO", "B": "BO",
+}
+ORDER_TYPES = {
+    "MARKET": "MARKET", "MKT": "MARKET", "MKT ORDER": "MARKET", "2": "MARKET",
+    "LIMIT": "LIMIT", "LMT": "LIMIT", "L": "LIMIT", "1": "LIMIT",
+    "SL": "SL", "SL-LMT": "SL", "STOPLIMIT": "SL", "SL LIMIT": "SL", "4": "SL",
+    "SL-M": "SL-M", "SL-MKT": "SL-M", "STOPMARKET": "SL-M", "SL MARKET": "SL-M", "3": "SL-M", "SL M": "SL-M",
+    "SLM": "SL-M", "STOP LOSS": "SL", "STOP LOSS MARKET": "SL-M",
+}
+VALIDITIES = {
+    "DAY": "DAY", "EOS": "DAY", "0": "DAY", "IOC": "IOC", "IMMEDIATE": "IOC", "1": "IOC",
+    "GTT": "GTT", "GTC": "GTC", "GTD": "GTD",
+}
+STATUSES = {
+    "PENDING": "PENDING", "TRANSIT": "PENDING", "VALIDATION PENDING": "PENDING", "PUT ORDER REQ RECEIVED": "PENDING",
+    "TRIGGER PENDING": "PENDING", "AMO REQ RECEIVED": "PENDING", "PENDINGNEW": "PENDING", "O-PENDING": "PENDING",
+    "MODIFY AMO REQ RECEIVED": "PENDING", "AFTER MARKET ORDER REQ RECEIVED": "PENDING", "AMO PENDING": "PENDING",
+    "MODIFY AFTER MARKET ORDER REQ RECEIVED": "PENDING", "QUEUED": "PENDING", "PROCESSING": "PENDING",
+    "SL-PENDING": "PENDING",
+    "OPEN": "OPEN", "OPEN PENDING": "OPEN", "NEW": "OPEN", "REPLACED": "OPEN", "ACKED": "OPEN", "APPROVED": "OPEN",
+    "MODIFICATION REQUESTED": "OPEN", "MODIFIED": "OPEN", "MODIFY VALIDATION PENDING": "OPEN", "MODIFY PENDING": "OPEN",
+    "PARTIALLY FILLED": "OPEN", "PARTIALLY EXECUTED": "OPEN", "PLACED": "OPEN", "PART TRADED": "OPEN",
+    "PARTIALLYFILLED": "OPEN", "PENDINGREPLACE": "OPEN", "CONFIRMED": "OPEN", "PARTIALLY TRADED": "OPEN",
+    "INITIATED": "OPEN",
+    "COMPLETE": "COMPLETE", "COMPLETED": "COMPLETE", "TRADED": "COMPLETE", "FILLED": "COMPLETE",
+    "EXECUTED": "COMPLETE", "FULLY EXECUTED": "COMPLETE", "DELIVERY AWAITED": "COMPLETE", "SUCCESS": "COMPLETE",
+    "CANCELLED": "CANCELLED", "CANCELED": "CANCELLED", "CANCEL": "CANCELLED", "CANCEL PENDING": "CANCELLED",
+    "CANCELLATION REQUESTED": "CANCELLED", "PENDINGCANCEL": "CANCELLED", "CANCELLED AFTER MARKET ORDER": "CANCELLED",
+    "AMO CANCELLED": "CANCELLED", "PARTIALLY FILLED - CANCELLED": "CANCELLED",
+    "REJECTED": "REJECTED", "REJECT": "REJECTED", "FAILED": "REJECTED", "ABORTED": "REJECTED",
+    "EXPIRED": "EXPIRED", "PARTIALLY FILLED - EXPIRED": "EXPIRED",
+}
+
+def normalize(value, mapping):
+    """
+    A broker's term on the shared vocabulary, or the term uppercased when the vocabulary does not know it.
+
+    - `value` is the broker's term.
+    - `mapping` is one of the vocabulary tables.
+    """
+    if value is None or value == "":
+        return None
+    key = str(value).strip().upper().replace("_", " ")
+    if key in mapping:
+        return mapping[key]
+    collapsed = " ".join(key.split())
+    return mapping.get(collapsed, collapsed)
+
+def present(value):
+    """A value, or None for Kotak's blanks and `NA` placeholders."""
+    return None if value is None or str(value).strip() in ("", "NA") else value
+
+def first(data, *names):
+    """
+    The first present value among a field's spellings; Kotak's abbreviations vary between segments.
+
+    - `data` is the payload.
+    - `names` are the candidate field names.
+    """
+    for name in names:
+        if present(data.get(name)) is not None:
+            return data[name]
+    return None
+
+def number(value, cast=float):
+    """
+    A value as a number, or None when it is missing or not numeric.
+
+    - `value` is the raw field value.
+    - `cast` is the number type.
+    """
+    value = present(value)
+    try:
+        return None if value is None else int(float(value)) if cast is int else float(value)
+    except (TypeError, ValueError):
+        return None
+
+def text(value):
+    """A value as a string, or None when it is missing."""
+    value = present(value)
+    return None if value is None else str(value)
+
+def kotak_timestamp(value):
+    """
+    A Kotak time, IST wall clock such as `12-Sep-2026 09:20:11`, as an ISO timestamp with the IST offset, or None.
+
+    An epoch is read as one; a placeholder before 1971 or an unrecognised string reads as None.
+
+    - `value` is the time as Kotak sent it.
+    """
+    value = present(value)
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if raw.replace(".", "", 1).isdigit():
+        try:
+            return datetime.fromtimestamp(float(raw), tz=INDIA).isoformat()
+        except (ValueError, OSError, OverflowError):
+            return None
+    for fmt in ("%d-%b-%Y %H:%M:%S", "%d-%b-%Y %H:%M:%S.%f", "%d/%m/%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S",
+                "%Y-%m-%dT%H:%M:%S", "%d-%m-%Y %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            moment = datetime.strptime(raw, fmt)
+        except ValueError:
+            continue
+        return None if moment.year < 1971 else moment.replace(tzinfo=INDIA).isoformat()
+    return None
+
+def next_reset():
+    """The epoch of the next 06:00 IST, when the merged hash expires."""
+    now = datetime.now(INDIA)
+    reset = now.replace(hour=RESET_HOUR, minute=0, second=0, microsecond=0)
+    return int((reset if reset > now else reset + timedelta(days=1)).timestamp())
+
+def normalized_order(data):
+    """
+    A Kotak order as a normalized order, or None when it has no order number.
+
+    Kotak's order-book row and its order update message carry the same abbreviated fields, so both writers of
+    `kotak:orders:orders` build `order` with this one function.
+
+    - `data` is an order-book row, or an order message's `data`.
+    """
+    if not isinstance(data, dict) or text(data.get('nOrdNo')) is None:
+        return None
+    symbol, exchange = text(first(data, 'trdSym', 'sym')), text(first(data, 'exSeg', 'exch'))
+    quantity, filled = number(data.get('qty'), int), number(data.get('fldQty'), int)
+    pending = number(data.get('unFldSz'), int)
+    if pending is None and quantity is not None and filled is not None:
+        pending = quantity - filled
+    return {
+        "order_id": text(data.get('nOrdNo')),
+        "exchange_order_id": text(data.get('exOrdId')),
+        "parent_order_id": text(data.get('snoOrdNo')),
+        "status": normalize(present(first(data, 'ordSt', 'stat')), STATUSES),
+        "status_message": text(first(data, 'rejRsn', 'rejectionReason', 'errMsg', 'statMsg')),
+        "id": f"{exchange}:{symbol}" if exchange and symbol else symbol,
+        "instrument_token": text(data.get('tok')),
+        "tradingsymbol": symbol,
+        "exchange": exchange,
+        "transaction_type": normalize(present(data.get('trnsTp')), TRANSACTION_TYPES),
+        "product": normalize(present(data.get('prod')), PRODUCTS),
+        "order_type": normalize(present(data.get('prcTp')), ORDER_TYPES),
+        "validity": normalize(present(first(data, 'vldt', 'ret')), VALIDITIES),
+        "quantity": quantity,
+        "filled_quantity": filled,
+        "pending_quantity": pending,
+        "cancelled_quantity": number(data.get('cnclQty'), int),
+        "disclosed_quantity": number(data.get('dscQty'), int),
+        "price": number(data.get('prc')),
+        "trigger_price": number(data.get('trgPrc')),
+        "average_price": number(data.get('avgPrc')),
+        "order_timestamp": kotak_timestamp(data.get('ordDtTm')),
+        "exchange_timestamp": kotak_timestamp(first(data, 'exCfmTm', 'boeSec')),
+        "tag": text(first(data, 'tag', 'usrRmk', 'remarks')),
+    }
+
+def total(*values):
+    """The sum of the values that are present, or None when none is."""
+    present_values = [value for value in values if value is not None]
+    return sum(present_values) if present_values else None
+
+def position_key(data):
+    """
+    The hash field for a Kotak position, `exSeg:tok:prod`, with the trading symbol standing in for a missing token, or
+    None when the position names no segment, instrument or product.
+
+    Kotak holds one position per instrument and product, and its positions row and position message name them with
+    the same fields, so both writers of `kotak:portfolio:positions` build the field with this one function.
+
+    - `data` is a positions row, or a position message's `data`.
+    """
+    if not isinstance(data, dict):
+        return None
+    parts = [text(data.get('exSeg')), text(data.get('tok')) or text(first(data, 'trdSym', 'sym')), text(data.get('prod'))]
+    return ":".join(parts) if all(parts) else None
+
+def normalized_position(data):
+    """
+    A Kotak position as a normalized position.
+
+    Today's (`fl...`) and carried-forward (`cf...`) buys and sells are added together, as the positions endpoint
+    splits them; a message that sends only today's leg is read with that leg alone. Kotak reports values rather than
+    averages, so the prices are derived, and it reports no profit, last price or average cost.
+
+    - `data` is a positions row, or a position message's `data`.
+    """
+    exchange, symbol = text(data.get('exSeg')), text(first(data, 'trdSym', 'sym'))
+    bought = total(number(data.get('flBuyQty'), int), number(data.get('cfBuyQty'), int))
+    sold = total(number(data.get('flSellQty'), int), number(data.get('cfSellQty'), int))
+    buy_value = total(number(data.get('buyAmt')), number(data.get('cfBuyAmt')))
+    sell_value = total(number(data.get('sellAmt')), number(data.get('cfSellAmt')))
+    return {
+        "id": f"{exchange}:{symbol}" if exchange and symbol else symbol,
+        "instrument_token": text(data.get('tok')),
+        "tradingsymbol": symbol,
+        "exchange": exchange,
+        "segment": exchange.split("_", 1)[1] if exchange and "_" in exchange else None,
+        "product": normalize(present(data.get('prod')), PRODUCTS),
+        "quantity": bought - sold if bought is not None and sold is not None else None,
+        "buy_quantity": bought,
+        "sell_quantity": sold,
+        "buy_price": buy_value / bought if buy_value is not None and bought else None,
+        "sell_price": sell_value / sold if sell_value is not None and sold else None,
+        "buy_value": buy_value,
+        "sell_value": sell_value,
+        "average_price": None,
+        "last_price": None,
+        "realized_pnl": None,
+        "unrealized_pnl": None,
+        "pnl": None,
+        "multiplier": number(data.get('multiplier')),
+        "lot_size": number(data.get('lotSz'), int),
+        "day_or_net": "NET",
+        "updated_at": text(data.get('hsUpTm')),
+    }
+
+
+def realtime_url(base_url):
+    """
+    The order update URL for the host a session was assigned.
+
+    - `base_url` is the stored login's `base_url`, with or without a scheme or trailing slash.
+    """
+    host = str(base_url).split("://", 1)[-1].strip("/")
+    return f"wss://{host}{REALTIME_PATH}"
+
+class OrderUpdatesSocket:
+    """
+    Kotak's order update websocket, reconnecting and logging in again until stopped.
+    """
+
+    def __init__(self, cache, logger):
+        """
+        Construct KotakAPI, which logs in when the stored session is dead.
+
+        - `cache` is the Redis client.
+        - `logger` is where the connection reports.
+        """
+        from stock_brokers.api.kotak import KotakAPI
+
+        self._api_class = KotakAPI
+        self._kotak = KotakAPI()
+        self._cache = cache
+        self._merge = cache.register_script(MERGE_SCRIPT)
+        self._logger = logger
+        self._stop = threading.Event()
+        self._ws = None
+        self._opened = False
+        self._authentication_rejected = False
+        self.gave_up = False
+
+    def close(self):
+        """Close the websocket and stop reconnecting."""
+        self._stop.set()
+        if self._ws is not None:
+            self._ws.close()
+
+    def run_forever(self):
+        """Connect, and reconnect with backoff, until closed or unable to recover."""
+        backoff = MIN_BACKOFF_SECONDS
+        failed_connects = 0
+        logged_in_again = False
+        while not self._stop.is_set():
+            self._opened = False
+            self._authentication_rejected = False
+            try:
+                self._connect()
+            except Exception as exception:
+                self._logger.error(f"Order updates connection failed: {type(exception).__name__}: {exception}")
+            if self._stop.is_set():
+                break
+
+            if self._opened and not self._authentication_rejected:
+                failed_connects, logged_in_again, backoff = 0, False, MIN_BACKOFF_SECONDS
+            else:
+                failed_connects += 1
+
+            if self._authentication_rejected or failed_connects >= MAX_FAILED_CONNECTS:
+                if logged_in_again:
+                    self.gave_up = True
+                    self._logger.error("Order updates are still refused after logging in again. Giving up.")
+                    break
+                try:
+                    # A dead session: log in again before connecting again.
+                    self._logger.warning("Logging in to Kotak again.")
+                    self._kotak = self._api_class()
+                except Exception as exception:
+                    self.gave_up = True
+                    self._logger.error(f"Could not log in to Kotak again: {type(exception).__name__}: {exception}")
+                    break
+                failed_connects, logged_in_again = 0, True
+
+            self._logger.warning(f"Order updates disconnected. Reconnecting in {backoff} seconds.")
+            self._stop.wait(backoff)
+            backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
+        self._logger.info("Order updates socket stopped.")
+
+    def _connect(self):
+        """Open the websocket on the session's own host and block until it closes."""
+        import websocket
+
+        login = self._kotak._current_login() or {}
+        if not login.get('base_url') or login.get('base_url') == 'None':
+            raise RuntimeError("the stored Kotak login has no base_url, so there is no order update host")
+        self._ws = websocket.WebSocketApp(realtime_url(login['base_url']), on_open=self._on_open,
+                                          on_message=self._on_message, on_error=self._on_error, on_close=self._on_close)
+        self._ws.run_forever(ping_interval=PING_INTERVAL_SECONDS, ping_timeout=PING_TIMEOUT_SECONDS)
+
+    def _on_open(self, ws):
+        """Send the raw connection frame with the token and session id in force now."""
+        self._opened = True
+        login = self._kotak._current_login() or {}
+        ws.send(f"{{type:cn,Authorization:{login.get('access_token')},Sid:{login.get('sid')},src:WEB}}")
+        self._logger.info("Order updates socket opened. Waiting for Kotak's acknowledgement.")
+
+    def _on_error(self, ws, error):
+        self._logger.error(f"Order updates error: {error}")
+
+    def _on_close(self, ws, status_code, message):
+        self._logger.info(f"Order updates socket closed with status {status_code}: {message}")
+
+    def _on_message(self, ws, message):
+        """Merge each order and position message into its hash and append it to its stream; notice a refused connection frame."""
+        if isinstance(message, (bytes, bytearray)):
+            message = bytes(message).decode('utf-8', errors='replace')
+        try:
+            payload = json.loads(message)
+        except (TypeError, json.JSONDecodeError):
+            self._logger.debug(f"Ignoring a frame that is not JSON: {str(message)[:160]}")
+            return
+
+        received_at = datetime.now()
+        received = received_at.strftime("%Y-%m-%d %H:%M:%S.%f")
+        observed_at = received_at.timestamp()
+        orders, positions = [], []
+        for entry in (payload if isinstance(payload, list) else [payload]):
+            if not isinstance(entry, dict):
+                continue
+            message_type = entry.get('type')
+            data = entry.get('data')
+
+            if entry.get('ak') == 'nk' or message_type == 'failed to connect':
+                self._logger.error(f"Kotak refused the order update connection: {entry.get('msg') or entry}")
+                self._authentication_rejected = True
+                ws.close()
+                return
+            if message_type == CONNECT_ACK or entry.get('ak') == 'ok':
+                self._logger.info("Order updates socket authenticated. Waiting for updates.")
+            elif message_type == ORDER and normalized_order(data) is not None:
+                order = normalized_order(data)
+                orders.append((order["order_id"], {"observed_at": observed_at, "source": "websocket", "order": order,
+                                                   "data": data}, json.dumps({'timestamp': received, 'data': data})))
+            elif message_type == POSITION and position_key(data) is not None:
+                positions.append((position_key(data), {"observed_at": observed_at, "source": "websocket",
+                                                       "position": normalized_position(data), "data": data},
+                                  json.dumps({'timestamp': received, 'data': data})))
+            else:
+                self._logger.info(f"Ignoring a message of type {message_type!r}: {json.dumps(entry)[:200]}")
+
+        if not orders and not positions:
+            return
+        # Each hash keeps the latest state; each stream keeps every update, even two of one order in one message, in the
+        # shape bin/kotak/orders/store_orders_to_db and bin/kotak/portfolio/store_positions_to_db read.
+        pipeline = self._cache.pipeline(transaction=False)
+        for hash_key, stream_key, field, updates in ((ORDERS_KEY, ORDER_STREAM_KEY, "update", orders),
+                                                     (POSITIONS_KEY, POSITION_STREAM_KEY, "position", positions)):
+            if updates:
+                arguments = [next_reset(), "websocket", repr(observed_at)]
+                for key, value, _ in updates:
+                    arguments += [key, json.dumps(value)]
+                self._merge(keys=[hash_key], args=arguments)
+                for _, _, update in updates:
+                    pipeline.xadd(stream_key, {field: update}, maxlen=STREAM_MAX_LENGTH, approximate=True)
+        pipeline.execute()
+        if orders:
+            self._logger.info(f"Merged {len(orders)} order update(s) into {ORDERS_KEY}: "
+                              f"{', '.join(key for key, _, _ in orders)}")
+        if positions:
+            self._logger.info(f"Merged {len(positions)} position update(s) into {POSITIONS_KEY}: "
+                              f"{', '.join(key for key, _, _ in positions)}")
+
+def main():
+    """Stream Kotak order and position updates into Redis until stopped."""
+    from utilities.configurations import get_cache, get_logger
+
+    logger = get_logger("kotak.websocket_order_details")
+    try:
+        socket = OrderUpdatesSocket(get_cache(), logger)
+    except Exception as exception:
+        logger.error(f"Could not log in to Kotak: {type(exception).__name__}: {exception}")
+        return 1
+
+    # Installed before the thread starts: systemd stops a unit with SIGTERM, and the default action would kill
+    # the process without closing the connection.
+    def _handle_signal(signal_number, frame):
+        logger.info(f"Received signal {signal_number}. Closing the order updates feed.")
+        socket.close()
+
+    for signal_number in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(signal_number, _handle_signal)
+
+    thread = threading.Thread(target=socket.run_forever, name="kotak_order_updates", daemon=True)
+    logger.info("Starting the order updates feed.")
+    thread.start()
+
+    # Block in the main thread so the signal handlers above can run.
+    while thread.is_alive():
+        thread.join(timeout=1)
+
+    if socket.gave_up:
+        return 1
+    logger.info("Order updates feed stopped.")
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())

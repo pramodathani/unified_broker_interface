@@ -5,7 +5,11 @@
 #     systemctl --user link ~/Projects/unified_broker_interface/services/indmoney/*
 #     systemctl --user daemon-reload
 #     systemctl --user enable --now indmoney.target indmoney-login.timer \
-#         indmoney@quotes.service indmoney@order_updates.service indmoney@persist_ticks.service indmoney@persist_orders.service indmoney@orders.service indmoney@trades.service indmoney@positions.service indmoney@holdings.service indmoney@funds.service indmoney@user-profile.service indmoney-historical-prices.service
+#         indmoney-instruments@websocket_quotes.service indmoney-instruments@store_quotes_to_db.service \
+#         indmoney-orders@websocket_order_details.service indmoney-orders@store_orders_to_db.service indmoney-orders@api_order_details.service indmoney-orders@api_trade_details.service \
+#         indmoney-portfolio@positions.service indmoney-portfolio@holdings.service indmoney-portfolio@funds.service \
+#         indmoney-user@details.service \
+#         indmoney-historical-prices.service
 
 [Unit]
 Description=indmoney scripts

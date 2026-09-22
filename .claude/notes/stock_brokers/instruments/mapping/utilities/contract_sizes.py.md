@@ -30,6 +30,6 @@ On 2026-09-15 the user chose, from options put to them: a contract is trusted wh
 
 ## Robustness
 
-Snapshot columns are read through a regular expression before being cast, because the raw tables store text and a single malformed value would otherwise abort the whole query. A size that is zero or negative is treated as missing, which matters for Kotak, whose `lmultiplier` is -1 where it has none. `bin/unified/map_instruments` logs a failure of this step and carries on, because the safe outcome of a missing decision is already that such orders are refused.
+Snapshot columns are read through a regular expression before being cast, because the raw tables store text and a single malformed value would otherwise abort the whole query. A size that is zero or negative is treated as missing, which matters for Kotak, whose `lmultiplier` is -1 where it has none. `bin/unified/instruments/map` logs a failure of this step and carries on, because the safe outcome of a missing decision is already that such orders are refused.
 
 The run took 12 seconds on 2026-09-15 and wrote 83,351 rows.

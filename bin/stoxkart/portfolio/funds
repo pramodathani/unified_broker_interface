@@ -1,0 +1,106 @@
+#!/usr/bin/env python3
+"""Poll the Stoxkart funds every second and write them to the Redis key `stoxkart:portfolio:funds`.
+
+    bin/stoxkart/portfolio/funds
+    redis-cli GET stoxkart:portfolio:funds
+
+Calls `GET https://openapi.stoxkart.com/funds` through `StoxkartAPI`, which logs in first if the stored session is dead. Each response is written as one JSON string with SET, replacing the one before: `timestamp`, `status`, `code`, and Stoxkart's funds under `data`. Stoxkart sends every figure as a string. The fields seen on 2026-09-15 were `cash`, `adhoc_limit`, `net`, `available_limit`, `realised_profit`, `utilized_limit`, `payin_amount`, `payout_amount`, `pledge_value`, `delivery_sold_today` and `withdrawable_funds`; Stoxkart's documentation also lists `collateral`, which the live answer did not carry.
+
+Stoxkart documents a limit of one funds request a second, so the poll waits a second between requests. The limit was not enforced on 2026-09-15, when six back-to-back requests all succeeded.
+
+Runs until Ctrl+C. A dead session, which Stoxkart refuses with HTTP 401 and the code `AuthorizationError`, is logged in again before the next request. Any other failed poll is logged and leaves `stoxkart:portfolio:funds` unchanged. Exits 1 when the first login, or a login after the session died, fails. Reads only - it places no orders.
+"""
+
+import json
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+from stock_brokers.api.stoxkart import StoxkartAPI
+from utilities.configurations import get_cache, get_logger
+from utilities.poll_reporter import PollReporter
+
+FUNDS_URL = "https://openapi.stoxkart.com/funds"
+REDIS_KEY = "stoxkart:portfolio:funds"
+DELAY_SECONDS = 1.0
+TIMEOUT_SECONDS = 10
+AUTHENTICATION_CODES = (
+    "AuthorizationError",
+    "401",
+    "Invalid Session",
+)
+
+
+class StoxkartFundsPoller:
+    """A loop that copies Stoxkart's funds into Redis once a second.
+
+    Attributes:
+        logger (logging.Logger): Where logins and failures are reported.
+        reporter (PollReporter): Where each cycle's outcome is reported without repeating it every second.
+        cache (redis.Redis): The Redis client the funds are written with.
+    """
+
+    def __init__(self):
+        """Creates the logger, the reporter and the Redis client."""
+        self.logger = get_logger("stoxkart.funds")
+        self.reporter = PollReporter(self.logger)
+        self.cache = get_cache()
+        self._stoxkart = None
+
+    def run(self):
+        """Logs in and polls the funds until interrupted.
+
+        Returns:
+            int: 0 when stopped with Ctrl+C, and 1 when a login failed.
+        """
+        try:
+            self._stoxkart = StoxkartAPI()
+        except Exception as error:
+            self.logger.error(f"Could not log in to Stoxkart: {type(error).__name__}: {error}")
+            return 1
+
+        try:
+            while True:
+                self._poll_once()
+                time.sleep(DELAY_SECONDS)
+        except KeyboardInterrupt:
+            self.logger.info("Stopped")
+        return 0
+
+    def _poll_once(self):
+        """Fetches the funds once and writes them, logging in again when the session is dead.
+
+        Raises:
+            StoxkartAPIException: Logging in again after a dead session failed.
+        """
+        try:
+            funds = self._stoxkart.get(url=FUNDS_URL, timeout=TIMEOUT_SECONDS)
+            self.cache.set(REDIS_KEY, json.dumps(funds))
+            data = funds.get("data") or {}
+            self.reporter.info(f"Wrote funds (net {data.get('net')}, available {data.get('available_limit')}) to {REDIS_KEY}")
+        except Exception as error:
+            if self._is_authentication_error(error):
+                self.logger.warning(f"Stoxkart session expired, logging in again: {error}")
+                self._stoxkart = StoxkartAPI()
+            else:
+                self.reporter.error(f"Funds poll failed: {type(error).__name__}: {error}")
+
+    def _is_authentication_error(self, error):
+        """Reports whether Stoxkart refused the request because the session is dead.
+
+        Args:
+            error (Exception): The exception the request raised.
+
+        Returns:
+            bool: True when the exception carries one of Stoxkart's authentication codes.
+        """
+        return str(getattr(error, "code", "")) in AUTHENTICATION_CODES
+
+
+if __name__ == "__main__":
+    raise SystemExit(StoxkartFundsPoller().run())

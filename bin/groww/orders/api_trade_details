@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""
+Poll the day's Groww trades every half second and write them to the Redis key `groww:orders:trades`.
+
+    bin/groww/orders/api_trade_details
+    redis-cli GET groww:orders:trades
+
+Groww has no single trade book: an order's fills are asked for by its id and segment. So each poll calls
+`GET https://api.groww.in/v1/order/list` through `GrowwAPI`, which logs in first if the stored session is
+dead, and then `GET https://api.groww.in/v1/order/trades/{groww_order_id}?segment=` for each order that has
+filled anything, one after another. The fills are written together as one JSON string with SET, replacing
+the one before: `timestamp`, `status` and `code` of the last response, and under `data` every fill in one
+list, each row carrying `groww_trade_id`, `groww_order_id`, `exchange_trade_id`, `exchange_order_id`,
+`trading_symbol`, `exchange`, `segment`, `product`, `transaction_type`, `quantity`, `price`,
+`trade_date_time` and `created_at`. A day with no fills is `[]`.
+
+A poll therefore costs one request plus one per filled order, and on a busy day that is many requests
+every half second.
+
+Runs until Ctrl+C. A dead session (HTTP 401, or a refusal naming authentication or an expired or invalid
+token) is logged in again before the next request; Groww's 403, an endpoint the account is not entitled
+to, and 429, a rate limit, are not taken for one. Any other failed poll - including any one order's fills
+failing - is logged and leaves `groww:orders:trades` unchanged. Exits 1 when the first login, or a login
+after the session died, fails. Reads only - it never places, modifies or cancels an order.
+"""
+
+import sys
+import json
+import time
+from pathlib import Path
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+ORDERS_URL = "https://api.groww.in/v1/order/list"
+TRADES_URL = "https://api.groww.in/v1/order/trades/{order_id}"
+REDIS_KEY = "groww:orders:trades"
+DELAY_SECONDS = 0.5
+TIMEOUT_SECONDS = 10
+
+# What Groww says when the session is no good, lowercased.
+AUTHENTICATION_MARKERS = ("unauthori", "authentication", "token expired", "invalid token", "expired token", "jwt")
+
+def is_authentication_error(exception):
+    """Whether Groww refused the request because the session is dead, rather than for entitlement or rate."""
+    status = str(getattr(exception, 'code', '') or '').strip()
+    lowered = str(exception).lower()
+    if status in ('403', '429') or 'access forbidden' in lowered:
+        return False
+    return status == '401' or any(marker in lowered for marker in AUTHENTICATION_MARKERS)
+
+def listed(response, key):
+    """The list under `key` in a Groww response's data, empty when there is no data, raising when it is malformed."""
+    data = (response or {}).get('data')
+    if data is None:
+        return []
+    if not isinstance(data, dict) or not isinstance(data.get(key, []), list):
+        raise RuntimeError(f"Groww answered without a {key}: {str(data)[:200]}")
+    return data.get(key) or []
+
+def fetch_trades(groww):
+    """Every fill of today's filled orders as one response."""
+    response = groww.get(url=ORDERS_URL, timeout=TIMEOUT_SECONDS) or {}
+    fills = []
+    for row in listed(response, 'order_list'):
+        if not isinstance(row, dict) or not row.get('groww_order_id') or not float(row.get('filled_quantity') or 0):
+            continue
+        response = groww.get(url=TRADES_URL.format(order_id=row['groww_order_id']),
+                             params={'segment': row.get('segment')}, timeout=TIMEOUT_SECONDS) or {}
+        fills.extend(fill for fill in listed(response, 'trade_list') if isinstance(fill, dict))
+    return {**response, 'data': fills}
+
+def main():
+    """Fetch the fills and write them to groww:orders:trades every half second, until interrupted."""
+    from stock_brokers.api.groww import GrowwAPI
+    from utilities.configurations import get_cache, get_logger
+    from utilities.poll_reporter import PollReporter
+
+    logger = get_logger("groww.api_trade_details")
+    report = PollReporter(logger)
+    cache = get_cache()
+    try:
+        groww = GrowwAPI()
+    except Exception as exception:
+        logger.error(f"Could not log in to Groww: {type(exception).__name__}: {exception}")
+        return 1
+
+    try:
+        while True:
+            try:
+                trades = fetch_trades(groww)
+                cache.set(REDIS_KEY, json.dumps(trades))
+                report.info(f"Wrote {len(trades['data'])} trades to {REDIS_KEY}")
+            except Exception as exception:
+                if is_authentication_error(exception):
+                    # A dead session: log in again before sending anything more.
+                    logger.warning(f"Groww session expired, logging in again: {exception}")
+                    groww = GrowwAPI()
+                else:
+                    report.error(f"Trades poll failed: {type(exception).__name__}: {exception}")
+            time.sleep(DELAY_SECONDS)
+    except KeyboardInterrupt:
+        logger.info("Stopped")
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())

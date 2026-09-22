@@ -1,0 +1,47 @@
+#!/usr/bin/env python3
+"""
+Mark Groww as logged out in the Redis key `groww:session:status`.
+
+    bin/groww/session/disconnect
+    redis-cli GET groww:session:status
+
+Nothing is sent to Groww. The script only replaces `groww:session:status` with:
+
+    {"status": "logged out", "access-token": null, "last_login": null}
+
+The stored token in the Redis `last_login` hash and in MongoDB is left alone, so every other process - the
+feeds, the pollers, the REST API - keeps using it, and Groww keeps accepting it until it expires.
+
+Exits 0 when the key was written and 1 when it could not be, in which case `groww:session:status` is
+unchanged.
+"""
+
+import sys
+import json
+from pathlib import Path
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+REDIS_KEY = "groww:session:status"
+
+def main():
+    """Write the logged-out record to groww:session:status."""
+    from utilities.configurations import get_cache
+
+    record = {'status': 'logged out', 'access-token': None, 'last_login': None}
+    try:
+        get_cache().set(REDIS_KEY, json.dumps(record))
+    except Exception as exception:
+        print(f"groww could not write {REDIS_KEY}: {type(exception).__name__}: {exception}", file=sys.stderr)
+        return 1
+
+    print(f"groww logged out in {REDIS_KEY}")
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())

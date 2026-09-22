@@ -1,6 +1,6 @@
 -- Live ticks for every unified instrument, one table across all brokers.
 --
--- Written by bin/unified/persist_ticks from the unified quote stream bin/unified/quotes fills. Each row is one quote the
+-- Written by bin/unified/instruments/store_quotes_to_db from the unified quote stream bin/unified/instruments/websocket_quotes fills. Each row is one quote the
 -- unified quote layer accepted: resolved to its unified.instruments id, from the broker that owned the instrument at
 -- that moment, normalized so a row means the same thing whichever broker it came from - prices in rupees on the tick
 -- grid, previous_close the previous session's close with change_percent recomputed from it, quantities in underlying

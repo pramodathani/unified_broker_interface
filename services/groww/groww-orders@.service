@@ -1,0 +1,31 @@
+# One bin/groww/orders/ script that keeps running: the order and trade pollers, the websocket that carries order
+# updates, and the persister that drains its stream. So groww-orders@api_order_details.service runs
+# bin/groww/orders/api_order_details, and groww-orders@websocket_order_details.service runs the update feed beside it.
+# They all fit, because every one of them logs in by itself, logs in again when its token is refused, and exits
+# non-zero only when it cannot recover.
+#
+#     systemctl --user enable --now groww-orders@api_order_details.service
+#     journalctl --user -u groww-orders@api_order_details -f
+
+[Unit]
+Description=groww orders %i
+PartOf=groww.target
+Wants=network-online.target
+After=network-online.target
+# Never give up restarting: a broker outage can outlast any start limit, and each script paces its own logins.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+# Python block-buffers stdout when it is not a terminal; without this the journal stays empty.
+Environment=PYTHONUNBUFFERED=1
+SyslogIdentifier=groww-orders-%i
+ExecStart=%h/Projects/unified_broker_interface/bin/groww/orders/%i
+Restart=always
+RestartSec=15
+# Exit 2 is a bad argument or configuration - nothing to subscribe to, say - which a restart cannot fix.
+RestartPreventExitStatus=2
+TimeoutStopSec=60
+
+[Install]
+WantedBy=groww.target

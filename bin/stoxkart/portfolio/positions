@@ -1,0 +1,530 @@
+#!/usr/bin/env python3
+"""Poll the Stoxkart positions every second and merge them into the Redis hash `stoxkart:portfolio:positions`.
+
+    bin/stoxkart/portfolio/positions
+    redis-cli HGETALL stoxkart:portfolio:positions
+    redis-cli HGET stoxkart:portfolio:positions NSE:760946:DELIVERY
+
+Calls `GET https://openapi.stoxkart.com/portfolio/positions` through `StoxkartAPI`, which logs in first if the stored session is dead. Stoxkart answers with a flat list of rows. Its documentation says the API returns net and day positions, but its sample and the live answer of 2026-09-15 are a single list, so every row is treated as the net view. Should Stoxkart ever answer with `net` and `day` lists, both are read.
+
+**One key for positions.** `stoxkart:portfolio:positions` is a hash with one field per position, keyed `exchange:token:product_type`, such as `NSE:760946:DELIVERY`, with `DAY:` in front for a row from a `day` list. Stoxkart streams no positions, so this poller is the one writer. Every value is
+
+    {"observed_at": <epoch>, "source": "rest", "position": <normalized position>, "data": <Stoxkart's own row>}
+
+`position` is built from the row:
+
+| field | from Stoxkart |
+| --- | --- |
+| `id`, `tradingsymbol` | `exchange:tradingsymbol`, where the symbol is looked up in `stoxkart:instruments:master` by `exchange:token`, because a position row carries no symbol |
+| `instrument_token`, `exchange`, `segment` | `token`, `exchange`, `inst_type` |
+| `product` | `product_type` on the shared vocabulary |
+| `quantity`, `buy_quantity`, `sell_quantity` | `net_quantity`, `buy_quantity`, `sell_quantity` |
+| `buy_price`, `sell_price`, `buy_value`, `sell_value` | `buy_average_price`, `sell_average_price`, `buy_value`, `sell_value` |
+| `average_price`, `last_price` | `net_average_price`, `last_trade_price` |
+| `pnl` | `mark_to_market` |
+| `lot_size` | `regular_lot` |
+| `day_or_net` | `NET`, or `DAY` for a row from a `day` list |
+
+Stoxkart sends no realized or unrealized split, multiplier or update time, so `realized_pnl`, `unrealized_pnl`, `multiplier` and `updated_at` are null. No open position had been seen by 2026-09-15, so the field names come from Stoxkart's documentation and are unconfirmed; the sign of `net_quantity` for a short position in particular is unverified.
+
+**Which write wins.** A row from this poller replaces an entry only when that entry was observed before this poll's request was sent. The check and the write run together in Redis, as one script.
+
+**Daily reset.** The hash expires at 06:00 IST, and every write moves that to the next 06:00. A position Stoxkart stops listing during the day is not removed before then. Each successful poll also writes its request time to `stoxkart:portfolio:positions:polled_at`, expiring with the hash.
+
+Stoxkart documents a limit of one positions request a second, so the poll waits a second between requests.
+
+Runs until Ctrl+C. A dead session, which Stoxkart refuses with HTTP 401 and the code `AuthorizationError`, is logged in again before the next request. Any other failed poll is logged and leaves the hash unchanged. Exits 1 when the first login, or a login after the session died, fails. Reads only - it places no orders.
+"""
+
+import json
+import sys
+import time
+from datetime import datetime, timedelta
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+from stock_brokers.api.stoxkart import StoxkartAPI
+from utilities.configurations import get_cache, get_logger
+from utilities.poll_reporter import PollReporter
+
+POSITIONS_URL = "https://openapi.stoxkart.com/portfolio/positions"
+REDIS_KEY = "stoxkart:portfolio:positions"
+POLLED_KEY = "stoxkart:portfolio:positions:polled_at"
+MASTER_KEY = "stoxkart:instruments:master"
+META_KEY = "stoxkart:instruments:meta"
+DELAY_SECONDS = 1.0
+TIMEOUT_SECONDS = 10
+INDIA = ZoneInfo("Asia/Kolkata")
+RESET_HOUR = 6
+AUTHENTICATION_CODES = (
+    "AuthorizationError",
+    "401",
+    "Invalid Session",
+)
+
+MERGE_SCRIPT = """
+local kind = redis.call('TYPE', KEYS[1])
+if type(kind) == 'table' then kind = kind['ok'] end
+if kind ~= 'hash' and kind ~= 'none' then redis.call('DEL', KEYS[1]) end
+local written = 0
+for i = 4, #ARGV, 2 do
+    local replace = true
+    if ARGV[2] == 'rest' then
+        local current = redis.call('HGET', KEYS[1], ARGV[i])
+        if current then
+            local ok, decoded = pcall(cjson.decode, current)
+            if ok and type(decoded) == 'table' and tonumber(decoded['observed_at'])
+                    and tonumber(decoded['observed_at']) >= tonumber(ARGV[3]) then
+                replace = false
+            end
+        end
+    end
+    if replace then
+        redis.call('HSET', KEYS[1], ARGV[i], ARGV[i + 1])
+        written = written + 1
+    end
+end
+if #ARGV >= 4 then redis.call('EXPIREAT', KEYS[1], ARGV[1]) end
+return written
+"""
+
+
+class StoxkartInstrumentNames:
+    """Trading symbols for Stoxkart instruments, read from the instrument master stored in Redis."""
+
+    DERIVATIVE_TYPE_PREFIXES = (
+        "FUT",
+        "OPT",
+    )
+
+    def __init__(self, cache):
+        """Remembers the Redis client and starts with no names cached.
+
+        Args:
+            cache (redis.Redis): The Redis client holding `stoxkart:instruments:master`.
+        """
+        self._cache = cache
+        self._columns = None
+        self._names = {}
+
+    def symbol(self, exchange, token):
+        """Looks up the trading symbol of one instrument.
+
+        A future or option whose `symbol_description` already names the contract, such as `NIFTY26SEPFUT`, is named by that description. A commodity contract's description is often only the commodity's name, such as `COPPER` or `GOLD 995`, so its name is built from the symbol, expiry, strike and option type instead, such as `CRUDEOIL21SEP26FUT`. Anything else is named by `symbol`.
+
+        Args:
+            exchange (str | None): Stoxkart's exchange, such as `NSE` or `NFO`.
+            token (str | None): Stoxkart's instrument token.
+
+        Returns:
+            str | None: The trading symbol, or None when the instrument is not in the master.
+        """
+        if not exchange or not token:
+            return None
+        field = f"{exchange}:{token}"
+        if field not in self._names:
+            self._names[field] = self._read_symbol(field)
+        return self._names[field]
+
+    def _read_symbol(self, field):
+        """Reads one instrument's row from the master hash and picks its trading symbol.
+
+        Args:
+            field (str): The hash field, `EXCHANGE:TOKEN`.
+
+        Returns:
+            str | None: The trading symbol, or None when the row or the column list cannot be read.
+        """
+        columns = self._column_positions()
+        if columns is None:
+            return None
+        stored = self._cache.hget(MASTER_KEY, field)
+        if not stored:
+            return None
+        try:
+            row = json.loads(stored)
+        except ValueError:
+            return None
+
+        symbol = row[columns["symbol"]]
+        instrument_type = str(row[columns["instrument_type"]] or "").upper()
+        if not symbol or not instrument_type.startswith(self.DERIVATIVE_TYPE_PREFIXES):
+            return symbol
+        description = str(row[columns["symbol_description"]] or "")
+        if self._is_contract_name(description, str(symbol)):
+            return description
+        return self._contract_name(row, columns, symbol)
+
+    def _is_contract_name(self, description, symbol):
+        """Reports whether a master row's description already names the contract.
+
+        A contract name such as `NIFTY26SEPFUT` begins with the symbol, is longer than it, has no spaces and carries the expiry's digits. A commodity description such as `COPPER` or `GOLD 995` fails at least one of those tests.
+
+        Args:
+            description (str): The row's `symbol_description`.
+            symbol (str): The row's `symbol`.
+
+        Returns:
+            bool: True when the description can be used as the trading symbol.
+        """
+        if not description.startswith(symbol) or len(description) <= len(symbol):
+            return False
+        if " " in description:
+            return False
+        for character in description:
+            if character.isdigit():
+                return True
+        return False
+
+    def _contract_name(self, row, columns, symbol):
+        """Builds a contract name from the symbol, expiry, strike and option type.
+
+        Args:
+            row (list): The master row.
+            columns (dict): Each column name mapped to its position in a row.
+            symbol (str): The contract's underlying symbol.
+
+        Returns:
+            str: The name, such as `CRUDEOIL21SEP26FUT` or `SILVER24FEB26150000CE`, or the symbol alone when the expiry cannot be read.
+        """
+        try:
+            expiry = datetime.strptime(str(row[columns["expiry_date"]]), "%d-%m-%Y")
+        except ValueError:
+            return symbol
+        name = f"{symbol}{expiry.strftime('%d%b%y').upper()}"
+        option_type = str(row[columns["option_type"]] or "").upper()
+        if option_type not in ("CE", "PE"):
+            return f"{name}FUT"
+        try:
+            strike = float(row[columns["strike_price"]]) / 100
+        except (TypeError, ValueError):
+            return f"{name}{option_type}"
+        return f"{name}{strike:g}{option_type}"
+
+    def _column_positions(self):
+        """Reads the master's column order from its meta key, once.
+
+        Returns:
+            dict | None: Each column name mapped to its position in a row, or None when the meta key is missing or lacks a needed column.
+        """
+        if self._columns is not None:
+            return self._columns
+        stored = self._cache.get(META_KEY)
+        if not stored:
+            return None
+        try:
+            columns = json.loads(stored).get("columns") or []
+        except ValueError:
+            return None
+        positions = {}
+        for index, name in enumerate(columns):
+            positions[name] = index
+        for needed in ("instrument_type", "symbol", "symbol_description", "expiry_date", "strike_price", "option_type"):
+            if needed not in positions:
+                return None
+        self._columns = positions
+        return positions
+
+
+class StoxkartPositionNormalizer:
+    """Turns a Stoxkart position row into the normalized position every broker's scripts share."""
+
+    PRODUCTS = {
+        "DELIVERY": "CNC",
+        "CNC": "CNC",
+        "INTRADAY": "MIS",
+        "MIS": "MIS",
+        "CARRYFORWARD": "NRML",
+        "CARRY FORWARD": "NRML",
+        "NRML": "NRML",
+        "NORMAL": "NRML",
+        "BO": "BO",
+        "BRACKET ORDER": "BO",
+        "CO": "CO",
+        "COVER ORDER": "CO",
+        "MTF": "MTF",
+    }
+
+    def __init__(self, names):
+        """Remembers where trading symbols are looked up.
+
+        Args:
+            names (StoxkartInstrumentNames): The instrument master lookup.
+        """
+        self._names = names
+
+    def key(self, row, day_or_net):
+        """Builds the hash field that identifies a position.
+
+        Args:
+            row (dict): One Stoxkart position row.
+            day_or_net (str): `NET` or `DAY`.
+
+        Returns:
+            str | None: The field, such as `NSE:760946:DELIVERY`, or None when the row has no exchange or token.
+        """
+        exchange = self._text(row.get("exchange"))
+        token = self._text(row.get("token"))
+        if exchange is None or token is None:
+            return None
+        field = f"{exchange}:{token}:{self._text(row.get('product_type')) or ''}"
+        if day_or_net == "DAY":
+            return f"DAY:{field}"
+        return field
+
+    def normalize(self, row, day_or_net):
+        """Builds the normalized position for one row.
+
+        Args:
+            row (dict): One Stoxkart position row.
+            day_or_net (str): `NET` or `DAY`.
+
+        Returns:
+            dict: The normalized position.
+        """
+        exchange = self._text(row.get("exchange"))
+        token = self._text(row.get("token"))
+        symbol = self._names.symbol(exchange, token)
+        instrument_name = symbol
+        if exchange and symbol:
+            instrument_name = f"{exchange}:{symbol}"
+
+        return {
+            "id": instrument_name,
+            "instrument_token": token,
+            "tradingsymbol": symbol,
+            "exchange": exchange,
+            "segment": self._text(row.get("inst_type")),
+            "product": self._product(row.get("product_type")),
+            "quantity": self._integer(row.get("net_quantity")),
+            "buy_quantity": self._integer(row.get("buy_quantity")),
+            "sell_quantity": self._integer(row.get("sell_quantity")),
+            "buy_price": self._decimal(row.get("buy_average_price")),
+            "sell_price": self._decimal(row.get("sell_average_price")),
+            "buy_value": self._decimal(row.get("buy_value")),
+            "sell_value": self._decimal(row.get("sell_value")),
+            "average_price": self._decimal(row.get("net_average_price")),
+            "last_price": self._decimal(row.get("last_trade_price")),
+            "realized_pnl": None,
+            "unrealized_pnl": None,
+            "pnl": self._decimal(row.get("mark_to_market")),
+            "multiplier": None,
+            "lot_size": self._integer(row.get("regular_lot")),
+            "day_or_net": day_or_net,
+            "updated_at": None,
+        }
+
+    def _product(self, value):
+        """Maps Stoxkart's product type onto the shared vocabulary.
+
+        Args:
+            value (object): The product type as Stoxkart sent it.
+
+        Returns:
+            str | None: The shared product, the term uppercased when the table does not know it, or None when it is blank.
+        """
+        text = self._text(value)
+        if text is None:
+            return None
+        key = " ".join(text.upper().replace("_", " ").split())
+        if key in self.PRODUCTS:
+            return self.PRODUCTS[key]
+        return key
+
+    def _text(self, value):
+        """Returns a value as a string, treating blanks and Stoxkart's `NA` placeholder as missing.
+
+        Args:
+            value (object): The raw field value.
+
+        Returns:
+            str | None: The value as a stripped string, or None.
+        """
+        if value is None:
+            return None
+        text = str(value).strip()
+        if text in ("", "NA"):
+            return None
+        return text
+
+    def _decimal(self, value):
+        """Returns a value as a float.
+
+        Args:
+            value (object): The raw field value.
+
+        Returns:
+            float | None: The number, or None when the value is missing or not numeric.
+        """
+        text = self._text(value)
+        if text is None:
+            return None
+        try:
+            return float(text)
+        except ValueError:
+            return None
+
+    def _integer(self, value):
+        """Returns a value as an integer.
+
+        Args:
+            value (object): The raw field value.
+
+        Returns:
+            int | None: The number, or None when the value is missing or not numeric.
+        """
+        number = self._decimal(value)
+        if number is None:
+            return None
+        return int(number)
+
+
+class StoxkartPositionsPoller:
+    """A loop that merges Stoxkart's positions into the shared Redis positions hash once a second.
+
+    Attributes:
+        logger (logging.Logger): Where logins and failures are reported.
+        reporter (PollReporter): Where each cycle's outcome is reported without repeating it every second.
+        cache (redis.Redis): The Redis client the positions are written with.
+        normalizer (StoxkartPositionNormalizer): Builds the normalized position from each row.
+    """
+
+    def __init__(self):
+        """Creates the logger, the reporter, the Redis client, the merge script and the normalizer."""
+        self.logger = get_logger("stoxkart.positions")
+        self.reporter = PollReporter(self.logger)
+        self.cache = get_cache()
+        self.normalizer = StoxkartPositionNormalizer(StoxkartInstrumentNames(self.cache))
+        self._merge = self.cache.register_script(MERGE_SCRIPT)
+        self._stoxkart = None
+
+    def run(self):
+        """Logs in and polls the positions until interrupted.
+
+        Returns:
+            int: 0 when stopped with Ctrl+C, and 1 when a login failed.
+        """
+        try:
+            self._stoxkart = StoxkartAPI()
+        except Exception as error:
+            self.logger.error(f"Could not log in to Stoxkart: {type(error).__name__}: {error}")
+            return 1
+
+        try:
+            while True:
+                self._poll_once()
+                time.sleep(DELAY_SECONDS)
+        except KeyboardInterrupt:
+            self.logger.info("Stopped")
+        return 0
+
+    def _poll_once(self):
+        """Fetches the positions once and merges them, logging in again when the session is dead.
+
+        Raises:
+            StoxkartAPIException: Logging in again after a dead session failed.
+        """
+        try:
+            requested_at = time.time()
+            response = self._stoxkart.get(url=POSITIONS_URL, timeout=TIMEOUT_SECONDS)
+            views = self._views(response.get("data"))
+            written, total = self._merge_views(views, requested_at)
+            self.reporter.info(f"Merged {written} of {total} position(s) into {REDIS_KEY}")
+        except Exception as error:
+            if self._is_authentication_error(error):
+                self.logger.warning(f"Stoxkart session expired, logging in again: {error}")
+                self._stoxkart = StoxkartAPI()
+            else:
+                self.reporter.error(f"Positions poll failed: {type(error).__name__}: {error}")
+
+    def _views(self, data):
+        """Splits Stoxkart's answer into the views it holds.
+
+        Args:
+            data (object): The `data` of Stoxkart's answer, a list of rows or a dict of `net` and `day` lists.
+
+        Returns:
+            list: Pairs of (`NET` or `DAY`, list of rows).
+        """
+        if isinstance(data, list):
+            return [
+                ("NET", data),
+            ]
+        if isinstance(data, dict):
+            views = []
+            for name, day_or_net in (("net", "NET"), ("day", "DAY")):
+                rows = data.get(name)
+                if isinstance(rows, list):
+                    views.append((day_or_net, rows))
+            return views
+        return []
+
+    def _merge_views(self, views, requested_at):
+        """Merges every row into the hash and records when the positions were read.
+
+        Args:
+            views (list): Pairs of (`NET` or `DAY`, list of rows).
+            requested_at (float): The epoch at which the request was sent.
+
+        Returns:
+            tuple: A tuple (written, total), where written is how many hash fields were written and total is how many rows were read.
+        """
+        expires_at = self._next_reset()
+        arguments = [
+            expires_at,
+            "rest",
+            repr(requested_at),
+        ]
+        total = 0
+        for day_or_net, rows in views:
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                total += 1
+                field = self.normalizer.key(row, day_or_net)
+                if field is None:
+                    continue
+                entry = {
+                    "observed_at": requested_at,
+                    "source": "rest",
+                    "position": self.normalizer.normalize(row, day_or_net),
+                    "data": row,
+                }
+                arguments.append(field)
+                arguments.append(json.dumps(entry))
+
+        written = self._merge(keys=[REDIS_KEY], args=arguments)
+        self.cache.set(POLLED_KEY, repr(requested_at), exat=expires_at)
+        return written, total
+
+    def _next_reset(self):
+        """Returns the epoch of the next 06:00 in India, when the positions hash expires.
+
+        Returns:
+            int: The epoch in seconds.
+        """
+        now = datetime.now(INDIA)
+        reset = now.replace(hour=RESET_HOUR, minute=0, second=0, microsecond=0)
+        if reset <= now:
+            reset = reset + timedelta(days=1)
+        return int(reset.timestamp())
+
+    def _is_authentication_error(self, error):
+        """Reports whether Stoxkart refused the request because the session is dead.
+
+        Args:
+            error (Exception): The exception the request raised.
+
+        Returns:
+            bool: True when the exception carries one of Stoxkart's authentication codes.
+        """
+        return str(getattr(error, "code", "")) in AUTHENTICATION_CODES
+
+
+if __name__ == "__main__":
+    raise SystemExit(StoxkartPositionsPoller().run())

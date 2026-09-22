@@ -1,0 +1,659 @@
+#!/usr/bin/env python3
+"""Stream Stoxkart order updates from its order websocket into the Redis hash `stoxkart:orders:orders`, and keep streaming until stopped.
+
+    bin/stoxkart/orders/websocket_order_details
+    redis-cli HGETALL stoxkart:orders:orders
+    redis-cli XRANGE stoxkart:order-updates:stream - + COUNT 5
+
+**The socket.** Stoxkart's API documentation mentions only a postback URL for order status. Stoxkart's own trading website instead receives order updates on `wss://openapi-v2.stoxkart.com/websocket/v2/connect`, and on 2026-09-15 that socket accepted the API app's own session:
+
+1. `POST https://openapi-v2.stoxkart.com/websocket/authenticate` with the headers `x-client-id` (the `ucc_code` setting), `x-access-token` (the API access token), `x-platform: api` and `x-api-key` answers `{"message": "Authentication successful, server ready to accept WS", "status": "success", "data": {"ClientId": ..., "RequestId": ...}}`. The same call with `x-platform: web` is refused with `AuthorizationError`, so this is the API platform's access, not the website's.
+2. The socket is opened at `wss://openapi-v2.stoxkart.com/websocket/v2/connect?x-client-id=<client>&x-platform=api&RequestId=<RequestId>`.
+3. `{"type": "heartbeat"}` is sent on connecting and every 30 seconds, as Stoxkart's website does. Updates arrive as JSON text.
+
+Stoxkart keeps one order socket per client. A new connection closes the older one with a close reason containing `new incoming connection`, so this script and a logged-in Stoxkart website or app knock each other off. When that happens here the script waits five minutes before reclaiming the socket, so a person using the website is not fought over every few seconds.
+
+**What an update holds** was first seen on 2026-09-15, when three KWIL orders sent after the close were rejected: an update arrived within a second of each order, carrying `client_id`, `user_id`, `order_id`, `exch_order_id`, `order_timestamp` (blank on a rejection), `variety`, `exchange`, `trading_symbol`, `symbol`, `token`, `segment`, `order_type`, `transaction_type`, `validity`, `product`, `quantity`, `disclose_quantity`, `disclose_quantity_remaining`, `price`, `trigger_price`, `traded_quantity`, `pending_quantity`, `order_status`, `reason`, `expiry_date`, `strike_price`, `option_type` and `lot_size`, every value a string. No update arrived when two after-market orders were placed the same evening, which only `bin/stoxkart/orders/api_order_details` recorded, but one arrived for each when they were cancelled, with `order_status` `AMO CANCELLED`. Updates for open, partly filled and filled orders have not been seen yet. Every JSON object received is logged at INFO with its first 300 characters.
+
+**Keys.** An object carrying an `order_id` is an order update:
+
+- It is merged into `stoxkart:orders:orders`, the hash `bin/stoxkart/orders/api_order_details` also writes, keyed by `order_id`, as `{"observed_at": <epoch>, "source": "websocket", "order": <normalized order>, "data": <the update as Stoxkart sent it>, "variety": <the order's variety>}`. `variety` is what the REST API's cancel endpoint builds Stoxkart's cancel path from. Stoxkart's socket reported `NORMAL` for after-market orders whose order book row said `AMO`, so an `AMO` or `BO` variety already stored for the order is kept, a status beginning with `AMO` means `AMO`, and only otherwise is the update's own `variety` used. A websocket update always replaces its entry; the poller replaces an entry only when it was observed before the poll's request was sent. The hash expires at 06:00 IST, moved to the next 06:00 by every write.
+- It is appended to the Redis Stream `stoxkart:order-updates:stream` as an `update` field holding `{"timestamp": "YYYY-MM-DD HH:MM:SS.ffffff", "order": <normalized order>, "data": <the update>}`, capped at about 20,000 entries, which `bin/stoxkart/orders/store_orders_to_db` writes to `stoxkart.order_updates` and `bin/unified/orders/websocket_order_details` combines.
+
+Any other object - an acknowledgement, a heartbeat reply - is logged and not stored.
+
+**The normalized order** has the fields `bin/stoxkart/orders/api_order_details` builds, read from the order book's field names or, where an update may name a field differently, from the likeliest alternative:
+
+| field | from the update |
+| --- | --- |
+| `order_id`, `exchange_order_id`, `parent_order_id` | `order_id`, `exch_order_id` or `exchange_order_id`, `parent_order_id` |
+| `status`, `status_message` | `status` or `order_status` on the shared vocabulary, `reason`, `rejection_reason` or `status_message` |
+| `id`, `instrument_token`, `tradingsymbol`, `exchange` | `exchange:tradingsymbol`, `token` or `instrument_token`, `symbol_description` for a contract whose description names it and otherwise `symbol` or `trading_symbol`, `exchange` |
+| `transaction_type`, `product`, `order_type`, `validity` | `action` or `transaction_type`, `product_type` or `product`, `order_type`, `validity`, on the shared vocabulary |
+| `quantity`, `filled_quantity`, `pending_quantity`, `disclosed_quantity` | `quantity`, `traded_quantity` or `filled_quantity`, `pending_quantity`, `disclose_quantity` or `disclosed_quantity` |
+| `price`, `trigger_price`, `average_price` | `price`, `trigger_price`, `trade_average_price` or `average_price` |
+| `order_timestamp` | `order_date_time` or `order_timestamp`, India time, as ISO with the IST offset |
+| `cancelled_quantity`, `exchange_timestamp` | null |
+| `tag` | `tag` |
+
+**Sessions.** The access token is read afresh for every authentication, so a login made by any process is picked up. An authentication refused with `AuthorizationError` logs in again through `StoxkartAPI` before retrying. Other failures reconnect with a backoff from 1 to 60 seconds.
+
+Exits 0 when stopped with Ctrl+C or SIGTERM, and 1 when the first login, or a login after the session died, fails. Reads only - it never places, modifies or cancels an order.
+"""
+
+import json
+import signal
+import sys
+import threading
+import time
+from datetime import datetime, timedelta
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+import requests
+import websocket
+
+from stock_brokers.api.stoxkart import StoxkartAPI
+from utilities.configurations import get_cache, get_logger
+
+AUTHENTICATE_URL = "https://openapi-v2.stoxkart.com/websocket/authenticate"
+SOCKET_URL = "wss://openapi-v2.stoxkart.com/websocket/v2/connect"
+ORDERS_KEY = "stoxkart:orders:orders"
+STREAM_KEY = "stoxkart:order-updates:stream"
+STREAM_MAX_LENGTH = 20000
+HEARTBEAT_SECONDS = 30
+RECEIVE_TIMEOUT_SECONDS = 1
+TIMEOUT_SECONDS = 15
+MINIMUM_BACKOFF_SECONDS = 1
+MAXIMUM_BACKOFF_SECONDS = 60
+EVICTED_WAIT_SECONDS = 300
+EVICTION_REASON = "new incoming connection"
+INDIA = ZoneInfo("Asia/Kolkata")
+RESET_HOUR = 6
+
+MERGE_SCRIPT = """
+local kind = redis.call('TYPE', KEYS[1])
+if type(kind) == 'table' then kind = kind['ok'] end
+if kind ~= 'hash' and kind ~= 'none' then redis.call('DEL', KEYS[1]) end
+local written = 0
+for i = 4, #ARGV, 2 do
+    local replace = true
+    if ARGV[2] == 'rest' then
+        local current = redis.call('HGET', KEYS[1], ARGV[i])
+        if current then
+            local ok, decoded = pcall(cjson.decode, current)
+            if ok and type(decoded) == 'table' and tonumber(decoded['observed_at'])
+                    and tonumber(decoded['observed_at']) >= tonumber(ARGV[3]) then
+                replace = false
+            end
+        end
+    end
+    if replace then
+        redis.call('HSET', KEYS[1], ARGV[i], ARGV[i + 1])
+        written = written + 1
+    end
+end
+if #ARGV >= 4 then redis.call('EXPIREAT', KEYS[1], ARGV[1]) end
+return written
+"""
+
+
+class StoxkartSessionRefused(Exception):
+    """Stoxkart refused the order socket's authentication because the session is dead."""
+
+
+class StoxkartUpdateNormalizer:
+    """Turns a Stoxkart order update into the normalized order every broker's scripts share."""
+
+    TRANSACTION_TYPES = {
+        "BUY": "BUY",
+        "B": "BUY",
+        "SELL": "SELL",
+        "S": "SELL",
+    }
+    PRODUCTS = {
+        "DELIVERY": "CNC",
+        "CNC": "CNC",
+        "INTRADAY": "MIS",
+        "MIS": "MIS",
+        "CARRYFORWARD": "NRML",
+        "CARRY FORWARD": "NRML",
+        "NRML": "NRML",
+        "NORMAL": "NRML",
+        "BO": "BO",
+        "BRACKET ORDER": "BO",
+        "CO": "CO",
+        "COVER ORDER": "CO",
+        "MTF": "MTF",
+    }
+    ORDER_TYPES = {
+        "MARKET": "MARKET",
+        "MKT": "MARKET",
+        "RL MKT": "MARKET",
+        "RL-MKT": "MARKET",
+        "LIMIT": "LIMIT",
+        "RL": "LIMIT",
+        "L": "LIMIT",
+        "STOPLOSS LIMIT": "SL",
+        "SL": "SL",
+        "SL LIMIT": "SL",
+        "STOPLOSS MARKET": "SL-M",
+        "SL-M": "SL-M",
+        "SL M": "SL-M",
+        "SL-MKT": "SL-M",
+        "SL MKT": "SL-M",
+    }
+    VALIDITIES = {
+        "DAY": "DAY",
+        "EOTODY": "DAY",
+        "EOSESS": "DAY",
+        "IOC": "IOC",
+        "GTC": "GTC",
+        "GTD": "GTD",
+        "GTT": "GTT",
+    }
+    STATUSES = {
+        "PENDING": "PENDING",
+        "TRANSIT": "PENDING",
+        "TRIGGER PENDING": "PENDING",
+        "AMO REQ RECEIVED": "PENDING",
+        "AMO PENDING": "PENDING",
+        "AFTER MARKET ORDER REQ RECEIVED": "PENDING",
+        "O-PENDING": "PENDING",
+        "OPEN": "OPEN",
+        "NEW": "OPEN",
+        "MODIFIED": "OPEN",
+        "REPLACED": "OPEN",
+        "PARTIALLY EXECUTED": "OPEN",
+        "PARTIALLY FILLED": "OPEN",
+        "PART TRADED": "OPEN",
+        "PARTIALLY TRADED": "OPEN",
+        "COMPLETE": "COMPLETE",
+        "COMPLETED": "COMPLETE",
+        "EXECUTED": "COMPLETE",
+        "FULLY EXECUTED": "COMPLETE",
+        "TRADED": "COMPLETE",
+        "FILLED": "COMPLETE",
+        "CANCELLED": "CANCELLED",
+        "CANCELED": "CANCELLED",
+        "CANCEL": "CANCELLED",
+        "AMO CANCELLED": "CANCELLED",
+        "REJECTED": "REJECTED",
+        "REJECT": "REJECTED",
+        "FAILED": "REJECTED",
+        "EXPIRED": "EXPIRED",
+    }
+    DERIVATIVE_TYPE_PREFIXES = (
+        "FUT",
+        "OPT",
+    )
+
+    def normalize(self, update):
+        """Builds the normalized order for one update.
+
+        Args:
+            update (dict): One order update as Stoxkart sent it.
+
+        Returns:
+            dict | None: The normalized order, or None when the update has no order id.
+        """
+        order_id = self._first(update, "order_id")
+        if order_id is None:
+            return None
+
+        exchange = self._first(update, "exchange")
+        symbol = self._trading_symbol(update)
+        instrument_name = symbol
+        if exchange and symbol:
+            instrument_name = f"{exchange}:{symbol}"
+
+        return {
+            "order_id": order_id,
+            "exchange_order_id": self._identifier(self._first(update, "exch_order_id", "exchange_order_id")),
+            "parent_order_id": self._identifier(self._first(update, "parent_order_id")),
+            "status": self._vocabulary(self._first(update, "status", "order_status"), self.STATUSES),
+            "status_message": self._first(update, "reason", "rejection_reason", "status_message"),
+            "id": instrument_name,
+            "instrument_token": self._first(update, "token", "instrument_token"),
+            "tradingsymbol": symbol,
+            "exchange": exchange,
+            "transaction_type": self._vocabulary(self._first(update, "action", "transaction_type"), self.TRANSACTION_TYPES),
+            "product": self._vocabulary(self._first(update, "product_type", "product"), self.PRODUCTS),
+            "order_type": self._vocabulary(self._first(update, "order_type"), self.ORDER_TYPES),
+            "validity": self._vocabulary(self._first(update, "validity"), self.VALIDITIES),
+            "quantity": self._integer(self._first(update, "quantity")),
+            "filled_quantity": self._integer(self._first(update, "traded_quantity", "filled_quantity")),
+            "pending_quantity": self._integer(self._first(update, "pending_quantity")),
+            "cancelled_quantity": None,
+            "disclosed_quantity": self._integer(self._first(update, "disclose_quantity", "disclosed_quantity")),
+            "price": self._decimal(self._first(update, "price")),
+            "trigger_price": self._decimal(self._first(update, "trigger_price")),
+            "average_price": self._decimal(self._first(update, "trade_average_price", "average_price")),
+            "order_timestamp": self._india_timestamp(self._first(update, "order_date_time", "order_timestamp")),
+            "exchange_timestamp": None,
+            "tag": self._first(update, "tag"),
+        }
+
+    def _trading_symbol(self, update):
+        """Chooses the name that identifies the contract.
+
+        A future or option is named by `symbol_description` when that begins with its symbol, is longer, has no space and carries a digit, as `NIFTY23FEBFUT` does. Anything else is named by `symbol` or `trading_symbol`.
+
+        Args:
+            update (dict): One order update.
+
+        Returns:
+            str | None: The trading symbol, or None when the update names none.
+        """
+        symbol = self._first(update, "symbol", "trading_symbol")
+        instrument_type = str(update.get("instrument_type") or "").upper()
+        description = self._first(update, "symbol_description")
+        if not instrument_type.startswith(self.DERIVATIVE_TYPE_PREFIXES) or description is None:
+            return symbol
+        if symbol is None:
+            return description
+        if not description.startswith(symbol) or len(description) <= len(symbol) or " " in description:
+            return symbol
+        for character in description:
+            if character.isdigit():
+                return description
+        return symbol
+
+    def _first(self, update, *names):
+        """Returns the first of several fields the update carries a value for, as a string.
+
+        Args:
+            update (dict): One order update.
+            *names (str): The field names to try, in order.
+
+        Returns:
+            str | None: The stripped value, or None when every field is missing, blank or Stoxkart's `NA` placeholder.
+        """
+        for name in names:
+            value = update.get(name)
+            if value is None:
+                continue
+            text = str(value).strip()
+            if text not in ("", "NA"):
+                return text
+        return None
+
+    def _identifier(self, value):
+        """Returns an order id, treating Stoxkart's `0` for an id not yet assigned as missing.
+
+        Args:
+            value (str | None): The raw field value.
+
+        Returns:
+            str | None: The id, or None when it is missing or `0`.
+        """
+        if value == "0":
+            return None
+        return value
+
+    def _vocabulary(self, value, table):
+        """Maps a Stoxkart term onto the shared vocabulary.
+
+        Args:
+            value (str | None): The term as Stoxkart sent it.
+            table (dict): One of the vocabulary tables on this class.
+
+        Returns:
+            str | None: The shared term, the term uppercased when the table does not know it, or None when it is blank.
+        """
+        if value is None:
+            return None
+        key = " ".join(value.upper().replace("_", " ").split())
+        if key in table:
+            return table[key]
+        return key
+
+    def _decimal(self, value):
+        """Returns a value as a float.
+
+        Args:
+            value (str | None): The raw field value.
+
+        Returns:
+            float | None: The number, or None when the value is missing or not numeric.
+        """
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except ValueError:
+            return None
+
+    def _integer(self, value):
+        """Returns a value as an integer.
+
+        Args:
+            value (str | None): The raw field value.
+
+        Returns:
+            int | None: The number, or None when the value is missing or not numeric.
+        """
+        number = self._decimal(value)
+        if number is None:
+            return None
+        return int(number)
+
+    def _india_timestamp(self, value):
+        """Converts a Stoxkart order time into an ISO timestamp with the IST offset.
+
+        Args:
+            value (str | None): The time as Stoxkart sent it, such as `16-02-2023 17:15:37`.
+
+        Returns:
+            str | None: The ISO timestamp, or None when the value is missing or in no known format.
+        """
+        if value is None:
+            return None
+        for pattern in ("%d-%b-%Y %H:%M:%S", "%d-%m-%Y %H:%M:%S", "%d/%m/%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+            try:
+                moment = datetime.strptime(value, pattern)
+            except ValueError:
+                continue
+            return moment.replace(tzinfo=INDIA).isoformat()
+        return None
+
+
+class StoxkartOrderSocket:
+    """The order update websocket, authenticated with the API session and reconnected until stopped.
+
+    Attributes:
+        logger (logging.Logger): Where connections, updates and failures are reported.
+        cache (redis.Redis): The Redis client updates are written with.
+        normalizer (StoxkartUpdateNormalizer): Builds the normalized order from each update.
+        stop (threading.Event): Set when streaming should end.
+    """
+
+    def __init__(self, stoxkart):
+        """Remembers the API session and prepares the Redis merge script.
+
+        Args:
+            stoxkart (StoxkartAPI): The logged-in API session whose token authenticates the socket.
+        """
+        self.logger = get_logger("stoxkart.websocket_order_details")
+        self.cache = get_cache()
+        self.normalizer = StoxkartUpdateNormalizer()
+        self.stop = threading.Event()
+        self._merge = self.cache.register_script(MERGE_SCRIPT)
+        self._stoxkart = stoxkart
+
+    def run(self):
+        """Authenticates, connects and stores updates, reconnecting with a backoff, until stopped.
+
+        Returns:
+            int: 0 once stopped, and 1 when logging in again after a refused session failed.
+        """
+        backoff = MINIMUM_BACKOFF_SECONDS
+        while not self.stop.is_set():
+            wait = backoff
+            try:
+                request_id = self._authenticate()
+                close_reason = self._stream(request_id)
+                backoff = MINIMUM_BACKOFF_SECONDS
+                wait = MINIMUM_BACKOFF_SECONDS
+                if EVICTION_REASON in close_reason.lower():
+                    self.logger.warning(f"Another Stoxkart session took the order socket; reclaiming it in {EVICTED_WAIT_SECONDS} seconds.")
+                    wait = EVICTED_WAIT_SECONDS
+            except StoxkartSessionRefused as error:
+                self.logger.warning(f"Stoxkart session expired, logging in again: {error}")
+                try:
+                    self._stoxkart = StoxkartAPI()
+                except Exception as login_error:
+                    self.logger.error(f"Could not log in to Stoxkart: {type(login_error).__name__}: {login_error}")
+                    return 1
+                wait = 0
+            except Exception as error:
+                self.logger.error(f"Order socket failed, reconnecting in {backoff} seconds: {type(error).__name__}: {error}")
+                backoff = min(backoff * 2, MAXIMUM_BACKOFF_SECONDS)
+            if wait:
+                self.stop.wait(wait)
+        self.logger.info("Stopped")
+        return 0
+
+    def _authenticate(self):
+        """Asks Stoxkart for the RequestId the socket connects with.
+
+        Returns:
+            str: The RequestId.
+
+        Raises:
+            StoxkartSessionRefused: Stoxkart refused the access token.
+            RuntimeError: Stoxkart answered without a RequestId.
+            requests.RequestException: The request could not be sent.
+        """
+        login = self._stoxkart._current_login() or {}
+        settings = self._stoxkart._settings
+        headers = {
+            "x-client-id": settings["ucc_code"],
+            "x-access-token": login.get("access_token") or "",
+            "x-platform": "api",
+            "x-api-key": settings["api_key"],
+        }
+        response = requests.post(AUTHENTICATE_URL, headers=headers, timeout=TIMEOUT_SECONDS)
+        try:
+            body = response.json()
+        except ValueError:
+            body = {}
+        if response.status_code == 401 or body.get("code") == "AuthorizationError":
+            raise StoxkartSessionRefused(body.get("message") or f"HTTP {response.status_code}")
+        request_id = (body.get("data") or {}).get("RequestId")
+        if response.status_code >= 300 or not request_id:
+            raise RuntimeError(f"authentication answered HTTP {response.status_code}: {response.text[:200]}")
+        return request_id
+
+    def _stream(self, request_id):
+        """Opens the socket and reads it until it closes or streaming stops.
+
+        Args:
+            request_id (str): The RequestId from the authentication.
+
+        Returns:
+            str: The close reason Stoxkart gave, or an empty string.
+
+        Raises:
+            websocket.WebSocketException: The socket could not be opened or broke.
+        """
+        client_id = self._stoxkart._settings["ucc_code"]
+        url = f"{SOCKET_URL}?x-client-id={client_id}&x-platform=api&RequestId={request_id}"
+        socket = websocket.create_connection(url, timeout=RECEIVE_TIMEOUT_SECONDS)
+        self.logger.info(f"Connected to {SOCKET_URL}.")
+        try:
+            return self._read(socket)
+        finally:
+            socket.close()
+
+    def _read(self, socket):
+        """Sends heartbeats and stores updates until the socket closes or streaming stops.
+
+        Args:
+            socket (websocket.WebSocket): The open connection.
+
+        Returns:
+            str: The close reason Stoxkart gave, or an empty string.
+        """
+        heartbeat = json.dumps({"type": "heartbeat"})
+        socket.send(heartbeat)
+        last_heartbeat_at = time.monotonic()
+        while not self.stop.is_set():
+            if time.monotonic() - last_heartbeat_at >= HEARTBEAT_SECONDS:
+                socket.send(heartbeat)
+                last_heartbeat_at = time.monotonic()
+            try:
+                opcode, frame = socket.recv_data()
+            except websocket.WebSocketTimeoutException:
+                continue
+            if opcode == websocket.ABNF.OPCODE_CLOSE:
+                reason = frame[2:].decode("utf-8", errors="replace")
+                self.logger.warning(f"Stoxkart closed the order socket: {reason!r}")
+                return reason
+            if opcode == websocket.ABNF.OPCODE_TEXT:
+                self._handle(frame.decode("utf-8", errors="replace"))
+        return ""
+
+    def _handle(self, text):
+        """Stores every order update in one text frame.
+
+        Args:
+            text (str): The frame's text.
+        """
+        try:
+            payload = json.loads(text)
+        except ValueError:
+            self.logger.info(f"Ignoring a frame that is not JSON: {text[:200]}")
+            return
+        items = payload
+        if not isinstance(payload, list):
+            items = [payload]
+
+        received_at = datetime.now()
+        observed_at = received_at.timestamp()
+        received = received_at.strftime("%Y-%m-%d %H:%M:%S.%f")
+        merge_arguments = [
+            self._next_reset(),
+            "websocket",
+            repr(observed_at),
+        ]
+        stream_entries = []
+        orders = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            self.logger.info(f"Order socket message: {json.dumps(item)[:300]}")
+            order = self.normalizer.normalize(item)
+            if order is not None:
+                orders.append((order, item))
+        stored_varieties = self._stored_varieties(orders)
+        for order, item in orders:
+            entry = {
+                "observed_at": observed_at,
+                "source": "websocket",
+                "order": order,
+                "data": item,
+                "variety": self._variety(item, stored_varieties.get(order["order_id"])),
+            }
+            merge_arguments.append(order["order_id"])
+            merge_arguments.append(json.dumps(entry))
+            stream_entries.append(json.dumps({"timestamp": received, "order": order, "data": item}))
+
+        if not stream_entries:
+            return
+        self._merge(keys=[ORDERS_KEY], args=merge_arguments)
+        pipeline = self.cache.pipeline(transaction=False)
+        for update in stream_entries:
+            pipeline.xadd(STREAM_KEY, {"update": update}, maxlen=STREAM_MAX_LENGTH, approximate=True)
+        pipeline.execute()
+        self.logger.info(f"Merged {len(stream_entries)} order update(s) into {ORDERS_KEY}")
+
+    def _stored_varieties(self, orders):
+        """Reads the variety already stored for each order, from the entries in `stoxkart:orders:orders`.
+
+        Args:
+            orders (list): Pairs of (normalized order, update).
+
+        Returns:
+            dict: Each order id mapped to its stored variety, uppercased, for the orders whose entry holds one.
+        """
+        if not orders:
+            return {}
+        order_ids = []
+        for order, _ in orders:
+            order_ids.append(order["order_id"])
+        stored = self.cache.hmget(ORDERS_KEY, order_ids)
+        varieties = {}
+        for order_id, value in zip(order_ids, stored):
+            if not value:
+                continue
+            try:
+                entry = json.loads(value)
+            except ValueError:
+                continue
+            if not isinstance(entry, dict):
+                continue
+            variety = entry.get("variety")
+            data = entry.get("data")
+            if not variety and entry.get("source") == "rest" and isinstance(data, dict):
+                variety = data.get("variety")
+            if variety:
+                varieties[order_id] = str(variety).strip().upper()
+        return varieties
+
+    def _variety(self, update, stored_variety):
+        """Chooses the variety an order is cancelled with.
+
+        Stoxkart's order socket reported `NORMAL` for two after-market orders on 2026-09-15 while the order book said `AMO`, so an `AMO` or `BO` variety already stored for the order is kept, a status beginning with `AMO` means `AMO`, and only otherwise is the update's own variety used.
+
+        Args:
+            update (dict): One order update as Stoxkart sent it.
+            stored_variety (str | None): The variety already stored for the order, uppercased, or None.
+
+        Returns:
+            str | None: The variety, uppercased, or None when neither the stored entry nor the update names one.
+        """
+        if stored_variety in ("AMO", "BO"):
+            return stored_variety
+        status = str(update.get("order_status") or update.get("status") or "").strip().upper()
+        if status.startswith("AMO"):
+            return "AMO"
+        variety = str(update.get("variety") or "").strip().upper()
+        if variety:
+            return variety
+        return stored_variety
+
+    def _next_reset(self):
+        """Returns the epoch of the next 06:00 in India, when the order hash expires.
+
+        Returns:
+            int: The epoch in seconds.
+        """
+        now = datetime.now(INDIA)
+        reset = now.replace(hour=RESET_HOUR, minute=0, second=0, microsecond=0)
+        if reset <= now:
+            reset = reset + timedelta(days=1)
+        return int(reset.timestamp())
+
+
+class StoxkartOrderUpdatesApplication:
+    """The command line entry point: logs in and runs the order socket until stopped."""
+
+    def run(self):
+        """Logs in, installs the signal handlers and streams order updates.
+
+        Returns:
+            int: 0 when stopped, and 1 when a login failed.
+        """
+        logger = get_logger("stoxkart.websocket_order_details")
+        try:
+            stoxkart = StoxkartAPI()
+        except Exception as error:
+            logger.error(f"Could not log in to Stoxkart: {type(error).__name__}: {error}")
+            return 1
+
+        socket = StoxkartOrderSocket(stoxkart)
+
+        def stop_socket(signal_number, frame):
+            """Sets the socket's stop event.
+
+            Args:
+                signal_number (int): The signal received.
+                frame (frame): The interrupted stack frame, unused.
+            """
+            del frame
+            logger.info(f"Received signal {signal_number}. Stopping.")
+            socket.stop.set()
+
+        signal.signal(signal.SIGINT, stop_socket)
+        signal.signal(signal.SIGTERM, stop_socket)
+        return socket.run()
+
+
+if __name__ == "__main__":
+    raise SystemExit(StoxkartOrderUpdatesApplication().run())

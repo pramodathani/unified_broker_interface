@@ -7,7 +7,7 @@ broker here. All four were measured on 2026-09-12 rather than taken from documen
 **It needs a different session.** XTS splits a broker into two applications with separate
 credentials, and the token this project's `WisdomCapitalAPI` holds belongs to the interactive
 one. The chart endpoint lives under `/apimarketdata`, so this module logs in a second time with
-`price_api_key` and `price_api_secret` - the same pair `bin/wisdom_capital/quotes` uses -
+`price_api_key` and `price_api_secret` - the same pair `bin/wisdom_capital/instruments/websocket_quotes` uses -
 and carries that token on every request.
 
 **The bars are not JSON.** They arrive inside one string under a key the platform spells

@@ -1,4 +1,4 @@
-# Log stoxkart in with bin/stoxkart/login. Driven by stoxkart-login.timer.
+# Log stoxkart in with bin/stoxkart/session/connect. Driven by stoxkart-login.timer.
 #
 #     systemctl --user start stoxkart-login          # log in now
 #     journalctl --user -u stoxkart-login
@@ -6,7 +6,7 @@
 # The bin/stoxkart/ scripts read the current token on every connect and
 # request, so nothing has to be restarted after a login - it only has to happen ahead of the market.
 #
-# Tried up to three times. bin/stoxkart/login exits non-zero when the login fails or the session it produced does not
+# Tried up to three times. bin/stoxkart/session/connect exits non-zero when the login fails or the session it produced does not
 # answer an authenticated request, and Restart=on-failure runs it again after RestartSec. StartLimitBurst counts the
 # first attempt, so three starts inside the interval is the first try and two retries. Every attempt writes
 # stoxkart:session:status.
@@ -21,7 +21,7 @@ StartLimitBurst=3
 Type=oneshot
 Environment=PYTHONUNBUFFERED=1
 SyslogIdentifier=stoxkart-login
-ExecStart=%h/Projects/unified_broker_interface/bin/stoxkart/login
+ExecStart=%h/Projects/unified_broker_interface/bin/stoxkart/session/connect
 Restart=on-failure
 RestartSec=2min
 # Zerodha and Shoonya log in by driving a headless Chrome and waiting on a TOTP.

@@ -119,7 +119,7 @@ class IndMoneyInstruments(BrokerInstruments):
         if not self.access_token:
             raise ValueError(
                 "No IND Money access token available, and logging in did not produce one. "
-                "Try 'bin/indmoney/login' and read the error it reports. The token lasts "
+                "Try 'bin/indmoney/session/connect' and read the error it reports. The token lasts "
                 "twenty-four hours, and one issued on an earlier day is not reused."
             )
 

@@ -1,0 +1,321 @@
+#!/usr/bin/env python3
+"""
+Poll the Kotak positions every half second and merge them into the Redis hash `kotak:portfolio:positions`.
+
+    bin/kotak/portfolio/positions
+    redis-cli HGETALL kotak:portfolio:positions
+    redis-cli HGET kotak:portfolio:positions nse_cm:11536:CNC
+
+Calls `GET {base_url}/quick/user/positions`, where `base_url` is the API host Kotak assigned the session at login, read
+from the stored login with its `Auth` and `Sid`; `KotakAPI` logs in first if the stored session is dead. A flat account
+answers `{"stCode": 5203, "errMsg": "No Data", "stat": "Not_Ok"}` in an HTTP 200, which is an answer and writes nothing.
+
+**One key for positions.** `kotak:portfolio:positions` is a hash with one field per position, keyed `exSeg:tok:prod` -
+segment, instrument token and product, as Kotak holds one position per instrument and product; the trading symbol
+stands in for a missing token. It is written by two scripts: this poller, and `bin/kotak/orders/websocket_order_details`, which merges
+each position message from Kotak's websocket into the same hash. Every value is
+
+    {"observed_at": <epoch>, "source": "rest" | "websocket", "position": <normalized position>, "data": <Kotak's own row>}
+
+Kotak's positions row and its position message name a position with the same fields, so both writers build the field
+and `position` with the same functions, and `data` is the position exactly as Kotak sent it:
+
+| field | from Kotak |
+| --- | --- |
+| `id` | `exSeg:trdSym` |
+| `instrument_token`, `tradingsymbol`, `exchange` | `tok`, `trdSym` (or `sym`), `exSeg` |
+| `segment` | the part of `exSeg` after the underscore (`cm`, `fo`) |
+| `product` | `prod` on the shared vocabulary |
+| `buy_quantity`, `sell_quantity` | `flBuyQty` + `cfBuyQty`, `flSellQty` + `cfSellQty` - today's and carried forward |
+| `quantity` | bought less sold |
+| `buy_value`, `sell_value` | `buyAmt` + `cfBuyAmt`, `sellAmt` + `cfSellAmt` |
+| `buy_price`, `sell_price` | value divided by quantity, as Kotak reports values rather than averages |
+| `multiplier`, `lot_size`, `updated_at` | `multiplier`, `lotSz`, `hsUpTm` |
+| `day_or_net` | `NET`: Kotak reports each position once, today's and carried forward together |
+
+Kotak sends no profit, last price or average cost, so `average_price`, `last_price`, `realized_pnl`, `unrealized_pnl`
+and `pnl` are null.
+
+**Which write wins.** A websocket update always replaces its entry. A row from this poller replaces an entry only when
+that entry was observed before this poll's request was sent, so an update that arrived while the request was in flight
+is never overwritten by the older snapshot; a stale entry is corrected by the next poll. The check and the write run
+together in Redis, as one script. `observed_at` of a polled row is the moment its request was sent.
+
+**Daily reset.** The hash expires at 06:00 IST, and every write moves that to the next 06:00. A position Kotak stops
+listing during the day is not removed before then.
+
+Runs until Ctrl+C. A dead session (HTTP 401, "unauthorised") is logged in again before the next request; any other
+failed poll, including a `Not_Ok` body other than "No Data", is logged and leaves the hash unchanged. Exits 1 when the
+first login, or a login after the session died, fails. Reads only - it places no orders.
+"""
+
+import sys
+import json
+import time
+from datetime import datetime, timedelta
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+POSITIONS_PATH = "/quick/user/positions"
+REDIS_KEY = "kotak:portfolio:positions"
+# When the book was last read successfully, epoch seconds, expiring with the hash. The hash alone cannot say so
+# when the book is empty, since Redis keeps no empty hash.
+POLLED_KEY = "kotak:portfolio:positions:polled_at"
+DELAY_SECONDS = 0.5
+TIMEOUT_SECONDS = 10
+
+INDIA = ZoneInfo("Asia/Kolkata")
+RESET_HOUR = 6
+
+# Merges entries into a hash. KEYS[1] is the hash; ARGV is the expiry epoch, the source, the observed-at epoch, then
+# field and value pairs. A "rest" value replaces an entry only when the entry was observed before ARGV[3]; any other
+# source always replaces. A key of another type - the order book stored whole before this hash - is replaced.
+MERGE_SCRIPT = """
+local kind = redis.call('TYPE', KEYS[1])
+if type(kind) == 'table' then kind = kind['ok'] end
+if kind ~= 'hash' and kind ~= 'none' then redis.call('DEL', KEYS[1]) end
+local written = 0
+for i = 4, #ARGV, 2 do
+    local replace = true
+    if ARGV[2] == 'rest' then
+        local current = redis.call('HGET', KEYS[1], ARGV[i])
+        if current then
+            local ok, decoded = pcall(cjson.decode, current)
+            if ok and type(decoded) == 'table' and tonumber(decoded['observed_at'])
+                    and tonumber(decoded['observed_at']) >= tonumber(ARGV[3]) then
+                replace = false
+            end
+        end
+    end
+    if replace then
+        redis.call('HSET', KEYS[1], ARGV[i], ARGV[i + 1])
+        written = written + 1
+    end
+end
+if #ARGV >= 4 then redis.call('EXPIREAT', KEYS[1], ARGV[1]) end
+return written
+"""
+
+PRODUCTS = {
+    "CNC": "CNC", "C": "CNC", "DELIVERY": "CNC", "CASH": "CNC",
+    "MIS": "MIS", "I": "MIS", "INTRADAY": "MIS", "M": "NRML",
+    "NRML": "NRML", "NORMAL": "NRML", "MARGIN": "NRML", "CARRYFORWARD": "NRML",
+    "CO": "CO", "BO": "BO", "MTF": "MTF", "ARB": "ARB", "H": "CO", "B": "BO",
+}
+
+def normalize(value, mapping):
+    """
+    A broker's term on the shared vocabulary, or the term uppercased when the vocabulary does not know it.
+
+    - `value` is the broker's term.
+    - `mapping` is one of the vocabulary tables.
+    """
+    if value is None or value == "":
+        return None
+    key = str(value).strip().upper().replace("_", " ")
+    if key in mapping:
+        return mapping[key]
+    collapsed = " ".join(key.split())
+    return mapping.get(collapsed, collapsed)
+
+def present(value):
+    """A value, or None for Kotak's blanks and `NA` placeholders."""
+    return None if value is None or str(value).strip() in ("", "NA") else value
+
+def first(data, *names):
+    """
+    The first present value among a field's spellings; Kotak's abbreviations vary between segments.
+
+    - `data` is the payload.
+    - `names` are the candidate field names.
+    """
+    for name in names:
+        if present(data.get(name)) is not None:
+            return data[name]
+    return None
+
+def number(value, cast=float):
+    """
+    A value as a number, or None when it is missing or not numeric.
+
+    - `value` is the raw field value.
+    - `cast` is the number type.
+    """
+    value = present(value)
+    try:
+        return None if value is None else int(float(value)) if cast is int else float(value)
+    except (TypeError, ValueError):
+        return None
+
+def text(value):
+    """A value as a string, or None when it is missing."""
+    value = present(value)
+    return None if value is None else str(value)
+
+def next_reset():
+    """The epoch of the next 06:00 IST, when the merged hash expires."""
+    now = datetime.now(INDIA)
+    reset = now.replace(hour=RESET_HOUR, minute=0, second=0, microsecond=0)
+    return int((reset if reset > now else reset + timedelta(days=1)).timestamp())
+
+def total(*values):
+    """The sum of the values that are present, or None when none is."""
+    present_values = [value for value in values if value is not None]
+    return sum(present_values) if present_values else None
+
+def position_key(data):
+    """
+    The hash field for a Kotak position, `exSeg:tok:prod`, with the trading symbol standing in for a missing token, or
+    None when the position names no segment, instrument or product.
+
+    Kotak holds one position per instrument and product, and its positions row and position message name them with
+    the same fields, so both writers of `kotak:portfolio:positions` build the field with this one function.
+
+    - `data` is a positions row, or a position message's `data`.
+    """
+    if not isinstance(data, dict):
+        return None
+    parts = [text(data.get('exSeg')), text(data.get('tok')) or text(first(data, 'trdSym', 'sym')), text(data.get('prod'))]
+    return ":".join(parts) if all(parts) else None
+
+def normalized_position(data):
+    """
+    A Kotak position as a normalized position.
+
+    Today's (`fl...`) and carried-forward (`cf...`) buys and sells are added together, as the positions endpoint
+    splits them; a message that sends only today's leg is read with that leg alone. Kotak reports values rather than
+    averages, so the prices are derived, and it reports no profit, last price or average cost.
+
+    - `data` is a positions row, or a position message's `data`.
+    """
+    exchange, symbol = text(data.get('exSeg')), text(first(data, 'trdSym', 'sym'))
+    bought = total(number(data.get('flBuyQty'), int), number(data.get('cfBuyQty'), int))
+    sold = total(number(data.get('flSellQty'), int), number(data.get('cfSellQty'), int))
+    buy_value = total(number(data.get('buyAmt')), number(data.get('cfBuyAmt')))
+    sell_value = total(number(data.get('sellAmt')), number(data.get('cfSellAmt')))
+    return {
+        "id": f"{exchange}:{symbol}" if exchange and symbol else symbol,
+        "instrument_token": text(data.get('tok')),
+        "tradingsymbol": symbol,
+        "exchange": exchange,
+        "segment": exchange.split("_", 1)[1] if exchange and "_" in exchange else None,
+        "product": normalize(present(data.get('prod')), PRODUCTS),
+        "quantity": bought - sold if bought is not None and sold is not None else None,
+        "buy_quantity": bought,
+        "sell_quantity": sold,
+        "buy_price": buy_value / bought if buy_value is not None and bought else None,
+        "sell_price": sell_value / sold if sell_value is not None and sold else None,
+        "buy_value": buy_value,
+        "sell_value": sell_value,
+        "average_price": None,
+        "last_price": None,
+        "realized_pnl": None,
+        "unrealized_pnl": None,
+        "pnl": None,
+        "multiplier": number(data.get('multiplier')),
+        "lot_size": number(data.get('lotSz'), int),
+        "day_or_net": "NET",
+        "updated_at": text(data.get('hsUpTm')),
+    }
+
+# Kotak's status code for an answer with nothing in it.
+NO_DATA_STATUS_CODE = 5203
+
+# What Kotak says when the session is no good, lowercased. A dead session is HTTP 401 and "unauthorised".
+AUTHENTICATION_MARKERS = ("unauthorised", "unauthorized", "invalid session", "session expired")
+
+def kotak_request(kotak, method, path, body=None):
+    """
+    Call a Kotak path on the session's host and return the response in the API client's shape.
+
+    Made here rather than through the API client, because the client drops `timeout`. Kotak's "No Data"
+    answer comes back with `data` as `[]`; any other body whose `stat` is not `ok`, compared without regard to letter case, and any HTTP error, raises KotakAPIException.
+
+    - `kotak` is the KotakAPI whose stored login supplies the host, `Auth` and `Sid`.
+    - `method` is the HTTP method.
+    - `path` is the path on the session's host.
+    - `body` is the form body to send, if any.
+    """
+    import requests
+    from stock_brokers.api.kotak import KotakAPIException
+
+    login = kotak._current_login() or {}
+    headers = {"neo-fin-key": "neotradeapi", "Auth": str(login.get("access_token")), "Sid": str(login.get("sid"))}
+    response = requests.request(method, kotak.url(path), data=body, headers=headers, timeout=TIMEOUT_SECONDS)
+    if response.status_code >= 300:
+        raise KotakAPIException(code=response.status_code, message=response.text[:300])
+    try:
+        payload = response.json()
+    except ValueError:
+        raise KotakAPIException(code=response.status_code, message=response.text[:300])
+
+    content = {'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"), 'status': 'success',
+               'code': response.status_code}
+    if isinstance(payload, dict) and payload.get('stCode') == NO_DATA_STATUS_CODE:
+        return {**content, 'data': []}
+    status_text = payload.get('stat') if isinstance(payload, dict) else None
+    if status_text is not None and str(status_text).lower() != 'ok':
+        message = str(payload.get('errMsg') or payload.get('emsg') or payload)
+        raise KotakAPIException(code=payload.get('stCode'), message=message[:300])
+    return {**content, 'data': payload.get('data') if isinstance(payload, dict) and 'data' in payload else payload}
+
+def is_authentication_error(exception):
+    """Whether Kotak refused the request because the session is dead."""
+    if str(getattr(exception, 'code', '')) == '401':
+        return True
+    return any(marker in str(exception).lower() for marker in AUTHENTICATION_MARKERS)
+
+def main():
+    """Fetch the positions and merge them into kotak:portfolio:positions every half second, until interrupted."""
+    from stock_brokers.api.kotak import KotakAPI
+    from utilities.configurations import get_cache, get_logger
+    from utilities.poll_reporter import PollReporter
+
+    logger = get_logger("kotak.positions")
+    report = PollReporter(logger)
+    cache = get_cache()
+    merge = cache.register_script(MERGE_SCRIPT)
+    try:
+        kotak = KotakAPI()
+    except Exception as exception:
+        logger.error(f"Could not log in to Kotak: {type(exception).__name__}: {exception}")
+        return 1
+
+    try:
+        while True:
+            try:
+                requested_at = time.time()
+                response = kotak_request(kotak, 'GET', POSITIONS_PATH)
+                rows = response['data'] if response['data'] not in (None, {}) else []
+                if not isinstance(rows, list):
+                    raise ValueError(f"Kotak answered without a list: {str(rows)[:200]}")
+                arguments = [next_reset(), "rest", repr(requested_at)]
+                for row in rows:
+                    field = position_key(row)
+                    if field is not None:
+                        arguments += [field, json.dumps({"observed_at": requested_at, "source": "rest",
+                                                         "position": normalized_position(row), "data": row})]
+                written = merge(keys=[REDIS_KEY], args=arguments)
+                cache.set(POLLED_KEY, repr(requested_at), exat=arguments[0])
+                report.info(f"Merged {written} of {len(rows)} position(s) into {REDIS_KEY}")
+            except Exception as exception:
+                if is_authentication_error(exception):
+                    # A dead session: log in again before sending anything more.
+                    logger.warning(f"Kotak session expired, logging in again: {exception}")
+                    kotak = KotakAPI()
+                else:
+                    report.error(f"Positions poll failed: {type(exception).__name__}: {exception}")
+            time.sleep(DELAY_SECONDS)
+    except KeyboardInterrupt:
+        logger.info("Stopped")
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())

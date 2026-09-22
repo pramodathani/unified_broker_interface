@@ -9,11 +9,11 @@ added together. That costs roughly three times the requests and it is the point:
 can be compared against the broker's own charts without an argument about aggregation boundaries,
 and the seven brokers can be compared against each other.
 
-The queue is worked by `bin/<broker>/historical_prices`, one script per broker, run as
+The queue is worked by `bin/<broker>/instruments/price_history`, one script per broker, run as
 `<broker>-historical-prices.service`. Each is built on the broker's `BrokerCandles` subclass and works its
 `<broker>.price_history_progress` queue; every login, at startup and after the broker refuses the session,
 goes straight through the broker's API class, which logs in when the stored token is dead. Wisdom Capital's
-market data token is shared with `bin/wisdom_capital/quotes` through the Redis key
+market data token is shared with `bin/wisdom_capital/instruments/websocket_quotes` through the Redis key
 `wisdom_capital:session:marketdata`. See [Broker scripts](broker-scripts.md#historical-prices) and
 [Running it as a service](services.md).
 
@@ -21,15 +21,15 @@ market data token is shared with `bin/wisdom_capital/quotes` through the Redis k
 
 ```bash
 python -m stock_brokers.instruments.historical.utilities.sql.apply_ddl   # once, to create the tables
-bin/dhan/historical_prices --seed-only   # register every instrument and interval
-bin/dhan/historical_prices               # work the queue until stopped
-bin/dhan/historical_prices --status      # how far it has got
+bin/dhan/instruments/price_history --seed-only   # register every instrument and interval
+bin/dhan/instruments/price_history               # work the queue until stopped
+bin/dhan/instruments/price_history --status      # how far it has got
 systemctl --user enable --now dhan-historical-prices.service   # the same thing, as a service
 ```
 
 It is not a job that finishes. The seven brokers together publish a little over eighteen million
 series, the deepest reaching back to 2002, and the rates the brokers allow put a complete backfill
-in the region of weeks. So `bin/<broker>/historical_prices` is a worker that makes progress whenever it
+in the region of weeks. So `bin/<broker>/instruments/price_history` is a worker that makes progress whenever it
 runs and can be stopped at any moment.
 
 ## A queue, not a loop
@@ -91,7 +91,7 @@ bar anywhere in the range the broker offers, which is what a contract that liste
 looks like. Retired series are never claimed again.
 
 **Stuck** - five consecutive failures. The series stops being claimed and `last_failure_reason`
-says why. `bin/<broker>/historical_prices --status` counts these. A throttle is deliberately not a
+says why. `bin/<broker>/instruments/price_history --status` counts these. A throttle is deliberately not a
 failure: it says something about the pace rather than about the series, so it costs the rate
 limiter a few seconds and leaves the series claimable.
 
@@ -215,7 +215,7 @@ so those modules override `instruments()` and store a composite such as `2885|NS
 
 **The session comes from `relogin`.** The base class's default goes through `ensure_session`, which
 takes a Redis login lock and a floor on login attempts, and then builds the broker's API class. Each
-`bin/<broker>/historical_prices` overrides `relogin` and `_build_api` to construct the broker's API class
+`bin/<broker>/instruments/price_history` overrides `relogin` and `_build_api` to construct the broker's API class
 directly, which logs in when the stored token is dead, as every other script in `bin/<broker>/` does. This
 process runs for weeks and will be alive across an overnight token expiry.
 

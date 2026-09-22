@@ -5,7 +5,11 @@
 #     systemctl --user link ~/Projects/unified_broker_interface/services/shoonya/*
 #     systemctl --user daemon-reload
 #     systemctl --user enable --now shoonya.target shoonya-login.timer \
-#         shoonya@quotes.service shoonya@order_updates.service shoonya@persist_ticks.service shoonya@persist_orders.service shoonya@orders.service shoonya@trades.service shoonya@positions.service shoonya@holdings.service shoonya@funds.service shoonya@user-profile.service shoonya-historical-prices.service
+#         shoonya-instruments@websocket_quotes.service shoonya-instruments@store_quotes_to_db.service \
+#         shoonya-orders@websocket_order_details.service shoonya-orders@store_orders_to_db.service shoonya-orders@api_order_details.service shoonya-orders@api_trade_details.service \
+#         shoonya-portfolio@positions.service shoonya-portfolio@holdings.service shoonya-portfolio@funds.service \
+#         shoonya-user@details.service \
+#         shoonya-historical-prices.service
 
 [Unit]
 Description=shoonya scripts

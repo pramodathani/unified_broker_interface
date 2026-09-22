@@ -16,21 +16,21 @@ that the broker cannot do it.
 | Wisdom Capital | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-minus: |
 | Stoxkart | :material-check: | :material-check: | :material-check: | :material-check: | :material-minus: | :material-check: | :material-check: | :material-minus: | :material-minus: |
 
-**REST** is the API class in `stock_brokers/api`. **Quotes** and **Order updates** are `bin/<broker>/quotes`
-and `bin/<broker>/order_updates`, and **Unified quotes** the brokers `bin/unified/quotes` reads. Stoxkart's
+**REST** is the API class in `stock_brokers/api`. **Quotes** and **Order updates** are `bin/<broker>/instruments/websocket_quotes`
+and `bin/<broker>/orders/websocket_order_details`, and **Unified quotes** the brokers `bin/unified/instruments/websocket_quotes` reads. Stoxkart's
 **Quotes** and **Order updates** stream from the websockets of Stoxkart's own trading website rather than
 documented API feeds. **API broker
 quotes** are the REST quote modules in service, which the API asks when the quote cache cannot answer.
 
 ## How to read the gaps
 
-**Unified quotes.** Every broker with a quote feed is read by `bin/unified/quotes`, but only Zerodha is
+**Unified quotes.** Every broker with a quote feed is read by `bin/unified/instruments/websocket_quotes`, but only Zerodha is
 verified against a live session so far; the others supply an instrument only when no verified broker streams
 it. [Unified scripts](../guides/unified-scripts.md#what-each-brokers-values-mean) lists what each still has to
 have confirmed.
 
 **Positions streamed.** Only four brokers send position updates on their order update socket - Fyers, Groww
-(derivatives positions only), Kotak and Wisdom Capital - so only they have `persist_positions`. Every
+(derivatives positions only), Kotak and Wisdom Capital - so only they have `store_positions_to_db`. Every
 broker's positions still come from its `positions` poller.
 
 **Price history.** Seven brokers serve candles. Groww answers 403 on the historical endpoint,
@@ -47,11 +47,11 @@ unverified, and Groww's account is not entitled to live data. Wisdom Capital has
 [REST API](../guides/rest-api.md#live-quotes).
 
 **Stoxkart.** Stoxkart has had scripts and units since 2026-09-15: the login, the profile, funds,
-holdings, trades, orders, positions, quotes, order updates, `persist_ticks` and `persist_orders`, and the
+holdings, trades, orders, positions, quotes, order updates, `store_quotes_to_db` and `store_orders_to_db`, and the
 unified combiners read all of them. It still differs from the other brokers in three ways.
 
 - **Undocumented feeds.** Stoxkart's documented quote websocket could not be reached and its documented
-  order status needs a Postback URL, so `bin/stoxkart/quotes` and `bin/stoxkart/order_updates` use the
+  order status needs a Postback URL, so `bin/stoxkart/instruments/websocket_quotes` and `bin/stoxkart/orders/websocket_order_details` use the
   two websockets Stoxkart's own trading website uses. Stoxkart may change them without notice. The quote
   feed is last in the unified quote priority and is not verified, and it is not one of the REST API's
   broker quote modules. See [Broker scripts](../guides/broker-scripts.md#stoxkarts-quote-feed).
@@ -68,7 +68,7 @@ unified combiners read all of them. It still differs from the other brokers in t
   and the order socket have been seen live only for rejected, after-market and cancelled orders.
 
 **Flattrade's order feed is implemented but not running.** The broker permits one websocket per
-session, so `flattrade@order_updates` is not enabled and `flattrade@quotes` holds the connection. See
+session, so `flattrade-orders@websocket_order_details` is not enabled and `flattrade-instruments@websocket_quotes` holds the connection. See
 [Known issues](../contributing/known-issues.md#broker-limits).
 
 ## Broker lists in the code
@@ -80,7 +80,7 @@ They differ, and the differences are deliberate.
 | `orchestrator.INSTRUMENT_BROKERS` | 10 | `stock_brokers/instruments/orchestrator.py` | Every broker with an instrument master, Stoxkart included. |
 | `segments.MAPPED_BROKERS` | 10 | `stock_brokers/instruments/mapping/utilities/segments.py` | The same ten, but **ordered**: the order they must be mapped in. |
 | `orchestrator.CANDLE_BROKERS` | 7 | `stock_brokers/instruments/historical/utilities/orchestrator.py` | Every broker with a candle downloader. |
-| `BROKERS` | 10 | each combiner in `bin/unified/`; `ORDER_BROKERS` (10) and `POSITION_BROKERS` (4) in `order_updates` | The brokers that script combines. Stoxkart is in every `BROKERS` and in `ORDER_BROKERS`, but not in `POSITION_BROKERS`, because it streams no position updates. |
+| `BROKERS` | 10 | each combiner in `bin/unified/`; `ORDER_BROKERS` (10) and `POSITION_BROKERS` (4) in `websocket_order_details` | The brokers that script combines. Stoxkart is in every `BROKERS` and in `ORDER_BROKERS`, but not in `POSITION_BROKERS`, because it streams no position updates. |
 | `SOURCES` | varies | `utilities/service.py` in the REST API's `broker_quotes` | The broker quote modules in service. |
 
 When adding a broker, all of them need looking at - a broker whose scripts write to Redis but which is

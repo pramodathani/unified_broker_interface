@@ -1,0 +1,614 @@
+#!/usr/bin/env python3
+"""
+Stream Zerodha (Kite) market quotes over websockets into the Redis hash `zerodha:quotes:live`, and keep
+streaming until stopped.
+
+    bin/zerodha/instruments/websocket_quotes                         # today's whole instrument master over 24 websockets
+    bin/zerodha/instruments/websocket_quotes --sockets 8
+    bin/zerodha/instruments/websocket_quotes --tokens 738561,408065
+
+    redis-cli HGET zerodha:quotes:live "NSE:RELIANCE"
+    redis-cli HLEN zerodha:quotes:instruments
+
+Self-contained: it logs in with `ZerodhaAPI` and carries its own connection, subscription and binary packet
+decoding for Kite's ticker at `wss://ws.kite.trade`, so it needs no other feed process or key.
+
+**Instruments** are `--tokens` when given, otherwise every instrument in today's `zerodha:instruments:master`,
+the hash `bin/zerodha/instruments/daily_feed` fills at 07:45 IST - 112,657 instruments on 2026-09-16, across NFO, NCO,
+MCX, BSE, NSE, CDS, BFO, GLOBAL and NSEIX. Each is keyed by its Kite instrument token, the number in the
+`instrument_token` column of Kite's instrument file, whose low byte names the exchange segment (738561 is NSE
+RELIANCE), and is named `EXCHANGE:TRADINGSYMBOL` from the master's own row. When the master is empty, only
+`--tokens` works, and those instruments are named from Kite's public instrument file instead.
+
+**Sockets.** The instruments are sorted by token and split into `--sockets` parts of as near the same size as
+they divide into, 24 parts by default, and each part is subscribed on its own websocket running on its own
+thread. The first `count % sockets` parts carry one instrument more than the rest, so today's master splits
+into one part of 4,695 and twenty-three of 4,694.
+
+**This asks Kite for far more than Kite documents.** Kite documents three websockets per api_key, one of which
+`bin/zerodha/orders/websocket_order_details` holds, and 3,000 instruments per websocket. Twenty-four sockets of about 4,700
+instruments each exceeds both, so Kite is expected to refuse the connections past its limit; a refused socket
+reconnects with backoff and leaves the others streaming rather than stopping the feed. The tick volume is also
+far above what the feed was built for: `zerodha:quotes:stream` was raised from 100,000 entries to 1,000,000 on
+2026-09-16 to give `bin/zerodha/instruments/store_quotes_to_db` ten times the room to catch up, which buys minutes rather than
+hours at this subscription size. Nothing here is capped or budgeted: the script opens as many sockets as it is
+asked for.
+
+**Keys.**
+
+- `zerodha:quotes:live`, a hash of the latest tick per instrument as JSON, keyed by the instrument's name from
+  the master (`NSE:RELIANCE`), or by its token when the master does not name it. A tick is replaced as the next
+  one arrives. It is not cleared at startup, so an instrument no longer subscribed keeps its last tick.
+- `zerodha:quotes:instruments`, a hash of every subscribed token to its name, or to an empty string when
+  unnamed. Replaced whole at startup, 5,000 fields at a time.
+- `zerodha:quotes:stream`, a Redis Stream with every tick in arrival order as a `tick` field, which
+  `bin/zerodha/instruments/store_quotes_to_db` writes to `zerodha.ticks`. Capped at about 1,000,000 entries, so ticks that arrive
+  while the persister is down for long enough are trimmed before they are persisted.
+
+A tick has `id`, `broker`, `instrument_token`, `exchange`, `mode`, `last_price`, `last_quantity`,
+`average_price`, `volume`, `buy_quantity`, `sell_quantity`, `ohlc`, `change`, `oi`, `oi_day_high`,
+`oi_day_low`, `last_trade_time`, `exchange_timestamp`, `depth` (five `buy` and `sell` levels of `quantity`,
+`price` and `orders`) and `received_at`, with `None` for what Kite does not send. Kite sends integer prices;
+they are divided into rupees by segment - by 100, by 10,000,000 for NSE currency and by 10,000 for BSE
+currency. Index packets carry no quantities, and `change` is the percentage change against `ohlc.close`.
+
+**Sessions.** Each connection reads the current token when it connects, so a login made by any process is
+picked up. Kite refuses a dead token at the handshake with HTTP 403; that, or a socket failing to open six
+times running, logs in again through `ZerodhaAPI` - one socket at a time, and only if no other socket already
+replaced the token, because Kite issues one token per session and every login invalidates the last - before
+reconnecting. A reconnect otherwise backs off from 1 to 60 seconds.
+
+Exits 0 when stopped with Ctrl+C or SIGTERM, 1 when a login fails or a socket still cannot open after logging
+in again, and 2 when `--sockets` is below 1 or there is nothing to subscribe to. Reads only - it places no
+orders.
+"""
+
+import sys
+import csv
+import json
+import time
+import signal
+import struct
+import argparse
+import threading
+from io import StringIO
+from pathlib import Path
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+FEED_URL = "wss://ws.kite.trade"
+INSTRUMENTS_URL = "https://api.kite.trade/instruments"
+
+LIVE_KEY = "zerodha:quotes:live"
+INSTRUMENTS_KEY = "zerodha:quotes:instruments"
+MASTER_KEY = "zerodha:instruments:master"
+MASTER_META_KEY = "zerodha:instruments:meta"
+
+# Every tick is also appended here for bin/zerodha/instruments/store_quotes_to_db, which reads it with a consumer group. The cap
+# bounds Redis memory when the persister is down; ticks trimmed before it returns are not persisted.
+STREAM_KEY = "zerodha:quotes:stream"
+STREAM_MAX_LENGTH = 1000000
+
+# The exchange segment in the low byte of a Kite instrument token.
+SEGMENTS = {1: "nse", 2: "nfo", 3: "cds", 4: "bse", 5: "bfo", 6: "bcd", 7: "mcx", 8: "mcxsx", 9: "indices"}
+
+DEFAULT_SOCKETS = 24
+
+FIELDS_PER_BATCH = 5000
+
+# HTTP statuses Kite answers a refused token with at the handshake.
+AUTHENTICATION_STATUSES = (401, 403)
+
+PING_INTERVAL_SECONDS = 30
+PING_TIMEOUT_SECONDS = 10
+MIN_BACKOFF_SECONDS = 1
+MAX_BACKOFF_SECONDS = 60
+MAX_FAILED_CONNECTS = 6
+
+class ZerodhaSession:
+    """
+    The Kite login every socket authenticates with, logged in again by one socket at a time.
+    """
+
+    def __init__(self, logger):
+        """
+        Construct ZerodhaAPI, which logs in when the stored session is dead.
+
+        - `logger` is where logins are reported.
+        """
+        from stock_brokers.api.zerodha import ZerodhaAPI
+
+        self._api_class = ZerodhaAPI
+        self._logger = logger
+        self._lock = threading.Lock()
+        self._zerodha = ZerodhaAPI()
+
+    def credentials(self):
+        """
+        The api key and the access token in force now, which may be one another process has just obtained.
+        """
+        login = self._zerodha._current_login() or {}
+        return self._zerodha._settings.get('api_key'), login.get('access_token')
+
+    def log_in_again(self, stale_token):
+        """
+        Log in again, unless another socket already replaced the token that failed.
+
+        Kite issues one token per session and a login invalidates the one before, so two sockets logging in
+        at once would each knock out the other's token.
+
+        - `stale_token` is the access token the failing connection used.
+        """
+        with self._lock:
+            if self.credentials()[1] != stale_token:
+                return
+            self._logger.warning("Logging in to Zerodha again.")
+            self._zerodha = self._api_class()
+
+class QuotesSocket:
+    """
+    One Kite ticker websocket for a batch of instruments, reconnecting until stopped.
+    """
+
+    def __init__(self, name, tokens, names, session, cache, logger):
+        """
+        - `name` is the connection's name, for the log.
+        - `tokens` is the batch of Kite instrument tokens, as integers.
+        - `names` maps a token, as text, to the instrument's name.
+        - `session` is the shared ZerodhaSession.
+        - `cache` is the Redis client.
+        - `logger` is where the connection reports.
+        """
+        self.name = name
+        self._tokens = tokens
+        self._names = names
+        self._session = session
+        self._cache = cache
+        self._logger = logger
+        self._stop = threading.Event()
+        self._ws = None
+        self._token = None
+        self._opened = False
+        self._authentication_rejected = False
+        self.gave_up = False
+
+    def close(self):
+        """Close the websocket and stop reconnecting."""
+        self._stop.set()
+        if self._ws is not None:
+            self._ws.close()
+
+    def run_forever(self):
+        """Connect, and reconnect with backoff, until closed or unable to recover."""
+        backoff = MIN_BACKOFF_SECONDS
+        failed_connects = 0
+        logged_in_again = False
+        while not self._stop.is_set():
+            self._opened = False
+            self._authentication_rejected = False
+            try:
+                self._connect()
+            except Exception as exception:
+                self._logger.error(f"{self.name} connection failed: {type(exception).__name__}: {exception}")
+            if self._stop.is_set():
+                break
+
+            if self._opened and not self._authentication_rejected:
+                failed_connects, logged_in_again, backoff = 0, False, MIN_BACKOFF_SECONDS
+            else:
+                failed_connects += 1
+
+            if self._authentication_rejected or failed_connects >= MAX_FAILED_CONNECTS:
+                if logged_in_again and (self._authentication_rejected or failed_connects >= MAX_FAILED_CONNECTS):
+                    self.gave_up = True
+                    self._logger.error(f"{self.name} is still refused after logging in again. Giving up.")
+                    break
+                try:
+                    # A dead session: log in again before connecting again.
+                    self._session.log_in_again(self._token)
+                except Exception as exception:
+                    self.gave_up = True
+                    self._logger.error(f"{self.name} could not log in to Zerodha again: {type(exception).__name__}: {exception}")
+                    break
+                failed_connects, logged_in_again = 0, True
+
+            self._logger.warning(f"{self.name} disconnected. Reconnecting in {backoff} seconds.")
+            self._stop.wait(backoff)
+            backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
+        self._logger.info(f"{self.name} stopped.")
+
+    def _connect(self):
+        """Open the websocket with the token in force now and block until it closes."""
+        import websocket
+
+        api_key, self._token = self._session.credentials()
+        url = f"{FEED_URL}/?api_key={api_key}&access_token={self._token}"
+        self._ws = websocket.WebSocketApp(url, on_open=self._on_open, on_message=self._on_message,
+                                          on_error=self._on_error, on_close=self._on_close)
+        self._ws.run_forever(ping_interval=PING_INTERVAL_SECONDS, ping_timeout=PING_TIMEOUT_SECONDS)
+
+    def _on_open(self, ws):
+        """Subscribe the batch and put it in full mode."""
+        self._opened = True
+        ws.send(json.dumps({"a": "subscribe", "v": self._tokens}))
+        ws.send(json.dumps({"a": "mode", "v": ["full", self._tokens]}))
+        self._logger.info(f"{self.name} opened and subscribed to {len(self._tokens)} instrument(s).")
+
+    def _on_error(self, ws, error):
+        if getattr(error, 'status_code', None) in AUTHENTICATION_STATUSES:
+            self._authentication_rejected = True
+        self._logger.error(f"{self.name} error: {error}")
+
+    def _on_close(self, ws, status_code, message):
+        self._logger.info(f"{self.name} closed with status {status_code}: {message}")
+
+    def _on_message(self, ws, message):
+        """Decode a binary frame and write its ticks to the live quotes hash; log Kite's text messages."""
+        if not isinstance(message, bytes):
+            # Text frames are Kite's own messages - errors, notices and order updates for the account.
+            try:
+                payload = json.loads(message)
+            except (TypeError, json.JSONDecodeError):
+                return
+            if isinstance(payload, dict) and payload.get('type') == 'error':
+                self._logger.error(f"{self.name}: Kite reported an error: {payload.get('data')}")
+            return
+        ticks = [tick for tick in (self._parse_packet(packet) for packet in split_packets(message)) if tick]
+        if ticks:
+            encoded = [(tick['id'], json.dumps(tick)) for tick in ticks]
+            # The latest tick per instrument and every tick in arrival order, in one round trip.
+            pipeline = self._cache.pipeline(transaction=False)
+            pipeline.hset(LIVE_KEY, mapping=dict(encoded))
+            for _, payload in encoded:
+                pipeline.xadd(STREAM_KEY, {"tick": payload}, maxlen=STREAM_MAX_LENGTH, approximate=True)
+            pipeline.execute()
+
+    def _parse_packet(self, packet):
+        """
+        A normalized tick from one Kite packet, or None for a packet that carries no tick.
+
+        The packet's length says what it holds: 8 bytes is a last price, 28 and 32 an index quote without and
+        with a timestamp, 44 a quote, and 184 a full quote with open interest and five levels of depth.
+
+        - `packet` is the binary packet.
+        """
+        length = len(packet)
+        if length < 8:
+            return None
+        token = unpack(packet, 0, 4)
+        exchange = SEGMENTS.get(token & 0xff)
+        divisor = price_divisor(exchange)
+
+        if length == 8:
+            tick = self._empty_tick(token, exchange, "ltp")
+            tick["last_price"] = unpack(packet, 4, 8) / divisor
+            return tick
+
+        if exchange == "indices" and length in (28, 32):
+            tick = self._empty_tick(token, exchange, "quote" if length == 28 else "full")
+            tick["last_price"] = unpack(packet, 4, 8) / divisor
+            tick["ohlc"] = {"high": unpack(packet, 8, 12) / divisor, "low": unpack(packet, 12, 16) / divisor,
+                            "open": unpack(packet, 16, 20) / divisor, "close": unpack(packet, 20, 24) / divisor}
+            # Bytes 24-28 are the change in index points, not the percentage `change` means, so it is computed.
+            apply_change(tick)
+            if length == 32:
+                tick["exchange_timestamp"] = unpack(packet, 28, 32)
+            return tick
+
+        if length not in (44, 184):
+            self._logger.debug(f"{self.name} skipped a packet of unexpected length {length}.")
+            return None
+
+        tick = self._empty_tick(token, exchange, "quote" if length == 44 else "full")
+        tick["last_price"] = unpack(packet, 4, 8) / divisor
+        tick["last_quantity"] = unpack(packet, 8, 12)
+        tick["average_price"] = unpack(packet, 12, 16) / divisor
+        tick["volume"] = unpack(packet, 16, 20)
+        tick["buy_quantity"] = unpack(packet, 20, 24)
+        tick["sell_quantity"] = unpack(packet, 24, 28)
+        tick["ohlc"] = {"open": unpack(packet, 28, 32) / divisor, "high": unpack(packet, 32, 36) / divisor,
+                        "low": unpack(packet, 36, 40) / divisor, "close": unpack(packet, 40, 44) / divisor}
+        apply_change(tick)
+
+        if length == 184:
+            tick["last_trade_time"] = unpack(packet, 44, 48)
+            tick["oi"] = unpack(packet, 48, 52)
+            tick["oi_day_high"] = unpack(packet, 52, 56)
+            tick["oi_day_low"] = unpack(packet, 56, 60)
+            tick["exchange_timestamp"] = unpack(packet, 60, 64)
+            # Ten levels of twelve bytes each, the five bids first and then the five offers.
+            for level, offset in enumerate(range(64, 184, 12)):
+                tick["depth"]["sell" if level >= 5 else "buy"].append({
+                    "quantity": unpack(packet, offset, offset + 4),
+                    "price": unpack(packet, offset + 4, offset + 8) / divisor,
+                    "orders": unpack(packet, offset + 8, offset + 10, "H")})
+        return tick
+
+    def _empty_tick(self, token, exchange, mode):
+        """
+        A tick with every field unset.
+
+        - `token` is the Kite instrument token.
+        - `exchange` is the segment its low byte names.
+        - `mode` is `ltp`, `quote` or `full`.
+        """
+        return {"id": self._names.get(str(token)) or str(token), "broker": "zerodha", "instrument_token": token,
+                "exchange": exchange, "mode": mode, "last_price": None, "last_quantity": None,
+                "average_price": None, "volume": None, "buy_quantity": None, "sell_quantity": None,
+                "ohlc": {"open": None, "high": None, "low": None, "close": None}, "change": None, "oi": None,
+                "oi_day_high": None, "oi_day_low": None, "last_trade_time": None, "exchange_timestamp": None,
+                "depth": {"buy": [], "sell": []}, "received_at": time.time()}
+
+def unpack(data, start, end, byte_format="I"):
+    """
+    A big endian value from a slice of a packet.
+
+    - `data` is the packet.
+    - `start` and `end` bound the slice.
+    - `byte_format` is the struct format character.
+    """
+    return struct.unpack(">" + byte_format, data[start:end])[0]
+
+def split_packets(frame):
+    """
+    A Kite frame's packets: a two byte count, then each packet prefixed with its two byte length.
+
+    - `frame` is the binary frame.
+    """
+    if len(frame) < 2:
+        return []
+    packets, offset = [], 2
+    for _ in range(unpack(frame, 0, 2, "H")):
+        if offset + 2 > len(frame):
+            break
+        length = unpack(frame, offset, offset + 2, "H")
+        packets.append(frame[offset + 2:offset + 2 + length])
+        offset += 2 + length
+    return packets
+
+def price_divisor(exchange):
+    """
+    What Kite's integer prices are divided by to give rupees, per segment.
+
+    - `exchange` is the segment the token's low byte names.
+    """
+    if exchange == "cds":
+        return 10000000.0
+    if exchange in ("bcd", "bsecds"):
+        return 10000.0
+    return 100.0
+
+def apply_change(tick):
+    """
+    The percentage change of the last price against the close, when there is a close.
+
+    - `tick` is the tick to adjust.
+    """
+    close = tick["ohlc"]["close"]
+    tick["change"] = (tick["last_price"] - close) * 100 / close if close else None
+
+def master_instruments(cache, logger):
+    """
+    Today's instruments from `zerodha:instruments:master`, as a dict of instrument token text to name.
+
+    The hash's field is the Kite instrument token and its value is the instrument's row as a JSON array, whose
+    column order is in `zerodha:instruments:meta`. An instrument the row does not name, or a row that cannot be
+    read, is mapped to an empty string, so every instrument in the master is still subscribed to.
+
+    Args:
+        cache (redis.Redis): The Redis client.
+        logger (logging.Logger): Where a missing or unreadable master is reported.
+
+    Returns:
+        dict[str, str]: Each instrument token as text to `EXCHANGE:TRADINGSYMBOL`, or to an empty string when
+        the master does not name it. Empty when the master has not been downloaded.
+    """
+    meta = cache.get(MASTER_META_KEY)
+    try:
+        columns = json.loads(meta).get('columns', []) if meta else []
+    except (TypeError, json.JSONDecodeError):
+        columns = []
+    if 'tradingsymbol' in columns and 'exchange' in columns:
+        symbol_index, exchange_index = columns.index('tradingsymbol'), columns.index('exchange')
+    else:
+        symbol_index, exchange_index = None, None
+        logger.warning(f"{MASTER_META_KEY} does not say where the trading symbol and exchange are, so instruments "
+                       f"are keyed by token.")
+
+    names = {}
+    for token, payload in cache.hscan_iter(MASTER_KEY, count=FIELDS_PER_BATCH):
+        names[token] = ""
+        if symbol_index is None:
+            continue
+        try:
+            row = json.loads(payload)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if row[exchange_index] and row[symbol_index]:
+            names[token] = f"{row[exchange_index]}:{row[symbol_index]}"
+
+    if names:
+        download_date = json.loads(meta).get('download_date') if meta else None
+        logger.info(f"Read {len(names)} instrument(s) from {MASTER_KEY}, downloaded {download_date}.")
+    return names
+
+def resolve_tokens(tokens, master, logger):
+    """
+    The Kite instrument tokens to subscribe to, as integers, in ascending order.
+
+    Args:
+        tokens (str | None): A comma separated list of instrument tokens from `--tokens`, or None for every
+            instrument in today's master.
+        master (dict[str, str]): Today's instruments from `master_instruments`.
+        logger (logging.Logger): Where the resolution and any unusable token are reported.
+
+    Returns:
+        list[int]: The instrument tokens to subscribe to, de-duplicated and sorted.
+    """
+    if tokens:
+        wanted, source = [token.strip() for token in tokens.split(",")], "--tokens"
+    else:
+        wanted, source = list(master), MASTER_KEY
+
+    resolved = []
+    for token in {str(token).strip() for token in wanted if str(token).strip()}:
+        if token.isdigit():
+            resolved.append(int(token))
+        else:
+            logger.warning(f"Skipping {token}: expected a Kite instrument token, a number such as 738561.")
+    resolved.sort()
+    logger.info(f"Subscribing to {len(resolved)} instrument(s) from {source}.")
+    return resolved
+
+def split_into_parts(tokens, parts):
+    """
+    The instrument tokens split into as many equal parts as there are websockets to carry them.
+
+    The first `len(tokens) % parts` parts carry one instrument more than the others, which is as equal as a
+    split can be when the count does not divide. A part that would be empty, because there are fewer
+    instruments than parts, is left out rather than opening a websocket that subscribes to nothing.
+
+    Args:
+        tokens (list[int]): The instrument tokens to split.
+        parts (int): How many parts to split them into.
+
+    Returns:
+        list[list[int]]: One list of instrument tokens per websocket.
+    """
+    size, remainder = divmod(len(tokens), parts)
+    batches = []
+    start = 0
+    for index in range(parts):
+        length = size + 1 if index < remainder else size
+        if length == 0:
+            continue
+        batches.append(tokens[start:start + length])
+        start += length
+    return batches
+
+def instrument_names(tokens, logger):
+    """
+    The names of the subscribed instruments from Kite's public instrument file, keyed by token as text.
+
+    An unreachable file is reported and leaves every instrument unnamed rather than stopping the feed.
+
+    - `tokens` is the list of subscribed tokens.
+    - `logger` is where a failed download is reported.
+    """
+    import requests
+
+    wanted = {str(token) for token in tokens}
+    try:
+        response = requests.get(INSTRUMENTS_URL, headers={"X-Kite-Version": "3"}, timeout=120)
+        response.raise_for_status()
+    except Exception as exception:
+        logger.warning(f"Could not download Kite's instrument file, so instruments are keyed by token: {exception}")
+        return {}
+
+    return {row['instrument_token']: f"{row['exchange']}:{row['tradingsymbol']}"
+            for row in csv.DictReader(StringIO(response.text)) if row.get('instrument_token') in wanted}
+
+def write_subscribed_instruments(tokens, names, cache, logger):
+    """
+    Replace `zerodha:quotes:instruments` with every subscribed token and its name.
+
+    The hash is written in batches, because a subscription covering the whole instrument master is more fields
+    than belong in one Redis command.
+
+    Args:
+        tokens (list[int]): The subscribed instrument tokens.
+        names (dict[str, str]): Each instrument token as text to its name.
+        cache (redis.Redis): The Redis client.
+        logger (logging.Logger): Where the write and any unnamed instruments are reported.
+
+    Returns:
+        None
+    """
+    cache.delete(INSTRUMENTS_KEY)
+    for start in range(0, len(tokens), FIELDS_PER_BATCH):
+        batch = tokens[start:start + FIELDS_PER_BATCH]
+        cache.hset(INSTRUMENTS_KEY, mapping={str(token): names.get(str(token), "") for token in batch})
+    logger.info(f"Wrote {len(tokens)} subscribed instrument(s) to {INSTRUMENTS_KEY}.")
+
+    unnamed = [str(token) for token in tokens if not names.get(str(token))]
+    if unnamed:
+        logger.warning(f"{len(unnamed)} instrument(s) are unnamed and are keyed by token: "
+                       f"{', '.join(unnamed[:20])}{' ...' if len(unnamed) > 20 else ''}")
+
+def main():
+    """Stream Zerodha quotes into zerodha:quotes:live until stopped."""
+    parser = argparse.ArgumentParser(description="Stream Zerodha market quotes into zerodha:quotes:live until stopped.")
+    parser.add_argument("--tokens", help="comma separated Kite instrument tokens, for example 738561,408065")
+    parser.add_argument("--sockets", type=int, default=DEFAULT_SOCKETS,
+                        help=f"websockets to split the instruments equally across, default {DEFAULT_SOCKETS}")
+    arguments = parser.parse_args()
+
+    from utilities.configurations import get_cache, get_logger
+
+    logger = get_logger("zerodha.websocket_quotes")
+    cache = get_cache()
+
+    if arguments.sockets < 1:
+        logger.error("--sockets must be at least 1.")
+        return 2
+
+    master = master_instruments(cache, logger)
+    tokens = resolve_tokens(arguments.tokens, master, logger)
+    if not tokens:
+        logger.error(f"Nothing to subscribe to. Pass --tokens, or run bin/zerodha/instruments/daily_feed to fill {MASTER_KEY}.")
+        return 2
+
+    batches = split_into_parts(tokens, arguments.sockets)
+
+    try:
+        session = ZerodhaSession(logger)
+    except Exception as exception:
+        logger.error(f"Could not log in to Zerodha: {type(exception).__name__}: {exception}")
+        return 1
+
+    names = {}
+    for token in tokens:
+        name = master.get(str(token), "")
+        if name:
+            names[str(token)] = name
+    if not names:
+        names = instrument_names(tokens, logger)
+    write_subscribed_instruments(tokens, names, cache, logger)
+
+    sockets = [QuotesSocket(f"socket_{index}", batch, names, session, cache, logger) for index, batch in enumerate(batches)]
+
+    # Installed before the sockets start: systemd stops a unit with SIGTERM, and the default action would kill
+    # the process without closing anything.
+    def _handle_signal(signal_number, frame):
+        logger.info(f"Received signal {signal_number}. Closing the quotes feed.")
+        for socket in sockets:
+            socket.close()
+
+    for signal_number in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(signal_number, _handle_signal)
+
+    threads = [threading.Thread(target=socket.run_forever, name=f"zerodha_quotes_{socket.name}", daemon=True)
+               for socket in sockets]
+    logger.info(f"Starting {len(sockets)} websocket(s) for {len(tokens)} instrument(s).")
+    for thread in threads:
+        thread.start()
+
+    # Block in the main thread so the signal handlers above can run.
+    while any(thread.is_alive() for thread in threads):
+        for thread in threads:
+            thread.join(timeout=1)
+
+    gave_up = [socket.name for socket in sockets if socket.gave_up]
+    if gave_up:
+        logger.error(f"Socket(s) {', '.join(gave_up)} gave up.")
+        return 1
+    logger.info("Quotes feed stopped.")
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())

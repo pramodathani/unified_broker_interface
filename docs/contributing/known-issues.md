@@ -13,7 +13,7 @@ policy. One mapping date is added a day, so it grows by about
 
 **`bar_count` over-counts.** `_store` increments it by the number of rows written rather than by
 the number of distinct new bars, so every overlapping forward window inflates it and the "bars
-stored" figure from `bin/<broker>/historical_prices --status` drifts upwards over time. Row counts
+stored" figure from `bin/<broker>/instruments/price_history --status` drifts upwards over time. Row counts
 taken from the table itself are unaffected. The fix is to count true insertions with
 `RETURNING (xmax = 0)`, which touches the hot write path and was left alone deliberately.
 
@@ -22,21 +22,21 @@ taken from the table itself are unaffected. The fix is to count true insertions 
 for having never traded, and then started trading would stay retired forever. Clearing
 `reached_broker_limit` where `limit_reason` names that case, periodically, would fix it.
 
-**Wisdom Capital's pollers log in independently when the session expires.** `bin/wisdom_capital/orders`,
+**Wisdom Capital's pollers log in independently when the session expires.** `bin/wisdom_capital/orders/api_order_details`,
 `positions`, `trades` and `funds` each construct `WisdomCapitalAPI` when their token is refused, and XTS allows one
 interactive session per application key, so four logins in the same second can log each other out. On 2026-09-15
 they did this twice, at 06:36:07 and 06:36:20, before settling on one token. The interactive login has no
-cross-process lock like the market data login in `bin/wisdom_capital/quotes`, and adding one to `WisdomCapitalAPI`
+cross-process lock like the market data login in `bin/wisdom_capital/instruments/websocket_quotes`, and adding one to `WisdomCapitalAPI`
 would change every Wisdom Capital script, so it was left alone.
 
-**Kotak streams no index values.** `bin/kotak/quotes` subscribes scrip and depth topics only. Kotak's HSM
+**Kotak streams no index values.** `bin/kotak/instruments/websocket_quotes` subscribes scrip and depth topics only. Kotak's HSM
 feed serves indices as separate `if|` topics named by the index's name, which the script's `EXCHANGE|TOKEN`
 validation rejects, and those topics' fields have not been measured live.
 
 **Fyers currency derivatives are left out of the unified quotes.** Fyers scales prices by a precision and
 multiplier per instrument. A fixed divisor of 100 is right for two-decimal instruments and a hundred times
-wrong for four-decimal currency pairs. `bin/fyers/quotes` divides by 10 to the precision times the
-multiplier it reads from each snapshot, but `bin/unified/quotes` and `stock_brokers/instruments/ticks/fyers.py`
+wrong for four-decimal currency pairs. `bin/fyers/instruments/websocket_quotes` divides by 10 to the precision times the
+multiplier it reads from each snapshot, but `bin/unified/instruments/websocket_quotes` and `stock_brokers/instruments/ticks/fyers.py`
 leave Fyers currency derivatives out until that scaling is confirmed on a live currency pair.
 
 **Tick sizes of uncategorised rows are not in one unit.** The uncategorised catch-alls mix paise, rupees
@@ -136,8 +136,8 @@ public address changes, Kotak orders fail again with `100008` until the new addr
 
 **Cancelling an order is confirmed live at seven brokers, and misses some orders.** `DELETE /api/orders/cancel` finds an
 order's broker in the `<broker>:orders:orders` hashes, so it cannot cancel an order that no order script has
-recorded yet. A Stoxkart order is recorded by `bin/stoxkart/orders`, which polls once a second, or by
-`bin/stoxkart/order_updates` from Stoxkart's order socket. On 2026-09-15 cancels of after-market orders were
+recorded yet. A Stoxkart order is recorded by `bin/stoxkart/orders/api_order_details`, which polls once a second, or by
+`bin/stoxkart/orders/websocket_order_details` from Stoxkart's order socket. On 2026-09-15 cancels of after-market orders were
 accepted and ended cancelled with nothing traded at Dhan, Flattrade, INDmoney, Kotak, Shoonya, Stoxkart and
 Zerodha, as the live test below describes. No cancel of an open order during market hours has been tried, and
 Fyers', Groww's and Wisdom Capital's cancels are checked only against stubbed answers. Kotak refused the first
@@ -201,20 +201,20 @@ or the protocol, and the table in
 ## Broker limits
 
 **Zerodha's quote feed runs past Kite's documented websocket limits, and has not been tried live.** On
-2026-09-16 `bin/zerodha/quotes` was changed to subscribe to every instrument in today's
+2026-09-16 `bin/zerodha/instruments/websocket_quotes` was changed to subscribe to every instrument in today's
 `zerodha:instruments:master` - 112,657 that day - split equally across 24 websockets, one part of 4,695 and
-twenty-three of 4,694. Kite documents three websockets per api key, one of which `bin/zerodha/order_updates`
+twenty-three of 4,694. Kite documents three websockets per api key, one of which `bin/zerodha/orders/websocket_order_details`
 holds, and 3,000 instruments per websocket, so this exceeds both, and the connection budget and the
 per-connection cap that used to refuse it were removed. What Kite does with the connections past its limit is
 unknown: it is expected to refuse them, and a refused socket reconnects with backoff and leaves the others
 streaming, but no run against the live feed has confirmed that. Two further consequences are expected rather
 than measured. Full-mode ticks for 112,657 instruments outrun `zerodha:quotes:stream`, whose cap was raised
-from 100,000 entries to 1,000,000 the same day for that reason, so `bin/zerodha/persist_ticks` still has to
+from 100,000 entries to 1,000,000 the same day for that reason, so `bin/zerodha/instruments/store_quotes_to_db` still has to
 keep up or Redis will trim ticks before it has persisted them into `zerodha.ticks`. Every login also
 invalidates the last at Zerodha, so 24 sockets reconnecting after a dead token lean much harder on the
 one-socket-at-a-time login lock than two ever did.
 
-**The unified quote layer has never been run at the size Zerodha's feed now gives it.** `bin/unified/quotes`
+**The unified quote layer has never been run at the size Zerodha's feed now gives it.** `bin/unified/instruments/websocket_quotes`
 keeps no instrument list of its own - it writes a unified quote for every tick that arrives on the ten broker
 streams - so Zerodha's 24-socket feed raises its coverage from sixteen instruments to about 112,400 without
 any change to it. Nothing about that is configured, and nothing about it has been measured either. It is one
@@ -226,7 +226,7 @@ about 820 MB, and `unified:quotes:live` itself comes to roughly 92 MB. Watch `un
 `unified` consumer group's lag on `zerodha:quotes:stream` the first time this runs during market hours.
 
 **Every broker's tick stream now holds ten times as much.** On 2026-09-16 `STREAM_MAX_LENGTH` in all ten
-`bin/<broker>/quotes` scripts went from 100,000 to 1,000,000 entries. The stored ticks were measured that day:
+`bin/<broker>/instruments/websocket_quotes` scripts went from 100,000 to 1,000,000 entries. The stored ticks were measured that day:
 a Zerodha tick averages 940 bytes of JSON and the ten brokers range from 504 bytes at Fyers to 1,071 at Groww,
 so Zerodha's stream at the new cap is about 940 MB of payload and all ten brokers' streams full at once come
 to about 7.8 GB, before Redis's own stream overhead. That host has 123 GB of memory, was using 3 GB, and has `maxmemory` unset with
@@ -236,38 +236,39 @@ instruments each and will never come near it.
 
 **Flattrade permits one websocket per session.** Its market and order sockets each kicked the
 other off on connect, both flapping in lockstep at close code 1000, while Shoonya runs both
-happily on the same platform. `flattrade@order_updates` is left out of `flattrade.target` so
-`flattrade@quotes` holds the connection, which makes Flattrade the one gap in the live half of the system. Noren can carry
+happily on the same platform. `flattrade-orders@websocket_order_details` is left out of `flattrade.target` so
+`flattrade-instruments@websocket_quotes` holds the connection, which makes Flattrade the one gap in the live half of the system. Noren can carry
 order updates on the market socket, and that is the way to get both back.
 
 **Stoxkart's feeds are its trading website's, not documented API feeds.** The documented binary quote
 websocket at `ws://inmob.stoxkart.com:7763` could not be reached on 2026-09-15, and the documented order
-status needs a Postback URL on a public web server that this project does not run. `bin/stoxkart/quotes`
-and `bin/stoxkart/order_updates` therefore use the two websockets Stoxkart's own trading website uses,
+status needs a Postback URL on a public web server that this project does not run. `bin/stoxkart/instruments/websocket_quotes`
+and `bin/stoxkart/orders/websocket_order_details` therefore use the two websockets Stoxkart's own trading website uses,
 `wss://broadcasting-v2.stoxkart.com/` and `wss://openapi-v2.stoxkart.com/websocket/v2/connect`. Neither is
 documented for API users, so Stoxkart may change either without notice. The REST quote poller the quote
-feed replaced is in git history as a fallback. `bin/unified/quotes` ranks Stoxkart last.
+feed replaced is in git history as a fallback. `bin/unified/instruments/websocket_quotes` ranks Stoxkart last.
 
-**Stoxkart's quote feed covers four exchanges.** `bin/stoxkart/quotes` accepts NSE, NFO, BSE and MCX
+**Stoxkart's quote feed covers four exchanges.** `bin/stoxkart/instruments/websocket_quotes` accepts NSE, NFO, BSE and MCX
 instruments and refuses `NSECD`, `BSECD`, `BFO` and `NCDEX`, because no trade packet was seen for them on
 2026-09-15 and their broadcast segment numbers are unconfirmed.
 
 **Stoxkart allows one order socket per client.** A new connection closes the older one with a close reason
-containing `new incoming connection`, so `stoxkart@order_updates` and a Stoxkart website or app logged in to
+containing `new incoming connection`, so `stoxkart-orders@websocket_order_details` and a Stoxkart website or app logged in to
 the same account knock each other off. The script waits five minutes before reclaiming the socket, and
-order updates are missed while the website or app holds it; the `orders` poller still records the orders.
+order updates are missed while the website or app holds it; the `api_order_details` poller still records the orders.
 
 **Stoxkart refuses logins from 23:40 to midnight, and the pollers crash-loop through it.** On 2026-09-18 and
 2026-09-19, Stoxkart ended the session at exactly 23:40:00, and every login until just after 00:00 was refused
 in `_exchange_request_token` with `('AuthorizationError', 'Session is expired')`, the same message as the
-expired session itself. The six REST pollers (`orders`, `trades`, `positions`, `holdings`, `funds` and
-`user-profile`) build `StoxkartAPI` when their session is refused, the login raises, the script exits 1, and
+expired session itself. The six REST pollers (`api_order_details`, `api_trade_details`, `positions`, `holdings`, `funds` and
+`details`) build `StoxkartAPI` when their session is refused, the login raises, the script exits 1, and
 systemd restarts it 15 seconds later. Each poller therefore fails about 70 times in those 20 minutes, which is
 roughly 420 refused logins a night across the six, each with a full traceback in the journal. On 2026-09-20 the
 first login that worked was at 00:00:03, and every poller ran cleanly from then on. No data is lost, because MCX
 closes at 23:30 and nothing trades in the window, but so many refused logins could lead Stoxkart to rate-limit
 or lock the account. A poller that waited a few minutes after a refused login instead of exiting would avoid
-this. The four other Stoxkart scripts, `quotes`, `order_updates`, `persist_orders` and `persist_ticks`, are
+this. The four other Stoxkart scripts, `websocket_quotes`, `websocket_order_details`, `store_orders_to_db` and
+`store_quotes_to_db`, are
 unaffected.
 
 **Stoxkart's servers fail briefly in the early morning.** Around 05:30 and 06:20 on 2026-09-18 and 2026-09-19,
@@ -277,14 +278,14 @@ Each episode lasted a few minutes, restarted the pollers a handful of times, and
 before the 09:00 pre-open.
 
 **Stoxkart's trade and position fields, and its open and filled orders, are unconfirmed.** No fill or
-open position has existed on the Stoxkart account, so `bin/stoxkart/trades` and `positions`, and the
+open position has existed on the Stoxkart account, so `bin/stoxkart/orders/api_trade_details` and `positions`, and the
 unified readers of them, use the field names in Stoxkart's documentation. The order book and the order
 socket were seen live on 2026-09-15, but only for rejected, after-market and cancelled orders, whose
 statuses were `REJECTED`, `AMO PENDING` (normalized to `PENDING`) and `AMO CANCELLED` (normalized to
 `CANCELLED`). The statuses of an open, partly filled or filled order, and the socket updates that go with
 them, have not been seen. The order book's `order_date_time` looked like `15-Sep-2026 15:40:40`, and
 `exch_order_id` and `parent_order_id` were `"0"` before an id was assigned, which the normalized order
-holds as null while `data` keeps Stoxkart's `"0"`. `bin/stoxkart/order_updates` still logs every message at INFO so that the first update for an
+holds as null while `data` keeps Stoxkart's `"0"`. `bin/stoxkart/orders/websocket_order_details` still logs every message at INFO so that the first update for an
 open or filled order shows its shape. The holdings row seen live already differed from
 that documentation, carrying `nse_symbol`, `nse_token`, `bse_symbol`, `bse_token` and `isin_code` in place
 of a single `symbol` and `token`, so the other books may differ too. The sign of `net_quantity` for a short
@@ -335,7 +336,7 @@ running after a logout and to start at boot. After enabling it on a machine, reb
 `<broker>.target` and `unified.target` come back on their own.
 
 **Kotak and Fyers instrument downloads may need a session.** Only IND Money's does today, and
-`bin/indmoney/instruments` logs in when its stored session is refused. If either download starts failing
+`bin/indmoney/instruments/daily_feed` logs in when its stored session is refused. If either download starts failing
 after a token expiry, this is the first thing to look at.
 
 ## Observations, stored as received

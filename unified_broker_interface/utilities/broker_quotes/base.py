@@ -2,7 +2,7 @@
 What a broker's REST quote module provides.
 
 A module fetches one instrument's quote and returns it as a tick in the market feeds' contract - the
-twenty keys every broker's quote feed in `bin/<broker>/quotes` writes - with
+twenty keys every broker's quote feed in `bin/<broker>/instruments/websocket_quotes` writes - with
 `instrument_token` spelled the way that broker's feed spells it. That is what lets the broker's
 `TickNormalizer` and the `TickResolver` handle a fetched quote exactly like a streamed one, so a quote
 from either path means the same thing.

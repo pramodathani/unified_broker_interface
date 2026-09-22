@@ -5,7 +5,7 @@ The unified table and quote cache do not blend brokers. At any moment one broker
 instrument and only its ticks are written; another broker's ticks for the same instrument are
 dropped unless the owner goes unhealthy, when the best healthy backup takes over, and the owner
 takes the instrument back once it has been healthy again for a while. The ownership engine in
-`bin/unified/quotes` applies these rules, and `rank` orders brokers by them wherever one has to be
+`bin/unified/instruments/websocket_quotes` applies these rules, and `rank` orders brokers by them wherever one has to be
 picked first.
 
 The priority order is a starting point, not a measurement. Zerodha leads because its feed runs in
