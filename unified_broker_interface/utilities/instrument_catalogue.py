@@ -3,10 +3,10 @@ The instrument universe as the REST API sees it: segments, listings, search, det
 request to one instrument.
 
 Everything is answered from the Redis tier of the instrument mapping cache, which the daily warm fills
-for the current mapping date: the identity and order handle hashes, and the catalogue it builds for
-browsing and searching - one sorted set per segment in name, expiry, strike and option type order, a
-set of each segment's distinct names, each instrument's first and last seen dates, and a count per
-segment. See `stock_brokers/instruments/mapping/utilities/cache.py`.
+for the current mapping date: the identity, order handle and additional attribute hashes, and the
+catalogue it builds for browsing and searching - one sorted set per segment in name, expiry, strike and
+option type order, a set of each segment's distinct names, each instrument's first and last seen dates,
+and a count per segment. See `stock_brokers/instruments/mapping/utilities/cache.py`.
 
 The tables are the unified ones, `unified.instruments` and `unified.broker_mappings`, which `bin/unified/map_instruments`
 maps and warms the cache from; every query here names its tables through
@@ -26,6 +26,7 @@ from decimal import Decimal, InvalidOperation
 from sqlalchemy import text
 
 from stock_brokers.instruments.mapping.utilities import tables
+from stock_brokers.instruments.mapping.utilities.raw_attributes import ATTRIBUTE_NAMES, RawAttributes
 from stock_brokers.instruments.mapping.utilities.resolution import MappingResolver
 from stock_brokers.instruments.mapping.utilities.segments import segment_rank, split_segment_value
 from stock_brokers.instruments.ticks.utilities.resolution import units_per_lot
@@ -88,6 +89,7 @@ class InstrumentCatalogue:
         self.redis = mapping_cache.redis_tier
         self.engine = mapping_cache.engine
         self._resolver = MappingResolver(mapping_cache)
+        self._raw_attributes = RawAttributes()
 
     def mapping_date(self, as_of=None):
         """
@@ -372,6 +374,43 @@ class InstrumentCatalogue:
             "last_seen_date": last_seen.isoformat() if last_seen else None,
             "lot_size": lot_size,
             "tick_size": self.agreed_tick_size(carried_by),
+            "carried_by": carried_by,
+        }
+
+    def additional_details(self, instrument, as_of=None):
+        """
+        One instrument's identity and the extra attributes each broker's own instrument file carries.
+
+        These are the columns a broker publishes beyond the handle an order needs: the ISIN, the series, the freeze quantity, the price band, the multiplier and so on. Every broker's spellings are given one shared set of names by `stock_brokers/instruments/mapping/utilities/raw_attributes.py`, so an ISIN reads as `isin` whether the broker called it `isin`, `pisin` or `isin_code`, and every name is present for every broker with None where that broker publishes nothing.
+
+        The attributes are read from the same Redis tier `/details` reads, warmed by the same daily run, and fall back to the mapping table for a past date or a cold cache exactly as the rest of the catalogue does.
+
+        - `instrument` is the `InstrumentQuery` the request parsed to.
+        - `as_of` is the date asked about, or None for today.
+        """
+        identity, mapping_date, cached = self.resolve(instrument, as_of)
+        identifier = str(identity["instrument_id"])
+        attributes_by_broker = None
+        if cached:
+            attributes_by_broker = self.redis.read_additional_attributes(mapping_date, [identifier]).get(identifier)
+            if attributes_by_broker is None and not self.redis.has_additional_attributes(mapping_date):
+                logger.warning(f"the additional attributes for {mapping_date} are not in Redis; reading Postgres")
+                cached = False
+        if not cached:
+            attributes_by_broker = self.cache.postgres_tier.read_additional_attributes(
+                mapping_date, [identifier]).get(identifier)
+        if attributes_by_broker is None:
+            attributes_by_broker = {}
+
+        carried_by = []
+        for broker in sorted(attributes_by_broker):
+            entry = {"broker": broker}
+            entry.update(self._raw_attributes.fill(attributes_by_broker[broker]))
+            carried_by.append(entry)
+        return {
+            **identity_to_json(identity),
+            "mapping_date": mapping_date.isoformat(),
+            "attribute_names": list(ATTRIBUTE_NAMES),
             "carried_by": carried_by,
         }
 

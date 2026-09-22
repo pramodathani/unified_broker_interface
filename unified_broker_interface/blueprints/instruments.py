@@ -3,7 +3,7 @@
 
 | Route | Answers from |
 | --- | --- |
-| `/segments`, `/master`, `/search`, `/details` | The Redis instrument mapping cache |
+| `/segments`, `/master`, `/search`, `/details`, `/additional_details` | The Redis instrument mapping cache |
 | `/ltp`, `/ohlc`, `/quote` | The unified quote cache, or a broker's REST API when that is not recent enough |
 | `/prices` | unified.price_history, adjusted on read for equities, ETFs and investment trusts |
 | `/ticks` | unified.ticks, likewise, streamed |
@@ -58,6 +58,7 @@ class InstrumentsBlueprint(BaseBlueprint):
         ('/master', 'master', ['GET']),
         ('/search', 'search', ['GET']),
         ('/details', 'details', ['GET']),
+        ('/additional_details', 'additional_details', ['GET']),
         ('/ltp', 'ltp', ['GET']),
         ('/ohlc', 'ohlc', ['GET']),
         ('/quote', 'quote', ['GET']),
@@ -129,6 +130,17 @@ class InstrumentsBlueprint(BaseBlueprint):
         """
         catalogue, _ = self._services()
         answer = catalogue.details(parse_instrument(request.args), parse_date(request.args.get('date'), 'date'))
+        return jsonify(answer), 200
+
+    @authenticated
+    @answers_request_errors
+    def additional_details(self):
+        """
+        One instrument's identity and the extra attributes each broker's own instrument file carries.
+        """
+        catalogue, _ = self._services()
+        answer = catalogue.additional_details(parse_instrument(request.args),
+                                              parse_date(request.args.get('date'), 'date'))
         return jsonify(answer), 200
 
     def _live_quote(self):

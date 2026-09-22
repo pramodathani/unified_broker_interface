@@ -188,6 +188,7 @@ Everything under `/api/instruments` takes the `access-token` header and answers 
 | `/master` | `exchange`, `segment` (either may be `all`), `date` | **Streamed** JSON array of identities, in segment, name, expiry, strike order; `X-Mapping-Date` header | Redis |
 | `/search` | `exchange`, `segment`, `q`, `date`, `limit` (50, at most 200) | `{mapping_date, instruments}`: exact name matches, then prefixes, then substrings | Redis |
 | `/details` | an instrument, `date` | Identity, `mapping_date`, seen dates, the instrument's `lot_size` and `tick_size`, and `carried_by` each broker's token, order symbol, lot and tick size | Redis |
+| `/additional_details` | an instrument, `date` | Identity, `mapping_date`, `attribute_names`, and `carried_by` each broker's extra instrument attributes | Redis |
 | `/ltp` | an instrument | Identity, `last_price`, `last_trade_time`, `received_at`, `source` | Quote cache or broker |
 | `/ohlc` | an instrument | The above with `ohlc`, `previous_close`, `change_percent` | Quote cache or broker |
 | `/quote` | an instrument | The whole [unified quote](../architecture/contracts.md#the-unified-quote), depth included, with `source` | Quote cache or broker |
@@ -209,10 +210,50 @@ lot size of 1 (one lot), Flattrade, Kotak, Shoonya and Stoxkart give the lot in 
 trading unit, and Groww gives it in quotation units. An order's quantity is checked against the lot size
 of the broker it goes to.
 
+**Additional attributes.** `/additional_details` answers the columns each broker's own instrument file
+carries beyond the handle an order needs. Every broker's spellings are given one shared set of names, so
+an ISIN reads as `isin` whether the broker called it `isin`, `pisin` or `isin_code`. Every name in
+`attribute_names` is present for every broker in `carried_by`, and is null where that broker publishes
+nothing. Values are kept exactly as the broker sent them, stripped of surrounding whitespace and never
+converted or scaled, so a broker reporting a price band in paise still reports it in paise here.
+
+| Attribute | Brokers that publish it |
+| --- | --- |
+| `instrument_type` | all ten |
+| `display_name` | Dhan, Kotak, Groww, Stoxkart, Fyers, Wisdom Capital, INDmoney, Zerodha |
+| `isin` | Dhan, Kotak, Groww, Stoxkart, Fyers, Wisdom Capital, INDmoney |
+| `series` | Dhan, Groww, Stoxkart, Wisdom Capital, INDmoney |
+| `freeze_quantity` | Dhan, Kotak, Groww, Wisdom Capital, INDmoney |
+| `price_band_high`, `price_band_low` | Dhan, Kotak, Wisdom Capital, INDmoney |
+| `multiplier` | Kotak, Shoonya, Wisdom Capital, INDmoney |
+| `underlying_token` | Dhan, Groww, Fyers, Wisdom Capital |
+| `surveillance_category` | Dhan, Kotak, Wisdom Capital |
+| `pledge_eligible` | Kotak, INDmoney |
+| `permitted_to_trade` | Kotak |
+| `buy_allowed`, `sell_allowed` | Groww |
+| `intraday_leverage` | INDmoney |
+| `margin_trading_leverage` | Dhan |
+
+The attributes are read at mapping time and stored in `unified.broker_mappings.attributes`, because
+there is no stable key to find the raw row again afterwards: a broker's token is not unique within its
+own daily snapshot for seven of the ten brokers. `/additional_details` is a hash of its own rather than
+more fields on `/details`, so the order path keeps costing what it costs today.
+
+Values are passed through untouched, sentinels included. On 2026-09-22 NSE INFY came back with Kotak's
+price band as `114230` where Dhan sent `1156.5000`, because Kotak reports it in paise; Kotak's
+`multiplier` as `-1` and INDmoney's as `0`, both of which read as "no value"; and Fyers' and Wisdom
+Capital's `instrument_type` as the numeric codes `0` and `8` rather than text. Nothing is corrected on
+the way in, so compare across brokers with care.
+
+A `date` mapped before the attributes column existed has none stored, so `carried_by` comes back empty
+rather than as an error. Re-running `bin/unified/map_instruments --date <date>` fills it in, as long as
+that date's raw broker snapshots are still in `<broker>.instruments`.
+
 ```bash
 curl -s "localhost:8080/api/instruments/search?exchange=nse&segment=equities&q=RELIANCE" -H "access-token: $TOKEN"
 curl -s "localhost:8080/api/instruments/quote?exchange=nse&segment=equities&symbol=INFY" -H "access-token: $TOKEN"
 curl -s "localhost:8080/api/instruments/details?exchange=nse&segment=equity_index_options&underlying_symbol=NIFTY&expiry_date=2026-09-29&strike_price=25000&option_type=CE" -H "access-token: $TOKEN"
+curl -s "localhost:8080/api/instruments/additional_details?exchange=nse&segment=equities&symbol=INFY" -H "access-token: $TOKEN"
 curl -s "localhost:8080/api/instruments/prices?instrument_id=3f92570a-9924-5bf5-9f9d-e006cd9f4202&interval=day&days=365" -H "access-token: $TOKEN"
 curl -s "localhost:8080/api/instruments/ticks?instrument_id=$ID&start=2026-09-11%2009:15&end=2026-09-11%2015:30" -H "access-token: $TOKEN"
 ```
@@ -223,11 +264,11 @@ stream's status is settled before it starts: a bad parameter or an unknown instr
 
 ### Lookups come from the mapping cache
 
-`/segments`, `/master`, `/search` and `/details` read the Redis tier of the
+`/segments`, `/master`, `/search`, `/details` and `/additional_details` read the Redis tier of the
 [instrument mapping cache](instrument-mapping.md), kept under `unified:catalogue:` for the unified tables
 `unified.instruments` and `unified.broker_mappings`, and run no database query. `bin/unified/map_instruments`
-warms it each day after mapping, from those tables: besides the identity and order handle hashes, a catalogue
-per segment - a sorted set of every instrument in name, expiry, strike order and a set of its distinct names -
+warms it each day after mapping, from those tables: besides the identity, order handle and additional attribute
+hashes, a catalogue per segment - a sorted set of every instrument in name, expiry, strike order and a set of its distinct names -
 plus every instrument's seen dates and a count per segment. See
 [Redis keys](../architecture/redis-keys.md#the-rest-apis-catalogue).
 
