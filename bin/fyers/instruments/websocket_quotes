@@ -1,0 +1,864 @@
+#!/usr/bin/env python3
+"""
+Stream Fyers market quotes over websockets into the Redis hash `fyers:quotes:live`, and keep streaming until
+stopped.
+
+    bin/fyers/instruments/websocket_quotes                                            # instruments from the Redis set fyers:quotes:subscriptions
+    bin/fyers/instruments/websocket_quotes --tokens NSE:SBIN-EQ,MCX:CRUDEOIL26SEPFUT
+    bin/fyers/instruments/websocket_quotes --per-socket 2000
+
+    redis-cli SADD fyers:quotes:subscriptions NSE:SBIN-EQ NSE:NIFTY50-INDEX
+    redis-cli HGET fyers:quotes:live NSE:SBIN-EQ
+    redis-cli HGETALL fyers:quotes:instruments
+
+Self-contained: it logs in with `FyersAPI` and carries its own connection, authentication, subscription and
+binary decoding for Fyers' market feed at `wss://socket.fyers.in/hsm/v1-5/prod`, so it needs no other feed
+process or key.
+
+**The protocol** is the binary one Fyers' SDK calls HSM. The feed is not authenticated with the REST access
+token but with the `hsm_key` claim inside it, sent in a binary frame after connecting. Subscription is by HSM
+topic name, so each connect first resolves the symbols through `POST https://api-t1.fyers.in/data/symbol-token`,
+whose `validSymbol` maps each symbol to its fytoken. The fytoken's first four digits name the exchange segment and
+the digits from the eleventh on the exchange token, giving `sf|nse_cm|3045` for `NSE:SBIN-EQ`; an index is
+`if|nse_cm|Nifty 50`, by the index names Fyers' SDK carries. Once the authentication frame is acknowledged the
+socket selects full mode and subscribes the topic names, and it acknowledges every `ack_count` data messages, the
+count the authentication response gives, as the SDK does. The feed is incremental: a snapshot packet (type 83)
+names a topic and carries every field, followed by the price multiplier and precision and three strings; update
+packets (85, and 76 for lite) carry the topic id and positional values, where -2147483648 means "no value", read
+against the fixed field tables below. Prices are scaled integers, divided by 10 to the precision times the
+multiplier.
+
+**Instruments** are `--tokens` when given, otherwise the members of the Redis set `fyers:quotes:subscriptions`,
+each a Fyers symbol with its exchange, such as `NSE:SBIN-EQ`, `NSE:NIFTY50-INDEX` or `MCX:CRUDEOIL26SEPFUT`.
+One websocket carries up to `--per-socket` instruments, at most 5000.
+
+**Keys.**
+
+- `fyers:quotes:live`, a hash of the latest tick per instrument as JSON, keyed by the Fyers symbol, which is
+  already exchange-qualified and unique. A tick is replaced as the next one arrives. It is not cleared at
+  startup, so an instrument no longer subscribed keeps its last tick.
+- `fyers:quotes:instruments`, a hash of every subscribed symbol to its name from Fyers' public symbol master,
+  downloaded at startup, or to an empty string when the master does not list it. Replaced whole at startup.
+- `fyers:quotes:stream`, a Redis Stream with every tick in arrival order as a `tick` field, which
+  `bin/fyers/instruments/store_quotes_to_db` writes to `fyers.ticks`. Capped at about 1,000,000 entries, so ticks that arrive while
+  the persister is down for long enough are trimmed before they are persisted.
+
+A tick has `id`, `broker`, `instrument_token`, `exchange`, `mode`, `last_price`, `last_quantity`,
+`average_price`, `volume`, `buy_quantity`, `sell_quantity`, `ohlc`, `change`, `oi`, `oi_day_high`,
+`oi_day_low`, `last_trade_time`, `exchange_timestamp`, `depth` (`buy` and `sell` levels of `quantity`, `price`
+and `orders`; the best bid and offer when no depth topic is subscribed) and `received_at`, with `None` for what
+Fyers does not send. `ohlc.close` is the previous close and `change` the percentage change against it.
+
+**Sessions.** Each connection reads the current token when it connects, so a login made by any process is
+picked up. A token whose expiry has passed, a symbol lookup refused for the session (Fyers codes -8, -15, -16,
+-17, or HTTP 401), or a socket that fails to open six times running logs in again through `FyersAPI` - one
+socket at a time, confirmed against the profile - before reconnecting. A Cloudflare ban on the symbol lookup
+pauses the socket thirty minutes and a rate limit five, rather than logging in, because every refused request
+extends a ban. A reconnect otherwise backs off from 1 to 60 seconds.
+
+Exits 0 when stopped with Ctrl+C or SIGTERM, 1 when a login fails or a socket still cannot open after logging
+in again, and 2 when there is nothing to subscribe to. Reads only - it places no orders.
+"""
+
+import sys
+import csv
+import json
+import time
+import base64
+import signal
+import struct
+import argparse
+import threading
+from io import StringIO
+from pathlib import Path
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+FEED_URL = "wss://socket.fyers.in/hsm/v1-5/prod"
+SYMBOL_TOKEN_URL = "https://api-t1.fyers.in/data/symbol-token"
+PROFILE_URL = "https://api-t1.fyers.in/api/v3/profile"
+
+# Fyers' public symbol masters, headerless, with the symbol name in the second column and the symbol in the tenth.
+SYMBOL_MASTER_URLS = [
+    "https://public.fyers.in/sym_details/NSE_CD.csv",
+    "https://public.fyers.in/sym_details/NSE_FO.csv",
+    "https://public.fyers.in/sym_details/NSE_COM.csv",
+    "https://public.fyers.in/sym_details/NSE_CM.csv",
+    "https://public.fyers.in/sym_details/BSE_CM.csv",
+    "https://public.fyers.in/sym_details/BSE_FO.csv",
+    "https://public.fyers.in/sym_details/MCX_COM.csv",
+]
+SYMBOL_NAME_COLUMN = 1
+SYMBOL_TICKER_COLUMN = 9
+
+LIVE_KEY = "fyers:quotes:live"
+INSTRUMENTS_KEY = "fyers:quotes:instruments"
+SUBSCRIPTIONS_KEY = "fyers:quotes:subscriptions"
+
+# Every tick is also appended here for bin/fyers/instruments/store_quotes_to_db, which reads it with a consumer group. The cap
+# bounds Redis memory when the persister is down; ticks trimmed before it returns are not persisted.
+STREAM_KEY = "fyers:quotes:stream"
+STREAM_MAX_LENGTH = 1000000
+
+MAX_INSTRUMENTS_PER_CONNECTION = 5000
+SYMBOLS_PER_LOOKUP = 500
+# The SDK subscribes at most this many topics in one frame; the frame's field lengths are two bytes.
+TOPICS_PER_SUBSCRIBE = 1500
+
+SOURCE = "PythonSDK-3.0.9"
+MODE = "P"
+CHANNEL = 11
+
+# Request and response types in the message header, and packet types inside a data feed response.
+AUTH_RESPONSE, SUBSCRIBE, DATAFEED_RESPONSE, FULL_MODE = 1, 4, 6, 12
+ACKNOWLEDGE = 3
+SNAPSHOT, UPDATE, LITE = 83, 85, 76
+NO_VALUE = -2147483648
+
+# The fytoken's first four digits to the exchange segment in a topic name, as Fyers' SDK maps them.
+EXCHANGE_SEGMENTS = {"1010": "nse_cm", "1011": "nse_fo", "1120": "mcx_fo", "1210": "bse_cm", "1012": "cde_fo",
+                     "1211": "bse_fo", "1212": "bcs_fo", "1020": "nse_com"}
+
+# An index topic is named by the exchange's index name, which for most indices is not the symbol's stem. From the
+# SDK's map.json; an index missing here falls back to the stem, as the SDK does.
+INDEX_TOPIC_NAMES = {"NSE:NIFTYINDIAMFG-INDEX": "NIFTY INDIA MFG", "NSE:NIFTY100ESG-INDEX": "NIFTY100 ESG",
+    "NSE:NIFTYINDDIGITAL-INDEX": "NIFTY IND DIGITAL", "NSE:NIFTYMICROCAP250-INDEX": "NIFTY MICROCAP250",
+    "NSE:NIFTYCONSRDURBL-INDEX": "NIFTY CONSR DURBL", "NSE:NIFTYHEALTHCARE-INDEX": "NIFTY HEALTHCARE",
+    "NSE:NIFTYOILANDGAS-INDEX": "NIFTY OIL AND GAS", "NSE:NIFTY100ESGSECLDR-INDEX": "Nifty100ESGSecLdr",
+    "NSE:NIFTY200MOMENTM30-INDEX": "Nifty200Momentm30", "NSE:NIFTYALPHALOWVOL-INDEX": "NIFTY AlphaLowVol",
+    "NSE:NIFTY200QUALTY30-INDEX": "NIFTY200 QUALTY30", "NSE:NIFTYSMLCAP50-INDEX": "NIFTY SMLCAP 50",
+    "NSE:MIDCPNIFTY-INDEX": "NIFTY MID SELECT", "NSE:NIFTYMIDCAP150-INDEX": "NIFTY MIDCAP 150",
+    "NSE:NIFTY100 EQL WGT-INDEX": "NIFTY100 EQL Wgt", "NSE:NIFTY50 EQL WGT-INDEX": "NIFTY50 EQL Wgt",
+    "NSE:NIFTYGSCOMPSITE-INDEX": "Nifty GS Compsite", "NSE:NIFTYGS1115YR-INDEX": "Nifty GS 11 15Yr",
+    "NSE:NIFTYGS48YR-INDEX": "Nifty GS 4 8Yr", "NSE:NIFTYGS10YRCLN-INDEX": "Nifty GS 10Yr Cln",
+    "NSE:NIFTYGS813YR-INDEX": "Nifty GS 8 13Yr", "NSE:NIFTYSMLCAP100-INDEX": "NIFTY SMLCAP 100",
+    "NSE:NIFTYQUALITY30-INDEX": "NIFTY100 Qualty30", "NSE:NIFTYPVTBANK-INDEX": "Nifty Pvt Bank",
+    "NSE:NIFTYPHARMA-INDEX": "Nifty Pharma", "NSE:NIFTYLARGEMID250-INDEX": "NIFTY LARGEMID250",
+    "NSE:NIFTYGS15YRPLUS-INDEX": "Nifty GS 15YrPlus", "NSE:NIFTYPSUBANK-INDEX": "Nifty PSU Bank",
+    "NSE:NIFTYSMLCAP250-INDEX": "NIFTY SMLCAP 250", "NSE:NIFTYENERGY-INDEX": "Nifty Energy",
+    "NSE:NIFTYALPHA50-INDEX": "NIFTY Alpha 50", "NSE:NIFTYPSE-INDEX": "Nifty PSE",
+    "NSE:NIFTYFINSRV2550-INDEX": "Nifty FinSrv25 50", "NSE:FINNIFTY-INDEX": "Nifty Fin Service",
+    "NSE:NIFTYREALTY-INDEX": "Nifty Realty", "NSE:NIFTY500-INDEX": "Nifty 500",
+    "NSE:NIFTY500MULTICAP-INDEX": "NIFTY500 MULTICAP", "NSE:NIFTYMIDCAP50-INDEX": "Nifty Midcap 50",
+    "NSE:NIFTYTOTALMKT-INDEX": "NIFTY TOTAL MKT", "NSE:NIFTY50PR2XLEV-INDEX": "Nifty50 PR 2x Lev",
+    "NSE:INDIAVIX-INDEX": "India VIX", "NSE:NIFTYDIVOPPS50-INDEX": "Nifty Div Opps 50",
+    "NSE:NIFTYMNC-INDEX": "Nifty MNC", "NSE:NIFTY50VALUE20-INDEX": "Nifty50 Value 20",
+    "NSE:NIFTY50-INDEX": "Nifty 50", "NSE:HANGSENG BEES-NAV-INDEX": "HangSeng BeES-NAV",
+    "NSE:NIFTY100LIQ15-INDEX": "Nifty100 Liq 15", "NSE:NIFTY50TR2XLEV-INDEX": "Nifty50 TR 2x Lev",
+    "NSE:NIFTY100-INDEX": "Nifty 100", "NSE:NIFTY100 LOWVOL30-INDEX": "NIFTY100 LowVol30",
+    "NSE:NIFTYBANK-INDEX": "Nifty Bank", "NSE:NIFTYFMCG-INDEX": "Nifty FMCG", "NSE:NIFTYIT-INDEX": "Nifty IT",
+    "NSE:NIFTYGS10YR-INDEX": "Nifty GS 10Yr", "NSE:NIFTYMIDCAP100-INDEX": "NIFTY MIDCAP 100",
+    "NSE:NIFTYNEXT50-INDEX": "Nifty Next 50", "NSE:NIFTYNXT50-INDEX": "Nifty Next 50",
+    "NSE:NIFTYM150QLTY50-INDEX": "NIFTY M150 QLTY50", "NSE:NIFTYSERVSECTOR-INDEX": "Nifty Serv Sector",
+    "NSE:NIFTYMIDSML400-INDEX": "NIFTY MIDSML 400", "NSE:NIFTYAUTO-INDEX": "Nifty Auto",
+    "NSE:NIFTYMETAL-INDEX": "Nifty Metal", "NSE:NIFTYINFRA-INDEX": "Nifty Infra",
+    "NSE:NIFTYMEDIA-INDEX": "Nifty Media", "NSE:NIFTY50PR1XINV-INDEX": "Nifty50 PR 1x Inv",
+    "NSE:NIFTY200-INDEX": "Nifty 200", "NSE:NIFTY50TR1XINV-INDEX": "Nifty50 TR 1x Inv",
+    "NSE:NIFTYCPSE-INDEX": "Nifty CPSE", "NSE:NIFTYMIDLIQ15-INDEX": "Nifty Mid Liq 15",
+    "NSE:NIFTYCOMMODITIES-INDEX": "Nifty Commodities", "NSE:NIFTYCONSUMPTION-INDEX": "Nifty Consumption",
+    "NSE:NIFTY50DIVPOINT-INDEX": "Nifty50 Div Point", "NSE:NIFTYGROWSECT15-INDEX": "Nifty GrowSect 15",
+    "BSE:100LARGECAPTMC-INDEX": "LCTMCI", "BSE:DFRG-INDEX": "DFRGRI", "BSE:QUALITY-INDEX": "BSEQUI",
+    "BSE:DIVIDENDSTABILITY-INDEX": "BSEDSI", "BSE:250SMALLCAP-INDEX": "SML250", "BSE:150MIDCAP-INDEX": "MID150",
+    "BSE:ESG100-INDEX": "ESG100", "BSE:SNXT50-INDEX": "SNXT50", "BSE:SNSX50-INDEX": "SNSX50",
+    "BSE:UTILS-INDEX": "UTILS", "BSE:GREENEX-INDEX": "GREENX", "BSE:SENSEX-INDEX": "SENSEX",
+    "BSE:REALTY-INDEX": "REALTY", "BSE:PRIVATEBANKS-INDEX": "BSEPBI", "BSE:CDGS-INDEX": "CDGS",
+    "BSE:OILGAS-INDEX": "OILGAS", "BSE:ENERGY-INDEX": "ENERGY", "BSE:POWER-INDEX": "POWER",
+    "BSE:500-INDEX": "BSE500", "BSE:100-INDEX": "BSE100", "BSE:PSU-INDEX": "BSEPSU", "BSE:HC-INDEX": "BSE HC",
+    "BSE:400MIDSMALLCAP-INDEX": "MSL400", "BSE:BHRT22-INDEX": "BHRT22", "BSE:BANKEX-INDEX": "BANKEX",
+    "BSE:ALLCAP-INDEX": "ALLCAP", "BSE:INFRA-INDEX": "INFRA", "BSE:CD-INDEX": "BSE CD", "BSE:MIDCAP-INDEX": "MIDCAP",
+    "BSE:AUTO-INDEX": "AUTO", "BSE:BASMTR-INDEX": "BASMTR", "BSE:200-INDEX": "BSE200", "BSE:FIN-INDEX": "FIN",
+    "BSE:CG-INDEX": "BSE CG", "BSE:ENHANCEDVALUE-INDEX": "BSEEVI", "BSE:TECK-INDEX": "TECK",
+    "BSE:METAL-INDEX": "METAL", "BSE:CARBONEX-INDEX": "CARBON", "BSE:MIDSEL-INDEX": "MIDSEL",
+    "BSE:SME IPO-INDEX": "SMEIPO", "BSE:MOMENTUM-INDEX": "BSEMOI", "BSE:TELCOM-INDEX": "TELCOM",
+    "BSE:CPSE-INDEX": "CPSE", "BSE:250LARGEMIDCAP-INDEX": "LMI250", "BSE:SMLCAP-INDEX": "SMLCAP",
+    "BSE:IT-INDEX": "BSE IT", "BSE:INDIAMANUFACTURING-INDEX": "MFG", "BSE:INDSTR-INDEX": "INDSTR",
+    "BSE:LOWVOLATILITY-INDEX": "BSELVI", "BSE:LRGCAP-INDEX": "LRGCAP", "BSE:IPO-INDEX": "BSEIPO",
+    "BSE:FMC-INDEX": "BSEFMC", "BSE:SMLSEL-INDEX": "SMLSEL", "NSE:NIFTYINDDEFENCE-INDEX": "Nifty Ind Defence",
+    "NSE:NIFTYTATA25CAP-INDEX": "Nifty Tata 25 Cap", "NSE:NIFTYMIDSMLHLTH-INDEX": "Nifty MidSml Hlth",
+    "NSE:NIFTYMULTIMFG-INDEX": "Nifty Multi Mfg", "NSE:NIFTYMULTIINFRA-INDEX": "Nifty Multi Infra",
+    "NSE:BHARATBOND-APR30-INDEX": "BHARATBOND-APR30", "NSE:BHARATBOND-APR31-INDEX": "BHARATBOND-APR31",
+    "NSE:BHARATBOND-APR32-INDEX": "BHARATBOND-APR32", "NSE:BHARATBOND-APR33-INDEX": "BHARATBOND-APR33",
+    "NSE:NIFTYINDTOURISM-INDEX": "Nifty Ind Tourism", "NSE:NIFTYCAPITALMKT-INDEX": "Nifty Capital Mkt",
+    "NSE:NIFTY500MOMENTM50-INDEX": "Nifty500Momentm50", "NSE:NIFTYMS400MQ100-INDEX": "NiftyMS400 MQ 100",
+    "NSE:NIFTYSML250MQ100-INDEX": "NiftySml250MQ 100", "NSE:NIFTYTOP10EW-INDEX": "Nifty Top 10 EW",
+    "NSE:NIFTYAQL30-INDEX": "Nifty AQL 30", "NSE:NIFTYAQLV30-INDEX": "Nifty AQLV 30",
+    "NSE:NIFTYEV-INDEX": "Nifty EV", "NSE:NIFTYHIGHBETA50-INDEX": "Nifty HighBeta 50",
+    "NSE:NIFTYNEWCONSUMP-INDEX": "Nifty New Consump", "NSE:NIFTYCORPMAATR-INDEX": "Nifty Corp MAATR",
+    "NSE:NIFTYLOWVOL50-INDEX": "Nifty Low Vol 50", "NSE:NIFTYMOBILITY-INDEX": "Nifty Mobility",
+    "NSE:NIFTYQLTYLV30-INDEX": "Nifty Qlty LV 30", "NSE:NIFTYSML250Q50-INDEX": "Nifty Sml250 Q50",
+    "NSE:NIFTYTOP15EW-INDEX": "Nifty Top 15 EW", "NSE:NIFTY100ALPHA30-INDEX": "Nifty100 Alpha 30",
+    "NSE:NIFTY100ENHESG-INDEX": "Nifty100 Enh ESG", "NSE:NIFTY200VALUE30-INDEX": "Nifty200 Value 30",
+    "NSE:NIFTY500EW-INDEX": "Nifty500 EW", "NSE:NIFTYMULTIMQ50-INDEX": "Nifty Multi MQ 50",
+    "NSE:NIFTY500VALUE50-INDEX": "Nifty500 Value 50", "NSE:NIFTYTOP20EW-INDEX": "Nifty Top 20 EW",
+    "NSE:NIFTYCOREHOUSING-INDEX": "Nifty CoreHousing", "NSE:NIFTYFINSEREXBNK-INDEX": "Nifty FinSerExBnk",
+    "NSE:NIFTYHOUSING-INDEX": "Nifty Housing", "NSE:NIFTYIPO-INDEX": "Nifty IPO",
+    "NSE:NIFTYMSFINSERV-INDEX": "Nifty MS Fin Serv", "NSE:NIFTYMSINDCONS-INDEX": "Nifty MS Ind Cons",
+    "NSE:NIFTYMSITTELCM-INDEX": "Nifty MS IT Telcm", "NSE:NIFTYNONCYCCONS-INDEX": "Nifty NonCyc Cons",
+    "NSE:NIFTYRURAL-INDEX": "Nifty Rural", "NSE:NIFTYSHARIAH25-INDEX": "Nifty Shariah 25",
+    "NSE:NIFTYTRANSLOGIS-INDEX": "Nifty Trans Logis", "NSE:NIFTY50SHARIAH-INDEX": "Nifty50 Shariah",
+    "NSE:NIFTY500LMSEQL-INDEX": "Nifty500 LMS Eql", "NSE:NIFTY500SHARIAH-INDEX": "Nifty500 Shariah",
+    "NSE:NIFTY500QLTY50-INDEX": "Nifty500 Qlty50", "NSE:NIFTY500LOWVOL50-INDEX": "Nifty500 LowVol50"}
+
+# The positional field tables of the HSM wire format, as Fyers' SDK defines them.
+DATA_FIELDS = ["ltp", "vol_traded_today", "last_traded_time", "exch_feed_time", "bid_size", "ask_size", "bid_price",
+               "ask_price", "last_traded_qty", "tot_buy_qty", "tot_sell_qty", "avg_trade_price", "OI", "low_price",
+               "high_price", "Yhigh", "Ylow", "lower_ckt", "upper_ckt", "open_price", "prev_close_price", "type",
+               "symbol"]
+INDEX_FIELDS = ["ltp", "prev_close_price", "exch_feed_time", "high_price", "low_price", "open_price", "type", "symbol"]
+LITE_FIELDS = ["ltp", "symbol", "type"]
+DEPTH_FIELDS = ([f"bid_price{level}" for level in range(1, 6)] + [f"ask_price{level}" for level in range(1, 6)]
+                + [f"bid_size{level}" for level in range(1, 6)] + [f"ask_size{level}" for level in range(1, 6)]
+                + [f"bid_order{level}" for level in range(1, 6)] + [f"ask_order{level}" for level in range(1, 6)]
+                + ["type", "symbol"])
+
+# Fyers' codes for a dead session: -8 token expired, -15 invalid token, -16 could not authenticate, -17 invalid or
+# expired.
+AUTHENTICATION_ERROR_CODES = {-8, -15, -16, -17}
+
+# Phrases on Cloudflare's block page, which it serves with HTTP 429 in front of api-t1.fyers.in.
+BLOCK_PAGE_MARKERS = ("error 1015", "error code: 1015", "banned you temporarily")
+BLOCK_PAUSE_SECONDS = 30 * 60
+THROTTLE_PAUSE_SECONDS = 5 * 60
+
+PING_INTERVAL_SECONDS = 30
+PING_TIMEOUT_SECONDS = 10
+MIN_BACKOFF_SECONDS = 1
+MAX_BACKOFF_SECONDS = 60
+MAX_FAILED_CONNECTS = 6
+
+class FyersRefusal(Exception):
+    """Fyers refused a request, with its code and message."""
+
+    def __init__(self, code, message):
+        super().__init__(code, message)
+        self.code = code
+        self.message = message
+
+def refusal_code(exception):
+    """The numeric code a refusal carries, or None."""
+    try:
+        return int(getattr(exception, 'code', None))
+    except (TypeError, ValueError):
+        return None
+
+def is_block(exception):
+    """Whether a refusal is Cloudflare's address ban rather than anything Fyers itself said."""
+    lowered = str(exception).lower()
+    return any(marker in lowered for marker in BLOCK_PAGE_MARKERS) or (refusal_code(exception) == 429 and "cloudflare" in lowered)
+
+def is_throttle(exception):
+    """Whether a refusal is a rate limit."""
+    lowered = str(exception).lower()
+    return refusal_code(exception) == 429 or "too many requests" in lowered or "rate limit" in lowered
+
+def is_authentication_error(exception):
+    """Whether Fyers refused the request because the session is dead, and not for a ban or a limit."""
+    if is_block(exception) or is_throttle(exception):
+        return False
+    return refusal_code(exception) in AUTHENTICATION_ERROR_CODES or refusal_code(exception) == 401
+
+def token_claims(access_token):
+    """
+    The claims inside a Fyers access token, a JWT, or an empty dict when it cannot be decoded.
+
+    - `access_token` is the token from the REST login.
+    """
+    try:
+        return json.loads(base64.urlsafe_b64decode(str(access_token).split('.')[1] + '===').decode())
+    except Exception:
+        return {}
+
+class FyersSession:
+    """
+    The Fyers login every socket authenticates with, logged in again by one socket at a time.
+    """
+
+    def __init__(self, logger):
+        """
+        Construct FyersAPI, which logs in when its probe raises, and confirm the session against the profile.
+
+        - `logger` is where logins are reported.
+        """
+        from stock_brokers.api.fyers import FyersAPI
+
+        self._api_class = FyersAPI
+        self._logger = logger
+        self._lock = threading.Lock()
+        self._fyers = self._confirmed(FyersAPI())
+
+    def _confirmed(self, fyers):
+        """
+        Raise FyersRefusal unless the profile is served. FyersAPI only logs in when its probe raises, and Fyers
+        can refuse a dead session inside an HTTP 200, so a constructor that returned is no proof of a session.
+
+        - `fyers` is a FyersAPI.
+        """
+        body = (fyers.get(url=PROFILE_URL, timeout=30) or {}).get('data')
+        if not isinstance(body, dict) or body.get('s') not in (None, 'ok'):
+            raise FyersRefusal((body or {}).get('code') if isinstance(body, dict) else None,
+                               f"the profile was refused: {str(body)[:200]}")
+        return fyers
+
+    def credentials(self):
+        """
+        The app id and the access token in force now, which may be one another process has just obtained.
+        """
+        login = self._fyers._current_login() or {}
+        return self._fyers._settings.get('app_id'), login.get('access_token')
+
+    def log_in_again(self, stale_token):
+        """
+        Log in again, unless another socket already replaced the token that failed.
+
+        - `stale_token` is the access token the failing connection used.
+        """
+        with self._lock:
+            if self.credentials()[1] != stale_token:
+                return
+            self._logger.warning("Logging in to Fyers again.")
+            self._fyers = self._confirmed(self._api_class())
+
+class QuotesSocket:
+    """
+    One Fyers market feed websocket for a batch of symbols, reconnecting until stopped.
+    """
+
+    def __init__(self, name, symbols, session, cache, logger):
+        """
+        - `name` is the connection's name, for the log.
+        - `symbols` is the batch of Fyers symbols.
+        - `session` is the shared FyersSession.
+        - `cache` is the Redis client.
+        - `logger` is where the connection reports.
+        """
+        self.name = name
+        self._symbols = symbols
+        self._session = session
+        self._cache = cache
+        self._logger = logger
+        self._stop = threading.Event()
+        self._ws = None
+        self._token = None
+        self._hsm_key = None
+        # Topic name to Fyers symbol, from the symbol lookup; topic id to (symbol, topic name), from the snapshots.
+        self._resolved = {}
+        self._topics = {}
+        self._state = {}
+        # Acknowledge every `_ack_count` data messages, as the authentication response asks; 0 means never.
+        self._ack_count = 0
+        self._since_ack = 0
+        self._opened = False
+        self._authentication_rejected = False
+        self._pause_seconds = 0
+        self.gave_up = False
+
+    def close(self):
+        """Close the websocket and stop reconnecting."""
+        self._stop.set()
+        if self._ws is not None:
+            self._ws.close()
+
+    def run_forever(self):
+        """Connect, and reconnect with backoff, until closed or unable to recover."""
+        backoff = MIN_BACKOFF_SECONDS
+        failed_connects = 0
+        logged_in_again = False
+        while not self._stop.is_set():
+            self._opened = False
+            self._authentication_rejected = False
+            self._pause_seconds = 0
+            try:
+                self._connect()
+            except Exception as exception:
+                self._logger.error(f"{self.name} connection failed: {type(exception).__name__}: {exception}")
+            if self._stop.is_set():
+                break
+
+            if self._pause_seconds:
+                # A ban or a rate limit: waiting is the only thing that helps, and logging in would extend a ban.
+                self._stop.wait(self._pause_seconds)
+                continue
+
+            if self._opened and not self._authentication_rejected:
+                failed_connects, logged_in_again, backoff = 0, False, MIN_BACKOFF_SECONDS
+            else:
+                failed_connects += 1
+
+            if self._authentication_rejected or failed_connects >= MAX_FAILED_CONNECTS:
+                # Refused again straight after a login: another login would not help, and Fyers bans addresses
+                # that keep sending refused requests.
+                if logged_in_again and (self._authentication_rejected or failed_connects >= MAX_FAILED_CONNECTS):
+                    self.gave_up = True
+                    self._logger.error(f"{self.name} still cannot connect after logging in again. Giving up.")
+                    break
+                try:
+                    # A dead session: log in again before connecting again.
+                    self._session.log_in_again(self._token)
+                except Exception as exception:
+                    self.gave_up = True
+                    self._logger.error(f"{self.name} could not log in to Fyers again: {type(exception).__name__}: {exception}")
+                    break
+                failed_connects, logged_in_again = 0, True
+
+            self._logger.warning(f"{self.name} disconnected. Reconnecting in {backoff} seconds.")
+            self._stop.wait(backoff)
+            backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
+        self._logger.info(f"{self.name} stopped.")
+
+    def _connect(self):
+        """Check the token, resolve the symbols to topics, then open the websocket and block until it closes."""
+        import websocket
+
+        app_id, self._token = self._session.credentials()
+        claims = token_claims(self._token)
+        if claims.get('exp', 0) <= time.time() or 'hsm_key' not in claims:
+            self._logger.warning(f"{self.name}: the Fyers access token has expired or carries no hsm_key.")
+            self._authentication_rejected = True
+            return
+        self._hsm_key = claims['hsm_key']
+
+        try:
+            self._resolved = self._resolve_symbols(app_id, self._token)
+        except Exception as exception:
+            if is_block(exception):
+                self._logger.error(f"{self.name}: Cloudflare is blocking Fyers requests, pausing {BLOCK_PAUSE_SECONDS}s: "
+                                   f"{str(exception)[:160]}")
+                self._pause_seconds = BLOCK_PAUSE_SECONDS
+            elif is_throttle(exception):
+                self._logger.warning(f"{self.name}: Fyers rate limited the symbol lookup, pausing {THROTTLE_PAUSE_SECONDS}s.")
+                self._pause_seconds = THROTTLE_PAUSE_SECONDS
+            elif is_authentication_error(exception):
+                self._logger.warning(f"{self.name}: Fyers refused the session on the symbol lookup: {exception}")
+                self._authentication_rejected = True
+            else:
+                raise
+            return
+        resolved_symbols = set(self._resolved.values())
+        unresolved = [symbol for symbol in self._symbols if symbol not in resolved_symbols]
+        if unresolved:
+            self._logger.warning(f"{self.name}: {len(unresolved)} symbol(s) did not resolve and are not subscribed: "
+                                 f"{', '.join(unresolved[:20])}{' ...' if len(unresolved) > 20 else ''}")
+        if not self._resolved:
+            raise FyersRefusal(None, "no symbol resolved to a topic")
+
+        self._topics, self._state, self._ack_count, self._since_ack = {}, {}, 0, 0
+        self._ws = websocket.WebSocketApp(FEED_URL, on_open=self._on_open, on_message=self._on_message,
+                                          on_error=self._on_error, on_close=self._on_close)
+        self._ws.run_forever(ping_interval=PING_INTERVAL_SECONDS, ping_timeout=PING_TIMEOUT_SECONDS)
+
+    def _resolve_symbols(self, app_id, token):
+        """
+        The Fyers symbol of each HSM topic name, from Fyers' symbol-token endpoint, five hundred symbols a request.
+
+        - `app_id` and `token` authenticate the request.
+
+        A symbol the endpoint lists as invalid, or whose fytoken names a segment the feed does not carry, is left out.
+        """
+        import requests
+
+        headers = {"Authorization": f"{app_id}:{token}", "Content-Type": "application/json"}
+        resolved = {}
+        for start in range(0, len(self._symbols), SYMBOLS_PER_LOOKUP):
+            response = requests.post(SYMBOL_TOKEN_URL, headers=headers, json={"symbols": self._symbols[start:start + SYMBOLS_PER_LOOKUP]},
+                                     timeout=60)
+            try:
+                body = response.json()
+            except ValueError:
+                raise FyersRefusal(response.status_code, response.text[:300])
+            if response.status_code >= 300 or body.get('s') == 'error':
+                raise FyersRefusal(body.get('code') if body.get('code') is not None else response.status_code,
+                                   str(body.get('message') or body)[:300])
+            for symbol, fytoken in (body.get('validSymbol') or {}).items():
+                topic = topic_name(symbol, str(fytoken))
+                if topic is not None:
+                    resolved[topic] = symbol
+        return resolved
+
+    def _on_open(self, ws):
+        """Authenticate with the hsm key. Subscription waits for the acknowledgement."""
+        self._opened = True
+        ws.send(auth_frame(self._hsm_key), opcode=0x2)
+        self._logger.info(f"{self.name} opened. Authenticating.")
+
+    def _on_error(self, ws, error):
+        self._logger.error(f"{self.name} error: {error}")
+
+    def _on_close(self, ws, status_code, message):
+        self._logger.info(f"{self.name} closed with status {status_code}: {message}")
+
+    def _on_message(self, ws, message):
+        """Handle the acknowledgements and write each updated instrument's tick to the live quotes hash."""
+        if not isinstance(message, (bytes, bytearray)) or len(message) < 3:
+            return
+        data = bytes(message)
+        response_type = data[2]
+        if response_type == AUTH_RESPONSE:
+            accepted, self._ack_count = auth_response(data)
+            if not accepted:
+                self._logger.warning(f"{self.name}: Fyers refused the feed authentication.")
+                self._authentication_rejected = True
+                ws.close()
+                return
+            ws.send(full_mode_frame(), opcode=0x2)
+            topics = list(self._resolved)
+            for start in range(0, len(topics), TOPICS_PER_SUBSCRIBE):
+                ws.send(subscribe_frame(topics[start:start + TOPICS_PER_SUBSCRIBE]), opcode=0x2)
+            self._logger.info(f"{self.name} authenticated and subscribed to {len(self._resolved)} instrument(s).")
+            return
+        if response_type == SUBSCRIBE:
+            accepted = len(data) > 7 and data[7:8] == b"K"
+            if accepted:
+                self._logger.info(f"{self.name}: subscription acknowledged.")
+            else:
+                self._logger.error(f"{self.name}: Fyers refused the subscription.")
+            return
+        if response_type != DATAFEED_RESPONSE:
+            return
+
+        if self._ack_count > 0 and len(data) >= 7:
+            self._since_ack += 1
+            if self._since_ack >= self._ack_count:
+                ws.send(acknowledge_frame(struct.unpack(">I", data[3:7])[0]), opcode=0x2)
+                self._since_ack = 0
+
+        ticks = [tick for tick in (build_tick(symbol, state, price_divisor(state))
+                                   for symbol, state in self.parse_feed(data).items())
+                 if tick['last_price'] is not None or tick['depth']['buy'] or tick['depth']['sell']]
+        if ticks:
+            encoded = [(tick['id'], json.dumps(tick)) for tick in ticks]
+            # The latest tick per instrument and every tick in arrival order, in one round trip.
+            pipeline = self._cache.pipeline(transaction=False)
+            pipeline.hset(LIVE_KEY, mapping=dict(encoded))
+            for _, payload in encoded:
+                pipeline.xadd(STREAM_KEY, {"tick": payload}, maxlen=STREAM_MAX_LENGTH, approximate=True)
+            pipeline.execute()
+
+    def parse_feed(self, data):
+        """
+        Merge a data feed response into the per-instrument state, and return the state of each instrument it touched.
+
+        - `data` is the binary data feed response.
+        """
+        if len(data) < 9:
+            return {}
+        updated = {}
+        scrip_count = struct.unpack("!H", data[7:9])[0]
+        offset = 9
+        for _ in range(scrip_count):
+            if offset + 1 > len(data):
+                break
+            packet_type = data[offset]
+            offset += 1
+
+            if packet_type == SNAPSHOT:
+                if offset + 3 > len(data):
+                    break
+                topic_id = struct.unpack("H", data[offset:offset + 2])[0]
+                name_length = data[offset + 2]
+                offset += 3
+                topic_name = data[offset:offset + name_length].decode('utf-8', errors='replace')
+                offset += name_length
+                if offset >= len(data):
+                    break
+                field_count = data[offset]
+                offset += 1
+                symbol = self._resolved.get(topic_name)
+                self._topics[topic_id] = (symbol, topic_name)
+            elif packet_type in (UPDATE, LITE):
+                if offset + 3 > len(data):
+                    break
+                topic_id = struct.unpack("H", data[offset:offset + 2])[0]
+                field_count = data[offset + 2]
+                offset += 3
+                symbol, topic_name = self._topics.get(topic_id, (None, ''))
+            else:
+                break
+
+            state = self._state.setdefault(symbol, {}) if symbol else {}
+            fields = fields_for(topic_name, field_count)
+            for index in range(field_count):
+                if offset + 4 > len(data):
+                    break
+                value = struct.unpack(">i", data[offset:offset + 4])[0]
+                offset += 4
+                if value != NO_VALUE and index < len(fields):
+                    state[fields[index]] = value
+            if packet_type == SNAPSHOT:
+                # After a snapshot's fields: two reserved bytes, the price multiplier and precision, then the
+                # exchange, exchange token and symbol as length-prefixed strings.
+                if offset + 5 > len(data):
+                    break
+                multiplier = struct.unpack(">H", data[offset + 2:offset + 4])[0]
+                state['multiplier'], state['precision'] = multiplier, data[offset + 4]
+                offset += 5
+                for _ in range(3):
+                    if offset >= len(data):
+                        break
+                    offset += 1 + data[offset]
+            if symbol:
+                updated[symbol] = state
+        return updated
+
+def auth_frame(hsm_key):
+    """
+    The binary frame that authenticates the feed with the hsm key.
+
+    - `hsm_key` is the `hsm_key` claim of the access token.
+    """
+    frame = bytearray()
+    frame.extend(struct.pack("!H", 18 + len(hsm_key) + len(SOURCE) - 2))
+    frame.extend(bytes([1, 4]))                                           # authenticate, four fields
+    frame.extend(bytes([1]) + struct.pack("!H", len(hsm_key)) + hsm_key.encode())
+    frame.extend(bytes([2]) + struct.pack("!H", 1) + MODE.encode())
+    frame.extend(bytes([3]) + struct.pack("!H", 1) + bytes([1]))
+    frame.extend(bytes([4]) + struct.pack("!H", len(SOURCE)) + SOURCE.encode())
+    return bytes(frame)
+
+def auth_response(data):
+    """
+    Whether an authentication response accepted the feed, and how many data messages to acknowledge at a time.
+
+    - `data` is the binary authentication response: a `K` in its first field on success, then the count.
+    """
+    try:
+        length = struct.unpack("!H", data[5:7])[0]
+        accepted = data[7:7 + length] == b"K"
+        offset = 7 + length + 1
+        length = struct.unpack("!H", data[offset:offset + 2])[0]
+        ack_count = struct.unpack(">I", data[offset + 2:offset + 6])[0] if length >= 4 else 0
+        return accepted, ack_count
+    except struct.error:
+        return False, 0
+
+def full_mode_frame():
+    """The binary frame that puts the channel in full mode, so data packets carry every field."""
+    frame = bytearray(struct.pack(">H", 0))
+    frame.extend(bytes([FULL_MODE, 2]))                                   # full mode, two fields
+    frame.extend(bytes([1]) + struct.pack(">H", 8) + struct.pack(">Q", 1 << CHANNEL))
+    frame.extend(bytes([2]) + struct.pack(">H", 1) + bytes([70]))
+    return bytes(frame)
+
+def subscribe_frame(topics):
+    """
+    The binary frame that subscribes HSM topic names on the channel.
+
+    - `topics` is the list of topic names, such as `sf|nse_cm|3045`, at most 1500 of them in one frame.
+    """
+    scrips = bytearray(struct.pack(">H", len(topics)))
+    for topic in topics:
+        encoded = topic.encode("ascii")
+        scrips.extend(bytes([len(encoded)]) + encoded)
+    frame = bytearray(struct.pack(">H", 18 + len(scrips)))
+    frame.extend(bytes([SUBSCRIBE, 2]))                                   # subscribe, two fields
+    frame.extend(bytes([1]) + struct.pack(">H", len(scrips)) + scrips)
+    frame.extend(bytes([2]) + struct.pack(">H", 1) + bytes([CHANNEL]))
+    return bytes(frame)
+
+def acknowledge_frame(message_number):
+    """
+    The binary frame that acknowledges data messages up to `message_number`, the number in a data message's header.
+    """
+    return struct.pack(">HBBBHI", 9, ACKNOWLEDGE, 1, 1, 4, message_number)
+
+def topic_name(symbol, fytoken):
+    """
+    The HSM topic name of a Fyers symbol, or None when its segment is not one the feed carries.
+
+    - `symbol` is the Fyers symbol, such as `NSE:SBIN-EQ` or `NSE:NIFTY50-INDEX`.
+    - `fytoken` is the symbol's fytoken from the symbol-token endpoint.
+    """
+    segment = EXCHANGE_SEGMENTS.get(fytoken[:4])
+    if segment is None:
+        return None
+    if symbol.endswith("-INDEX"):
+        return f"if|{segment}|{INDEX_TOPIC_NAMES.get(symbol) or symbol.split(':', 1)[-1].rsplit('-', 1)[0]}"
+    return f"sf|{segment}|{fytoken[10:]}"
+
+def price_divisor(state):
+    """
+    What an instrument's scaled integer prices are divided by: 10 to its precision times its multiplier, from its
+    snapshot, or 100 when no snapshot has said.
+
+    - `state` is the instrument's merged field state.
+    """
+    precision, multiplier = state.get('precision'), state.get('multiplier')
+    if precision is None or not multiplier:
+        return 100
+    return (10 ** precision) * multiplier
+
+def fields_for(topic_name, field_count):
+    """
+    The field table a packet's positional values are read against.
+
+    - `topic_name` is the topic name its snapshot gave, which encodes the feed kind.
+    - `field_count` is the number of values in the packet.
+    """
+    if topic_name.startswith('dp'):
+        return DEPTH_FIELDS
+    if topic_name.startswith('if'):
+        return INDEX_FIELDS
+    if field_count <= len(LITE_FIELDS):
+        return LITE_FIELDS
+    return DATA_FIELDS
+
+def build_tick(symbol, state, divisor=100):
+    """
+    A normalized tick from an instrument's merged field state.
+
+    - `symbol` is the Fyers symbol.
+    - `state` is the merged field state.
+    - `divisor` turns Fyers' scaled integers into rupees.
+    """
+    price = lambda key: state[key] / divisor if state.get(key) is not None else None
+    depth = {"buy": [], "sell": []}
+    for level in range(1, 6):
+        if state.get(f'bid_price{level}') is not None:
+            depth['buy'].append({"quantity": state.get(f'bid_size{level}'), "price": state[f'bid_price{level}'] / divisor,
+                                 "orders": state.get(f'bid_order{level}')})
+        if state.get(f'ask_price{level}') is not None:
+            depth['sell'].append({"quantity": state.get(f'ask_size{level}'), "price": state[f'ask_price{level}'] / divisor,
+                                  "orders": state.get(f'ask_order{level}')})
+    # The data packet carries the best bid and offer itself, which is the only book there is without a depth topic.
+    if not depth['buy'] and state.get('bid_price'):
+        depth['buy'].append({"quantity": state.get('bid_size'), "price": state['bid_price'] / divisor, "orders": None})
+    if not depth['sell'] and state.get('ask_price'):
+        depth['sell'].append({"quantity": state.get('ask_size'), "price": state['ask_price'] / divisor, "orders": None})
+
+    last_price, close = price('ltp'), price('prev_close_price')
+    return {"id": symbol, "broker": "fyers", "instrument_token": symbol,
+            "exchange": symbol.split(':', 1)[0] if ':' in symbol else None,
+            "mode": "full" if depth['buy'] or depth['sell'] else "quote", "last_price": last_price,
+            "last_quantity": state.get('last_traded_qty'), "average_price": price('avg_trade_price'),
+            "volume": state.get('vol_traded_today'), "buy_quantity": state.get('tot_buy_qty'),
+            "sell_quantity": state.get('tot_sell_qty'),
+            "ohlc": {"open": price('open_price'), "high": price('high_price'), "low": price('low_price'), "close": close},
+            "change": (last_price - close) * 100 / close if last_price is not None and close else None,
+            "oi": state.get('OI'), "oi_day_high": None, "oi_day_low": None,
+            "last_trade_time": state.get('last_traded_time'), "exchange_timestamp": state.get('exch_feed_time'),
+            "depth": depth, "received_at": time.time()}
+
+def resolve_tokens(tokens, cache, logger):
+    """
+    The Fyers symbols to subscribe to: `--tokens` when given, otherwise the subscription set.
+
+    - `tokens` is a comma separated list of symbols, or None.
+    - `cache` is the Redis client.
+    - `logger` is where the resolution is reported.
+    """
+    if tokens:
+        wanted, source = [token.strip() for token in tokens.split(",")], "--tokens"
+    else:
+        wanted, source = list(cache.smembers(SUBSCRIPTIONS_KEY)), SUBSCRIPTIONS_KEY
+
+    resolved = []
+    for token in sorted({str(token).strip() for token in wanted if str(token).strip()}):
+        exchange, _, name = token.partition(':')
+        if exchange and name:
+            resolved.append(token)
+        else:
+            logger.warning(f"Skipping {token}: expected an exchange-qualified Fyers symbol such as NSE:SBIN-EQ.")
+    logger.info(f"Subscribing to {len(resolved)} instrument(s) from {source}.")
+    return resolved
+
+def instrument_names(symbols, logger):
+    """
+    The names of the subscribed symbols from Fyers' public symbol masters.
+
+    A master that cannot be downloaded is reported and leaves its symbols unnamed rather than stopping the feed.
+
+    - `symbols` is the list of subscribed symbols.
+    - `logger` is where a failed download is reported.
+    """
+    import requests
+
+    wanted = set(symbols)
+    names = {}
+    for url in SYMBOL_MASTER_URLS:
+        try:
+            response = requests.get(url, timeout=120)
+            response.raise_for_status()
+        except Exception as exception:
+            logger.warning(f"Could not download {url}, so its symbols are unnamed: {exception}")
+            continue
+        for row in csv.reader(StringIO(response.text)):
+            if len(row) > SYMBOL_TICKER_COLUMN and row[SYMBOL_TICKER_COLUMN] in wanted:
+                names[row[SYMBOL_TICKER_COLUMN]] = row[SYMBOL_NAME_COLUMN]
+    return names
+
+def main():
+    """Stream Fyers quotes into fyers:quotes:live until stopped."""
+    parser = argparse.ArgumentParser(description="Stream Fyers market quotes into fyers:quotes:live until stopped.")
+    parser.add_argument("--tokens", help="comma separated Fyers symbols, for example NSE:SBIN-EQ")
+    parser.add_argument("--per-socket", type=int, default=MAX_INSTRUMENTS_PER_CONNECTION,
+                        help=f"instruments per websocket connection, at most {MAX_INSTRUMENTS_PER_CONNECTION}")
+    arguments = parser.parse_args()
+
+    from utilities.configurations import get_cache, get_logger
+
+    logger = get_logger("fyers.websocket_quotes")
+    cache = get_cache()
+
+    if not 1 <= arguments.per_socket <= MAX_INSTRUMENTS_PER_CONNECTION:
+        logger.error(f"--per-socket must be between 1 and {MAX_INSTRUMENTS_PER_CONNECTION}.")
+        return 2
+
+    symbols = resolve_tokens(arguments.tokens, cache, logger)
+    if not symbols:
+        logger.error(f"Nothing to subscribe to. Pass --tokens or add Fyers symbols to the Redis set {SUBSCRIPTIONS_KEY}.")
+        return 2
+
+    try:
+        session = FyersSession(logger)
+    except Exception as exception:
+        logger.error(f"Could not log in to Fyers: {type(exception).__name__}: {exception}")
+        return 1
+
+    names = instrument_names(symbols, logger)
+    pipeline = cache.pipeline()
+    pipeline.delete(INSTRUMENTS_KEY)
+    pipeline.hset(INSTRUMENTS_KEY, mapping={symbol: names.get(symbol, "") for symbol in symbols})
+    pipeline.execute()
+    unnamed = [symbol for symbol in symbols if symbol not in names]
+    logger.info(f"Wrote {len(symbols)} subscribed instrument(s) to {INSTRUMENTS_KEY}.")
+    if unnamed:
+        logger.warning(f"{len(unnamed)} symbol(s) are not in the symbol master: "
+                       f"{', '.join(unnamed[:20])}{' ...' if len(unnamed) > 20 else ''}")
+
+    batches = [symbols[start:start + arguments.per_socket] for start in range(0, len(symbols), arguments.per_socket)]
+    sockets = [QuotesSocket(f"socket_{index}", batch, session, cache, logger) for index, batch in enumerate(batches)]
+
+    # Installed before the sockets start: systemd stops a unit with SIGTERM, and the default action would kill
+    # the process without closing anything.
+    def _handle_signal(signal_number, frame):
+        logger.info(f"Received signal {signal_number}. Closing the quotes feed.")
+        for socket in sockets:
+            socket.close()
+
+    for signal_number in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(signal_number, _handle_signal)
+
+    threads = [threading.Thread(target=socket.run_forever, name=f"fyers_quotes_{socket.name}", daemon=True)
+               for socket in sockets]
+    logger.info(f"Starting {len(sockets)} websocket(s) for {len(symbols)} instrument(s).")
+    for thread in threads:
+        thread.start()
+
+    # Block in the main thread so the signal handlers above can run.
+    while any(thread.is_alive() for thread in threads):
+        for thread in threads:
+            thread.join(timeout=1)
+
+    gave_up = [socket.name for socket in sockets if socket.gave_up]
+    if gave_up:
+        logger.error(f"Socket(s) {', '.join(gave_up)} gave up.")
+        return 1
+    logger.info("Quotes feed stopped.")
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())

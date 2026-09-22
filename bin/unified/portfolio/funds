@@ -1,0 +1,440 @@
+#!/usr/bin/env python3
+"""
+Combine every broker's funds from Redis into one funds document, the way the REST API's `/api/portfolio/funds`
+answers, and write it to the Redis key `unified:portfolio:funds` every half second.
+
+    bin/unified/portfolio/funds
+    redis-cli GET unified:portfolio:funds
+
+Nothing here calls a broker. Each broker's funds are already kept in Redis by `bin/<broker>/portfolio/funds`, as
+`{"timestamp", "status", "code", "data"}` under `<broker>:portfolio:funds`, so this reads those and interprets them.
+
+**The document** has the REST API's shape, every figure the sum across brokers, rounded to paise:
+
+    {"summary": {"total_balance", "available_balance", "cash_balance", "collateral_value", "adhoc_credit",
+                 "margin_utilized", "withdrawable_balance"},
+     "pnl": {"realized", "unrealized"},
+     "margin_breakdown": {"span_margin", "exposure_margin", "other_margin"},
+     "cash_movement": {"pay_in_today", "pay_out_today", "uncleared_funds", "pending_withdrawal"},
+     "segments": {"equity" | "derivatives" | "currency" | "commodity": {"available_balance", "margin_utilized",
+                                                                        "span_margin", "exposure_margin"}},
+     "brokers": [...], "as_of": ...}
+
+No broker reports a total, so `total_balance` is what is free to trade plus what is already blocked -
+`available_balance` plus `margin_utilized` - which holds whichever way a broker reports its balance. A field a broker
+does not report contributes nothing, and a missing, blank or non-numeric one - Wisdom Capital's "NaN" included - is read
+as zero. A segment appears when any broker reports it.
+
+**Each broker's funds** are read like this:
+
+| broker | stored `data` | summary from | segments |
+| --- | --- | --- | --- |
+| zerodha | `equity` and `commodity` blocks | each block's `net`, `available.cash`/`collateral`/`adhoc_margin`, `utilised.debits`; `utilised.span`/`exposure`/`m2m_realised`/`m2m_unrealised`/`payout`, `available.intraday_payin` | `equity`, `commodity` |
+| dhan | one pool | `availabelBalance`, `collateralAmount`, `utilizedAmount`, `withdrawableBalance`; `receiveableAmount` uncleared, `blockedPayoutAmount` pending withdrawal | none |
+| flattrade, shoonya | Noren `Limits` | available is `cash + collateral (or brkcollamt) + daycash - marginused`; `span`, `expo`, `premium + varelm + marprt`, `rpnl`, `unmtom`, `payin`, `payout`, `unclearedcash` | from `span_{e,d,f,c}_{i,m,c}` and `expo_...`, when non-zero |
+| fyers | `fund_limit` rows by `title` | equity plus commodity amount of Available Balance, Clear Balance, Collaterals, Adhoc Limit, Utilized Amount, Realized Profit and Loss | `equity`, `commodity` |
+| groww | margin detail | available is `clear_cash + collateral_available + adhoc_margin - net_margin_used`; collateral used plus available; commodity M2M | `equity`, `derivatives`, `commodity` |
+| indmoney | funds | available is `sod_balance + pledge_received`; `withdrawal_balance`, P&L, funds added and withdrawn | from `detailed_avl_balance` |
+| kotak | limits | `Net`, `CollateralValue`, `AdhocMargin`, `MarginUsed`, span and exposure present, MTM present, RMS pay-in and pay-out | `derivatives`, `currency`, `commodity` span and exposure, Nrml plus Mis |
+| stoxkart | one pool of strings | `available_limit`, `cash`, `pledge_value` (or `collateral`), `adhoc_limit`, the absolute `utilized_limit`, `withdrawable_funds`; `realised_profit`, `payin_amount`, `payout_amount` | none |
+| wisdom_capital | XTS `BalanceList` | the first balance's `RMSSubLimits`, `marginAvailable` and `marginUtilized` | none |
+
+**Which brokers count.** `brokers` lists every broker with a `status`, and `as_of`, when its
+script stored the funds: `ok`; `stale`, stored more than a minute ago - its script may have stopped - and still added
+in; `missing`, no key; or `unreadable`, a stored value that is not funds - a refusal Fyers, Noren or Kotak carried in a
+successful answer, or a body of the wrong shape - with an `error` saying why. A missing or unreadable broker adds
+nothing, and its status says so, so it is never mistaken for a broker holding no money.
+
+Written with SET every half second, the per-broker funds scripts' cadence. Runs until Ctrl+C or SIGTERM; a Redis that
+cannot be reached is logged and tried again. Reads only - it places no orders.
+"""
+
+import sys
+import json
+import signal
+import threading
+from datetime import datetime
+from pathlib import Path
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+REDIS_KEY = "unified:portfolio:funds"
+DELAY_SECONDS = 0.5
+STALE_SECONDS = 60
+
+BROKERS = ("dhan", "flattrade", "fyers", "groww", "indmoney", "kotak", "shoonya", "stoxkart", "wisdom_capital", "zerodha")
+
+# Zerodha's two margin blocks, which are also its segments.
+ZERODHA_SEGMENTS = ("equity", "commodity")
+
+# Noren: a segment's field suffix in `Limits`, and the product suffixes its margin fields are split by.
+NOREN_SEGMENT_SUFFIXES = (("equity", "e"), ("derivatives", "d"), ("currency", "f"), ("commodity", "c"))
+NOREN_PRODUCT_SUFFIXES = ("i", "m", "c")
+
+# Kotak: each segment's span and exposure fields, by product.
+KOTAK_SEGMENT_FIELDS = {
+    "commodity": ("ComSpanMrgn{}Prsnt", "ComExpsrMrgn{}Prsnt"),
+    "derivatives": ("FoSpanrgn{}Prsnt", "FoExpMrgn{}Prsnt"),
+    "currency": ("CurSpanMrgn{}Prsnt", "CurExpMrgn{}Prsnt"),
+}
+KOTAK_PRODUCTS = ("Nrml", "Mis")
+
+class NotFunds(Exception):
+    """A broker's stored value is not funds: a refusal carried in a successful answer, or a body of the wrong shape."""
+
+def number(value):
+    """A broker's field as a float, or 0.0 when it is missing or not a number, NaN included."""
+    if value is None:
+        return 0.0
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return parsed if parsed == parsed else 0.0
+
+def funds_record():
+    """An empty funds record: every bucket at zero and no segments."""
+    return {
+        "summary": {"available_balance": 0.0, "cash_balance": 0.0, "collateral_value": 0.0, "adhoc_credit": 0.0,
+                    "margin_utilized": 0.0, "withdrawable_balance": 0.0},
+        "pnl": {"realized": 0.0, "unrealized": 0.0},
+        "margin_breakdown": {"span_margin": 0.0, "exposure_margin": 0.0, "other_margin": 0.0},
+        "cash_movement": {"pay_in_today": 0.0, "pay_out_today": 0.0, "uncleared_funds": 0.0, "pending_withdrawal": 0.0},
+        "segments": {},
+    }
+
+def add(record, bucket, field, value):
+    """Add a broker's field into one bucket of a funds record."""
+    record[bucket][field] += number(value)
+
+def add_segment(record, name, **fields):
+    """Add a broker's figures into one segment of a funds record, creating the segment at zero first."""
+    segment = record["segments"].setdefault(name, {"available_balance": 0.0, "margin_utilized": 0.0,
+                                                   "span_margin": 0.0, "exposure_margin": 0.0})
+    for field, value in fields.items():
+        segment[field] += number(value)
+
+def a_dict(broker, data):
+    """The stored funds when they are an object, raising NotFunds when they are not."""
+    if not isinstance(data, dict):
+        raise NotFunds(f"{broker} stored no funds: {str(data)[:200]}")
+    return data
+
+def zerodha_funds(data):
+    data = a_dict("zerodha", data)
+    record = funds_record()
+    for segment in ZERODHA_SEGMENTS:
+        block = data.get(segment) or {}
+        available = block.get("available") or {}
+        utilised = block.get("utilised") or {}
+        add(record, "summary", "available_balance", block.get("net"))
+        add(record, "summary", "cash_balance", available.get("cash"))
+        add(record, "summary", "collateral_value", available.get("collateral"))
+        add(record, "summary", "adhoc_credit", available.get("adhoc_margin"))
+        add(record, "summary", "margin_utilized", utilised.get("debits"))
+        add(record, "margin_breakdown", "span_margin", utilised.get("span"))
+        add(record, "margin_breakdown", "exposure_margin", utilised.get("exposure"))
+        add(record, "pnl", "realized", utilised.get("m2m_realised"))
+        add(record, "pnl", "unrealized", utilised.get("m2m_unrealised"))
+        add(record, "cash_movement", "pay_in_today", available.get("intraday_payin"))
+        add(record, "cash_movement", "pay_out_today", utilised.get("payout"))
+        add_segment(record, segment, available_balance=block.get("net"), margin_utilized=utilised.get("debits"),
+                    span_margin=utilised.get("span"), exposure_margin=utilised.get("exposure"))
+    return record
+
+def dhan_funds(data):
+    data = a_dict("dhan", data)
+    record = funds_record()
+    add(record, "summary", "available_balance", data.get("availabelBalance"))
+    add(record, "summary", "collateral_value", data.get("collateralAmount"))
+    add(record, "summary", "margin_utilized", data.get("utilizedAmount"))
+    add(record, "summary", "withdrawable_balance", data.get("withdrawableBalance"))
+    add(record, "cash_movement", "uncleared_funds", data.get("receiveableAmount"))
+    add(record, "cash_movement", "pending_withdrawal", data.get("blockedPayoutAmount"))
+    return record
+
+def noren_funds(broker):
+    def read(data):
+        data = a_dict(broker, data)
+        if str(data.get("stat", "")).lower() != "ok":
+            raise NotFunds(f"{broker} refused the limits request: {str(data.get('emsg') or data)[:200]}")
+        record = funds_record()
+        collateral = data.get("collateral", data.get("brkcollamt"))
+        add(record, "summary", "available_balance", number(data.get("cash")) + number(collateral)
+            + number(data.get("daycash")) - number(data.get("marginused")))
+        add(record, "summary", "cash_balance", data.get("cash"))
+        add(record, "summary", "collateral_value", collateral)
+        add(record, "summary", "adhoc_credit", data.get("daycash"))
+        add(record, "summary", "margin_utilized", data.get("marginused"))
+        add(record, "margin_breakdown", "span_margin", data.get("span"))
+        add(record, "margin_breakdown", "exposure_margin", data.get("expo"))
+        add(record, "margin_breakdown", "other_margin", number(data.get("premium")) + number(data.get("varelm"))
+            + number(data.get("marprt")))
+        add(record, "pnl", "realized", data.get("rpnl"))
+        add(record, "pnl", "unrealized", data.get("unmtom"))
+        add(record, "cash_movement", "pay_in_today", data.get("payin"))
+        add(record, "cash_movement", "pay_out_today", data.get("payout"))
+        add(record, "cash_movement", "uncleared_funds", data.get("unclearedcash"))
+        for segment, suffix in NOREN_SEGMENT_SUFFIXES:
+            span = sum(number(data.get(f"span_{suffix}_{product}")) for product in NOREN_PRODUCT_SUFFIXES)
+            exposure = sum(number(data.get(f"expo_{suffix}_{product}")) for product in NOREN_PRODUCT_SUFFIXES)
+            if span or exposure:
+                add_segment(record, segment, span_margin=span, exposure_margin=exposure)
+        return record
+    return read
+
+def fyers_funds(data):
+    data = a_dict("fyers", data)
+    if data.get("s") not in (None, "ok"):
+        raise NotFunds(f"fyers refused the funds request: code {data.get('code')}: {str(data.get('message'))[:200]}")
+    record = funds_record()
+    rows = {row.get("title"): row for row in data.get("fund_limit") or [] if isinstance(row, dict)}
+
+    def total(title):
+        row = rows.get(title) or {}
+        return number(row.get("equityAmount")) + number(row.get("commodityAmount"))
+
+    add(record, "summary", "available_balance", total("Available Balance"))
+    add(record, "summary", "cash_balance", total("Clear Balance"))
+    add(record, "summary", "collateral_value", total("Collaterals"))
+    add(record, "summary", "adhoc_credit", total("Adhoc Limit"))
+    add(record, "summary", "margin_utilized", total("Utilized Amount"))
+    add(record, "pnl", "realized", total("Realized Profit and Loss"))
+    available = rows.get("Available Balance")
+    utilized = rows.get("Utilized Amount") or {}
+    if available:
+        add_segment(record, "equity", available_balance=available.get("equityAmount"),
+                    margin_utilized=utilized.get("equityAmount"))
+        add_segment(record, "commodity", available_balance=available.get("commodityAmount"),
+                    margin_utilized=utilized.get("commodityAmount"))
+    return record
+
+def groww_funds(data):
+    data = a_dict("groww", data)
+    record = funds_record()
+    derivatives = data.get("fno_margin_details") or {}
+    equity = data.get("equity_margin_details") or {}
+    commodity = data.get("commodity_margin_details") or {}
+    add(record, "summary", "available_balance", number(data.get("clear_cash")) + number(data.get("collateral_available"))
+        + number(data.get("adhoc_margin")) - number(data.get("net_margin_used")))
+    add(record, "summary", "cash_balance", data.get("clear_cash"))
+    add(record, "summary", "margin_utilized", data.get("net_margin_used"))
+    add(record, "summary", "collateral_value", number(data.get("collateral_used")) + number(data.get("collateral_available")))
+    add(record, "summary", "adhoc_credit", data.get("adhoc_margin"))
+    add(record, "pnl", "realized", commodity.get("commodity_realised_m2m"))
+    add(record, "pnl", "unrealized", commodity.get("commodity_unrealised_m2m"))
+    add_segment(record, "equity",
+                available_balance=number(equity.get("cnc_balance_available")) + number(equity.get("mis_balance_available")),
+                margin_utilized=equity.get("net_equity_margin_used"))
+    add_segment(record, "derivatives",
+                available_balance=number(derivatives.get("future_balance_available"))
+                + number(derivatives.get("option_buy_balance_available"))
+                + number(derivatives.get("option_sell_balance_available")),
+                margin_utilized=derivatives.get("net_fno_margin_used"),
+                span_margin=derivatives.get("span_margin_used"),
+                exposure_margin=derivatives.get("exposure_margin_used"))
+    add_segment(record, "commodity",
+                margin_utilized=sum(number(commodity.get(f"commodity_{kind}_margin"))
+                                    for kind in ("span", "exposure", "tender", "special", "additional")),
+                span_margin=commodity.get("commodity_span_margin"),
+                exposure_margin=commodity.get("commodity_exposure_margin"))
+    return record
+
+def indmoney_funds(data):
+    data = a_dict("indmoney", data)
+    record = funds_record()
+    detail = data.get("detailed_avl_balance") or {}
+    add(record, "summary", "available_balance", number(data.get("sod_balance")) + number(data.get("pledge_received")))
+    add(record, "summary", "cash_balance", data.get("sod_balance"))
+    add(record, "summary", "collateral_value", data.get("pledge_received"))
+    add(record, "summary", "withdrawable_balance", data.get("withdrawal_balance"))
+    add(record, "pnl", "realized", data.get("realized_pnl"))
+    add(record, "pnl", "unrealized", data.get("unrealized_pnl"))
+    add(record, "cash_movement", "pay_in_today", data.get("funds_added"))
+    add(record, "cash_movement", "pay_out_today", data.get("funds_withdrawn"))
+    add_segment(record, "equity", available_balance=number(detail.get("eq_cnc")) + number(detail.get("eq_mis"))
+                + number(detail.get("eq_mtf")))
+    add_segment(record, "derivatives", available_balance=number(detail.get("future")) + number(detail.get("option_buy"))
+                + number(detail.get("option_sell")))
+    add_segment(record, "commodity", available_balance=detail.get("comm_option_buy"))
+    return record
+
+def kotak_funds(data):
+    if isinstance(data, dict) and isinstance(data.get("data"), dict):
+        data = data["data"]
+    data = a_dict("kotak", data)
+    if data.get("stat") not in (None, "Ok"):
+        raise NotFunds(f"kotak refused the limits request: {str(data.get('emsg') or data.get('errMsg') or data)[:200]}")
+    record = funds_record()
+    add(record, "summary", "available_balance", data.get("Net"))
+    add(record, "summary", "collateral_value", data.get("CollateralValue"))
+    add(record, "summary", "adhoc_credit", data.get("AdhocMargin"))
+    add(record, "summary", "margin_utilized", data.get("MarginUsed"))
+    add(record, "margin_breakdown", "span_margin", data.get("SpanMarginPrsnt"))
+    add(record, "margin_breakdown", "exposure_margin", data.get("ExposureMarginPrsnt"))
+    add(record, "pnl", "realized", data.get("RealizedMtomPrsnt"))
+    add(record, "pnl", "unrealized", data.get("UnrealizedMtomPrsnt"))
+    add(record, "cash_movement", "pay_in_today", data.get("RmsPayInAmt"))
+    add(record, "cash_movement", "pay_out_today", data.get("RmsPayOutAmt"))
+    for segment, (span, exposure) in KOTAK_SEGMENT_FIELDS.items():
+        add_segment(record, segment,
+                    span_margin=sum(number(data.get(span.format(product))) for product in KOTAK_PRODUCTS),
+                    exposure_margin=sum(number(data.get(exposure.format(product))) for product in KOTAK_PRODUCTS))
+    return record
+
+def wisdom_capital_funds(data):
+    if not isinstance(data, dict) or not isinstance(data.get("BalanceList"), list):
+        raise NotFunds(f"wisdom_capital stored no balances: {str(data)[:200]}")
+    record = funds_record()
+    balances = data.get("BalanceList") or []
+    limits = ((balances[0] if balances and isinstance(balances[0], dict) else {}).get("limitObject")) or {}
+    sub_limits = limits.get("RMSSubLimits") or {}
+    available = limits.get("marginAvailable") or {}
+    utilized = limits.get("marginUtilized") or {}
+    add(record, "summary", "available_balance", sub_limits.get("netMarginAvailable"))
+    add(record, "summary", "cash_balance", sub_limits.get("cashAvailable"))
+    add(record, "summary", "collateral_value", sub_limits.get("collateral"))
+    add(record, "summary", "margin_utilized", sub_limits.get("marginUtilized"))
+    add(record, "summary", "adhoc_credit", available.get("AdhocMargin"))
+    add(record, "pnl", "realized", sub_limits.get("RealizedMTM"))
+    add(record, "pnl", "unrealized", sub_limits.get("UnrealizedMTM"))
+    add(record, "cash_movement", "pay_in_today", available.get("PayInAmount"))
+    add(record, "cash_movement", "pay_out_today", available.get("PayOutAmount"))
+    add(record, "margin_breakdown", "span_margin", utilized.get("TotalSpanMargin"))
+    add(record, "margin_breakdown", "exposure_margin", utilized.get("ExposureMarginPresent"))
+    add(record, "margin_breakdown", "other_margin", number(utilized.get("VarELMarginPresent"))
+        + number(utilized.get("ScripBasketMarginPresent")))
+    return record
+
+def stoxkart_funds(data):
+    """Reads Stoxkart's stored funds into a funds record.
+
+    Stoxkart reports one pool with every figure as a string. Its documentation shows `utilized_limit` as a negative number while the live account has only shown zero, so the margin used is taken as its absolute value.
+
+    Args:
+        data (object): The `data` of `stoxkart:portfolio:funds`.
+
+    Returns:
+        dict: The funds record.
+
+    Raises:
+        NotFunds: The stored funds are not an object.
+    """
+    data = a_dict("stoxkart", data)
+    record = funds_record()
+    add(record, "summary", "available_balance", data.get("available_limit"))
+    add(record, "summary", "cash_balance", data.get("cash"))
+    add(record, "summary", "collateral_value", data.get("pledge_value") or data.get("collateral"))
+    add(record, "summary", "adhoc_credit", data.get("adhoc_limit"))
+    add(record, "summary", "margin_utilized", abs(number(data.get("utilized_limit"))))
+    add(record, "summary", "withdrawable_balance", data.get("withdrawable_funds"))
+    add(record, "pnl", "realized", data.get("realised_profit"))
+    add(record, "cash_movement", "pay_in_today", data.get("payin_amount"))
+    add(record, "cash_movement", "pay_out_today", data.get("payout_amount"))
+    return record
+
+# Each broker's reader of its stored funds `data` into a funds record.
+READERS = {"zerodha": zerodha_funds, "dhan": dhan_funds, "flattrade": noren_funds("flattrade"),
+           "shoonya": noren_funds("shoonya"), "fyers": fyers_funds, "groww": groww_funds, "indmoney": indmoney_funds,
+           "kotak": kotak_funds, "stoxkart": stoxkart_funds, "wisdom_capital": wisdom_capital_funds}
+
+def combine(records):
+    """Several brokers' funds records added into one."""
+    combined = funds_record()
+    for record in records:
+        for bucket, fields in record.items():
+            if bucket == "segments":
+                continue
+            for field, value in fields.items():
+                combined[bucket][field] += value
+        for name, fields in record["segments"].items():
+            segment = combined["segments"].setdefault(name, dict.fromkeys(fields, 0.0))
+            for field, value in fields.items():
+                segment[field] += value
+    return combined
+
+def rounded(fields):
+    """A bucket's figures rounded to paise."""
+    return {field: round(value, 2) for field, value in fields.items()}
+
+def funds_document(cache, now):
+    """
+    Every broker's stored funds added into one document in the REST API's shape.
+
+    - `cache` is the Redis client.
+    - `now` is the current local time, for staleness and `as_of`.
+    """
+    records, statuses = [], []
+    for broker, raw in zip(BROKERS, cache.mget([f"{broker}:portfolio:funds" for broker in BROKERS])):
+        if raw is None:
+            statuses.append({"broker": broker, "status": "missing", "as_of": None})
+            continue
+        stored_at = None
+        try:
+            stored = json.loads(raw)
+            stored_at = stored.get("timestamp") if isinstance(stored, dict) else None
+            record = READERS[broker](stored.get("data") if isinstance(stored, dict) else None)
+        except (TypeError, ValueError, NotFunds) as exception:
+            statuses.append({"broker": broker, "status": "unreadable", "as_of": stored_at,
+                             "error": f"{type(exception).__name__}: {str(exception)[:200]}"})
+            continue
+        try:
+            age = (now - datetime.strptime(stored_at, "%Y-%m-%d %H:%M:%S.%f")).total_seconds()
+        except (TypeError, ValueError):
+            age = None
+        statuses.append({"broker": broker, "status": "stale" if age is None or age > STALE_SECONDS else "ok",
+                         "as_of": stored_at})
+        records.append(record)
+
+    combined = combine(records)
+    summary = combined["summary"]
+    # No broker reports a total. What is free to trade plus what is already blocked holds whichever way a broker
+    # reports its balance, where cash plus collateral plus adhoc credit does not.
+    summary = {"total_balance": summary["available_balance"] + summary["margin_utilized"], **summary}
+    return {
+        "summary": rounded(summary),
+        "pnl": rounded(combined["pnl"]),
+        "margin_breakdown": rounded(combined["margin_breakdown"]),
+        "cash_movement": rounded(combined["cash_movement"]),
+        "segments": {name: rounded(fields) for name, fields in combined["segments"].items()},
+        "brokers": statuses,
+        "as_of": now.strftime("%Y-%m-%dT%H:%M:%S"),
+    }
+
+def main():
+    """Write the unified funds document to unified:portfolio:funds every half second, until stopped."""
+    from utilities.configurations import get_cache, get_logger
+    from utilities.poll_reporter import PollReporter
+
+    logger = get_logger("unified.funds")
+    report = PollReporter(logger)
+    cache = get_cache()
+    stop = threading.Event()
+
+    def _handle_signal(signal_number, frame):
+        logger.info(f"Received signal {signal_number}. Stopping.")
+        stop.set()
+
+    for signal_number in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(signal_number, _handle_signal)
+
+    while not stop.is_set():
+        try:
+            document = funds_document(cache, datetime.now())
+            cache.set(REDIS_KEY, json.dumps(document))
+            not_ok = [f"{status['broker']} {status['status']}" for status in document["brokers"] if status["status"] != "ok"]
+            report.info(f"Wrote funds (available {document['summary']['available_balance']}) to {REDIS_KEY}"
+                        + (f"; {', '.join(not_ok)}" if not_ok else ""))
+        except Exception as exception:
+            report.error(f"Could not combine the funds: {type(exception).__name__}: {exception}")
+        stop.wait(DELAY_SECONDS)
+    logger.info("Stopped")
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())

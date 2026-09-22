@@ -6,65 +6,81 @@ to do it: it logs in by itself through the broker's API class, logs in again whe
 and writes what it reads to Redis under keys named for the broker. No script depends on another process
 running.
 
+The scripts are grouped into five folders by what they are about, the same five at every broker:
+
+```text
+bin/<broker>/
+├── session/        connect, disconnect
+├── user/           details
+├── orders/         api_order_details, api_trade_details, websocket_order_details, store_orders_to_db
+├── portfolio/      positions, holdings, funds, store_positions_to_db
+└── instruments/    daily_feed, price_history, websocket_quotes, store_quotes_to_db
+```
+
+A script's name says how it gets its data: an `api_` script polls the broker's REST endpoint, a
+`websocket_` script holds a socket open, and a `store_*_to_db` script drains one of those sockets'
+Redis streams into TimescaleDB. No name is used twice within a broker, so a script can be named on its
+own - `websocket_quotes`, `store_orders_to_db` - without its folder.
+
 These scripts are the only part of the project that talks to a broker. The
 [unified scripts](unified-scripts.md) in `bin/unified/` read what these write and combine it across
 brokers, and never call a broker themselves.
 
 ```bash
-bin/zerodha/login                         # log in, record the outcome
-bin/zerodha/orders                        # poll the order book every half second
+bin/zerodha/session/connect             # log in, record the outcome
+bin/zerodha/orders/api_order_details    # poll the order book every half second
 redis-cli HGETALL zerodha:orders:orders
-systemctl --user enable --now zerodha@orders.service
+systemctl --user enable --now zerodha-orders@api_order_details.service
 ```
 
 ## The scripts
 
 | Script | Kind | What it does |
 | --- | --- | --- |
-| `login` | once | Confirms the stored session works, logging in when it does not, and records the outcome in `<broker>:session:status` |
-| `logout` | once | Marks the broker logged out in `<broker>:session:status`. Nothing is sent to the broker |
-| `user-profile` | poll | Writes the account's profile to `<broker>:user:details` |
-| `orders` | poll | Merges the day's order book into the hash `<broker>:orders:orders` |
-| `trades` | poll | Writes the day's trade book to `<broker>:orders:trades` |
+| `connect` | once | Confirms the stored session works, logging in when it does not, and records the outcome in `<broker>:session:status` |
+| `disconnect` | once | Marks the broker logged out in `<broker>:session:status`. Nothing is sent to the broker |
+| `details` | poll | Writes the account's profile to `<broker>:user:details` |
+| `api_order_details` | poll | Merges the day's order book into the hash `<broker>:orders:orders` |
+| `api_trade_details` | poll | Writes the day's trade book to `<broker>:orders:trades` |
 | `holdings` | poll | Writes the holdings to `<broker>:portfolio:holdings` |
 | `positions` | poll | Merges the positions into the hash `<broker>:portfolio:positions` |
 | `funds` | poll | Writes the funds and margins to `<broker>:portfolio:funds` |
-| `quotes` | websocket | Streams market quotes into `<broker>:quotes:live` and the stream `<broker>:quotes:stream` |
-| `order_updates` | websocket | Merges order updates, and position updates where the broker sends them, into the same hashes the pollers fill, and appends each to a stream |
-| `instruments` | once | Downloads the day's instrument master into `<broker>.instruments` and `<broker>:instruments:master` |
-| `historical_prices` | worker | Works a resumable queue of historical candle downloads into `<broker>.price_history` |
-| `persist_ticks` | consumer | Drains `<broker>:quotes:stream` into `<broker>.ticks` |
-| `persist_orders` | consumer | Drains `<broker>:order-updates:stream` into `<broker>.order_updates` |
-| `persist_positions` | consumer | Drains `<broker>:positions_updates:stream` into `<broker>.positions` |
+| `websocket_quotes` | websocket | Streams market quotes into `<broker>:quotes:live` and the stream `<broker>:quotes:stream` |
+| `websocket_order_details` | websocket | Merges order updates, and position updates where the broker sends them, into the same hashes the pollers fill, and appends each to a stream |
+| `daily_feed` | once | Downloads the day's instrument master into `<broker>.instruments` and `<broker>:instruments:master` |
+| `price_history` | worker | Works a resumable queue of historical candle downloads into `<broker>.price_history` |
+| `store_quotes_to_db` | consumer | Drains `<broker>:quotes:stream` into `<broker>.ticks` |
+| `store_orders_to_db` | consumer | Drains `<broker>:order-updates:stream` into `<broker>.order_updates` |
+| `store_positions_to_db` | consumer | Drains `<broker>:positions_updates:stream` into `<broker>.positions` |
 
 Every script's module docstring is its full reference: the endpoint it calls, every field it writes and
-how each is derived from the broker's own names, and its exit codes. Only `quotes`, `instruments`,
-`historical_prices` and the persisters take options; `login`, `logout` and the pollers take none.
+how each is derived from the broker's own names, and its exit codes. Only `websocket_quotes`, `daily_feed`,
+`price_history` and the persisters take options; `connect`, `disconnect` and the pollers take none.
 
 ## Which broker has which
 
 | Script | dhan | zerodha | flattrade | shoonya | fyers | indmoney | wisdom_capital | groww | kotak | stoxkart |
 | --- | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: |
-| `login`, `logout` | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
-| `user-profile` | yes | yes | yes | yes | yes | yes | yes | yes | - | yes |
-| `orders`, `trades`, `holdings`, `positions`, `funds` | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
-| `quotes` | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
-| `order_updates` | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
-| `persist_ticks` | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
-| `persist_orders` | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
-| `persist_positions` | - | - | - | - | yes | - | yes | yes | yes | - |
-| `instruments` | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
-| `historical_prices` | yes | yes | yes | yes | yes | yes | yes | - | - | - |
+| `connect`, `disconnect` | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
+| `details` | yes | yes | yes | yes | yes | yes | yes | yes | - | yes |
+| `api_order_details`, `api_trade_details`, `holdings`, `positions`, `funds` | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
+| `websocket_quotes` | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
+| `websocket_order_details` | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
+| `store_quotes_to_db` | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
+| `store_orders_to_db` | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
+| `store_positions_to_db` | - | - | - | - | yes | - | yes | yes | yes | - |
+| `daily_feed` | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
+| `price_history` | yes | yes | yes | yes | yes | yes | yes | - | - | - |
 
 The gaps follow the brokers:
 
-- **Kotak** has no profile endpoint. Its profile arrives only in the login response, so `bin/kotak/login`
-  writes `kotak:user:details` on a run that actually logged in, and there is no `user-profile` script.
-- **Groww, Kotak and Stoxkart** have no `historical_prices`, and so no `<broker>-historical-prices.service`.
-- **`persist_positions`** exists only for the four brokers whose `order_updates` socket carries
+- **Kotak** has no profile endpoint. Its profile arrives only in the login response, so `bin/kotak/session/connect`
+  writes `kotak:user:details` on a run that actually logged in, and there is no `details` script.
+- **Groww, Kotak and Stoxkart** have no `price_history`, and so no `<broker>-historical-prices.service`.
+- **`store_positions_to_db`** exists only for the four brokers whose `websocket_order_details` socket carries
   positions: Fyers, Wisdom Capital, Groww (derivatives positions only) and Kotak. The other six stream
   orders alone, and their positions come only from the `positions` poller.
-- **Stoxkart**'s `quotes` and `order_updates` use the two websockets Stoxkart's own trading website
+- **Stoxkart**'s `websocket_quotes` and `websocket_order_details` use the two websockets Stoxkart's own trading website
   uses, found by watching `webtrade.stoxkart.com` in Chrome DevTools on 2026-09-15, rather than the
   documented quote websocket, which could not be reached, and the documented Postback URL, which needs a
   public web server. See [Stoxkart's quote feed](#stoxkarts-quote-feed) and
@@ -72,7 +88,7 @@ The gaps follow the brokers:
 
 ## Sessions
 
-`login` constructs the broker's API class, which probes an authenticated endpoint with the stored token
+`connect` constructs the broker's API class, which probes an authenticated endpoint with the stored token
 and runs the real login only when that probe fails. A new token is written to MongoDB and to the Redis
 `last_login` hash, which is where every other script reads it. The endpoint is then asked once more, so a
 success means a session that has actually been used. The outcome goes to `<broker>:session:status`:
@@ -83,9 +99,9 @@ success means a session that has actually been used. The outcome goes to `<broke
 ```
 
 On success `last_login` is when the token in force was issued, which is earlier than the run when the
-stored session was still good. `login` exits 1 on any failure, so its unit can retry.
+stored session was still good. `connect` exits 1 on any failure, so its unit can retry.
 
-`logout` writes `{"status": "logged out", "access-token": null, "last_login": null}` and nothing more.
+`disconnect` writes `{"status": "logged out", "access-token": null, "last_login": null}` and nothing more.
 No broker's logout endpoint is called: it would invalidate the one token every other script is using.
 The stored token is left alone and stays valid until it expires.
 
@@ -100,7 +116,7 @@ recover: a login that fails, or a socket still refused straight after logging in
 
     At Zerodha every login invalidates the token before it. `ZerodhaAPI` therefore probes with the newest
     stored token first and logs in only when that fails too, so a refusal caused by another process's
-    login is recovered without a second login, and `bin/zerodha/quotes` lets only one socket log in at a
+    login is recovered without a second login, and `bin/zerodha/instruments/websocket_quotes` lets only one socket log in at a
     time. Two independent morning logins at such a broker invalidate each other.
 
 Fyers can refuse a request inside an HTTP 200, so its scripts check the body and confirm a new session
@@ -111,12 +127,12 @@ limit for five, instead of logging in, because every refused request extends a b
 
 | Script | Interval | Exceptions |
 | --- | --- | --- |
-| `orders` | 0.5 s | Fyers 5 s, Stoxkart 1 s |
+| `api_order_details` | 0.5 s | Fyers 5 s, Stoxkart 1 s |
 | `positions` | 0.5 s | Fyers 5 s, Stoxkart 1 s |
-| `trades` | 0.5 s | Fyers 15 s, Stoxkart 1 s |
+| `api_trade_details` | 0.5 s | Fyers 15 s, Stoxkart 1 s |
 | `funds` | 0.5 s | Fyers 30 s, Stoxkart 1 s |
 | `holdings` | 60 s | |
-| `user-profile` | 60 s | Wisdom Capital once a day, retried after an hour when a call fails, since it allows about one profile call a day |
+| `details` | 60 s | Wisdom Capital once a day, retried after an hour when a call fails, since it allows about one profile call a day |
 
 Fyers polls more slowly because it refuses more than a handful of requests a second per app. Stoxkart
 documents a limit of one request a second for its order book, positions, trade book and funds, so those
@@ -133,7 +149,7 @@ heartbeat while nothing changes.
 
 ### Snapshot keys
 
-`user-profile`, `trades`, `holdings` and `funds` write the whole response with SET, replacing the one
+`details`, `api_trade_details`, `holdings` and `funds` write the whole response with SET, replacing the one
 before, as one JSON string:
 
 ```text
@@ -147,7 +163,7 @@ or an account holding nothing is written too, so an empty `data` is an answer ra
 ### Orders and positions
 
 Orders and positions each have **one hash per broker**, written by two scripts: the REST poller, and
-`order_updates` from the broker's websocket. Every value has the same envelope:
+`websocket_order_details` from the broker's websocket. Every value has the same envelope:
 
 ```text
 {"observed_at": <epoch>, "source": "rest" | "websocket", "order": <normalized order>, "data": <the broker's order>}
@@ -166,8 +182,8 @@ Stoxkart's order entries carry one more field, a top-level `variety` beside `dat
 kept apart from `data` because Stoxkart's order socket reported `NORMAL` for after-market orders whose
 order book row said `AMO`. The two scripts fill it in differently:
 
-- `bin/stoxkart/orders` copies the order book row's `variety`.
-- `bin/stoxkart/order_updates` keeps an `AMO` or `BO` variety already stored for the order, reads `AMO`
+- `bin/stoxkart/orders/api_order_details` copies the order book row's `variety`.
+- `bin/stoxkart/orders/websocket_order_details` keeps an `AMO` or `BO` variety already stored for the order, reads `AMO`
   from a status starting with `AMO`, and otherwise uses the update's own `variety`.
 
 **Which write wins.** A websocket update always replaces its entry. A polled row replaces an entry only
@@ -202,7 +218,7 @@ Orders are keyed by the broker's order id (`order_id`, `norenordno`, `nOrdNo`, `
 
 ### Quotes
 
-`quotes` logs in, opens its own connections and decodes the broker's packets itself. It writes three keys:
+`websocket_quotes` logs in, opens its own connections and decodes the broker's packets itself. It writes three keys:
 
 | Key | Type | Holds |
 | --- | --- | --- |
@@ -212,18 +228,18 @@ Orders are keyed by the broker's order id (`order_id`, `norenordno`, `nOrdNo`, `
 
 At eight brokers `--per-socket` sets how many instruments one connection carries; Zerodha takes `--sockets` instead and Stoxkart neither. At every broker `--tokens` subscribes to a list instead of the subscription set.
 
-Zerodha is the exception. `bin/zerodha/quotes` reads no subscription set at all: it subscribes to every
+Zerodha is the exception. `bin/zerodha/instruments/websocket_quotes` reads no subscription set at all: it subscribes to every
 instrument in today's `zerodha:instruments:master` and splits them equally across `--sockets` connections, 24
 by default. On 2026-09-16 that was 112,657 instruments, one socket of 4,695 and twenty-three of 4,694.
 
 !!! danger "Zerodha's feed asks Kite for more than Kite documents"
 
-    Kite documents three websockets per api key, one of which `bin/zerodha/order_updates` holds, and 3,000
+    Kite documents three websockets per api key, one of which `bin/zerodha/orders/websocket_order_details` holds, and 3,000
     instruments per websocket. Twenty-four sockets of about 4,700 instruments exceeds both limits, and the
     script no longer refuses to start when it does. Kite is expected to refuse the connections past its limit;
     a refused socket reconnects with backoff and leaves the others streaming. The tick volume also outruns
     `zerodha:quotes:stream`, whose cap was raised from 100,000 entries to 1,000,000 on 2026-09-16 for that
-    reason, so `bin/zerodha/persist_ticks` still has to keep up or Redis will trim ticks before it has
+    reason, so `bin/zerodha/instruments/store_quotes_to_db` still has to keep up or Redis will trim ticks before it has
     persisted them into `zerodha.ticks`. See
     [Known issues](../contributing/known-issues.md#broker-limits).
 
@@ -234,15 +250,15 @@ it starts. Add the instrument in the broker's own format, then restart the feed:
 
 ```bash
 redis-cli SADD dhan:quotes:subscriptions NSE_EQ:2885
-systemctl --user restart dhan@quotes
+systemctl --user restart dhan-instruments@websocket_quotes
 ```
 
 Zerodha has no such set. Its feed subscribes to today's whole instrument master, so an instrument is added by
 downloading the day's master rather than by editing a set:
 
 ```bash
-bin/zerodha/instruments
-systemctl --user restart zerodha@quotes
+bin/zerodha/instruments/daily_feed
+systemctl --user restart zerodha-instruments@websocket_quotes
 ```
 
 | Broker | Member format | Example |
@@ -265,7 +281,7 @@ subscribe to exits 2, which its unit does not restart, and for Zerodha that mean
 ### Stoxkart's quote feed
 
 Stoxkart documents a binary quote websocket at `ws://inmob.stoxkart.com:7763`, which could not be reached
-on 2026-09-15. `bin/stoxkart/quotes` instead streams from `wss://broadcasting-v2.stoxkart.com/` on port
+on 2026-09-15. `bin/stoxkart/instruments/websocket_quotes` instead streams from `wss://broadcasting-v2.stoxkart.com/` on port
 443, the feed Stoxkart's own trading website uses. The feed takes no login: the token field of the
 connection header is left blank, exactly as the website sends it. It is not documented for API users, so
 Stoxkart may change it without notice, and the REST poller it replaced is kept in git history as a
@@ -324,22 +340,22 @@ time matched for TCS and RELIANCE.
 
 ### Order updates
 
-`order_updates` holds its own connection, subscribes to no instruments, and merges each update into
+`websocket_order_details` holds its own connection, subscribes to no instruments, and merges each update into
 `<broker>:orders:orders` as described above. Fyers, Kotak and Wisdom Capital also send position updates,
 and Groww derivatives position updates, which are merged into `<broker>:portfolio:positions`. Every
 update is also appended to a stream, so the history the hashes overwrite is kept:
 
 | Stream | Field | Cap | Drained by |
 | --- | --- | --- | --- |
-| `<broker>:order-updates:stream` | `update` | about 20,000 | `persist_orders` |
-| `<broker>:positions_updates:stream` | `position` | about 20,000 | `persist_positions` |
+| `<broker>:order-updates:stream` | `update` | about 20,000 | `store_orders_to_db` |
+| `<broker>:positions_updates:stream` | `position` | about 20,000 | `store_positions_to_db` |
 
 Updates arrive only when an order or position changes, so a quiet socket is not a broken one.
 
 ### Stoxkart's order socket
 
 Stoxkart's API documentation offers only a Postback URL for order status, which would need a public web
-server. `bin/stoxkart/order_updates` uses the order socket Stoxkart's trading website uses instead, and
+server. `bin/stoxkart/orders/websocket_order_details` uses the order socket Stoxkart's trading website uses instead, and
 that socket accepted the API app's own session on 2026-09-15. The script connects in three steps:
 
 1. It sends `POST https://openapi-v2.stoxkart.com/websocket/authenticate` with the headers `x-client-id`
@@ -357,7 +373,7 @@ other off. When that happens the script waits five minutes before reclaiming the
 The first updates arrived on 2026-09-15. Three NSE KWIL orders sent at 15:40 IST were rejected because
 the market had closed, and two after-market KWIL orders were placed and then cancelled. The socket sent
 an update within a second of each rejection and each cancellation, but sent nothing when the two
-after-market orders were placed, so only `bin/stoxkart/orders` recorded those until they were cancelled.
+after-market orders were placed, so only `bin/stoxkart/orders/api_order_details` recorded those until they were cancelled.
 Every value in an update was a string, and an update carried these fields:
 
 - `client_id`, `user_id`, `order_id`, `exch_order_id` and `order_timestamp`, which was blank
@@ -375,22 +391,22 @@ some fields, such as `status` or `order_status` and `action` or `transaction_typ
 message at INFO so that the first such update shows its shape in the journal. An update carrying an `order_id` is merged into `stoxkart:orders:orders` with source `websocket`
 and appended to `stoxkart:order-updates:stream` as `{"timestamp", "order": <normalized order>, "data": <the update>}`.
 Unlike the other brokers' streams, the entry carries the normalized `order`, which
-`bin/unified/order_updates` uses as it is.
+`bin/unified/orders/websocket_order_details` uses as it is.
 
 ## Persisters
 
-`persist_ticks`, `persist_orders` and `persist_positions` read their stream as the consumer group
+`store_quotes_to_db`, `store_orders_to_db` and `store_positions_to_db` read their stream as the consumer group
 `persist` and write to the broker's hypertable with COPY, a batch at a time. Each applies its broker's
 `<NNN>_<broker>_streams.sql` in `stock_brokers/instruments/ticks/utilities/sql/ddl` when it starts - `010`
 Zerodha through `100` Stoxkart, holding that broker's `ticks`, `order_updates` and, where it streams
-them, `positions` - so a new database needs no separate step, and a start that cannot apply it exits 1. Each takes `--batch-size` and `--flush-interval`, and `persist_ticks` writes a batch when it
+them, `positions` - so a new database needs no separate step, and a start that cannot apply it exits 1. Each takes `--batch-size` and `--flush-interval`, and `store_quotes_to_db` writes a batch when it
 holds `--batch-size` ticks or has waited `--flush-interval` seconds, whichever comes first.
 
 | Script | Stream | Table |
 | --- | --- | --- |
-| `persist_ticks` | `<broker>:quotes:stream` | `<broker>.ticks` |
-| `persist_orders` | `<broker>:order-updates:stream` | `<broker>.order_updates`, one row per transition of an order |
-| `persist_positions` | `<broker>:positions_updates:stream` | `<broker>.positions`, one row per snapshot of a position |
+| `store_quotes_to_db` | `<broker>:quotes:stream` | `<broker>.ticks` |
+| `store_orders_to_db` | `<broker>:order-updates:stream` | `<broker>.order_updates`, one row per transition of an order |
+| `store_positions_to_db` | `<broker>:positions_updates:stream` | `<broker>.positions`, one row per snapshot of a position |
 
 An entry is acknowledged only after the batch holding it is committed, and pending entries are read first
 at the next start, so nothing is lost across a crash - but a batch committed just before one can be
@@ -399,9 +415,15 @@ are counted as skipped. Run one instance of each. A database or Redis that canno
 with backoff. The consumer groups are separate from the `unified` group the unified scripts read with, so
 neither disturbs the other.
 
+Each persister's consumer name inside the `persist` group is still the script's old name -
+`persist_ticks`, `persist_orders` and `persist_positions` - rather than the file's current name. A
+consumer's pending entries belong to its name, so renaming the consumer would strand whatever a running
+persister had read but not yet acknowledged, and those ticks would never be written. The names are
+deliberately left as they are; `XINFO CONSUMERS <stream> persist` shows them.
+
 ## Instrument masters
 
-`instruments` downloads the broker's instrument file once and stores it twice. The table write is the
+`daily_feed` downloads the broker's instrument file once and stores it twice. The table write is the
 ingester's: cleaned columns, placeholder and duplicate rows dropped, `download_date` added, appended to
 `<broker>.instruments`. A date already stored is skipped unless `--bootstrap` replaces it, and a row count
 more than ten percent off the earlier days' average is reported.
@@ -415,16 +437,16 @@ key: `738561` at Zerodha, `NSE:E:2885` at Dhan and INDmoney, `NSE:RELIANCE-EQ` a
 Kotak and `NSE:2885` at Stoxkart.
 
 The snapshot can only ever be today's, since the brokers publish no other. Mapping the snapshots into
-unified instruments is `bin/unified/map_instruments`; see [Unified scripts](unified-scripts.md).
+unified instruments is `bin/unified/instruments/map`; see [Unified scripts](unified-scripts.md).
 
 ## Historical prices
 
 ```bash
-bin/zerodha/historical_prices --seed            # register every instrument and interval, then work
-bin/zerodha/historical_prices                   # work the queue until stopped or drained
-bin/zerodha/historical_prices --seed-only       # register new series and exit
-bin/zerodha/historical_prices --status          # how far it has got
-bin/zerodha/historical_prices --deadline-seconds 21600
+bin/zerodha/instruments/price_history --seed            # register every instrument and interval, then work
+bin/zerodha/instruments/price_history                   # work the queue until stopped or drained
+bin/zerodha/instruments/price_history --seed-only       # register new series and exit
+bin/zerodha/instruments/price_history --status          # how far it has got
+bin/zerodha/instruments/price_history --deadline-seconds 21600
 ```
 
 Seeding reads the latest rows of `<broker>.instruments` and registers one row per instrument and interval
@@ -444,10 +466,10 @@ Each broker's units live in `services/<broker>/`:
 
 | Unit | Type | What it does |
 | --- | --- | --- |
-| `<broker>@.service` | template | Runs one long-lived script: `zerodha@quotes` runs `bin/zerodha/quotes`. `Restart=always` after 15 s, never giving up, except on exit 2 |
-| `<broker>-login.service` | oneshot | Runs `login`, retried on failure after two minutes, three attempts an hour |
+| `<broker>-instruments@.service`, `<broker>-orders@.service`, `<broker>-portfolio@.service`, `<broker>-user@.service` | templates | One per folder, running one long-lived script from it: `zerodha-instruments@websocket_quotes` runs `bin/zerodha/instruments/websocket_quotes`. `Restart=always` after 15 s, never giving up, except on exit 2 |
+| `<broker>-login.service` | oneshot | Runs `connect`, retried on failure after two minutes, three attempts an hour |
 | `<broker>-login.timer` | timer | 07:00 IST every day, with up to 30 minutes of random delay |
-| `<broker>-historical-prices.service` | service | Runs `historical_prices`, restarted ten minutes after it exits, at low CPU and idle IO priority |
+| `<broker>-historical-prices.service` | service | Runs `price_history`, restarted ten minutes after it exits, at low CPU and idle IO priority |
 | `<broker>.target` | target | Everything above; stopping it stops them all |
 
 Nothing needs restarting after the morning login: every script reads the current token on each connect
@@ -462,26 +484,29 @@ are in each target file's comments:
 systemctl --user link ~/Projects/unified_broker_interface/services/zerodha/*
 systemctl --user daemon-reload
 systemctl --user enable --now zerodha.target zerodha-login.timer \
-    zerodha@quotes.service zerodha@order_updates.service zerodha@persist_ticks.service \
-    zerodha@persist_orders.service zerodha@orders.service zerodha@trades.service \
-    zerodha@positions.service zerodha@holdings.service zerodha@funds.service \
-    zerodha@user-profile.service zerodha-historical-prices.service
+    zerodha-instruments@websocket_quotes.service zerodha-orders@websocket_order_details.service zerodha-instruments@store_quotes_to_db.service \
+    zerodha-orders@store_orders_to_db.service zerodha-orders@api_order_details.service zerodha-orders@api_trade_details.service \
+    zerodha-portfolio@positions.service zerodha-portfolio@holdings.service zerodha-portfolio@funds.service \
+    zerodha-user@details.service zerodha-historical-prices.service
 ```
 
-The other targets list the same set adjusted for the matrix above: `@persist_positions` for Fyers, Groww,
-Kotak and Wisdom Capital, no `@user-profile` for Kotak, and no historical prices service for Groww,
-Kotak or Stoxkart. `stoxkart.target` enables `@quotes`, `@order_updates`, `@persist_ticks`,
-`@persist_orders`, `@orders`, `@trades`, `@positions`, `@holdings`, `@funds` and `@user-profile`, plus
-`stoxkart-login.timer`. `bin/<broker>/instruments` has no unit here; it runs from `unified-instruments.service`.
+The other targets list the same set adjusted for the matrix above: `portfolio@store_positions_to_db` for
+Fyers, Groww, Kotak and Wisdom Capital, no `user@details` for Kotak, and no historical prices service for
+Groww, Kotak or Stoxkart. `stoxkart.target` enables `instruments@websocket_quotes`,
+`instruments@store_quotes_to_db`, `orders@websocket_order_details`, `orders@store_orders_to_db`,
+`orders@api_order_details`, `orders@api_trade_details`, `portfolio@positions`, `portfolio@holdings`,
+`portfolio@funds` and `user@details`, plus `stoxkart-login.timer`. `bin/<broker>/instruments/daily_feed`
+has no unit here; it runs from `unified-mapping.service`, and `bin/<broker>/session/disconnect` has none
+either, because it is run by hand.
 
-!!! warning "Flattrade leaves `order_updates` out"
+!!! warning "Flattrade leaves `websocket_order_details` out"
 
-    Flattrade permits one websocket per session and `flattrade@quotes` holds it, so `flattrade.target`
-    does not enable `flattrade@order_updates.service`: running both would knock one of them off. Flattrade's
+    Flattrade permits one websocket per session and `flattrade-instruments@websocket_quotes` holds it, so `flattrade.target`
+    does not enable `flattrade-orders@websocket_order_details.service`: running both would knock one of them off. Flattrade's
     orders still reach `flattrade:orders:orders` through the poller. See
     [Known issues](../contributing/known-issues.md).
 
-Fyers' `fyers@.service` and `fyers-historical-prices.service` wait a random 0 to 30 seconds before
+Fyers' four templates and `fyers-historical-prices.service` wait a random 0 to 30 seconds before
 starting, because a whole target starting at once sent more requests than Fyers accepts, and a login one
 script then attempted spoiled another's auth code.
 
@@ -489,7 +514,7 @@ script then attempted spoiled another's auth code.
 
 ```bash
 systemctl --user list-units 'zerodha*'
-journalctl --user -u zerodha@orders -f
+journalctl --user -u zerodha-orders@api_order_details -f
 journalctl --user -u zerodha-login --since today
 redis-cli GET zerodha:session:status
 redis-cli GET zerodha:orders:orders:polled_at

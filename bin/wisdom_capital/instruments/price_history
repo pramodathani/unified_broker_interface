@@ -1,0 +1,254 @@
+#!/usr/bin/env python3
+"""
+Download Wisdom Capital's historical candles into `wisdom_capital.price_history`, working a resumable queue until
+stopped.
+
+    bin/wisdom_capital/instruments/price_history --seed                    # register every instrument and interval, then work
+    bin/wisdom_capital/instruments/price_history                           # work the queue until stopped or drained
+    bin/wisdom_capital/instruments/price_history --seed-only
+    bin/wisdom_capital/instruments/price_history --status
+    bin/wisdom_capital/instruments/price_history --deadline-seconds 21600
+
+Built on `WisdomCapitalCandles`, with two differences: every login of the trading session goes straight through
+`WisdomCapitalAPI`, and the market data session is shared through the Redis key
+`wisdom_capital:session:marketdata`, not through the shared session helper
+`stock_brokers.api.utilities.session.ensure_session`.
+
+**Two sessions.** Wisdom Capital runs Symphony's XTS, which splits a broker into two applications. The trading
+(interactive) token `WisdomCapitalAPI` holds is refused by the chart endpoint, which lives under
+`/apimarketdata` and wants a market data token minted from `price_api_key` and `price_api_secret`. XTS issues
+exactly one market data session per application key - a second login invalidates the first - so the token is
+kept in `wisdom_capital:session:marketdata` as `{"token", "userID"}`, which `bin/wisdom_capital/instruments/websocket_quotes` reads and
+writes the same way. A process mints a new one only when there is none, or when the token it was using has
+been refused and nobody has replaced it yet, under the lock `wisdom_capital:session:marketdata:lock`.
+
+**Seeding** reads the latest row per instrument from `wisdom_capital.instruments` (filled by
+`bin/wisdom_capital/instruments/daily_feed`) and registers one row per instrument and interval in
+`wisdom_capital.price_history_progress`, leaving existing rows alone. An instrument is identified as
+`segmentNumber|exchangeInstrumentID`, for example `1|2885`. There are thirteen intraday intervals, from
+`1minute` to `240minute`, and no daily one: XTS's 86,400 second compression is a rolling twenty four hours, not
+the exchange session.
+
+**The queue** is worked in priority order - cash first, then live futures, live options, and expired contracts
+last - walking each series backward from today to 2021-01-01, then forward. Bars come from
+`GET /apimarketdata/instruments/ohlc`, paced at one request a second.
+
+**Each window** is upserted into `wisdom_capital.price_history` on `(instrument_token, interval, time)` together
+with the series' progress, in one transaction. XTS answers an unknown instrument, a window before the history
+and an expired market data token all as an empty window, so after fifty empty windows in a row the downloader
+asks about NSE RELIANCE, which always has bars; when that is empty too it mints a fresh market data token and
+asks again before concluding the session is dead. A throttle backs off; a refused session is logged in once and
+the window retried.
+
+Run it on its own: the queue is not locked between processes, so two workers on the progress table would claim the same
+series. Minting a market data token also invalidates the one any older process still holds.
+
+Exits 0 when stopped, drained or out of time, 1 when it stopped because the session could not be restored or
+the platform refused this client, and 2 when the first login fails.
+"""
+
+import os
+import sys
+import json
+import time
+import signal
+import argparse
+import threading
+from pathlib import Path
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+MARKET_DATA_LOGIN_URL = "https://trade.wisdomcapital.in/apimarketdata/auth/login"
+MARKET_DATA_SESSION_KEY = "wisdom_capital:session:marketdata"
+MARKET_DATA_LOCK_KEY = "wisdom_capital:session:marketdata:lock"
+# A stored token is kept a day at most; a refused one is replaced sooner, by whoever it failed for.
+MARKET_DATA_SESSION_SECONDS = 24 * 60 * 60
+MARKET_DATA_LOCK_SECONDS = 120
+
+def market_data_session(cache, api, logger, stale_token=None):
+    """
+    The shared XTS market data session, minting one only when none is stored or the stored one has failed.
+
+    XTS issues one market data session per application key and a new login invalidates the old token, so every
+    process takes the token from Redis. A process whose token was refused passes it as `stale_token`: when the
+    stored token is still that one it mints a replacement, and when someone already replaced it that is used.
+
+    - `cache` is the Redis client.
+    - `api` is the WisdomCapitalAPI whose settings hold `price_api_key` and `price_api_secret`.
+    - `logger` is where a login is reported.
+    - `stale_token` is the market data token that was just refused, or None.
+
+    Returns `{"token": ..., "userID": ...}`.
+    """
+    def stored():
+        raw = cache.get(MARKET_DATA_SESSION_KEY)
+        session = json.loads(raw) if raw else None
+        return session if session and session.get("token") and session.get("token") != stale_token else None
+
+    session = stored()
+    if session:
+        return session
+
+    deadline = time.time() + MARKET_DATA_LOCK_SECONDS
+    while not cache.set(MARKET_DATA_LOCK_KEY, str(os.getpid()), nx=True, ex=MARKET_DATA_LOCK_SECONDS):
+        # Another process is minting. A second login would invalidate the token it is about to store.
+        time.sleep(1)
+        session = stored()
+        if session:
+            return session
+        if time.time() > deadline:
+            raise RuntimeError("timed out waiting for another process to log in to the market data API")
+    try:
+        session = stored()
+        if session:
+            return session
+        settings = api._settings or {}
+        if not settings.get("price_api_key") or not settings.get("price_api_secret"):
+            raise RuntimeError("no price_api_key or price_api_secret in wisdom_capital's settings")
+        logger.info("Logging in to the Wisdom Capital market data API.")
+        response = api.post(url=MARKET_DATA_LOGIN_URL, headers={"Content-Type": "application/json"},
+                            json={"appKey": settings["price_api_key"], "secretKey": settings["price_api_secret"],
+                                  "source": "WEBAPI"})
+        result = (response or {}).get("data") or {}
+        if not result.get("token"):
+            raise RuntimeError(f"the market data login returned no token: {str(response)[:200]}")
+        session = {"token": result["token"], "userID": result.get("userID")}
+        cache.set(MARKET_DATA_SESSION_KEY, json.dumps(session), ex=MARKET_DATA_SESSION_SECONDS)
+        return session
+    finally:
+        cache.delete(MARKET_DATA_LOCK_KEY)
+
+def downloader():
+    """
+    A WisdomCapitalCandles that logs in through WisdomCapitalAPI directly, shares the market data session through
+    wisdom_capital:session:marketdata, and remembers why it stopped.
+    """
+    from stock_brokers.api.wisdom_capital import WisdomCapitalAPI
+    from stock_brokers.instruments.historical.base import CandleAuthenticationError, CandleBlocked, CandleThrottled
+    from stock_brokers.instruments.historical.wisdom_capital import WisdomCapitalCandles
+    from utilities.configurations import get_cache
+
+    class DirectLoginWisdomCapitalCandles(WisdomCapitalCandles):
+        """WisdomCapitalCandles whose logins construct WisdomCapitalAPI and share the market data token in Redis."""
+
+        stopped_by = None
+
+        def _build_api(self):
+            return WisdomCapitalAPI()
+
+        def _log_in_to_market_data(self, refresh=False):
+            """
+            Take the shared market data token, replacing it when `refresh` says the one in hand was refused.
+
+            - `refresh` passes the token in hand as stale, so a refused token is minted again unless another
+              process has already done so.
+            """
+            try:
+                session = market_data_session(get_cache(), self._api, self._logger,
+                                              stale_token=self._market_data_token if refresh else None)
+            except Exception as exception:
+                raise CandleAuthenticationError(f"wisdom_capital market data login failed: "
+                                                f"{type(exception).__name__}: {str(exception)[:200]}") from exception
+            self._market_data_token = session["token"]
+
+        def relogin(self):
+            """
+            Log in again through WisdomCapitalAPI, then renew the market data token on top of it.
+
+            Raises:
+                CandleAuthenticationError: If no working session could be established.
+            """
+            try:
+                self._api = self._build_api()
+                self.after_relogin()
+            except CandleAuthenticationError:
+                raise
+            except Exception as exception:
+                raise CandleAuthenticationError(f"logging in again did not produce a working session: "
+                                                f"{type(exception).__name__}: {str(exception)[:200]}") from exception
+            self._logger.info("wisdom_capital logged in again. Continuing.")
+
+        def visit(self, series):
+            # `run` ends its loop on these without raising, so they are noted here for the exit code.
+            try:
+                return super().visit(series)
+            except (CandleAuthenticationError, CandleBlocked, CandleThrottled) as exception:
+                self.stopped_by = exception
+                raise
+
+    # Passing the API in keeps WisdomCapitalCandles from establishing the session itself.
+    return DirectLoginWisdomCapitalCandles(api=WisdomCapitalAPI())
+
+def show_status(candles):
+    """
+    Print how far the download has got.
+
+    - `candles` is the Wisdom Capital candle downloader.
+    """
+    summary = candles.summary()
+    print("wisdom_capital price history")
+    for label, value in (("series registered", summary["series"]), ("series with bars", summary["with_bars"]),
+                         ("series retired by the broker", summary["retired"]),
+                         ("series stuck on failures", summary["stuck"]), ("bars stored", summary["bars"])):
+        print(f"  {label:<30} {value:>14,}")
+    if not summary["series"]:
+        print("Nothing registered. Run with --seed first.")
+    return 0
+
+def main():
+    """Work Wisdom Capital's candle queue."""
+    parser = argparse.ArgumentParser(
+        description="Download Wisdom Capital's historical candles into wisdom_capital.price_history.")
+    parser.add_argument("--seed", action="store_true", help="register every instrument and interval before working")
+    parser.add_argument("--seed-only", action="store_true", help="register the series and exit without downloading")
+    parser.add_argument("--status", action="store_true", help="show how far the download has got, and exit")
+    parser.add_argument("--deadline-seconds", type=int, help="stop after this long, for a nightly window")
+    arguments = parser.parse_args()
+
+    from utilities.configurations import get_logger
+
+    logger = get_logger("wisdom_capital.price_history")
+    try:
+        candles = downloader()
+    except Exception as exception:
+        logger.error(f"Could not log in to Wisdom Capital: {type(exception).__name__}: {exception}")
+        return 2
+
+    try:
+        if arguments.status:
+            return show_status(candles)
+
+        if arguments.seed or arguments.seed_only:
+            logger.info("Registering every wisdom_capital instrument and interval. This reads the whole instrument master.")
+            added = candles.seed()
+            logger.info(f"Registered {added:,} new series.")
+            if arguments.seed_only:
+                return 0
+
+        # A backfill is stopped many times, so shutdown finishes the window in flight rather than abandoning it:
+        # the flag is checked between windows.
+        stop = threading.Event()
+
+        def _handle_signal(signal_number, frame):
+            logger.info(f"Received signal {signal_number}. Finishing the window in flight, then stopping.")
+            stop.set()
+
+        for signal_number in (signal.SIGINT, signal.SIGTERM):
+            signal.signal(signal_number, _handle_signal)
+
+        visits, bars = candles.run(stop_event=stop, deadline_seconds=arguments.deadline_seconds)
+        logger.info(f"Stored {bars:,} bar(s) over {visits:,} window(s).")
+        if candles.stopped_by is not None and not stop.is_set():
+            logger.error(f"Stopped early: {type(candles.stopped_by).__name__}: {candles.stopped_by}")
+            return 1
+        return 0
+    finally:
+        candles.close()
+
+if __name__ == "__main__":
+    raise SystemExit(main())

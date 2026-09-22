@@ -5,7 +5,9 @@
 #     systemctl --user link ~/Projects/unified_broker_interface/services/kotak/*
 #     systemctl --user daemon-reload
 #     systemctl --user enable --now kotak.target kotak-login.timer \
-#         kotak@quotes.service kotak@order_updates.service kotak@persist_ticks.service kotak@persist_orders.service kotak@orders.service kotak@trades.service kotak@positions.service kotak@holdings.service kotak@funds.service kotak@persist_positions.service
+#         kotak-instruments@websocket_quotes.service kotak-instruments@store_quotes_to_db.service \
+#         kotak-orders@websocket_order_details.service kotak-orders@store_orders_to_db.service kotak-orders@api_order_details.service kotak-orders@api_trade_details.service \
+#         kotak-portfolio@positions.service kotak-portfolio@holdings.service kotak-portfolio@funds.service kotak-portfolio@store_positions_to_db.service
 
 [Unit]
 Description=kotak scripts

@@ -1,0 +1,25 @@
+# One bin/unified/user/ script that keeps running: unified-user@details.service combines every broker's profile from
+# Redis into unified:user:details, and unified-user@unified_details.service caches the MongoDB user_details collection
+# in unified:details:users. Both fit, because each one logs a store it cannot reach and tries again at its next turn
+# rather than exiting.
+#
+#     systemctl --user enable --now unified-user@details.service
+#     journalctl --user -u unified-user@details -f
+
+[Unit]
+Description=Unified user %i
+PartOf=unified.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Environment=PYTHONUNBUFFERED=1
+SyslogIdentifier=unified-user-%i
+ExecStart=%h/Projects/unified_broker_interface/bin/unified/user/%i
+Restart=always
+RestartSec=15
+RestartPreventExitStatus=2
+TimeoutStopSec=60
+
+[Install]
+WantedBy=unified.target

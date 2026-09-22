@@ -8,7 +8,7 @@ catalogue it builds for browsing and searching - one sorted set per segment in n
 option type order, a set of each segment's distinct names, each instrument's first and last seen dates,
 and a count per segment. See `stock_brokers/instruments/mapping/utilities/cache.py`.
 
-The tables are the unified ones, `unified.instruments` and `unified.broker_mappings`, which `bin/unified/map_instruments`
+The tables are the unified ones, `unified.instruments` and `unified.broker_mappings`, which `bin/unified/instruments/map`
 maps and warms the cache from; every query here names its tables through
 `stock_brokers.instruments.mapping.utilities.tables`. TimescaleDB is read only when the cache cannot answer, and each time it is, it is logged:
 

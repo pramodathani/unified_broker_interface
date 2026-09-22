@@ -39,8 +39,8 @@ capped at a maximum length, which bounds the damage if a persister is never star
 
 Every feed writes two things: a hash holding the current state, keyed by instrument or order id, for
 anything that wants to ask "what is it now", and a stream holding every message in arrival order for
-the persister - `bin/<broker>/quotes` writes `<broker>:quotes:live` and `<broker>:quotes:stream`, drained
-by `bin/<broker>/persist_ticks`. See [Broker scripts](../guides/broker-scripts.md), and
+the persister - `bin/<broker>/instruments/websocket_quotes` writes `<broker>:quotes:live` and `<broker>:quotes:stream`, drained
+by `bin/<broker>/instruments/store_quotes_to_db`. See [Broker scripts](../guides/broker-scripts.md), and
 [Redis keys](../architecture/redis-keys.md) for the full list.
 
 ## Creating the PostgreSQL objects
@@ -56,8 +56,8 @@ The broker schemas and instrument tables come from `.sql` files applied in filen
 python -m stock_brokers.instruments.sql.apply_ddl
 ```
 
-The per-broker price history tables have a runner of their own, which `bin/unified/historical_prices` also
-applies on every run; neither `bin/<broker>/instruments` nor `bin/<broker>/historical_prices` applies DDL:
+The per-broker price history tables have a runner of their own, which `bin/unified/instruments/price_history` also
+applies on every run; neither `bin/<broker>/instruments/daily_feed` nor `bin/<broker>/instruments/price_history` applies DDL:
 
 ```bash
 python -m stock_brokers.instruments.historical.utilities.sql.apply_ddl
@@ -65,7 +65,7 @@ python -m stock_brokers.instruments.historical.utilities.sql.apply_ddl
 
 Each broker's tick, order update and position tables are defined in
 `stock_brokers/instruments/ticks/utilities/sql/ddl/010_zerodha_streams.sql` to `100_stoxkart_streams.sql`,
-and each `bin/<broker>/persist_*` script applies its broker's file when it starts, so they need no step of their
+and each `bin/<broker>/*/store_*_to_db` script applies its broker's file when it starts, so they need no step of their
 own. To create them without starting a persister, apply a file directly:
 
 ```bash
@@ -74,7 +74,7 @@ psql -h "$UNIFIED_BROKER_INTERFACE_POSTGRES_HOST" -p "$UNIFIED_BROKER_INTERFACE_
      -f stock_brokers/instruments/ticks/utilities/sql/ddl/010_zerodha_streams.sql
 ```
 
-The `unified` tables are applied by `bin/unified/map_instruments`, `bin/unified/historical_prices` and the
+The `unified` tables are applied by `bin/unified/instruments/map`, `bin/unified/instruments/price_history` and the
 unified persisters when they run. See [DDL and migrations](../database/ddl.md).
 
 ## Verifying the connections

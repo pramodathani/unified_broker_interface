@@ -5,7 +5,11 @@
 #     systemctl --user link ~/Projects/unified_broker_interface/services/dhan/*
 #     systemctl --user daemon-reload
 #     systemctl --user enable --now dhan.target dhan-login.timer \
-#         dhan@quotes.service dhan@order_updates.service dhan@persist_ticks.service dhan@persist_orders.service dhan@orders.service dhan@trades.service dhan@positions.service dhan@holdings.service dhan@funds.service dhan@user-profile.service dhan-historical-prices.service
+#         dhan-instruments@websocket_quotes.service dhan-instruments@store_quotes_to_db.service \
+#         dhan-orders@websocket_order_details.service dhan-orders@store_orders_to_db.service dhan-orders@api_order_details.service dhan-orders@api_trade_details.service \
+#         dhan-portfolio@positions.service dhan-portfolio@holdings.service dhan-portfolio@funds.service \
+#         dhan-user@details.service \
+#         dhan-historical-prices.service
 
 [Unit]
 Description=dhan scripts

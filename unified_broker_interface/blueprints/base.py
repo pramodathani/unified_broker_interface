@@ -54,7 +54,7 @@ class BaseBlueprint:
         Every document in a collection without its `_id`: from its Redis copy, or from MongoDB when there is none.
 
         - `collection` is the name of the MongoDB collection.
-        - `cache_key` is the Redis key `bin/unified/details` caches it in, as a JSON array.
+        - `cache_key` is the Redis key `bin/unified/user/unified_details` caches it in, as a JSON array.
 
         A copy that is missing, unreadable or not an array falls back to MongoDB, the store of record, so the documents
         are served whether or not the cache is being kept.

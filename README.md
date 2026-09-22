@@ -15,13 +15,13 @@ Three layers sit over three shared data stores. Each layer runs without the othe
 broker REST APIs and websockets
         │
         ▼
-bin/<broker>/*          the only code that ever talks to a broker
+bin/<broker>/*/*        the only code that ever talks to a broker
         │  writes <broker>:* keys and Redis Streams
         ▼
-Redis ──── bin/<broker>/persist_* ───► TimescaleDB schema <broker>.*
+Redis ──── bin/<broker>/*/store_*_to_db ──► TimescaleDB schema <broker>.*
         │
         ▼
-bin/unified/*           reads only Redis and the database, never a broker
+bin/unified/*/*         reads only Redis and the database, never a broker
         │  writes unified:* keys and the unified.* schema
         ▼
 unified_broker_interface/   Flask REST API over the unified layer
@@ -46,7 +46,7 @@ Ten brokers are implemented. A dash means no module or script exists for that ca
 | Wisdom Capital | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Stoxkart | ✓ | ✓ | ✓ | — | ✓ | ✓ | — |
 
-The gaps have reasons rather than being work left undone. Only four brokers send position updates on their order update socket, so only those four have a `persist_positions`; every broker's positions still arrive through its `positions` poller. Groww answers 403 on the historical endpoint, which is an entitlement rather than a bug, while Kotak and Stoxkart publish no candle endpoint at all. `docs/brokers/coverage.md` carries the full matrix and the reason behind every dash.
+The gaps have reasons rather than being work left undone. Only four brokers send position updates on their order update socket, so only those four have a `store_positions_to_db`; every broker's positions still arrive through its `positions` poller. Groww answers 403 on the historical endpoint, which is an entitlement rather than a bug, while Kotak and Stoxkart publish no candle endpoint at all. `docs/brokers/coverage.md` carries the full matrix and the reason behind every dash.
 
 ## Requirements
 

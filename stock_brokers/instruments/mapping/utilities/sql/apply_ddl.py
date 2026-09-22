@@ -7,7 +7,7 @@ Files under the `ddl` directory beside this one are executed in filename order, 
 statement is written to be safe to run again, so this is both the way to create the tables and
 the way to pick up a later change to one. The order matters for one reason: `100` creates the
 `unified` schema, and `unified.broker_mappings` carries a foreign key to `unified.instruments`, so
-`110` has to have run before `120`. `bin/unified/map_instruments` applies them before every run.
+`110` has to have run before `120`. `bin/unified/instruments/map` applies them before every run.
 
 The runner itself is the one the instrument DDL already uses - same behaviour, same single
 transaction, pointed at a different directory. These tables live in a schema of their own, so this

@@ -20,7 +20,7 @@ Zerodha's ticks received at the same moment during the session of 2026-09-15:
   second on TCS, HDFCBANK, CRUDEOIL, NATURALGAS and GOLD.
 
 The earlier `sfeed` feed, measured on the weekend snapshots of 2026-09-12 and 2026-09-13, sent a date
-with no time and scaled only the MCX last quantity; `bin/kotak/quotes` no longer uses it.
+with no time and scaled only the MCX last quantity; `bin/kotak/instruments/websocket_quotes` no longer uses it.
 """
 
 from stock_brokers.instruments.ticks.base import (CLOSE_ALWAYS, QUANTITY_FIELDS, FeedKey, TickNormalizer,

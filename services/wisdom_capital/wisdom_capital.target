@@ -5,7 +5,11 @@
 #     systemctl --user link ~/Projects/unified_broker_interface/services/wisdom_capital/*
 #     systemctl --user daemon-reload
 #     systemctl --user enable --now wisdom_capital.target wisdom_capital-login.timer \
-#         wisdom_capital@quotes.service wisdom_capital@order_updates.service wisdom_capital@persist_ticks.service wisdom_capital@persist_orders.service wisdom_capital@orders.service wisdom_capital@trades.service wisdom_capital@positions.service wisdom_capital@holdings.service wisdom_capital@funds.service wisdom_capital@user-profile.service wisdom_capital@persist_positions.service wisdom_capital-historical-prices.service
+#         wisdom_capital-instruments@websocket_quotes.service wisdom_capital-instruments@store_quotes_to_db.service \
+#         wisdom_capital-orders@websocket_order_details.service wisdom_capital-orders@store_orders_to_db.service wisdom_capital-orders@api_order_details.service wisdom_capital-orders@api_trade_details.service \
+#         wisdom_capital-portfolio@positions.service wisdom_capital-portfolio@holdings.service wisdom_capital-portfolio@funds.service wisdom_capital-portfolio@store_positions_to_db.service \
+#         wisdom_capital-user@details.service \
+#         wisdom_capital-historical-prices.service
 
 [Unit]
 Description=wisdom_capital scripts

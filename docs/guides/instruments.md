@@ -8,13 +8,13 @@ appends each day's snapshot to that broker's `instruments` table.
 
 ```bash
 python -m stock_brokers.instruments.sql.apply_ddl        # once, to create the tables
-bin/zerodha/instruments                                  # one broker, into zerodha.instruments and Redis
-bin/zerodha/instruments --bootstrap                      # replace today's rows
+bin/zerodha/instruments/daily_feed                                  # one broker, into zerodha.instruments and Redis
+bin/zerodha/instruments/daily_feed --bootstrap                      # replace today's rows
 python -m test_runs.download_instruments                 # every broker, tables only
 python -m test_runs.download_instruments zerodha dhan    # only these
 ```
 
-Each morning `unified-instruments.service` runs every broker's `bin/<broker>/instruments`, Stoxkart's
+Each morning `unified-mapping.service` runs every broker's `bin/<broker>/instruments/daily_feed`, Stoxkart's
 included, and then the mapping. Safe to run daily and safe to run twice: a broker already ingested for a
 date is skipped unless `--bootstrap` is given, which replaces that date's rows instead. See
 [Broker scripts](broker-scripts.md#instrument-masters) for the Redis copy each script also writes.

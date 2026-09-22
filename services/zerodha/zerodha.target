@@ -5,7 +5,11 @@
 #     systemctl --user link ~/Projects/unified_broker_interface/services/zerodha/*
 #     systemctl --user daemon-reload
 #     systemctl --user enable --now zerodha.target zerodha-login.timer \
-#         zerodha@quotes.service zerodha@order_updates.service zerodha@persist_ticks.service zerodha@persist_orders.service zerodha@orders.service zerodha@trades.service zerodha@positions.service zerodha@holdings.service zerodha@funds.service zerodha@user-profile.service zerodha-historical-prices.service
+#         zerodha-instruments@websocket_quotes.service zerodha-instruments@store_quotes_to_db.service \
+#         zerodha-orders@websocket_order_details.service zerodha-orders@store_orders_to_db.service zerodha-orders@api_order_details.service zerodha-orders@api_trade_details.service \
+#         zerodha-portfolio@positions.service zerodha-portfolio@holdings.service zerodha-portfolio@funds.service \
+#         zerodha-user@details.service \
+#         zerodha-historical-prices.service
 
 [Unit]
 Description=zerodha scripts

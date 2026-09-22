@@ -17,19 +17,19 @@ are read here, while the raw row is in hand, because a broker's token is not uni
 daily snapshot for seven of the ten brokers, so there is no reliable way to find that row again
 later. `GET /api/instruments/additional_details` serves them.
 
-The mapping runs as `bin/unified/map_instruments`, started by `unified-instruments.service` at 07:45 every
+The mapping runs as `bin/unified/instruments/map`, started by `unified-mapping.service` at 07:45 every
 day after every broker's instrument download. It applies the mapping DDL, maps the day's broker
 snapshots, caches the day's rows in Redis under `unified:` and warms the REST API's catalogue under
-`unified:catalogue:`. See [Unified scripts](unified-scripts.md#instruments-map_instruments).
+`unified:catalogue:`. See [Unified scripts](unified-scripts.md#instruments-map).
 
 ## Running it
 
 ```bash
-bin/unified/map_instruments                          # every broker, today
-bin/unified/map_instruments dhan kotak               # only these
-bin/unified/map_instruments --date 2026-09-14        # a date already downloaded, not older than one already mapped
-bin/unified/map_instruments --skip-collisions               # leave stale duplicate instruments alone
-bin/unified/map_instruments --cache-only --date 2026-09-14   # only the contract sizes, Redis cache and catalogue, for a mapped date
+bin/unified/instruments/map                          # every broker, today
+bin/unified/instruments/map dhan kotak               # only these
+bin/unified/instruments/map --date 2026-09-14        # a date already downloaded, not older than one already mapped
+bin/unified/instruments/map --skip-collisions               # leave stale duplicate instruments alone
+bin/unified/instruments/map --cache-only --date 2026-09-14   # only the contract sizes, Redis cache and catalogue, for a mapped date
 ```
 
 A date older than the newest date already in `unified.broker_mappings` is refused. Mapping an older date on
@@ -44,8 +44,8 @@ from empty tables and run oldest date first.
     is refused while newer ones are mapped, as above.
 
     That is also why the mapping is a separate command from the downloads. The daily
-    `unified-instruments.service` runs every `bin/<broker>/instruments` download and then
-    `bin/unified/map_instruments` as separate steps of one unit.
+    `unified-mapping.service` runs every `bin/<broker>/instruments/daily_feed` download and then
+    `bin/unified/instruments/map` as separate steps of one unit.
 
 ## Identity is computed, not matched
 
@@ -180,7 +180,7 @@ A run in which fewer than all ten brokers had rows to map - a subset of brokers,
 
 ## Contract sizes
 
-Straight after the mapping and the duplicate merge, `bin/unified/map_instruments` decides how many quotation units
+Straight after the mapping and the duplicate merge, `bin/unified/instruments/map` decides how many quotation units
 one lot of every live currency and commodity derivative is, and writes each decision to `unified.contract_sizes`
 for the date. The brokers' own `lot_size` figures cannot be compared on these markets, because each broker counts a
 lot in its own unit: on MCX, GOLD's lot is 1 at Zerodha (one lot), 1 at Kotak (one kilogram) and 100 at Groww
@@ -218,7 +218,7 @@ python -m stock_brokers.instruments.mapping.utilities.contract_sizes --date 2026
 python -m stock_brokers.instruments.mapping.utilities.collisions --date 2026-09-12 --dry-run
 ```
 
-`bin/unified/map_instruments` ends with a summary per broker - rows classified, uncategorised, instruments,
+`bin/unified/instruments/map` ends with a summary per broker - rows classified, uncategorised, instruments,
 and any row errors - and exits 1 when a broker failed or rows could not be mapped. Convergence is what proves
 the whole premise - a liquid instrument should carry a mapping from close to ten brokers under **one** id in
 `unified.broker_mappings`. A count of one or two means brokers are computing different ids for the same
@@ -264,7 +264,7 @@ caching every historical date would multiply the memory for no benefit.
 python -m stock_brokers.instruments.mapping.utilities.warm_cache --date 2026-09-12 --clear
 ```
 
-The warm is the last step of every `bin/unified/map_instruments` run, and the keys are under
+The warm is the last step of every `bin/unified/instruments/map` run, and the keys are under
 `unified:catalogue:`, the prefix named in `stock_brokers/instruments/mapping/utilities/tables.py`.
 
 Warming is not required - the cache fills itself from Postgres as processes touch instruments -

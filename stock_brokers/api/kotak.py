@@ -18,7 +18,7 @@ class KotakAPI(BrokerAPI):
     even when the token is perfectly valid. So no host is hard coded: `url()` reads the one the
     login stored and builds every request path on top of it.
 
-    The order update feed, `bin/kotak/order_updates`, does the same thing with the same stored value.
+    The order update feed, `bin/kotak/orders/websocket_order_details`, does the same thing with the same stored value.
     """
 
     # Only a starting point for the first probe on an account that has never logged in and so has

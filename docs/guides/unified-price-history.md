@@ -9,7 +9,7 @@ Equities, exchange traded funds and investment trusts are stored **unadjusted**,
 from `unified.adjustment_factors`. Everything else - indices, futures, options, bonds - is stored
 exactly as the broker served it, since there is nothing to adjust.
 
-The history is built by `bin/unified/historical_prices`, run each morning by `unified-prices.timer` at
+The history is built by `bin/unified/instruments/price_history`, run each morning by `unified-prices.timer` at
 08:30 Monday to Saturday, into `unified.price_history`, `unified.price_history_sources`,
 `unified.price_history_corrections`, `unified.adjustment_factors` and `unified.yahoo_fetch_state`, read
 adjusted through `unified.price_history_adjusted` and `unified.adjusted_bars`, with series resolved against
@@ -23,12 +23,12 @@ adjusted through `unified.price_history_adjusted` and `unified.adjusted_bars`, w
 ## Running it
 
 ```bash
-bin/unified/historical_prices daily                  # load, corrections, load, factors --stale-days 14, verify
-bin/unified/historical_prices load                   # copy new and changed daily bars
-bin/unified/historical_prices factors                # Yahoo Finance -> adjustment factors (first run: hours)
-bin/unified/historical_prices verify                 # the checks below
-bin/unified/historical_prices status                 # last run, bar counts, sources, factors
-bin/unified/historical_prices load --pilot           # just the pilot instruments
+bin/unified/instruments/price_history daily                  # load, corrections, load, factors --stale-days 14, verify
+bin/unified/instruments/price_history load                   # copy new and changed daily bars
+bin/unified/instruments/price_history factors                # Yahoo Finance -> adjustment factors (first run: hours)
+bin/unified/instruments/price_history verify                 # the checks below
+bin/unified/instruments/price_history status                 # last run, bar counts, sources, factors
+bin/unified/instruments/price_history load --pilot           # just the pilot instruments
 ```
 
 Every run applies the mapping and price DDL first, so there is no separate DDL step.
@@ -77,9 +77,9 @@ flattrade's own last NSE 15 minute bar of that day closed at 3,036.4. On the ful
 differed by more than 5%.
 
 ```bash
-bin/unified/historical_prices corrections                # detect, store, and flag changed instruments
-bin/unified/historical_prices load                       # rebuild them with the corrections applied
-bin/unified/historical_prices factors --stale-days 14    # their Yahoo events, now with a step to match
+bin/unified/instruments/price_history corrections                # detect, store, and flag changed instruments
+bin/unified/instruments/price_history load                       # rebuild them with the corrections applied
+bin/unified/instruments/price_history factors --stale-days 14    # their Yahoo events, now with a step to match
 ```
 
 [`CorrectionBuilder`][stock_brokers.instruments.historical.utilities.unified.corrections.CorrectionBuilder]
@@ -138,7 +138,7 @@ when they are off the interval's grid, or when their high and low do not contain
 ## Intraday bars
 
 ```bash
-bin/unified/historical_prices load --interval 15minute --pilot
+bin/unified/instruments/price_history load --interval 15minute --pilot
 ```
 
 Intraday history is two orders of magnitude larger than daily - flattrade stores some 300 million
@@ -194,7 +194,7 @@ rebuild cannot bring back an event that was looked at and found not to apply.
 
 ## Checks
 
-`bin/unified/historical_prices verify` runs:
+`bin/unified/instruments/price_history verify` runs:
 
 | Check | Pass condition |
 | --- | --- |

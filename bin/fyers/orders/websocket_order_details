@@ -1,0 +1,608 @@
+#!/usr/bin/env python3
+"""
+Stream Fyers order and position updates over a websocket and merge them into the Redis hashes `fyers:orders:orders` and
+`fyers:portfolio:positions`, and keep streaming until stopped.
+
+    bin/fyers/orders/websocket_order_details
+    redis-cli HGETALL fyers:orders:orders
+    redis-cli HGET fyers:orders:orders <order id>
+    redis-cli HGETALL fyers:portfolio:positions
+
+Self-contained: it logs in with `FyersAPI` and carries its own connection to Fyers' order update stream at
+`wss://socket.fyers.in/trade/v3`, so it needs no other feed process or key.
+
+**The stream.** The session is authenticated during the websocket handshake, by an `authorization` header of
+the app id and access token joined by a colon, so a bad credential fails the HTTP upgrade itself. Once open it
+sends `{"T": "SUB_ORD", "SLIST": ["orders", "positions"], "SUB_T": 1}`, Fyers answers with code 1605, and from
+then on every change arrives as JSON: `{"s": "ok", "orders": {...}}` for an order - `id`, `id_exchange`,
+`org_ord_status` (1 cancelled, 2 filled, 4 transit, 5 rejected, 6 pending), `symbol`, `exchange`, `segment`,
+`fy_token`, `tran_side` (1 buy, -1 sell), `ord_type`, `product_type`, `validity`, `qty`, `qty_filled`,
+`qty_remaining`, `price_limit`, `price_stop`, `price_traded`, `time_oms`, `oms_msg`, `ordertag` - and
+`{"s": "ok", "positions": {...}}` for a position - `symbol`, `fy_token`, `exchange`, `segment`, `product_type`,
+`buy_qty`, `sell_qty`, `net_qty`, `buy_avg`, `sell_avg`, `net_avg`, `buy_val`, `sell_val`, `cf_buy_qty`,
+`cf_sell_qty`, `pl_realized`, `pl_unrealized`, `pl_total`, `qty_multiplier`. The trades channel is not
+subscribed.
+
+**The keys.** Each is the one hash for its kind, shared with a REST poller:
+
+- `fyers:orders:orders`, keyed by the order `id`, shared with `bin/fyers/orders/api_order_details`, which merges the polled order book.
+- `fyers:portfolio:positions`, keyed `symbol:product` as Fyers spells both (`NSE:INFY-EQ:INTRADAY`), since one symbol
+  can be held under more than one product, shared with `bin/fyers/portfolio/positions`, which merges the polled positions. The
+  update's `symbol` and `product_type` are the same values as the REST row's `symbol` and `productType`, so a
+  position lands on one field whichever wrote it.
+
+Each update is written as `{"observed_at": <epoch received>, "source": "websocket", "order" | "position": <normalized>,
+"data": <Fyers' object exactly as sent>}`. The normalized `order` and `position` have the same fields the REST pollers
+build, mapped from the update's own names - see `bin/fyers/orders/api_order_details` and `bin/fyers/portfolio/positions` for the field tables. Two
+order fields only the update carries, `cancelled_quantity` and `exchange_timestamp`, and one position field only the
+REST positions carry, `last_price`, is null from the other side. A websocket update always replaces its entry; a polled
+row replaces it only when the entry was observed before the poll's request was sent. Each hash expires at 06:00 IST,
+moved to the next 06:00 by every write.
+
+**The streams.** Every update is also appended, in arrival order, to a Redis Stream as
+`{"timestamp": <received, local wall clock>, "data": <Fyers' object>}` - so the history the hashes overwrite is kept there: each order update to `fyers:order-updates:stream` as an `update` field,
+which `bin/fyers/orders/store_orders_to_db` writes to `fyers.order_updates`, and each position update to
+`fyers:positions_updates:stream` as a `position` field, which `bin/fyers/portfolio/store_positions_to_db` writes to
+`fyers.positions`. Each is capped at about 20,000 entries.
+
+**Sessions.** The token is read afresh on every connect, so a login made by any process is picked up. A token
+whose expiry has passed, a handshake refused with HTTP 401 or 403, an error message carrying a session code
+(-8, -15, -16, -17), or a socket that fails to open six times running logs in again through `FyersAPI` -
+confirmed against the profile - before reconnecting; refused again straight after that login, it gives up
+rather than keep sending refused requests, which Cloudflare punishes with an address ban. A reconnect otherwise
+backs off from 1 to 60 seconds. Updates arrive only when an order or position changes, so a quiet socket is
+not a broken one.
+
+Exits 0 when stopped with Ctrl+C or SIGTERM, and 1 when a login fails or the socket still cannot open after
+logging in again. Reads only - it never places, modifies or cancels an order.
+"""
+
+import sys
+import json
+import time
+import base64
+import signal
+import threading
+from datetime import datetime, timedelta
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+ORDER_UPDATES_URL = "wss://socket.fyers.in/trade/v3"
+PROFILE_URL = "https://api-t1.fyers.in/api/v3/profile"
+ORDERS_KEY = "fyers:orders:orders"
+POSITIONS_KEY = "fyers:portfolio:positions"
+
+# Every order and position update is also appended here, for bin/fyers/orders/store_orders_to_db and
+# bin/fyers/portfolio/store_positions_to_db, which read them with a consumer group.
+ORDER_STREAM_KEY = "fyers:order-updates:stream"
+POSITION_STREAM_KEY = "fyers:positions_updates:stream"
+STREAM_MAX_LENGTH = 20000
+
+SUBSCRIBE_CHANNELS = ["orders", "positions"]
+SUBSCRIBED_CODE = 1605
+
+# Fyers' codes for a dead session: -8 token expired, -15 invalid token, -16 could not authenticate, -17 invalid or
+# expired.
+AUTHENTICATION_ERROR_CODES = {-8, -15, -16, -17}
+AUTHENTICATION_HANDSHAKE_STATUSES = {401, 403}
+
+PING_INTERVAL_SECONDS = 30
+PING_TIMEOUT_SECONDS = 10
+MIN_BACKOFF_SECONDS = 1
+MAX_BACKOFF_SECONDS = 60
+MAX_FAILED_CONNECTS = 6
+
+INDIA = ZoneInfo("Asia/Kolkata")
+RESET_HOUR = 6
+
+# Merges entries into a hash. KEYS[1] is the hash; ARGV is the expiry epoch, the source, the observed-at epoch, then
+# field and value pairs. A "rest" value replaces an entry only when the entry was observed before ARGV[3]; any other
+# source always replaces. A key of another type - the order book stored whole before this hash - is replaced.
+MERGE_SCRIPT = """
+local kind = redis.call('TYPE', KEYS[1])
+if type(kind) == 'table' then kind = kind['ok'] end
+if kind ~= 'hash' and kind ~= 'none' then redis.call('DEL', KEYS[1]) end
+local written = 0
+for i = 4, #ARGV, 2 do
+    local replace = true
+    if ARGV[2] == 'rest' then
+        local current = redis.call('HGET', KEYS[1], ARGV[i])
+        if current then
+            local ok, decoded = pcall(cjson.decode, current)
+            if ok and type(decoded) == 'table' and tonumber(decoded['observed_at'])
+                    and tonumber(decoded['observed_at']) >= tonumber(ARGV[3]) then
+                replace = false
+            end
+        end
+    end
+    if replace then
+        redis.call('HSET', KEYS[1], ARGV[i], ARGV[i + 1])
+        written = written + 1
+    end
+end
+if #ARGV >= 4 then redis.call('EXPIREAT', KEYS[1], ARGV[1]) end
+return written
+"""
+
+# The shared vocabulary: each broker's spelling of an order's side, product, type, validity and status mapped onto
+# one set. Keys are compared uppercased with underscores levelled to spaces.
+TRANSACTION_TYPES = {
+    "BUY": "BUY", "B": "BUY", "1": "BUY", "BUY ORDER": "BUY",
+    "SELL": "SELL", "S": "SELL", "-1": "SELL", "2": "SELL", "SELL ORDER": "SELL",
+}
+PRODUCTS = {
+    "CNC": "CNC", "C": "CNC", "DELIVERY": "CNC", "CASH": "CNC",
+    "MIS": "MIS", "I": "MIS", "INTRADAY": "MIS", "M": "NRML",
+    "NRML": "NRML", "NORMAL": "NRML", "MARGIN": "NRML", "CARRYFORWARD": "NRML",
+    "CO": "CO", "BO": "BO", "MTF": "MTF", "ARB": "ARB", "H": "CO", "B": "BO",
+}
+ORDER_TYPES = {
+    "MARKET": "MARKET", "MKT": "MARKET", "MKT ORDER": "MARKET", "2": "MARKET",
+    "LIMIT": "LIMIT", "LMT": "LIMIT", "L": "LIMIT", "1": "LIMIT",
+    "SL": "SL", "SL-LMT": "SL", "STOPLIMIT": "SL", "SL LIMIT": "SL", "4": "SL",
+    "SL-M": "SL-M", "SL-MKT": "SL-M", "STOPMARKET": "SL-M", "SL MARKET": "SL-M", "3": "SL-M", "SL M": "SL-M",
+    "SLM": "SL-M", "STOP LOSS": "SL", "STOP LOSS MARKET": "SL-M",
+}
+VALIDITIES = {
+    "DAY": "DAY", "EOS": "DAY", "0": "DAY", "IOC": "IOC", "IMMEDIATE": "IOC", "1": "IOC",
+    "GTT": "GTT", "GTC": "GTC", "GTD": "GTD",
+}
+STATUSES = {
+    "PENDING": "PENDING", "TRANSIT": "PENDING", "VALIDATION PENDING": "PENDING", "PUT ORDER REQ RECEIVED": "PENDING",
+    "TRIGGER PENDING": "PENDING", "AMO REQ RECEIVED": "PENDING", "PENDINGNEW": "PENDING", "O-PENDING": "PENDING",
+    "MODIFY AMO REQ RECEIVED": "PENDING", "AFTER MARKET ORDER REQ RECEIVED": "PENDING", "AMO PENDING": "PENDING",
+    "MODIFY AFTER MARKET ORDER REQ RECEIVED": "PENDING", "QUEUED": "PENDING", "PROCESSING": "PENDING",
+    "SL-PENDING": "PENDING",
+    "OPEN": "OPEN", "OPEN PENDING": "OPEN", "NEW": "OPEN", "REPLACED": "OPEN", "ACKED": "OPEN", "APPROVED": "OPEN",
+    "MODIFICATION REQUESTED": "OPEN", "MODIFIED": "OPEN", "MODIFY VALIDATION PENDING": "OPEN", "MODIFY PENDING": "OPEN",
+    "PARTIALLY FILLED": "OPEN", "PARTIALLY EXECUTED": "OPEN", "PLACED": "OPEN", "PART TRADED": "OPEN",
+    "PARTIALLYFILLED": "OPEN", "PENDINGREPLACE": "OPEN", "CONFIRMED": "OPEN", "PARTIALLY TRADED": "OPEN",
+    "INITIATED": "OPEN",
+    "COMPLETE": "COMPLETE", "COMPLETED": "COMPLETE", "TRADED": "COMPLETE", "FILLED": "COMPLETE",
+    "EXECUTED": "COMPLETE", "FULLY EXECUTED": "COMPLETE", "DELIVERY AWAITED": "COMPLETE", "SUCCESS": "COMPLETE",
+    "CANCELLED": "CANCELLED", "CANCELED": "CANCELLED", "CANCEL": "CANCELLED", "CANCEL PENDING": "CANCELLED",
+    "CANCELLATION REQUESTED": "CANCELLED", "PENDINGCANCEL": "CANCELLED", "CANCELLED AFTER MARKET ORDER": "CANCELLED",
+    "AMO CANCELLED": "CANCELLED", "PARTIALLY FILLED - CANCELLED": "CANCELLED",
+    "REJECTED": "REJECTED", "REJECT": "REJECTED", "FAILED": "REJECTED", "ABORTED": "REJECTED",
+    "EXPIRED": "EXPIRED", "PARTIALLY FILLED - EXPIRED": "EXPIRED",
+}
+
+def normalize(value, mapping):
+    """
+    A broker's term on the shared vocabulary, or the term uppercased when the vocabulary does not know it.
+
+    - `value` is the broker's term.
+    - `mapping` is one of the vocabulary tables.
+    """
+    if value is None or value == "":
+        return None
+    key = str(value).strip().upper().replace("_", " ")
+    if key in mapping:
+        return mapping[key]
+    collapsed = " ".join(key.split())
+    return mapping.get(collapsed, collapsed)
+
+def present(value):
+    """A value, or None for blanks and `NA` placeholders."""
+    return None if value is None or str(value).strip() in ("", "NA") else value
+
+def number(value, cast=float):
+    """
+    A value as a number, or None when it is missing or not numeric.
+
+    - `value` is the raw field value.
+    - `cast` is the number type.
+    """
+    value = present(value)
+    try:
+        return None if value is None else int(float(value)) if cast is int else float(value)
+    except (TypeError, ValueError):
+        return None
+
+def text(value):
+    """A value as a string, or None when it is missing."""
+    value = present(value)
+    return None if value is None else str(value)
+
+def exchange_of(symbol):
+    """
+    The exchange a Fyers symbol names in its prefix (`NSE` for `NSE:INFY-EQ`), or None.
+
+    Both the REST rows and the websocket messages carry `exchange` as a number (10 for NSE), but only the symbol
+    names it in words, and both carry the symbol, so it is read from there on either side.
+
+    - `symbol` is the Fyers symbol.
+    """
+    prefix, colon, _ = str(symbol or "").partition(":")
+    return prefix if colon and prefix else None
+
+# Fyers' numeric order states, the same on the order book and the order update stream: 1 cancelled, 2 filled, 3 reserved
+# (read as filled), 4 transit, 5 rejected, 6 pending.
+FYERS_STATUS_CODES = {1: "CANCELLED", 2: "COMPLETE", 3: "COMPLETE", 4: "OPEN", 5: "REJECTED", 6: "PENDING"}
+
+def fyers_status(value):
+    """
+    Fyers' order state on the shared vocabulary: its numeric codes translated first, a word normalized.
+
+    - `value` is the raw status, an integer code or a word.
+    """
+    code = number(value, int)
+    if code is not None and code in FYERS_STATUS_CODES:
+        return FYERS_STATUS_CODES[code]
+    return normalize(present(value), STATUSES)
+
+def fyers_timestamp(value):
+    """
+    A Fyers order time as an ISO timestamp, or None: `DD-Mon-YYYY HH:MM:SS` is IST wall clock, a number an epoch.
+
+    - `value` is the time as Fyers sent it.
+    """
+    value = present(value)
+    if value is None:
+        return None
+    if isinstance(value, (int, float)) or str(value).replace(".", "", 1).isdigit():
+        try:
+            return datetime.fromtimestamp(float(value), tz=INDIA).isoformat()
+        except (ValueError, OSError, OverflowError):
+            return None
+    for fmt in ("%d-%b-%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S", "%d/%m/%Y %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            return datetime.strptime(str(value).strip(), fmt).replace(tzinfo=INDIA).isoformat()
+        except ValueError:
+            continue
+    return None
+
+def next_reset():
+    """The epoch of the next 06:00 IST, when the merged hash expires."""
+    now = datetime.now(INDIA)
+    reset = now.replace(hour=RESET_HOUR, minute=0, second=0, microsecond=0)
+    return int((reset if reset > now else reset + timedelta(days=1)).timestamp())
+
+def order_from_update(data):
+    """
+    A Fyers order update's `orders` object as a normalized order, or None when it has no order id.
+
+    - `data` is the `orders` object of an order update message.
+    """
+    if not isinstance(data, dict) or text(data.get('id')) is None:
+        return None
+    symbol = text(data.get('symbol'))
+    quantity, filled = number(data.get('qty'), int), number(data.get('qty_filled'), int)
+    pending = number(data.get('qty_remaining'), int)
+    if pending is None and quantity is not None and filled is not None:
+        pending = quantity - filled
+    status = data.get('org_ord_status') if data.get('org_ord_status') is not None else data.get('status')
+    return {
+        "order_id": text(data.get('id')),
+        "exchange_order_id": text(data.get('id_exchange')),
+        "parent_order_id": text(data.get('id_parent')),
+        "status": fyers_status(status),
+        "status_message": text(data.get('oms_msg')) or text(data.get('message')),
+        "id": symbol,
+        "instrument_token": text(data.get('fy_token')),
+        "tradingsymbol": symbol,
+        "exchange": exchange_of(symbol),
+        "transaction_type": normalize(present(data.get('tran_side')), TRANSACTION_TYPES),
+        "product": normalize(present(data.get('product_type')), PRODUCTS),
+        "order_type": normalize(present(data.get('ord_type')), ORDER_TYPES),
+        "validity": normalize(present(data.get('validity')), VALIDITIES),
+        "quantity": quantity,
+        "filled_quantity": filled,
+        "pending_quantity": pending,
+        "cancelled_quantity": number(data.get('qty_cancelled'), int),
+        "disclosed_quantity": number(data.get('qty_disclosed'), int),
+        "price": number(data.get('price_limit')),
+        "trigger_price": number(data.get('price_stop')),
+        "average_price": number(data.get('price_traded')),
+        "order_timestamp": fyers_timestamp(data.get('time_oms')),
+        "exchange_timestamp": fyers_timestamp(data.get('time_exch')),
+        "tag": text(data.get('ordertag')),
+    }
+
+def position_key(symbol, product):
+    """
+    The hash field for a Fyers position, `symbol:product` as Fyers spells both (`NSE:INFY-EQ:INTRADAY`), or None.
+
+    The REST row and the websocket message carry the same two values under different names - `symbol` and
+    `productType` against `symbol` and `product_type` - so both writers build the field here and a position lands on
+    one field whichever wrote it. A position without a product falls back to the symbol alone.
+
+    - `symbol` is the Fyers symbol.
+    - `product` is Fyers' product, `CNC`, `INTRADAY`, `MARGIN`, `CO`, `BO` or `MTF`.
+    """
+    symbol, product = text(symbol), text(product)
+    if symbol is None:
+        return None
+    return f"{symbol}:{product.strip().upper()}" if product else symbol
+
+def position_from_update(data):
+    """
+    A Fyers position update's `positions` object as a normalized position.
+
+    - `data` is the `positions` object of a position update message.
+    """
+    symbol = text(data.get('symbol'))
+    buy_quantity, sell_quantity = number(data.get('buy_qty'), int), number(data.get('sell_qty'), int)
+    net = number(data.get('net_qty'), int)
+    if net is None and buy_quantity is not None and sell_quantity is not None:
+        net = buy_quantity - sell_quantity
+    realized, unrealized = number(data.get('pl_realized')), number(data.get('pl_unrealized'))
+    total = number(data.get('pl_total'))
+    if total is None and realized is not None and unrealized is not None:
+        total = realized + unrealized
+    carried = (number(data.get('cf_buy_qty'), int) or 0) or (number(data.get('cf_sell_qty'), int) or 0)
+    return {
+        "id": symbol,
+        "instrument_token": text(data.get('fy_token')),
+        "tradingsymbol": symbol,
+        "exchange": exchange_of(symbol),
+        "segment": text(data.get('segment')),
+        "product": normalize(present(data.get('product_type')), PRODUCTS),
+        "quantity": net,
+        "buy_quantity": buy_quantity,
+        "sell_quantity": sell_quantity,
+        "buy_price": number(data.get('buy_avg')),
+        "sell_price": number(data.get('sell_avg')),
+        "buy_value": number(data.get('buy_val')),
+        "sell_value": number(data.get('sell_val')),
+        "average_price": number(data.get('net_avg')),
+        # The position update stream carries no last price; only the REST positions do.
+        "last_price": None,
+        "realized_pnl": realized,
+        "unrealized_pnl": unrealized,
+        "pnl": total,
+        "multiplier": number(data.get('qty_multiplier')),
+        "lot_size": None,
+        "day_or_net": "NET" if carried else "DAY",
+        "updated_at": None,
+    }
+
+
+def token_expired(access_token):
+    """
+    Whether a Fyers access token, a JWT, has passed its expiry or cannot be read.
+
+    - `access_token` is the token from the REST login.
+    """
+    try:
+        claims = json.loads(base64.urlsafe_b64decode(str(access_token).split('.')[1] + '===').decode())
+    except Exception:
+        return True
+    return claims.get('exp', 0) <= time.time()
+
+class OrderUpdatesSocket:
+    """
+    Fyers' order update websocket, reconnecting and logging in again until stopped.
+    """
+
+    def __init__(self, cache, logger):
+        """
+        Construct FyersAPI, which logs in when its probe raises, and confirm the session against the profile.
+
+        - `cache` is the Redis client.
+        - `logger` is where the connection reports.
+        """
+        from stock_brokers.api.fyers import FyersAPI
+
+        self._api_class = FyersAPI
+        self._cache = cache
+        self._merge = cache.register_script(MERGE_SCRIPT)
+        self._logger = logger
+        self._fyers = self._confirmed(FyersAPI())
+        self._stop = threading.Event()
+        self._ws = None
+        self._opened = False
+        self._authentication_rejected = False
+        self.gave_up = False
+
+    @staticmethod
+    def _confirmed(fyers):
+        """
+        Raise unless the profile is served. FyersAPI only logs in when its probe raises, and Fyers can refuse a dead
+        session inside an HTTP 200, so a constructor that returned is no proof of a session.
+
+        - `fyers` is a FyersAPI.
+        """
+        body = (fyers.get(url=PROFILE_URL, timeout=30) or {}).get('data')
+        if not isinstance(body, dict) or body.get('s') not in (None, 'ok'):
+            raise RuntimeError(f"the Fyers profile was refused: {str(body)[:200]}")
+        return fyers
+
+    def close(self):
+        """Close the websocket and stop reconnecting."""
+        self._stop.set()
+        if self._ws is not None:
+            self._ws.close()
+
+    def run_forever(self):
+        """Connect, and reconnect with backoff, until closed or unable to recover."""
+        backoff = MIN_BACKOFF_SECONDS
+        failed_connects = 0
+        logged_in_again = False
+        while not self._stop.is_set():
+            self._opened = False
+            self._authentication_rejected = False
+            try:
+                self._connect()
+            except Exception as exception:
+                self._logger.error(f"Order updates connection failed: {type(exception).__name__}: {exception}")
+            if self._stop.is_set():
+                break
+
+            if self._opened and not self._authentication_rejected:
+                failed_connects, logged_in_again, backoff = 0, False, MIN_BACKOFF_SECONDS
+            else:
+                failed_connects += 1
+
+            if self._authentication_rejected or failed_connects >= MAX_FAILED_CONNECTS:
+                if logged_in_again and (self._authentication_rejected or failed_connects >= MAX_FAILED_CONNECTS):
+                    self.gave_up = True
+                    self._logger.error("Order updates are still refused after logging in again. Giving up.")
+                    break
+                try:
+                    # A dead session: log in again before connecting again.
+                    self._logger.warning("Logging in to Fyers again.")
+                    self._fyers = self._confirmed(self._api_class())
+                except Exception as exception:
+                    self.gave_up = True
+                    self._logger.error(f"Could not log in to Fyers again: {type(exception).__name__}: {exception}")
+                    break
+                failed_connects, logged_in_again = 0, True
+
+            self._logger.warning(f"Order updates disconnected. Reconnecting in {backoff} seconds.")
+            self._stop.wait(backoff)
+            backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
+        self._logger.info("Order updates socket stopped.")
+
+    def _connect(self):
+        """Open the websocket with the token in force now, authenticated in the handshake, and block until it closes."""
+        import websocket
+
+        login = self._fyers._current_login() or {}
+        token = login.get('access_token')
+        if token_expired(token):
+            self._logger.warning("The Fyers access token has expired.")
+            self._authentication_rejected = True
+            return
+        self._ws = websocket.WebSocketApp(ORDER_UPDATES_URL, header={"authorization": f"{self._fyers._settings.get('app_id')}:{token}"},
+                                          on_open=self._on_open, on_message=self._on_message,
+                                          on_error=self._on_error, on_close=self._on_close)
+        self._ws.run_forever(ping_interval=PING_INTERVAL_SECONDS, ping_timeout=PING_TIMEOUT_SECONDS)
+
+    def _on_open(self, ws):
+        """Subscribe to orders and positions. The session was authenticated by the handshake."""
+        self._opened = True
+        ws.send(json.dumps({"T": "SUB_ORD", "SLIST": SUBSCRIBE_CHANNELS, "SUB_T": 1}))
+        self._logger.info(f"Order updates socket opened and subscribed to {', '.join(SUBSCRIBE_CHANNELS)}.")
+
+    def _on_error(self, ws, error):
+        # A refused handshake surfaces here, with the HTTP status of the failed upgrade.
+        if getattr(error, 'status_code', None) in AUTHENTICATION_HANDSHAKE_STATUSES:
+            self._authentication_rejected = True
+        self._logger.error(f"Order updates error: {error}")
+
+    def _on_close(self, ws, status_code, message):
+        self._logger.info(f"Order updates socket closed with status {status_code}: {message}")
+
+    def _on_message(self, ws, message):
+        """Merge each order and position into its hash, and append every one of them to its stream."""
+        received_at = datetime.now()
+        received = received_at.strftime("%Y-%m-%d %H:%M:%S.%f")
+        observed_at = received_at.timestamp()
+        orders, positions = self.parse(message)
+
+        merged_orders, merged_positions = [], []
+        for data in orders:
+            order = order_from_update(data)
+            merged_orders += [order["order_id"], json.dumps({"observed_at": observed_at, "source": "websocket",
+                                                             "order": order, "data": data})]
+        for data in positions:
+            merged_positions += [position_key(data.get('symbol'), data.get('product_type')),
+                                 json.dumps({"observed_at": observed_at, "source": "websocket",
+                                             "position": position_from_update(data), "data": data})]
+        # The hashes keep the latest state; the streams keep every update, even two of one order in one message, in the
+        # shape bin/fyers/orders/store_orders_to_db and bin/fyers/portfolio/store_positions_to_db read.
+        for key, merged in ((ORDERS_KEY, merged_orders), (POSITIONS_KEY, merged_positions)):
+            if merged:
+                self._merge(keys=[key], args=[next_reset(), "websocket", repr(observed_at)] + merged)
+        if orders or positions:
+            pipeline = self._cache.pipeline(transaction=False)
+            for stream, field, updates in ((ORDER_STREAM_KEY, "update", orders), (POSITION_STREAM_KEY, "position", positions)):
+                for data in updates:
+                    pipeline.xadd(stream, {field: json.dumps({'timestamp': received, 'data': data})},
+                                  maxlen=STREAM_MAX_LENGTH, approximate=True)
+            pipeline.execute()
+        if orders:
+            self._logger.info(f"Merged {len(orders)} order update(s) into {ORDERS_KEY}: {', '.join(merged_orders[0::2])}")
+        if positions:
+            self._logger.info(f"Merged {len(positions)} position update(s) into {POSITIONS_KEY}: "
+                              f"{', '.join(merged_positions[0::2])}")
+        if self._authentication_rejected and self._ws is not None:
+            self._ws.close()
+
+    def parse(self, message):
+        """
+        The order and position objects a message carries, each a list of Fyers' objects in arrival order.
+
+        - `message` is the message received.
+        """
+        if isinstance(message, (bytes, bytearray)):
+            message = bytes(message).decode('utf-8', errors='replace')
+        # Fyers answers its keepalive with a bare word rather than a frame.
+        if not isinstance(message, str) or message.strip() in ('', 'ping', 'pong'):
+            return [], []
+        try:
+            payload = json.loads(message)
+        except json.JSONDecodeError:
+            self._logger.debug(f"Ignoring a frame that is not JSON: {message[:160]}")
+            return [], []
+
+        orders, positions = [], []
+        for entry in (payload if isinstance(payload, list) else [payload]):
+            if not isinstance(entry, dict):
+                continue
+            if entry.get('s') == 'error':
+                try:
+                    code = int(entry.get('code'))
+                except (TypeError, ValueError):
+                    code = None
+                if code in AUTHENTICATION_ERROR_CODES:
+                    self._authentication_rejected = True
+                self._logger.error(f"Fyers reported an error: {entry.get('message') or entry}")
+                continue
+            if entry.get('code') == SUBSCRIBED_CODE:
+                self._logger.info(f"Fyers: {entry.get('message')}.")
+                continue
+
+            order = entry.get('orders')
+            position = entry.get('positions')
+            if isinstance(order, dict) and text(order.get('id')) is not None:
+                orders.append(order)
+            elif isinstance(position, dict) and text(position.get('symbol')) is not None:
+                positions.append(position)
+            elif 'trades' not in entry:
+                self._logger.info(f"Ignoring a message: {json.dumps(entry)[:200]}")
+        return orders, positions
+
+def main():
+    """Stream Fyers order and position updates into Redis until stopped."""
+    from utilities.configurations import get_cache, get_logger
+
+    logger = get_logger("fyers.websocket_order_details")
+    try:
+        socket = OrderUpdatesSocket(get_cache(), logger)
+    except Exception as exception:
+        logger.error(f"Could not log in to Fyers: {type(exception).__name__}: {exception}")
+        return 1
+
+    # Installed before the thread starts: systemd stops a unit with SIGTERM, and the default action would kill
+    # the process without closing the connection.
+    def _handle_signal(signal_number, frame):
+        logger.info(f"Received signal {signal_number}. Closing the order updates feed.")
+        socket.close()
+
+    for signal_number in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(signal_number, _handle_signal)
+
+    thread = threading.Thread(target=socket.run_forever, name="fyers_order_updates", daemon=True)
+    logger.info("Starting the order updates feed.")
+    thread.start()
+
+    # Block in the main thread so the signal handlers above can run.
+    while thread.is_alive():
+        thread.join(timeout=1)
+
+    if socket.gave_up:
+        return 1
+    logger.info("Order updates feed stopped.")
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,7 +1,7 @@
 """
 Reading the documents the `bin/unified/` scripts keep in Redis, for the routes that answer from them.
 
-`bin/unified/funds`, `holdings`, `positions`, `orders` and `trades` each combine every broker's data into one document
+`bin/unified/portfolio/funds`, `holdings`, `positions`, `orders` and `trades` each combine every broker's data into one document
 in the REST API's own shape and write it to a Redis key - every half second, or every minute for holdings. A route
 answers with that document rather than asking every broker while the client waits. The document carries `as_of`, when
 it was written, and `brokers`, how each broker's data was read.

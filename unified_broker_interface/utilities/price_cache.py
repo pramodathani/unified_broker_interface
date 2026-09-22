@@ -7,7 +7,7 @@ window is sliced out of the copy and no database query is made at all. A request
 window is read from the union of the two ranges, and that wider answer replaces the copy, so a caller
 that keeps asking for a longer history fills one growing entry rather than many overlapping ones.
 
-**What makes a copy current.** A copy records the `finished` time of the `bin/unified/historical_prices`
+**What makes a copy current.** A copy records the `finished` time of the `bin/unified/instruments/price_history`
 run that was in force when it was built, read from `unified:prices:last_run`. When the loader has run
 since - a nightly load, a correction, a rebuilt adjustment factor - the copy is ignored and written
 again from the database. That is what keeps the promise the adjustment DDL makes, that correcting a

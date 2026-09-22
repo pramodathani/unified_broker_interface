@@ -5,18 +5,18 @@
 On 2026-09-22 the user asked for `/api/instruments/prices` to keep a copy of every answer in Redis and to serve a later request for the same instrument from that copy rather than querying TimescaleDB again. Three decisions were put to them, and they chose:
 
 - **Slice a wider cached window**, not exact-range keys. One entry per series holds the widest range read so far, and any request whose range falls inside it is sliced out. The alternative, putting `from` and `to` into the key, was rejected because a caller asking for a year and then for a month inside it would query twice.
-- **The loader stamp plus a TTL**, not a fixed TTL alone and not clearing by hand from `bin/unified/historical_prices`. The stamp keeps the loader's own code untouched and the correctness rule visible in the API.
+- **The loader stamp plus a TTL**, not a fixed TTL alone and not clearing by hand from `bin/unified/instruments/price_history`. The stamp keeps the loader's own code untouched and the correctness rule visible in the API.
 - **Every interval, with a size cap**, not daily only. Intraday charts get the benefit, and the cap stops one instrument taking eleven megabytes.
 
 ## The stamp is what makes a cached copy safe
 
 `unified.adjusted_bars` exists so that adjustment happens on read: the DDL's own comment says correcting a factor corrects every query at once and nothing has to be rewritten. A Redis copy of adjusted candles is the first thing in this project that can hold prices the database has since revised, so the copy has to be able to tell that it is out of date.
 
-`bin/unified/historical_prices` already writes the outcome of every run to `unified:prices:last_run`, so the `finished` time in that JSON is used as the stamp. A copy records the stamp in force when it was built, and `load()` throws the copy away when the stamp has changed. A load, a correction or a rebuilt factor therefore drops every copy without the loader knowing this cache exists.
+`bin/unified/instruments/price_history` already writes the outcome of every run to `unified:prices:last_run`, so the `finished` time in that JSON is used as the stamp. A copy records the stamp in force when it was built, and `load()` throws the copy away when the stamp has changed. A load, a correction or a rebuilt factor therefore drops every copy without the loader knowing this cache exists.
 
 Two consequences are deliberate rather than accidental:
 
-- The script writes `last_run` on *every* invocation, including the read-only `status` and `sources` steps, so running `bin/unified/historical_prices status` drops the whole cache. That costs one query per series afterwards and nothing else, which is a much better trade than teaching this module which steps change data.
+- The script writes `last_run` on *every* invocation, including the read-only `status` and `sources` steps, so running `bin/unified/instruments/price_history status` drops the whole cache. That costs one query per series afterwards and nothing else, which is a much better trade than teaching this module which steps change data.
 - `replace()` stamps the copy with the value read in `load()`, *before* the query ran, not with a fresh read afterwards. If a load finishes while the query is in flight, the rows may be a mix of before and after, and the pre-query stamp makes the next request discard that copy. Stamping it afterwards would have left a mixed copy claiming to be current for a whole day.
 
 When `last_run` cannot be parsed at all, `loader_stamp` returns `None` and the cache turns itself off for that request rather than guessing. When the key is simply unset, because the loader has never run on this machine, the stamp is the constant `"none"` and caching works normally.

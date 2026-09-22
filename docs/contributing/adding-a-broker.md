@@ -90,13 +90,13 @@ the pattern; take the script from the broker on the same platform where there is
 
 | Script | What it needs from the broker |
 | --- | --- |
-| `login`, `logout` | The API class; `login` writes `<broker>:session:status` |
-| `user-profile`, `orders`, `trades`, `holdings`, `positions`, `funds` | Each endpoint, and how the broker signals a dead session, so the poller logs in again **before** its next request |
-| `quotes` | The feed's connection, subscription and decoding, producing the [normalized tick](../architecture/contracts.md#the-tick) |
-| `order_updates` | The order feed's connection and decoding, producing the [normalized order](../architecture/contracts.md#the-order), and positions where the broker streams them |
-| `persist_ticks`, `persist_orders`, `persist_positions` | Only the column mapping; `persist_positions` only if the broker streams positions |
-| `instruments` | Runs the ingester from step 2 and writes `<broker>:instruments:master` |
-| `historical_prices` | Wraps the `BrokerCandles` subclass from step 3, logging in through the API class |
+| `session/connect`, `session/disconnect` | The API class; `connect` writes `<broker>:session:status` |
+| `user/details`, `orders/api_order_details`, `orders/api_trade_details`, `portfolio/holdings`, `portfolio/positions`, `portfolio/funds` | Each endpoint, and how the broker signals a dead session, so the poller logs in again **before** its next request |
+| `instruments/websocket_quotes` | The feed's connection, subscription and decoding, producing the [normalized tick](../architecture/contracts.md#the-tick) |
+| `orders/websocket_order_details` | The order feed's connection and decoding, producing the [normalized order](../architecture/contracts.md#the-order), and positions where the broker streams them |
+| `instruments/store_quotes_to_db`, `orders/store_orders_to_db`, `portfolio/store_positions_to_db` | Only the column mapping; `store_positions_to_db` only if the broker streams positions |
+| `instruments/daily_feed` | Runs the ingester from step 2 and writes `<broker>:instruments:master` |
+| `instruments/price_history` | Wraps the `BrokerCandles` subclass from step 3, logging in through the API class |
 
 Map the broker's status, product, order type and validity spellings onto the
 [shared vocabulary](../architecture/contracts.md#the-shared-vocabulary), adding them to the script's tables
@@ -107,22 +107,24 @@ rather than branching in the parser, and keep the broker's own row as `data`.
 Add `stock_brokers/instruments/ticks/utilities/sql/ddl/<NNN>_<broker>_streams.sql`, numbered after
 `100_stoxkart_streams.sql`, holding the broker's schema, `ticks`,
 `order_updates` and, if it streams them, `positions` - table, hypertable, indexes and compression, every
-statement safe to run again. Each `persist_*` script applies this file by name when it starts, so there is no
+statement safe to run again. Each `store_*_to_db` script applies this file by name when it starts, so there is no
 separate step. See [DDL and migrations](../database/ddl.md).
 
 ## 6. The units
 
-Create `services/<broker>/` with `<broker>@.service`, `<broker>-login.service`, `<broker>-login.timer`,
+Create `services/<broker>/` with a template per folder - `<broker>-instruments@.service`,
+`<broker>-orders@.service`, `<broker>-portfolio@.service` and `<broker>-user@.service` - plus
+`<broker>-login.service`, `<broker>-login.timer`,
 `<broker>-historical-prices.service` if it serves candles, and `<broker>.target`, whose header comment
-carries the install commands. Add its `bin/<broker>/instruments` line to `unified-instruments.service`.
+carries the install commands. Add its `bin/<broker>/instruments/daily_feed` line to `unified-mapping.service`.
 See [Running it as a service](../guides/services.md).
 
 ## 7. The unified scripts
 
 The `bin/unified/` scripts pick a broker up only once it is in their lists: `BROKERS` in each combiner and
-in `quotes`, `ORDER_BROKERS` and, if it streams positions, `POSITION_BROKERS` in `order_updates`. Each
-combiner also has a per-broker field table it reads that broker's data with, and `quotes` carries its own
-normalizer per broker in `build_normalizers`, stating which quantities it reports in lots, when its `close`
+in `websocket_quotes`, `ORDER_BROKERS` and, if it streams positions, `POSITION_BROKERS` in
+`websocket_order_details`. Each combiner also has a per-broker field table it reads that broker's data
+with, and `websocket_quotes` carries its own normalizer per broker in `build_normalizers`, stating which quantities it reports in lots, when its `close`
 is the previous close and which timestamps are true. See [Unified scripts](../guides/unified-scripts.md).
 
 ## 8. The REST API

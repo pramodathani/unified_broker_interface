@@ -1,0 +1,1366 @@
+#!/usr/bin/env python3
+"""
+Combine every broker's live ticks into one live quote per unified instrument, in the Redis hash `unified:quotes:live`,
+the way the project's unified tick layer does, and keep doing it until stopped.
+
+    bin/unified/instruments/websocket_quotes
+    redis-cli HGET unified:quotes:live <instrument id>
+    redis-cli XINFO GROUPS dhan:quotes:stream           # the unified group's lag on one broker
+    redis-cli GET unified:quotes:stats
+
+Nothing here calls a broker. Each broker's ticks arrive on the Redis Stream `<broker>:quotes:stream` (field `tick`),
+written by `bin/<broker>/instruments/websocket_quotes`, and the instruments come from the unified cache `bin/unified/instruments/map` writes.
+
+**Reading the streams.** The ten streams are read together as the consumer group `unified` - separate from the `persist`
+group `bin/<broker>/instruments/store_quotes_to_db` reads, so each gets every tick. The group is created at the end of a stream the first
+time, since a live cache has no use for history. Entries are acknowledged only after the batch holding them is written;
+at every start the entries this consumer read but never acknowledged are taken first.
+
+**Each tick** goes through the unified tick layer's steps, cheapest refusal first:
+
+1. **Resolve** its token to an instrument, once per token per mapping date. Each broker's token names an exchange and a
+   kind of instrument - Kite's token in its low byte, Dhan's `NSE_EQ:2885` (or `1:2885`), Noren's `NSE|2885`, Kotak's
+   `nse_cm|11536`, Groww's `NSE|CASH|2885`, INDstocks' and Stoxkart's `NSE:2885`, XTS's `1:2885`, and Fyers' symbol `NSE:SBIN-EQ`,
+   which is turned into its token through the order symbols in `unified:broker_mappings`. The token is looked up in
+   `unified:broker_tokens` and kept only among the segments that exchange and kind allow; an expired contract is ruled
+   out, and a token that still names more than one instrument is not guessed at. The instrument's lot size is decided
+   from every broker's mapping - one for a security, Groww's on MCX, the most common otherwise - and each quantity field
+   the broker reports in lots is multiplied up to units.
+2. **Session:** a tick received outside its instrument's window - NSE and BSE 09:00 to 16:00, currency to 17:30,
+   commodities to midnight, NCDEX to 21:30, on the exchanges' trading days from the calendars beside the tick layer - is
+   dropped, which keeps weekend replays and mock sessions out.
+3. **Ownership:** one broker owns an instrument at a time and only its ticks are written. Priority is Zerodha, Dhan,
+   Kotak, Flattrade, Shoonya, Fyers, Wisdom Capital, Groww, INDmoney, Stoxkart (Shoonya and Wisdom Capital on NCDEX), with Zerodha
+   the only verified broker. The top verified broker takes an instrument at once; any other waits 5 seconds for a better
+   one. A backup takes over when the owner's stream has been silent 45 seconds, or the owner has not sent the instrument
+   for 60 seconds while a backup sent it 3 times; a higher-ranked verified broker takes it back after 60 seconds of
+   continuous health. Health is judged per broker stream from the ticks it carries, since the streams carry no heartbeats.
+   Ownership starts afresh at each session's end.
+4. **Normalize:** prices rounded to the instrument's places (4 for currency, 2 otherwise), negative prices allowed only for
+   commodity derivatives, empty order-book levels dropped, timestamps days away from receipt discarded, and `close` taken
+   as the previous close only where the broker's close means that: always at Zerodha, Kotak and Fyers; before the
+   session's close at Dhan, Stoxkart and the Noren brokers; never at Groww, INDmoney and Wisdom Capital.
+5. **Previous close** is carried from an earlier owner's tick the same India day when the owner does not send it, and the
+   change is recomputed from it.
+6. **De-duplicate:** a tick that changes nothing but the clock is dropped.
+
+**`unified:quotes:live`** is a hash keyed by `instrument_id`, each value the unified quote document the tick layer writes:
+`instrument_id`, `broker`, `broker_token`, `exchange`, `segment`, `shape`, `symbol`, `underlying_symbol`, `expiry_date`,
+`strike_price`, `option_type`, `lot_size`, `last_price`, `average_price`, `ohlc` (`open`, `high`, `low`),
+`previous_close`, `change_percent`, `last_quantity`, `volume`, `buy_quantity`, `sell_quantity`, `oi`, `oi_day_high`,
+`oi_day_low`, `depth` (`buy` and `sell` levels of `price`, `quantity` and `orders`), `last_trade_time`, `exchange_time`,
+`received_at`, `unified_at`, `stale` and `stale_since`. Quantities are units and times epoch seconds. A quote whose owner
+went silent with no healthy backup stays, with `stale` true and `stale_since` set; quotes stale for a week are removed.
+Today's previous closes are recovered from the hash at start.
+
+**Which instruments are covered** is not decided here. There is no instrument list: a quote is written for whatever
+arrives on the ten streams, so the coverage is the feeds' coverage. Since `bin/zerodha/instruments/websocket_quotes` began carrying Zerodha's
+whole instrument master on 2026-09-16, that is about 112,400 instruments - 112,422 of that day's 112,657 resolve to
+exactly one unified instrument, 170 name more than one and are not guessed at, 64 are filed under a segment the
+token's segment code does not allow, and 1 has no mapping at all.
+
+**`unified:quotes:stream`** gets every quote written, as field `quote`, capped at about 1,000,000 entries, for a unified tick
+persister. `unified:quotes:stats` holds the counts - received, unresolved, out_of_session, not_owner, no_price, duplicate,
+written - and `unified:quotes:unresolved` counts each unresolved `broker:token:reason`.
+
+Runs until Ctrl+C or SIGTERM, writing and acknowledging the batch in hand. A Redis that cannot be reached is retried.
+Reads only - it places no orders.
+"""
+
+import sys
+import json
+import time
+import signal
+import threading
+from collections import Counter, defaultdict, namedtuple
+from datetime import date
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+import yaml  # noqa: E402
+
+from stock_brokers.instruments.mapping.utilities.segments import (CASH_SEGMENTS, DERIVATIVE_SEGMENTS,  # noqa: E402
+                                                                  INDEX_SEGMENTS, MAPPED_BROKERS, segments_of,
+                                                                  split_segment_value)
+
+LIVE_KEY = "unified:quotes:live"
+QUOTES_STREAM_KEY = "unified:quotes:stream"
+QUOTES_STREAM_MAX_LENGTH = 1000000
+STATS_KEY = "unified:quotes:stats"
+UNRESOLVED_KEY = "unified:quotes:unresolved"
+
+BROKER_TOKENS_KEY = "unified:broker_tokens"
+BROKER_MAPPINGS_KEY = "unified:broker_mappings"
+INSTRUMENTS_KEY = "unified:instruments"
+META_KEY = "unified:mapping:meta"
+
+BROKERS = ("zerodha", "dhan", "kotak", "flattrade", "shoonya", "fyers", "wisdom_capital", "groww", "indmoney", "stoxkart")
+GROUP = "unified"
+CONSUMER = "quotes"
+BATCH_SIZE = 500
+BLOCK_MILLISECONDS = 1000
+
+HOUSEKEEPING_SECONDS = 1.0
+REFRESH_SECONDS = 30.0
+STATS_SECONDS = 10.0
+PURGE_SECONDS = 3600.0
+STALE_RETENTION_SECONDS = 7 * 86400
+MISS_RETRY_SECONDS = 600.0
+MIN_BACKOFF_SECONDS = 1
+MAX_BACKOFF_SECONDS = 60
+
+# The calendars of trading days and special sessions the tick layer keeps, one YAML file a year. Data, read by path.
+CALENDAR_DIRECTORY = PROJECT_ROOT / "stock_brokers" / "instruments" / "ticks" / "utilities" / "calendars"
+
+# ---- which broker owns an instrument --------------------------------------------------------------------------------
+
+# Highest priority first, for every exchange unless overridden.
+DEFAULT_PRIORITY = ("zerodha", "dhan", "kotak", "flattrade", "shoonya", "fyers", "wisdom_capital", "groww", "indmoney",
+                    "stoxkart")
+EXCHANGE_PRIORITY = {
+    "mcx": ("zerodha", "dhan", "kotak", "flattrade", "shoonya", "fyers", "wisdom_capital", "groww", "stoxkart"),
+    "ncdex": ("shoonya", "wisdom_capital"),
+}
+VERIFIED_BROKERS = frozenset({"zerodha"})
+
+# A stream silent this long is unhealthy. An owner silent on one instrument this long, while a backup sent it this many
+# times, has lost it. A higher priority broker must be healthy this long to take an instrument back. A new instrument
+# waits this long for a better broker than the first to send it.
+STALE_SOCKET_SECONDS = 45.0
+INSTRUMENT_LAG_SECONDS = 60.0
+INSTRUMENT_LAG_BACKUP_TICKS = 3
+HANDBACK_HEALTHY_SECONDS = 60.0
+INITIAL_GRACE_SECONDS = 5.0
+
+def priority_for(exchange):
+    """The broker priority for an exchange, highest first."""
+    return EXCHANGE_PRIORITY.get(exchange, DEFAULT_PRIORITY)
+
+def rank(broker, exchange, verified=VERIFIED_BROKERS):
+    """A broker's sort key on an exchange: verified before unverified, then by priority; unlisted brokers last."""
+    order = priority_for(exchange)
+    return (0 if broker in verified else 1, order.index(broker) if broker in order else len(order))
+
+class _Socket:
+    __slots__ = ("last_message_at", "up_since", "closed")
+
+    def __init__(self, at):
+        self.last_message_at = at
+        self.up_since = at
+        self.closed = False
+
+class _Candidate:
+    __slots__ = ("socket", "last_tick_at", "ticks_since_owner")
+
+    def __init__(self, socket, at):
+        self.socket = socket
+        self.last_tick_at = at
+        self.ticks_since_owner = 0
+
+class _Instrument:
+    __slots__ = ("exchange", "owner", "session_end", "first_seen", "candidates", "stale_since")
+
+    def __init__(self, exchange, at):
+        self.exchange = exchange
+        self.owner = None
+        self.session_end = None
+        self.first_seen = at
+        self.candidates = {}
+        self.stale_since = None
+
+class OwnershipEngine:
+    """
+    Decides, tick by tick, which broker owns each instrument, from the instants passed in rather than the clock.
+    """
+
+    def __init__(self):
+        self.verified = VERIFIED_BROKERS
+        self._sockets = {}
+        self._instruments = {}
+        self._top = {}
+
+    def observe(self, broker, socket, instrument_id, exchange, at, session_end):
+        """
+        Account for one resolved tick, as (whether it is written, whether this broker just took the instrument).
+
+        - `broker` and `socket` say where it came from; `instrument_id` and `exchange` what it is for.
+        - `at` is when it was received; `session_end` when the instrument's window closes.
+        """
+        self._touch(broker, socket, at)
+        state = self._instruments.get(instrument_id)
+        if state is None:
+            state = self._instruments[instrument_id] = _Instrument(exchange, at)
+        elif state.first_seen is None:
+            state.first_seen = at
+
+        candidate = state.candidates.get(broker)
+        if candidate is None:
+            candidate = state.candidates[broker] = _Candidate(socket, at)
+        else:
+            candidate.socket = socket
+            candidate.last_tick_at = at
+
+        owner = state.owner
+        if owner == broker:
+            for other in state.candidates.values():
+                other.ticks_since_owner = 0
+            state.stale_since = None
+            return True, False
+
+        if owner is None:
+            if broker == self._top_verified(exchange) or (
+                    at - state.first_seen >= INITIAL_GRACE_SECONDS and self._best_healthy(state, at) == broker):
+                self._take(state, broker, session_end)
+                return True, True
+            return False, False
+
+        candidate.ticks_since_owner += 1
+        if not self._owner_healthy(state, at):
+            if self._best_healthy(state, at, exclude=owner) == broker:
+                self._take(state, broker, session_end)
+                return True, True
+            return False, False
+
+        if (broker in self.verified and rank(broker, exchange) < rank(owner, exchange)
+                and at - self._sockets[(broker, socket)].up_since >= HANDBACK_HEALTHY_SECONDS):
+            self._take(state, broker, session_end)
+            return True, True
+        return False, False
+
+    def stale(self, now):
+        """Owned instruments whose owner is unhealthy with no healthy backup, newly so, as (instrument id, since)."""
+        newly = []
+        for instrument_id, state in self._instruments.items():
+            if state.owner is None or state.stale_since is not None:
+                continue
+            if self._owner_healthy(state, now) or self._best_healthy(state, now, exclude=state.owner):
+                continue
+            state.stale_since = now
+            newly.append((instrument_id, now))
+        return newly
+
+    def end_sessions(self, now):
+        """Forget the owners of instruments whose session window has ended, so each session starts afresh."""
+        for state in self._instruments.values():
+            if state.owner is not None and state.session_end is not None and state.session_end <= now:
+                self._reset(state)
+
+    def owner_of(self, instrument_id):
+        """The broker that owns an instrument now, or None."""
+        state = self._instruments.get(instrument_id)
+        return state.owner if state else None
+
+    def _touch(self, broker, socket, at):
+        known = self._sockets.get((broker, socket))
+        if known is None:
+            self._sockets[(broker, socket)] = _Socket(at)
+            return
+        if known.closed or at - known.last_message_at > STALE_SOCKET_SECONDS:
+            known.up_since = at
+            known.closed = False
+        if at > known.last_message_at:
+            known.last_message_at = at
+
+    def _socket_healthy(self, broker, socket, now):
+        known = self._sockets.get((broker, socket))
+        return known is not None and not known.closed and now - known.last_message_at <= STALE_SOCKET_SECONDS
+
+    def _owner_healthy(self, state, now):
+        owner = state.candidates[state.owner]
+        if not self._socket_healthy(state.owner, owner.socket, now):
+            return False
+        if now - owner.last_tick_at <= INSTRUMENT_LAG_SECONDS:
+            return True
+        for broker, candidate in state.candidates.items():
+            if (broker != state.owner and candidate.ticks_since_owner >= INSTRUMENT_LAG_BACKUP_TICKS
+                    and self._socket_healthy(broker, candidate.socket, now)):
+                return False
+        return True
+
+    def _best_healthy(self, state, now, exclude=None):
+        best, best_rank = None, None
+        for broker, candidate in state.candidates.items():
+            if broker == exclude or not self._socket_healthy(broker, candidate.socket, now):
+                continue
+            broker_rank = rank(broker, state.exchange)
+            if best_rank is None or broker_rank < best_rank:
+                best, best_rank = broker, broker_rank
+        return best
+
+    def _top_verified(self, exchange):
+        top = self._top.get(exchange, False)
+        if top is False:
+            top = next((broker for broker in priority_for(exchange) if broker in self.verified), None)
+            self._top[exchange] = top
+        return top
+
+    def _take(self, state, broker, session_end):
+        state.owner = broker
+        state.session_end = session_end
+        state.stale_since = None
+        for candidate in state.candidates.values():
+            candidate.ticks_since_owner = 0
+
+    def _reset(self, state):
+        state.owner = None
+        state.session_end = None
+        state.first_seen = None
+        state.candidates = {}
+        state.stale_since = None
+
+# ---- session windows ------------------------------------------------------------------------------------------------
+
+INDIA_OFFSET_SECONDS = 19800
+SECONDS_PER_DAY = 86400
+_EPOCH_WEEKDAY = 3
+EQUITY, CURRENCY, COMMODITY = "equity", "currency", "commodity"
+Session = namedtuple("Session", ["calendar", "opens", "evening_opens", "trading_close", "window_close"])
+
+def _clock(hours, minutes=0, seconds=0):
+    return hours * 3600 + minutes * 60 + seconds
+
+EQUITY_SESSION = Session(EQUITY, _clock(9), None, _clock(15, 30), _clock(16))
+CURRENCY_SESSION = Session(CURRENCY, _clock(9), None, _clock(17), _clock(17, 30))
+COMMODITY_SESSION = Session(COMMODITY, _clock(9), _clock(17), _clock(23, 55), _clock(23, 59, 59))
+NCDEX_SESSION = Session(COMMODITY, _clock(9), _clock(17), _clock(21), _clock(21, 30))
+EVENING_CLOSED_GRACE_SECONDS = 1800
+
+def session_for(segment):
+    """The session window an instrument's ticks are accepted in, from its exchange-prefixed segment."""
+    exchange, bare = split_segment_value(segment)
+    if exchange == "ncdex":
+        return NCDEX_SESSION
+    if exchange == "mcx" or bare.startswith("commodit"):
+        return COMMODITY_SESSION
+    if bare.startswith("currenc"):
+        return CURRENCY_SESSION
+    return EQUITY_SESSION
+
+def india_day_number(epoch):
+    """The India day an instant falls on, as whole days since 1970-01-01."""
+    return int((epoch + INDIA_OFFSET_SECONDS) // SECONDS_PER_DAY)
+
+def india_date(epoch):
+    """The India calendar date an instant falls on."""
+    return date.fromordinal(date(1970, 1, 1).toordinal() + india_day_number(epoch))
+
+def day_start_epoch(day_number):
+    """The instant India midnight begins a day."""
+    return day_number * SECONDS_PER_DAY - INDIA_OFFSET_SECONDS
+
+def _seconds(text_value):
+    return _clock(*[int(part) for part in str(text_value).split(":")])
+
+def load_calendar(directory=CALENDAR_DIRECTORY):
+    """
+    The exchanges' closures and special sessions from the calendar files, as two dicts keyed (exchange, calendar).
+
+    A missing directory leaves every weekday a trading day.
+    """
+    closures, special_sessions = {}, {}
+    for path in sorted(Path(directory).glob("*.yaml")):
+        document = yaml.safe_load(path.read_text()) or {}
+        for exchange, calendars in (document.get("holidays") or {}).items():
+            for calendar, entries in calendars.items():
+                for entry in entries or []:
+                    closures.setdefault((exchange, calendar), {})[entry["date"]] = entry["closed"]
+        for entry in document.get("special_sessions") or []:
+            window = (_seconds(entry["opens"]), _seconds(entry["closes"]))
+            for exchange in entry["exchanges"]:
+                for calendar in entry["calendars"]:
+                    special_sessions.setdefault((exchange, calendar), {})[entry["date"]] = window
+    return closures, special_sessions
+
+class SessionGate:
+    """
+    Whether an instant is inside an instrument's window, worked out once per exchange, session and day.
+    """
+
+    def __init__(self, calendar=None):
+        self._closures, self._special = calendar if calendar is not None else load_calendar()
+        self._windows = {}
+
+    def window(self, exchange, session, day_number):
+        """The first and last accepted second after India midnight on a day, or None when the day is closed."""
+        key = (exchange, session, day_number)
+        if key in self._windows:
+            return self._windows[key]
+        day = date.fromordinal(date(1970, 1, 1).toordinal() + day_number)
+        special = self._special.get((exchange, session.calendar), {}).get(day)
+        if special is not None:
+            window = special
+        elif (day_number + _EPOCH_WEEKDAY) % 7 >= 5:
+            window = None
+        else:
+            closed = self._closures.get((exchange, session.calendar), {}).get(day)
+            if closed is None:
+                window = (session.opens, session.window_close)
+            elif closed == "morning" and session.evening_opens is not None:
+                window = (session.evening_opens, session.window_close)
+            elif closed == "evening" and session.evening_opens is not None:
+                window = (session.opens, session.evening_opens + EVENING_CLOSED_GRACE_SECONDS)
+            else:
+                window = None
+        if len(self._windows) > 4096:
+            self._windows.clear()
+        self._windows[key] = window
+        return window
+
+    def in_window(self, exchange, session, epoch):
+        shifted = epoch + INDIA_OFFSET_SECONDS
+        window = self.window(exchange, session, int(shifted // SECONDS_PER_DAY))
+        return window is not None and window[0] <= shifted % SECONDS_PER_DAY <= window[1]
+
+    def before_trading_close(self, session, epoch):
+        return (epoch + INDIA_OFFSET_SECONDS) % SECONDS_PER_DAY < session.trading_close
+
+    def window_end_epoch(self, exchange, session, epoch):
+        day_number = india_day_number(epoch)
+        window = self.window(exchange, session, day_number)
+        return day_start_epoch(day_number) + (window[1] if window else session.window_close)
+
+# ---- what each broker's ticks mean ----------------------------------------------------------------------------------
+
+FeedKey = namedtuple("FeedKey", ["broker_token", "segments", "order_symbol"], defaults=(None,))
+QUANTITY_FIELDS = ("last_quantity", "volume", "buy_quantity", "sell_quantity", "depth_quantity", "oi", "oi_day_high",
+                   "oi_day_low")
+BASIS_UNITS, BASIS_LOTS, BASIS_BROKER_LOTS = "units", "lots", "broker_lots"
+CLOSE_ALWAYS, CLOSE_BEFORE_SESSION_END, CLOSE_NEVER = "always", "before", "never"
+DEPTH_LEVELS = 5
+ALL_QUANTITIES = frozenset(QUANTITY_FIELDS)
+
+def family_segments(exchanges, family):
+    """The canonical segments for a family of instruments - cash, index, cash_or_index, derivative - on some exchanges."""
+    bare = {"cash": CASH_SEGMENTS, "index": INDEX_SEGMENTS, "cash_or_index": CASH_SEGMENTS + INDEX_SEGMENTS,
+            "derivative": DERIVATIVE_SEGMENTS}[family]
+    return tuple(segments_of(list(exchanges), bare))
+
+class Normalizer:
+    """
+    One broker's tick meaning: how its token names an instrument, which quantities are lots, when `close` is the previous
+    close, and which timestamps are true instants. A broker sets the attributes and `feed_key`.
+    """
+
+    BROKER_NAME = None
+    LOT_FIELDS = {}
+    BROKER_LOT_FIELDS = {}
+    CLOSE_POLICY = {}
+    TRUSTS_LAST_TRADE_TIME = True
+    TRUSTS_EXCHANGE_TIME = True
+    MAXIMUM_TIMESTAMP_AGE_SECONDS = 7 * 86400
+    MAXIMUM_TIMESTAMP_LEAD_SECONDS = 5
+
+    def feed_key(self, instrument_token):
+        raise NotImplementedError
+
+    def quantity_basis(self, exchange, field):
+        if field in self.BROKER_LOT_FIELDS.get(exchange, ()):
+            return BASIS_BROKER_LOTS
+        if field in self.LOT_FIELDS.get(exchange, ()):
+            return BASIS_LOTS
+        return BASIS_UNITS
+
+    def close_policy(self, exchange):
+        return self.CLOSE_POLICY.get(exchange, CLOSE_NEVER)
+
+    def normalize(self, tick, plan, before_trading_close):
+        """A tick's values with a plan applied, or None when it carries no usable last price."""
+        decimals, negative = plan.price_decimals, plan.negative_prices
+        last_price = tick.get("last_price")
+        if last_price is None or last_price == 0 or (last_price < 0 and not negative):
+            return None
+        last_price = round(last_price, decimals)
+        multipliers = plan.multipliers
+        received_at = tick.get("received_at") or 0.0
+        ohlc = tick.get("ohlc") or {}
+
+        close = None
+        policy = plan.close_policy
+        if policy == CLOSE_ALWAYS or (policy == CLOSE_BEFORE_SESSION_END and before_trading_close):
+            close = _price(ohlc.get("close"), decimals, negative)
+
+        if plan.has_open_interest:
+            oi = _quantity(tick.get("oi"), multipliers["oi"])
+            oi_day_high = _quantity(tick.get("oi_day_high") or None, multipliers["oi_day_high"])
+            oi_day_low = _quantity(tick.get("oi_day_low") or None, multipliers["oi_day_low"])
+        else:
+            oi = oi_day_high = oi_day_low = None
+
+        depth = tick.get("depth") or {}
+        depth_multiplier = multipliers["depth_quantity"]
+        return {
+            "last_price": last_price,
+            "last_quantity": _quantity(tick.get("last_quantity"), multipliers["last_quantity"]),
+            "average_price": _price(tick.get("average_price"), decimals, negative),
+            "volume": _quantity(tick.get("volume"), multipliers["volume"]),
+            "buy_quantity": _quantity(tick.get("buy_quantity"), multipliers["buy_quantity"]),
+            "sell_quantity": _quantity(tick.get("sell_quantity"), multipliers["sell_quantity"]),
+            "open": _price(ohlc.get("open"), decimals, negative),
+            "high": _price(ohlc.get("high"), decimals, negative),
+            "low": _price(ohlc.get("low"), decimals, negative),
+            "reported_close": close,
+            "oi": oi,
+            "oi_day_high": oi_day_high,
+            "oi_day_low": oi_day_low,
+            "last_trade_time": self._instant(tick.get("last_trade_time"), received_at) if plan.trusts_last_trade_time else None,
+            "exchange_time": self._instant(tick.get("exchange_timestamp"), received_at) if plan.trusts_exchange_time else None,
+            "bids": _levels(depth.get("buy"), decimals, negative, depth_multiplier),
+            "asks": _levels(depth.get("sell"), decimals, negative, depth_multiplier),
+        }
+
+    def _instant(self, value, received_at):
+        if not value:
+            return None
+        try:
+            instant = float(value)
+        except (TypeError, ValueError):
+            return None
+        if received_at and not (received_at - self.MAXIMUM_TIMESTAMP_AGE_SECONDS
+                                <= instant <= received_at + self.MAXIMUM_TIMESTAMP_LEAD_SECONDS):
+            return None
+        return instant
+
+def _price(value, decimals, negative):
+    if value is None or value == 0:
+        return None
+    if value < 0 and not negative:
+        return None
+    return round(value, decimals)
+
+def _quantity(value, multiplier):
+    if value is None or multiplier is None:
+        return None
+    if value.__class__ is not int:
+        try:
+            value = int(round(value))
+        except (TypeError, ValueError):
+            return None
+    if value < 0:
+        return None
+    if multiplier.__class__ is int:
+        return value * multiplier
+    return int(round(value * multiplier))
+
+def _levels(levels, decimals, negative, multiplier):
+    if not levels:
+        return []
+    kept = []
+    for level in levels:
+        price, quantity = level.get("price"), level.get("quantity")
+        if not price or not quantity:
+            continue
+        price = _price(price, decimals, negative)
+        units = _quantity(quantity, multiplier)
+        if price is None:
+            continue
+        orders = level.get("orders")
+        if orders is not None and orders.__class__ is not int:
+            try:
+                orders = int(round(orders))
+            except (TypeError, ValueError):
+                orders = None
+        kept.append((price, units, orders))
+        if len(kept) == DEPTH_LEVELS:
+            break
+    return kept
+
+class ZerodhaNormalizer(Normalizer):
+    """Kite: the segment is the token's low byte; `close` is the previous close; MCX quantities are lots."""
+    BROKER_NAME = "zerodha"
+    SEGMENT_CODES = {1: (("nse",), "cash"), 2: (("nse",), "derivative"), 3: (("nse",), "derivative"),
+                     4: (("bse",), "cash"), 5: (("bse",), "derivative"), 6: (("bse",), "derivative"),
+                     7: (("mcx",), "derivative"), 9: (("nse", "bse"), "index"), 12: (("nse",), "derivative")}
+    LOT_FIELDS = {"mcx": ALL_QUANTITIES}
+    CLOSE_POLICY = {"nse": CLOSE_ALWAYS, "bse": CLOSE_ALWAYS, "mcx": CLOSE_ALWAYS}
+
+    def __init__(self):
+        self._segments = {code: family_segments(exchanges, family) for code, (exchanges, family) in self.SEGMENT_CODES.items()}
+
+    def feed_key(self, instrument_token):
+        try:
+            token = int(instrument_token)
+        except (TypeError, ValueError):
+            return None
+        segments = self._segments.get(token & 0xff)
+        return FeedKey(str(token), segments) if segments is not None else None
+
+class DhanNormalizer(Normalizer):
+    """Dhan: `SEGMENT:SECURITY_ID`, the segment by name or number; `close` good until the session closes; MCX in lots."""
+    BROKER_NAME = "dhan"
+    SEGMENT_CODES = {0: (("nse", "bse"), "index"), 1: (("nse",), "cash"), 2: (("nse",), "derivative"),
+                     3: (("nse",), "derivative"), 4: (("bse",), "cash"), 5: (("mcx",), "derivative"),
+                     7: (("bse",), "derivative"), 8: (("bse",), "derivative")}
+    SEGMENT_NAMES = {"IDX_I": 0, "NSE_EQ": 1, "NSE_FNO": 2, "NSE_CURRENCY": 3, "BSE_EQ": 4, "MCX_COMM": 5,
+                     "BSE_CURRENCY": 7, "BSE_FNO": 8}
+    LOT_FIELDS = {"mcx": ALL_QUANTITIES}
+    CLOSE_POLICY = {"nse": CLOSE_BEFORE_SESSION_END, "bse": CLOSE_BEFORE_SESSION_END, "mcx": CLOSE_BEFORE_SESSION_END}
+    TRUSTS_EXCHANGE_TIME = False
+
+    def __init__(self):
+        self._segments = {code: family_segments(exchanges, family) for code, (exchanges, family) in self.SEGMENT_CODES.items()}
+
+    def feed_key(self, instrument_token):
+        segment, _, security_id = str(instrument_token).partition(":")
+        if not security_id:
+            return None
+        code = self.SEGMENT_NAMES.get(segment)
+        if code is None:
+            try:
+                code = int(segment)
+            except ValueError:
+                return None
+        segments = self._segments.get(code)
+        return FeedKey(security_id.strip(), segments) if segments is not None else None
+
+class NorenNormalizer(Normalizer):
+    """Flattrade and Shoonya: `EXCHANGE|TOKEN`; `close` good until the session closes; MCX and NCDEX in lots."""
+    EXCHANGES = {"NSE": (("nse",), "cash_or_index"), "BSE": (("bse",), "cash_or_index"), "NFO": (("nse",), "derivative"),
+                 "CDS": (("nse",), "derivative"), "NCO": (("nse",), "derivative"), "BFO": (("bse",), "derivative"),
+                 "BCD": (("bse",), "derivative"), "MCX": (("mcx",), "derivative"), "NCX": (("ncdex",), "derivative"),
+                 "NCDEX": (("ncdex",), "derivative")}
+    LOT_FIELDS = {"mcx": ALL_QUANTITIES, "ncdex": ALL_QUANTITIES}
+    CLOSE_POLICY = {exchange: CLOSE_BEFORE_SESSION_END for exchange in ("nse", "bse", "mcx", "ncdex")}
+
+    def __init__(self, broker):
+        self.BROKER_NAME = broker
+        self._segments = {name: family_segments(exchanges, family) for name, (exchanges, family) in self.EXCHANGES.items()}
+
+    def feed_key(self, instrument_token):
+        exchange, _, token = str(instrument_token).partition("|")
+        segments = self._segments.get(exchange.strip().upper())
+        if segments is None or not token.strip():
+            return None
+        return FeedKey(token.strip(), segments)
+
+class FyersNormalizer(Normalizer):
+    """Fyers: the symbol, turned into a token by order symbol; `close` is the previous close; no currency derivatives."""
+    BROKER_NAME = "fyers"
+    EXCHANGES = {"NSE": "nse", "BSE": "bse", "MCX": "mcx"}
+    DERIVATIVE_SUFFIXES = ("FUT", "CE", "PE")
+    LOT_FIELDS = {"mcx": ALL_QUANTITIES}
+    CLOSE_POLICY = {"nse": CLOSE_ALWAYS, "bse": CLOSE_ALWAYS, "mcx": CLOSE_ALWAYS}
+
+    def __init__(self):
+        self._segments = {}
+        for prefix, exchange in self.EXCHANGES.items():
+            for family in ("cash", "index", "derivative"):
+                segments = family_segments([exchange], family)
+                if family == "derivative":
+                    segments = tuple(segment for segment in segments if "_currenc" not in segment)
+                self._segments[(prefix, family)] = segments
+
+    def feed_key(self, instrument_token):
+        symbol = str(instrument_token).strip()
+        prefix, _, name = symbol.partition(":")
+        prefix = prefix.upper()
+        if prefix not in self.EXCHANGES or not name:
+            return None
+        if prefix == "MCX" or name.upper().endswith(self.DERIVATIVE_SUFFIXES):
+            family = "derivative"
+        elif name.upper().endswith("-INDEX"):
+            family = "index"
+        else:
+            family = "cash"
+        return FeedKey(None, self._segments[(prefix, family)], symbol)
+
+class GrowwNormalizer(Normalizer):
+    """Groww: `EXCHANGE|SEGMENT|TOKEN`; `close` never trusted; units; no last trade time."""
+    BROKER_NAME = "groww"
+    SEGMENTS = {"CASH": "cash_or_index", "FNO": "derivative", "COMMODITY": "derivative"}
+    EXCHANGES = {"NSE": "nse", "BSE": "bse", "MCX": "mcx"}
+    CLOSE_POLICY = {"nse": CLOSE_NEVER, "bse": CLOSE_NEVER}
+    TRUSTS_LAST_TRADE_TIME = False
+
+    def __init__(self):
+        self._segments = {(prefix, segment): family_segments([exchange], family)
+                          for prefix, exchange in self.EXCHANGES.items() for segment, family in self.SEGMENTS.items()}
+
+    def feed_key(self, instrument_token):
+        parts = [part.strip() for part in str(instrument_token).split("|")]
+        if len(parts) != 3 or not parts[2]:
+            return None
+        segments = self._segments.get((parts[0].upper(), parts[1].upper()))
+        return FeedKey(parts[2], segments) if segments is not None else None
+
+class IndmoneyNormalizer(Normalizer):
+    """INDstocks: `SEGMENT:TOKEN`; `close` is the last price, never used; units; both times true."""
+    BROKER_NAME = "indmoney"
+    SEGMENTS = {"NSE": (("nse",), "cash"), "BSE": (("bse",), "cash"), "NFO": (("nse",), "derivative"),
+                "BFO": (("bse",), "derivative"), "NIDX": (("nse",), "index"), "BIDX": (("bse",), "index")}
+    CLOSE_POLICY = {"nse": CLOSE_NEVER, "bse": CLOSE_NEVER}
+
+    def __init__(self):
+        self._segments = {name: family_segments(exchanges, family) for name, (exchanges, family) in self.SEGMENTS.items()}
+
+    def feed_key(self, instrument_token):
+        segment, _, token = str(instrument_token).partition(":")
+        segments = self._segments.get(segment.strip().upper())
+        if segments is None or not token.strip():
+            return None
+        return FeedKey(token.strip(), segments)
+
+class KotakNormalizer(Normalizer):
+    """Kotak: `exchange_segment|token`; `close` is the previous close; every MCX quantity in Kotak's lots; both times true."""
+    BROKER_NAME = "kotak"
+    EXCHANGE_SEGMENTS = {"nse_cm": (("nse",), "cash_or_index"), "bse_cm": (("bse",), "cash_or_index"),
+                         "nse_fo": (("nse",), "derivative"), "cde_fo": (("nse",), "derivative"),
+                         "nse_com": (("nse",), "derivative"), "bse_fo": (("bse",), "derivative"),
+                         "bse_cd": (("bse",), "derivative"), "bse_co": (("bse",), "derivative"),
+                         "mcx_fo": (("mcx",), "derivative")}
+    BROKER_LOT_FIELDS = {"mcx": ALL_QUANTITIES}
+    CLOSE_POLICY = {"nse": CLOSE_ALWAYS, "bse": CLOSE_ALWAYS, "mcx": CLOSE_ALWAYS}
+
+    def __init__(self):
+        self._segments = {name: family_segments(exchanges, family) for name, (exchanges, family) in self.EXCHANGE_SEGMENTS.items()}
+
+    def feed_key(self, instrument_token):
+        segment, _, token = str(instrument_token).partition("|")
+        segments = self._segments.get(segment.strip().lower())
+        if segments is None or not token.strip():
+            return None
+        return FeedKey(token.strip(), segments)
+
+class WisdomCapitalNormalizer(Normalizer):
+    """XTS: `SEGMENT:INSTRUMENT_ID`, the segment by number or name; `close` never trusted; MCX and NCDEX in lots."""
+    BROKER_NAME = "wisdom_capital"
+    SEGMENT_NUMBERS = {1: (("nse",), "cash_or_index"), 2: (("nse",), "derivative"), 3: (("nse",), "derivative"),
+                       4: (("nse",), "derivative"), 11: (("bse",), "cash_or_index"), 12: (("bse",), "derivative"),
+                       13: (("bse",), "derivative"), 21: (("ncdex",), "derivative"), 51: (("mcx",), "derivative")}
+    SEGMENT_NAMES = {"NSECM": 1, "NSEFO": 2, "NSECD": 3, "NSECO": 4, "BSECM": 11, "BSEFO": 12, "BSECD": 13, "NCDEX": 21,
+                     "MCXFO": 51}
+    LOT_FIELDS = {"mcx": ALL_QUANTITIES, "ncdex": ALL_QUANTITIES}
+    CLOSE_POLICY = {exchange: CLOSE_NEVER for exchange in ("nse", "bse", "mcx", "ncdex")}
+
+    def __init__(self):
+        self._segments = {number: family_segments(exchanges, family) for number, (exchanges, family) in self.SEGMENT_NUMBERS.items()}
+
+    def feed_key(self, instrument_token):
+        segment, _, instrument_id = str(instrument_token).partition(":")
+        segment = segment.strip().upper()
+        number = self.SEGMENT_NAMES.get(segment)
+        if number is None:
+            try:
+                number = int(segment)
+            except ValueError:
+                return None
+        segments = self._segments.get(number)
+        if segments is None or not instrument_id.strip():
+            return None
+        return FeedKey(instrument_id.strip(), segments)
+
+class StoxkartNormalizer(Normalizer):
+    """Stoxkart's broadcast feed: `EXCHANGE:TOKEN`; `close` good until the session closes; MCX in lots; both times true on NSE.
+
+    Measured against Zerodha's ticks in the same second on 2026-09-15: `close`, taken from Stoxkart's previous close packet, was the previous close; NSE price, volume, average price, total bid and offered quantity and first depth level matched; MCX volume and open interest were lots as at Zerodha; and the last trade and exchange times matched to the second. Stoxkart sends no MCX exchange time. What `close` means after the session has not been seen, so it is trusted only before the session closes.
+    """
+    BROKER_NAME = "stoxkart"
+    EXCHANGES = {"NSE": (("nse",), "cash_or_index"), "BSE": (("bse",), "cash_or_index"), "NFO": (("nse",), "derivative"),
+                 "NSECD": (("nse",), "derivative"), "BFO": (("bse",), "derivative"), "BSECD": (("bse",), "derivative"),
+                 "MCX": (("mcx",), "derivative"), "NCDEX": (("ncdex",), "derivative")}
+    LOT_FIELDS = {"mcx": ALL_QUANTITIES}
+    CLOSE_POLICY = {exchange: CLOSE_BEFORE_SESSION_END for exchange in ("nse", "bse", "mcx", "ncdex")}
+
+    def __init__(self):
+        """Builds the canonical segments each Stoxkart exchange's tokens may name."""
+        self._segments = {name: family_segments(exchanges, family) for name, (exchanges, family) in self.EXCHANGES.items()}
+
+    def feed_key(self, instrument_token):
+        """Reads the broker token and segments out of a Stoxkart `EXCHANGE:TOKEN`.
+
+        Args:
+            instrument_token (str): The tick's `instrument_token`, such as `NSE:760946`.
+
+        Returns:
+            FeedKey | None: The key, or None for a malformed token or an unknown exchange.
+        """
+        exchange, _, token = str(instrument_token).partition(":")
+        segments = self._segments.get(exchange.strip().upper())
+        if segments is None or not token.strip():
+            return None
+        return FeedKey(token.strip(), segments)
+
+def build_normalizers():
+    """One normalizer per broker with a quotes stream."""
+    return {"zerodha": ZerodhaNormalizer(), "dhan": DhanNormalizer(), "kotak": KotakNormalizer(),
+            "flattrade": NorenNormalizer("flattrade"), "shoonya": NorenNormalizer("shoonya"), "fyers": FyersNormalizer(),
+            "wisdom_capital": WisdomCapitalNormalizer(), "groww": GrowwNormalizer(), "indmoney": IndmoneyNormalizer(),
+            "stoxkart": StoxkartNormalizer()}
+
+# ---- resolving a token to an instrument plan ------------------------------------------------------------------------
+
+# The broker whose lot sizes are the authority on MCX, where the brokers disagree.
+MCX_LOT_AUTHORITY = "groww"
+
+class InstrumentPlan:
+    """Everything needed to turn one broker token's ticks into quotes, decided once per mapping date."""
+
+    __slots__ = ("instrument_id", "broker", "broker_token", "exchange", "segment", "shape", "session", "lot_size",
+                 "multipliers", "price_decimals", "negative_prices", "close_policy", "has_open_interest",
+                 "trusts_last_trade_time", "trusts_exchange_time", "identity_json")
+
+    def __init__(self, **values):
+        for name in self.__slots__:
+            setattr(self, name, values[name])
+
+def identity_json(instrument_id, broker, broker_token, identity, lot_size):
+    """The identity members of a quote, serialized once, without the enclosing braces."""
+    expiry = identity.get("expiry_date")
+    strike = identity.get("strike_price")
+    fields = {
+        "instrument_id": instrument_id, "broker": broker, "broker_token": broker_token,
+        "exchange": identity.get("exchange"), "segment": identity.get("segment"), "shape": identity.get("shape"),
+        "symbol": identity.get("symbol"), "underlying_symbol": identity.get("underlying_symbol"),
+        "expiry_date": expiry.isoformat() if hasattr(expiry, "isoformat") else expiry,
+        "strike_price": float(strike) if strike is not None else None,
+        "option_type": identity.get("option_type"), "lot_size": lot_size,
+    }
+    return json.dumps(fields, separators=(",", ":"))[1:-1]
+
+def _whole_number(value):
+    if value is None:
+        return None
+    try:
+        number = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+    if number <= 0 or number != number.to_integral_value():
+        return None
+    return int(number)
+
+def units_per_lot(identity, handles_by_broker):
+    """Units in one lot: 1 for a security, the authority's on MCX, the most common broker's otherwise; and a note."""
+    if identity.get("shape") == "security":
+        return 1, None
+    if identity.get("exchange") == "mcx":
+        handle = handles_by_broker.get(MCX_LOT_AUTHORITY)
+        size = _whole_number(handle.get("lot_size")) if handle else None
+        return (size, None) if size is not None else (None, f"no {MCX_LOT_AUTHORITY} lot size")
+    sizes = Counter()
+    for handle in handles_by_broker.values():
+        size = _whole_number(handle.get("lot_size"))
+        if size is not None:
+            sizes[size] += 1
+    if not sizes:
+        return None, "no broker lot size"
+    ranked = sizes.most_common()
+    note = None
+    if len(ranked) > 1:
+        note = "brokers disagree: " + ", ".join(f"{size}x{count}" for size, count in ranked)
+        if ranked[0][1] == ranked[1][1]:
+            return None, note
+    return ranked[0][0], note
+
+def _expired(identity, as_of_date):
+    expiry = identity.get("expiry_date")
+    return bool(expiry) and str(expiry)[:10] < as_of_date.isoformat()
+
+class RedisCandidateSource:
+    """
+    Candidates, lot sizes and order symbols from the unified instrument cache in Redis.
+    """
+
+    def __init__(self, cache):
+        self._cache = cache
+        self._columns = None
+
+    def mapping_date(self, as_of_date):
+        """The cache's mapping date, or None when there is no cache or it is newer than the day asked about."""
+        meta = json.loads(self._cache.get(META_KEY) or "null") or {}
+        self._columns = meta.get("columns")
+        value = meta.get("mapping_date")
+        mapping_date = date.fromisoformat(value) if value else None
+        return None if mapping_date is None or as_of_date < mapping_date else mapping_date
+
+    def _identities(self, instrument_ids):
+        if not instrument_ids or not self._columns:
+            return {}
+        position = {column: index for index, column in enumerate(self._columns["instruments"])}
+        found = {}
+        for instrument_id, value in zip(instrument_ids, self._cache.hmget(INSTRUMENTS_KEY, instrument_ids)):
+            if value is None:
+                continue
+            row = json.loads(value)
+            identity = {column: row[index] for column, index in position.items()}
+            identity["instrument_id"] = instrument_id
+            found[instrument_id] = identity
+        return found
+
+    def candidates(self, broker, broker_tokens, as_of_date, segments):
+        """Token to every identity it names inside the segments."""
+        allowed = set(segments)
+        fields = [f"{broker}:{token}" for token in broker_tokens]
+        id_lists = [json.loads(value) if value else [] for value in self._cache.hmget(BROKER_TOKENS_KEY, fields)]
+        identities = self._identities(sorted({instrument_id for ids in id_lists for instrument_id in ids}))
+        result = {}
+        for token, ids in zip(broker_tokens, id_lists):
+            kept = [identities[instrument_id] for instrument_id in ids
+                    if instrument_id in identities and identities[instrument_id]["segment"] in allowed]
+            if kept:
+                result[token] = kept
+        return result
+
+    def handles(self, instrument_ids, as_of_date):
+        """Instrument id to broker to that broker's `{"lot_size"}`, for every broker that maps it."""
+        if not instrument_ids or not self._columns:
+            return {}
+        lot_index = self._columns["broker_mappings"].index("lot_size")
+        fields = [(instrument_id, broker) for instrument_id in instrument_ids for broker in MAPPED_BROKERS]
+        values = self._cache.hmget(BROKER_MAPPINGS_KEY, [f"{broker}:{instrument_id}" for instrument_id, broker in fields])
+        handles = defaultdict(dict)
+        for (instrument_id, broker), value in zip(fields, values):
+            if value is not None:
+                handles[instrument_id][broker] = {"lot_size": json.loads(value)[lot_index]}
+        return handles
+
+    def order_symbols(self, broker, as_of_date):
+        """A broker's order symbol to token, read once per mapping date from its mappings."""
+        if not self._columns:
+            return {}
+        token_index = self._columns["broker_mappings"].index("broker_token")
+        symbol_index = self._columns["broker_mappings"].index("order_symbol")
+        index = {}
+        for _, value in self._cache.hscan_iter(BROKER_MAPPINGS_KEY, match=f"{broker}:*", count=10000):
+            row = json.loads(value)
+            if row[symbol_index]:
+                index.setdefault(row[symbol_index], str(row[token_index]))
+        return index
+
+class TickResolver:
+    """
+    Instrument plans for broker tokens, compiled once per token per mapping date; a miss is retried after ten minutes.
+    """
+
+    def __init__(self, source, normalizers, logger=None):
+        self._source = source
+        self._normalizers = normalizers
+        self._logger = logger
+        self._plans = {}
+        self._order_symbols = {}
+        self._logged = set()
+        self.unresolved = Counter()
+        self.as_of_date = None
+        self.mapping_date = None
+
+    def refresh(self, epoch):
+        """Move to the India day of an instant, dropping every plan when the mapping date changed. True when dropped."""
+        as_of_date = india_date(epoch)
+        mapping_date = self._source.mapping_date(as_of_date)
+        self.as_of_date = as_of_date
+        if mapping_date == self.mapping_date:
+            return False
+        dropped = bool(self._plans)
+        self._plans, self._order_symbols, self._logged = {}, {}, set()
+        self.mapping_date = mapping_date
+        if dropped and self._logger:
+            self._logger.info(f"Mapping date is now {mapping_date}; instrument plans will be recompiled.")
+        return dropped
+
+    def plan_for(self, broker, instrument_token, now):
+        key = (broker, instrument_token)
+        plan = self._plans.get(key)
+        if plan is not None:
+            if plan.__class__ is InstrumentPlan:
+                return plan
+            if now < plan:
+                return None
+        return self.compile(broker, [instrument_token], now).get(key)
+
+    def compile(self, broker, instrument_tokens, now):
+        """Resolve a batch of one broker's tokens and compile their plans, returning (broker, token) to plan."""
+        if self.as_of_date is None:
+            self.refresh(now)
+        retry_at = now + MISS_RETRY_SECONDS
+        normalizer = self._normalizers.get(broker)
+        if normalizer is None:
+            for token in instrument_tokens:
+                self._miss(broker, token, "no_normalizer", retry_at)
+            return {}
+        if self.mapping_date is None:
+            for token in instrument_tokens:
+                self._miss(broker, token, "no_mapping_date", retry_at)
+            return {}
+
+        groups = defaultdict(list)
+        for token in instrument_tokens:
+            feed_key = normalizer.feed_key(token)
+            if feed_key is None:
+                self._miss(broker, token, "unplaceable", retry_at)
+                continue
+            broker_token = feed_key.broker_token
+            if broker_token is None and feed_key.order_symbol is not None:
+                if broker not in self._order_symbols:
+                    self._order_symbols[broker] = self._source.order_symbols(broker, self.as_of_date)
+                broker_token = self._order_symbols[broker].get(feed_key.order_symbol)
+            if broker_token is None:
+                self._miss(broker, token, "unmapped", retry_at)
+                continue
+            groups[feed_key.segments].append((token, broker_token))
+
+        chosen = {}
+        for segments, items in groups.items():
+            found = self._source.candidates(broker, sorted({broker_token for _, broker_token in items}), self.as_of_date, segments)
+            for token, broker_token in items:
+                candidates = [identity for identity in found.get(broker_token, ()) if not _expired(identity, self.as_of_date)]
+                distinct = {identity["instrument_id"] for identity in candidates}
+                if not distinct:
+                    self._miss(broker, token, "unmapped", retry_at)
+                elif len(distinct) > 1:
+                    self._miss(broker, token, "ambiguous", retry_at)
+                else:
+                    chosen[token] = (broker_token, candidates[0])
+        if not chosen:
+            return {}
+
+        handles = self._source.handles(sorted({identity["instrument_id"] for _, identity in chosen.values()}), self.as_of_date)
+        compiled = {}
+        for token, (broker_token, identity) in chosen.items():
+            plan = self._compile_plan(normalizer, broker, broker_token, identity, handles.get(identity["instrument_id"], {}))
+            self._plans[(broker, token)] = compiled[(broker, token)] = plan
+        return compiled
+
+    def plans(self):
+        return {key: plan for key, plan in self._plans.items() if plan.__class__ is InstrumentPlan}
+
+    def drain_unresolved(self):
+        counts, self.unresolved = self.unresolved, Counter()
+        return counts
+
+    def _compile_plan(self, normalizer, broker, broker_token, identity, handles_by_broker):
+        exchange, segment, shape = identity["exchange"], identity["segment"], identity["shape"]
+        lot_size, _ = units_per_lot(identity, handles_by_broker)
+        broker_lot = _whole_number((handles_by_broker.get(broker) or {}).get("lot_size"))
+        multipliers = {}
+        for field in QUANTITY_FIELDS:
+            basis = normalizer.quantity_basis(exchange, field)
+            if basis == BASIS_LOTS:
+                multipliers[field] = lot_size
+            elif basis == BASIS_BROKER_LOTS:
+                if lot_size is None or broker_lot is None:
+                    multipliers[field] = None
+                elif lot_size % broker_lot == 0:
+                    multipliers[field] = lot_size // broker_lot
+                else:
+                    multipliers[field] = lot_size / broker_lot
+            else:
+                multipliers[field] = 1
+        return InstrumentPlan(
+            instrument_id=identity["instrument_id"], broker=broker, broker_token=broker_token, exchange=exchange,
+            segment=segment, shape=shape, session=session_for(segment), lot_size=lot_size, multipliers=multipliers,
+            price_decimals=4 if "_currenc" in segment else 2,
+            negative_prices=shape != "security" and exchange in ("mcx", "ncdex"),
+            close_policy=normalizer.close_policy(exchange), has_open_interest=shape != "security",
+            trusts_last_trade_time=normalizer.TRUSTS_LAST_TRADE_TIME, trusts_exchange_time=normalizer.TRUSTS_EXCHANGE_TIME,
+            identity_json=identity_json(identity["instrument_id"], broker, broker_token, identity, lot_size),
+        )
+
+    def _miss(self, broker, token, reason, retry_at):
+        self._plans[(broker, token)] = retry_at
+        self.unresolved[(broker, str(token), reason)] += 1
+        if self._logger and (broker, token, reason) not in self._logged:
+            self._logged.add((broker, token, reason))
+            self._logger.warning(f"{broker} token {token} did not resolve: {reason}.")
+
+# ---- one tick in, at most one quote out ------------------------------------------------------------------------------
+
+_SEPARATORS = (",", ":")
+
+def change_percent_from(last_price, previous_close):
+    """The change since the previous close, as a percentage rounded to four places, or None without one."""
+    return round((last_price - previous_close) * 100 / previous_close, 4) if previous_close else None
+
+def quote_document(plan, values, previous_close, change_percent, received_at, unified_at):
+    """The unified quote JSON for one normalized tick."""
+    body = {
+        "last_price": values["last_price"],
+        "average_price": values["average_price"],
+        "ohlc": {"open": values["open"], "high": values["high"], "low": values["low"]},
+        "previous_close": previous_close,
+        "change_percent": change_percent,
+        "last_quantity": values["last_quantity"],
+        "volume": values["volume"],
+        "buy_quantity": values["buy_quantity"],
+        "sell_quantity": values["sell_quantity"],
+        "oi": values["oi"],
+        "oi_day_high": values["oi_day_high"],
+        "oi_day_low": values["oi_day_low"],
+        "depth": {
+            "buy": [{"price": price, "quantity": quantity, "orders": orders} for price, quantity, orders in values["bids"]],
+            "sell": [{"price": price, "quantity": quantity, "orders": orders} for price, quantity, orders in values["asks"]],
+        },
+        "last_trade_time": values["last_trade_time"],
+        "exchange_time": values["exchange_time"],
+        "received_at": received_at,
+        "unified_at": unified_at,
+        "stale": False,
+        "stale_since": None,
+    }
+    return "{" + plan.identity_json + "," + json.dumps(body, separators=_SEPARATORS)[1:]
+
+class TickPipeline:
+    """
+    Turns broker ticks into unified quotes: resolve, session, ownership, normalize, previous close, de-duplicate.
+    """
+
+    def __init__(self, resolver, ownership, normalizers, gate=None, clock=time.time):
+        self.resolver = resolver
+        self.ownership = ownership
+        self._normalizers = normalizers
+        self._gate = gate or SessionGate()
+        self._clock = clock
+        self.counts = Counter()
+        self._previous_close = {}
+        self._last_values = {}
+        self._last_quote = {}
+
+    def process(self, broker, socket, tick):
+        """The quote JSON a tick produces, as (instrument id, quote), or None when it is dropped."""
+        counts = self.counts
+        counts["received"] += 1
+        received_at = tick.get("received_at")
+        if received_at is None:
+            counts["unresolved"] += 1
+            return None
+        plan = self.resolver.plan_for(broker, tick.get("instrument_token"), received_at)
+        if plan is None:
+            counts["unresolved"] += 1
+            return None
+        gate, session = self._gate, plan.session
+        if not gate.in_window(plan.exchange, session, received_at):
+            counts["out_of_session"] += 1
+            return None
+        instrument_id = plan.instrument_id
+        write, taken = self.ownership.observe(broker, socket, instrument_id, plan.exchange, received_at,
+                                              gate.window_end_epoch(plan.exchange, session, received_at))
+        if not write:
+            counts["not_owner"] += 1
+            return None
+        values = self._normalizers[broker].normalize(tick, plan, gate.before_trading_close(session, received_at))
+        if values is None:
+            counts["no_price"] += 1
+            return None
+
+        day = india_day_number(received_at)
+        previous_close = values["reported_close"]
+        if previous_close is not None:
+            self._previous_close[instrument_id] = (day, previous_close)
+        else:
+            known = self._previous_close.get(instrument_id)
+            if known is not None and known[0] == day:
+                previous_close = known[1]
+        last_price = values["last_price"]
+        change_percent = change_percent_from(last_price, previous_close)
+
+        # Everything but the clock, the instrument and the broker; a tick that just took the instrument is always written.
+        comparable = (last_price, values["last_quantity"], values["average_price"], values["volume"],
+                      values["buy_quantity"], values["sell_quantity"], values["open"], values["high"], values["low"],
+                      previous_close, change_percent, values["oi"], values["oi_day_high"], values["oi_day_low"],
+                      plan.lot_size, tuple(values["bids"]), tuple(values["asks"]))
+        if not taken and self._last_values.get(instrument_id) == comparable:
+            counts["duplicate"] += 1
+            return None
+        self._last_values[instrument_id] = comparable
+
+        quote = quote_document(plan, values, previous_close, change_percent, received_at, self._clock())
+        self._last_quote[instrument_id] = quote
+        counts["written"] += 1
+        return instrument_id, quote
+
+    def stale_quote(self, instrument_id, stale_since):
+        """The last quote written for an instrument, flagged stale, or None."""
+        quote = self._last_quote.get(instrument_id)
+        if quote is None:
+            return None
+        body = json.loads(quote)
+        body["stale"], body["stale_since"] = True, stale_since
+        quote = json.dumps(body, separators=_SEPARATORS)
+        self._last_quote[instrument_id] = quote
+        return quote
+
+    def seed_previous_close(self, instrument_id, epoch, previous_close):
+        """Remember an instrument's previous close from before this process started."""
+        self._previous_close[instrument_id] = (india_day_number(epoch), previous_close)
+
+# ---- the service ----------------------------------------------------------------------------------------------------
+
+def stream_key(broker):
+    """A broker's tick stream."""
+    return f"{broker}:quotes:stream"
+
+class UnifiedQuotes:
+    """
+    Reads every broker's tick stream as the `unified` group and keeps `unified:quotes:live` current.
+    """
+
+    def __init__(self, cache, logger, clock=time.time, gate=None):
+        self._cache = cache
+        self._logger = logger
+        self._clock = clock
+        self._normalizers = build_normalizers()
+        self.resolver = TickResolver(RedisCandidateSource(cache), self._normalizers, logger)
+        self.ownership = OwnershipEngine()
+        self.pipeline = TickPipeline(self.resolver, self.ownership, self._normalizers, gate=gate, clock=clock)
+        self._streams = [stream_key(broker) for broker in BROKERS]
+        self._next_housekeeping = self._next_refresh = self._next_stats = self._next_purge = 0.0
+        self.undecodable = 0
+
+    def start(self):
+        """Create the consumer groups, recover today's previous closes from the live hash, and take pending entries."""
+        now = self._clock()
+        self.ensure_groups()
+        self.resolver.refresh(now)
+        today, seeded = india_day_number(now), 0
+        for instrument_id, raw in self._cache.hscan_iter(LIVE_KEY, count=1000):
+            try:
+                quote = json.loads(raw)
+            except (TypeError, ValueError):
+                continue
+            if quote.get("previous_close") and quote.get("received_at") and india_day_number(quote["received_at"]) == today:
+                self.pipeline.seed_previous_close(instrument_id, quote["received_at"], quote["previous_close"])
+                seeded += 1
+        if seeded:
+            self._logger.info(f"Recovered today's previous close for {seeded} instrument(s).")
+        while self.step(pending=True):
+            pass
+
+    def ensure_groups(self):
+        for key in self._streams:
+            try:
+                self._cache.xgroup_create(key, GROUP, id="$", mkstream=True)
+            except Exception as exception:
+                if "BUSYGROUP" not in str(exception):
+                    raise
+
+    def step(self, pending=False):
+        """One read across every stream - pending entries, or new ones blocking up to a second - written and acknowledged."""
+        now = self._clock()
+        if not pending and now >= self._next_housekeeping:
+            self.housekeeping(now)
+        streams = {key: ("0" if pending else ">") for key in self._streams}
+        response = self._cache.xreadgroup(GROUP, CONSUMER, streams, count=BATCH_SIZE,
+                                          block=None if pending else BLOCK_MILLISECONDS)
+        if not response:
+            return 0
+        read = 0
+        for key, entries in response:
+            if entries:
+                self.process(key, entries)
+                read += len(entries)
+        return read
+
+    def process(self, key, entries):
+        """Take one stream's entries through the pipeline, write the quotes, then acknowledge the entries."""
+        broker = key.split(":", 1)[0]
+        quotes = []
+        for _, fields in entries:
+            try:
+                tick = json.loads((fields or {}).get("tick"))
+            except (TypeError, ValueError):
+                self.undecodable += 1
+                continue
+            output = self.pipeline.process(broker, broker, tick)
+            if output is not None:
+                quotes.append(output)
+        self.write(quotes)
+        self._cache.xack(key, GROUP, *[entry_id for entry_id, _ in entries])
+        return len(quotes)
+
+    def write(self, quotes):
+        """Store the latest quote per instrument and append every quote to the unified stream, in one round trip."""
+        if not quotes:
+            return
+        pipeline = self._cache.pipeline(transaction=False)
+        pipeline.hset(LIVE_KEY, mapping=dict(quotes))
+        for _, quote in quotes:
+            pipeline.xadd(QUOTES_STREAM_KEY, {"quote": quote}, maxlen=QUOTES_STREAM_MAX_LENGTH, approximate=True)
+        pipeline.execute()
+
+    def housekeeping(self, now):
+        """At most once a second: session ends and stale quotes; every 30 s the mapping date; stats; hourly purge."""
+        self._next_housekeeping = now + HOUSEKEEPING_SECONDS
+        self.ownership.end_sessions(now)
+        stale = [(instrument_id, quote) for instrument_id, since in self.ownership.stale(now)
+                 for quote in [self.pipeline.stale_quote(instrument_id, since)] if quote is not None]
+        if stale:
+            self._cache.hset(LIVE_KEY, mapping=dict(stale))
+            self._logger.info(f"{len(stale)} instrument(s) went stale with no healthy broker.")
+        if now >= self._next_refresh:
+            self._next_refresh = now + REFRESH_SECONDS
+            self.resolver.refresh(now)
+        if now >= self._next_stats:
+            self._next_stats = now + STATS_SECONDS
+            self.publish_statistics(now)
+        if now >= self._next_purge:
+            self._next_purge = now + PURGE_SECONDS
+            self.purge_stale(now)
+
+    def publish_statistics(self, now):
+        counts = dict(self.pipeline.counts)
+        unresolved = self.resolver.drain_unresolved()
+        pipeline = self._cache.pipeline(transaction=False)
+        pipeline.set(STATS_KEY, json.dumps({"at": now, "pipeline": counts, "undecodable": self.undecodable,
+                                            "plans": len(self.resolver.plans()),
+                                            "mapping_date": str(self.resolver.mapping_date)}))
+        for (broker, token, reason), count in unresolved.items():
+            pipeline.hincrby(UNRESOLVED_KEY, f"{broker}:{token}:{reason}", count)
+        pipeline.execute()
+        self._logger.info(f"Quotes: {counts}")
+
+    def purge_stale(self, now):
+        doomed = []
+        for instrument_id, raw in self._cache.hscan_iter(LIVE_KEY, count=1000):
+            try:
+                body = json.loads(raw)
+            except (TypeError, ValueError):
+                doomed.append(instrument_id)
+                continue
+            since = body.get("stale_since")
+            if body.get("stale") and since and now - since > STALE_RETENTION_SECONDS:
+                doomed.append(instrument_id)
+        for start in range(0, len(doomed), 1000):
+            self._cache.hdel(LIVE_KEY, *doomed[start:start + 1000])
+        if doomed:
+            self._logger.info(f"Removed {len(doomed)} quote(s) stale for over a week.")
+
+def main():
+    """Keep unified:quotes:live current from every broker's tick stream until stopped."""
+    from utilities.configurations import get_cache, get_logger
+
+    logger = get_logger("unified.websocket_quotes")
+    stop = threading.Event()
+
+    def _handle_signal(signal_number, frame):
+        logger.info(f"Received signal {signal_number}. Finishing the batch in hand, then stopping.")
+        stop.set()
+
+    for signal_number in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(signal_number, _handle_signal)
+
+    backoff, service, started = MIN_BACKOFF_SECONDS, None, False
+    while not stop.is_set():
+        try:
+            if service is None:
+                service = UnifiedQuotes(get_cache(), logger)
+            if not started:
+                service.start()
+                started = True
+                logger.info(f"Reading {', '.join(stream_key(broker) for broker in BROKERS)} as group {GROUP}.")
+            service.step()
+            backoff = MIN_BACKOFF_SECONDS
+        except Exception as exception:
+            logger.error(f"Unified quotes failed, retrying in {backoff} seconds: {type(exception).__name__}: {exception}")
+            # Started afresh: the unwritten batch stays pending, and a pipeline that already saw it would drop it as a duplicate.
+            service, started = None, False
+            stop.wait(backoff)
+            backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
+    logger.info("Stopped")
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())

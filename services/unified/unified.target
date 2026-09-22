@@ -4,8 +4,14 @@
 #
 #     systemctl --user link ~/Projects/unified_broker_interface/services/unified/*
 #     systemctl --user daemon-reload
-#     systemctl --user enable --now unified.target unified-instruments.timer unified-prices.timer \
-#         unified@quotes.service unified@order_updates.service unified@orders.service unified@trades.service unified@positions.service unified@holdings.service unified@funds.service unified@user-profile.service unified@details.service unified-rest-api.service unified@persist_ticks.service unified@persist_orders.service unified@persist_positions.service
+#     systemctl --user enable --now unified.target unified-mapping.timer unified-prices.timer \
+#         unified-instruments@websocket_quotes.service unified-instruments@store_quotes_to_db.service \
+#         unified-orders@api_order_details.service unified-orders@api_trade_details.service unified-orders@websocket_order_details.service unified-orders@store_orders_to_db.service \
+#         unified-portfolio@positions.service unified-portfolio@holdings.service unified-portfolio@funds.service unified-portfolio@store_positions_to_db.service \
+#         unified-user@details.service unified-user@unified_details.service \
+#         unified-brokers@unified_details.service \
+#         unified-exchanges@unified_details.service \
+#         unified-rest-api.service
 #
 # The unified scripts read what the bin/<broker>/ scripts write to Redis, so each broker's target should be running
 # for its data to appear.

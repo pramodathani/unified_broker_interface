@@ -11,7 +11,7 @@ So a client here is built without its constructor's probe: the object is allocat
 `_current_login()`, so a token another process has just minted is used at once.
 
 **The API never logs a broker in.** Logins belong to each broker's `<broker>-login.service`, the unit
-`bin/<broker>/login` runs under - on its morning timer, and whenever anything asks for it. When a request is
+`bin/<broker>/session/connect` runs under - on its morning timer, and whenever anything asks for it. When a request is
 refused because the session is dead, the rule is to log in first and only then carry on, never to keep
 sending the dead token. `relogin` keeps that rule without a login of its own:
 
@@ -22,7 +22,7 @@ sending the dead token. `relogin` keeps that rule without a login of its own:
   its session.
 
 systemd runs one instance of a unit at a time, so any number of refused requests, in any number of workers, start
-at most one login, and `bin/<broker>/login` probes the stored session before logging in, so a login asked for
+at most one login, and `bin/<broker>/session/connect` probes the stored session before logging in, so a login asked for
 after another process already refreshed the session changes nothing. A worker asks at most once every five
 minutes per broker, which keeps a broker that stays refused from running the unit into its start limit.
 """

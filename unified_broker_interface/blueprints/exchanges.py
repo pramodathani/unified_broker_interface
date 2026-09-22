@@ -1,7 +1,7 @@
 """
 `/api/exchanges`: each exchange's profile, from the MongoDB `exchange_details` collection, one
 document per `exchange` (`nse`, `bse`, `mcx`, `ncdex`), served from its Redis copy
-`unified:details:exchanges` when `bin/unified/details` keeps one.
+`unified:details:exchanges` when `bin/unified/user/unified_details` keeps one.
 """
 
 from unified_broker_interface.blueprints.base import BaseBlueprint, authenticated

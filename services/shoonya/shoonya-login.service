@@ -1,4 +1,4 @@
-# Log shoonya in with bin/shoonya/login. Driven by shoonya-login.timer.
+# Log shoonya in with bin/shoonya/session/connect. Driven by shoonya-login.timer.
 #
 #     systemctl --user start shoonya-login          # log in now
 #     journalctl --user -u shoonya-login
@@ -6,7 +6,7 @@
 # The bin/shoonya/ scripts read the current token on every connect and
 # request, so nothing has to be restarted after a login - it only has to happen ahead of the market.
 #
-# Tried up to three times. bin/shoonya/login exits non-zero when the login fails or the session it produced does not
+# Tried up to three times. bin/shoonya/session/connect exits non-zero when the login fails or the session it produced does not
 # answer an authenticated request, and Restart=on-failure runs it again after RestartSec. StartLimitBurst counts the
 # first attempt, so three starts inside the interval is the first try and two retries. Every attempt writes
 # shoonya:session:status.
@@ -21,7 +21,7 @@ StartLimitBurst=3
 Type=oneshot
 Environment=PYTHONUNBUFFERED=1
 SyslogIdentifier=shoonya-login
-ExecStart=%h/Projects/unified_broker_interface/bin/shoonya/login
+ExecStart=%h/Projects/unified_broker_interface/bin/shoonya/session/connect
 Restart=on-failure
 RestartSec=2min
 # Zerodha and Shoonya log in by driving a headless Chrome and waiting on a TOTP.

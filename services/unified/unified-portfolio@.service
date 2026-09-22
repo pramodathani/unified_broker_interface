@@ -1,0 +1,25 @@
+# One bin/unified/portfolio/ script that keeps running: the positions, holdings and funds combiners, and the persister
+# that writes combined positions to the database. So unified-portfolio@positions.service runs
+# bin/unified/portfolio/positions. They all fit, because every one of them reads only Redis and the database, and
+# retries a store that cannot be reached rather than exiting.
+#
+#     systemctl --user enable --now unified-portfolio@positions.service
+#     journalctl --user -u unified-portfolio@positions -f
+
+[Unit]
+Description=Unified portfolio %i
+PartOf=unified.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Environment=PYTHONUNBUFFERED=1
+SyslogIdentifier=unified-portfolio-%i
+ExecStart=%h/Projects/unified_broker_interface/bin/unified/portfolio/%i
+Restart=always
+RestartSec=15
+RestartPreventExitStatus=2
+TimeoutStopSec=60
+
+[Install]
+WantedBy=unified.target

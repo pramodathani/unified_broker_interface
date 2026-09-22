@@ -52,7 +52,7 @@ WISDOM_ONLY_INTERVALS = ("20minute", "45minute", "180minute")
 # A gap-filling broker must agree with the primary on at least this share of the bars both have.
 GAP_FILL_AGREEMENT = 0.995
 
-# The intervals `bin/unified/historical_prices load` accepts. The daily timer loads only "day"; intraday is
+# The intervals `bin/unified/instruments/price_history load` accepts. The daily timer loads only "day"; intraday is
 # loaded by hand until there is room for it - see the unified price history guide.
 LOADED_INTERVALS = ("day",) + tuple(INTRADAY_MINUTES)
 

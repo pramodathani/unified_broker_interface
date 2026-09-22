@@ -1,0 +1,33 @@
+# The one bin/fyers/user/ script that keeps running: fyers-user@details.service runs bin/fyers/user/details, which
+# polls the broker's profile. It fits the template because it logs in by itself, logs in again when its token is
+# refused, and exits non-zero only when it cannot recover.
+#
+#     systemctl --user enable --now fyers-user@details.service
+#     journalctl --user -u fyers-user@details -f
+
+[Unit]
+Description=fyers user %i
+PartOf=fyers.target
+Wants=network-online.target
+After=network-online.target
+# Never give up restarting: a broker outage can outlast any start limit, and each script paces its own logins.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+# Python block-buffers stdout when it is not a terminal; without this the journal stays empty.
+Environment=PYTHONUNBUFFERED=1
+SyslogIdentifier=fyers-user-%i
+# Fyers refuses more than a handful of requests a second per app, and every Fyers script checks its session with a
+# request as it starts - at boot, or when fyers.target starts, eleven of them at once. Such a burst is refused, and a
+# login one script then attempts can spoil another's auth code. A random wait of up to thirty seconds spreads them out.
+ExecStartPre=/bin/sh -c 'sleep $$(shuf -i 0-30 -n 1)'
+ExecStart=%h/Projects/unified_broker_interface/bin/fyers/user/%i
+Restart=always
+RestartSec=15
+# Exit 2 is a bad argument or configuration - nothing to subscribe to, say - which a restart cannot fix.
+RestartPreventExitStatus=2
+TimeoutStopSec=60
+
+[Install]
+WantedBy=fyers.target

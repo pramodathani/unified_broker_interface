@@ -83,7 +83,7 @@ names the order's variety, as in `DELETE /orders/amo/{order_id}`. On 2026-09-15 
 `AMO` for two after-market orders, but the socket's cancellation updates for the same orders said
 `variety: NORMAL`, so a cancel built from the newest socket update would name the wrong variety. Each
 entry in `stoxkart:orders:orders` therefore carries a top-level `variety` beside `data`. The poller
-copies the order book row's variety, and `bin/stoxkart/order_updates` keeps an `AMO` or `BO` variety
+copies the order book row's variety, and `bin/stoxkart/orders/websocket_order_details` keeps an `AMO` or `BO` variety
 already stored, reads `AMO` from a status starting with `AMO`, and uses the update's own variety only
 otherwise.
 
@@ -174,7 +174,7 @@ from an expired session and is not one - the same token authenticates REST happi
 against both Flattrade and Shoonya.
 
 **Kotak's `sfeed` answers a subscription with one stale snapshot and then nothing.** Until 2026-09-15
-`bin/kotak/quotes` used `wss://sfeed.kotaksecurities.com/apifeed`, which authenticated, acknowledged the
+`bin/kotak/instruments/websocket_quotes` used `wss://sfeed.kotaksecurities.com/apifeed`, which authenticated, acknowledged the
 subscription, sent one snapshot and stayed connected without a further tick. The snapshot carried
 Friday's prices with zero volume, and more arrived only at session boundaries, so the stream held a few
 dozen ticks a day and looked like a quiet feed rather than a broken one. In the same minute the HSM feed
@@ -208,7 +208,7 @@ identifier the login offers. The "Your session has been expired" that arrives al
 is noise - it appears for a token minted a second earlier.
 
 **INDmoney's price feed sends JSON inside a JSON string.** Every update is a line such as
-`"{\"mode\":\"full\",\"instrument\":\"11536\",...}"`, so one `json.loads` returns a `str`. `bin/indmoney/quotes`
+`"{\"mode\":\"full\",\"instrument\":\"11536\",...}"`, so one `json.loads` returns a `str`. `bin/indmoney/instruments/websocket_quotes`
 treated anything that was not a dict as a heartbeat and skipped it quietly, and for at least the five days to
 2026-09-15 the feed connected, subscribed and streamed about ten updates a second while `indmoney.ticks` stayed
 empty. Decode a string result a second time, and log a message you skip rather than dropping it silently.
@@ -241,18 +241,18 @@ tried and whose ports 7763, 9443, 9444 and 9964 are closed.
 found by watching the website in Chrome DevTools. It is a different host from the API documentation's, it
 takes a blank token, and it subscribes with request codes 12 (trade) and 23 (depth) rather than the
 documented 71 to 76, so a script written from the documentation alone gets nothing from it.
-`bin/stoxkart/quotes` sends what the website sends.
+`bin/stoxkart/instruments/websocket_quotes` sends what the website sends.
 
 **Stoxkart's order socket evicts the older connection.** Stoxkart keeps one order socket per client, and a
 new connection closes the older one with a close reason containing `new incoming connection`. A logged-in
-Stoxkart website or app therefore knocks `bin/stoxkart/order_updates` off, and a script that reconnects at
+Stoxkart website or app therefore knocks `bin/stoxkart/orders/websocket_order_details` off, and a script that reconnects at
 once knocks the person off in turn, over and over. The script waits five minutes before reclaiming the
 socket. The socket's authentication must also send `x-platform: api`, because the same API token with
 `x-platform: web` is refused with `AuthorizationError`.
 
 **Stoxkart counts `last_trade_time` from 1980, not 1970.** Its `last_trade_time` is a count of seconds
 from 1980-01-01 UTC, so read as a Unix time it lands ten years in the past and still looks like a
-plausible timestamp. `bin/stoxkart/quotes` adds 315532800 seconds, and the converted time matched
+plausible timestamp. `bin/stoxkart/instruments/websocket_quotes` adds 315532800 seconds, and the converted time matched
 Zerodha's last trade time to the second on 2026-09-15. A value of 0 is stored as null.
 
 ## Platform notes

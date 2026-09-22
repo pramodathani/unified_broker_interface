@@ -1,0 +1,24 @@
+# The one bin/unified/brokers/ script that keeps running: unified-brokers@unified_details.service caches the MongoDB
+# broker_details collection in unified:details:brokers, once a minute. It fits the template because it reads MongoDB
+# and writes Redis only, and logs a store it cannot reach and tries again at the next minute rather than exiting.
+#
+#     systemctl --user enable --now unified-brokers@unified_details.service
+#     journalctl --user -u unified-brokers@unified_details -f
+
+[Unit]
+Description=Unified brokers %i
+PartOf=unified.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Environment=PYTHONUNBUFFERED=1
+SyslogIdentifier=unified-brokers-%i
+ExecStart=%h/Projects/unified_broker_interface/bin/unified/brokers/%i
+Restart=always
+RestartSec=15
+RestartPreventExitStatus=2
+TimeoutStopSec=60
+
+[Install]
+WantedBy=unified.target

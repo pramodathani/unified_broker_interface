@@ -11,7 +11,7 @@ The units are found from the `services/` directory rather than from a list in th
 | --- | --- | --- | --- |
 | Target | `<group>.target` | active | starts it |
 | Timer | every `*.timer` file in the folder | active, which systemd shows as waiting | starts it |
-| Long-running service | every service the target wants whose `Restart=` is `always`, such as `zerodha@quotes.service`, `zerodha-historical-prices.service` and `unified-rest-api.service` | running, starting, or waiting for systemd to restart it | clears a failed state and starts it |
+| Long-running service | every service the target wants whose `Restart=` is `always`, such as `zerodha-instruments@websocket_quotes.service`, `zerodha-historical-prices.service` and `unified-rest-api.service` | running, starting, or waiting for systemd to restart it | clears a failed state and starts it |
 | Scheduled job | every other service file in the folder that is not a template, such as `zerodha-login.service` and `unified-prices.service` | anything except failed | reports the failure and never starts it |
 
 Scheduled jobs are never started, because starting a login service logs in to a live broker account, and at Zerodha every login invalidates the token that every other running script holds. Their timers run them at the right time.
@@ -71,7 +71,7 @@ class SystemdClient:
         """Reads some properties of one unit.
 
         Args:
-            unit_name (str): The unit's full name, such as `zerodha@quotes.service`.
+            unit_name (str): The unit's full name, such as `zerodha-instruments@websocket_quotes.service`.
             property_names (list[str]): The systemd property names to read, such as `ActiveState`.
 
         Returns:
@@ -211,7 +211,7 @@ class ProjectUnit:
     Each kind of unit is a subclass that decides what healthy means for it and whether this script may start it.
 
     Attributes:
-        name: The unit's full name, such as `zerodha@quotes.service`.
+        name: The unit's full name, such as `zerodha-instruments@websocket_quotes.service`.
         load_state: The unit's `LoadState`, which is `not-found` when the unit was never installed.
         active_state: The unit's `ActiveState`, such as `active`, `inactive` or `failed`.
         sub_state: The unit's `SubState`, such as `running`, `dead` or `waiting`.
@@ -395,7 +395,7 @@ class TimerUnit(ProjectUnit):
 
 
 class LongRunningService(ProjectUnit):
-    """A service with `Restart=always` that should always be running, such as `zerodha@quotes.service`."""
+    """A service with `Restart=always` that should always be running, such as `zerodha-instruments@websocket_quotes.service`."""
 
     KIND = "long-running"
 

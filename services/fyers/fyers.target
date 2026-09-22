@@ -5,7 +5,11 @@
 #     systemctl --user link ~/Projects/unified_broker_interface/services/fyers/*
 #     systemctl --user daemon-reload
 #     systemctl --user enable --now fyers.target fyers-login.timer \
-#         fyers@quotes.service fyers@order_updates.service fyers@persist_ticks.service fyers@persist_orders.service fyers@orders.service fyers@trades.service fyers@positions.service fyers@holdings.service fyers@funds.service fyers@user-profile.service fyers@persist_positions.service fyers-historical-prices.service
+#         fyers-instruments@websocket_quotes.service fyers-instruments@store_quotes_to_db.service \
+#         fyers-orders@websocket_order_details.service fyers-orders@store_orders_to_db.service fyers-orders@api_order_details.service fyers-orders@api_trade_details.service \
+#         fyers-portfolio@positions.service fyers-portfolio@holdings.service fyers-portfolio@funds.service fyers-portfolio@store_positions_to_db.service \
+#         fyers-user@details.service \
+#         fyers-historical-prices.service
 
 [Unit]
 Description=fyers scripts

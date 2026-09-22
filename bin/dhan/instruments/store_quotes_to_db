@@ -1,0 +1,334 @@
+#!/usr/bin/env python3
+"""
+Persist Dhan ticks from the Redis Stream `dhan:quotes:stream` into `dhan.ticks`, and keep persisting until stopped.
+
+    bin/dhan/instruments/store_quotes_to_db
+    bin/dhan/instruments/store_quotes_to_db --batch-size 2000 --flush-interval 2
+
+    redis-cli XINFO GROUPS dhan:quotes:stream                                     # lag and pending count
+
+`bin/dhan/instruments/websocket_quotes` appends every tick to the stream; this reads it as the `persist` consumer group and writes
+the ticks to the `dhan.ticks` hypertable with COPY, a batch at a time. A batch is written when it
+holds `--batch-size` ticks or has waited `--flush-interval` seconds, whichever comes first, so a quiet
+market is still persisted promptly and a busy one efficiently.
+
+**Nothing is lost across a restart.** An entry is acknowledged only after the batch holding it has been
+committed. A crash, a refused write or a lost connection leaves the batch pending in the group, and the
+next read - after a reconnect, or at the next start - takes the pending entries first. The price is that a
+batch committed just before a crash, and not yet acknowledged, is written a second time; `dhan.ticks` has no
+unique key to stop that. The one way ticks are lost is the stream's cap: `bin/dhan/instruments/websocket_quotes` trims it at about
+1,000,000 entries, so ticks trimmed while this is stopped are gone, and are counted as skipped when their
+pending ids come back empty.
+
+The consumer group is created at the start of the stream the first time, so the first run persists
+everything already in it. Run one instance: a second would share the consumer name and re-read the first's
+pending entries.
+
+**Columns.** `time` is when `bin/dhan/instruments/websocket_quotes` received the tick; then `id`, `instrument_token`, `exchange`,
+`mode`, the prices and quantities, `open`/`high`/`low`/`close` from `ohlc`, `change`, the open interest,
+`last_trade_time` and `exchange_timestamp` as timestamps, and the five bid and ask levels flattened into
+`bid1_price` ... `ask5_orders`. A tick without an `id`, or one that is not JSON, is skipped and acknowledged.
+
+Exits 0 when stopped with Ctrl+C or SIGTERM, after writing and acknowledging the batch in hand. A database or
+Redis that cannot be reached is retried with backoff rather than ending the process.
+
+**The table** is created on start from `020_dhan_streams.sql` in `stock_brokers/instruments/ticks/utilities/sql/ddl`,
+whose statements are all safe to run again, so a new database needs no separate step. A start that cannot apply
+it exits 1.
+"""
+
+import io
+import sys
+import json
+import time
+import signal
+import argparse
+import threading
+from datetime import datetime, timezone
+from pathlib import Path
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+STREAM_KEY = "dhan:quotes:stream"
+STREAM_FIELD = "tick"
+TABLE = "dhan.ticks"
+
+# The DDL that creates dhan.ticks, with the rest of dhan's stream tables.
+DDL_FILE = "020_dhan_streams.sql"
+DDL_DIRECTORY = PROJECT_ROOT / "stock_brokers" / "instruments" / "ticks" / "utilities" / "sql" / "ddl"
+GROUP = "persist"
+CONSUMER = "persist_ticks"
+
+MIN_BACKOFF_SECONDS = 1
+MAX_BACKOFF_SECONDS = 60
+
+# The table's columns in the order each row is built.
+COLUMNS = [
+    "time", "id", "instrument_token", "exchange", "mode",
+    "last_price", "last_quantity", "average_price", "volume", "buy_quantity", "sell_quantity",
+    "open", "high", "low", "close", "change",
+    "oi", "oi_day_high", "oi_day_low", "last_trade_time", "exchange_timestamp",
+] + [f"{side}{level}_{field}" for side in ("bid", "ask") for level in range(1, 6)
+     for field in ("price", "quantity", "orders")]
+
+def epoch_timestamp(value):
+    """
+    An epoch in seconds as an ISO timestamp in UTC, or None.
+
+    - `value` is the epoch, or None.
+    """
+    if not value:
+        return None
+    try:
+        return datetime.fromtimestamp(float(value), tz=timezone.utc).isoformat()
+    except (TypeError, ValueError, OSError, OverflowError):
+        return None
+
+def tick_row(tick):
+    """
+    A tick flattened into COLUMNS order, or None when it has no `id` to be stored under.
+
+    - `tick` is the decoded tick.
+    """
+    if not isinstance(tick, dict) or not tick.get('id'):
+        return None
+    ohlc = tick.get('ohlc') or {}
+    depth = tick.get('depth') or {}
+    row = [
+        epoch_timestamp(tick.get('received_at')) or datetime.now(tz=timezone.utc).isoformat(),
+        tick.get('id'), tick.get('instrument_token'), tick.get('exchange'), tick.get('mode'),
+        tick.get('last_price'), tick.get('last_quantity'), tick.get('average_price'), tick.get('volume'),
+        tick.get('buy_quantity'), tick.get('sell_quantity'),
+        ohlc.get('open'), ohlc.get('high'), ohlc.get('low'), ohlc.get('close'), tick.get('change'),
+        tick.get('oi'), tick.get('oi_day_high'), tick.get('oi_day_low'),
+        epoch_timestamp(tick.get('last_trade_time')), epoch_timestamp(tick.get('exchange_timestamp')),
+    ]
+    for side in ("buy", "sell"):
+        levels = depth.get(side) or []
+        for index in range(5):
+            level = levels[index] if index < len(levels) and isinstance(levels[index], dict) else {}
+            row.extend([level.get('price'), level.get('quantity'), level.get('orders')])
+    return row
+
+def copy_value(value):
+    """
+    One value in COPY text format, with the format's NULL marker and its three structural characters escaped.
+
+    - `value` is the column value.
+    """
+    if value is None:
+        return "\\N"
+    return str(value).replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n")
+
+class StreamPersister:
+    """
+    Reads one Redis Stream as a consumer group and writes its entries to one table, acknowledging after commit.
+
+    The same class in every bin/<broker>/persist_* script; only the constants and the row function differ.
+    """
+
+    def __init__(self, cache, connect, logger, batch_size, flush_interval, row, noun, stream=STREAM_KEY,
+                 field=STREAM_FIELD, table=TABLE, columns=COLUMNS, consumer=CONSUMER):
+        """
+        - `cache` is the Redis client.
+        - `connect` opens a new database connection.
+        - `logger` is where progress is reported.
+        - `batch_size` is the most rows written in one COPY.
+        - `flush_interval` is the longest a row waits, in seconds, before its batch is written.
+        - `stream`, `field`, `table`, `columns` and `consumer` say what is read and where it is written.
+        - `row` turns one decoded entry into a row in `columns` order, or None to skip it.
+        - `noun` names an entry in the log.
+        """
+        self._stream, self._field, self._table, self._columns = stream, field, table, columns
+        self._row, self._consumer, self._noun = row, consumer, noun
+        self._cache = cache
+        self._connect = connect
+        self._logger = logger
+        self._batch_size = batch_size
+        self._flush_interval = flush_interval
+        self._connection = None
+        self.written = 0
+        self.skipped = 0
+
+    def ensure_group(self):
+        """Create the consumer group at the start of the stream, creating the stream too, unless it exists."""
+        try:
+            self._cache.xgroup_create(self._stream, GROUP, id="0", mkstream=True)
+            self._logger.info(f"Created consumer group {GROUP} on {self._stream}.")
+        except Exception as exception:
+            if "BUSYGROUP" not in str(exception):
+                raise
+
+    def run(self, stop):
+        """
+        Persist until `stop` is set, then write and acknowledge whatever batch is in hand.
+
+        - `stop` is a threading.Event.
+        """
+        backoff = MIN_BACKOFF_SECONDS
+        # Pending entries - read before but never acknowledged - are taken first, at every start and after
+        # every failure, so a batch that failed to commit is written before anything newer.
+        pending_first = True
+        batch = []
+        started = time.monotonic()
+        while True:
+            try:
+                if pending_first:
+                    # Reading pending entries always starts from the oldest unacknowledged one, so each read is
+                    # written and acknowledged before the next rather than gathered, which would repeat them.
+                    self.ensure_group()
+                    entries = self._read(True, self._batch_size, 0)
+                    if entries:
+                        self._write(entries)
+                    else:
+                        pending_first = False
+                    backoff = MIN_BACKOFF_SECONDS
+                    continue
+
+                if not stop.is_set():
+                    remaining = self._flush_interval - (time.monotonic() - started) if batch else self._flush_interval
+                    entries = self._read(False, self._batch_size - len(batch), max(0.0, remaining))
+                    if entries and not batch:
+                        started = time.monotonic()
+                    batch.extend(entries)
+
+                due = batch and time.monotonic() - started >= self._flush_interval
+                if batch and (len(batch) >= self._batch_size or due or stop.is_set()):
+                    self._write(batch)
+                    batch = []
+                    backoff = MIN_BACKOFF_SECONDS
+                elif stop.is_set():
+                    break
+            except Exception as exception:
+                self._logger.error(f"Persisting failed, retrying in {backoff} seconds: {type(exception).__name__}: {exception}")
+                self._reset_connection()
+                # The batch in hand is still pending in the group; drop it here and read it back from there.
+                batch, pending_first = [], True
+                if stop.is_set():
+                    break
+                stop.wait(backoff)
+                backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
+        self._reset_connection()
+        self._logger.info(f"Stopped. Wrote {self.written} {self._noun}(s), skipped {self.skipped}.")
+
+    def _read(self, pending, count, wait):
+        """
+        Up to `count` entries as `(id, fields)` pairs: this consumer's pending ones, or new ones waiting up to `wait` seconds.
+
+        - `pending` reads the pending entries instead of new ones.
+        - `count` is the most entries to read.
+        - `wait` is how long to block for new entries, in seconds.
+        """
+        response = self._cache.xreadgroup(GROUP, self._consumer, {self._stream: "0" if pending else ">"}, count=count,
+                                          block=None if pending else max(1, int(wait * 1000)))
+        return [entry for _, entries in (response or []) for entry in entries]
+
+    def _write(self, batch):
+        """
+        Write a batch with COPY, commit, then acknowledge every entry in it.
+
+        - `batch` is a list of `(id, fields)` pairs.
+        """
+        buffer = io.StringIO()
+        rows = skipped = 0
+        for _, fields in batch:
+            try:
+                row = self._row(json.loads((fields or {}).get(self._field)))
+            except (TypeError, ValueError):
+                row = None
+            if row is None:
+                # Not JSON, no id, or trimmed from the stream while pending.
+                skipped += 1
+                continue
+            buffer.write("\t".join(copy_value(value) for value in row) + "\n")
+            rows += 1
+
+        if rows:
+            if self._connection is None:
+                self._connection = self._connect()
+            buffer.seek(0)
+            columns = ", ".join(f'"{column}"' for column in self._columns)
+            with self._connection.cursor() as cursor:
+                cursor.copy_expert(f"copy {self._table} ({columns}) from stdin with (format text)", buffer)
+            self._connection.commit()
+            self.written += rows
+        self._cache.xack(self._stream, GROUP, *[entry_id for entry_id, _ in batch])
+        # Counted only once the batch is acknowledged: a batch whose commit fails is read back and counted then.
+        self.skipped += skipped
+        self._logger.debug(f"Wrote {rows} {self._noun}(s) to {self._table}.")
+
+    def _reset_connection(self):
+        """Roll back and close the database connection, so the next write opens a fresh one."""
+        if self._connection is not None:
+            try:
+                self._connection.rollback()
+                self._connection.close()
+            except Exception:
+                pass
+            self._connection = None
+
+def apply_table(connect, logger):
+    """
+    Apply the broker's stream table DDL, which creates the table the first time and changes nothing after.
+
+    Executed through psycopg2 rather than SQLAlchemy's text(), which would take the colons in the file's comments for
+    bind parameters.
+
+    - `connect` opens a database connection.
+    - `logger` is where progress is reported.
+    """
+    path = DDL_DIRECTORY / DDL_FILE
+    connection = connect()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(path.read_text())
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+    logger.info(f"Applied {path.name}.")
+
+def main():
+    """Persist Dhan ticks from dhan:quotes:stream into dhan.ticks until stopped."""
+    parser = argparse.ArgumentParser(description="Persist Dhan ticks from dhan:quotes:stream into dhan.ticks.")
+    parser.add_argument("--batch-size", type=int, default=500, help="most ticks written in one COPY, default 500")
+    parser.add_argument("--flush-interval", type=float, default=1.0,
+                        help="longest a tick waits before its batch is written, in seconds, default 1")
+    arguments = parser.parse_args()
+
+    from utilities.configurations import get_cache, get_logger, get_postgres
+
+    logger = get_logger("dhan.store_quotes_to_db")
+    if arguments.batch_size < 1 or arguments.flush_interval <= 0:
+        logger.error("--batch-size must be at least 1 and --flush-interval above 0.")
+        return 2
+
+    try:
+        apply_table(get_postgres, logger)
+    except Exception as exception:
+        logger.error(f"Could not prepare dhan.ticks: {type(exception).__name__}: {exception}")
+        return 1
+
+    stop = threading.Event()
+
+    def _handle_signal(signal_number, frame):
+        logger.info(f"Received signal {signal_number}. Writing the batch in hand, then stopping.")
+        stop.set()
+
+    for signal_number in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(signal_number, _handle_signal)
+
+    logger.info(f"Persisting {STREAM_KEY} into {TABLE}.")
+    StreamPersister(get_cache(), get_postgres, logger, arguments.batch_size, arguments.flush_interval,
+                    row=tick_row, noun="tick").run(stop)
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,26 @@
+# One bin/unified/instruments/ script that keeps running: unified-instruments@websocket_quotes.service combines every
+# broker's ticks into one quote per unified instrument, and unified-instruments@store_quotes_to_db.service drains the
+# same streams into unified.ticks. Both fit, because each one reads only Redis and the database, and retries a store
+# that cannot be reached rather than exiting. The other two scripts in the folder are jobs rather than services: map
+# runs from unified-mapping.service each morning, and price_history from unified-prices.service.
+#
+#     systemctl --user enable --now unified-instruments@websocket_quotes.service
+#     journalctl --user -u unified-instruments@websocket_quotes -f
+
+[Unit]
+Description=Unified instruments %i
+PartOf=unified.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Environment=PYTHONUNBUFFERED=1
+SyslogIdentifier=unified-instruments-%i
+ExecStart=%h/Projects/unified_broker_interface/bin/unified/instruments/%i
+Restart=always
+RestartSec=15
+RestartPreventExitStatus=2
+TimeoutStopSec=60
+
+[Install]
+WantedBy=unified.target

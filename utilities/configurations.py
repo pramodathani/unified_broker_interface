@@ -83,7 +83,7 @@ def get_logger(name):
     """
     Named logger.
 
-    - `name` is the name of the logger, for example `zerodha.quotes`.
+    - `name` is the name of the logger, for example `zerodha.websocket_quotes`.
     """
     return logging.getLogger(name)
 

@@ -1,0 +1,18 @@
+# When the daily instrument job runs.
+#
+# 07:45 IST every day, weekends included: the brokers publish the day's masters overnight, and the mapping has to be done before the 09:00 pre-open, when the feeders resolve against it.
+
+[Unit]
+Description=Daily instrument download and unified mapping
+PartOf=unified.target
+
+[Timer]
+OnCalendar=*-*-* 07:45 Asia/Kolkata
+AccuracySec=1min
+# A snapshot missed is a snapshot that can never be fetched later - the brokers publish only today's file - so a machine
+# that was off at 07:45 runs the job as soon as it starts.
+Persistent=true
+Unit=unified-mapping.service
+
+[Install]
+WantedBy=timers.target

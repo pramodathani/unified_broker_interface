@@ -1,0 +1,25 @@
+# One bin/unified/orders/ script that keeps running: the order and trade combiners, the stream of order updates across
+# every broker, and the persister that drains it. So unified-orders@api_order_details.service runs
+# bin/unified/orders/api_order_details. They all fit, because every one of them reads only Redis and the database, and
+# retries a store that cannot be reached rather than exiting.
+#
+#     systemctl --user enable --now unified-orders@api_order_details.service
+#     journalctl --user -u unified-orders@api_order_details -f
+
+[Unit]
+Description=Unified orders %i
+PartOf=unified.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Environment=PYTHONUNBUFFERED=1
+SyslogIdentifier=unified-orders-%i
+ExecStart=%h/Projects/unified_broker_interface/bin/unified/orders/%i
+Restart=always
+RestartSec=15
+RestartPreventExitStatus=2
+TimeoutStopSec=60
+
+[Install]
+WantedBy=unified.target

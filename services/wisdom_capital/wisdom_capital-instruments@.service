@@ -1,0 +1,32 @@
+# One bin/wisdom_capital/instruments/ script that keeps running: wisdom_capital-instruments@websocket_quotes.service
+# runs the websocket quote feed into Redis, and wisdom_capital-instruments@store_quotes_to_db.service runs the
+# persister that drains that stream into wisdom_capital.ticks. Both fit, because each one logs in by itself, logs in
+# again when its token is refused, and exits non-zero only when it cannot recover. The rest of the folder is not run
+# through this template: daily_feed is a once-a-day download that unified-mapping.service runs, and price_history
+# paces itself differently and has its own wisdom_capital-historical-prices.service.
+#
+#     systemctl --user enable --now wisdom_capital-instruments@websocket_quotes.service
+#     journalctl --user -u wisdom_capital-instruments@websocket_quotes -f
+
+[Unit]
+Description=wisdom_capital instruments %i
+PartOf=wisdom_capital.target
+Wants=network-online.target
+After=network-online.target
+# Never give up restarting: a broker outage can outlast any start limit, and each script paces its own logins.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+# Python block-buffers stdout when it is not a terminal; without this the journal stays empty.
+Environment=PYTHONUNBUFFERED=1
+SyslogIdentifier=wisdom_capital-instruments-%i
+ExecStart=%h/Projects/unified_broker_interface/bin/wisdom_capital/instruments/%i
+Restart=always
+RestartSec=15
+# Exit 2 is a bad argument or configuration - nothing to subscribe to, say - which a restart cannot fix.
+RestartPreventExitStatus=2
+TimeoutStopSec=60
+
+[Install]
+WantedBy=wisdom_capital.target

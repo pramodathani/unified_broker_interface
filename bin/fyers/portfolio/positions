@@ -1,0 +1,353 @@
+#!/usr/bin/env python3
+"""
+Poll the Fyers positions every five seconds and merge them into the Redis hash `fyers:portfolio:positions`.
+
+    bin/fyers/portfolio/positions
+    redis-cli HGETALL fyers:portfolio:positions
+    redis-cli HGET fyers:portfolio:positions NSE:INFY-EQ:INTRADAY
+
+Calls `GET https://api-t1.fyers.in/api/v3/positions` through `FyersAPI`, which logs in first if the stored session is
+dead. The body has no `data` envelope: its `netPositions` has one row per position. A flat account writes nothing.
+
+**One key for positions.** `fyers:portfolio:positions` is a hash with one field per position, written by two scripts:
+this poller, and `bin/fyers/orders/websocket_order_details`, which merges each position update from Fyers' websocket into the same hash.
+The field is `symbol:product` as Fyers spells both - `NSE:INFY-EQ:INTRADAY` - because Fyers holds one position per
+symbol and product, and both writers carry those two values: `symbol` and `productType` here, `symbol` and
+`product_type` on the websocket. Every value is
+
+    {"observed_at": <epoch>, "source": "rest" | "websocket", "position": <normalized position>, "data": <Fyers' own payload>}
+
+`position` has the same fields whichever script wrote it - `id`, `instrument_token`, `tradingsymbol`, `exchange`,
+`segment`, `product`, `quantity`, `buy_quantity`, `sell_quantity`, `buy_price`, `sell_price`, `buy_value`, `sell_value`,
+`average_price`, `last_price`, `realized_pnl`, `unrealized_pnl`, `pnl`, `multiplier`, `lot_size`, `day_or_net` and
+`updated_at` - because the two name the same things differently:
+
+| field | REST positions (`bin/fyers/portfolio/positions`) | position update (`bin/fyers/orders/websocket_order_details`) |
+| --- | --- | --- |
+| `id`, `tradingsymbol` | `symbol` | `symbol` |
+| `instrument_token` | `fyToken` | `fy_token` |
+| `exchange` | the `symbol` prefix (`NSE`) | the `symbol` prefix |
+| `segment` | `segment` (10 cash, 11 derivatives, 12 currency, 20 commodities) | `segment` |
+| `product` | `productType` on the shared vocabulary | `product_type` on the shared vocabulary |
+| `quantity`, `buy_quantity`, `sell_quantity` | `netQty`, `buyQty`, `sellQty` | `net_qty`, `buy_qty`, `sell_qty` |
+| `buy_price`, `sell_price`, `average_price` | `buyAvg`, `sellAvg`, `netAvg` | `buy_avg`, `sell_avg`, `net_avg` |
+| `buy_value`, `sell_value` | `buyVal`, `sellVal` | `buy_val`, `sell_val` |
+| `last_price` | `ltp` | null - the update carries none |
+| `realized_pnl`, `unrealized_pnl`, `pnl` | `realized_profit`, `unrealized_profit`, `pl` | `pl_realized`, `pl_unrealized`, `pl_total` |
+| `multiplier` | `qtyMulti_com` | `qty_multiplier` |
+| `day_or_net` | `NET` when `cfBuyQty` or `cfSellQty` carries a quantity forward, else `DAY` | the same, from `cf_buy_qty`, `cf_sell_qty` |
+
+Fyers sends no lot size or update time on a position, so `lot_size` and `updated_at` are null. `pnl` is the sum of
+realized and unrealized when Fyers does not state it. The REST fields follow Fyers' published v3 schema and have not
+been read back live: every request on 2026-09-13 met Fyers' request limit.
+
+**Which write wins.** A websocket update always replaces its position's entry. A row from this poller replaces an entry
+only when that entry was observed before this poll's request was sent, so an update that arrived while the request was
+in flight is never overwritten by the older snapshot; a stale entry is corrected by the next poll. The check and the
+write run together in Redis, as one script. `observed_at` of a polled row is the moment its request was sent.
+
+**Daily reset.** The hash expires at 06:00 IST, and every write moves that to the next 06:00. A position Fyers stops
+listing during the day is not removed before then.
+
+**Refusals.** Fyers can refuse a request inside an HTTP 200 as well as with an error status, so the body is checked:
+only an `s` of `ok` (or none) is merged. A dead session - Fyers code -8, -15, -16 or -17 - is logged in again before the
+next request, and the new session is confirmed against the profile, because `FyersAPI` only logs in when its probe
+raises and a refusal inside a 200 does not. A Cloudflare ban in front of the host pauses polling for thirty minutes and
+a rate limit for five, rather than logging in, since every refused request extends a ban. Any other failed poll is
+logged and leaves the hash unchanged.
+
+Runs until Ctrl+C. Exits 1 when the session does not work at startup, or after a login following a dead session.
+Reads only - it places no orders.
+"""
+
+import sys
+import json
+import time
+from datetime import datetime, timedelta
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+POSITIONS_URL = "https://api-t1.fyers.in/api/v3/positions"
+PROFILE_URL = "https://api-t1.fyers.in/api/v3/profile"
+REDIS_KEY = "fyers:portfolio:positions"
+# When the book was last read successfully, epoch seconds, expiring with the hash. The hash alone cannot say so
+# when the book is empty, since Redis keeps no empty hash.
+POLLED_KEY = "fyers:portfolio:positions:polled_at"
+# Fyers allows an app 200 requests a minute and 100,000 a day across every endpoint, shared by every bin/fyers/
+# script and the history download, so this polls every five seconds; the position update websocket carries changes as they happen.
+DELAY_SECONDS = 5
+TIMEOUT_SECONDS = 10
+
+INDIA = ZoneInfo("Asia/Kolkata")
+RESET_HOUR = 6
+
+# Merges entries into a hash. KEYS[1] is the hash; ARGV is the expiry epoch, the source, the observed-at epoch, then
+# field and value pairs. A "rest" value replaces an entry only when the entry was observed before ARGV[3]; any other
+# source always replaces. A key of another type - the order book stored whole before this hash - is replaced.
+MERGE_SCRIPT = """
+local kind = redis.call('TYPE', KEYS[1])
+if type(kind) == 'table' then kind = kind['ok'] end
+if kind ~= 'hash' and kind ~= 'none' then redis.call('DEL', KEYS[1]) end
+local written = 0
+for i = 4, #ARGV, 2 do
+    local replace = true
+    if ARGV[2] == 'rest' then
+        local current = redis.call('HGET', KEYS[1], ARGV[i])
+        if current then
+            local ok, decoded = pcall(cjson.decode, current)
+            if ok and type(decoded) == 'table' and tonumber(decoded['observed_at'])
+                    and tonumber(decoded['observed_at']) >= tonumber(ARGV[3]) then
+                replace = false
+            end
+        end
+    end
+    if replace then
+        redis.call('HSET', KEYS[1], ARGV[i], ARGV[i + 1])
+        written = written + 1
+    end
+end
+if #ARGV >= 4 then redis.call('EXPIREAT', KEYS[1], ARGV[1]) end
+return written
+"""
+
+PRODUCTS = {
+    "CNC": "CNC", "C": "CNC", "DELIVERY": "CNC", "CASH": "CNC",
+    "MIS": "MIS", "I": "MIS", "INTRADAY": "MIS", "M": "NRML",
+    "NRML": "NRML", "NORMAL": "NRML", "MARGIN": "NRML", "CARRYFORWARD": "NRML",
+    "CO": "CO", "BO": "BO", "MTF": "MTF", "ARB": "ARB", "H": "CO", "B": "BO",
+}
+
+def normalize(value, mapping):
+    """
+    A broker's term on the shared vocabulary, or the term uppercased when the vocabulary does not know it.
+
+    - `value` is the broker's term.
+    - `mapping` is one of the vocabulary tables.
+    """
+    if value is None or value == "":
+        return None
+    key = str(value).strip().upper().replace("_", " ")
+    if key in mapping:
+        return mapping[key]
+    collapsed = " ".join(key.split())
+    return mapping.get(collapsed, collapsed)
+
+def present(value):
+    """A value, or None for blanks and `NA` placeholders."""
+    return None if value is None or str(value).strip() in ("", "NA") else value
+
+def number(value, cast=float):
+    """
+    A value as a number, or None when it is missing or not numeric.
+
+    - `value` is the raw field value.
+    - `cast` is the number type.
+    """
+    value = present(value)
+    try:
+        return None if value is None else int(float(value)) if cast is int else float(value)
+    except (TypeError, ValueError):
+        return None
+
+def text(value):
+    """A value as a string, or None when it is missing."""
+    value = present(value)
+    return None if value is None else str(value)
+
+def exchange_of(symbol):
+    """
+    The exchange a Fyers symbol names in its prefix (`NSE` for `NSE:INFY-EQ`), or None.
+
+    Both the REST rows and the websocket messages carry `exchange` as a number (10 for NSE), but only the symbol
+    names it in words, and both carry the symbol, so it is read from there on either side.
+
+    - `symbol` is the Fyers symbol.
+    """
+    prefix, colon, _ = str(symbol or "").partition(":")
+    return prefix if colon and prefix else None
+
+def next_reset():
+    """The epoch of the next 06:00 IST, when the merged hash expires."""
+    now = datetime.now(INDIA)
+    reset = now.replace(hour=RESET_HOUR, minute=0, second=0, microsecond=0)
+    return int((reset if reset > now else reset + timedelta(days=1)).timestamp())
+
+def position_key(symbol, product):
+    """
+    The hash field for a Fyers position, `symbol:product` as Fyers spells both (`NSE:INFY-EQ:INTRADAY`), or None.
+
+    The REST row and the websocket message carry the same two values under different names - `symbol` and
+    `productType` against `symbol` and `product_type` - so both writers build the field here and a position lands on
+    one field whichever wrote it. A position without a product falls back to the symbol alone.
+
+    - `symbol` is the Fyers symbol.
+    - `product` is Fyers' product, `CNC`, `INTRADAY`, `MARGIN`, `CO`, `BO` or `MTF`.
+    """
+    symbol, product = text(symbol), text(product)
+    if symbol is None:
+        return None
+    return f"{symbol}:{product.strip().upper()}" if product else symbol
+
+def position_from_row(row):
+    """
+    A Fyers `netPositions` row as a normalized position.
+
+    - `row` is one row of `netPositions`.
+    """
+    symbol = text(row.get('symbol'))
+    buy_quantity, sell_quantity = number(row.get('buyQty'), int), number(row.get('sellQty'), int)
+    net = number(row.get('netQty'), int)
+    if net is None and buy_quantity is not None and sell_quantity is not None:
+        net = buy_quantity - sell_quantity
+    realized, unrealized = number(row.get('realized_profit')), number(row.get('unrealized_profit'))
+    total = number(row.get('pl'))
+    if total is None and realized is not None and unrealized is not None:
+        total = realized + unrealized
+    carried = (number(row.get('cfBuyQty'), int) or 0) or (number(row.get('cfSellQty'), int) or 0)
+    return {
+        "id": symbol,
+        "instrument_token": text(row.get('fyToken')),
+        "tradingsymbol": symbol,
+        "exchange": exchange_of(symbol),
+        "segment": text(row.get('segment')),
+        "product": normalize(present(row.get('productType')), PRODUCTS),
+        "quantity": net,
+        "buy_quantity": buy_quantity,
+        "sell_quantity": sell_quantity,
+        "buy_price": number(row.get('buyAvg')),
+        "sell_price": number(row.get('sellAvg')),
+        "buy_value": number(row.get('buyVal')),
+        "sell_value": number(row.get('sellVal')),
+        "average_price": number(row.get('netAvg')),
+        "last_price": number(row.get('ltp')),
+        "realized_pnl": realized,
+        "unrealized_pnl": unrealized,
+        "pnl": total,
+        "multiplier": number(row.get('qtyMulti_com')),
+        "lot_size": None,
+        "day_or_net": "NET" if carried else "DAY",
+        "updated_at": None,
+    }
+
+# Fyers' codes for a dead session.
+AUTHENTICATION_ERROR_CODES = {-8, -15, -16, -17}
+
+# Phrases on Cloudflare's block page, which it serves with HTTP 429 in front of api-t1.fyers.in.
+BLOCK_PAGE_MARKERS = ("error 1015", "error code: 1015", "banned you temporarily")
+
+BLOCK_PAUSE_SECONDS = 30 * 60
+THROTTLE_PAUSE_SECONDS = 5 * 60
+
+class FyersRefusal(Exception):
+    """Fyers refused the request in the body of an HTTP 2xx response."""
+
+    def __init__(self, code, message):
+        super().__init__(code, message)
+        self.code = code
+        self.message = message
+
+def checked(response):
+    """The response when Fyers served the request, raising FyersRefusal with its code and message when it did not."""
+    data = (response or {}).get('data')
+    if not isinstance(data, dict):
+        raise FyersRefusal(None, f"answered without a body: {str(data)[:200]}")
+    if data.get('s') not in (None, 'ok'):
+        raise FyersRefusal(data.get('code'), data.get('message'))
+    return response
+
+def confirm_session(fyers):
+    """
+    Raise FyersRefusal unless the profile is served.
+
+    FyersAPI only logs in when its probe raises, and Fyers can refuse a dead session inside an HTTP 200, so a
+    constructor that returned is no proof of a working session.
+    """
+    checked(fyers.get(url=PROFILE_URL, timeout=TIMEOUT_SECONDS))
+
+def refusal_code(exception):
+    """The numeric code a Fyers refusal carries, or None."""
+    try:
+        return int(getattr(exception, 'code', None))
+    except (TypeError, ValueError):
+        return None
+
+def is_block(exception):
+    """Whether a refusal is Cloudflare's address ban rather than anything Fyers itself said."""
+    lowered = str(exception).lower()
+    return any(marker in lowered for marker in BLOCK_PAGE_MARKERS) or (refusal_code(exception) == 429 and "cloudflare" in lowered)
+
+def is_throttle(exception):
+    """Whether a refusal is a rate limit."""
+    lowered = str(exception).lower()
+    return (refusal_code(exception) == 429 or "too many requests" in lowered or "rate limit" in lowered
+            or "request limit" in lowered)
+
+def is_authentication_error(exception):
+    """Whether Fyers refused the request because the session is dead, and not for a ban or a limit."""
+    if is_block(exception) or is_throttle(exception):
+        return False
+    return refusal_code(exception) in AUTHENTICATION_ERROR_CODES
+
+def main():
+    """Fetch the positions and merge them into fyers:portfolio:positions every five seconds, until interrupted."""
+    from stock_brokers.api.fyers import FyersAPI
+    from utilities.configurations import get_cache, get_logger
+    from utilities.poll_reporter import PollReporter
+
+    logger = get_logger("fyers.positions")
+    report = PollReporter(logger)
+    cache = get_cache()
+    merge = cache.register_script(MERGE_SCRIPT)
+    try:
+        fyers = FyersAPI()
+        confirm_session(fyers)
+    except Exception as exception:
+        logger.error(f"Could not log in to Fyers: {type(exception).__name__}: {exception}")
+        return 1
+
+    try:
+        while True:
+            try:
+                requested_at = time.time()
+                response = checked(fyers.get(url=POSITIONS_URL, timeout=TIMEOUT_SECONDS))
+                rows = response['data'].get('netPositions')
+                rows = rows if isinstance(rows, list) else []
+                arguments = [next_reset(), "rest", repr(requested_at)]
+                for row in rows:
+                    field = position_key(row.get('symbol'), row.get('productType')) if isinstance(row, dict) else None
+                    if field is not None:
+                        arguments += [field, json.dumps({"observed_at": requested_at, "source": "rest",
+                                                         "position": position_from_row(row), "data": row})]
+                written = merge(keys=[REDIS_KEY], args=arguments)
+                cache.set(POLLED_KEY, repr(requested_at), exat=arguments[0])
+                report.info(f"Merged {written} of {len(rows)} position(s) into {REDIS_KEY}")
+            except Exception as exception:
+                if is_block(exception):
+                    logger.error(f"Cloudflare is blocking Fyers requests from this address, pausing "
+                                 f"{BLOCK_PAUSE_SECONDS}s: {str(exception)[:160]}")
+                    time.sleep(BLOCK_PAUSE_SECONDS)
+                elif is_throttle(exception):
+                    logger.warning(f"Fyers rate limited the request, pausing {THROTTLE_PAUSE_SECONDS}s: "
+                                   f"{str(exception)[:160]}")
+                    time.sleep(THROTTLE_PAUSE_SECONDS)
+                elif is_authentication_error(exception):
+                    # A dead session: log in again before sending anything more.
+                    logger.warning(f"Fyers session expired, logging in again: {exception}")
+                    fyers = FyersAPI()
+                    confirm_session(fyers)
+                else:
+                    report.error(f"Positions poll failed: {type(exception).__name__}: {exception}")
+            time.sleep(DELAY_SECONDS)
+    except KeyboardInterrupt:
+        logger.info("Stopped")
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())

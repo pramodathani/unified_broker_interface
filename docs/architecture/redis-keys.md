@@ -25,8 +25,8 @@ The keys come in three kinds:
 
 | Key | Type | Written by | Holds |
 | --- | --- | --- | --- |
-| `<broker>:session:status` | string | `bin/<broker>/login`, `logout` | `{"status", "access-token", "last_login"}`, replaced on every run |
-| `<broker>:user:details` | string | `bin/<broker>/user-profile` | `{"timestamp", "status", "code", "data"}`, the broker's profile under `data` |
+| `<broker>:session:status` | string | `bin/<broker>/session/connect`, `disconnect` | `{"status", "access-token", "last_login"}`, replaced on every run |
+| `<broker>:user:details` | string | `bin/<broker>/user/details` | `{"timestamp", "status", "code", "data"}`, the broker's profile under `data` |
 
 `status` is `success`, `failure` or `logged out`. On success `last_login` is when the token in force was
 issued, which is earlier than the run when the stored session was still good; on failure it is when the
@@ -36,20 +36,20 @@ other process is using.
 
 The profile is polled every minute. Wisdom Capital's is fetched once a day, since it allows about one
 profile call a day, and Kotak, which has no profile endpoint, has its profile written by
-`bin/kotak/login` from the login response, on a run that actually logged in.
+`bin/kotak/session/connect` from the login response, on a run that actually logged in.
 
 `wisdom_capital:session:marketdata` holds Wisdom Capital's separate market data token as
-`{"token", "userID"}`, shared by `bin/wisdom_capital/quotes` and `bin/wisdom_capital/historical_prices`,
+`{"token", "userID"}`, shared by `bin/wisdom_capital/instruments/websocket_quotes` and `bin/wisdom_capital/instruments/price_history`,
 with `wisdom_capital:session:marketdata:lock` held while one of them replaces a refused token.
 
 ### Orders
 
 | Key | Type | Written by | Holds |
 | --- | --- | --- | --- |
-| `<broker>:orders:orders` | hash, keyed by the broker's order id | `bin/<broker>/orders` and `bin/<broker>/order_updates` | `{"observed_at", "source", "order", "data"}` per order |
-| `<broker>:orders:orders:polled_at` | string | `bin/<broker>/orders` | When the order book was last read successfully, epoch seconds |
-| `<broker>:orders:trades` | string | `bin/<broker>/trades` | `{"timestamp", "status", "code", "data"}`, the day's trade book under `data` |
-| `<broker>:order-updates:stream` | stream, field `update` | `bin/<broker>/order_updates` | Every order update as `{"timestamp", "data"}`, with the normalized `order` added at Stoxkart, capped at about 20,000 |
+| `<broker>:orders:orders` | hash, keyed by the broker's order id | `bin/<broker>/orders/api_order_details` and `bin/<broker>/orders/websocket_order_details` | `{"observed_at", "source", "order", "data"}` per order |
+| `<broker>:orders:orders:polled_at` | string | `bin/<broker>/orders/api_order_details` | When the order book was last read successfully, epoch seconds |
+| `<broker>:orders:trades` | string | `bin/<broker>/orders/api_trade_details` | `{"timestamp", "status", "code", "data"}`, the day's trade book under `data` |
+| `<broker>:order-updates:stream` | stream, field `update` | `bin/<broker>/orders/websocket_order_details` | Every order update as `{"timestamp", "data"}`, with the normalized `order` added at Stoxkart, capped at about 20,000 |
 
 `orders:orders` is the one hash for a broker's orders, merged from two writers. `source` is `rest` or
 `websocket`, `order` is the order normalized onto the shared vocabulary - status `PENDING`, `OPEN`,
@@ -60,27 +60,27 @@ is never overwritten by the older snapshot. The check and the write run together
 
 Stoxkart's entries also carry a top-level `variety` beside `data`, such as `NORMAL`, `AMO` or `BO`, which
 `PUT /api/orders/modify` and `DELETE /api/orders/cancel` build Stoxkart's modify and cancel URLs from. It is stored apart from `data` because
-Stoxkart's order socket reports `NORMAL` for an after-market order, so `bin/stoxkart/order_updates` keeps
+Stoxkart's order socket reports `NORMAL` for an after-market order, so `bin/stoxkart/orders/websocket_order_details` keeps
 an `AMO` or `BO` variety already stored rather than taking the socket's.
 
 `polled_at` exists because Redis keeps no empty hash, so the hash alone cannot say that an empty book
 was read. Both keys expire at 06:00 IST, and every write moves that to the next 06:00, so yesterday's
 orders stay readable overnight and the first poll of the day starts afresh.
 
-The stream is written by the `order_updates` scripts of all ten brokers. It is read by
-`bin/<broker>/persist_orders` into `<broker>.order_updates`, and by `bin/unified/order_updates`.
-Flattrade's `order_updates` script exists but is not run, since Flattrade permits one websocket per
+The stream is written by the `websocket_order_details` scripts of all ten brokers. It is read by
+`bin/<broker>/orders/store_orders_to_db` into `<broker>.order_updates`, and by `bin/unified/orders/websocket_order_details`.
+Flattrade's `websocket_order_details` script exists but is not run, since Flattrade permits one websocket per
 session and its quotes script holds it.
 
 ### Portfolio
 
 | Key | Type | Written by | Holds |
 | --- | --- | --- | --- |
-| `<broker>:portfolio:positions` | hash, keyed per position | `bin/<broker>/positions`, and `order_updates` where the broker streams positions | `{"observed_at", "source", "position", "data"}` per position |
-| `<broker>:portfolio:positions:polled_at` | string | `bin/<broker>/positions` | When the positions were last read successfully, epoch seconds |
-| `<broker>:positions_updates:stream` | stream, field `position` | `bin/<broker>/order_updates` | Every position update as `{"timestamp", "data"}`, capped at about 20,000 |
-| `<broker>:portfolio:holdings` | string | `bin/<broker>/holdings` | `{"timestamp", "status", "code", "data"}`, polled every minute |
-| `<broker>:portfolio:funds` | string | `bin/<broker>/funds` | `{"timestamp", "status", "code", "data"}` |
+| `<broker>:portfolio:positions` | hash, keyed per position | `bin/<broker>/portfolio/positions`, and `websocket_order_details` where the broker streams positions | `{"observed_at", "source", "position", "data"}` per position |
+| `<broker>:portfolio:positions:polled_at` | string | `bin/<broker>/portfolio/positions` | When the positions were last read successfully, epoch seconds |
+| `<broker>:positions_updates:stream` | stream, field `position` | `bin/<broker>/orders/websocket_order_details` | Every position update as `{"timestamp", "data"}`, capped at about 20,000 |
+| `<broker>:portfolio:holdings` | string | `bin/<broker>/portfolio/holdings` | `{"timestamp", "status", "code", "data"}`, polled every minute |
+| `<broker>:portfolio:funds` | string | `bin/<broker>/portfolio/funds` | `{"timestamp", "status", "code", "data"}` |
 
 The positions hash follows the orders hash exactly - the same merge rule, the same `polled_at`, the same
 06:00 IST expiry. Its field names a position the way the broker holds one, such as Zerodha's
@@ -89,8 +89,8 @@ The positions hash follows the orders hash exactly - the same merge rule, the sa
 script wrote it.
 
 Only Fyers, Groww, Kotak and Wisdom Capital stream positions, so only they have a
-`positions_updates:stream`, read by `bin/<broker>/persist_positions` into `<broker>.positions` and by
-`bin/unified/order_updates`.
+`positions_updates:stream`, read by `bin/<broker>/portfolio/store_positions_to_db` into `<broker>.positions` and by
+`bin/unified/orders/websocket_order_details`.
 
 Orders, positions, trades and funds are polled every half second, except at Fyers, which is polled
 more slowly - orders and positions every five seconds, trades every fifteen and funds every thirty - and
@@ -100,10 +100,10 @@ at Stoxkart, which documents a limit of one request a second and is polled every
 
 | Key | Type | Written by | Holds |
 | --- | --- | --- | --- |
-| `<broker>:quotes:subscriptions` | set | you | The instruments `bin/<broker>/quotes` subscribes to when none are passed on its command line. Zerodha has none: its feed subscribes to every instrument in `zerodha:instruments:master` |
-| `<broker>:quotes:live` | hash, keyed by instrument name | `bin/<broker>/quotes` | The latest tick per instrument; Stoxkart's feed writes a tick only when it changed |
-| `<broker>:quotes:instruments` | hash | `bin/<broker>/quotes` | Every subscribed token to its name, or to an empty string when unnamed; replaced whole at startup |
-| `<broker>:quotes:stream` | stream, field `tick` | `bin/<broker>/quotes` | Every tick in arrival order, capped at about 1,000,000 |
+| `<broker>:quotes:subscriptions` | set | you | The instruments `bin/<broker>/instruments/websocket_quotes` subscribes to when none are passed on its command line. Zerodha has none: its feed subscribes to every instrument in `zerodha:instruments:master` |
+| `<broker>:quotes:live` | hash, keyed by instrument name | `bin/<broker>/instruments/websocket_quotes` | The latest tick per instrument; Stoxkart's feed writes a tick only when it changed |
+| `<broker>:quotes:instruments` | hash | `bin/<broker>/instruments/websocket_quotes` | Every subscribed token to its name, or to an empty string when unnamed; replaced whole at startup |
+| `<broker>:quotes:stream` | stream, field `tick` | `bin/<broker>/instruments/websocket_quotes` | Every tick in arrival order, capped at about 1,000,000 |
 
 Subscription members and hash fields are in the broker's own vocabulary: a Kite instrument token for
 Zerodha, `EXCHANGE|TOKEN` for the Noren brokers and Kotak, a Fyers symbol, `EXCHANGE:TOKEN` for
@@ -112,17 +112,17 @@ keyed by the instrument's name where the broker's instrument file gives one (`NS
 the token otherwise. It is not cleared at startup, so an instrument no longer subscribed keeps its last
 tick.
 
-The stream is read by `bin/<broker>/persist_ticks` into `<broker>.ticks` and by `bin/unified/quotes`.
+The stream is read by `bin/<broker>/instruments/store_quotes_to_db` into `<broker>.ticks` and by `bin/unified/instruments/websocket_quotes`.
 Ticks trimmed from it while the persister is stopped are lost to the database.
 
 ### Instruments
 
 | Key | Type | Written by | Holds |
 | --- | --- | --- | --- |
-| `<broker>:instruments:master` | hash, keyed by the table's natural key | `bin/<broker>/instruments` | Each instrument's row as a JSON array in column order |
-| `<broker>:instruments:meta` | string | `bin/<broker>/instruments` | `{"download_date", "rows", "columns", "source_last_modified", "written_at"}`, with Kotak's `source` (the day's scrip master URL) and Wisdom Capital's `segments` in place of `source_last_modified` |
+| `<broker>:instruments:master` | hash, keyed by the table's natural key | `bin/<broker>/instruments/daily_feed` | Each instrument's row as a JSON array in column order |
+| `<broker>:instruments:meta` | string | `bin/<broker>/instruments/daily_feed` | `{"download_date", "rows", "columns", "source_last_modified", "written_at"}`, with Kotak's `source` (the day's scrip master URL) and Wisdom Capital's `segments` in place of `source_last_modified` |
 
-Written for all ten brokers, Stoxkart included, each morning by `unified-instruments.service`. The
+Written for all ten brokers, Stoxkart included, each morning by `unified-mapping.service`. The
 field is the broker's own key for an instrument - Zerodha's `instrument_token`, Stoxkart's
 `EXCHANGE:TOKEN` - and the column names are stored once in `meta` rather than in every row, which keeps
 the hash near the file's own size. The hash is built under `<broker>:instruments:master:staging` and
@@ -138,24 +138,24 @@ REST API answers with. Every document carries `brokers`, saying for each broker 
 
 | Key | Type | Written by | Holds |
 | --- | --- | --- | --- |
-| `unified:portfolio:positions` | string | `bin/unified/positions`, every half second | `{"net", "day", "summary", "brokers", "as_of"}` |
-| `unified:portfolio:holdings` | string | `bin/unified/holdings`, every minute | `{"holdings", "summary", "brokers", "as_of"}` |
-| `unified:portfolio:funds` | string | `bin/unified/funds`, every half second | `{"summary", "pnl", "margin_breakdown", "cash_movement", "segments", "brokers", "as_of"}` |
-| `unified:orders:orders` | string | `bin/unified/orders`, every half second | `{"orders", "summary", "brokers", "as_of"}` |
-| `unified:orders:trades` | string | `bin/unified/trades`, every half second | `{"trades", "summary", "brokers", "as_of"}` |
+| `unified:portfolio:positions` | string | `bin/unified/portfolio/positions`, every half second | `{"net", "day", "summary", "brokers", "as_of"}` |
+| `unified:portfolio:holdings` | string | `bin/unified/portfolio/holdings`, every minute | `{"holdings", "summary", "brokers", "as_of"}` |
+| `unified:portfolio:funds` | string | `bin/unified/portfolio/funds`, every half second | `{"summary", "pnl", "margin_breakdown", "cash_movement", "segments", "brokers", "as_of"}` |
+| `unified:orders:orders` | string | `bin/unified/orders/api_order_details`, every half second | `{"orders", "summary", "brokers", "as_of"}` |
+| `unified:orders:trades` | string | `bin/unified/orders/api_trade_details`, every half second | `{"trades", "summary", "brokers", "as_of"}` |
 | `unified:orders:round_robin` | string | `POST /api/orders/place`, one `INCR` per checked order | A counter with no expiry; the broker whose turn it is is this count modulo the number of brokers not excluded |
 
 ### Order and position updates
 
 | Key | Type | Written by | Holds |
 | --- | --- | --- | --- |
-| `unified:order-updates:stream` | stream, field `update` | `bin/unified/order_updates` | Every broker's order updates, in the REST order contract with `broker`, `instrument_id` and `observed_at`; capped at about 50,000 |
-| `unified:order-updates` | hash, keyed `broker:order_id` | `bin/unified/order_updates` | The latest update per order |
-| `unified:positions_updates:stream` | stream, field `position` | `bin/unified/order_updates` | Every position update, in the REST position contract with `broker`, `position_key`, `basis` and `observed_at`; capped at about 50,000 |
-| `unified:positions_updates` | hash, keyed `broker:position_key` | `bin/unified/order_updates` | The latest update per position |
+| `unified:order-updates:stream` | stream, field `update` | `bin/unified/orders/websocket_order_details` | Every broker's order updates, in the REST order contract with `broker`, `instrument_id` and `observed_at`; capped at about 50,000 |
+| `unified:order-updates` | hash, keyed `broker:order_id` | `bin/unified/orders/websocket_order_details` | The latest update per order |
+| `unified:positions_updates:stream` | stream, field `position` | `bin/unified/orders/websocket_order_details` | Every position update, in the REST position contract with `broker`, `position_key`, `basis` and `observed_at`; capped at about 50,000 |
+| `unified:positions_updates` | hash, keyed `broker:position_key` | `bin/unified/orders/websocket_order_details` | The latest update per position |
 
-The streams are read by `bin/unified/persist_orders` into `unified.order_updates` and
-`bin/unified/persist_positions` into `unified.positions`. The two hashes expire at 06:00 IST like the
+The streams are read by `bin/unified/orders/store_orders_to_db` into `unified.order_updates` and
+`bin/unified/portfolio/store_positions_to_db` into `unified.positions`. The two hashes expire at 06:00 IST like the
 brokers' merged hashes, and an update observed before the latest 06:00 goes to the stream but not into
 the hash.
 
@@ -163,27 +163,27 @@ the hash.
 
 | Key | Type | Written by | Holds |
 | --- | --- | --- | --- |
-| `unified:quotes:live` | hash, keyed by `instrument_id` | `bin/unified/quotes` | The latest unified quote per instrument, from the one broker that owns it |
-| `unified:quotes:stream` | stream, field `quote` | `bin/unified/quotes` | Every quote written to the hash, capped at about 1,000,000 |
+| `unified:quotes:live` | hash, keyed by `instrument_id` | `bin/unified/instruments/websocket_quotes` | The latest unified quote per instrument, from the one broker that owns it |
+| `unified:quotes:stream` | stream, field `quote` | `bin/unified/instruments/websocket_quotes` | Every quote written to the hash, capped at about 1,000,000 |
 | `unified:quotes:fetched` | hash, per-field expiry of two days | the REST API | Quotes fetched from a broker when the live quote was not good enough, in the same document shape |
-| `unified:quotes:stats` | string | `bin/unified/quotes` | The counts: received, unresolved, out of session, not owner, no price, duplicate, written |
-| `unified:quotes:unresolved` | hash, keyed `broker:token:reason` | `bin/unified/quotes` | How many times a token failed to resolve to one instrument: once when first seen, then once per ten-minute retry |
+| `unified:quotes:stats` | string | `bin/unified/instruments/websocket_quotes` | The counts: received, unresolved, out of session, not owner, no price, duplicate, written |
+| `unified:quotes:unresolved` | hash, keyed `broker:token:reason` | `bin/unified/instruments/websocket_quotes` | How many times a token failed to resolve to one instrument: once when first seen, then once per ten-minute retry |
 
 A quote is the [unified quote](contracts.md#the-unified-quote) document. A quote whose
 owner went silent with no healthy backup stays in `quotes:live` with `stale` true; quotes stale for a
-week are removed. The stream is read by `bin/unified/persist_ticks` into `unified.ticks`. The REST API
+week are removed. The stream is read by `bin/unified/instruments/store_quotes_to_db` into `unified.ticks`. The REST API
 answers from the more recent of `quotes:live` and `quotes:fetched`, and never writes into
-`quotes:live`, whose ownership rules belong to `bin/unified/quotes`.
+`quotes:live`, whose ownership rules belong to `bin/unified/instruments/websocket_quotes`.
 
 ### Session, profiles and details
 
 | Key | Type | Written by | Holds |
 | --- | --- | --- | --- |
-| `unified:session:status` | string | `bin/unified/login`, `logout` | `{"status", "access-token", "last_login", "expires_at"}` for the application's own token |
-| `unified:user:details` | string | `bin/unified/user-profile`, every minute | One object with a key per broker and that broker's profile `data`, or null |
-| `unified:details:users` | string | `bin/unified/details`, every minute | The MongoDB `user_details` collection as one JSON array |
-| `unified:details:brokers` | string | `bin/unified/details` | `broker_details`, likewise |
-| `unified:details:exchanges` | string | `bin/unified/details` | `exchange_details`, likewise |
+| `unified:session:status` | string | `bin/unified/session/connect`, `disconnect` | `{"status", "access-token", "last_login", "expires_at"}` for the application's own token |
+| `unified:user:details` | string | `bin/unified/user/details`, every minute | One object with a key per broker and that broker's profile `data`, or null |
+| `unified:details:users` | string | `bin/unified/user/unified_details`, every minute | The MongoDB `user_details` collection as one JSON array |
+| `unified:details:brokers` | string | `bin/unified/user/unified_details` | `broker_details`, likewise |
+| `unified:details:exchanges` | string | `bin/unified/user/unified_details` | `exchange_details`, likewise |
 
 The three `details` keys are written together in one `MULTI`. MongoDB stays the store of record, and
 the REST API falls back to it when a key is missing.
@@ -192,16 +192,16 @@ the REST API falls back to it when a key is missing.
 
 | Key | Type | Written by | Holds |
 | --- | --- | --- | --- |
-| `unified:instruments` | hash, keyed by `instrument_id` | `bin/unified/map_instruments` | Every instrument mapped on the date, as a JSON array in the order `columns.instruments` gives |
-| `unified:broker_mappings` | hash, keyed `broker:instrument_id` | `bin/unified/map_instruments` | `[broker_token, broker_symbol, order_symbol, lot_size, tick_size]` |
-| `unified:broker_tokens` | hash, keyed `broker:broker_token` | `bin/unified/map_instruments` | A JSON array of the instrument ids that token names on the date |
-| `unified:instrument_symbols` | hash, keyed `segment:SYMBOL` | `bin/unified/map_instruments` | The instrument id, for a broker that sends no token |
-| `unified:mapping:meta` | string | `bin/unified/map_instruments` | `mapping_date`, the four counts, `columns` and `written_at` |
+| `unified:instruments` | hash, keyed by `instrument_id` | `bin/unified/instruments/map` | Every instrument mapped on the date, as a JSON array in the order `columns.instruments` gives |
+| `unified:broker_mappings` | hash, keyed `broker:instrument_id` | `bin/unified/instruments/map` | `[broker_token, broker_symbol, order_symbol, lot_size, tick_size]` |
+| `unified:broker_tokens` | hash, keyed `broker:broker_token` | `bin/unified/instruments/map` | A JSON array of the instrument ids that token names on the date |
+| `unified:instrument_symbols` | hash, keyed `segment:SYMBOL` | `bin/unified/instruments/map` | The instrument id, for a broker that sends no token |
+| `unified:mapping:meta` | string | `bin/unified/instruments/map` | `mapping_date`, the four counts, `columns` and `written_at` |
 
 `unified:instruments` columns are `exchange`, `segment`, `shape`, `symbol`, `underlying_symbol`,
 `expiry_date`, `strike_price`, `option_type`, `first_seen_date` and `last_seen_date`. A token is not
 unique within a broker, so `broker_mappings` is keyed by the instrument, and `broker_tokens` is the
-reverse lookup the combiners and `bin/unified/quotes` resolve with; it usually names one instrument,
+reverse lookup the combiners and `bin/unified/instruments/websocket_quotes` resolve with; it usually names one instrument,
 and several where a broker reuses a token across an exchange's scrip files. All four hashes are built
 under `:staging` keys and swapped in together with the meta, so a reader sees yesterday's complete
 cache or today's, never a mix. For one day that is about half a million instruments and two million
@@ -210,7 +210,7 @@ mappings. See [Instrument mapping](../guides/instrument-mapping.md).
 #### The REST API's catalogue
 
 The [mapping cache](../guides/instrument-mapping.md#the-three-tier-cache) the REST API's instrument
-routes read, under the `unified:catalogue:` prefix. `bin/unified/map_instruments` warms it from the
+routes read, under the `unified:catalogue:` prefix. `bin/unified/instruments/map` warms it from the
 unified tables after every mapping and clears every other date's keys. A warm that fails is logged and
 does not fail the run; the API reads the unified tables until the next warm succeeds.
 
@@ -229,13 +229,13 @@ does not fail the run; the API reads the unified tables until the next warm succ
 | `unified:catalogue:<date>:segments` | hash | segment | Instruments in the segment; written last, so its presence means the catalogue is complete |
 
 The prefix is not `unified:mapping:` because a warm deletes every key under its prefix but the current
-date's, and `unified:mapping:meta` belongs to `bin/unified/map_instruments`' own cache.
+date's, and `unified:mapping:meta` belongs to `bin/unified/instruments/map`' own cache.
 
 ### Runs and the candle cache
 
 | Key | Type | Written by | Holds |
 | --- | --- | --- | --- |
-| `unified:prices:last_run` | string | `bin/unified/historical_prices` | The outcome of the last run, as JSON |
+| `unified:prices:last_run` | string | `bin/unified/instruments/price_history` | The outcome of the last run, as JSON |
 | `unified:prices:cache:<instrument_id>:<interval>:<basis>:<known_as_of or latest>` | string, 86400 s TTL | The REST API's `/api/instruments/prices` | `{last_run, built_at, from, to, columns, candles}` - the widest range of candles read for that series |
 
 The API keeps a copy of every answer `/prices` reads from the database, and serves a later request by
@@ -258,7 +258,7 @@ token in force is read from, and a login by any process takes effect for every o
 next request. When a field is empty it is filled from MongoDB with `HSETNX`, which cannot overwrite a
 login that lands first.
 
-The field `unified_broker_interface` holds the application's own token, written by `bin/unified/login`
+The field `unified_broker_interface` holds the application's own token, written by `bin/unified/session/connect`
 and the REST API's connect as `{"broker_name", "access_token", "last_login", "expires_at"}`. A logout
 sets `access_token` and `expires_at` to null. If the Redis write fails the field is deleted instead, so
 a reader falls back to MongoDB rather than trusting a token that has since been replaced or revoked.

@@ -12,7 +12,7 @@ implementations.
     own protocol and get their own module in every subsystem.
 
     Groww is the odd one here: its feed is NATS over a websocket with protocol buffer payloads rather
-    than a plain websocket. `bin/groww/quotes` generates an ed25519 key pair, exchanges its public key for
+    than a plain websocket. `bin/groww/instruments/websocket_quotes` generates an ed25519 key pair, exchanges its public key for
     a short lived socket JWT, signs the server's nonce in its `CONNECT`, and builds the protobuf message
     classes at runtime from a serialized file descriptor it carries itself.
 
@@ -38,18 +38,18 @@ implementations.
     than on the socket, the transport is socket.io rather than a plain websocket, and orders and
     positions arrive in the same frame.
 
-    `bin/wisdom_capital/quotes` carries its own Engine.IO and socket.io transport, and shares the market
-    data token with `bin/wisdom_capital/historical_prices` through the Redis key
+    `bin/wisdom_capital/instruments/websocket_quotes` carries its own Engine.IO and socket.io transport, and shares the market
+    data token with `bin/wisdom_capital/instruments/price_history` through the Redis key
     `wisdom_capital:session:marketdata`.
 
 === "Website feeds"
 
     **Stoxkart** streams through the two websockets its own trading website uses, found by watching
     `webtrade.stoxkart.com` in Chrome DevTools on 2026-09-15. Its documented binary quote websocket at
-    `ws://inmob.stoxkart.com:7763` refused connections that day, so `bin/stoxkart/quotes` streams the
+    `ws://inmob.stoxkart.com:7763` refused connections that day, so `bin/stoxkart/instruments/websocket_quotes` streams the
     website's broadcast feed at `wss://broadcasting-v2.stoxkart.com/`, which needs no login and uses
     request codes 12 and 23 rather than the documented 71 to 76. Stoxkart documents only a Postback URL for
-    order status, so `bin/stoxkart/order_updates` authenticates the API session at
+    order status, so `bin/stoxkart/orders/websocket_order_details` authenticates the API session at
     `https://openapi-v2.stoxkart.com/websocket/authenticate` and opens the website's order socket, which
     allows one connection per client. Neither feed is documented for API users, so Stoxkart may change
     them without notice.
@@ -60,7 +60,7 @@ implementations.
 | --- | --- | --- |
 | Zerodha | Selenium + TOTP | Tries an authenticated call first and only logs in when it fails, so most constructions are cheap; every login invalidates the token before it |
 | Dhan | REST + TOTP | - |
-| Flattrade | REST + TOTP | Permits one websocket per session, so `flattrade@order_updates` is not run and `flattrade@quotes` holds the connection |
+| Flattrade | REST + TOTP | Permits one websocket per session, so `flattrade-orders@websocket_order_details` is not run and `flattrade-instruments@websocket_quotes` holds the connection |
 | Shoonya | Selenium + TOTP | Its Noren user id is the account's UCC code, held in the `ucc_code` setting |
 | Fyers | REST + TOTP | Streams positions as well as orders; refuses more than a handful of requests a second per app |
 | Groww | REST + TOTP | NATS transport with protocol buffer payloads; streams derivatives positions |
@@ -80,16 +80,16 @@ own `quotes` script: `--per-socket` sets how many instruments one connection car
 runs on its own thread, writing to the same `<broker>:quotes:live` and `<broker>:quotes:stream`.
 
 ```bash
-bin/dhan/quotes --per-socket 2000
+bin/dhan/instruments/websocket_quotes --per-socket 2000
 ```
 
-Zerodha splits the other way round. `bin/zerodha/quotes` takes every instrument in today's
+Zerodha splits the other way round. `bin/zerodha/instruments/websocket_quotes` takes every instrument in today's
 `zerodha:instruments:master` and divides it into `--sockets` equal parts, 24 by default, one websocket each:
 
 ```bash
-bin/zerodha/quotes --sockets 24
+bin/zerodha/instruments/websocket_quotes --sockets 24
 ```
 
-That is far past what Kite documents - three connections per api key, one of which `bin/zerodha/order_updates`
+That is far past what Kite documents - three connections per api key, one of which `bin/zerodha/orders/websocket_order_details`
 holds, and 3,000 instruments per connection - and the script no longer refuses to start when it is. See
 [Known issues](../contributing/known-issues.md#broker-limits).

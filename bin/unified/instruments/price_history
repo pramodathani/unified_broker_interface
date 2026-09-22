@@ -1,0 +1,398 @@
+#!/usr/bin/env python3
+"""
+Build the unified price history - `unified.price_history` and its adjustment factors - from the brokers' price tables.
+
+    bin/unified/instruments/price_history daily                           # the daily job: load, corrections, load, factors, verify
+    bin/unified/instruments/price_history load                            # copy new and changed daily bars across
+    bin/unified/instruments/price_history corrections                     # find series flattrade served already adjusted
+    bin/unified/instruments/price_history factors --stale-days 14         # fetch Yahoo Finance and derive adjustment factors
+    bin/unified/instruments/price_history verify                          # run the checks
+    bin/unified/instruments/price_history sources                         # resolve every series and report, writing nothing
+    bin/unified/instruments/price_history status                          # what the last run did, and what is stored
+
+    bin/unified/instruments/price_history load --pilot                    # only the pilot instruments
+    bin/unified/instruments/price_history load --symbols RELIANCE,NIFTY
+    bin/unified/instruments/price_history factors --retry empty,mismatch  # only instruments whose last fetch ended so
+
+    redis-cli GET unified:prices:last_run
+
+One price history per unified instrument, built in the `unified` schema by the unified price history package. The brokers' own price tables, `<broker>.price_history`,
+are filled by `bin/<broker>/instruments/price_history`; this turns them into one history per unified instrument.
+
+**Where it writes.** `unified.price_history` (bars under the unified `instrument_id`), `unified.price_history_sources`
+(which broker series feeds which instrument, and how it was resolved), `unified.price_history_corrections`,
+`unified.adjustment_factors` and `unified.yahoo_fetch_state`, read adjusted through the views `unified.adjustment_ranges`,
+`unified.correction_ranges` and `unified.price_history_adjusted` and the function `unified.adjusted_bars`. Series are
+resolved against `unified.instruments` and `unified.broker_mappings`, which `bin/unified/instruments/map` keeps.
+
+**Every run starts the same way.** The mapping and price DDL is applied - every statement is safe to run again - which
+creates the unified price tables the first time. The unified instruments have to be mapped first.
+
+**The steps:**
+
+- `load` copies each broker series' new and changed bars for `--interval` (daily by default) into the unified history,
+  resolving the series to its instrument, choosing the source each instrument takes each day from, and applying
+  confirmed corrections. Equities, exchange traded funds and investment trusts are stored unadjusted; everything else
+  as the broker served it.
+- `corrections` finds the NSE daily series flattrade served already adjusted across some corporate actions, by comparing
+  them with BSE and with its own intraday bars, and records multipliers that undo that; a changed correction wants a
+  `load` afterwards.
+- `factors` fetches Yahoo Finance for the instruments stored unadjusted and derives split, bonus and demerger factors,
+  confirmed against our own raw prices; `--stale-days` limits it to instruments not fetched for that long, plus any with
+  a fresh raw price jump, and `--retry` to those whose last fetch ended in the given statuses.
+- `verify` runs the checks, including the known cases, and fails when any check fails.
+- `sources` resolves every broker series and reports how, writing nothing.
+- `status` prints the last run and what is stored.
+- `daily` is the morning sequence `unified-prices.service` runs: `load`, `corrections`, `load` again for what the corrections changed,
+  `factors --stale-days 14`, then `verify`, whose failures are reported without failing the job.
+
+Each run's outcome is written to `unified:prices:last_run` in Redis.
+
+Exits 0 when the step or steps succeeded, 1 when a step failed, the import could not run or verify found a failing check
+(outside `daily`), and 2 for a bad argument, an interval not loaded, or no instruments matching `--symbols`.
+"""
+
+import sys
+import json
+import argparse
+from collections import Counter
+from datetime import datetime
+from pathlib import Path
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+LAST_RUN_KEY = "unified:prices:last_run"
+
+# Instruments that between them exercise every case the design has to handle: a bonus and a demerger (RELIANCE), a split
+# (AJMERA), a token change and an action Yahoo has not caught up with (INDIAGLYCO), a new listing (JIOFIN), a REIT
+# (EMBASSY), an exchange traded fund (NIFTYBEES), a stock listed only on BSE (GOODRICKE), a temporary BE series
+# (ORICONENT), the two benchmark indices, and three actions flattrade's NSE series were served already adjusted for.
+PILOT_SYMBOLS = ["RELIANCE", "AJMERA", "INDIAGLYCO", "JIOFIN", "EMBASSY", "NIFTYBEES", "GOODRICKE",
+                 "ORICONENT", "NIFTY", "SENSEX", "PIDILITIND", "TATAINVEST", "PGIL"]
+PILOT_SEGMENTS = ["nse_equities", "bse_equities", "nse_exchange_traded_funds", "bse_exchange_traded_funds",
+                  "nse_investment_trusts", "bse_investment_trusts", "nse_equity_indices", "bse_equity_indices"]
+
+# The unified tick table and its adjusted view, applied after the price DDL the view reads.
+TICKS_DDL_FILES = ("300_unified_ticks.sql", "330_unified_ticks_adjusted.sql")
+
+def apply_tables(logger):
+    """
+    Apply the mapping and the price DDL, which create the unified tables the first time and change nothing after, and
+    then `unified.ticks` and its adjusted view `unified.ticks_adjusted`, which reads the adjustment ranges the price DDL
+    creates.
+
+    - `logger` is where progress is reported.
+    """
+    from sqlalchemy import text
+
+    from stock_brokers.instruments.historical.utilities.sql.apply_ddl import DDL_DIRECTORY as PRICE_DDL
+    from stock_brokers.instruments.mapping.utilities.sql.apply_ddl import DDL_DIRECTORY as MAPPING_DDL
+    from stock_brokers.instruments.sql.apply_ddl import apply_all
+    from utilities.configurations import get_postgres_engine
+
+    for directory in (MAPPING_DDL, PRICE_DDL):
+        logger.info(f"Applying the DDL in {directory}.")
+        apply_all(directory)
+    ticks_ddl = PROJECT_ROOT / "stock_brokers" / "instruments" / "ticks" / "utilities" / "sql" / "ddl"
+    with get_postgres_engine().begin() as connection:
+        for name in TICKS_DDL_FILES:
+            logger.info(f"Applying {name}.")
+            connection.execute(text((ticks_ddl / name).read_text()))
+
+
+def instruments_for(connect, symbols):
+    """
+    The unified ids of the classified NSE and BSE instruments with these symbols.
+
+    - `connect` opens a database connection.
+    - `symbols` are trading symbols.
+    """
+    from stock_brokers.instruments.historical.utilities.unified import tables
+
+    connection = connect()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(f"""
+                select instrument_id::text from {tables.MASTER}
+                where exchange in ('nse', 'bse') and upper(symbol) = any(%s) and segment = any(%s)
+            """, ([symbol.upper() for symbol in symbols], PILOT_SEGMENTS))
+            return {row[0] for row in cursor.fetchall()}
+    finally:
+        connection.close()
+
+def stale_instruments(connect, days):
+    """
+    Instruments due a Yahoo fetch: not fetched within a number of days, failed last time, or with a recent raw jump.
+
+    The last group is how a new corporate action is picked up within a day rather than within a fortnight: a daily
+    close more than 35% away from the one before, in the last five days.
+
+    - `connect` opens a database connection.
+    - `days` is the age beyond which an instrument is fetched again.
+    """
+    from stock_brokers.instruments.historical.utilities.unified import tables
+
+    connection = connect()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(f"""
+                select distinct s.instrument_id::text from {tables.PRICE_HISTORY_SOURCES} s
+                left join {tables.YAHOO_FETCH_STATE} y using (instrument_id)
+                where s."interval" = 'day' and s.price_basis = 'unadjusted' and s.loaded_latest is not null
+                  and (y.last_fetched_at is null or y.last_status = 'error'
+                       or y.last_fetched_at < now() - make_interval(days => %s))
+            """, (days,))
+            due = {row[0] for row in cursor.fetchall()}
+            cursor.execute(f"""
+                select distinct p.instrument_id::text
+                from (select instrument_id, close,
+                             lag(close) over (partition by instrument_id order by "time") as previous_close,
+                             "time"
+                      from {tables.PRICE_HISTORY}
+                      where "interval" = 'day' and "time" > now() - interval '12 days') p
+                join {tables.PRICE_HISTORY_SOURCES} s
+                  on s.instrument_id = p.instrument_id and s."interval" = 'day' and s.price_basis = 'unadjusted'
+                left join {tables.YAHOO_FETCH_STATE} y on y.instrument_id = p.instrument_id
+                where p."time" > now() - interval '5 days' and p.previous_close > 0
+                  and abs(p.close / p.previous_close - 1) > 0.35
+                  and (y.last_fetched_at is null or y.last_fetched_at < p."time")
+            """)
+            due.update(row[0] for row in cursor.fetchall())
+            return due
+    finally:
+        connection.close()
+
+def instruments_with_status(connect, statuses):
+    """
+    Instruments whose last Yahoo fetch ended in one of these statuses.
+
+    - `connect` opens a database connection.
+    - `statuses` are fetch statuses, for example ["empty", "mismatch"].
+    """
+    from stock_brokers.instruments.historical.utilities.unified import tables
+
+    connection = connect()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(f"select instrument_id::text from {tables.YAHOO_FETCH_STATE} where last_status = any(%s)",
+                           (statuses,))
+            return {row[0] for row in cursor.fetchall()}
+    finally:
+        connection.close()
+
+def status(cache, connect):
+    """
+    Print the last run and what is stored.
+
+    - `cache` is the Redis client.
+    - `connect` opens a database connection.
+    """
+    from stock_brokers.instruments.historical.utilities.unified import tables
+
+    last = cache.get(LAST_RUN_KEY)
+    print("last run:", json.dumps(json.loads(last), indent=2) if last else "none recorded")
+    connection = connect()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(f"""
+                select "interval", count(distinct instrument_id), count(*),
+                       min(("time" at time zone 'Asia/Kolkata')::date), max(("time" at time zone 'Asia/Kolkata')::date)
+                from {tables.PRICE_HISTORY} group by 1 order by 1
+            """)
+            print("\nbars:")
+            for interval, instruments, bars, first, last_bar in cursor.fetchall():
+                print(f"  {interval:<10} {instruments:>7,} instruments {bars:>12,} bars  {first} to {last_bar}")
+            cursor.execute(f"""
+                select broker, role, resolved_by, status, count(*) from {tables.PRICE_HISTORY_SOURCES}
+                group by 1, 2, 3, 4 order by 1, 2, 3, 4
+            """)
+            print("\nsources:")
+            for row in cursor.fetchall():
+                print(f"  {row[0]:<15} {row[1]:<9} {row[2]:<15} {row[3]:<11} {row[4]:>7,}")
+            cursor.execute(f"select method, status, count(*) from {tables.PRICE_HISTORY_CORRECTIONS} group by 1, 2 order by 1, 2")
+            print("\ncorrections:")
+            for method, correction_status, count in cursor.fetchall():
+                print(f"  {method:<15} {correction_status:<12} {count:>7,}")
+            cursor.execute(f"select kind, status, count(*) from {tables.ADJUSTMENT_FACTORS} group by 1, 2 order by 1, 2")
+            print("\nfactors:")
+            for kind, factor_status, count in cursor.fetchall():
+                print(f"  {kind:<13} {factor_status:<12} {count:>7,}")
+            cursor.execute(f"select last_status, count(*) from {tables.YAHOO_FETCH_STATE} group by 1 order by 1")
+            print("\nyahoo:", ", ".join(f"{name} {count:,}" for name, count in cursor.fetchall()) or "never fetched")
+    finally:
+        connection.close()
+
+def run_step(step, interval, instrument_ids, connect, stale_days=None, retry=None):
+    """
+    Run one step and return `(outcome, exit_code)`, printing what it did.
+
+    - `step` is `sources`, `load`, `corrections`, `factors` or `verify`.
+    - `interval` is the interval to load or resolve.
+    - `instrument_ids` restricts the step to these instruments, or None for all.
+    - `connect` opens a database connection.
+    - `stale_days` and `retry` narrow `factors`, as the options do.
+    """
+    outcome, exit_code = {}, 0
+
+    if step == "sources":
+        from stock_brokers.instruments.historical.utilities.unified.resolution import SeriesResolver
+        from stock_brokers.instruments.historical.utilities.unified.sources import brokers_for_interval
+
+        resolver = SeriesResolver()
+        connection = connect()
+        try:
+            for broker in brokers_for_interval(interval):
+                with connection.cursor() as cursor:
+                    cursor.execute(f"""
+                        select instrument_token from {broker}.price_history_progress
+                        where "interval" = %s and bar_count > 0
+                    """, (interval,))
+                    identifiers = [row[0] for row in cursor.fetchall()]
+                resolved = resolver.resolve(broker, identifiers)
+                tally = Counter((found.resolved_by, found.status) for results in resolved.values() for found in results)
+                print(f"{broker}: {len(identifiers):,} series")
+                for (resolved_by, found_status), count in sorted(tally.items(), key=lambda item: -item[1]):
+                    print(f"  {str(resolved_by):<15} {found_status:<10} {count:>7,}")
+                outcome[broker] = {f"{key[0]}/{key[1]}": value for key, value in tally.items()}
+        finally:
+            connection.close()
+
+    elif step == "load":
+        from stock_brokers.instruments.historical.utilities.unified.loader import IntradayLoader, UnifiedLoader
+
+        loader = UnifiedLoader(interval, instrument_ids) if interval == "day" else IntradayLoader(interval, instrument_ids)
+        counts = loader.run()
+        for key, value in sorted(counts.items()):
+            print(f"  {key:<28} {value:>12,}")
+        if loader.unresolved:
+            print(f"\n{len(loader.unresolved):,} series not resolved; first few:")
+            for broker, identifier, found_status, reason in loader.unresolved[:10]:
+                print(f"  {broker} {identifier}: {found_status} - {reason}")
+        outcome.update(counts)
+
+    elif step == "corrections":
+        from stock_brokers.instruments.historical.utilities.unified.corrections import CorrectionBuilder
+
+        counts = CorrectionBuilder().build(instrument_ids)
+        for key, value in sorted(counts.items()):
+            print(f"  {key:<32} {value:>8,}")
+        if counts.get("instruments_changed"):
+            print("\nRun `bin/unified/instruments/price_history load` to rebuild the instruments whose corrections changed.")
+        outcome.update(counts)
+
+    elif step == "factors":
+        from stock_brokers.instruments.historical.utilities.unified.factors import FactorBuilder
+
+        if retry:
+            retried = instruments_with_status(connect, retry.split(","))
+            instrument_ids = retried if instrument_ids is None else instrument_ids & retried
+            if not instrument_ids:
+                print(f"No instruments last ended {retry}.")
+                return {"skipped": "nothing to retry"}, 0
+        if stale_days is not None:
+            stale = stale_instruments(connect, stale_days)
+            instrument_ids = stale if instrument_ids is None else instrument_ids & stale
+            if not instrument_ids:
+                print("Every instrument has been fetched recently.")
+                return {"skipped": "nothing stale"}, 0
+        counts = FactorBuilder().build(instrument_ids)
+        for key, value in sorted(counts.items()):
+            print(f"  {key:<28} {value:>8,}")
+        outcome.update(counts)
+        if counts.get("error"):
+            exit_code = 1
+
+    elif step == "verify":
+        from stock_brokers.instruments.historical.utilities.unified.calendar import TradingCalendar
+        from stock_brokers.instruments.historical.utilities.unified.verify import run_all
+
+        checks = run_all(TradingCalendar(), known_cases=True)
+        for check in checks:
+            print(f"{'PASS' if check.passed else 'FAIL'}  {check.name}: {check.detail}")
+        failed = [check.name for check in checks if not check.passed]
+        outcome["failed"] = failed
+        if failed:
+            exit_code = 1
+
+    return outcome, exit_code
+
+def main():
+    """Prepare the unified tables, run the requested step or the daily sequence, and record the outcome."""
+    parser = argparse.ArgumentParser(description="Build the unified price history into the unified schema.")
+    parser.add_argument("step", choices=["daily", "load", "corrections", "factors", "verify", "sources", "status"])
+    parser.add_argument("--interval", default="day", help="the interval to load, 'day' by default")
+    parser.add_argument("--pilot", action="store_true", help="restrict to the pilot instruments")
+    parser.add_argument("--symbols", help="restrict to these comma separated symbols")
+    parser.add_argument("--stale-days", type=int,
+                        help="factors: only instruments not fetched from Yahoo within this many days")
+    parser.add_argument("--retry", help="factors: only instruments whose last fetch ended in these "
+                                        "comma separated statuses, for example empty,mismatch")
+    arguments = parser.parse_args()
+
+    from stock_brokers.instruments.historical.utilities.unified.sources import LOADED_INTERVALS
+    from utilities.configurations import get_cache, get_logger, get_postgres
+
+    logger = get_logger("unified.price_history")
+    if arguments.interval not in LOADED_INTERVALS:
+        logger.error(f"--interval {arguments.interval} is not loaded yet; loaded: {', '.join(LOADED_INTERVALS)}")
+        return 2
+
+    try:
+        apply_tables(logger)
+    except Exception as exception:
+        logger.error(f"Could not prepare the unified price tables: {type(exception).__name__}: {exception}")
+        return 1
+
+    cache = get_cache()
+    if arguments.step == "status":
+        status(cache, get_postgres)
+        return 0
+
+    instrument_ids = None
+    if arguments.pilot or arguments.symbols:
+        symbols = PILOT_SYMBOLS if arguments.pilot else arguments.symbols.split(",")
+        instrument_ids = instruments_for(get_postgres, symbols)
+        if not instrument_ids:
+            logger.error(f"No instruments match {symbols}.")
+            return 2
+
+    started = datetime.now()
+    outcome = {"step": arguments.step, "interval": arguments.interval,
+               "restricted_to": len(instrument_ids) if instrument_ids else None}
+    exit_code = 0
+
+    if arguments.step == "daily":
+        # The morning sequence. A failed step ends the job; verify is reported without failing it.
+        sequence = [("load", {}), ("corrections", {}), ("load", {}), ("factors", {"stale_days": 14}), ("verify", {})]
+        outcome["steps"] = []
+        for position, (step, options) in enumerate(sequence, start=1):
+            print(f"\n=== {step} ({position} of {len(sequence)}) ===")
+            step_outcome, step_code = run_step(step, arguments.interval, instrument_ids, get_postgres, **options)
+            outcome["steps"].append({"step": step, "exit_code": step_code, **step_outcome})
+            if step_code and step != "verify":
+                logger.error(f"The daily job stopped: {step} failed.")
+                exit_code = step_code
+                break
+            if step_code:
+                logger.warning(f"verify found failing checks: {', '.join(step_outcome.get('failed', []))}")
+    else:
+        step_outcome, exit_code = run_step(arguments.step, arguments.interval, instrument_ids, get_postgres,
+                                           stale_days=arguments.stale_days, retry=arguments.retry)
+        outcome.update(step_outcome)
+
+    outcome["started"] = started.strftime("%Y-%m-%d %H:%M:%S")
+    outcome["finished"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    outcome["exit_code"] = exit_code
+    try:
+        cache.set(LAST_RUN_KEY, json.dumps(outcome, default=str))
+    except Exception as exception:
+        logger.error(f"The run was not recorded in Redis: {exception}")
+    return exit_code
+
+if __name__ == "__main__":
+    raise SystemExit(main())

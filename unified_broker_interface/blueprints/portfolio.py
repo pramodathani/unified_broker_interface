@@ -4,9 +4,9 @@ scripts keep in Redis.
 
 | Route | Answers from | Written |
 | --- | --- | --- |
-| `/funds` | `unified:portfolio:funds`, by `bin/unified/funds` | every half second |
-| `/holdings` | `unified:portfolio:holdings`, by `bin/unified/holdings`, priced by `unified:quotes:live` | every minute |
-| `/positions` | `unified:portfolio:positions`, by `bin/unified/positions`, priced by `unified:quotes:live` | every half second |
+| `/funds` | `unified:portfolio:funds`, by `bin/unified/portfolio/funds` | every half second |
+| `/holdings` | `unified:portfolio:holdings`, by `bin/unified/portfolio/holdings`, priced by `unified:quotes:live` | every minute |
+| `/positions` | `unified:portfolio:positions`, by `bin/unified/portfolio/positions`, priced by `unified:quotes:live` | every half second |
 
 Nothing here asks a broker: each broker's own scripts keep its data in Redis, and the unified scripts combine it in this
 API's shape, with `as_of` and each broker's read status. See `utilities/unified_documents.py` for when a document is not

@@ -4,7 +4,7 @@
 #     journalctl --user -u unified-rest-api -f
 #     curl -s localhost:8080/api/
 #
-# It answers from what the unified@ scripts keep in Redis and the unified tables, so it is useful once unified.target
+# It answers from what the unified-*@ scripts keep in Redis and the unified tables, so it is useful once unified.target
 # is up, but it does not require it: a route whose document is missing answers 503 and says which key, rather than
 # failing to start. The address, port and token lifetime come from the environment - override them with a drop-in:
 #
