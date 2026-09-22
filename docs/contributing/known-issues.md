@@ -26,8 +26,8 @@ for having never traded, and then started trading would stay retired forever. Cl
 `positions`, `trades` and `funds` each construct `WisdomCapitalAPI` when their token is refused, and XTS allows one
 interactive session per application key, so four logins in the same second can log each other out. On 2026-09-15
 they did this twice, at 06:36:07 and 06:36:20, before settling on one token. The interactive login has no
-cross-process lock like the market data login in `bin/wisdom_capital/instruments/websocket_quotes`, and adding one to `WisdomCapitalAPI`
-would change every Wisdom Capital script, so it was left alone.
+cross-process lock like the market data login beside it in `WisdomCapitalAPI`, and adding one would change
+every Wisdom Capital script, so it was left alone.
 
 **Kotak streams no index values.** `bin/kotak/instruments/websocket_quotes` subscribes scrip and depth topics only. Kotak's HSM
 feed serves indices as separate `if|` topics named by the index's name, which the script's `EXCHANGE|TOKEN`

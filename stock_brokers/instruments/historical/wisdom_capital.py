@@ -5,10 +5,11 @@ Wisdom Capital runs Symphony's XTS platform, and four things about it are unlike
 broker here. All four were measured on 2026-09-12 rather than taken from documentation.
 
 **It needs a different session.** XTS splits a broker into two applications with separate
-credentials, and the token this project's `WisdomCapitalAPI` holds belongs to the interactive
-one. The chart endpoint lives under `/apimarketdata`, so this module logs in a second time with
-`price_api_key` and `price_api_secret` - the same pair `bin/wisdom_capital/instruments/websocket_quotes` uses -
-and carries that token on every request.
+credentials, and the interactive token is refused by the chart endpoint, which lives under
+`/apimarketdata`. `WisdomCapitalAPI` establishes both sessions when it is constructed and keeps
+the market data one in `last_login` as `market_data_access_token`, so this module asks that class
+for the token - the same one `bin/wisdom_capital/instruments/websocket_quotes` carries - and sends
+it on every request.
 
 **The bars are not JSON.** They arrive inside one string under a key the platform spells
 `dataReponse`, comma separated between bars and pipe separated within one.
@@ -44,8 +45,6 @@ from stock_brokers.instruments.historical.base import (INDIA_TIMEZONE,
                                                        SeriesContext)
 from stock_brokers.instruments.mapping.utilities.segments import (CASH_SEGMENTS, DERIVATIVE_SEGMENTS,
                                                              INDEX_SEGMENTS, segments_of)
-
-LOGIN_URL = "https://trade.wisdomcapital.in/apimarketdata/auth/login"
 
 HISTORICAL_URL = "https://trade.wisdomcapital.in/apimarketdata/instruments/ohlc"
 
@@ -164,53 +163,38 @@ class WisdomCapitalCandles(BrokerCandles):
 
     def _log_in_to_market_data(self, refresh=False):
         """
-        Take the shared market data session, establishing it when nobody has yet.
+        Take the market data token the broker session holds, replacing it when it has been refused.
 
         Separate from the broker's ordinary session: XTS issues one token for trading and another
-        for market data, and the chart endpoint refuses the first. It also issues exactly one
-        market data session per application key, so a second login invalidates the first - which
-        means two processes that need it cannot each mint their own. The token is minted once,
-        published in Redis and read by every process that needs it.
+        for market data, and the chart endpoint refuses the first. `WisdomCapitalAPI` establishes
+        both and publishes them in the shared `last_login`, so this asks that class for the token
+        rather than minting one - a second market data login invalidates the first, which would
+        take the live quotes feed's token with it.
 
-        - `refresh` mints a new one even though a session is stored, for a token that has stopped
-          working. Rotating it is not destructive: whoever reads it next gets the new one.
+        - `refresh` replaces the token in hand, for one that has stopped working. Rotating it is
+          not destructive: whoever reads it next gets the new one.
         """
-        from stock_brokers.api.utilities.session import shared_application_session
-
-        session = shared_application_session(self.BROKER_NAME, "marketdata",
-                                             self._mint_market_data_session,
-                                             logger=self._logger, refresh=refresh)
-        self._market_data_token = session["token"]
+        try:
+            session = self._api.replace_market_data_session(
+                stale_access_token=self._market_data_token if refresh else None)
+        except Exception as exception:
+            raise CandleAuthenticationError(
+                f"wisdom_capital market data login failed: "
+                f"{type(exception).__name__}: {str(exception)[:200]}") from exception
+        self._market_data_token = session["access_token"]
 
     def after_relogin(self):
         """
-        Renew the market data token after the broker session has been logged in again.
+        Take the market data token again after the broker session has been logged in again.
 
         The chart endpoint takes the market data token, not the interactive one, so a fresh
-        interactive session alone would leave the refused credential in place.
+        interactive session alone would leave a refused credential in place. Building the API
+        class checks the market data token as well and replaces it only when it has stopped
+        working, so this takes what that check settled on rather than forcing a new login, which
+        would invalidate the token the live quotes feed is using. The empty-window check does
+        force one, because there the market data token is what is suspect.
         """
-        self._log_in_to_market_data(refresh=True)
-
-    def _mint_market_data_session(self):
-        """
-        Exchange the market data credentials for a token and user id.
-        """
-        settings = self._api._settings or {}
-        application_key = settings.get("price_api_key")
-        application_secret = settings.get("price_api_secret")
-        if not application_key or not application_secret:
-            raise CandleAuthenticationError(
-                "wisdom_capital has no price_api_key or price_api_secret in its settings, so the "
-                "market data session cannot be established.")
-
-        response = self._api.post(url=LOGIN_URL, headers={"Content-Type": "application/json"},
-                                  json={"appKey": application_key,
-                                        "secretKey": application_secret, "source": "WEBAPI"})
-        result = (response or {}).get("data") or {}
-        if not result.get("token"):
-            raise CandleAuthenticationError(
-                f"wisdom_capital's market data login returned no token: {str(response)[:200]}")
-        return {"token": result["token"], "userID": result.get("userID")}
+        self._log_in_to_market_data()
 
     def instruments(self):
         """

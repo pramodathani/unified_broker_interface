@@ -9,18 +9,16 @@ stopped.
     bin/wisdom_capital/instruments/price_history --status
     bin/wisdom_capital/instruments/price_history --deadline-seconds 21600
 
-Built on `WisdomCapitalCandles`, with two differences: every login of the trading session goes straight through
-`WisdomCapitalAPI`, and the market data session is shared through the Redis key
-`wisdom_capital:session:marketdata`, not through the shared session helper
-`stock_brokers.api.utilities.session.ensure_session`.
+Built on `WisdomCapitalCandles`, with one difference: every login goes straight through `WisdomCapitalAPI`
+rather than through the shared session helper `stock_brokers.api.utilities.session.ensure_session`.
 
 **Two sessions.** Wisdom Capital runs Symphony's XTS, which splits a broker into two applications. The trading
-(interactive) token `WisdomCapitalAPI` holds is refused by the chart endpoint, which lives under
-`/apimarketdata` and wants a market data token minted from `price_api_key` and `price_api_secret`. XTS issues
-exactly one market data session per application key - a second login invalidates the first - so the token is
-kept in `wisdom_capital:session:marketdata` as `{"token", "userID"}`, which `bin/wisdom_capital/instruments/websocket_quotes` reads and
-writes the same way. A process mints a new one only when there is none, or when the token it was using has
-been refused and nobody has replaced it yet, under the lock `wisdom_capital:session:marketdata:lock`.
+(interactive) token is refused by the chart endpoint, which lives under `/apimarketdata` and wants a market
+data token minted from `price_api_key` and `price_api_secret`. Constructing `WisdomCapitalAPI` establishes
+both and stores the market data one in `last_login` as `market_data_access_token`, which every other Wisdom
+Capital process reads. XTS issues exactly one market data session per application key - a second login
+invalidates the first - so a new one is minted only when there is none, or when the token in hand has been
+refused and nobody has replaced it yet, under the lock `wisdom_capital:session:marketdata:lock`.
 
 **Seeding** reads the latest row per instrument from `wisdom_capital.instruments` (filled by
 `bin/wisdom_capital/instruments/daily_feed`) and registers one row per instrument and interval in
@@ -47,10 +45,7 @@ Exits 0 when stopped, drained or out of time, 1 when it stopped because the sess
 the platform refused this client, and 2 when the first login fails.
 """
 
-import os
 import sys
-import json
-import time
 import signal
 import argparse
 import threading
@@ -63,98 +58,22 @@ from utilities.bootstrap import run_under_venv
 
 PROJECT_ROOT = run_under_venv(__file__)
 
-MARKET_DATA_LOGIN_URL = "https://trade.wisdomcapital.in/apimarketdata/auth/login"
-MARKET_DATA_SESSION_KEY = "wisdom_capital:session:marketdata"
-MARKET_DATA_LOCK_KEY = "wisdom_capital:session:marketdata:lock"
-# A stored token is kept a day at most; a refused one is replaced sooner, by whoever it failed for.
-MARKET_DATA_SESSION_SECONDS = 24 * 60 * 60
-MARKET_DATA_LOCK_SECONDS = 120
-
-def market_data_session(cache, api, logger, stale_token=None):
-    """
-    The shared XTS market data session, minting one only when none is stored or the stored one has failed.
-
-    XTS issues one market data session per application key and a new login invalidates the old token, so every
-    process takes the token from Redis. A process whose token was refused passes it as `stale_token`: when the
-    stored token is still that one it mints a replacement, and when someone already replaced it that is used.
-
-    - `cache` is the Redis client.
-    - `api` is the WisdomCapitalAPI whose settings hold `price_api_key` and `price_api_secret`.
-    - `logger` is where a login is reported.
-    - `stale_token` is the market data token that was just refused, or None.
-
-    Returns `{"token": ..., "userID": ...}`.
-    """
-    def stored():
-        raw = cache.get(MARKET_DATA_SESSION_KEY)
-        session = json.loads(raw) if raw else None
-        return session if session and session.get("token") and session.get("token") != stale_token else None
-
-    session = stored()
-    if session:
-        return session
-
-    deadline = time.time() + MARKET_DATA_LOCK_SECONDS
-    while not cache.set(MARKET_DATA_LOCK_KEY, str(os.getpid()), nx=True, ex=MARKET_DATA_LOCK_SECONDS):
-        # Another process is minting. A second login would invalidate the token it is about to store.
-        time.sleep(1)
-        session = stored()
-        if session:
-            return session
-        if time.time() > deadline:
-            raise RuntimeError("timed out waiting for another process to log in to the market data API")
-    try:
-        session = stored()
-        if session:
-            return session
-        settings = api._settings or {}
-        if not settings.get("price_api_key") or not settings.get("price_api_secret"):
-            raise RuntimeError("no price_api_key or price_api_secret in wisdom_capital's settings")
-        logger.info("Logging in to the Wisdom Capital market data API.")
-        response = api.post(url=MARKET_DATA_LOGIN_URL, headers={"Content-Type": "application/json"},
-                            json={"appKey": settings["price_api_key"], "secretKey": settings["price_api_secret"],
-                                  "source": "WEBAPI"})
-        result = (response or {}).get("data") or {}
-        if not result.get("token"):
-            raise RuntimeError(f"the market data login returned no token: {str(response)[:200]}")
-        session = {"token": result["token"], "userID": result.get("userID")}
-        cache.set(MARKET_DATA_SESSION_KEY, json.dumps(session), ex=MARKET_DATA_SESSION_SECONDS)
-        return session
-    finally:
-        cache.delete(MARKET_DATA_LOCK_KEY)
-
 def downloader():
     """
-    A WisdomCapitalCandles that logs in through WisdomCapitalAPI directly, shares the market data session through
-    wisdom_capital:session:marketdata, and remembers why it stopped.
+    A WisdomCapitalCandles that logs in through WisdomCapitalAPI directly, takes the market data token that class
+    publishes in `last_login`, and remembers why it stopped.
     """
     from stock_brokers.api.wisdom_capital import WisdomCapitalAPI
     from stock_brokers.instruments.historical.base import CandleAuthenticationError, CandleBlocked, CandleThrottled
     from stock_brokers.instruments.historical.wisdom_capital import WisdomCapitalCandles
-    from utilities.configurations import get_cache
 
     class DirectLoginWisdomCapitalCandles(WisdomCapitalCandles):
-        """WisdomCapitalCandles whose logins construct WisdomCapitalAPI and share the market data token in Redis."""
+        """WisdomCapitalCandles whose logins construct WisdomCapitalAPI, which carries both of the broker's sessions."""
 
         stopped_by = None
 
         def _build_api(self):
             return WisdomCapitalAPI()
-
-        def _log_in_to_market_data(self, refresh=False):
-            """
-            Take the shared market data token, replacing it when `refresh` says the one in hand was refused.
-
-            - `refresh` passes the token in hand as stale, so a refused token is minted again unless another
-              process has already done so.
-            """
-            try:
-                session = market_data_session(get_cache(), self._api, self._logger,
-                                              stale_token=self._market_data_token if refresh else None)
-            except Exception as exception:
-                raise CandleAuthenticationError(f"wisdom_capital market data login failed: "
-                                                f"{type(exception).__name__}: {str(exception)[:200]}") from exception
-            self._market_data_token = session["token"]
 
         def relogin(self):
             """

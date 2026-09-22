@@ -7,12 +7,12 @@ Mark Wisdom Capital as logged out in the Redis key `wisdom_capital:session:statu
 
 Nothing is sent to Wisdom Capital. The script only replaces `wisdom_capital:session:status` with:
 
-    {"status": "logged out", "access-token": null, "last_login": null}
+    {"status": "logged out", "access-token": null, "market-data-access-token": null, "last_login": null}
 
 Symphony XTS, which Wisdom Capital runs on, does have a logout (`DELETE /interactive/user/session`), and it
 is deliberately not called: it would end the session every other process - the feeds, the pollers, the REST
-API - is using. The stored token in the Redis `last_login` hash and in MongoDB is left alone, and Wisdom
-Capital keeps accepting it until it expires.
+API - is using. The same goes for the market data application's logout. The stored tokens in the Redis
+`last_login` hash and in MongoDB are left alone, and Wisdom Capital keeps accepting them until they expire.
 
 Exits 0 when the key was written and 1 when it could not be, in which case `wisdom_capital:session:status`
 is unchanged.
@@ -35,7 +35,7 @@ def main():
     """Write the logged-out record to wisdom_capital:session:status."""
     from utilities.configurations import get_cache
 
-    record = {'status': 'logged out', 'access-token': None, 'last_login': None}
+    record = {'status': 'logged out', 'access-token': None, 'market-data-access-token': None, 'last_login': None}
     try:
         get_cache().set(REDIS_KEY, json.dumps(record))
     except Exception as exception:

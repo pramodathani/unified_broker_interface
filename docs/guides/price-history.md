@@ -12,10 +12,11 @@ and the seven brokers can be compared against each other.
 The queue is worked by `bin/<broker>/instruments/price_history`, one script per broker, run as
 `<broker>-historical-prices.service`. Each is built on the broker's `BrokerCandles` subclass and works its
 `<broker>.price_history_progress` queue; every login, at startup and after the broker refuses the session,
-goes straight through the broker's API class, which logs in when the stored token is dead. Wisdom Capital's
-market data token is shared with `bin/wisdom_capital/instruments/websocket_quotes` through the Redis key
-`wisdom_capital:session:marketdata`. See [Broker scripts](broker-scripts.md#historical-prices) and
-[Running it as a service](services.md).
+goes straight through the broker's API class, which logs in when the stored token is dead. Wisdom Capital
+needs a second session for its chart endpoint, and `WisdomCapitalAPI` establishes it alongside the trading
+one and publishes it in the `last_login` document as `market_data_access_token`, which
+`bin/wisdom_capital/instruments/websocket_quotes` reads as well. See
+[Broker scripts](broker-scripts.md#historical-prices) and [Running it as a service](services.md).
 
 ## Running it
 
@@ -234,8 +235,9 @@ Two hooks let a module take part:
 
 - `_build_api()` constructs the broker's API class around the new session. The default builds the
   broker's class from `api_class_for`; the Noren modules override it with their own.
-- `after_relogin()` renews anything built on top of the session. Wisdom Capital uses it for the
-  separate market data token its chart endpoint takes. A module that has already spent a login
+- `after_relogin()` renews anything built on top of the session. Wisdom Capital uses it to ask
+  `WisdomCapitalAPI` to replace the separate market data token its chart endpoint takes. A module
+  that has already spent a login
   itself - Wisdom Capital's empty-window check does - sets `_relogin_used` before raising, so the
   base class does not log in a second time.
 

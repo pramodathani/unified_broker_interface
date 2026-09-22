@@ -1,31 +1,40 @@
 #!/usr/bin/env python3
 """
-Log in to the Wisdom Capital (Symphony XTS) API by constructing `WisdomCapitalAPI`, confirm the session
-works, and record the outcome in the Redis key `wisdom_capital:session:status`.
+Log in to the Wisdom Capital (Symphony XTS) API by constructing `WisdomCapitalAPI`, confirm both sessions
+work, and record the outcome in the Redis key `wisdom_capital:session:status`.
 
     bin/wisdom_capital/session/connect
     redis-cli GET wisdom_capital:session:status
 
-`WisdomCapitalAPI()` probes `GET /interactive/user/balance` with the stored token and only opens a new
-interactive session - posting the app key and secret to `/interactive/user/session` - when that probe is
-refused for anything but a rate limit. A new token is written to MongoDB and to the Redis `last_login` hash,
-where every other process picks it up. The balance is then asked once more, so a success means a session
-that has actually been used, not just a constructor that returned.
+XTS splits a broker into two applications with separate credentials, so Wisdom Capital needs two sessions.
+The interactive one places orders and reports the account, and the market data one serves quotes and charts;
+each issues its own token and refuses the other's. `WisdomCapitalAPI()` establishes both. It probes
+`GET /interactive/user/balance` with the stored interactive token and only opens a new interactive session -
+posting the app key and secret to `/interactive/user/session` - when that probe is refused for anything but a
+rate limit, then checks the stored market data token against `GET /apimarketdata/config/clientConfig` and
+posts `price_api_key` and `price_api_secret` to `/apimarketdata/auth/login` when that one is refused. New
+tokens are written to MongoDB and to the Redis `last_login` hash, as `access_token` and
+`market_data_access_token`, where every other process picks them up. The balance is then asked once more, so a
+success means a session that has actually been used, not just a constructor that returned.
 
 The check uses the balance rather than `/user/profile` because Wisdom Capital allows only about one profile
 call a day. A check refused for rate (HTTP 429 or an `e-apirl` code) still counts as a working session: XTS
 rate limits only after the request has authenticated.
 
+XTS issues exactly one market data session per application key, and a second login invalidates the first, so
+this script mints one only when the stored token is refused. Running it while the live quotes feed is
+connected is therefore safe unless that token has already stopped working.
+
 `wisdom_capital:session:status` holds one JSON object, replaced on every run:
 
-    {"status": "success", "access-token": "<token>", "last_login": "2026-09-14 08:30:02"}
-    {"status": "failure", "access-token": null, "last_login": "2026-09-14 08:30:02"}
+    {"status": "success", "access-token": "<token>", "market-data-access-token": "<token>", "last_login": "2026-09-14 08:30:02"}
+    {"status": "failure", "access-token": null, "market-data-access-token": null, "last_login": "2026-09-14 08:30:02"}
 
-On success `last_login` is when the token in force was issued, which is earlier than this run when the
-stored session was still good. On failure it is when this attempt was made.
+On success `last_login` is when the interactive token in force was issued, which is earlier than this run when
+the stored session was still good. On failure it is when this attempt was made.
 
-Exits 0 when the session works and 1 when the login, the check or the Redis write fails, so a systemd
-unit can retry on failure. Logs in to a live broker account. Reads only - it places no orders.
+Exits 0 when both sessions work and 1 when either login, the check or the Redis write fails, so a systemd unit
+can retry on failure. Logs in to a live broker account. Reads only - it places no orders.
 """
 
 import sys
@@ -44,12 +53,8 @@ BALANCE_URL = "https://trade.wisdomcapital.in/interactive/user/balance"
 REDIS_KEY = "wisdom_capital:session:status"
 TIMEOUT_SECONDS = 10
 
-def is_rate_limited(exception):
-    """Whether XTS refused the request for rate, which it does only after authenticating it."""
-    return getattr(exception, 'code', None) in (429, "429") or "e-apirl" in str(exception).lower()
-
 def main():
-    """Construct WisdomCapitalAPI, which logs in when the stored session is dead, confirm it, and record the outcome."""
+    """Construct WisdomCapitalAPI, which logs in where a stored session is dead, confirm both sessions, and record the outcome."""
     from stock_brokers.api.wisdom_capital import WisdomCapitalAPI
     from utilities.configurations import get_cache
 
@@ -59,13 +64,21 @@ def main():
             wisdom_capital.get(url=BALANCE_URL, params={'clientID': wisdom_capital._settings.get('ucc_code', '')},
                                timeout=TIMEOUT_SECONDS)
         except Exception as exception:
-            if not is_rate_limited(exception):
+            if not wisdom_capital.is_rate_limited(exception):
                 raise
+        if wisdom_capital.market_data_session_error:
+            raise wisdom_capital.market_data_session_error
+        market_data = wisdom_capital.market_data_session()
+        if not market_data['access_token']:
+            raise RuntimeError("no market data token is in force after the login")
         login = wisdom_capital._last_login or {}
-        record = {'status': 'success', 'access-token': login.get('access_token'), 'last_login': login.get('last_login')}
+        record = {'status': 'success', 'access-token': login.get('access_token'),
+                  'market-data-access-token': market_data['access_token'],
+                  'last_login': login.get('last_login')}
         print(f"wisdom_capital ok logged in at {record['last_login']}")
     except Exception as exception:
-        record = {'status': 'failure', 'access-token': None, 'last_login': datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+        record = {'status': 'failure', 'access-token': None, 'market-data-access-token': None,
+                  'last_login': datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
         print(f"wisdom_capital FAILED {type(exception).__name__}: {exception}", file=sys.stderr)
 
     try:

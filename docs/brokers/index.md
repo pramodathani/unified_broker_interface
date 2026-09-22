@@ -38,9 +38,9 @@ implementations.
     than on the socket, the transport is socket.io rather than a plain websocket, and orders and
     positions arrive in the same frame.
 
-    `bin/wisdom_capital/instruments/websocket_quotes` carries its own Engine.IO and socket.io transport, and shares the market
-    data token with `bin/wisdom_capital/instruments/price_history` through the Redis key
-    `wisdom_capital:session:marketdata`.
+    `bin/wisdom_capital/instruments/websocket_quotes` carries its own Engine.IO and socket.io transport, and
+    takes the market data token `WisdomCapitalAPI` publishes in `last_login` as `market_data_access_token`,
+    the same one `bin/wisdom_capital/instruments/price_history` uses.
 
 === "Website feeds"
 

@@ -23,11 +23,11 @@ subscribed. One socket carries up to `--per-socket` instruments, 1000 by default
 
 **The market data session.** XTS splits a broker into two applications. Quotes need the market data one, whose
 token is minted from `price_api_key` and `price_api_secret` - the trading token is refused - and XTS issues
-exactly one market data session per application key, a second login invalidating the first. So the token lives
-in the Redis key `wisdom_capital:session:marketdata` as `{"token", "userID"}`, shared with
-`bin/wisdom_capital/instruments/price_history`, and a new one is minted only when none is stored or the one in use has
-been refused and nobody has replaced it, under `wisdom_capital:session:marketdata:lock`. Each connection reads it
-afresh.
+exactly one market data session per application key, a second login invalidating the first. Constructing
+`WisdomCapitalAPI` establishes both sessions and stores the market data token and user id in `last_login` as
+`market_data_access_token` and `market_data_user_id`, shared with `bin/wisdom_capital/instruments/price_history`.
+A new one is minted only when none is stored or the one in use has been refused and nobody has replaced it,
+under `wisdom_capital:session:marketdata:lock`. Each connection reads it afresh.
 
 **The transport.** The host's certificate is issued to the platform provider's domain, so the exact certificate
 is pinned instead of the hostname being checked. A connection opens an Engine.IO session over HTTPS, attaches a
@@ -61,7 +61,6 @@ Exits 0 when stopped with Ctrl+C or SIGTERM, 1 when a login fails or a socket st
 was replaced, and 2 when there is nothing to subscribe to. Reads only - it places no orders.
 """
 
-import os
 import ssl
 import sys
 import json
@@ -98,12 +97,6 @@ SUBSCRIPTIONS_KEY = "wisdom_capital:quotes:subscriptions"
 STREAM_KEY = "wisdom_capital:quotes:stream"
 STREAM_MAX_LENGTH = 1000000
 
-MARKET_DATA_SESSION_KEY = "wisdom_capital:session:marketdata"
-MARKET_DATA_LOCK_KEY = "wisdom_capital:session:marketdata:lock"
-# A stored token is kept a day at most; a refused one is replaced sooner, by whoever it failed for.
-MARKET_DATA_SESSION_SECONDS = 24 * 60 * 60
-MARKET_DATA_LOCK_SECONDS = 120
-
 # XTS segment numbers and the names its instrument master uses for them.
 SEGMENT_NAMES = {1: "NSECM", 2: "NSEFO", 3: "NSECD", 4: "NSECO", 11: "BSECM", 12: "BSEFO", 13: "BSECD",
                  21: "NCDEX", 51: "MCXFO"}
@@ -124,82 +117,28 @@ MIN_BACKOFF_SECONDS = 1
 MAX_BACKOFF_SECONDS = 60
 MAX_FAILED_CONNECTS = 6
 
-def market_data_session(cache, api, logger, stale_token=None):
-    """
-    The shared XTS market data session, minting one only when none is stored or the stored one has failed.
-
-    XTS issues one market data session per application key and a new login invalidates the old token, so every
-    process takes the token from Redis. A process whose token was refused passes it as `stale_token`: when the
-    stored token is still that one it mints a replacement, and when someone already replaced it that is used.
-
-    - `cache` is the Redis client.
-    - `api` is the WisdomCapitalAPI whose settings hold `price_api_key` and `price_api_secret`.
-    - `logger` is where a login is reported.
-    - `stale_token` is the market data token that was just refused, or None.
-
-    Returns `{"token": ..., "userID": ...}`.
-    """
-    def stored():
-        raw = cache.get(MARKET_DATA_SESSION_KEY)
-        session = json.loads(raw) if raw else None
-        return session if session and session.get("token") and session.get("token") != stale_token else None
-
-    session = stored()
-    if session:
-        return session
-
-    deadline = time.time() + MARKET_DATA_LOCK_SECONDS
-    while not cache.set(MARKET_DATA_LOCK_KEY, str(os.getpid()), nx=True, ex=MARKET_DATA_LOCK_SECONDS):
-        # Another process is minting. A second login would invalidate the token it is about to store.
-        time.sleep(1)
-        session = stored()
-        if session:
-            return session
-        if time.time() > deadline:
-            raise RuntimeError("timed out waiting for another process to log in to the market data API")
-    try:
-        session = stored()
-        if session:
-            return session
-        settings = api._settings or {}
-        if not settings.get("price_api_key") or not settings.get("price_api_secret"):
-            raise RuntimeError("no price_api_key or price_api_secret in wisdom_capital's settings")
-        logger.info("Logging in to the Wisdom Capital market data API.")
-        response = api.post(url=MARKET_DATA_LOGIN_URL, headers={"Content-Type": "application/json"},
-                            json={"appKey": settings["price_api_key"], "secretKey": settings["price_api_secret"],
-                                  "source": "WEBAPI"})
-        result = (response or {}).get("data") or {}
-        if not result.get("token"):
-            raise RuntimeError(f"the market data login returned no token: {str(response)[:200]}")
-        session = {"token": result["token"], "userID": result.get("userID")}
-        cache.set(MARKET_DATA_SESSION_KEY, json.dumps(session), ex=MARKET_DATA_SESSION_SECONDS)
-        return session
-    finally:
-        cache.delete(MARKET_DATA_LOCK_KEY)
-
 class WisdomCapitalSession:
     """
-    The trading login and the shared market data token every socket authenticates with.
+    The broker login, which carries both the trading token and the market data token every socket authenticates with.
     """
 
-    def __init__(self, cache, logger):
+    def __init__(self, logger):
         """
-        Construct WisdomCapitalAPI, which logs in when the stored session is dead, and take the market data token.
+        Construct WisdomCapitalAPI, which establishes both of Wisdom Capital's sessions when either has stopped working.
 
-        - `cache` is the Redis client.
         - `logger` is where logins are reported.
         """
         from stock_brokers.api.wisdom_capital import WisdomCapitalAPI
 
         self._api = WisdomCapitalAPI()
-        self._cache = cache
         self._logger = logger
         self._lock = threading.Lock()
-        self.market_data()
+        if self._api.market_data_session_error:
+            raise self._api.market_data_session_error
 
     def market_data(self):
-        """The market data session in force now, `{"token", "userID"}`."""
-        return market_data_session(self._cache, self._api, self._logger)
+        """The market data session in force now, `{"access_token", "user_id"}`."""
+        return self._api.market_data_session()
 
     def replace(self, stale_token):
         """
@@ -209,7 +148,7 @@ class WisdomCapitalSession:
         """
         with self._lock:
             self._logger.warning("Replacing the Wisdom Capital market data token.")
-            market_data_session(self._cache, self._api, self._logger, stale_token=stale_token)
+            self._api.replace_market_data_session(stale_access_token=stale_token)
 
 def pinned_request(method, path, token=None, body=None):
     """
@@ -333,7 +272,7 @@ class QuotesSocket:
         import websocket
 
         session = self._session.market_data()
-        self._token, user_id = session["token"], session.get("userID")
+        self._token, user_id = session["access_token"], session["user_id"]
         query = f"token={self._token}&userID={user_id}&publishFormat=JSON&broadcastMode=Full"
 
         response = pinned_request("GET", f"{APPLICATION_PATH}/socket.io/?EIO=3&transport=polling&{query}")
@@ -628,7 +567,7 @@ def main():
         return 2
 
     try:
-        session = WisdomCapitalSession(cache, logger)
+        session = WisdomCapitalSession(logger)
     except Exception as exception:
         logger.error(f"Could not log in to Wisdom Capital: {type(exception).__name__}: {exception}")
         return 1

@@ -25,7 +25,7 @@ The keys come in three kinds:
 
 | Key | Type | Written by | Holds |
 | --- | --- | --- | --- |
-| `<broker>:session:status` | string | `bin/<broker>/session/connect`, `disconnect` | `{"status", "access-token", "last_login"}`, replaced on every run |
+| `<broker>:session:status` | string | `bin/<broker>/session/connect`, `disconnect` | `{"status", "access-token", "last_login"}`, replaced on every run. Wisdom Capital's also carries `market-data-access-token` |
 | `<broker>:user:details` | string | `bin/<broker>/user/details` | `{"timestamp", "status", "code", "data"}`, the broker's profile under `data` |
 
 `status` is `success`, `failure` or `logged out`. On success `last_login` is when the token in force was
@@ -38,9 +38,12 @@ The profile is polled every minute. Wisdom Capital's is fetched once a day, sinc
 profile call a day, and Kotak, which has no profile endpoint, has its profile written by
 `bin/kotak/session/connect` from the login response, on a run that actually logged in.
 
-`wisdom_capital:session:marketdata` holds Wisdom Capital's separate market data token as
-`{"token", "userID"}`, shared by `bin/wisdom_capital/instruments/websocket_quotes` and `bin/wisdom_capital/instruments/price_history`,
-with `wisdom_capital:session:marketdata:lock` held while one of them replaces a refused token.
+Wisdom Capital needs two sessions, because Symphony XTS splits a broker into an interactive application
+and a market data one with separate credentials. Both tokens live in the `last_login` hash, as
+`access_token` and `market_data_access_token`, and both are established by constructing
+`WisdomCapitalAPI`. `wisdom_capital:session:marketdata:lock` is held while one process replaces a refused
+market data token, because XTS issues exactly one market data session per application key and a second
+login invalidates the first.
 
 ### Orders
 
@@ -258,6 +261,12 @@ token in force is read from, and a login by any process takes effect for every o
 next request. When a field is empty it is filled from MongoDB with `HSETNX`, which cannot overwrite a
 login that lands first.
 
+Wisdom Capital's field carries a second token beside the first. Symphony XTS issues one token for the
+interactive application and another for market data, so its document also holds `market_data_access_token`,
+`market_data_user_id` and `market_data_last_login`. Both are established when `WisdomCapitalAPI` is
+constructed, and each login merges into the stored document rather than replacing it, so establishing one
+session never erases the other's token.
+
 The field `unified_broker_interface` holds the application's own token, written by `bin/unified/session/connect`
 and the REST API's connect as `{"broker_name", "access_token", "last_login", "expires_at"}`. A logout
 sets `access_token` and `expires_at` to null. If the Redis write fails the field is deleted instead, so
@@ -280,7 +289,7 @@ redis-cli HGET unified:broker_tokens dhan:2885
 | --- | --- | --- | --- |
 | `ubi:login:<broker>` | string, 300 s TTL | `ensure_session` | The lock held while one process logs a broker in, recording the holder's pid |
 | `ubi:login-attempt:<broker>`, `ubi:login-ok:<broker>` | string | `ensure_session` | When a login was last attempted and last succeeded, so only genuine retries are rate limited |
-| `ubi:session:wisdom_capital:marketdata`, and `:lock` beside it | string, 300 s TTL | `shared_application_session`, for `WisdomCapitalCandles` | Wisdom Capital's market data session as JSON, minted once and read by every process that downloads candles through that class |
+| `wisdom_capital:session:marketdata:lock` | string, 120 s TTL | `WisdomCapitalAPI` | The lock held while one process replaces Wisdom Capital's market data token, recording the holder's pid. The token itself lives in the `last_login` hash |
 | `broker_api_calls` | list | every broker's API class, only when called with `verbose` | Each request made |
 
 `ensure_session` in `stock_brokers/api/utilities/session.py` is the login `BrokerCandles` uses by default and the one
