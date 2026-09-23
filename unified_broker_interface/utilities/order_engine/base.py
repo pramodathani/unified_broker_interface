@@ -307,10 +307,10 @@ class SyntheticOrder:
         if quantity < 1:
             return self.cancel_leg(leg, reason)
         try:
-            answer = self.placement.modify_quantity(
+            answer = self.placement.modify_leg(
                 leg.broker,
                 leg.broker_order_id,
-                quantity,
+                quantity=quantity,
             )
         except Exception as error:
             self.record({
@@ -335,6 +335,63 @@ class SyntheticOrder:
             'broker': leg.broker,
             'broker_order_id': leg.broker_order_id,
             'quantity': quantity if accepted else leg.quantity,
+            'outcome': answer.outcome,
+            'status_message': f'{reason}; {answer.status_message or "accepted"}',
+            'detail': {
+                'broker_response': answer.response_body,
+            },
+        })
+        return accepted
+
+    def reprice_leg(self, leg, price, trigger_price, reason):
+        """Moves one leg's prices at its broker, leaving its quantity alone.
+
+        Moving a stop to breakeven after a first target fills works through this, and so will every type that re-prices a resting order.
+
+        Args:
+            leg (OrderLeg): The leg to move.
+            price (decimal.Decimal | None): The new limit price, or None to leave it.
+            trigger_price (decimal.Decimal | None): The new trigger price, or None to leave it.
+            reason (str): Why, for a person reading the parent later.
+
+        Returns:
+            bool: True when the broker accepted the change.
+        """
+        try:
+            answer = self.placement.modify_leg(
+                leg.broker,
+                leg.broker_order_id,
+                price=price,
+                trigger_price=trigger_price,
+            )
+        except Exception as error:
+            self.record({
+                'event': 'leg_update',
+                'parent_state': self.parent.state,
+                'leg_id': leg.leg_id,
+                'leg_role': leg.role,
+                'broker': leg.broker,
+                'broker_order_id': leg.broker_order_id,
+                'outcome': 'unknown',
+                'status_message': (
+                    f'{reason}; the move could not be sent: {error}'
+                ),
+            })
+            return False
+        accepted = answer.outcome == 'accepted'
+        self.record({
+            'event': 'leg_update',
+            'parent_state': self.parent.state,
+            'leg_id': leg.leg_id,
+            'leg_role': leg.role,
+            'broker': leg.broker,
+            'broker_order_id': leg.broker_order_id,
+            'price': self.json_number(price) if accepted else leg.price,
+            'trigger_price': (
+                self.json_number(trigger_price)
+                if accepted
+                else leg.trigger_price
+            ),
             'outcome': answer.outcome,
             'status_message': f'{reason}; {answer.status_message or "accepted"}',
             'detail': {

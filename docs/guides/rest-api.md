@@ -1283,6 +1283,9 @@ to one broker, which is what every caller gets and what every other type is buil
 | `scheduled` | Holds the order until `at_time`, then places it |
 | `good_till_time` | Places now and cancels whatever is still resting at `until_time` |
 | `time_stop` | Places now, then at `until_time` or after `minutes` cancels the rest and closes what filled |
+| `scale_out` | A bracket with several targets sharing the position, and a stop that shrinks behind them |
+| `two_sided_breakout` | A buy stop above a range and a sell stop below it; the first to fill cancels the other |
+| `twap` | Splits the order into `slices` sent at even intervals over `over_minutes` |
 
 ```json
 { "instrument_id": "…", "transaction_type": "BUY", "product": "NRML", "order_type": "LIMIT",
@@ -1324,6 +1327,34 @@ A stop needs **both** `stop_price` and `stop_limit_price`, and neither is defaul
 options and from BSE entirely, so a stop is a stop-limit, and a stop-limit whose limit sits at its trigger will not
 fill when the price runs through it — which is the one condition a stop exists for. NSE caps the gap between them, so a
 limit too far away is refused by the exchange.
+
+### Scaling out, breaking out, and spreading over time
+
+```json
+{ "synthetic": { "type": "scale_out", "stop_price": 990, "stop_limit_price": 988,
+                 "target_prices": [1010, 1020, 1030], "breakeven_after": 1 } }
+
+{ "synthetic": { "type": "two_sided_breakout", "buy_trigger": 1010, "buy_limit": 1012,
+                 "sell_trigger": 990, "sell_limit": 988,
+                 "stop_price": 985, "stop_limit_price": 983 } }
+
+{ "synthetic": { "type": "twap", "slices": 4, "over_minutes": 20 } }
+```
+
+`scale_out` is a bracket whose target is several. **A target filling reduces only the stop, not the other targets** —
+the targets are tranches of one position and reducing each by what another took would leave the position uncovered
+after the first fill. Once `breakeven_after` targets have filled, the stop is **moved** to the entry's average price,
+as a price change on the resting order rather than a cancel and replace.
+
+`two_sided_breakout` places both entries as native stop orders, so they fire at exchange speed whether or not the
+engine is running. The first fill **cancels** the other side — cancelling rather than reducing, because the other entry
+is not a tranche of the same position, it is the opposite trade. A spike through both triggers in one tick can still
+fill both; nothing but the exchange could prevent that, and it offers no such order.
+
+`twap` is the freeze slicer's opposite in intent: the slicer splits an order an exchange will not take whole, while
+this splits one it would, because taking it whole would cost more than waiting. The first slice goes immediately so a
+caller gets an order id rather than a promise. Nothing here watches the price — a slice is sent because its time has
+come, which is what makes it a TWAP rather than a chaser.
 
 ### The timed types
 

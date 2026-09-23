@@ -2252,6 +2252,47 @@ class OrderEngineSuite:
                 accepted,
             ),
             self.reaction_result(
+                'a_scale_out_arms_one_stop_and_several_targets',
+                self.scenarios.bodies.market_order(
+                    dry_run=None,
+                    order_type='LIMIT',
+                    price=1000,
+                    quantity=9,
+                    synthetic={
+                        'type': 'scale_out',
+                        'stop_price': 990,
+                        'stop_limit_price': 988,
+                        'target_prices': [1010, 1020, 1030],
+                    },
+                ),
+                [
+                    self.update('26091500000021', 'COMPLETE', 9),
+                ],
+                accepted,
+            ),
+            self.reaction_result(
+                'a_two_sided_breakout_cancels_the_side_that_did_not_fire',
+                self.scenarios.bodies.market_order(
+                    dry_run=None,
+                    order_type='LIMIT',
+                    price=1000,
+                    quantity=10,
+                    synthetic={
+                        'type': 'two_sided_breakout',
+                        'buy_trigger': 1010,
+                        'buy_limit': 1012,
+                        'sell_trigger': 990,
+                        'sell_limit': 988,
+                        'stop_price': 985,
+                        'stop_limit_price': 983,
+                    },
+                ),
+                [
+                    self.update('26091500000021', 'OPEN', 10),
+                ],
+                accepted,
+            ),
+            self.reaction_result(
                 'an_oto_places_its_child_sized_to_what_actually_filled',
                 self.scenarios.bodies.market_order(
                     dry_run=None,
@@ -2310,7 +2351,14 @@ class OrderEngineSuite:
             event_log,
             parent_store,
         )
-        engine.run(OnePassStop(3))
+        # The whole check runs on one frozen clock, so a slice due five minutes in is due five
+        # minutes after the order was recorded rather than five minutes after the real time of day.
+        original_time = time.time
+        time.time = lambda: FROZEN_NOW.timestamp()
+        try:
+            engine.run(OnePassStop(3))
+        finally:
+            time.time = original_time
         reply = self.shown_replies(reply_keys)[0]
 
         follower = OrderUpdateFollower(
@@ -2455,6 +2503,28 @@ class OrderEngineSuite:
                 }),
                 [],
                 frozen + 1900,
+                accepted,
+            ),
+            self.clock_result(
+                'a_twap_sends_its_slices_on_the_clock',
+                dict(entry, quantity=10, synthetic={
+                    'type': 'twap',
+                    'slices': 4,
+                    'over_minutes': 20,
+                }),
+                [],
+                frozen + 400,
+                accepted,
+            ),
+            self.clock_result(
+                'a_twap_sends_nothing_before_its_next_slice_is_due',
+                dict(entry, quantity=10, synthetic={
+                    'type': 'twap',
+                    'slices': 4,
+                    'over_minutes': 20,
+                }),
+                [],
+                frozen + 10,
                 accepted,
             ),
             self.clock_result(

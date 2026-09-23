@@ -272,24 +272,39 @@ class EnginePlacement:
         )
         return broker_orders.send_cancel(broker_request)
 
-    def modify_quantity(self, broker_name, broker_order_id, quantity):
-        """Changes one order's quantity at a broker, leaving everything else as it is.
+    def modify_leg(
+        self,
+        broker_name,
+        broker_order_id,
+        quantity=None,
+        price=None,
+        trigger_price=None,
+    ):
+        """Changes one order at a broker, leaving whatever is not named as it was.
 
-        This is what reduces the other leg of a linked pair when one of them partly fills, which the Atlas names as the correct way to run an OCO rather than cancelling and replacing.
+        Changing the quantity is what reduces the other leg of a linked pair when one of them partly fills, which the Atlas names as the correct way to run an OCO rather than cancelling and replacing. Changing a price is what moves a stop to breakeven after a first target fills, and what every type that re-prices a resting order will do.
 
-        The quantity is in the broker's own terms, as the order book stores it and as the leg records it, so nothing is converted here.
+        Quantities are in the broker's own terms, as the order book stores them and as a leg records them, so nothing is converted here.
 
         Args:
             broker_name (str): The broker.
             broker_order_id (str): The broker's own order id.
-            quantity (int): The new quantity, in the broker's own terms.
+            quantity (int | None): The new quantity, in the broker's own terms, or None to leave it.
+            price (decimal.Decimal | float | None): The new limit price, or None to leave it.
+            trigger_price (decimal.Decimal | float | None): The new trigger price, or None to leave it.
 
         Returns:
             BrokerAnswer: What the broker said.
 
         Raises:
-            RefusedRequestError: With HTTP 501 when the broker takes no modifications, 503 when the order cannot be read, and 404 when the order book does not hold it.
+            RefusedRequestError: With HTTP 400 when nothing was named to change, 501 when the broker takes no modifications, 503 when the order cannot be read, and 404 when the order book does not hold it.
         """
+        if quantity is None and price is None and trigger_price is None:
+            raise RefusedRequestError.refusal(
+                'a modification has to change something',
+                400,
+                broker=broker_name,
+            )
         broker_orders, login, settings = self.read_credentials_for(broker_name)
         if not broker_orders.takes_modifications():
             raise RefusedRequestError.refusal(
@@ -305,11 +320,17 @@ class EnginePlacement:
                 broker=broker_name,
             )
         stored = self.stored_order(broker_name, broker_order_id)
+        changes = {
+            'order_id': str(broker_order_id),
+        }
+        if quantity is not None:
+            changes['quantity'] = quantity
+        if price is not None:
+            changes['price'] = str(price)
+        if trigger_price is not None:
+            changes['trigger_price'] = str(trigger_price)
         modify_request = ModifyOrderRequest(
-            {
-                'order_id': str(broker_order_id),
-                'quantity': quantity,
-            },
+            changes,
             {},
             self.order_placement.broker_names,
         )
@@ -320,10 +341,11 @@ class EnginePlacement:
         # to be made. Leaving it out sent the stored quantity while the engine recorded the new one,
         # so the engine believed a leg had been reduced while the broker still had it whole.
         modification = OrderModification(modify_request, stored)
-        modification = modification.with_quantities(
-            quantity,
-            min(modification.disclosed_quantity or 0, quantity),
-        )
+        if quantity is not None:
+            modification = modification.with_quantities(
+                quantity,
+                min(modification.disclosed_quantity or 0, quantity),
+            )
         broker_request = broker_orders.build_modify_request(
             str(broker_order_id),
             stored,
