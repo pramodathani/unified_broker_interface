@@ -58,6 +58,7 @@ class BrokerOrders:
         adapter (IdleLimitedAdapter): The session's adapter, whose pools refuse connections idle longer than `MAXIMUM_IDLE_SECONDS`.
         origin_lock (threading.Lock): Guards `last_origin`.
         last_origin (str | None): The scheme and host of the latest request sent to this broker, such as `https://api.kite.trade/`.
+        daily_count (DailyOrderCount | None): What counts every request sent to this broker against its daily cap, or None when no broker is capped.
     """
 
     BROKER_NAME = None
@@ -122,6 +123,7 @@ class BrokerOrders:
         self.session.mount('http://', self.adapter)
         self.origin_lock = threading.Lock()
         self.last_origin = None
+        self.daily_count = None
         if not self.VERIFY_CERTIFICATE and self.WARM_URL is not None:
             host = urllib.parse.urlsplit(self.WARM_URL).hostname
             warnings.filterwarnings(
@@ -608,6 +610,7 @@ class BrokerOrders:
             answer.outcome = 'unknown'
             answer.status_message = f'{type(error).__name__}: {error}'
         answer.answered_at = time.perf_counter()
+        self.count_message(answer)
         if response is not None:
             answer.status_code = response.status_code
             try:
@@ -615,6 +618,21 @@ class BrokerOrders:
             except ValueError:
                 answer.response_body = response.text[:300]
         return answer
+
+    def count_message(self, answer):
+        """Counts one request against the broker's daily cap, unless it never left the machine.
+
+        Args:
+            answer (BrokerAnswer): The answer, whose outcome is already `rejected` when the connection could not be made.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        if self.daily_count is None:
+            return
+        if answer.outcome == 'rejected' and answer.status_code is None:
+            return
+        self.daily_count.count_sent(self.BROKER_NAME)
 
     def remember_origin(self, url):
         """Remembers the scheme and host a request is sent to, so warming pings reach the same connection pool.

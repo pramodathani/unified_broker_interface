@@ -61,6 +61,9 @@ from unified_broker_interface.utilities.broker_orders.utilities.stored_order imp
     StoredOrder,
 )
 from unified_broker_interface.utilities.instrument_cache import InstrumentCache
+from unified_broker_interface.utilities.order_engine.utilities.daily_order_count import (
+    DailyOrderCount,
+)
 from unified_broker_interface.utilities.order_engine.utilities.intent_handoff import (
     IntentHandoff,
 )
@@ -107,7 +110,7 @@ class OrdersBlueprint(BaseBlueprint):
             None: This method returns nothing.
 
         Raises:
-            ValueError: When the configured broker selector or the configured order placement mode is not a known one, so a misspelt name stops the worker from starting rather than routing orders some other way.
+            ValueError: When the configured broker selector or the configured order placement mode is not a known one, or the daily order caps cannot be read, so a misspelt name stops the worker from starting rather than routing orders some other way.
         """
         super().__init__()
         self.logger = get_logger('rest_api.orders')
@@ -123,6 +126,9 @@ class OrdersBlueprint(BaseBlueprint):
                 f'unknown order placement {self.placement_mode!r}; known modes are {known_modes}'
             )
         self.instrument_cache = InstrumentCache()
+        self.order_placement.attach_daily_count(
+            DailyOrderCount.from_configuration(self.cache, self.logger),
+        )
         self.kill_switch = KillSwitch(self.broker_names)
         self.order_handoff = None
         if self.placement_mode == 'engine':

@@ -1,4 +1,4 @@
-"""Counting each broker's orders for the day, and refusing new ones before a broker's daily cap is reached."""
+"""Counting every order message sent to each broker in a day, and refusing new ones before a broker's daily cap is reached."""
 
 import datetime
 
@@ -9,18 +9,19 @@ from unified_broker_interface.utilities.order_engine.utilities.parent_store impo
     INDIA,
     RESET_HOUR,
 )
+from utilities.configurations import api_configuration
 
 COUNT_KEY_PREFIX = 'unified:orders:daily_count:'
 
 
 class DailyOrderCount:
-    """How many orders each broker has been sent today, against the cap that broker allows.
+    """How many order messages each capped broker has been sent today, against the cap that broker allows.
 
-    Some brokers refuse every order past a fixed number a day. Zerodha's cap covers every platform on the account and counts rejected orders too, and once it is reached it refuses even the order that would close a position. So the count stops new entries a little before the cap, and keeps the rest of the cap for exits.
+    Some brokers refuse every order message past a fixed number a day, and a message is a placement, a modification or a cancellation alike. Zerodha counts rejected orders too, and once its cap is reached it refuses even the order that would close a position. So the count stops new entries a little before the cap, and keeps the rest of the cap for exits.
 
-    The count lives in Redis, one key per broker, and expires at the next 06:00 IST, so it survives an engine restart and starts again every trading day. Only placements are counted, because that is what the published caps count.
+    Counting happens in `BrokerOrders.send`, which every placement, modification and cancellation passes through, whether the order engine or a REST API worker sent it, so a message cannot reach a capped broker without being counted. A request that could not connect is not counted, because it never left; one the broker answered with a refusal is. The count lives in Redis, one key per broker, and expires at the next 06:00 IST, so it is shared between processes, survives a restart and starts again every trading day.
 
-    A broker with no configured cap is never refused. A count that cannot be read does not refuse either, for the same reason the loss lockout does not: Redis being unreadable for a moment should not become an outage of its own. The failure is logged.
+    Only brokers with a configured cap are counted, so an order to any other broker costs no Redis call. A broker with no configured cap is never refused. A count that cannot be read does not refuse either, for the same reason the loss lockout does not: Redis being unreadable for a moment should not become an outage of its own. The failure is logged.
 
     Attributes:
         cache (redis.Redis): The Redis client.
@@ -55,6 +56,30 @@ class DailyOrderCount:
         self.exit_reserve = exit_reserve
         self.logger = logger
         self.refused = 0
+
+    @classmethod
+    def from_configuration(cls, cache, logger):
+        """Builds the count from the configured caps, or returns None when no broker is capped.
+
+        Args:
+            cache (redis.Redis): The Redis client.
+            logger (logging.Logger): The logger.
+
+        Returns:
+            DailyOrderCount | None: The count.
+
+        Raises:
+            ValueError: When the configured caps or exit reserve cannot be read.
+        """
+        caps = cls.read_caps(api_configuration['order_daily_caps'])
+        if not caps:
+            return None
+        return cls(
+            cache,
+            caps,
+            api_configuration['order_daily_cap_exit_reserve'],
+            logger,
+        )
 
     @staticmethod
     def read_caps(text):
@@ -122,7 +147,7 @@ class DailyOrderCount:
         return cap - int(cap * self.exit_reserve)
 
     def sent_today(self, broker_name):
-        """How many orders a broker has been sent today, or None when the count cannot be read.
+        """How many order messages a broker has been sent today, or None when the count cannot be read.
 
         Args:
             broker_name (str): The broker.
@@ -150,7 +175,7 @@ class DailyOrderCount:
 
         Args:
             broker_name (str): The broker the order would go to.
-            closes_position (bool): Whether the order closes a position, which may use the exit reserve.
+            closes_position (bool): Whether the message is about a position being closed, which may use the exit reserve.
 
         Returns:
             None: This method returns nothing.
@@ -170,14 +195,14 @@ class DailyOrderCount:
         self.refused = self.refused + 1
         if closes_position:
             reason = (
-                f'{broker_name} has been sent {sent} orders today, which is '
-                f'its daily cap of {cap}, so this order was not sent'
+                f'{broker_name} has been sent {sent} order messages today, '
+                f'which is its daily cap of {cap}, so this was not sent'
             )
         else:
             reason = (
-                f'{broker_name} has been sent {sent} orders today, and the '
-                f'last {cap - limit} of its daily cap of {cap} are kept for '
-                'orders that close a position, so this order was not sent'
+                f'{broker_name} has been sent {sent} order messages today, '
+                f'and the last {cap - limit} of its daily cap of {cap} are '
+                'kept for closing positions, so this was not sent'
             )
         raise RefusedRequestError.refusal(
             reason,
@@ -186,7 +211,7 @@ class DailyOrderCount:
         )
 
     def count_sent(self, broker_name):
-        """Counts one order sent to a broker.
+        """Counts one order message sent to a broker, when that broker is capped.
 
         Args:
             broker_name (str): The broker.
@@ -194,6 +219,8 @@ class DailyOrderCount:
         Returns:
             None: This method returns nothing.
         """
+        if broker_name not in self.caps:
+            return
         key = self.key(broker_name)
         try:
             pipeline = self.cache.pipeline(transaction=False)

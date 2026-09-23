@@ -114,7 +114,9 @@ class RiskGates:
         self.daily_count.refuse_if_capped(broker_name, closes_position)
 
     def count_sent(self, broker_name):
-        """Counts one order sent, for the order-to-trade ratio and the daily order count.
+        """Counts one order sent, for the order-to-trade ratio.
+
+        The daily order count is not kept here. It counts in `BrokerOrders.send`, where modifications and cancellations pass as well, and where a REST API worker's orders pass too.
 
         Args:
             broker_name (str): The broker.
@@ -123,8 +125,6 @@ class RiskGates:
             None: This method returns nothing.
         """
         self.ratio.count_sent(broker_name)
-        if self.daily_count is not None:
-            self.daily_count.count_sent(broker_name)
 
     def count_traded(self, broker_name):
         """Counts one order that traded, for the order-to-trade ratio.

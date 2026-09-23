@@ -4,7 +4,7 @@
 
 Some brokers refuse every order past a fixed number a day. It came up while designing the synthetic limit order book, whose whole purpose is to spend fewer of those orders, and nothing in the engine counted them: `OrderToTradeRatio` counts sends, but only in memory, so it starts again at every restart, and it never refuses anything.
 
-The caps found on 2026-09-23 were Zerodha at 5,000 a day (Kite's documentation; a 2023 forum answer said 3,000 across every platform, and the account holder confirmed 5,000 on 2026-09-24), Dhan at 7,000, Shoonya saying there is none, and the other seven publishing none. Zerodha counts placements only, rejections included; modifies and cancels do not count. Whether Dhan counts modifies was not found.
+The caps found on 2026-09-23 were Zerodha at 5,000 a day (Kite's documentation; a 2023 forum answer said 3,000 across every platform, and the account holder confirmed 5,000 on 2026-09-24), Dhan at 7,000, Shoonya saying there is none, and the other seven publishing none. A forum answer said Zerodha counts placements only, but the account holder said on 2026-09-24 that the caps they meant count placements, modifications and cancellations alike, so every message is counted for every capped broker.
 
 On 2026-09-24 every broker's own API documentation was read. Dhan's 7,000 is on the DhanHQ v2 home page, in one "Order APIs" bucket that probably includes modifies. Fyers' "Regulatory Changes (April 2026)" page caps transactional requests at 10,000 a day and explicitly counts modify, cancel and exit, which this class does not: it counts in `count_sent`, which only placements reach. Shoonya states there is no daily limit. The other six state none. The full table is in `docs/getting-started/configuration.md`.
 
@@ -27,3 +27,13 @@ A count that cannot be read does not refuse, for the same reason `LossLockout` d
 ## Where the check sits
 
 `SyntheticOrder.place_leg` calls `RiskGates.refuse_if_capped` right after `EnginePlacement.prepare` has chosen the broker and before `leg_requested` is recorded, so a refused order leaves no leg in the event log. The parent is then marked `rejected` by the ordinary refusal path, which the offline scenarios record.
+
+## Why counting moved into `BrokerOrders.send`
+
+The first version counted in `RiskGates.count_sent`, which only placements reach, and only in the engine. Once the user made clear that modifies and cancels count, that missed three paths: the engine's own `reprice_leg`, `reduce_leg` and `cancel_leg`, and the REST API's direct `modify`, `cancel` and `flatten` routes, which never pass through the engine. Every one of them ends in `BrokerOrders.send`, so the count is kept there, attached to each broker's order class by `OrderPlacement.attach_daily_count` in both the engine and each API worker. A request whose connection could not be made is not counted; anything the broker could have seen is.
+
+Only capped brokers are counted, which also keeps the offline route recordings unchanged: their configuration names no caps, so no request costs an extra Redis call.
+
+## What is refused, and what never is
+
+Refusing still happens only in the engine, where `refuse_if_capped` is asked before a placement (`place_leg`) and before a price change (`SyntheticOrder.has_room_today`, from `reprice_leg`). An entry's re-price stops where new entries stop; an exit's may use the reserve. `cancel_leg` and `reduce_leg` are never asked, because refusing a cancel could leave an unwanted order live, which is worse than exceeding a cap that the broker will enforce anyway.

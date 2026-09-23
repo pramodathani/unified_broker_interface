@@ -484,6 +484,8 @@ class SyntheticOrder:
             return False
         if not self.allowed_to_reprice(leg, reason):
             return False
+        if not self.has_room_today(leg, reason):
+            return False
         if not self.take_rate_token(leg, reason):
             return False
         try:
@@ -585,6 +587,43 @@ class SyntheticOrder:
             ),
         })
         return False
+
+    def has_room_today(self, leg, reason):
+        """Whether a change to this leg's price fits in its broker's daily order cap.
+
+        A modification counts against a broker's daily cap exactly as a placement does, so a type that re-prices an entry near the cap would spend the part of the cap kept for exits. So re-pricing an entry stops at the same point new entries do, and re-pricing an exit, such as a trailing stop ratcheting, may use the reserve. Cancels and quantity reductions are never held back here: refusing one could leave an order live that was meant to go.
+
+        A refusal is recorded against the leg and returns False, as a rate budget refusal does.
+
+        Args:
+            leg (OrderLeg): The leg to be changed.
+            reason (str): What the change was for, for the message.
+
+        Returns:
+            bool: True when the change may be sent.
+        """
+        if self.gates is None:
+            return True
+        try:
+            self.gates.refuse_if_capped(
+                leg.broker,
+                self.closes_position(leg.role),
+            )
+        except RefusedRequestError as refusal:
+            self.record({
+                'event': 'leg_update',
+                'parent_state': self.parent.state,
+                'leg_id': leg.leg_id,
+                'leg_role': leg.role,
+                'broker': leg.broker,
+                'broker_order_id': leg.broker_order_id,
+                'outcome': 'rejected',
+                'status_message': (
+                    f'{reason}; not sent: {refusal.body.get("error")}'
+                ),
+            })
+            return False
+        return True
 
     def take_rate_token(self, leg, reason):
         """Waits for the rate budget to allow one more request to this leg's broker.

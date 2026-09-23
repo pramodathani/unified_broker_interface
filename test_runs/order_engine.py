@@ -1098,7 +1098,7 @@ class OrderEngineScenarios:
                 },
             ),
             self.intents(
-                'a_broker_without_a_daily_cap_is_counted_and_never_refused',
+                'a_broker_without_a_daily_cap_is_neither_counted_nor_refused',
                 [
                     order,
                 ],
@@ -1663,6 +1663,8 @@ class OrderEngineSuite:
         event_log = RecordingEventLog()
         event_log.failing_event = scenario.get('failing_event')
         gates = self.build_gates(scenario, logger)
+        if gates is not None:
+            placement.order_placement.attach_daily_count(gates.daily_count)
         engine = OrderEngine(
             self.fake_redis,
             placement,
@@ -2929,6 +2931,8 @@ class OrderEngineSuite:
         fills=None,
         positions=None,
         restart_between_ticks=False,
+        daily_caps=None,
+        daily_sent=None,
     ):
         """Places one watching order, then walks it through a sequence of quotes.
 
@@ -2944,6 +2948,8 @@ class OrderEngineSuite:
             fills (list | None): Order updates to apply before the first tick, for a type that only acts once its legs are filled.
             positions (float | None): A net position in RELIANCE to seed, for a type that reads the account's holdings.
             restart_between_ticks (bool): Whether to rebuild every parent from its recorded events after every tick, as an engine restart does.
+            daily_caps (dict | None): Each capped broker's daily cap, or None for no daily order count.
+            daily_sent (dict | None): Each broker's order messages already sent today, written before the order is placed.
 
         Returns:
             dict: The recorded result.
@@ -2969,7 +2975,15 @@ class OrderEngineSuite:
             LossLockout(self.fake_redis, 0, logger),
             OrderToTradeRatio(),
             RepricingThrottle(throttle_seconds),
+            self.build_daily_count(
+                {
+                    'daily_caps': daily_caps,
+                    'daily_sent': daily_sent,
+                },
+                logger,
+            ),
         )
+        placement.order_placement.attach_daily_count(gates.daily_count)
         ticker = PriceTicker(
             self.fake_redis,
             parent_store,
@@ -3061,6 +3075,8 @@ class OrderEngineSuite:
             'parent_states': [parent.state for parent in parents],
             'repricing': gates.throttle.counts(),
         }
+        if daily_caps is not None:
+            result['daily_counts'] = self.shown_daily_counts()
         synthetic = request_body.get('synthetic') or {}
         if synthetic.get('type') == 'virtual_limit':
             result['held'] = [
@@ -3409,6 +3425,42 @@ class OrderEngineSuite:
                     {'quote': self.book_at(999.80, 999.85), 'at': 2},
                 ],
                 accepted,
+            ),
+            self.price_result(
+                'every_move_of_a_peg_counts_against_the_daily_cap',
+                dict(entry, synthetic={
+                    'type': 'peg',
+                    'reference': 'own_touch',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1000.20, 1000.25), 'at': 1},
+                    {'quote': self.book_at(999.80, 999.85), 'at': 2},
+                ],
+                accepted,
+                daily_caps={
+                    'flattrade': 100,
+                },
+                daily_sent={},
+            ),
+            self.price_result(
+                'a_peg_stops_moving_its_entry_inside_the_exit_reserve',
+                dict(entry, synthetic={
+                    'type': 'peg',
+                    'reference': 'own_touch',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1000.20, 1000.25), 'at': 1},
+                    {'quote': self.book_at(999.80, 999.85), 'at': 2},
+                ],
+                accepted,
+                daily_caps={
+                    'flattrade': 100,
+                },
+                daily_sent={
+                    'flattrade': 94,
+                },
             ),
             self.price_result(
                 'a_peg_sends_nothing_while_the_bid_stands_still',

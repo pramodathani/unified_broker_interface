@@ -1487,9 +1487,10 @@ way and SEBI's ten-orders-a-second threshold does too.
 
 ### The synthetic limit order book: `virtual_limit`
 
-Some brokers cap how many orders an account may send in a day: Zerodha at 5,000, Dhan at 7,000.
-A limit order that rests at the exchange and never fills still spends one. `virtual_limit` spends one only when it will
-fill. The body is an ordinary limit order with the type added:
+Some brokers cap how many order messages an account may send in a day, counting placements, modifications and
+cancellations alike: Zerodha at 5,000, Dhan at 7,000, Fyers at 10,000. A limit order that rests at the exchange and
+never fills spends two, one to place it and one to cancel it at the end. `virtual_limit` spends one, and only when it
+will fill. The body is an ordinary limit order with the type added:
 
 ```json
 {
@@ -1518,8 +1519,9 @@ on a given instrument.
 
 | | A limit resting at the exchange | `virtual_limit` |
 | --- | --- | --- |
-| Orders spent when the price never comes | 1, and another each time it is re-placed | 0 |
-| Orders spent when it fills | 1 | 1 |
+| Messages spent when the price never comes | 2: the order, and cancelling it | 0 |
+| Messages spent moving the price | 1 each time | 0 each time, since a held order is changed in the engine |
+| Messages spent when it fills | 1 | 1 |
 | Blocks margin while waiting | Yes | No |
 | Visible in the book | Yes | No |
 | Fills when sellers hit the bid but the offer never reaches the price | Yes | No, and the estimate counts it as missed |

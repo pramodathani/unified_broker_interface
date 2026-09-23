@@ -28,7 +28,7 @@ from utilities.configurations import api_configuration
 class OrderPlacement:
     """Everything an order goes through after Redis has been read: the turn, the broker, the request, the send and the answer.
 
-    One instance is built per gunicorn worker and one per order engine. It opens no store connection and makes no network call except the broker's own, so the round trips an order costs can still be counted by reading the caller.
+    One instance is built per gunicorn worker and one per order engine. It opens no store connection and makes no network call except the broker's own, so the round trips an order costs can still be counted by reading the caller. The one exception is the daily order count: when a broker is capped, each request sent to it costs one Redis pipeline more, written by `BrokerOrders.send`.
 
     Attributes:
         broker_names (list): Every broker's name, in the order the brokers take turns.
@@ -90,6 +90,18 @@ class OrderPlacement:
                 self.connection_warmers.append(warmer)
         except Exception:
             self.logger.exception('order connection warming could not start')
+
+    def attach_daily_count(self, daily_count):
+        """Makes every broker's order class count the requests it sends against the daily caps.
+
+        Args:
+            daily_count (DailyOrderCount | None): The count, or None to count nothing.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        for broker_orders in self.broker_orders.values():
+            broker_orders.daily_count = daily_count
 
     def rotation(self):
         """Lists the brokers that take turns, which is every broker not excluded by configuration.

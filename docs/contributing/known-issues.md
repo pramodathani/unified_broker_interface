@@ -200,14 +200,14 @@ or the protocol, and the table in
 
 ## Broker limits
 
-**The daily order count cannot see orders the engine did not send.** `DailyOrderCount` counts each broker's
-placements in `unified:orders:daily_count:<broker>`, but Zerodha's cap of 5,000 is on the account, and a 2023 forum answer says it covers every platform.
-An order placed from Kite's app or website, a direct-mode API worker, or `PUT /api/orders/modify` and
-`DELETE /api/orders/cancel` spends the broker's cap without appearing in the count. So the count is a floor on what the
-broker has seen, and the configured cap should be set below the broker's real one by whatever is placed outside the
-engine. Zerodha's 5,000 was confirmed by the account holder on 2026-09-24, and Dhan's 7,000 and Fyers' 10,000 were read
-from their own API documentation that day. Fyers counts modifies and cancels toward its cap and the count does not, so
-the engine's own re-pricing spends Fyers' cap unseen.
+**The daily order count cannot see orders sent from outside this system.** `DailyOrderCount` counts every
+placement, modification and cancellation this system sends to a capped broker, from the order engine and the REST API
+alike, in `unified:orders:daily_count:<broker>`. A broker's cap is on the account, so an order placed, changed or
+cancelled from the broker's own app or website spends it without appearing in the count. The count is therefore a floor
+on what the broker has seen, and the configured cap should be set below the broker's real one by whatever is done by
+hand. Zerodha's 5,000, counting modifies and cancels, was confirmed by the account holder on 2026-09-24, and Dhan's 7,000
+and Fyers' 10,000 were read from their own API documentation that day. Only the order engine refuses near a cap; a REST
+API worker in `direct` mode counts but refuses nothing.
 
 **Zerodha's quote feed runs past Kite's documented websocket limits, and has not been tried live.** On
 2026-09-16 `bin/zerodha/instruments/websocket_quotes` was changed to subscribe to every instrument in today's
