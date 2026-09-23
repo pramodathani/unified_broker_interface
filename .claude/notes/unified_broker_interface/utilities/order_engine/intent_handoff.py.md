@@ -27,3 +27,15 @@ The engine keeps the other half of that promise, by refusing to place an intent 
 `time.perf_counter()` counts from an arbitrary origin that differs between processes, so the engine's own `preparation` cannot be compared with anything this worker measured. The worker therefore replaces it with the time it measured itself, less the broker time the engine reported.
 
 What the caller is told the field means does not change: the API's own work before the request left the machine. In engine mode that work now includes the queue hop and the engine's preparation, and including them is correct, because all of it happened before the request left. The finer split belongs in the engine's own event log, where someone diagnosing a slow order will look, rather than in an answer whose shape every client depends on.
+
+## Why the API resolves the instrument and the engine does not
+
+The engine repeats most of the Redis reads the place route makes, because it has to build a broker request of its own. The question was whether it should repeat the instrument lookup as well.
+
+It does not. The route resolves the instrument and writes the id into the intent. The reason is that the lookup is not a read but a rule: no match is HTTP 404, and more than one match is HTTP 400 telling the caller to give an `instrument_id` instead. Copying thirty-six lines of that rule into the daemon would mean a future correction has to be made twice, and would eventually be made once.
+
+What remains duplicated is about sixty-eight lines of pipeline sequencing, which is I/O ordering rather than a rule, and which the two processes are entitled to differ on: the engine has no access token to check and reads no warm identifier for a cache it does not keep.
+
+The engine still reads the instrument's own catalogue entry, because it needs the order handles and the contract size at the moment it places each leg, and a bracket's stop may be placed minutes after its entry.
+
+The cost is one extra Redis round trip in engine mode for an order that names identity fields rather than an id, which the recording shows as four round trips against three. That round trip is one the route already makes in direct mode, so nothing new was added; it simply now happens before the handoff rather than after it.

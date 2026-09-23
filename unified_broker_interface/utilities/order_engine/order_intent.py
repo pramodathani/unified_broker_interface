@@ -20,20 +20,23 @@ class OrderIntent:
         reply_key (str): The Redis list the engine pushes the answer onto.
         api_worker (str): The host and process that wrote the intent, for diagnosis.
         synthetic_type (str): The kind of order the engine is being asked to run, `simple` unless the body named another.
+        instrument_id (str): The instrument the order is for, already resolved by the API worker.
         body (dict): The caller's decoded JSON body, exactly as it arrived.
     """
 
-    def __init__(self, body, timeout_seconds):
+    def __init__(self, body, instrument_id, timeout_seconds):
         """Builds the intent for one accepted order.
 
         Args:
             body (dict | None): The caller's decoded JSON body, or None when there was none.
+            instrument_id (str): The instrument the order is for, as the API worker resolved it.
             timeout_seconds (float): How long the API worker will wait for the answer, which sets the deadline.
 
         Returns:
             None: This method returns nothing.
         """
         self.intent_id = uuid.uuid4().hex
+        self.instrument_id = instrument_id
         self.created_at = time.time()
         self.deadline_at = self.created_at + timeout_seconds
         self.reply_key = REPLY_KEY_PREFIX + self.intent_id
@@ -72,5 +75,6 @@ class OrderIntent:
             'reply_key': self.reply_key,
             'api_worker': self.api_worker,
             'synthetic_type': self.synthetic_type,
+            'instrument_id': self.instrument_id,
             'body': self.body,
         }

@@ -38,20 +38,23 @@ class IntentHandoff:
         self.cache = cache
         self.timeout_seconds = timeout_seconds
 
-    def place(self, body, started_at):
+    def place(self, body, instrument_id, started_at):
         """Writes the order down for the engine and answers with what the engine did.
+
+        The instrument is resolved by the API worker rather than the engine, so the rule that decides an identity is unknown or ambiguous lives in one place. The engine still reads that instrument's catalogue entry itself, because it needs the handles and the contract size at the moment it places each leg.
 
         Args:
             body (dict | None): The caller's decoded JSON body, already validated.
+            instrument_id (str): The instrument the order is for, already resolved.
             started_at (float): `time.perf_counter()` when the request arrived.
 
         Returns:
             tuple: The answer's body (dict) and its HTTP status (int).
 
         Raises:
-            RefusedRequestError: With HTTP 503 when Redis cannot be written or read.
+            RefusedRequestError: With HTTP 503 when the order cannot be written for the engine.
         """
-        intent = OrderIntent(body, self.timeout_seconds)
+        intent = OrderIntent(body, instrument_id, self.timeout_seconds)
         try:
             self.cache.xadd(
                 INTENT_STREAM_KEY,
@@ -156,7 +159,7 @@ class IntentHandoff:
         preparation_milliseconds = (time.perf_counter() - started_at) * 1000
         return {
             'broker': None,
-            'instrument_id': None,
+            'instrument_id': intent.instrument_id,
             'tag': intent.body.get('tag'),
             'outcome': 'unknown',
             'order_id': None,

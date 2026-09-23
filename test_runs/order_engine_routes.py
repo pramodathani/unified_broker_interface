@@ -286,6 +286,25 @@ class OrderEngineScenarios:
                 }),
             ),
             self.place(
+                'identity_fields_are_resolved_before_the_intent_is_written',
+                self.bodies.by_fields(
+                    'nse',
+                    'equities',
+                    symbol='RELIANCE',
+                    dry_run=None,
+                ),
+                reply=self.accepted_answer(),
+            ),
+            self.place(
+                'unknown_identity_fields_are_never_queued',
+                self.bodies.by_fields(
+                    'nse',
+                    'equities',
+                    symbol='NOTLISTED',
+                    dry_run=None,
+                ),
+            ),
+            self.place(
                 'an_invalid_body_is_never_queued',
                 self.bodies.market_order(quantity=0),
             ),

@@ -286,30 +286,27 @@ class OrdersBlueprint(BaseBlueprint):
             raise self.refuse(str(error), 400)
 
         if self.order_handoff is not None:
-            return self.order_handoff.place(request.get_json(silent=True), started_at)
+            catalogue_key_prefix = self.catalogue_key_prefix(mapping_date_text)
+            instrument_id = self.resolve_instrument_id(
+                order,
+                mapping_date_text,
+                warm_identifier,
+                catalogue_key_prefix,
+            )
+            return self.order_handoff.place(
+                request.get_json(silent=True),
+                instrument_id,
+                started_at,
+            )
 
         rotation = self.order_placement.rotation()
-        if not mapping_date_text:
-            raise self.refuse('no instruments have been mapped yet', 503)
-        catalogue_key_prefix = f'unified:catalogue:{mapping_date_text}:'
-
-        instrument_id = order.instrument_id
-        if instrument_id is None:
-            instrument_id = self.instrument_cache.instrument_lookup(
-                mapping_date_text,
-                warm_identifier,
-                order.catalogue_segment,
-                order.catalogue_prefix,
-            )
-        if instrument_id is None:
-            instrument_id = self.find_instrument_id(order, catalogue_key_prefix)
-            self.instrument_cache.keep_instrument_lookup(
-                mapping_date_text,
-                warm_identifier,
-                order.catalogue_segment,
-                order.catalogue_prefix,
-                instrument_id,
-            )
+        catalogue_key_prefix = self.catalogue_key_prefix(mapping_date_text)
+        instrument_id = self.resolve_instrument_id(
+            order,
+            mapping_date_text,
+            warm_identifier,
+            catalogue_key_prefix,
+        )
 
         kept_texts = self.instrument_cache.instrument(
             mapping_date_text,
@@ -367,6 +364,66 @@ class OrdersBlueprint(BaseBlueprint):
             settings_texts,
             started_at,
         )
+
+    def catalogue_key_prefix(self, mapping_date_text):
+        """The prefix of today's catalogue keys, refusing the order when nothing has been mapped.
+
+        Args:
+            mapping_date_text (str | None): The mapping date as Redis holds it.
+
+        Returns:
+            str: The prefix, such as `unified:catalogue:2026-09-15:`.
+
+        Raises:
+            RefusedRequestError: With HTTP 503 when no instruments have been mapped yet.
+        """
+        if not mapping_date_text:
+            raise self.refuse('no instruments have been mapped yet', 503)
+        return f'unified:catalogue:{mapping_date_text}:'
+
+    def resolve_instrument_id(
+        self,
+        order,
+        mapping_date_text,
+        warm_identifier,
+        catalogue_key_prefix,
+    ):
+        """Finds the instrument the order is for, by its id or by the identity fields that name it.
+
+        An order that names an id needs no lookup. One that names identity fields is looked up in this worker's cache first, and only then in the catalogue, which costs the one Redis round trip an order can make beyond its two pipelines.
+
+        This is the only place the lookup happens. In engine mode the route resolves the instrument here and writes the id into the intent, so the rule that decides an identity is unknown or ambiguous lives in one place rather than in both this module and the order engine.
+
+        Args:
+            order (PlaceOrderRequest): The validated order.
+            mapping_date_text (str): The mapping date as Redis holds it.
+            warm_identifier (str | None): The current warm's identifier.
+            catalogue_key_prefix (str): The prefix of today's catalogue keys.
+
+        Returns:
+            str: The instrument id.
+
+        Raises:
+            RefusedRequestError: With HTTP 503 when Redis cannot be read, 404 when no instrument matches, and 400 when more than one does.
+        """
+        instrument_id = order.instrument_id
+        if instrument_id is None:
+            instrument_id = self.instrument_cache.instrument_lookup(
+                mapping_date_text,
+                warm_identifier,
+                order.catalogue_segment,
+                order.catalogue_prefix,
+            )
+        if instrument_id is None:
+            instrument_id = self.find_instrument_id(order, catalogue_key_prefix)
+            self.instrument_cache.keep_instrument_lookup(
+                mapping_date_text,
+                warm_identifier,
+                order.catalogue_segment,
+                order.catalogue_prefix,
+                instrument_id,
+            )
+        return instrument_id
 
     def find_instrument_id(self, order, catalogue_key_prefix):
         """Finds the instrument an order names by identity fields, in the segment's catalogue.
