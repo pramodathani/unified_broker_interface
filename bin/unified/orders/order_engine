@@ -93,6 +93,7 @@ def main():
     parser.parse_args()
 
     from utilities.configurations import api_configuration, get_cache, get_logger, get_postgres
+    from unified_broker_interface.utilities.order_engine.utilities.day_roll import DayRoll
     from unified_broker_interface.utilities.order_engine.utilities.engine_lock import EngineLock
     from unified_broker_interface.utilities.order_engine.utilities.engine_placement import EnginePlacement
     from unified_broker_interface.utilities.order_engine.utilities.clock_ticker import ClockTicker
@@ -135,8 +136,9 @@ def main():
     placement.start_connection_warmers()
 
     parent_store = ParentStore(cache)
+    recovery = EngineRecovery(cache, event_log, parent_store, placement.order_placement.broker_names, logger)
     try:
-        EngineRecovery(cache, event_log, parent_store, placement.order_placement.broker_names, logger).recover()
+        recovery.recover()
     except Exception as exception:
         # Placing new orders while the engine does not know what it already has at a broker is the
         # one thing worse than not starting, so this is fatal rather than logged and carried on from.
@@ -183,6 +185,7 @@ def main():
         gates,
         ClockTicker(parent_store, event_log, placement, logger, gates),
         PriceTicker(cache, parent_store, event_log, placement, logger, gates),
+        DayRoll(recovery, parent_store, logger),
     )
     exit_code = engine.run(stop)
     lock.release()

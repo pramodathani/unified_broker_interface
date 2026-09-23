@@ -597,6 +597,25 @@ class RecordingEventLog:
         for event in events:
             self.record(event)
 
+    def read_since_for_types(self, moment, types):
+        """Every transition kept whose order type is one of `types`.
+
+        The real one reads a longer window for the types that outlive a trading day. The stand-in keeps one run's events, so the window means nothing here and only the type filter does.
+
+        Args:
+            moment (datetime.datetime): Ignored, since the stand-in keeps only one run's events.
+            types (list): The `synthetic_type` values to read.
+
+        Returns:
+            list: The matching events, by parent and then sequence.
+        """
+        wanted = set(types or [])
+        return [
+            event
+            for event in self.read_since(moment)
+            if event.get('synthetic_type') in wanted
+        ]
+
     def read_since(self, moment):
         """Every transition kept, ordered as the table orders them.
 
@@ -3011,6 +3030,42 @@ class OrderEngineSuite:
                 accepted,
             ),
             self.clock_result(
+                'a_daily_stop_places_a_fresh_stop_in_the_morning',
+                dict(entry, synthetic={
+                    'type': 'daily_stop',
+                    'stop_price': 990,
+                    'stop_limit_price': 988,
+                    'arm_at': '09:20',
+                }),
+                [],
+                frozen + 60,
+                accepted,
+                quote=self.scenarios.quote(),
+            ),
+            self.clock_result(
+                'a_daily_stop_closes_the_position_when_the_open_gapped_past_it',
+                dict(entry, synthetic={
+                    'type': 'daily_stop',
+                    'stop_price': 990,
+                    'stop_limit_price': 988,
+                    'arm_at': '09:20',
+                }),
+                [],
+                frozen + 60,
+                accepted,
+                quote=self.scenarios.quote(
+                    last_price=960.00,
+                    depth={
+                        'buy': [
+                            {'price': 960.00, 'quantity': 100, 'orders': 1},
+                        ],
+                        'sell': [
+                            {'price': 960.05, 'quantity': 100, 'orders': 1},
+                        ],
+                    },
+                ),
+            ),
+            self.clock_result(
                 'a_square_off_cancels_what_is_resting_and_closes_what_is_held',
                 dict(entry, synthetic={
                     'type': 'square_off',
@@ -3514,6 +3569,34 @@ class OrderEngineSuite:
                 [
                     {'quote': self.book_at(1000.00, 1000.50), 'at': 0},
                     {'quote': self.book_at(1000.00, 1000.40), 'at': 1},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_multi_day_trigger_fires_on_the_day_the_level_is_touched',
+                dict(entry, synthetic={
+                    'type': 'gtt',
+                    'trigger_price': 995,
+                    'limit_price': 990,
+                    'valid_days': 30,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_multi_day_trigger_expires_once_it_has_waited_long_enough',
+                dict(entry, synthetic={
+                    'type': 'gtt',
+                    'trigger_price': 900,
+                    'limit_price': 890,
+                    'valid_days': 1,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 60 * 60 * 25},
                 ],
                 accepted,
             ),

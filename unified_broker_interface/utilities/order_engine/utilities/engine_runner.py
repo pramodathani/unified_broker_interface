@@ -61,6 +61,7 @@ class OrderEngine:
         gates=None,
         ticker=None,
         price_ticker=None,
+        day_roll=None,
     ):
         """Builds the engine.
 
@@ -77,6 +78,7 @@ class OrderEngine:
             gates (RiskGates | None): The limits every order passes.
             ticker (ClockTicker | None): What wakes the order types that are waiting for a time rather than a fill.
             price_ticker (PriceTicker | None): What hands the live quote to the order types that are watching the market.
+            day_roll (DayRoll | None): What rebuilds the parent caches when they expire at 06:00 IST.
 
         Returns:
             None: This method returns nothing.
@@ -93,6 +95,7 @@ class OrderEngine:
         self.gates = gates
         self.ticker = ticker
         self.price_ticker = price_ticker
+        self.day_roll = day_roll
         self.placed = 0
         self.refused = 0
         self.expired = 0
@@ -180,6 +183,8 @@ class OrderEngine:
                     self.ticker.tick()
                 if self.price_ticker is not None and self.price_ticker.due():
                     self.price_ticker.tick()
+                if self.day_roll is not None and self.day_roll.due():
+                    self.day_roll.roll()
                 backoff = MINIMUM_BACKOFF_SECONDS
             except Exception as exception:
                 self.logger.error(
@@ -206,6 +211,11 @@ class OrderEngine:
                 f'Prices: {self.price_ticker.ticks} ticks, '
                 f'{self.price_ticker.quotes_read} quotes read, '
                 f'{self.price_ticker.acted} parents acted on one.'
+            )
+        if self.day_roll is not None and self.day_roll.rolls:
+            self.logger.info(
+                f'The day rolled over {self.day_roll.rolls} time(s) while '
+                'this engine was running.'
             )
         if self.gates is not None:
             self.logger.info(f'Risk gates: {self.gates.counts()}.')

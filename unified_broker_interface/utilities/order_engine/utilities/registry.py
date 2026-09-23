@@ -23,8 +23,12 @@ from unified_broker_interface.utilities.order_engine.freeze_slicer import (
 from unified_broker_interface.utilities.order_engine.good_till_time import (
     GoodTillTime,
 )
+from unified_broker_interface.utilities.order_engine.daily_stop import DailyStop
 from unified_broker_interface.utilities.order_engine.discretionary import (
     Discretionary,
+)
+from unified_broker_interface.utilities.order_engine.good_till_triggered import (
+    GoodTillTriggered,
 )
 from unified_broker_interface.utilities.order_engine.grid import Grid
 from unified_broker_interface.utilities.order_engine.hidden_stop import (
@@ -120,4 +124,6 @@ SYNTHETIC_ORDER_CLASSES = {
     AtrTrail.SYNTHETIC_TYPE: AtrTrail,
     SquareOff.SYNTHETIC_TYPE: SquareOff,
     Accumulation.SYNTHETIC_TYPE: Accumulation,
+    GoodTillTriggered.SYNTHETIC_TYPE: GoodTillTriggered,
+    DailyStop.SYNTHETIC_TYPE: DailyStop,
 }

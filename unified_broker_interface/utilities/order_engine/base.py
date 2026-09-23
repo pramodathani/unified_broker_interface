@@ -50,6 +50,7 @@ class SyntheticOrder:
         SYNTHETIC_TYPE (str): The name the caller's `synthetic.type` names this class by.
         WANTS_CLOCK (bool): Whether this type is waiting for a time as well as for a fill, and so wants a tick about once a second.
         WANTS_PRICES (bool): Whether this type is watching the market, and so wants the live quote about once a second.
+        CARRIES_OVERNIGHT (bool): Whether a parent of this type outlives the trading day, so that recovery reads its events from further back than this morning.
         parent (ParentOrder): The parent being run.
         placement (EnginePlacement): What reads Redis, chooses a broker and sends.
         event_log (SyntheticOrderEventLog): Where transitions are recorded.
@@ -60,6 +61,7 @@ class SyntheticOrder:
     SYNTHETIC_TYPE = None
     WANTS_CLOCK = False
     WANTS_PRICES = False
+    CARRIES_OVERNIGHT = False
 
     def __init__(
         self,
