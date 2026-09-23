@@ -50,6 +50,7 @@ UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_PER_SECOND=8
 UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_PER_BROKER_PER_SECOND=5
 UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_WAIT_SECONDS=1
 UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_LOSS_LIMIT=0
+UNIFIED_BROKER_INTERFACE_API_ORDER_FLATTEN_WAIT_SECONDS=5
 
 # Optional: the shortest time, in seconds, between ensure_session login attempts for one broker
 UNIFIED_BROKER_INTERFACE_LOGIN_MIN_INTERVAL=300
@@ -80,6 +81,10 @@ closed.
 
 These are limits on placements. `PUT /api/orders/modify` and `DELETE /api/orders/cancel` still go straight from an API
 worker to a broker and are not counted against the rate budget.
+
+`..._ORDER_FLATTEN_WAIT_SECONDS` is how long `POST /api/orders/flatten` re-reads the brokers' order books waiting for
+its cancels to be confirmed before it closes any position. Waiting matters more than being quick: a protective order
+still live when its position closes will fill afterwards and open a new position the other way.
 
 !!! danger "`.env` holds live trading credentials"
 

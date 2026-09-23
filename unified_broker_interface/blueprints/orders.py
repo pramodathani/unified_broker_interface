@@ -30,6 +30,9 @@ from unified_broker_interface.utilities.broker_orders.utilities.cancel_order_req
 from unified_broker_interface.utilities.broker_orders.utilities.instrument import (
     Instrument,
 )
+from unified_broker_interface.utilities.broker_orders.utilities.kill_switch import (
+    KillSwitch,
+)
 from unified_broker_interface.utilities.broker_orders.utilities.modify_order_request import (
     ModifyOrderRequest,
 )
@@ -83,6 +86,7 @@ class OrdersBlueprint(BaseBlueprint):
         placement_mode (str): `direct` when this worker sends orders to brokers itself, or `engine` when it hands them to the order engine, named by `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT`.
         order_handoff (IntentHandoff | None): The handoff to the order engine in `engine` mode, and None in `direct` mode, which is what `place_order` branches on.
         instrument_cache (InstrumentCache): This worker's copy of the catalogue data placements and modifications have read under the current warm.
+        kill_switch (KillSwitch): What decides, from decoded order books and positions, what `POST /flatten` cancels and closes.
         logger (logging.Logger): The logger for failures that do not change an answer.
     """
 
@@ -93,6 +97,7 @@ class OrdersBlueprint(BaseBlueprint):
         ('/place', 'place', ['POST']),
         ('/modify', 'modify', ['PUT']),
         ('/cancel', 'cancel', ['DELETE']),
+        ('/flatten', 'flatten', ['POST']),
     ]
 
     def __init__(self):
@@ -118,6 +123,7 @@ class OrdersBlueprint(BaseBlueprint):
                 f'unknown order placement {self.placement_mode!r}; known modes are {known_modes}'
             )
         self.instrument_cache = InstrumentCache()
+        self.kill_switch = KillSwitch(self.broker_names)
         self.order_handoff = None
         if self.placement_mode == 'engine':
             self.order_handoff = IntentHandoff(
@@ -1056,6 +1062,420 @@ class OrdersBlueprint(BaseBlueprint):
                 'broker': answer.broker_milliseconds(),
             },
         }), answer.http_status()
+
+    def flatten(self):
+        """Cancels every open order at every broker, waits for the cancels, then closes every position.
+
+        This is the panic button. The JSON body must carry `confirm` set to `FLATTEN`, which exists so that a stray request cannot unwind an account, and may carry `dry_run` to report what would happen without sending anything.
+
+        The order of the two halves is the whole point. A resting stop or target that is still live when its position is closed will fill afterwards and open a new position the other way, turning an attempt to go flat into a trade nobody chose. So every open order is cancelled first, the brokers' own order books are re-read until they agree the orders are gone or `UNIFIED_BROKER_INTERFACE_API_ORDER_FLATTEN_WAIT_SECONDS` runs out, and only then are closing orders sent.
+
+        Positions are read from each broker's own `<broker>:portfolio:positions` rather than from the merged unified document, because a closing order has to go to the broker that actually holds the position, and the unified document deliberately merges a position across brokers.
+
+        A failure to cancel does not stop the closing half, but it is reported and the answer says the account may not be flat. Nothing is retried: a panic button that retries is a panic button that takes longer to finish.
+
+        Returns:
+            tuple: The Flask JSON response (flask.Response) and its HTTP status (int), which is 200 when everything asked for was done or for a dry run, 207 when some part failed, 400 without the confirmation, 401 for a missing, wrong or expired access token, and 503 when Redis cannot be read.
+        """
+        started_at = time.perf_counter()
+        try:
+            body, status = self.flatten_everything(started_at)
+        except RefusedRequestError as refusal:
+            body, status = refusal.body, refusal.status
+        return jsonify(body), status
+
+    def flatten_everything(self, started_at):
+        """Does the work of `flatten`, raising a refusal for anything answered without calling a broker.
+
+        Args:
+            started_at (float): `time.perf_counter()` when the request arrived.
+
+        Returns:
+            tuple: The answer's body (dict) and its HTTP status (int).
+
+        Raises:
+            RefusedRequestError: For a request answered without calling a broker.
+        """
+        access_token = request.headers.get('access-token')
+        if not access_token:
+            raise self.refuse('Access token is required', 401)
+        body = request.get_json(silent=True) or {}
+        if body.get('confirm') != 'FLATTEN':
+            raise self.refuse(
+                'flattening cancels every order and closes every position, so '
+                'it needs confirm set to FLATTEN',
+                400,
+            )
+        dry_run = bool(body.get('dry_run'))
+
+        try:
+            pipeline = self.cache.pipeline(transaction=False)
+            pipeline.hget('last_login', 'unified_broker_interface')
+            pipeline.hmget('last_login', self.broker_names)
+            pipeline.hmget('settings', self.broker_names)
+            for broker_name in self.broker_names:
+                pipeline.hgetall(f'{broker_name}:orders:orders')
+            for broker_name in self.broker_names:
+                pipeline.hgetall(f'{broker_name}:portfolio:positions')
+            replies = pipeline.execute()
+        except redis.RedisError as error:
+            raise self.redis_unreadable(error)
+        self.check_access_token(access_token, replies[0])
+        login_texts = replies[1]
+        settings_texts = replies[2]
+        broker_count = len(self.broker_names)
+        order_books = self.decode_books(replies[3:3 + broker_count])
+        position_books = self.decode_books(
+            replies[3 + broker_count:3 + broker_count * 2],
+        )
+
+        cancelling = self.kill_switch.orders_to_cancel(order_books)
+        closing = self.kill_switch.positions_to_close(position_books)
+        if dry_run:
+            return {
+                'dry_run': True,
+                'would_cancel': self.shown_cancels(cancelling),
+                'would_close': closing,
+                'timing_ms': {
+                    'preparation': round(
+                        (time.perf_counter() - started_at) * 1000,
+                        3,
+                    ),
+                },
+            }, 200
+
+        cancelled = self.cancel_every_order(
+            cancelling,
+            login_texts,
+            settings_texts,
+        )
+        still_open = self.wait_for_cancels(cancelling)
+        closed = self.close_every_position(closing, started_at)
+
+        # A close that was sent and refused leaves the position exactly where it was, so it counts
+        # as a failure although the request itself went out. A cancel is judged only on whether the
+        # order is still live, which the wait above has already established.
+        failures = [answer for answer in cancelled if not answer['sent']]
+        for answer in closed:
+            if not answer['sent'] or answer.get('outcome') != 'accepted':
+                failures.append(answer)
+        status = 200 if not failures and not still_open else 207
+        return {
+            'cancelled': cancelled,
+            'still_open_after_waiting': [
+                f'{broker}:{order_id}' for broker, order_id in still_open
+            ],
+            'closed': closed,
+            'flat': not failures and not still_open,
+            'timing_ms': {
+                'preparation': round(
+                    (time.perf_counter() - started_at) * 1000,
+                    3,
+                ),
+            },
+        }, status
+
+    def decode_books(self, replies):
+        """Each broker's hash of JSON entries, decoded, by broker name.
+
+        Args:
+            replies (list): One `HGETALL` reply per broker, in `broker_names` order.
+
+        Returns:
+            dict: Broker names to their decoded entries.
+        """
+        books = {}
+        for position, broker_name in enumerate(self.broker_names):
+            entries = replies[position] or {}
+            decoded = {}
+            for key, text in entries.items():
+                try:
+                    entry = json.loads(text)
+                except (TypeError, ValueError):
+                    continue
+                if isinstance(entry, dict):
+                    decoded[key] = entry
+            books[broker_name] = decoded
+        return books
+
+    def shown_cancels(self, cancelling):
+        """The orders that would be cancelled, without the brokers' whole stored entries.
+
+        Args:
+            cancelling (list): What `KillSwitch.orders_to_cancel` returned.
+
+        Returns:
+            list: One dictionary per order, with `broker`, `order_id` and `status`.
+        """
+        shown = []
+        for order in cancelling:
+            shown.append({
+                'broker': order['broker'],
+                'order_id': order['order_id'],
+                'status': order['status'],
+            })
+        return shown
+
+    def cancel_every_order(self, cancelling, login_texts, settings_texts):
+        """Sends a cancel for every open order, reporting each rather than stopping at the first failure.
+
+        Args:
+            cancelling (list): What `KillSwitch.orders_to_cancel` returned.
+            login_texts (list): Every broker's login as Redis holds it.
+            settings_texts (list): Every broker's settings as Redis holds them.
+
+        Returns:
+            list: One dictionary per order, with `broker`, `order_id`, `sent`, `outcome` and `status_message`.
+        """
+        answers = []
+        for order in cancelling:
+            broker_name = order['broker']
+            broker_orders = self.broker_orders[broker_name]
+            position = self.broker_names.index(broker_name)
+            login = broker_orders.decode_login(login_texts[position])
+            settings = broker_orders.decode_settings(settings_texts[position])
+            answers.append(self.cancel_one_order(
+                broker_orders,
+                order,
+                login,
+                settings,
+            ))
+        return answers
+
+    def cancel_one_order(self, broker_orders, order, login, settings):
+        """Cancels one order and reports what happened, without raising.
+
+        Args:
+            broker_orders (BrokerOrders): The broker's order class.
+            order (dict): One entry from `KillSwitch.orders_to_cancel`.
+            login (object): The broker's decoded login.
+            settings (dict): The broker's decoded settings.
+
+        Returns:
+            dict: What happened, with `broker`, `order_id`, `sent`, `outcome` and `status_message`.
+        """
+        answer = {
+            'broker': order['broker'],
+            'order_id': order['order_id'],
+            'sent': False,
+            'outcome': None,
+            'status_message': None,
+        }
+        problem = broker_orders.cancel_problem(login, settings)
+        if problem is not None:
+            answer['status_message'] = problem
+            return answer
+        try:
+            broker_request = broker_orders.build_cancel_request(
+                order['order_id'],
+                StoredOrder(order['entry']),
+                login,
+                settings,
+            )
+        except (OrderNotReadyError, KeyError, TypeError, ValueError) as error:
+            answer['status_message'] = f'the cancel could not be built: {error}'
+            return answer
+        try:
+            sent = broker_orders.send_cancel(broker_request)
+        except Exception as error:
+            answer['status_message'] = f'the cancel could not be sent: {error}'
+            return answer
+        answer['sent'] = True
+        answer['outcome'] = sent.outcome
+        answer['status_message'] = sent.status_message
+        return answer
+
+    def wait_for_cancels(self, cancelling):
+        """Re-reads the brokers' order books until the cancelled orders are gone, or time runs out.
+
+        Waiting matters more than being quick. Closing a position while one of its protective orders is still live at the exchange re-opens the position in the other direction, which is the failure this whole route exists to avoid.
+
+        Args:
+            cancelling (list): What `KillSwitch.orders_to_cancel` returned.
+
+        Returns:
+            list: The `(broker, order_id)` pairs still live when the wait ended.
+        """
+        if not cancelling:
+            return []
+        deadline = time.perf_counter() + api_configuration[
+            'order_flatten_wait_seconds'
+        ]
+        still_open = [
+            (order['broker'], order['order_id']) for order in cancelling
+        ]
+        while still_open and time.perf_counter() < deadline:
+            time.sleep(0.25)
+            try:
+                pipeline = self.cache.pipeline(transaction=False)
+                for broker_name in self.broker_names:
+                    pipeline.hgetall(f'{broker_name}:orders:orders')
+                order_books = self.decode_books(pipeline.execute())
+            except redis.RedisError:
+                continue
+            still_open = self.kill_switch.still_open(order_books, cancelling)
+        return still_open
+
+    def close_every_position(self, closing, started_at):
+        """Sends a closing order for every position that is not flat, at the broker holding it.
+
+        Args:
+            closing (list): What `KillSwitch.positions_to_close` returned.
+            started_at (float): `time.perf_counter()` when the request arrived.
+
+        Returns:
+            list: One dictionary per position, with what was sent and what happened.
+        """
+        answers = []
+        for position in closing:
+            answers.append(self.close_one_position(position, started_at))
+        return answers
+
+    def close_one_position(self, position, started_at):
+        """Closes one position at the broker holding it, without raising.
+
+        Args:
+            position (dict): One entry from `KillSwitch.positions_to_close`.
+            started_at (float): `time.perf_counter()` when the request arrived.
+
+        Returns:
+            dict: What happened, with the position, `sent`, `outcome` and `status_message`.
+        """
+        answer = dict(position)
+        answer['sent'] = False
+        answer['outcome'] = None
+        answer['status_message'] = None
+        instrument_id = self.instrument_for_broker_token(
+            position['broker'],
+            position['instrument_token'],
+        )
+        if instrument_id is None:
+            answer['status_message'] = (
+                "the broker's token does not name exactly one mapped "
+                'instrument, so this position was not closed'
+            )
+            return answer
+        body = {
+            'instrument_id': instrument_id,
+            'transaction_type': position['transaction_type'],
+            'product': self.closing_product(position['product']),
+            'order_type': 'MARKET',
+            'quantity': position['close_quantity'],
+        }
+        try:
+            sent, status = self.place_closing_order(
+                body,
+                instrument_id,
+                position['broker'],
+                started_at,
+            )
+        except RefusedRequestError as refusal:
+            answer['status_message'] = refusal.body.get('error')
+            return answer
+        except Exception as error:
+            answer['status_message'] = f'the close could not be sent: {error}'
+            return answer
+        answer['sent'] = True
+        answer['outcome'] = sent.get('outcome')
+        answer['order_id'] = sent.get('order_id')
+        answer['status_message'] = sent.get('status_message')
+        answer['http_status'] = status
+        return answer
+
+    def closing_product(self, product):
+        """The product a closing order carries, on the vocabulary `POST /place` takes.
+
+        Args:
+            product (str | None): The position's product, on the shared vocabulary.
+
+        Returns:
+            str: `CNC`, `MIS` or `NRML`.
+        """
+        named = str(product or '').lower()
+        if named == 'delivery':
+            return 'CNC'
+        if named == 'intraday':
+            return 'MIS'
+        return 'NRML'
+
+    def instrument_for_broker_token(self, broker_name, broker_token):
+        """The one instrument a broker's token names today, or None when it is not exactly one.
+
+        Args:
+            broker_name (str): The broker.
+            broker_token (str | None): The broker's own instrument token.
+
+        Returns:
+            str | None: The instrument id.
+        """
+        if not broker_token:
+            return None
+        try:
+            stored = self.cache.hget(
+                'unified:broker_tokens',
+                f'{broker_name}:{broker_token}',
+            )
+        except redis.RedisError:
+            return None
+        if not stored:
+            return None
+        try:
+            instrument_ids = json.loads(stored)
+        except ValueError:
+            return None
+        if not isinstance(instrument_ids, list) or len(instrument_ids) != 1:
+            return None
+        return str(instrument_ids[0])
+
+    def place_closing_order(self, body, instrument_id, broker_name, started_at):
+        """Places one closing order at a named broker, through whichever placement mode is configured.
+
+        Args:
+            body (dict): The order body.
+            instrument_id (str): The instrument.
+            broker_name (str): The broker holding the position.
+            started_at (float): `time.perf_counter()` when the request arrived.
+
+        Returns:
+            tuple: The answer's body (dict) and its HTTP status (int).
+
+        Raises:
+            RefusedRequestError: For an order answered without calling a broker.
+        """
+        order = PlaceOrderRequest(body)
+        if self.order_handoff is not None:
+            return self.order_handoff.place(
+                dict(body, broker=broker_name),
+                instrument_id,
+                started_at,
+            )
+        rotation = self.order_placement.rotation()
+        catalogue_key_prefix = self.catalogue_key_prefix(
+            self.cache.get('unified:catalogue:current_date'),
+        )
+        pipeline = self.cache.pipeline(transaction=False)
+        pipeline.hget(catalogue_key_prefix + 'identity', instrument_id)
+        pipeline.hget(catalogue_key_prefix + 'order_handles', instrument_id)
+        pipeline.hget(catalogue_key_prefix + 'contract_sizes', instrument_id)
+        pipeline.hmget('last_login', self.broker_names)
+        pipeline.hmget('settings', self.broker_names)
+        replies = pipeline.execute()
+        instrument = Instrument.decoded(
+            instrument_id,
+            replies[0],
+            replies[1],
+            replies[2],
+        )
+        prepared = self.order_placement.prepare(
+            order,
+            instrument,
+            rotation,
+            [],
+            replies[3],
+            replies[4],
+            broker_name,
+        )
+        return self.order_placement.send(prepared, started_at)
 
     def find_stored_order(self, order_request, order_texts):
         """Finds the one broker whose order book holds the order.

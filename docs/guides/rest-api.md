@@ -50,6 +50,7 @@ come from the environment. All seven variables are optional, and each is read on
 | `POST` | `/api/orders/place` | `access-token` header | Places one order at the broker the configured selector chooses, see [Placing an order](#placing-an-order) |
 | `PUT` | `/api/orders/modify` | `access-token` header | Changes one open order at the broker that holds it, see [Modifying an order](#modifying-an-order) |
 | `DELETE` | `/api/orders/cancel` | `access-token` header | Cancels one order at the broker that holds it, see [Cancelling an order](#cancelling-an-order) |
+| `POST` | `/api/orders/flatten` | `access-token` header | Cancels every open order, waits, then closes every position, see [Flattening everything](#flattening-everything) |
 
 Errors come back as `{"error": "…"}`. A refused token is `401`, with a message saying whether it
 was missing, not the token in force, or expired. A detail collection with nothing in it is `404`.
@@ -1166,3 +1167,39 @@ place of the outcome.
 | `404` | | No broker's order book in Redis holds the order id |
 | `409` | | The order is already `COMPLETE`, `CANCELLED`, `REJECTED` or `EXPIRED`, or two brokers hold the id |
 | `503` | | Redis cannot be read, or it holds no login or settings for the broker, or no segment for a Groww order |
+
+## Flattening everything
+
+`POST /api/orders/flatten` is the panic button. It cancels every open order at every broker, waits until the brokers'
+own order books agree those orders are gone, and only then closes every position that is not flat.
+
+!!! danger "This sends real orders that close real positions"
+
+    The body must carry `confirm` set to `FLATTEN`, which exists so that a stray request cannot unwind an account.
+    Send it with `dry_run` first to see what it would do.
+
+```bash
+curl -s -X POST localhost:8080/api/orders/flatten -H "access-token: $TOKEN" -H 'Content-Type: application/json' \
+    -d '{"confirm": "FLATTEN", "dry_run": true}'
+```
+
+**The order of the two halves is the whole point.** A stop or a target still resting at the exchange when its position
+is closed will fill afterwards and open a new position in the opposite direction, turning an attempt to go flat into a
+trade nobody chose. So the cancels go first, the order books are re-read until they confirm, and the closes follow.
+`UNIFIED_BROKER_INTERFACE_API_ORDER_FLATTEN_WAIT_SECONDS` bounds that wait.
+
+Positions come from each broker's own `<broker>:portfolio:positions` rather than from the merged document
+[`GET /api/portfolio/positions`](#positions) answers, because a closing order has to go to the broker that actually
+holds the position and the merged document deliberately combines them. Only `NET` positions are closed; a broker that
+reports both bases would otherwise be traded twice.
+
+Nothing is retried, because a panic button that retries is a panic button that takes longer to finish. The answer says
+what was cancelled, what is `still_open_after_waiting`, what was closed and whether the account is `flat`.
+
+| Status | Meaning |
+| --- | --- |
+| `200` | Everything asked for was done, or a dry run |
+| `207` | Some part was not: a cancel never confirmed, a position whose broker token names no single instrument, or a closing order the broker refused, where the request went out but the position is still there |
+| `400` | The body did not carry `confirm` set to `FLATTEN` |
+| `401` | The access token is missing, wrong or expired |
+| `503` | Redis cannot be read |

@@ -212,6 +212,57 @@ class OrderPlacement:
             skipped=skipped,
         )
 
+    def choose_named_broker(
+        self,
+        order,
+        instrument,
+        broker_name,
+        login_texts,
+        settings_texts,
+    ):
+        """Uses the broker the caller named, rather than the one the selector would rank first.
+
+        Closing a position has to go to the broker that holds it, and every leg of a bracket has to go to the broker its entry went to. Neither is something a selector can decide, so both name the broker instead.
+
+        The broker still has to be able to take the order. Skipping that check would send an order to a broker whose market listing does not cover the instrument, which fails at the broker rather than here and with a worse message.
+
+        Args:
+            order (PlaceOrderRequest): The validated order.
+            instrument (Instrument): The tradeable instrument.
+            broker_name (str): The broker the order must go to.
+            login_texts (list): Every broker's login as Redis holds it, in `broker_names` order.
+            settings_texts (list): Every broker's settings as Redis holds them, in `broker_names` order.
+
+        Returns:
+            tuple: `(broker_orders, skipped)`, where `skipped` is always empty because no broker was passed over.
+
+        Raises:
+            RefusedRequestError: With HTTP 503 when the named broker is not one this API knows, or cannot take the order.
+        """
+        broker_orders = self.broker_orders.get(broker_name)
+        if broker_orders is None:
+            raise RefusedRequestError.refusal(
+                f'{broker_name} is not a broker this API places orders at',
+                503,
+                broker=broker_name,
+            )
+        position = self.broker_names.index(broker_name)
+        reason = broker_orders.place_skip_reason(
+            order,
+            instrument,
+            instrument.handles.get(broker_name),
+            broker_orders.decode_login(login_texts[position]),
+            broker_orders.decode_settings(settings_texts[position]),
+        )
+        if reason is not None:
+            raise RefusedRequestError.refusal(
+                f'{broker_name} cannot take this order: {reason}',
+                503,
+                broker=broker_name,
+                instrument_id=instrument.instrument_id,
+            )
+        return broker_orders, []
+
     def prepare(
         self,
         order,
@@ -220,6 +271,7 @@ class OrderPlacement:
         selector_replies,
         login_texts,
         settings_texts,
+        broker_name=None,
     ):
         """Chooses the broker and builds the request, without sending anything.
 
@@ -230,6 +282,7 @@ class OrderPlacement:
             selector_replies (list): The replies to the commands the broker selector queued, in the order it queued them.
             login_texts (list): Every broker's login as Redis holds it, in `broker_names` order.
             settings_texts (list): Every broker's settings as Redis holds them, in `broker_names` order.
+            broker_name (str | None): The broker the order must go to, or None to let the selector choose.
 
         Returns:
             PreparedPlacement: The chosen broker and the request built for it.
@@ -242,20 +295,29 @@ class OrderPlacement:
             raise RefusedRequestError.refusal(message, 400)
         self.check_contract_size(order, instrument)
 
-        ranked_brokers = self.broker_selector.ranked_brokers(
-            order,
-            instrument,
-            rotation,
-            selector_replies,
-        )
-        broker_orders, skipped = self.choose_broker(
-            order,
-            instrument,
-            rotation,
-            ranked_brokers,
-            login_texts,
-            settings_texts,
-        )
+        if broker_name is None:
+            ranked_brokers = self.broker_selector.ranked_brokers(
+                order,
+                instrument,
+                rotation,
+                selector_replies,
+            )
+            broker_orders, skipped = self.choose_broker(
+                order,
+                instrument,
+                rotation,
+                ranked_brokers,
+                login_texts,
+                settings_texts,
+            )
+        else:
+            broker_orders, skipped = self.choose_named_broker(
+                order,
+                instrument,
+                broker_name,
+                login_texts,
+                settings_texts,
+            )
         broker_name = broker_orders.BROKER_NAME
         position = self.broker_names.index(broker_name)
         handle = instrument.handles.get(broker_name)

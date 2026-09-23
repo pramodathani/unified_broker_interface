@@ -51,6 +51,14 @@ test page, and a login check against the live brokers.
     `test_runs/fixtures/order_engine.jsonl`. The single-engine lock is checked directly, because losing it
     depends on a clock the loop owns.
 
+    **`order_flatten.py`** - `POST /api/orders/flatten`, the panic button, run in-process against the same
+    stand-in with every broker call stubbed. Each scenario keeps the status, the body, every broker request **in the
+    order it was sent** and the Redis round trips, and compares them with `test_runs/fixtures/order_flatten.jsonl`.
+    The ordering is the point: a cancel appearing after a close would change the recording, and that ordering is the
+    whole reason the route exists. The brokers' order books report the cancelled orders as `CANCELLED` from the second
+    read onward, which is what the pollers do a moment after a cancel lands; a scenario can leave them open instead,
+    to check what the route says when a cancel is never confirmed.
+
     **`connection_warming.py`** - the broker connection idle limit and connection warming, against a local
     HTTP server on 127.0.0.1 that answers warming pings by resetting the connection, closing it straight after
     answering or a moment later, answering with an error or a cookie, or answering too slowly, and that drops
@@ -82,6 +90,8 @@ test page, and a login check against the live brokers.
     python -m test_runs.order_engine_routes --record
     python -m test_runs.order_engine
     python -m test_runs.order_engine --record
+    python -m test_runs.order_flatten
+    python -m test_runs.order_flatten --record
     ```
 
 === "Safe - infrastructure"
