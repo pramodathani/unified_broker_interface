@@ -24,17 +24,17 @@ import requests
 
 from test_runs import order_engine_routes
 from test_runs import order_routes
-from unified_broker_interface.utilities.order_engine import engine_lock
-from unified_broker_interface.utilities.order_engine.engine_lock import EngineLock
-from unified_broker_interface.utilities.order_engine.engine_placement import (
+from unified_broker_interface.utilities.order_engine.utilities import engine_lock
+from unified_broker_interface.utilities.order_engine.utilities.engine_lock import EngineLock
+from unified_broker_interface.utilities.order_engine.utilities.engine_placement import (
     EnginePlacement,
 )
-from unified_broker_interface.utilities.order_engine.engine_runner import OrderEngine
-from unified_broker_interface.utilities.order_engine.intent_handoff import (
+from unified_broker_interface.utilities.order_engine.utilities.engine_runner import OrderEngine
+from unified_broker_interface.utilities.order_engine.utilities.intent_handoff import (
     INTENT_STREAM_FIELD,
     INTENT_STREAM_KEY,
 )
-from unified_broker_interface.utilities.order_engine.order_intent import OrderIntent
+from unified_broker_interface.utilities.order_engine.utilities.order_intent import OrderIntent
 from utilities.configurations import api_configuration
 
 FIXTURE_PATH = (

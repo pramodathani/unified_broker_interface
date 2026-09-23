@@ -6,10 +6,10 @@ import time
 from unified_broker_interface.utilities.broker_orders.utilities.refused_request import (
     RefusedRequestError,
 )
-from unified_broker_interface.utilities.order_engine.engine_lock import (
+from unified_broker_interface.utilities.order_engine.utilities.engine_lock import (
     REFRESH_SECONDS,
 )
-from unified_broker_interface.utilities.order_engine.intent_handoff import (
+from unified_broker_interface.utilities.order_engine.utilities.intent_handoff import (
     INTENT_STREAM_FIELD,
     INTENT_STREAM_KEY,
 )

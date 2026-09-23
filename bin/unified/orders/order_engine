@@ -63,9 +63,9 @@ def main():
     parser.parse_args()
 
     from utilities.configurations import api_configuration, get_cache, get_logger
-    from unified_broker_interface.utilities.order_engine.engine_lock import EngineLock
-    from unified_broker_interface.utilities.order_engine.engine_placement import EnginePlacement
-    from unified_broker_interface.utilities.order_engine.engine_runner import OrderEngine
+    from unified_broker_interface.utilities.order_engine.utilities.engine_lock import EngineLock
+    from unified_broker_interface.utilities.order_engine.utilities.engine_placement import EnginePlacement
+    from unified_broker_interface.utilities.order_engine.utilities.engine_runner import OrderEngine
 
     logger = get_logger("unified.order_engine")
     cache = get_cache()

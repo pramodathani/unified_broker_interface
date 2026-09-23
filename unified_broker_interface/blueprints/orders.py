@@ -58,7 +58,7 @@ from unified_broker_interface.utilities.broker_orders.utilities.stored_order imp
     StoredOrder,
 )
 from unified_broker_interface.utilities.instrument_cache import InstrumentCache
-from unified_broker_interface.utilities.order_engine.intent_handoff import (
+from unified_broker_interface.utilities.order_engine.utilities.intent_handoff import (
     IntentHandoff,
 )
 from unified_broker_interface.utilities.unified_documents import read_document

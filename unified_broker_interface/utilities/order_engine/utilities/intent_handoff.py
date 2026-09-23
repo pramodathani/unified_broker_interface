@@ -8,7 +8,7 @@ import redis
 from unified_broker_interface.utilities.broker_orders.utilities.refused_request import (
     RefusedRequestError,
 )
-from unified_broker_interface.utilities.order_engine.order_intent import OrderIntent
+from unified_broker_interface.utilities.order_engine.utilities.order_intent import OrderIntent
 
 INTENT_STREAM_KEY = 'unified:orders:intents:stream'
 INTENT_STREAM_FIELD = 'intent'

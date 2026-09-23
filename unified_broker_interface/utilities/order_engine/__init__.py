@@ -2,5 +2,7 @@
 
 An order placed through the engine outlives the HTTP request that asked for it, which is what lets it become a bracket, an OCO pair, a chaser or any other type whose behaviour is a reaction to a later fill, price or clock tick.
 
-`order_intent.py` holds what an API worker writes down, and `intent_handoff.py` holds the writing and the wait for the answer. The engine that reads them is `bin/unified/orders/order_engine`.
+`base.py` holds `SyntheticOrder`, the mechanism every order type shares: how a parent is started, how a leg is recorded before it is sent, and how a broker's answer becomes a state change. Each other file at this level holds one order type, `simple.py` being the plain order that is the degenerate case of all of them. `utilities/` holds the intent, the parent order and its legs, the event log, the Redis caches, the single-engine lock and the loop that reads the intent stream.
+
+The daemon that runs all of this is `bin/unified/orders/order_engine`.
 """
