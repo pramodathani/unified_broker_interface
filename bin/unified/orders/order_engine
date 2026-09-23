@@ -35,9 +35,15 @@ day that is past its limit costs nothing; it is off unless `UNIFIED_BROKER_INTER
 set, and the engine says so at startup when it is not. The rate budget is a token bucket, global and per broker, taken
 after the leg has been written down and before its request is sent, defaulting well under SEBI's ten orders a second;
 a burst waits for a token rather than being refused, and only a burst outlasting the whole wait is refused. The
-order-to-trade ratio is counted per broker and reported, and is what Stage 8's re-pricing types will consult. These are
-limits on placements: `PUT /api/orders/modify` and `DELETE /api/orders/cancel` still go straight from an API worker to
-a broker and are not counted.
+order-to-trade ratio is counted per broker and reported, and is what Stage 8's re-pricing types will consult. The daily
+order count keeps every placement, modification and cancellation sent to a capped broker in
+`unified:orders:daily_count:<broker>`, expiring at 06:00 IST, against the caps in
+`UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_CAPS` (`zerodha=5000,dhan=7000,fyers=10000`), counted as each request is sent
+by this engine or by a REST API worker. Once a broker is within `UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_CAP_EXIT_RESERVE`
+(a share, 0.05 by default) of its cap, new entries to it and re-pricing of its entries are refused, and only messages
+about closing a position are sent, up to the cap itself; cancels and reductions are never refused. The rate budget and
+loss lockout are limits on placements: `PUT /api/orders/modify` and `DELETE /api/orders/cancel` still go straight from an API worker to
+a broker and are not held by them, though they are counted against a daily cap.
 
 **What it does per order.** One or two Redis round trips and one broker call. The first reads the mapping marker and
 every broker's login and settings; the second reads the instrument's catalogue entry and whatever the broker selector
@@ -97,6 +103,7 @@ def main():
     from unified_broker_interface.utilities.order_engine.utilities.engine_lock import EngineLock
     from unified_broker_interface.utilities.order_engine.utilities.engine_placement import EnginePlacement
     from unified_broker_interface.utilities.order_engine.utilities.clock_ticker import ClockTicker
+    from unified_broker_interface.utilities.order_engine.utilities.daily_order_count import DailyOrderCount
     from unified_broker_interface.utilities.order_engine.utilities.engine_recovery import EngineRecovery
     from unified_broker_interface.utilities.order_engine.utilities.engine_runner import OrderEngine
     from unified_broker_interface.utilities.order_engine.utilities.order_update_follower import OrderUpdateFollower
@@ -155,6 +162,14 @@ def main():
     for signal_number in (signal.SIGINT, signal.SIGTERM):
         signal.signal(signal_number, _handle_signal)
 
+    try:
+        daily_count = DailyOrderCount.from_configuration(cache, logger)
+    except ValueError as error:
+        logger.error(f"The daily order caps are not configured correctly: {error}")
+        lock.release()
+        return 2
+    placement.order_placement.attach_daily_count(daily_count)
+
     gates = RiskGates(
         RateBudget(
             api_configuration["order_rate_per_second"],
@@ -165,7 +180,10 @@ def main():
         LossLockout(cache, api_configuration["order_daily_loss_limit"], logger),
         OrderToTradeRatio(),
         RepricingThrottle(api_configuration["order_reprice_minimum_seconds"]),
+        daily_count,
     )
+    if daily_count is not None:
+        logger.info(f"Capping each day's order messages at {daily_count.caps}, keeping {daily_count.exit_reserve:.0%} of each cap for exits.")
     if gates.loss_lockout.is_configured():
         logger.info(f"Refusing new orders once the day is down {api_configuration['order_daily_loss_limit']}.")
     else:

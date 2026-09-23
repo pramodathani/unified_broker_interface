@@ -28,6 +28,7 @@ class HiddenStop(PriceTrigger):
 
     SYNTHETIC_TYPE = 'hidden_stop'
     ARMED_MESSAGE = 'the book reaches the level'
+    CLOSES_POSITIONS = True
 
     def default_direction(self, transaction_type):
         """Which way the price has to move for a stop on this position to fire.

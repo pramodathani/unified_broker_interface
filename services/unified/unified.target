@@ -20,6 +20,11 @@
 #
 # Run one. A second engine refuses to start, because two would place every order twice.
 #
+# The synthetic limit order book runs beside it, under the same template, and only matters when virtual_limit
+# orders are placed:
+#
+#     systemctl --user enable --now unified-orders@virtual_book.service
+#
 # The unified scripts read what the bin/<broker>/ scripts write to Redis, so each broker's target should be running
 # for its data to appear.
 

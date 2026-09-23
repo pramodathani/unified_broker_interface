@@ -232,6 +232,23 @@ class ParentOrder:
             self.apply_state_change(event)
         elif name in ('orphan_attributed', 'orphan_abandoned'):
             self.apply_orphan(name, event)
+        elif name == 'paper_filled':
+            self.apply_paper_fill(event)
+
+    def apply_paper_fill(self, event):
+        """Applies a fill recorded for an order that was never sent, keeping the total filled in the parameters.
+
+        Args:
+            event (dict): The event, whose `filled_quantity` is the total filled so far.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        filled_quantity = event.get('filled_quantity')
+        if filled_quantity is None:
+            return
+        self.parameters = dict(self.parameters)
+        self.parameters['paper_filled'] = filled_quantity
 
     def apply_received(self, event):
         """Applies the event that starts a parent.

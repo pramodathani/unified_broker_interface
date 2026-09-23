@@ -1,6 +1,6 @@
 # Test runs
 
-`test_runs/` holds the manual scripts: six offline suites, the instrument download runner, the REST API
+`test_runs/` holds the manual scripts: the offline suites, the instrument download runner, the REST API
 test page, and a login check against the live brokers.
 
 !!! warning "`broker_login_test.py` logs in to live broker accounts"
@@ -78,8 +78,15 @@ test page, and a login check against the live brokers.
     Redis, database or network. Run it after touching
     `unified_broker_interface/utilities/price_cache.py` or the `/prices` route.
 
+    **`virtual_queue.py`** - the queue estimate behind the synthetic limit order book, fed scripted sequences of
+    quotes: joining behind the visible depth, trades at and through the price, cancellations ahead, arrivals behind,
+    a price beyond five levels, a change of owning broker, a stale quote, a new session, the other side reaching the
+    price, and the sell side. The virtual book that keeps the estimates is run against a stand-in Redis. Needs no
+    Redis, database or network. Run it after touching `virtual_queue.py` or `virtual_book.py`.
+
     ```bash
     python -m test_runs.candle_parse
+    python -m test_runs.virtual_queue
     python -m test_runs.contract_sizes
     python -m test_runs.price_cache
     python -m test_runs.unified_ticks_sessions

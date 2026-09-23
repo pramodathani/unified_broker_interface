@@ -13,7 +13,8 @@ bin/unified/
 ├── user/           details, unified_details
 ├── brokers/        unified_details
 ├── exchanges/      unified_details
-├── orders/         api_order_details, api_trade_details, websocket_order_details, store_orders_to_db
+├── orders/         api_order_details, api_trade_details, websocket_order_details, store_orders_to_db,
+│                   order_engine, virtual_book
 ├── portfolio/      positions, holdings, funds, store_positions_to_db
 └── instruments/    map, price_history, websocket_quotes, store_quotes_to_db
 ```
@@ -52,6 +53,8 @@ systemctl --user enable --now unified-orders@api_order_details.service
 | `store_quotes_to_db` | continuously | `unified:quotes:stream` | `unified.ticks` |
 | `store_orders_to_db` | continuously | `unified:order-updates:stream` | `unified.order_updates` |
 | `store_positions_to_db` | continuously | `unified:positions_updates:stream` | `unified.positions` |
+| `order_engine` | continuously, only with `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT=engine` | `unified:orders:intents:stream`, `unified:order-updates:stream`, `unified:quotes:live` | broker orders, `unified:orders:parents`, `unified.synthetic_order_events` |
+| `virtual_book` | continuously, beside `order_engine` | `unified:quotes:stream`, `unified:orders:parents` | `unified:orders:virtual_queue` |
 
 The combiners resolve each broker's token to a unified instrument through the mapping cache
 (`unified:broker_tokens`, and `unified:instrument_symbols` for Groww, which sends no token), and price
@@ -289,6 +292,29 @@ position contract as `positions` builds one, with `broker`, `position_key`, `bas
 
 The hashes expire at 06:00 IST like the brokers' merged hashes, and an update observed before the latest
 06:00 goes to the stream but not the hash, so yesterday's orders do not refill today's.
+
+## The synthetic limit order book: `virtual_book`
+
+A `virtual_limit` order is held by the order engine instead of resting at the exchange, and is sent as a real limit
+at the caller's price only once the other side of the book reaches that price. `virtual_book` follows every such held
+order through the quote stream and works out how it would have fared had it been resting at the exchange all along:
+how much was ahead of it in the queue at its price, and how much of it the queue would have filled. The engine reads
+that estimate to fill a paper order, and to report, when a real one is sent, how much holding it back cost.
+
+| Key | Type | Holds |
+| --- | --- | --- |
+| `unified:orders:virtual_queue` | hash, keyed `parent_order_id` | One queue estimate per held order: `ahead`, `queue_filled`, `filled`, `remaining`, `touched_at`, and the last quote's volume, owner and visible quantity it was compared with |
+
+It reads `unified:quotes:stream` with a plain `XREAD` from the moment it starts, decoding every instrument's quotes and
+using those for instruments with a held order. After a restart every estimate takes its next quote as a new baseline,
+so trading it missed is not counted as trading at its price. An estimate is removed once its parent is no longer
+open. The arithmetic and its limits are in
+[`VirtualQueue`][unified_broker_interface.utilities.order_engine.utilities.virtual_queue.VirtualQueue].
+
+```bash
+systemctl --user enable --now unified-orders@virtual_book.service
+redis-cli HGETALL unified:orders:virtual_queue
+```
 
 ## Profiles, details and the session
 

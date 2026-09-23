@@ -165,6 +165,8 @@ places it and pushes the answer back.
 | `unified:orders:parents` | hash, keyed `parent_order_id`, expires 06:00 IST | `bin/unified/orders/order_engine` | Every parent order the engine is running, in the contract above |
 | `unified:orders:parents:open` | set, expires 06:00 IST | `bin/unified/orders/order_engine` | The parents that have not finished, for a quick recovery scan |
 | `unified:orders:children` | hash, keyed `broker:order_id`, expires 06:00 IST | `bin/unified/orders/order_engine` | Which parent a broker's order belongs to, so an order update finds its owner |
+| `unified:orders:daily_count:<broker>` | string, expires 06:00 IST | `bin/unified/orders/order_engine`, one `INCR` per order sent | How many orders the engine has sent that broker today, against `UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_CAPS` |
+| `unified:orders:virtual_queue` | hash, keyed `parent_order_id` | `bin/unified/orders/virtual_book` | Each held `virtual_limit` order's queue estimate, removed once its parent is no longer open |
 
 The last three are a cache, not the record. `unified.synthetic_order_events` holds every transition, and the engine
 rebuilds all three from it on start, so a flushed Redis costs a slower start rather than a lost position. They expire

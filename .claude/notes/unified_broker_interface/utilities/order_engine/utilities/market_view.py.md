@@ -19,3 +19,7 @@ The midpoint is deliberately left alone. A midpoint of a one-tick spread belongs
 ## Why `moved` takes a side and a direction rather than a signed number of ticks
 
 A buy gets more aggressive by moving up and a sell by moving down, so "one tick towards the market" is `+tick` or `-tick` depending on the side. Every caller that worked this out for itself would be a place the sign could be wrong, and a sign error here does not fail loudly: it places an order one tick further from the market than intended, which looks like a slow day rather than a bug.
+
+## `is_stale`
+
+Added for `virtual_limit`, which must not send an order on a quote whose owning broker went silent: the unified quote layer keeps such a quote in `unified:quotes:live` with `stale` set to true. The other types still ignore the flag, as they did before; whether they should is an open question rather than a decision.

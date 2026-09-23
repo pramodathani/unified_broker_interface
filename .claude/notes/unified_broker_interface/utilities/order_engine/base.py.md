@@ -33,3 +33,7 @@ It stops being tolerable the moment a type re-prices. A chaser that walks its li
 A refusal is recorded against the leg and returns `False` rather than raising. The caller is usually reacting to a fill and has other legs to attend to, and an exception would abandon them. The thing that did not happen is in the event log either way, which is what a later reader needs.
 
 The offline recording covers this with a bracket run behind a budget of three requests a second. The entry and the two exits spend the whole allowance, so the two changes that would have grown the exits from four to ten are refused, and the exits stay at four. The same scenario without the guard sends all five requests.
+
+## The daily cap check in `place_leg`, and `CLOSES_POSITIONS`
+
+`place_leg` asks `RiskGates.refuse_if_capped` whether the chosen broker has room left today before it records `leg_requested`, so a leg refused for the cap never appears in the event log. The check needs to know whether the leg closes a position, because the last share of a broker's cap is kept for exits (see the note on `utilities/daily_order_count.py`). `closes_position` answers that from the leg's role, from the class attribute `CLOSES_POSITIONS` for types whose every leg is an exit whatever it is called, and from the caller's own `closes_position` parameter for a plain order. `HiddenStop` is the only type that sets the attribute today, because it fires through `PriceTrigger.fire`, which names every leg `entry`.

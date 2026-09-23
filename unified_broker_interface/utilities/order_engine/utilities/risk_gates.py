@@ -9,7 +9,7 @@ from unified_broker_interface.utilities.order_engine.utilities.repricing_throttl
 
 
 class RiskGates:
-    """The rate budget, the daily loss lockout, the order-to-trade ratio and the re-pricing throttle, held together.
+    """The rate budget, the daily loss lockout, the order-to-trade ratio, the re-pricing throttle and the daily order count, held together.
 
     They are one object rather than four arguments because every order passes all of them and a new one should be added in one place rather than threaded through every caller.
 
@@ -22,9 +22,17 @@ class RiskGates:
         loss_lockout (LossLockout): Whether the day has lost too much to place another.
         ratio (OrderToTradeRatio): How many orders are sent for each that trades.
         throttle (RepricingThrottle): How often any one resting order may be moved.
+        daily_count (DailyOrderCount | None): How many orders each broker has been sent today against its cap, or None when no broker is capped.
     """
 
-    def __init__(self, rate_budget, loss_lockout, ratio, throttle=None):
+    def __init__(
+        self,
+        rate_budget,
+        loss_lockout,
+        ratio,
+        throttle=None,
+        daily_count=None,
+    ):
         """Builds the gates.
 
         Args:
@@ -32,6 +40,7 @@ class RiskGates:
             loss_lockout (LossLockout): Whether the day has lost too much.
             ratio (OrderToTradeRatio): How many orders are sent for each that trades.
             throttle (RepricingThrottle | None): How often one order may be moved, or None for a throttle that allows every move.
+            daily_count (DailyOrderCount | None): The daily order count, or None when no broker is capped.
 
         Returns:
             None: This method returns nothing.
@@ -40,6 +49,7 @@ class RiskGates:
         self.loss_lockout = loss_lockout
         self.ratio = ratio
         self.throttle = throttle if throttle is not None else RepricingThrottle(0)
+        self.daily_count = daily_count
 
     def check_before_accepting(self, intent):
         """Refuses an order before any work is done on it, when the day is already locked out.
@@ -84,8 +94,29 @@ class RiskGates:
             broker=broker_name,
         )
 
+    def refuse_if_capped(self, broker_name, closes_position):
+        """Refuses one order when its broker is too close to the day's order cap.
+
+        This runs once the broker is known and before anything is recorded, so an order refused here leaves no leg behind.
+
+        Args:
+            broker_name (str): The broker the order would go to.
+            closes_position (bool): Whether the order closes a position, which may use the part of the cap kept for exits.
+
+        Returns:
+            None: This method returns nothing.
+
+        Raises:
+            RefusedRequestError: With HTTP 429 when the broker has no room left today for this kind of order.
+        """
+        if self.daily_count is None:
+            return
+        self.daily_count.refuse_if_capped(broker_name, closes_position)
+
     def count_sent(self, broker_name):
         """Counts one order sent, for the order-to-trade ratio.
+
+        The daily order count is not kept here. It counts in `BrokerOrders.send`, where modifications and cancellations pass as well, and where a REST API worker's orders pass too.
 
         Args:
             broker_name (str): The broker.
@@ -134,11 +165,14 @@ class RiskGates:
         """What every gate has done, for the engine's shutdown line.
 
         Returns:
-            dict: `rate`, `locked_out`, `order_to_trade` and `repricing`.
+            dict: `rate`, `locked_out`, `order_to_trade` and `repricing`, and `daily_count` when a broker is capped.
         """
-        return {
+        counts = {
             'rate': self.rate_budget.counts(),
             'locked_out': self.loss_lockout.locked_out,
             'order_to_trade': self.ratio.counts(),
             'repricing': self.throttle.counts(),
         }
+        if self.daily_count is not None:
+            counts['daily_count'] = self.daily_count.counts()
+        return counts

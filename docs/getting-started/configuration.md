@@ -52,6 +52,8 @@ UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_WAIT_SECONDS=1
 UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_LOSS_LIMIT=0
 UNIFIED_BROKER_INTERFACE_API_ORDER_FLATTEN_WAIT_SECONDS=5
 UNIFIED_BROKER_INTERFACE_API_ORDER_REPRICE_MINIMUM_SECONDS=1
+UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_CAPS=
+UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_CAP_EXIT_RESERVE=0.05
 
 # Optional: the shortest time, in seconds, between ensure_session login attempts for one broker
 UNIFIED_BROKER_INTERFACE_LOGIN_MIN_INTERVAL=300
@@ -67,7 +69,7 @@ with HTTP 504, how long that answer is kept for a worker that never collected it
 its deadline an order may be before the engine records it rather than placing it into a market that
 has moved.
 
-The order engine's risk gates are the last five. `..._ORDER_RATE_PER_SECOND` and
+The order engine's risk gates are the last seven. `..._ORDER_RATE_PER_SECOND` and
 `..._ORDER_RATE_PER_BROKER_PER_SECOND` are a token bucket across every broker and for any one of them, defaulting well
 under the ten orders a second that SEBI's retail algorithmic trading framework treats as algorithmic trading needing
 registration. An order that finds the bucket empty waits up to `..._ORDER_RATE_WAIT_SECONDS` for a token and is
@@ -94,6 +96,48 @@ run re-prices.
 A change and a cancel take a token from the rate budget as a placement does, because an exchange counts all three the
 same way. What is still outside it is the REST API's own `PUT /api/orders/modify` and `DELETE /api/orders/cancel`,
 which go straight from a worker to a broker.
+
+`..._ORDER_DAILY_CAPS` names the brokers that refuse order messages past a fixed number a day, as `broker=cap` pairs
+such as `zerodha=5000,dhan=7000,fyers=10000`. **A message is a placement, a modification or a cancellation**, and every
+one sent to a capped broker is counted in `unified:orders:daily_count:<broker>`, which expires at 06:00 IST, whether the
+order engine sent it or a REST API worker did, and whatever the broker answered. A request that could not connect is
+not counted, because it never left. **The count is off when the setting is empty, which is the default**, and a broker
+not named is neither counted nor refused.
+
+`..._ORDER_DAILY_CAP_EXIT_RESERVE` is the share of each cap kept for orders that close a position. Once a broker is
+inside it, new entries to that broker are refused with HTTP 429 and only exits are sent, up to the cap itself. The
+reserve exists because Zerodha, once its cap is reached, refuses even the order that would close a position. A leg
+counts as an exit when its role is a stop, a target, a close or a backstop, when its type is a hidden stop, or when the
+caller sets `closes_position: true` in the order's `synthetic` object, which is how a plain order sent to get out of a
+position says so. Re-pricing is held to the same line: once a broker is inside the reserve, a `peg`, `chaser` or any
+other type stops moving its entries there, while a trailing stop may keep moving, because it protects a position.
+Cancels and quantity reductions are never refused, because refusing one could leave live an order that was meant to go.
+Only the order engine refuses; a REST API worker in `direct` mode counts its requests but refuses none of them. The
+count cannot see orders placed from a broker's own app or website.
+
+Each broker's own API documentation was read on 2026-09-24 for these limits. Three brokers publish a daily cap, and
+every broker limits order requests to about ten a second, which is also SEBI's threshold for registering an algorithm.
+
+| Broker | Daily cap | Do modifies and cancels count | Modifies per order | Orders per second | Source |
+| --- | --- | --- | --- | --- | --- |
+| Zerodha | **5,000** | Yes, confirmed by the account holder; rejections count too | 25 | 10 | Kite Connect documentation; confirmed by the account holder |
+| Dhan | **7,000** | Not stated; "Order APIs" is one bucket, so probably yes | 25 | 10, and 250 a minute, 1,000 an hour | [dhanhq.co/docs/v2](https://dhanhq.co/docs/v2/) |
+| Fyers | **10,000** transactional requests | **Yes**: place, modify, cancel, exit and multi-leg orders all count | Not stated | 10, and 200 a minute; the per-minute limit exceeded three times in a day blocks the user until the next day | Fyers API v3 "Regulatory Changes (April 2026)" page |
+| Groww | Not stated | Share the per-second bucket | Not stated | 10, and 250 a minute | [groww.in/trade-api/docs](https://groww.in/trade-api/docs/curl) |
+| INDmoney | Not stated; the per-day cell for order APIs is blank | Not stated | 25 | 10 | [api-docs.indstocks.com/conventions](https://api-docs.indstocks.com/conventions/) |
+| Stoxkart | Not stated | Not stated | Not stated | 10 each for place, modify and cancel | [developers.stoxkart.com](https://developers.stoxkart.com/api-documentation/rate-limit) |
+| Kotak | Not stated | Not stated | Not stated | 10 | [kotakneo.com](https://www.kotakneo.com/platform/kotak-neo-trade-api/) |
+| Shoonya | **None**, stated explicitly | n/a | Not stated | About 10, shared by place, modify and cancel; its older FAQ says 20 | [shoonya.com rate limits](https://shoonya.com/api-documentation/rate-limits) |
+| Flattrade | Not stated | n/a | Not stated | Under 10 without a registered algorithm | Flattrade's January 2026 API v2 notice; its API docs could not be read |
+| Wisdom Capital | Not stated | n/a | Not stated | 10, shared by place, modify and cancel | Symphony's XTS documentation; Wisdom Capital's own pages could not be read |
+
+So the setting to use is `zerodha=5000,dhan=7000,fyers=10000`.
+
+!!! danger "Fyers blocks an account for the rest of the day"
+
+    Fyers allows 200 order requests a minute and blocks the user until the next day once that has been exceeded three
+    times. The rate budget limits requests per second only: at its default of five a second per broker it allows up to
+    300 a minute, so a busy minute of re-pricing at Fyers can trip the block. Nothing enforces a per-minute limit yet.
 
 `..._ORDER_FLATTEN_WAIT_SECONDS` is how long `POST /api/orders/flatten` re-reads the brokers' order books waiting for
 its cancels to be confirmed before it closes any position. Waiting matters more than being quick: a protective order

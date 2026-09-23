@@ -32,6 +32,10 @@ from unified_broker_interface.utilities.order_engine.utilities import moments
 from unified_broker_interface.utilities.order_engine.utilities.clock_ticker import (
     ClockTicker,
 )
+from unified_broker_interface.utilities.order_engine.utilities.daily_order_count import (
+    COUNT_KEY_PREFIX,
+    DailyOrderCount,
+)
 from unified_broker_interface.utilities.order_engine.utilities.engine_lock import (
     EngineLock,
 )
@@ -80,6 +84,9 @@ from unified_broker_interface.utilities.order_engine.utilities.risk_gates import
 )
 from unified_broker_interface.utilities.order_engine.utilities import (
     synthetic_order_event_log,
+)
+from unified_broker_interface.utilities.order_engine.utilities.virtual_book import (
+    ESTIMATES_KEY,
 )
 from utilities.configurations import api_configuration
 
@@ -1036,6 +1043,78 @@ class OrderEngineScenarios:
                 ),
             ),
             self.intents(
+                'an_entry_inside_the_exit_reserve_of_the_daily_cap_is_refused',
+                [
+                    order,
+                ],
+                gated=True,
+                daily_caps={
+                    'flattrade': 100,
+                },
+                daily_sent={
+                    'flattrade': 95,
+                },
+            ),
+            self.intents(
+                'an_order_that_closes_a_position_may_use_the_exit_reserve',
+                [
+                    self.bodies.market_order(
+                        dry_run=None,
+                        synthetic={
+                            'type': 'simple',
+                            'closes_position': True,
+                        },
+                    ),
+                ],
+                gated=True,
+                daily_caps={
+                    'flattrade': 100,
+                },
+                daily_sent={
+                    'flattrade': 95,
+                },
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
+                'an_exit_at_the_full_daily_cap_is_refused',
+                [
+                    self.bodies.market_order(
+                        dry_run=None,
+                        synthetic={
+                            'type': 'simple',
+                            'closes_position': True,
+                        },
+                    ),
+                ],
+                gated=True,
+                daily_caps={
+                    'flattrade': 100,
+                },
+                daily_sent={
+                    'flattrade': 100,
+                },
+            ),
+            self.intents(
+                'a_broker_without_a_daily_cap_is_neither_counted_nor_refused',
+                [
+                    order,
+                ],
+                gated=True,
+                daily_caps={
+                    'zerodha': 10,
+                },
+                daily_sent={
+                    'flattrade': 5000,
+                },
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
                 'an_entry_that_is_not_an_intent_is_acknowledged',
                 [
                     order,
@@ -1510,7 +1589,40 @@ class OrderEngineSuite:
                 logger,
             ),
             OrderToTradeRatio(),
+            None,
+            self.build_daily_count(scenario, logger),
         )
+
+    def build_daily_count(self, scenario, logger):
+        """The daily order count for one scenario, with the day's counts so far written to Redis, or None when it caps nothing.
+
+        Args:
+            scenario (dict): The scenario.
+            logger (logging.Logger): The logger.
+
+        Returns:
+            DailyOrderCount | None: The count.
+        """
+        caps = scenario.get('daily_caps')
+        if caps is None:
+            return None
+        daily_count = DailyOrderCount(self.fake_redis, caps, 0.05, logger)
+        sent = scenario.get('daily_sent') or {}
+        for broker_name, count in sent.items():
+            self.fake_redis.strings[daily_count.key(broker_name)] = str(count)
+        return daily_count
+
+    def shown_daily_counts(self):
+        """Every broker's daily order count in the stand-in Redis.
+
+        Returns:
+            dict: Each count (str), by key.
+        """
+        shown = {}
+        for key in sorted(self.fake_redis.strings):
+            if key.startswith(COUNT_KEY_PREFIX):
+                shown[key] = self.fake_redis.strings[key]
+        return shown
 
     def run_scenario(self, scenario):
         """Runs one scenario against a fresh stand-in and a fresh engine.
@@ -1551,6 +1663,8 @@ class OrderEngineSuite:
         event_log = RecordingEventLog()
         event_log.failing_event = scenario.get('failing_event')
         gates = self.build_gates(scenario, logger)
+        if gates is not None:
+            placement.order_placement.attach_daily_count(gates.daily_count)
         engine = OrderEngine(
             self.fake_redis,
             placement,
@@ -1567,7 +1681,7 @@ class OrderEngineSuite:
         exit_code = engine.run(OnePassStop(scenario.get('passes', 3)))
 
         delivered = self.fake_redis.pending.get(INTENT_STREAM_KEY, [])
-        return {
+        result = {
             'name': scenario['name'],
             'exit_code': exit_code,
             'replies': self.shown_replies(reply_keys),
@@ -1587,6 +1701,9 @@ class OrderEngineSuite:
                 for reply_key in reply_keys
             ],
         }
+        if scenario.get('daily_caps') is not None:
+            result['daily_counts'] = self.shown_daily_counts()
+        return result
 
     def run_lock_checks(self):
         """Checks the single-engine lock directly, since losing it depends on a clock the loop owns.
@@ -2764,6 +2881,27 @@ class OrderEngineSuite:
             'parent_states': [parent.state for parent in parents],
         }
 
+    def restart_parents(self, event_log, parent_store):
+        """Rebuilds every parent from its recorded events alone, which is all an engine restart has.
+
+        Args:
+            event_log (RecordingEventLog): The recorded events.
+            parent_store (ParentStore): The Redis copy to replace.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        by_parent = {}
+        for event in event_log.read_since(None):
+            parent_order_id = str(event.get('parent_order_id'))
+            by_parent.setdefault(parent_order_id, []).append(event)
+        parents = []
+        for events in by_parent.values():
+            parent = ParentOrder.from_events(events)
+            if parent is not None:
+                parents.append(parent)
+        parent_store.rebuild(parents)
+
     def seed_quote(self, quote):
         """Puts one live quote where the engine and the price ticker both read it.
 
@@ -2792,6 +2930,9 @@ class OrderEngineSuite:
         book_overrides=None,
         fills=None,
         positions=None,
+        restart_between_ticks=False,
+        daily_caps=None,
+        daily_sent=None,
     ):
         """Places one watching order, then walks it through a sequence of quotes.
 
@@ -2806,6 +2947,9 @@ class OrderEngineSuite:
             book_overrides (dict | None): Fields to replace on the broker's order book entry, for a type whose order is not a plain limit.
             fills (list | None): Order updates to apply before the first tick, for a type that only acts once its legs are filled.
             positions (float | None): A net position in RELIANCE to seed, for a type that reads the account's holdings.
+            restart_between_ticks (bool): Whether to rebuild every parent from its recorded events after every tick, as an engine restart does.
+            daily_caps (dict | None): Each capped broker's daily cap, or None for no daily order count.
+            daily_sent (dict | None): Each broker's order messages already sent today, written before the order is placed.
 
         Returns:
             dict: The recorded result.
@@ -2831,7 +2975,15 @@ class OrderEngineSuite:
             LossLockout(self.fake_redis, 0, logger),
             OrderToTradeRatio(),
             RepricingThrottle(throttle_seconds),
+            self.build_daily_count(
+                {
+                    'daily_caps': daily_caps,
+                    'daily_sent': daily_sent,
+                },
+                logger,
+            ),
         )
+        placement.order_placement.attach_daily_count(gates.daily_count)
         ticker = PriceTicker(
             self.fake_redis,
             parent_store,
@@ -2887,9 +3039,13 @@ class OrderEngineSuite:
         moves = []
         for step in steps:
             self.seed_quote(step.get('quote'))
+            if step.get('estimate') is not None:
+                self.seed_estimate(step['estimate'])
             before = len(self.network.sent_requests)
             self.tick_at(ticker, started + step.get('at', 0))
             moves.append(len(self.network.sent_requests) - before)
+            if restart_between_ticks:
+                self.restart_parents(event_log, parent_store)
 
         parents = [
             ParentOrder.from_document(json.loads(one))
@@ -2898,7 +3054,7 @@ class OrderEngineSuite:
                 {},
             ).values()
         ]
-        return {
+        result = {
             'name': name,
             'reply': reply,
             'requests': [
@@ -2919,6 +3075,39 @@ class OrderEngineSuite:
             'parent_states': [parent.state for parent in parents],
             'repricing': gates.throttle.counts(),
         }
+        if daily_caps is not None:
+            result['daily_counts'] = self.shown_daily_counts()
+        synthetic = request_body.get('synthetic') or {}
+        if synthetic.get('type') == 'virtual_limit':
+            result['held'] = [
+                {
+                    'paper_filled': parent.parameters.get('paper_filled'),
+                    'missed_quantity': parent.parameters.get('missed_quantity'),
+                }
+                for parent in parents
+            ]
+            result['paper_fills'] = [
+                event.get('filled_quantity')
+                for event in event_log.events
+                if event.get('event') == 'paper_filled'
+            ]
+        return result
+
+    def seed_estimate(self, estimate):
+        """Writes a queue estimate for every parent, as `bin/unified/orders/virtual_book` would.
+
+        Args:
+            estimate (dict): The estimate's fields.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        estimates = self.fake_redis.hashes.setdefault(ESTIMATES_KEY, {})
+        for parent_order_id in self.fake_redis.hashes.get(
+            'unified:orders:parents',
+            {},
+        ):
+            estimates[parent_order_id] = json.dumps(estimate)
 
     def tick_at(self, ticker, moment):
         """Runs one tick as though it were `moment`.
@@ -3236,6 +3425,42 @@ class OrderEngineSuite:
                     {'quote': self.book_at(999.80, 999.85), 'at': 2},
                 ],
                 accepted,
+            ),
+            self.price_result(
+                'every_move_of_a_peg_counts_against_the_daily_cap',
+                dict(entry, synthetic={
+                    'type': 'peg',
+                    'reference': 'own_touch',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1000.20, 1000.25), 'at': 1},
+                    {'quote': self.book_at(999.80, 999.85), 'at': 2},
+                ],
+                accepted,
+                daily_caps={
+                    'flattrade': 100,
+                },
+                daily_sent={},
+            ),
+            self.price_result(
+                'a_peg_stops_moving_its_entry_inside_the_exit_reserve',
+                dict(entry, synthetic={
+                    'type': 'peg',
+                    'reference': 'own_touch',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1000.20, 1000.25), 'at': 1},
+                    {'quote': self.book_at(999.80, 999.85), 'at': 2},
+                ],
+                accepted,
+                daily_caps={
+                    'flattrade': 100,
+                },
+                daily_sent={
+                    'flattrade': 94,
+                },
             ),
             self.price_result(
                 'a_peg_sends_nothing_while_the_bid_stands_still',
@@ -3773,6 +3998,119 @@ class OrderEngineSuite:
                     {'quote': self.book_at(994.90, 994.95), 'at': 2},
                 ],
                 accepted,
+            ),
+            self.price_result(
+                'a_fired_trigger_does_not_fire_again_after_a_restart',
+                dict(entry, synthetic={
+                    'type': 'market_if_touched',
+                    'trigger_price': 995,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 2},
+                ],
+                accepted,
+                restart_between_ticks=True,
+            ),
+            self.price_result(
+                'a_virtual_limit_is_held_until_the_offer_reaches_its_price',
+                dict(entry, price=999.50, synthetic={
+                    'type': 'virtual_limit',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(999.50, 999.55), 'at': 1},
+                    {
+                        'quote': self.book_at(999.40, 999.45),
+                        'estimate': {
+                            'queue_filled': 4,
+                            'filled': 4,
+                        },
+                        'at': 2,
+                    },
+                    {'quote': self.book_at(999.40, 999.45), 'at': 3},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_virtual_limit_ignores_a_stale_quote',
+                dict(entry, price=999.50, synthetic={
+                    'type': 'virtual_limit',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {
+                        'quote': dict(self.book_at(999.40, 999.45), stale=True),
+                        'at': 1,
+                    },
+                    {'quote': self.book_at(999.40, 999.45), 'at': 2},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_virtual_limit_must_be_a_limit_order',
+                dict(entry, order_type='MARKET', price=None, synthetic={
+                    'type': 'virtual_limit',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_paper_virtual_limit_fills_from_the_queue_estimate',
+                dict(entry, price=999.50, synthetic={
+                    'type': 'virtual_limit',
+                    'paper': True,
+                }),
+                [
+                    {
+                        'quote': steady,
+                        'estimate': {
+                            'queue_filled': 0,
+                            'filled': 0,
+                        },
+                        'at': 0,
+                    },
+                    {
+                        'quote': steady,
+                        'estimate': {
+                            'queue_filled': 4,
+                            'filled': 4,
+                        },
+                        'at': 1,
+                    },
+                    {
+                        'quote': self.book_at(999.40, 999.45),
+                        'estimate': {
+                            'queue_filled': 4,
+                            'filled': 10,
+                        },
+                        'at': 2,
+                    },
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_paper_fill_is_not_repeated_after_a_restart',
+                dict(entry, price=999.50, synthetic={
+                    'type': 'virtual_limit',
+                    'paper': True,
+                }),
+                [
+                    {
+                        'quote': steady,
+                        'estimate': {
+                            'queue_filled': 4,
+                            'filled': 4,
+                        },
+                        'at': 0,
+                    },
+                    {'quote': steady, 'at': 1},
+                ],
+                accepted,
+                restart_between_ticks=True,
             ),
             self.price_result(
                 'a_market_if_touched_order_that_is_never_touched_sends_nothing',

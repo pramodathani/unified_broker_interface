@@ -200,6 +200,15 @@ or the protocol, and the table in
 
 ## Broker limits
 
+**The daily order count cannot see orders sent from outside this system.** `DailyOrderCount` counts every
+placement, modification and cancellation this system sends to a capped broker, from the order engine and the REST API
+alike, in `unified:orders:daily_count:<broker>`. A broker's cap is on the account, so an order placed, changed or
+cancelled from the broker's own app or website spends it without appearing in the count. The count is therefore a floor
+on what the broker has seen, and the configured cap should be set below the broker's real one by whatever is done by
+hand. Zerodha's 5,000, counting modifies and cancels, was confirmed by the account holder on 2026-09-24, and Dhan's 7,000
+and Fyers' 10,000 were read from their own API documentation that day. Only the order engine refuses near a cap; a REST
+API worker in `direct` mode counts but refuses nothing.
+
 **Zerodha's quote feed runs past Kite's documented websocket limits, and has not been tried live.** On
 2026-09-16 `bin/zerodha/instruments/websocket_quotes` was changed to subscribe to every instrument in today's
 `zerodha:instruments:master` - 112,657 that day - split equally across 24 websockets, one part of 4,695 and
@@ -338,6 +347,15 @@ running after a logout and to start at boot. After enabling it on a machine, reb
 **Kotak and Fyers instrument downloads may need a session.** Only IND Money's does today, and
 `bin/indmoney/instruments/daily_feed` logs in when its stored session is refused. If either download starts failing
 after a token expiry, this is the first thing to look at.
+
+**The synthetic limit order book's queue estimate has not been run against a live feed.** `VirtualQueue` is checked only
+against scripted quotes in `test_runs/virtual_queue.py`. It assumes that all the volume between two quotes traded at the
+last price, that cancellations are spread evenly through a level, and that the held order changes nobody's behaviour;
+each is a known source of error, set out in its module docstring. How often a broker's feed sends an instrument, and so
+how many trades one volume jump hides, has not been measured either. Run paper `virtual_limit` orders on an instrument,
+and compare their fills with a real resting order's, before trusting `missed_quantity` on it. `bin/unified/orders/virtual_book`
+also decodes every quote on `unified:quotes:stream` in one process, at a rate nobody has measured at the open with
+Zerodha's full feed.
 
 ## Observations, stored as received
 
