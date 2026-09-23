@@ -79,6 +79,9 @@ from unified_broker_interface.utilities.order_engine.trailing_stop import (
     TrailingStop,
 )
 from unified_broker_interface.utilities.order_engine.twap import Twap
+from unified_broker_interface.utilities.order_engine.virtual_limit import (
+    VirtualLimit,
+)
 from unified_broker_interface.utilities.order_engine.vwap import Vwap
 from unified_broker_interface.utilities.order_engine.two_sided_breakout import (
     TwoSidedBreakout,
@@ -126,4 +129,5 @@ SYNTHETIC_ORDER_CLASSES = {
     Accumulation.SYNTHETIC_TYPE: Accumulation,
     GoodTillTriggered.SYNTHETIC_TYPE: GoodTillTriggered,
     DailyStop.SYNTHETIC_TYPE: DailyStop,
+    VirtualLimit.SYNTHETIC_TYPE: VirtualLimit,
 }

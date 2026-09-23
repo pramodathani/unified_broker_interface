@@ -1272,7 +1272,7 @@ order carries a price.
 A body may carry a `synthetic` object naming the kind of order to run. Without one the order is `simple`: one order sent
 to one broker, which is what every caller gets and what every other type is built from.
 
-There are forty-one of them. They divide into six families by what each one is waiting for, and that is the useful way
+There are forty-two of them. They divide into six families by what each one is waiting for, and that is the useful way
 to read the list: a type that waits for a fill needs the engine running only while it has legs at a broker, one that
 waits for a price needs it running every second, and one that waits for a morning needs it running for days.
 
@@ -1323,6 +1323,7 @@ waits for a price needs it running every second, and one that waits for a mornin
 | `discretionary` | Shows a limit at one price and quietly takes the other side within `discretion_points` |
 | `market_if_touched` | Takes what is there once the price touches `trigger_price` |
 | `limit_if_touched` | Rests a limit at `limit_price` once the price touches `trigger_price` |
+| `virtual_limit` | Holds a limit order in the engine's own book and sends it only once the other side reaches its price; `paper: true` fills it from the queue estimate instead |
 | `cross_instrument` | The same, triggered by `watch_instrument_id` rather than by what it trades |
 | `indicator_triggered` | The same, triggered by a named field of the quote such as the day's average price |
 | `hidden_stop` | A stop held here, watching the book rather than the last trade, with an optional native backstop |
@@ -1483,6 +1484,61 @@ way and SEBI's ten-orders-a-second threshold does too.
     `backstop_price` and `backstop_limit_price` place a real stop-loss limit further away, which fires at exchange
     speed whether or not anything of yours is running. A `candle_close_stop` deliberately sits through the move that
     triggers it until the candle ends, so it is unprotected for up to a whole bar and wants one most of all.
+
+### The synthetic limit order book: `virtual_limit`
+
+Some brokers cap how many orders an account may send in a day: Zerodha at 3,000 across every platform, Dhan at 7,000.
+A limit order that rests at the exchange and never fills still spends one. `virtual_limit` spends one only when it will
+fill. The body is an ordinary limit order with the type added:
+
+```json
+{
+  "instrument_id": "...",
+  "transaction_type": "BUY",
+  "order_type": "LIMIT",
+  "price": 98.00,
+  "quantity": 500,
+  "product": "MIS",
+  "synthetic": {"type": "virtual_limit"}
+}
+```
+
+Nothing is sent. The answer is `202` with `outcome: armed` and a `parent_id`, and the order is held by the engine. On
+each price tick, about once a second, the engine asks whether the **other** side of the book has reached the order's
+price: for a buy, whether the best offer is at or below 98. When it has, a real limit at 98 is sent, and because a seller
+is already there it fills at once, at 98 or better. A bid reaching 98 is not enough, because an order sent then would
+join the back of the queue at 98 rather than fill. A quote marked `stale` is never acted on.
+
+What holding the order gives up is its place in the queue. A resting bid at 98 would also fill when sellers come down
+and hit it, even if the offer never reaches 98. `bin/unified/orders/virtual_book` follows every held order through
+`unified:quotes:stream` and estimates, from the depth at 98, the volume traded there and the quantity that left it, how
+much such a resting order would have filled. When the real order is sent, that estimate is recorded in the parent's
+parameters as `missed_quantity`: the cost of having held it back, and the number to watch before trusting this type
+on a given instrument.
+
+| | A limit resting at the exchange | `virtual_limit` |
+| --- | --- | --- |
+| Orders spent when the price never comes | 1, and another each time it is re-placed | 0 |
+| Orders spent when it fills | 1 | 1 |
+| Blocks margin while waiting | Yes | No |
+| Visible in the book | Yes | No |
+| Fills when sellers hit the bid but the offer never reaches the price | Yes | No, and the estimate counts it as missed |
+| Delay between the price arriving and the order reaching the exchange | None | Up to about a second for the tick, plus the broker's own 100 to 300 ms |
+
+With `paper: true` nothing is ever sent to a broker, the daily order count is not touched, and the order is filled from
+the estimate: partly as the queue ahead of it trades away, and wholly once the other side reaches its price. Each fill
+is recorded as a `paper_filled` event at the order's limit price, and the parent completes when the whole quantity has
+filled. Paper orders are the way to measure the missed fills on an instrument before holding real orders on it.
+
+A held order lasts for the trading day, like a DAY limit at the exchange, and an engine restart during the day
+resumes it from the event log. It needs `virtual_book` running for the missed-fill figure and for paper fills; without
+it a real order still fires on the touch, with no `missed_quantity` recorded.
+
+!!! danger "A held order is only as reliable as the engine and the quote feed"
+
+    While the engine is stopped, nothing watches a held order and nothing is resting at the exchange in its place. A
+    feed that goes quiet marks its quotes stale, and a stale quote never fires an order. Both mean an order that would
+    have filled at the exchange can be missed entirely.
 
 ### The execution algorithms
 

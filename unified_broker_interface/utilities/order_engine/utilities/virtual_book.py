@@ -94,13 +94,12 @@ class VirtualBook:
             VirtualQueue | None: The estimate.
         """
         body = document.get('body') or {}
-        parameters = document.get('parameters') or {}
         try:
             return VirtualQueue(
                 document['parent_order_id'],
                 document['instrument_id'],
                 body.get('transaction_type'),
-                parameters.get('limit_price'),
+                body.get('price'),
                 int(body.get('quantity')),
             )
         except (KeyError, TypeError, ValueError) as error:

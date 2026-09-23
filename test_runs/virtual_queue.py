@@ -741,11 +741,12 @@ class VirtualQueueSuite:
             'instrument_id': INSTRUMENT_ID,
             'body': {
                 'transaction_type': 'BUY',
+                'order_type': 'LIMIT',
+                'price': 98,
                 'quantity': 500,
             },
             'parameters': {
                 'type': 'virtual_limit',
-                'limit_price': '98',
             },
             'legs': [],
         }

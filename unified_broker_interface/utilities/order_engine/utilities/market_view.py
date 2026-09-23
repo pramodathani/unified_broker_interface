@@ -42,6 +42,16 @@ class MarketView:
         """
         return self.quote is not None and self.tick_size is not None
 
+    def is_stale(self):
+        """Whether the quote is marked stale, because the broker that owned it went silent with no healthy backup.
+
+        Returns:
+            bool: True when the quote should not be acted on.
+        """
+        if self.quote is None:
+            return False
+        return self.quote.get('stale') is True
+
     def number(self, value):
         """One value out of the quote, as a price above zero snapped to the tick.
 

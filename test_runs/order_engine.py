@@ -85,6 +85,9 @@ from unified_broker_interface.utilities.order_engine.utilities.risk_gates import
 from unified_broker_interface.utilities.order_engine.utilities import (
     synthetic_order_event_log,
 )
+from unified_broker_interface.utilities.order_engine.utilities.virtual_book import (
+    ESTIMATES_KEY,
+)
 from utilities.configurations import api_configuration
 
 FIXTURE_PATH = (
@@ -3022,6 +3025,8 @@ class OrderEngineSuite:
         moves = []
         for step in steps:
             self.seed_quote(step.get('quote'))
+            if step.get('estimate') is not None:
+                self.seed_estimate(step['estimate'])
             before = len(self.network.sent_requests)
             self.tick_at(ticker, started + step.get('at', 0))
             moves.append(len(self.network.sent_requests) - before)
@@ -3035,7 +3040,7 @@ class OrderEngineSuite:
                 {},
             ).values()
         ]
-        return {
+        result = {
             'name': name,
             'reply': reply,
             'requests': [
@@ -3056,6 +3061,37 @@ class OrderEngineSuite:
             'parent_states': [parent.state for parent in parents],
             'repricing': gates.throttle.counts(),
         }
+        synthetic = request_body.get('synthetic') or {}
+        if synthetic.get('type') == 'virtual_limit':
+            result['held'] = [
+                {
+                    'paper_filled': parent.parameters.get('paper_filled'),
+                    'missed_quantity': parent.parameters.get('missed_quantity'),
+                }
+                for parent in parents
+            ]
+            result['paper_fills'] = [
+                event.get('filled_quantity')
+                for event in event_log.events
+                if event.get('event') == 'paper_filled'
+            ]
+        return result
+
+    def seed_estimate(self, estimate):
+        """Writes a queue estimate for every parent, as `bin/unified/orders/virtual_book` would.
+
+        Args:
+            estimate (dict): The estimate's fields.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        estimates = self.fake_redis.hashes.setdefault(ESTIMATES_KEY, {})
+        for parent_order_id in self.fake_redis.hashes.get(
+            'unified:orders:parents',
+            {},
+        ):
+            estimates[parent_order_id] = json.dumps(estimate)
 
     def tick_at(self, ticker, moment):
         """Runs one tick as though it were `moment`.
@@ -3921,6 +3957,105 @@ class OrderEngineSuite:
                     {'quote': steady, 'at': 0},
                     {'quote': self.book_at(994.90, 994.95), 'at': 1},
                     {'quote': self.book_at(994.90, 994.95), 'at': 2},
+                ],
+                accepted,
+                restart_between_ticks=True,
+            ),
+            self.price_result(
+                'a_virtual_limit_is_held_until_the_offer_reaches_its_price',
+                dict(entry, price=999.50, synthetic={
+                    'type': 'virtual_limit',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(999.50, 999.55), 'at': 1},
+                    {
+                        'quote': self.book_at(999.40, 999.45),
+                        'estimate': {
+                            'queue_filled': 4,
+                            'filled': 4,
+                        },
+                        'at': 2,
+                    },
+                    {'quote': self.book_at(999.40, 999.45), 'at': 3},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_virtual_limit_ignores_a_stale_quote',
+                dict(entry, price=999.50, synthetic={
+                    'type': 'virtual_limit',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {
+                        'quote': dict(self.book_at(999.40, 999.45), stale=True),
+                        'at': 1,
+                    },
+                    {'quote': self.book_at(999.40, 999.45), 'at': 2},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_virtual_limit_must_be_a_limit_order',
+                dict(entry, order_type='MARKET', price=None, synthetic={
+                    'type': 'virtual_limit',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_paper_virtual_limit_fills_from_the_queue_estimate',
+                dict(entry, price=999.50, synthetic={
+                    'type': 'virtual_limit',
+                    'paper': True,
+                }),
+                [
+                    {
+                        'quote': steady,
+                        'estimate': {
+                            'queue_filled': 0,
+                            'filled': 0,
+                        },
+                        'at': 0,
+                    },
+                    {
+                        'quote': steady,
+                        'estimate': {
+                            'queue_filled': 4,
+                            'filled': 4,
+                        },
+                        'at': 1,
+                    },
+                    {
+                        'quote': self.book_at(999.40, 999.45),
+                        'estimate': {
+                            'queue_filled': 4,
+                            'filled': 10,
+                        },
+                        'at': 2,
+                    },
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_paper_fill_is_not_repeated_after_a_restart',
+                dict(entry, price=999.50, synthetic={
+                    'type': 'virtual_limit',
+                    'paper': True,
+                }),
+                [
+                    {
+                        'quote': steady,
+                        'estimate': {
+                            'queue_filled': 4,
+                            'filled': 4,
+                        },
+                        'at': 0,
+                    },
+                    {'quote': steady, 'at': 1},
                 ],
                 accepted,
                 restart_between_ticks=True,

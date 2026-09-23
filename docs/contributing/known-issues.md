@@ -347,6 +347,15 @@ running after a logout and to start at boot. After enabling it on a machine, reb
 `bin/indmoney/instruments/daily_feed` logs in when its stored session is refused. If either download starts failing
 after a token expiry, this is the first thing to look at.
 
+**The synthetic limit order book's queue estimate has not been run against a live feed.** `VirtualQueue` is checked only
+against scripted quotes in `test_runs/virtual_queue.py`. It assumes that all the volume between two quotes traded at the
+last price, that cancellations are spread evenly through a level, and that the held order changes nobody's behaviour;
+each is a known source of error, set out in its module docstring. How often a broker's feed sends an instrument, and so
+how many trades one volume jump hides, has not been measured either. Run paper `virtual_limit` orders on an instrument,
+and compare their fills with a real resting order's, before trusting `missed_quantity` on it. `bin/unified/orders/virtual_book`
+also decodes every quote on `unified:quotes:stream` in one process, at a rate nobody has measured at the open with
+Zerodha's full feed.
+
 ## Observations, stored as received
 
 **Wisdom Capital reports Saturday bars.** 2026-09-12 has five minute bars at tiny volumes on the
