@@ -320,6 +320,19 @@ class SyntheticOrder:
         wanted = instrument_id or self.parent.instrument_id
         return MarketView(quotes.get(wanted), self.tick_size())
 
+    def chosen_broker(self):
+        """The broker this parent's legs go to, once one of them has picked one.
+
+        Every leg of one parent has to go to the same broker. A stop at one broker cannot protect a position held at another: the two accounts know nothing about each other, so the stop would open a fresh short at the second broker while the position sat unprotected at the first. Where a type places legs at different moments — a backstop now and an exit an hour later — the later ones have to be told where the earlier ones went, because the round robin will otherwise have moved on.
+
+        Returns:
+            str | None: The broker name, or None when nothing has been placed yet and the selector is free to choose.
+        """
+        for leg in self.parent.legs:
+            if leg.broker:
+                return leg.broker
+        return None
+
     def own_quote(self, quotes):
         """This parent's own instrument's quote, out of the ones a tick carried.
 

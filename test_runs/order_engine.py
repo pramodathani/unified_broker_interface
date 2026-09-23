@@ -2856,6 +2856,109 @@ class OrderEngineSuite:
                 accepted,
             ),
             self.price_result(
+                'a_market_if_touched_order_waits_and_then_takes_the_offer',
+                dict(entry, synthetic={
+                    'type': 'market_if_touched',
+                    'trigger_price': 995,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 2},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_market_if_touched_order_that_is_never_touched_sends_nothing',
+                dict(entry, synthetic={
+                    'type': 'market_if_touched',
+                    'trigger_price': 995,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1000.50, 1000.55), 'at': 1},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_limit_if_touched_order_rests_at_the_price_it_was_given',
+                dict(entry, synthetic={
+                    'type': 'limit_if_touched',
+                    'trigger_price': 995,
+                    'limit_price': 990,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_hidden_stop_rests_a_backstop_and_fires_on_the_bid',
+                dict(entry, synthetic={
+                    'type': 'hidden_stop',
+                    'trigger_price': 995,
+                    'backstop_price': 990,
+                    'backstop_limit_price': 988,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 995.20), 'at': 1},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_hidden_stop_is_not_fired_by_a_last_trade_the_book_never_reached',
+                dict(entry, synthetic={
+                    'type': 'hidden_stop',
+                    'trigger_price': 995,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {
+                        'quote': self.book_at(1000.00, 1000.05) | {
+                            'last_price': 990.00,
+                        },
+                        'at': 1,
+                    },
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_cross_instrument_order_is_fired_by_the_instrument_it_watches',
+                dict(entry, synthetic={
+                    'type': 'cross_instrument',
+                    'watch_instrument_id': order_routes.OrderRoutesState.
+                    INSTRUMENT_IDENTIFIERS['reliance'],
+                    'trigger_price': 995,
+                    'limit_price': 990,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'an_indicator_triggered_order_watches_the_day_average',
+                dict(entry, synthetic={
+                    'type': 'indicator_triggered',
+                    'watch_field': 'average_price',
+                    'trigger_price': 999,
+                    'limit_price': 995,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {
+                        'quote': self.book_at(1000.00, 1000.05) | {
+                            'average_price': 998.50,
+                        },
+                        'at': 1,
+                    },
+                ],
+                accepted,
+            ),
+            self.price_result(
                 'a_chaser_crosses_the_spread_once_its_time_is_up',
                 dict(entry, synthetic={
                     'type': 'chaser',

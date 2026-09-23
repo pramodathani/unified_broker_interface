@@ -2,13 +2,28 @@
 
 from unified_broker_interface.utilities.order_engine.bracket import Bracket
 from unified_broker_interface.utilities.order_engine.chaser import Chaser
+from unified_broker_interface.utilities.order_engine.cross_instrument import (
+    CrossInstrument,
+)
 from unified_broker_interface.utilities.order_engine.freeze_slicer import (
     FreezeSlicer,
 )
 from unified_broker_interface.utilities.order_engine.good_till_time import (
     GoodTillTime,
 )
+from unified_broker_interface.utilities.order_engine.hidden_stop import (
+    HiddenStop,
+)
+from unified_broker_interface.utilities.order_engine.indicator_triggered import (
+    IndicatorTriggered,
+)
 from unified_broker_interface.utilities.order_engine.ladder import Ladder
+from unified_broker_interface.utilities.order_engine.limit_if_touched import (
+    LimitIfTouched,
+)
+from unified_broker_interface.utilities.order_engine.market_if_touched import (
+    MarketIfTouched,
+)
 from unified_broker_interface.utilities.order_engine.oco import OneCancelsOther
 from unified_broker_interface.utilities.order_engine.oto import OneTriggersOther
 from unified_broker_interface.utilities.order_engine.peg import Peg
@@ -36,4 +51,9 @@ SYNTHETIC_ORDER_CLASSES = {
     Twap.SYNTHETIC_TYPE: Twap,
     Peg.SYNTHETIC_TYPE: Peg,
     Chaser.SYNTHETIC_TYPE: Chaser,
+    MarketIfTouched.SYNTHETIC_TYPE: MarketIfTouched,
+    LimitIfTouched.SYNTHETIC_TYPE: LimitIfTouched,
+    HiddenStop.SYNTHETIC_TYPE: HiddenStop,
+    CrossInstrument.SYNTHETIC_TYPE: CrossInstrument,
+    IndicatorTriggered.SYNTHETIC_TYPE: IndicatorTriggered,
 }
