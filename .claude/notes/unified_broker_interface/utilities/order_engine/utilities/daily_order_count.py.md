@@ -6,6 +6,8 @@ Some brokers refuse every order past a fixed number a day. It came up while desi
 
 The caps found on 2026-09-23 were Zerodha at 5,000 a day (Kite's documentation; a 2023 forum answer said 3,000 across every platform, and the account holder confirmed 5,000 on 2026-09-24), Dhan at 7,000, Shoonya saying there is none, and the other seven publishing none. Zerodha counts placements only, rejections included; modifies and cancels do not count. Whether Dhan counts modifies was not found.
 
+On 2026-09-24 every broker's own API documentation was read. Dhan's 7,000 is on the DhanHQ v2 home page, in one "Order APIs" bucket that probably includes modifies. Fyers' "Regulatory Changes (April 2026)" page caps transactional requests at 10,000 a day and explicitly counts modify, cancel and exit, which this class does not: it counts in `count_sent`, which only placements reach. Shoonya states there is no daily limit. The other six state none. The full table is in `docs/getting-started/configuration.md`.
+
 ## Why part of the cap is kept for exits
 
 At Zerodha, once the cap is reached, even the order that closes a position is refused. A count that let entries run right up to the cap could leave an open position that cannot be closed until support raises the limit. So entries stop at `cap - int(cap * exit_reserve)`, and exits may continue to the cap itself. The default reserve is 5 per cent: 250 orders of Zerodha's 5,000.

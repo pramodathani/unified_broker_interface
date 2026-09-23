@@ -111,12 +111,25 @@ caller sets `closes_position: true` in the order's `synthetic` object, which is 
 position says so. The count only sees orders this engine sent: orders placed from a broker's own app or website, and
 the REST API's direct modifies and cancels, are not in it.
 
-| Broker | Published daily cap | Source, as found on 2026-09-23 |
-| --- | --- | --- |
-| Zerodha | 5,000 a day, rejected orders included | Kite Connect documentation, confirmed by the account holder on 2026-09-24; a 2023 forum post said 3,000 across every platform |
-| Dhan | 7,000 a day | DhanHQ API documentation |
-| Shoonya | Says there is no daily limit | Shoonya API FAQ |
-| The other seven | None published | Their API documentation |
+Each broker's own API documentation was read on 2026-09-24 for these limits. Three brokers publish a daily cap, and
+every broker limits order requests to about ten a second, which is also SEBI's threshold for registering an algorithm.
+
+| Broker | Daily cap | Do modifies and cancels count | Modifies per order | Orders per second | Source |
+| --- | --- | --- | --- | --- | --- |
+| Zerodha | **5,000** | No, placements only, rejections included | 25 | 10 | Kite Connect documentation; confirmed by the account holder |
+| Dhan | **7,000** | Not stated; "Order APIs" is one bucket, so probably yes | 25 | 10, and 250 a minute, 1,000 an hour | [dhanhq.co/docs/v2](https://dhanhq.co/docs/v2/) |
+| Fyers | **10,000** transactional requests | **Yes**: place, modify, cancel, exit and multi-leg orders all count | Not stated | 10, and 200 a minute; the per-minute limit exceeded three times in a day blocks the user until the next day | Fyers API v3 "Regulatory Changes (April 2026)" page |
+| Groww | Not stated | Share the per-second bucket | Not stated | 10, and 250 a minute | [groww.in/trade-api/docs](https://groww.in/trade-api/docs/curl) |
+| INDmoney | Not stated; the per-day cell for order APIs is blank | Not stated | 25 | 10 | [api-docs.indstocks.com/conventions](https://api-docs.indstocks.com/conventions/) |
+| Stoxkart | Not stated | Not stated | Not stated | 10 each for place, modify and cancel | [developers.stoxkart.com](https://developers.stoxkart.com/api-documentation/rate-limit) |
+| Kotak | Not stated | Not stated | Not stated | 10 | [kotakneo.com](https://www.kotakneo.com/platform/kotak-neo-trade-api/) |
+| Shoonya | **None**, stated explicitly | n/a | Not stated | About 10, shared by place, modify and cancel; its older FAQ says 20 | [shoonya.com rate limits](https://shoonya.com/api-documentation/rate-limits) |
+| Flattrade | Not stated | n/a | Not stated | Under 10 without a registered algorithm | Flattrade's January 2026 API v2 notice; its API docs could not be read |
+| Wisdom Capital | Not stated | n/a | Not stated | 10, shared by place, modify and cancel | Symphony's XTS documentation; Wisdom Capital's own pages could not be read |
+
+So the setting to use is `zerodha=5000,dhan=7000,fyers=10000`. Fyers needs care, because its cap counts every modify
+and cancel, and this count sees only placements: a type that re-prices, such as `peg` or `chaser`, spends Fyers'
+cap faster than the count shows. Until modifies are counted for Fyers, configure its cap well below 10,000.
 
 `..._ORDER_FLATTEN_WAIT_SECONDS` is how long `POST /api/orders/flatten` re-reads the brokers' order books waiting for
 its cancels to be confirmed before it closes any position. Waiting matters more than being quick: a protective order
