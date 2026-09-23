@@ -2065,7 +2065,7 @@ class OrderEngineSuite:
             },
         })
 
-    def reaction_result(self, name, body, updates, answer=None):
+    def reaction_result(self, name, body, updates, answer=None, gated=False):
         """Places one order through the engine, then feeds it order updates and records what it does.
 
         This is the only place the two halves of the engine run together: the intent loop places the
@@ -2077,6 +2077,7 @@ class OrderEngineSuite:
             body (dict): The request body.
             updates (list): One order update per step, applied in order.
             answer (dict | None): The stubbed broker answer.
+            gated (int | bool): How many requests a second the rate budget allows, or False for no budget.
 
         Returns:
             dict: The recorded result.
@@ -2091,6 +2092,13 @@ class OrderEngineSuite:
         placement = EnginePlacement(self.fake_redis, logger)
         event_log = RecordingEventLog()
         parent_store = ParentStore(self.fake_redis)
+        gates = None
+        if gated:
+            gates = RiskGates(
+                RateBudget(gated, gated, 0, logger),
+                LossLockout(self.fake_redis, 0, logger),
+                OrderToTradeRatio(),
+            )
         engine = OrderEngine(
             self.fake_redis,
             placement,
@@ -2100,6 +2108,8 @@ class OrderEngineSuite:
             RESULT_TTL_SECONDS,
             event_log,
             parent_store,
+            None,
+            gates,
         )
         engine.run(OnePassStop(3))
 
@@ -2107,7 +2117,7 @@ class OrderEngineSuite:
             parent_store,
             event_log,
             logger,
-            None,
+            gates,
             placement,
         )
         for update in updates:
@@ -2155,6 +2165,7 @@ class OrderEngineSuite:
             'parent_states': [parent.state for parent in parents],
             'followed': follower.followed,
             'reacted': follower.reacted,
+            'gates': gates.counts() if gates is not None else None,
         }
 
     def sent_quantity(self, request):
@@ -2250,6 +2261,16 @@ class OrderEngineSuite:
                     self.update('26091500000021', 'OPEN', 4),
                 ],
                 accepted,
+            ),
+            self.reaction_result(
+                'the_rate_budget_now_covers_changes_not_only_placements',
+                bracket_body,
+                [
+                    self.update('26091500000021', 'OPEN', 4),
+                    self.update('26091500000021', 'COMPLETE', 10),
+                ],
+                accepted,
+                gated=3,
             ),
             self.reaction_result(
                 'a_scale_out_arms_one_stop_and_several_targets',

@@ -257,6 +257,8 @@ class SyntheticOrder:
             'broker_order_id': leg.broker_order_id,
             'status_message': reason,
         })
+        if not self.take_rate_token(leg, reason):
+            return False
         try:
             answer = self.placement.cancel(leg.broker, leg.broker_order_id)
         except Exception as error:
@@ -306,6 +308,8 @@ class SyntheticOrder:
         """
         if quantity < 1:
             return self.cancel_leg(leg, reason)
+        if not self.take_rate_token(leg, reason):
+            return False
         try:
             answer = self.placement.modify_leg(
                 leg.broker,
@@ -357,6 +361,8 @@ class SyntheticOrder:
         Returns:
             bool: True when the broker accepted the change.
         """
+        if not self.take_rate_token(leg, reason):
+            return False
         try:
             answer = self.placement.modify_leg(
                 leg.broker,
@@ -399,6 +405,40 @@ class SyntheticOrder:
             },
         })
         return accepted
+
+    def take_rate_token(self, leg, reason):
+        """Waits for the rate budget to allow one more request to this leg's broker.
+
+        Placing, changing and cancelling all count the same to an exchange, so all three pass through here. Until this existed the budget covered placements only, which was tolerable while nothing changed an order much and stops being tolerable the moment a type re-prices: a chaser walking towards the touch spends its whole budget on changes and would have been invisible to a limit that only watched placements.
+
+        A refusal is recorded against the leg and returns False rather than raising, because the caller is usually reacting to a fill and has other legs to attend to. The thing that did not happen is in the log either way.
+
+        Args:
+            leg (OrderLeg): The leg the request is about.
+            reason (str): What the request was for, for the message.
+
+        Returns:
+            bool: True when the request may be sent.
+        """
+        if self.gates is None:
+            return True
+        try:
+            self.gates.take_rate_token(leg.broker)
+        except RefusedRequestError as refusal:
+            self.record({
+                'event': 'leg_update',
+                'parent_state': self.parent.state,
+                'leg_id': leg.leg_id,
+                'leg_role': leg.role,
+                'broker': leg.broker,
+                'broker_order_id': leg.broker_order_id,
+                'outcome': 'rejected',
+                'status_message': (
+                    f'{reason}; not sent: {refusal.body.get("error")}'
+                ),
+            })
+            return False
+        return True
 
     def json_number(self, value):
         """A price as a number the parent's Redis record can hold.
