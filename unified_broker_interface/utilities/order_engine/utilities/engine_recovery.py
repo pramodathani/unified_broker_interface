@@ -9,7 +9,13 @@ from unified_broker_interface.utilities.order_engine.utilities.orphan_matcher im
 from unified_broker_interface.utilities.order_engine.utilities.parent_order import (
     ParentOrder,
 )
+from unified_broker_interface.utilities.order_engine.utilities.registry import (
+    SYNTHETIC_ORDER_CLASSES,
+)
 
+# How far back the carried types are read. Long enough for a stop armed before a long weekend and a
+# holiday to still be found, short enough that the query stays small.
+CARRY_DAYS = 30
 LEG_STATES_FROM_STATUS = {
     'PENDING': 'acknowledged',
     'OPEN': 'acknowledged',
@@ -102,13 +108,41 @@ class EngineRecovery:
             datetime.timezone.utc,
         )
 
+    def carried_types(self):
+        """The order types whose parents outlive a trading day.
+
+        Returns:
+            list: The type names, sorted so the query is the same every time.
+        """
+        carried = []
+        for name, synthetic_order_class in SYNTHETIC_ORDER_CLASSES.items():
+            if getattr(synthetic_order_class, 'CARRIES_OVERNIGHT', False):
+                carried.append(name)
+        return sorted(carried)
+
+    def carry_window_start(self):
+        """How far back the carried types are read from.
+
+        Returns:
+            datetime.datetime: The start of the window, in UTC.
+        """
+        return self.window_start() - datetime.timedelta(days=CARRY_DAYS)
+
     def replay(self):
-        """Rebuilds every parent from the day's recorded transitions.
+        """Rebuilds every parent from the day's recorded transitions, and the carried ones from further back.
+
+        The two reads are merged by parent rather than concatenated. A carried parent that also did something today appears in both, and its events have to end up in one list in sequence order or `ParentOrder.from_events` replays them out of order and rebuilds the wrong state.
 
         Returns:
             list: The `ParentOrder` objects, in the order the record holds them.
         """
         events = self.event_log.read_since(self.window_start())
+        carried = self.event_log.read_since_for_types(
+            self.carry_window_start(),
+            self.carried_types(),
+        )
+        if carried:
+            events = self.merged(events, carried)
         by_parent = {}
         order = []
         for event in events:
@@ -123,6 +157,32 @@ class EngineRecovery:
             if parent is not None:
                 parents.append(parent)
         return parents
+
+    def merged(self, events, carried):
+        """The two reads as one list, with each parent's events in sequence order and nothing counted twice.
+
+        Args:
+            events (list): The day's events.
+            carried (list): The carried types' events, which may overlap.
+
+        Returns:
+            list: The merged events.
+        """
+        seen = set()
+        merged = []
+        for event in list(carried) + list(events):
+            key = (str(event.get('parent_order_id')), event.get('sequence'))
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(event)
+        merged.sort(
+            key=lambda event: (
+                str(event.get('parent_order_id')),
+                event.get('sequence') or 0,
+            ),
+        )
+        return merged
 
     def read_broker_books(self):
         """Every broker's order book and when it was last read, in one round trip.

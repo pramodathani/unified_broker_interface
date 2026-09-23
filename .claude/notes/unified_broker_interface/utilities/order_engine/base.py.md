@@ -23,3 +23,13 @@ A parent with nothing recorded yet, such as a dry run's, is left alone. There is
 ## Why a dry run records nothing at all
 
 `SimpleOrder.run` answers a dry run from `prepare` without creating a parent or writing an event. Nothing happened: no order exists, so there is nothing for recovery to find and nothing for a later reader of the event log to be misled by. A dry run that left a parent behind would be a parent that never finishes.
+
+## Why changing and cancelling take a rate token too
+
+An exchange does not distinguish a placement from a change or a cancel: all three are requests against the same per-second allowance, and SEBI's algorithmic-trading threshold counts them the same way. Until `take_rate_token` existed the budget covered placements only, which was tolerable while no order type changed an order after sending it.
+
+It stops being tolerable the moment a type re-prices. A chaser that walks its limit towards the touch, or a peg that follows the best bid, spends almost its entire request budget on changes and would have been completely invisible to a budget that only watched placements. The same is true of the linked types, which reduce a sibling on every partial fill.
+
+A refusal is recorded against the leg and returns `False` rather than raising. The caller is usually reacting to a fill and has other legs to attend to, and an exception would abandon them. The thing that did not happen is in the event log either way, which is what a later reader needs.
+
+The offline recording covers this with a bracket run behind a budget of three requests a second. The entry and the two exits spend the whole allowance, so the two changes that would have grown the exits from four to ten are refused, and the exits stay at four. The same scenario without the guard sends all five requests.

@@ -51,6 +51,7 @@ UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_PER_BROKER_PER_SECOND=5
 UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_WAIT_SECONDS=1
 UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_LOSS_LIMIT=0
 UNIFIED_BROKER_INTERFACE_API_ORDER_FLATTEN_WAIT_SECONDS=5
+UNIFIED_BROKER_INTERFACE_API_ORDER_REPRICE_MINIMUM_SECONDS=1
 
 # Optional: the shortest time, in seconds, between ensure_session login attempts for one broker
 UNIFIED_BROKER_INTERFACE_LOGIN_MIN_INTERVAL=300
@@ -66,7 +67,7 @@ with HTTP 504, how long that answer is kept for a worker that never collected it
 its deadline an order may be before the engine records it rather than placing it into a market that
 has moved.
 
-The order engine's risk gates are the last four. `..._ORDER_RATE_PER_SECOND` and
+The order engine's risk gates are the last five. `..._ORDER_RATE_PER_SECOND` and
 `..._ORDER_RATE_PER_BROKER_PER_SECOND` are a token bucket across every broker and for any one of them, defaulting well
 under the ten orders a second that SEBI's retail algorithmic trading framework treats as algorithmic trading needing
 registration. An order that finds the bucket empty waits up to `..._ORDER_RATE_WAIT_SECONDS` for a token and is
@@ -79,8 +80,20 @@ when it is, because a limit guessed on your behalf would be worse than none: too
 is theatre. Unrealized loss counts, because a position held at a loss has lost the money whether or not it has been
 closed.
 
-These are limits on placements. `PUT /api/orders/modify` and `DELETE /api/orders/cancel` still go straight from an API
-worker to a broker and are not counted against the rate budget.
+`..._ORDER_REPRICE_MINIMUM_SECONDS` is the shortest gap allowed between two changes to **one** resting order, and it
+is what keeps the types that follow the market honest. The rate budget asks whether the system may send another
+request; this asks whether that particular order has been left alone long enough to be worth moving. An account well
+inside a budget of eight requests a second can still be moving one order eight times a second all day, and only this
+catches it.
+
+It **refuses** rather than waits, which is the opposite of what the rate budget does. An order the budget held back is
+the same order a moment later; a price a chaser worked out a second ago is the wrong price, so the move is dropped and
+the next tick works out a fresh one. Setting it to zero turns the throttle off, which is reasonable only if nothing you
+run re-prices.
+
+A change and a cancel take a token from the rate budget as a placement does, because an exchange counts all three the
+same way. What is still outside it is the REST API's own `PUT /api/orders/modify` and `DELETE /api/orders/cancel`,
+which go straight from a worker to a broker.
 
 `..._ORDER_FLATTEN_WAIT_SECONDS` is how long `POST /api/orders/flatten` re-reads the brokers' order books waiting for
 its cancels to be confirmed before it closes any position. Waiting matters more than being quick: a protective order

@@ -240,6 +240,51 @@ class SyntheticOrderEventLog:
             events.append(event)
         return events
 
+    def read_since_for_types(self, moment, types):
+        """Every transition of the named order types recorded at or after `moment`.
+
+        This exists for the handful of types that outlive a trading day. The ordinary recovery scan reads from the last 06:00 IST, which is right for everything that is finished by the close, and would silently forget a stop somebody armed on Monday for a position they mean to hold until Friday.
+
+        It is a separate read rather than a wider window for everything, because the day's events are the overwhelming majority and reading a week of them at every start would grow without bound. This one is narrowed by type, and the types that carry are the ones that place almost nothing.
+
+        Args:
+            moment (datetime.datetime): The start of the window.
+            types (list): The `synthetic_type` values to read.
+
+        Returns:
+            list: One dictionary per row, by column name.
+
+        Raises:
+            Exception: Anything the database raises, after dropping the connection so the next read reconnects.
+        """
+        if not types:
+            return []
+        columns = ', '.join(f'"{column}"' for column in COLUMNS)
+        statement = (
+            f'select {columns} from unified.synthetic_order_events '
+            'where "time" >= %s and synthetic_type = any(%s) '
+            'order by parent_order_id, sequence, "time"'
+        )
+        try:
+            connection = self.held_connection()
+            with connection.cursor() as cursor:
+                cursor.execute(statement, [
+                    moment,
+                    list(types),
+                ])
+                fetched = cursor.fetchall()
+            connection.commit()
+        except Exception:
+            self.forget_connection()
+            raise
+        events = []
+        for values in fetched:
+            event = {}
+            for column, value in zip(COLUMNS, values):
+                event[column] = self.json_ready(value)
+            events.append(event)
+        return events
+
     def json_ready(self, value):
         """One value from the database as a type the rest of the engine can hold and serialise.
 

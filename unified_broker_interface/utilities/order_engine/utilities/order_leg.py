@@ -27,6 +27,7 @@ class OrderLeg:
         leg_id (str): This leg's id, the parent's id and a counter.
         role (str): What the leg is for: `entry`, `stop`, `target`, `slice` or `chase`.
         state (str): One of `LEG_STATES`.
+        instrument_id (str | None): The instrument this leg trades, which is the parent's own except in a parent that spans several.
         broker (str | None): The broker it was sent to.
         broker_order_id (str | None): The broker's own order id, once it answered with one.
         exchange_order_id (str | None): The exchange's order id, once an update carried one.
@@ -60,6 +61,7 @@ class OrderLeg:
         self.leg_id = leg_id
         self.role = role
         self.state = 'planned'
+        self.instrument_id = None
         self.broker = None
         self.broker_order_id = None
         self.exchange_order_id = None
@@ -110,6 +112,7 @@ class OrderLeg:
         return {
             'leg_id': self.leg_id,
             'role': self.role,
+            'instrument_id': self.instrument_id,
             'state': self.state,
             'broker': self.broker,
             'broker_order_id': self.broker_order_id,

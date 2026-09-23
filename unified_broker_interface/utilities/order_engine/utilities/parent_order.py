@@ -274,6 +274,7 @@ class ParentOrder:
         if event.get('leg_state'):
             leg.state = event['leg_state']
         for column, attribute in (
+            ('instrument_id', 'instrument_id'),
             ('broker', 'broker'),
             ('broker_order_id', 'broker_order_id'),
             ('exchange_order_id', 'exchange_order_id'),

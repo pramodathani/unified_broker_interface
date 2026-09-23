@@ -66,8 +66,14 @@ from unified_broker_interface.utilities.order_engine.utilities.parent_order impo
 from unified_broker_interface.utilities.order_engine.utilities.parent_store import (
     ParentStore,
 )
+from unified_broker_interface.utilities.order_engine.utilities.price_ticker import (
+    PriceTicker,
+)
 from unified_broker_interface.utilities.order_engine.utilities.rate_budget import (
     RateBudget,
+)
+from unified_broker_interface.utilities.order_engine.utilities.repricing_throttle import (
+    RepricingThrottle,
 )
 from unified_broker_interface.utilities.order_engine.utilities.risk_gates import (
     RiskGates,
@@ -590,6 +596,25 @@ class RecordingEventLog:
         """
         for event in events:
             self.record(event)
+
+    def read_since_for_types(self, moment, types):
+        """Every transition kept whose order type is one of `types`.
+
+        The real one reads a longer window for the types that outlive a trading day. The stand-in keeps one run's events, so the window means nothing here and only the type filter does.
+
+        Args:
+            moment (datetime.datetime): Ignored, since the stand-in keeps only one run's events.
+            types (list): The `synthetic_type` values to read.
+
+        Returns:
+            list: The matching events, by parent and then sequence.
+        """
+        wanted = set(types or [])
+        return [
+            event
+            for event in self.read_since(moment)
+            if event.get('synthetic_type') in wanted
+        ]
 
     def read_since(self, moment):
         """Every transition kept, ordered as the table orders them.
@@ -2065,7 +2090,15 @@ class OrderEngineSuite:
             },
         })
 
-    def reaction_result(self, name, body, updates, answer=None):
+    def reaction_result(
+        self,
+        name,
+        body,
+        updates,
+        answer=None,
+        gated=False,
+        quote=None,
+    ):
         """Places one order through the engine, then feeds it order updates and records what it does.
 
         This is the only place the two halves of the engine run together: the intent loop places the
@@ -2077,12 +2110,16 @@ class OrderEngineSuite:
             body (dict): The request body.
             updates (list): One order update per step, applied in order.
             answer (dict | None): The stubbed broker answer.
+            gated (int | bool): How many requests a second the rate budget allows, or False for no budget.
+            quote (dict | None): A live quote to seed, for a type that reads the book when it is placed.
 
         Returns:
             dict: The recorded result.
         """
         scenario = self.scenarios.intents(name, [body], answer=answer)
         self.fake_redis = self.build_state()
+        if quote is not None:
+            self.seed_quote(quote)
         self.network.reset(answer)
         self.counting_uuid.reset()
         reply_keys = self.write_intents(scenario)
@@ -2091,6 +2128,13 @@ class OrderEngineSuite:
         placement = EnginePlacement(self.fake_redis, logger)
         event_log = RecordingEventLog()
         parent_store = ParentStore(self.fake_redis)
+        gates = None
+        if gated:
+            gates = RiskGates(
+                RateBudget(gated, gated, 0, logger),
+                LossLockout(self.fake_redis, 0, logger),
+                OrderToTradeRatio(),
+            )
         engine = OrderEngine(
             self.fake_redis,
             placement,
@@ -2100,6 +2144,8 @@ class OrderEngineSuite:
             RESULT_TTL_SECONDS,
             event_log,
             parent_store,
+            None,
+            gates,
         )
         engine.run(OnePassStop(3))
 
@@ -2107,7 +2153,7 @@ class OrderEngineSuite:
             parent_store,
             event_log,
             logger,
-            None,
+            gates,
             placement,
         )
         for update in updates:
@@ -2155,6 +2201,7 @@ class OrderEngineSuite:
             'parent_states': [parent.state for parent in parents],
             'followed': follower.followed,
             'reacted': follower.reacted,
+            'gates': gates.counts() if gates is not None else None,
         }
 
     def sent_quantity(self, request):
@@ -2202,6 +2249,7 @@ class OrderEngineSuite:
             200,
             self.scenarios.answers.place_success('flattrade'),
         )
+        identifiers = order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS
         bracket_body = self.scenarios.bodies.market_order(
             dry_run=None,
             order_type='LIMIT',
@@ -2250,6 +2298,287 @@ class OrderEngineSuite:
                     self.update('26091500000021', 'OPEN', 4),
                 ],
                 accepted,
+            ),
+            self.reaction_result(
+                'the_rate_budget_now_covers_changes_not_only_placements',
+                bracket_body,
+                [
+                    self.update('26091500000021', 'OPEN', 4),
+                    self.update('26091500000021', 'COMPLETE', 10),
+                ],
+                accepted,
+                gated=3,
+            ),
+            self.reaction_result(
+                'a_legged_spread_prices_its_second_leg_from_the_first_fill',
+                self.scenarios.bodies.market_order(
+                    dry_run=None,
+                    order_type='LIMIT',
+                    price=1000,
+                    quantity=10,
+                    synthetic={
+                        'type': 'legged_spread',
+                        'net_price': 20,
+                        'candidates': [
+                            {
+                                'instrument_id': identifiers['reliance'],
+                                'transaction_type': 'BUY',
+                                'quantity': 500,
+                                'price': 1000,
+                            },
+                            {
+                                'instrument_id': (
+                                    identifiers['reliance_future']
+                                ),
+                                'transaction_type': 'SELL',
+                                'quantity': 500,
+                                'price': 980,
+                            },
+                        ],
+                    },
+                ),
+                [
+                    self.update('26091500000021', 'COMPLETE', 500,
+                                average_price=1002.0),
+                ],
+                accepted,
+            ),
+            self.reaction_result(
+                'a_legged_spread_with_three_legs_is_refused',
+                self.scenarios.bodies.market_order(
+                    dry_run=None,
+                    order_type='LIMIT',
+                    price=1000,
+                    quantity=10,
+                    synthetic={
+                        'type': 'legged_spread',
+                        'net_price': 20,
+                        'candidates': [
+                            {'instrument_id': identifiers['reliance']},
+                            {'instrument_id': identifiers['kwil']},
+                            {'instrument_id': identifiers['nifty_option']},
+                        ],
+                    },
+                ),
+                [],
+                accepted,
+            ),
+            self.reaction_result(
+                'a_basket_places_every_leg_and_reports_each_one',
+                self.scenarios.bodies.market_order(
+                    dry_run=None,
+                    order_type='LIMIT',
+                    price=1000,
+                    quantity=10,
+                    synthetic={
+                        'type': 'basket',
+                        'candidates': [
+                            {
+                                'instrument_id': identifiers['reliance'],
+                                'quantity': 10,
+                                'price': 1000,
+                            },
+                            {
+                                'instrument_id': identifiers['kwil'],
+                                'quantity': 5,
+                                'price': 250,
+                            },
+                            {
+                                'instrument_id': identifiers['nifty_option'],
+                                'transaction_type': 'SELL',
+                                'quantity': 75,
+                                'price': 120,
+                            },
+                        ],
+                    },
+                ),
+                [],
+                accepted,
+            ),
+            self.reaction_result(
+                'a_basket_that_repeats_an_instrument_is_refused',
+                self.scenarios.bodies.market_order(
+                    dry_run=None,
+                    order_type='LIMIT',
+                    price=1000,
+                    quantity=10,
+                    synthetic={
+                        'type': 'basket',
+                        'candidates': [
+                            {
+                                'instrument_id': identifiers['reliance'],
+                                'quantity': 10,
+                            },
+                            {
+                                'instrument_id': identifiers['reliance'],
+                                'quantity': 5,
+                            },
+                        ],
+                    },
+                ),
+                [],
+                accepted,
+            ),
+            self.reaction_result(
+                'a_one_cancels_all_group_calls_off_the_rest_on_the_first_fill',
+                self.scenarios.bodies.market_order(
+                    dry_run=None,
+                    order_type='LIMIT',
+                    price=1000,
+                    quantity=10,
+                    synthetic={
+                        'type': 'oca',
+                        'candidates': [
+                            {
+                                'instrument_id': identifiers['reliance'],
+                                'quantity': 10,
+                                'price': 1000,
+                            },
+                            {
+                                'instrument_id': identifiers['kwil'],
+                                'quantity': 5,
+                                'price': 250,
+                            },
+                            {
+                                'instrument_id': identifiers['sensex_option'],
+                                'quantity': 20,
+                                'price': 80,
+                            },
+                        ],
+                    },
+                ),
+                [
+                    self.update('26091500000021', 'OPEN', 4),
+                ],
+                accepted,
+            ),
+            self.reaction_result(
+                'a_cover_order_arms_its_stop_and_has_no_target',
+                self.scenarios.bodies.market_order(
+                    dry_run=None,
+                    order_type='LIMIT',
+                    price=1000,
+                    quantity=10,
+                    synthetic={
+                        'type': 'cover',
+                        'stop_price': 990,
+                        'stop_limit_price': 988,
+                    },
+                ),
+                [
+                    self.update('26091500000021', 'OPEN', 4),
+                ],
+                accepted,
+            ),
+            self.reaction_result(
+                'a_cover_order_with_a_target_is_refused',
+                self.scenarios.bodies.market_order(
+                    dry_run=None,
+                    order_type='LIMIT',
+                    price=1000,
+                    quantity=10,
+                    synthetic={
+                        'type': 'cover',
+                        'stop_price': 990,
+                        'stop_limit_price': 988,
+                        'target_price': 1010,
+                    },
+                ),
+                [],
+                accepted,
+            ),
+            self.reaction_result(
+                'an_iceberg_shows_the_next_slice_only_once_the_last_one_filled',
+                self.scenarios.bodies.market_order(
+                    dry_run=None,
+                    order_type='LIMIT',
+                    price=1000,
+                    quantity=100,
+                    synthetic={
+                        'type': 'iceberg',
+                        'slice_quantity': 20,
+                    },
+                ),
+                [
+                    self.update('26091500000021', 'OPEN', 12),
+                    self.update('26091500000021', 'COMPLETE', 20),
+                ],
+                accepted,
+            ),
+            self.reaction_result(
+                'an_iceberg_varies_what_it_shows_when_asked_to',
+                self.scenarios.bodies.market_order(
+                    dry_run=None,
+                    order_type='LIMIT',
+                    price=1000,
+                    quantity=100,
+                    synthetic={
+                        'type': 'iceberg',
+                        'slice_quantity': 20,
+                        'randomise_percent': 25,
+                    },
+                ),
+                [
+                    self.update('26091500000021', 'COMPLETE', 20),
+                ],
+                accepted,
+            ),
+            self.reaction_result(
+                'a_grid_replaces_a_filled_rung_with_its_opposite',
+                self.scenarios.bodies.market_order(
+                    dry_run=None,
+                    order_type='LIMIT',
+                    price=1000,
+                    quantity=5,
+                    synthetic={
+                        'type': 'grid',
+                        'levels': 2,
+                        'step_points': 5,
+                        'most_inventory': 20,
+                    },
+                ),
+                [
+                    self.update('26091500000021', 'COMPLETE', 5),
+                ],
+                accepted,
+                quote=self.scenarios.quote(),
+            ),
+            self.reaction_result(
+                'a_grid_stops_adding_to_a_side_once_it_hits_its_cap',
+                self.scenarios.bodies.market_order(
+                    dry_run=None,
+                    order_type='LIMIT',
+                    price=1000,
+                    quantity=5,
+                    synthetic={
+                        'type': 'grid',
+                        'levels': 2,
+                        'step_points': 5,
+                        'most_inventory': 5,
+                    },
+                ),
+                [
+                    self.update('26091500000021', 'COMPLETE', 5),
+                ],
+                accepted,
+                quote=self.scenarios.quote(),
+            ),
+            self.reaction_result(
+                'a_grid_without_an_inventory_cap_is_refused',
+                self.scenarios.bodies.market_order(
+                    dry_run=None,
+                    order_type='LIMIT',
+                    price=1000,
+                    quantity=5,
+                    synthetic={
+                        'type': 'grid',
+                        'levels': 2,
+                        'step_points': 5,
+                    },
+                ),
+                [],
+                accepted,
+                quote=self.scenarios.quote(),
             ),
             self.reaction_result(
                 'a_scale_out_arms_one_stop_and_several_targets',
@@ -2315,7 +2644,16 @@ class OrderEngineSuite:
             ),
         ]
 
-    def clock_result(self, name, request_body, fills, tick_at, answer=None):
+    def clock_result(
+        self,
+        name,
+        request_body,
+        fills,
+        tick_at,
+        answer=None,
+        quote=None,
+        positions=None,
+    ):
         """Places one timed order, optionally fills it, then gives it a clock tick.
 
         The tick is called with a chosen moment rather than waited for, so a scenario about half past ten costs no time and means the same thing on every run. A second tick follows, to check the type does not act twice on one instruction.
@@ -2326,12 +2664,20 @@ class OrderEngineSuite:
             fills (list): Order updates to apply before the tick.
             tick_at (float): The Unix time to tick at.
             answer (dict | None): The stubbed broker answer.
+            quote (dict | None): A live quote to seed, for a type that reads the book when it is placed.
+            positions (float | None): A net position in RELIANCE to seed, for a type that reads the account's holdings.
 
         Returns:
             dict: The recorded result.
         """
         scenario = self.scenarios.intents(name, [request_body], answer=answer)
         self.fake_redis = self.build_state()
+        if quote is not None:
+            self.seed_quote(quote)
+        if positions is not None:
+            self.fake_redis.strings['unified:portfolio:positions'] = json.dumps(
+                self.scenarios.positions(positions),
+            )
         self.network.reset(answer)
         self.counting_uuid.reset()
         reply_keys = self.write_intents(scenario)
@@ -2418,11 +2764,167 @@ class OrderEngineSuite:
             'parent_states': [parent.state for parent in parents],
         }
 
+    def seed_quote(self, quote):
+        """Puts one live quote where the engine and the price ticker both read it.
+
+        Args:
+            quote (dict | None): The quote, or None to leave the instrument without one.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        instrument_id = order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS[
+            'reliance'
+        ]
+        quotes = self.fake_redis.hashes.setdefault('unified:quotes:live', {})
+        if quote is None:
+            quotes.pop(instrument_id, None)
+            return
+        quotes[instrument_id] = json.dumps(quote)
+
+    def price_result(
+        self,
+        name,
+        request_body,
+        steps,
+        answer=None,
+        throttle_seconds=0,
+        book_overrides=None,
+        fills=None,
+        positions=None,
+    ):
+        """Places one watching order, then walks it through a sequence of quotes.
+
+        Each step is a quote and the moment it arrives at, so a scenario about a chaser stepping every five seconds costs no time and means the same thing on every run. Every broker request is kept in the order it was sent, which is what shows whether a type moved its order once, twice or not at all.
+
+        Args:
+            name (str): The check's name.
+            request_body (dict): The request body.
+            steps (list): One `{"quote": dict | None, "at": float}` per tick, where `at` is seconds after the order was placed.
+            answer (dict | None): The stubbed broker answer.
+            throttle_seconds (float): The shortest gap the re-pricing throttle allows between two moves of one order.
+            book_overrides (dict | None): Fields to replace on the broker's order book entry, for a type whose order is not a plain limit.
+            fills (list | None): Order updates to apply before the first tick, for a type that only acts once its legs are filled.
+            positions (float | None): A net position in RELIANCE to seed, for a type that reads the account's holdings.
+
+        Returns:
+            dict: The recorded result.
+        """
+        scenario = self.scenarios.intents(name, [request_body], answer=answer)
+        self.fake_redis = self.build_state()
+        self.network.reset(answer)
+        self.counting_uuid.reset()
+        starting = steps[0]['quote'] if steps else None
+        self.seed_quote(starting)
+        if positions is not None:
+            self.fake_redis.strings['unified:portfolio:positions'] = json.dumps(
+                self.scenarios.positions(positions),
+            )
+        reply_keys = self.write_intents(scenario)
+
+        logger = logging.getLogger('test_runs.order_engine')
+        placement = EnginePlacement(self.fake_redis, logger)
+        event_log = RecordingEventLog()
+        parent_store = ParentStore(self.fake_redis)
+        gates = RiskGates(
+            RateBudget(100, 100, 0, logger),
+            LossLockout(self.fake_redis, 0, logger),
+            OrderToTradeRatio(),
+            RepricingThrottle(throttle_seconds),
+        )
+        ticker = PriceTicker(
+            self.fake_redis,
+            parent_store,
+            event_log,
+            placement,
+            logger,
+            gates,
+        )
+        engine = OrderEngine(
+            self.fake_redis,
+            placement,
+            EngineLock(self.fake_redis, logger),
+            logger,
+            STALE_INTENT_SECONDS,
+            RESULT_TTL_SECONDS,
+            event_log,
+            parent_store,
+            None,
+            gates,
+        )
+        started = FROZEN_NOW.timestamp()
+        original_time = time.time
+        time.time = lambda: started
+        try:
+            engine.run(OnePassStop(3))
+        finally:
+            time.time = original_time
+        reply = self.shown_replies(reply_keys)[0]
+
+        # The broker's own book has to hold the order before a change can be built from it, exactly
+        # as it does in life.
+        book = self.fake_redis.hashes.setdefault('flattrade:orders:orders', {})
+        book['26091500000021'] = self.broker_book_entry(
+            '26091500000021',
+            status='OPEN',
+            **(book_overrides or {}),
+        )
+
+        follower = OrderUpdateFollower(
+            parent_store,
+            event_log,
+            logger,
+            gates,
+            placement,
+        )
+        for update in fills or []:
+            changed = follower.follow({
+                'update': json.dumps(update),
+            })
+            if changed is not None:
+                parent_store.save(changed)
+
+        moves = []
+        for step in steps:
+            self.seed_quote(step.get('quote'))
+            before = len(self.network.sent_requests)
+            self.tick_at(ticker, started + step.get('at', 0))
+            moves.append(len(self.network.sent_requests) - before)
+
+        parents = [
+            ParentOrder.from_document(json.loads(one))
+            for one in self.fake_redis.hashes.get(
+                'unified:orders:parents',
+                {},
+            ).values()
+        ]
+        return {
+            'name': name,
+            'reply': reply,
+            'requests': [
+                request['url'].rsplit('/', 1)[-1]
+                for request in self.network.sent_requests
+            ],
+            'moves_per_tick': moves,
+            'legs': [
+                {
+                    'role': leg.role,
+                    'state': leg.state,
+                    'quantity': leg.quantity,
+                    'price': leg.price,
+                }
+                for parent in parents
+                for leg in parent.legs
+            ],
+            'parent_states': [parent.state for parent in parents],
+            'repricing': gates.throttle.counts(),
+        }
+
     def tick_at(self, ticker, moment):
         """Runs one tick as though it were `moment`.
 
         Args:
-            ticker (ClockTicker): The ticker.
+            ticker (ClockTicker | PriceTicker): The ticker.
             moment (float): The Unix time to tick at.
 
         Returns:
@@ -2528,6 +3030,138 @@ class OrderEngineSuite:
                 accepted,
             ),
             self.clock_result(
+                'a_daily_stop_places_a_fresh_stop_in_the_morning',
+                dict(entry, synthetic={
+                    'type': 'daily_stop',
+                    'stop_price': 990,
+                    'stop_limit_price': 988,
+                    'arm_at': '09:20',
+                }),
+                [],
+                frozen + 60,
+                accepted,
+                quote=self.scenarios.quote(),
+            ),
+            self.clock_result(
+                'a_daily_stop_closes_the_position_when_the_open_gapped_past_it',
+                dict(entry, synthetic={
+                    'type': 'daily_stop',
+                    'stop_price': 990,
+                    'stop_limit_price': 988,
+                    'arm_at': '09:20',
+                }),
+                [],
+                frozen + 60,
+                accepted,
+                quote=self.scenarios.quote(
+                    last_price=960.00,
+                    depth={
+                        'buy': [
+                            {'price': 960.00, 'quantity': 100, 'orders': 1},
+                        ],
+                        'sell': [
+                            {'price': 960.05, 'quantity': 100, 'orders': 1},
+                        ],
+                    },
+                ),
+            ),
+            self.clock_result(
+                'a_square_off_cancels_what_is_resting_and_closes_what_is_held',
+                dict(entry, synthetic={
+                    'type': 'square_off',
+                    'at_time': '15:10',
+                }),
+                [],
+                frozen + 20000,
+                accepted,
+                quote=self.scenarios.quote(),
+                positions=8,
+            ),
+            self.clock_result(
+                'a_square_off_with_nothing_held_closes_nothing',
+                dict(entry, synthetic={
+                    'type': 'square_off',
+                    'at_time': '15:10',
+                }),
+                [],
+                frozen + 20000,
+                accepted,
+                quote=self.scenarios.quote(),
+            ),
+            self.clock_result(
+                'an_accumulation_buys_again_when_its_gap_is_up',
+                dict(entry, quantity=5, synthetic={
+                    'type': 'accumulation',
+                    'every_minutes': 30,
+                    'purchases': 4,
+                }),
+                [],
+                frozen + 2000,
+                accepted,
+                quote=self.scenarios.quote(),
+            ),
+            self.clock_result(
+                'an_accumulation_waits_out_the_gap_between_purchases',
+                dict(entry, quantity=5, synthetic={
+                    'type': 'accumulation',
+                    'every_minutes': 30,
+                    'purchases': 4,
+                }),
+                [],
+                frozen + 60,
+                accepted,
+                quote=self.scenarios.quote(),
+            ),
+            self.clock_result(
+                'a_vwap_gives_the_busiest_part_of_the_day_the_biggest_slice',
+                dict(entry, quantity=100, synthetic={
+                    'type': 'vwap',
+                    'slices': 4,
+                    'over_minutes': 240,
+                }),
+                [],
+                frozen + 20000,
+                accepted,
+            ),
+            self.clock_result(
+                'a_vwap_can_be_given_a_profile_of_its_own',
+                dict(entry, quantity=100, synthetic={
+                    'type': 'vwap',
+                    'slices': 4,
+                    'over_minutes': 240,
+                    'volume_profile': [1, 1, 1, 9, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+                }),
+                [],
+                frozen + 20000,
+                accepted,
+            ),
+            self.clock_result(
+                'an_implementation_shortfall_order_front_loads_its_slices',
+                dict(entry, quantity=100, synthetic={
+                    'type': 'implementation_shortfall',
+                    'slices': 4,
+                    'over_minutes': 20,
+                    'urgency': 1,
+                }),
+                [],
+                frozen + 2000,
+                accepted,
+                quote=self.scenarios.quote(),
+            ),
+            self.clock_result(
+                'an_implementation_shortfall_order_at_zero_urgency_is_a_twap',
+                dict(entry, quantity=100, synthetic={
+                    'type': 'implementation_shortfall',
+                    'slices': 4,
+                    'over_minutes': 20,
+                    'urgency': 0,
+                }),
+                [],
+                frozen + 2000,
+                accepted,
+                quote=self.scenarios.quote(),
+            ),
+            self.clock_result(
                 'a_time_that_has_already_passed_is_refused',
                 dict(entry, synthetic={
                     'type': 'scheduled',
@@ -2535,6 +3169,713 @@ class OrderEngineSuite:
                 }),
                 [],
                 frozen + 60,
+                accepted,
+            ),
+        ]
+
+    def book_at(self, bid, offer):
+        """A quote whose touch sits where a scenario wants it, with five levels behind each side.
+
+        Args:
+            bid (float): The best bid.
+            offer (float): The best offer.
+
+        Returns:
+            dict: The quote.
+        """
+        return self.scenarios.quote(
+            last_price=offer,
+            depth={
+                'buy': [
+                    {
+                        'price': round(bid - index * 0.05, 2),
+                        'quantity': 100,
+                        'orders': 1,
+                    }
+                    for index in range(5)
+                ],
+                'sell': [
+                    {
+                        'price': round(offer + index * 0.05, 2),
+                        'quantity': 100,
+                        'orders': 1,
+                    }
+                    for index in range(5)
+                ],
+            },
+        )
+
+    def run_price_checks(self):
+        """Runs the types that watch the market, which is the only way they do anything.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        accepted = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        entry = self.scenarios.bodies.market_order(
+            dry_run=None,
+            order_type='LIMIT',
+            price=1000,
+            quantity=10,
+        )
+        identifiers = order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS
+        steady = self.book_at(1000.00, 1000.05)
+        return [
+            self.price_result(
+                'a_peg_follows_the_bid_it_is_pegged_to',
+                dict(entry, synthetic={
+                    'type': 'peg',
+                    'reference': 'own_touch',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1000.20, 1000.25), 'at': 1},
+                    {'quote': self.book_at(999.80, 999.85), 'at': 2},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_peg_sends_nothing_while_the_bid_stands_still',
+                dict(entry, synthetic={
+                    'type': 'peg',
+                    'reference': 'own_touch',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1},
+                    {'quote': steady, 'at': 2},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_peg_will_not_follow_the_bid_past_its_cap',
+                dict(entry, synthetic={
+                    'type': 'peg',
+                    'reference': 'own_touch',
+                    'cap_price': 1000.10,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1000.50, 1000.55), 'at': 1},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_peg_to_the_midpoint_rests_between_the_touch',
+                dict(entry, synthetic={
+                    'type': 'peg',
+                    'reference': 'mid',
+                }),
+                [
+                    {'quote': self.book_at(1000.00, 1000.10), 'at': 0},
+                    {'quote': self.book_at(1000.20, 1000.30), 'at': 1},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_peg_held_back_by_the_throttle_does_not_move',
+                dict(entry, synthetic={
+                    'type': 'peg',
+                    'reference': 'own_touch',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1000.20, 1000.25), 'at': 1},
+                    {'quote': self.book_at(1000.40, 1000.45), 'at': 2},
+                ],
+                accepted,
+                throttle_seconds=30,
+            ),
+            self.price_result(
+                'a_peg_does_nothing_on_a_tick_that_carried_no_quote',
+                dict(entry, synthetic={
+                    'type': 'peg',
+                    'reference': 'own_touch',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': None, 'at': 1},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_chaser_steps_towards_the_market_when_its_wait_is_up',
+                dict(entry, synthetic={
+                    'type': 'chaser',
+                    'step_ticks': 1,
+                    'step_seconds': 5,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1},
+                    {'quote': steady, 'at': 6},
+                    {'quote': steady, 'at': 7},
+                    {'quote': steady, 'at': 12},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_chaser_will_not_step_past_its_cap',
+                dict(entry, synthetic={
+                    'type': 'chaser',
+                    'step_ticks': 1,
+                    'step_seconds': 5,
+                    'cap_price': 1000.05,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 6},
+                    {'quote': steady, 'at': 12},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_strategy_stop_closes_every_leg_when_the_total_is_past_its_limit',
+                dict(entry, synthetic={
+                    'type': 'strategy_stop',
+                    'loss_limit': -500,
+                    'candidates': [
+                        {
+                            'instrument_id': identifiers['reliance'],
+                            'quantity': 10,
+                            'price': 1000,
+                        },
+                        {
+                            'instrument_id': identifiers['kwil'],
+                            'transaction_type': 'SELL',
+                            'quantity': 10,
+                            'price': 250,
+                        },
+                    ],
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(900.00, 900.05), 'at': 1},
+                ],
+                accepted,
+                fills=[
+                    self.update('26091500000021', 'COMPLETE', 10,
+                                average_price=1000.0),
+                ],
+            ),
+            self.price_result(
+                'a_strategy_stop_leaves_a_strategy_inside_its_limits_alone',
+                dict(entry, synthetic={
+                    'type': 'strategy_stop',
+                    'loss_limit': -500,
+                    'candidates': [
+                        {
+                            'instrument_id': identifiers['reliance'],
+                            'quantity': 10,
+                            'price': 1000,
+                        },
+                        {
+                            'instrument_id': identifiers['kwil'],
+                            'transaction_type': 'SELL',
+                            'quantity': 10,
+                            'price': 250,
+                        },
+                    ],
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(990.00, 990.05), 'at': 1},
+                ],
+                accepted,
+                fills=[
+                    self.update('26091500000021', 'COMPLETE', 10,
+                                average_price=1000.0),
+                ],
+            ),
+            self.price_result(
+                'an_exposure_hedge_trades_when_the_band_is_left',
+                dict(entry, synthetic={
+                    'type': 'exposure_hedge',
+                    'watched': [
+                        {
+                            'instrument_id': identifiers['reliance'],
+                            'exposure_per_unit': 1,
+                        },
+                    ],
+                    'hedge_instrument_id': identifiers['reliance'],
+                    'hedge_exposure_per_unit': 1,
+                    'lower_band': -10,
+                    'upper_band': 10,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1},
+                ],
+                accepted,
+                positions=100,
+            ),
+            self.price_result(
+                'an_exposure_hedge_inside_its_band_does_nothing',
+                dict(entry, synthetic={
+                    'type': 'exposure_hedge',
+                    'watched': [
+                        {
+                            'instrument_id': identifiers['reliance'],
+                            'exposure_per_unit': 1,
+                        },
+                    ],
+                    'hedge_instrument_id': identifiers['reliance'],
+                    'lower_band': -10,
+                    'upper_band': 10,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1},
+                ],
+                accepted,
+                positions=5,
+            ),
+            self.price_result(
+                'a_participation_order_takes_a_share_of_what_the_market_trades',
+                dict(entry, quantity=100, synthetic={
+                    'type': 'participation',
+                    'participation_percent': 10,
+                }),
+                [
+                    {'quote': steady | {'volume': 10000}, 'at': 0},
+                    {'quote': steady | {'volume': 10300}, 'at': 1},
+                    {'quote': steady | {'volume': 10300}, 'at': 2},
+                    {'quote': steady | {'volume': 10500}, 'at': 3},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_participation_order_sends_nothing_for_a_share_below_one_unit',
+                dict(entry, quantity=100, synthetic={
+                    'type': 'participation',
+                    'participation_percent': 1,
+                }),
+                [
+                    {'quote': steady | {'volume': 10000}, 'at': 0},
+                    {'quote': steady | {'volume': 10050}, 'at': 1},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_liquidity_seeking_order_strikes_when_the_size_appears',
+                dict(entry, quantity=500, synthetic={
+                    'type': 'liquidity_seeking',
+                    'limit_price': 1000.10,
+                    'minimum_quantity': 300,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {
+                        'quote': self.scenarios.quote(depth={
+                            'buy': [{'price': 1000.00, 'quantity': 100, 'orders': 1}],
+                            'sell': [
+                                {'price': 1000.05, 'quantity': 200, 'orders': 2},
+                                {'price': 1000.10, 'quantity': 250, 'orders': 3},
+                                {'price': 1000.15, 'quantity': 900, 'orders': 4},
+                            ],
+                        }),
+                        'at': 1,
+                    },
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_liquidity_seeking_order_ignores_size_beyond_its_limit',
+                dict(entry, quantity=500, synthetic={
+                    'type': 'liquidity_seeking',
+                    'limit_price': 1000.10,
+                    'minimum_quantity': 300,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {
+                        'quote': self.scenarios.quote(depth={
+                            'buy': [{'price': 1000.00, 'quantity': 100, 'orders': 1}],
+                            'sell': [
+                                {'price': 1000.05, 'quantity': 50, 'orders': 1},
+                                {'price': 1000.15, 'quantity': 900, 'orders': 4},
+                            ],
+                        }),
+                        'at': 1,
+                    },
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_post_only_order_refuses_a_price_that_would_cross',
+                dict(entry, price=1000.10, synthetic={
+                    'type': 'post_only',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_post_only_order_can_be_told_to_rest_at_the_touch_instead',
+                dict(entry, price=1000.10, synthetic={
+                    'type': 'post_only',
+                    'on_crossing': 'rest',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_post_only_order_that_rests_is_sent_untouched',
+                dict(entry, price=999.50, synthetic={
+                    'type': 'post_only',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_discretionary_order_takes_the_offer_when_it_comes_within_reach',
+                dict(entry, price=1000.00, synthetic={
+                    'type': 'discretionary',
+                    'discretion_points': 0.25,
+                }),
+                [
+                    {'quote': self.book_at(1000.00, 1000.50), 'at': 0},
+                    {'quote': self.book_at(1000.00, 1000.20), 'at': 1},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_discretionary_order_leaves_the_rest_showing_when_it_takes_a_slice',
+                dict(entry, price=1000.00, synthetic={
+                    'type': 'discretionary',
+                    'discretion_points': 0.25,
+                    'discretion_quantity': 4,
+                }),
+                [
+                    {'quote': self.book_at(1000.00, 1000.50), 'at': 0},
+                    {'quote': self.book_at(1000.00, 1000.20), 'at': 1},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_discretionary_order_waits_while_the_offer_stays_out_of_reach',
+                dict(entry, price=1000.00, synthetic={
+                    'type': 'discretionary',
+                    'discretion_points': 0.25,
+                }),
+                [
+                    {'quote': self.book_at(1000.00, 1000.50), 'at': 0},
+                    {'quote': self.book_at(1000.00, 1000.40), 'at': 1},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_multi_day_trigger_fires_on_the_day_the_level_is_touched',
+                dict(entry, synthetic={
+                    'type': 'gtt',
+                    'trigger_price': 995,
+                    'limit_price': 990,
+                    'valid_days': 30,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_multi_day_trigger_expires_once_it_has_waited_long_enough',
+                dict(entry, synthetic={
+                    'type': 'gtt',
+                    'trigger_price': 900,
+                    'limit_price': 890,
+                    'valid_days': 1,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 60 * 60 * 25},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_candle_close_stop_sits_through_a_wick',
+                dict(entry, synthetic={
+                    'type': 'candle_close_stop',
+                    'trigger_price': 995,
+                    'bar_minutes': 1,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(990.00, 990.05), 'at': 10},
+                    {'quote': steady, 'at': 50},
+                    {'quote': steady, 'at': 70},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_candle_close_stop_fires_on_a_bar_that_closed_below',
+                dict(entry, synthetic={
+                    'type': 'candle_close_stop',
+                    'trigger_price': 995,
+                    'bar_minutes': 1,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(990.00, 990.05), 'at': 10},
+                    {'quote': self.book_at(990.00, 990.05), 'at': 50},
+                    {'quote': self.book_at(990.00, 990.05), 'at': 70},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'an_average_range_trail_uses_its_fixed_fallback_until_it_has_bars',
+                dict(entry, synthetic={
+                    'type': 'atr_trail',
+                    'trail_points': 10,
+                    'stop_limit_offset': 2,
+                    'bar_minutes': 1,
+                    'periods': 2,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1020.00, 1020.05), 'at': 1},
+                ],
+                accepted,
+                book_overrides={
+                    'order_type': 'SL',
+                    'trigger_price': 990.05,
+                },
+            ),
+            self.price_result(
+                'an_average_range_trail_widens_once_enough_bars_have_closed',
+                dict(entry, synthetic={
+                    'type': 'atr_trail',
+                    'trail_points': 10,
+                    'stop_limit_offset': 2,
+                    'bar_minutes': 1,
+                    'periods': 2,
+                    'atr_multiple': 1,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1040.00, 1040.05), 'at': 10},
+                    {'quote': self.book_at(1010.00, 1010.05), 'at': 70},
+                    {'quote': self.book_at(1060.00, 1060.05), 'at': 130},
+                    {'quote': self.book_at(1080.00, 1080.05), 'at': 190},
+                ],
+                accepted,
+                book_overrides={
+                    'order_type': 'SL',
+                    'trigger_price': 990.05,
+                },
+            ),
+            self.price_result(
+                'a_trailing_stop_follows_a_rising_market_and_not_a_falling_one',
+                dict(entry, synthetic={
+                    'type': 'trailing_stop',
+                    'trail_points': 10,
+                    'stop_limit_offset': 2,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1020.00, 1020.05), 'at': 1},
+                    {'quote': self.book_at(1040.00, 1040.05), 'at': 2},
+                    {'quote': self.book_at(1015.00, 1015.05), 'at': 3},
+                ],
+                accepted,
+                book_overrides={
+                    'order_type': 'SL',
+                    'trigger_price': 990.05,
+                },
+            ),
+            self.price_result(
+                'a_trailing_stop_measured_as_a_percentage_widens_as_it_goes',
+                dict(entry, synthetic={
+                    'type': 'trailing_stop',
+                    'trail_percent': 1,
+                    'stop_limit_offset': 2,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1100.00, 1100.05), 'at': 1},
+                ],
+                accepted,
+                book_overrides={
+                    'order_type': 'SL',
+                    'trigger_price': 990.05,
+                },
+            ),
+            self.price_result(
+                'a_trailing_stop_ignores_a_move_smaller_than_its_step',
+                dict(entry, synthetic={
+                    'type': 'trailing_stop',
+                    'trail_points': 10,
+                    'stop_limit_offset': 2,
+                    'step_ticks': 40,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1000.50, 1000.55), 'at': 1},
+                    {'quote': self.book_at(1010.00, 1010.05), 'at': 2},
+                ],
+                accepted,
+                book_overrides={
+                    'order_type': 'SL',
+                    'trigger_price': 990.05,
+                },
+            ),
+            self.price_result(
+                'a_trailing_entry_follows_a_falling_market_down',
+                dict(entry, synthetic={
+                    'type': 'trailing_entry',
+                    'trail_points': 10,
+                    'stop_limit_offset': 2,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(980.00, 980.05), 'at': 1},
+                    {'quote': self.book_at(960.00, 960.05), 'at': 2},
+                    {'quote': self.book_at(985.00, 985.05), 'at': 3},
+                ],
+                accepted,
+                book_overrides={
+                    'order_type': 'SL',
+                    'trigger_price': 990.05,
+                },
+            ),
+            self.price_result(
+                'a_trailing_order_without_a_distance_is_refused',
+                dict(entry, synthetic={
+                    'type': 'trailing_stop',
+                    'stop_limit_offset': 2,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+                book_overrides={
+                    'order_type': 'SL',
+                    'trigger_price': 990.05,
+                },
+            ),
+            self.price_result(
+                'a_market_if_touched_order_waits_and_then_takes_the_offer',
+                dict(entry, synthetic={
+                    'type': 'market_if_touched',
+                    'trigger_price': 995,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 2},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_market_if_touched_order_that_is_never_touched_sends_nothing',
+                dict(entry, synthetic={
+                    'type': 'market_if_touched',
+                    'trigger_price': 995,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1000.50, 1000.55), 'at': 1},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_limit_if_touched_order_rests_at_the_price_it_was_given',
+                dict(entry, synthetic={
+                    'type': 'limit_if_touched',
+                    'trigger_price': 995,
+                    'limit_price': 990,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_hidden_stop_rests_a_backstop_and_fires_on_the_bid',
+                dict(entry, synthetic={
+                    'type': 'hidden_stop',
+                    'trigger_price': 995,
+                    'backstop_price': 990,
+                    'backstop_limit_price': 988,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 995.20), 'at': 1},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_hidden_stop_is_not_fired_by_a_last_trade_the_book_never_reached',
+                dict(entry, synthetic={
+                    'type': 'hidden_stop',
+                    'trigger_price': 995,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {
+                        'quote': self.book_at(1000.00, 1000.05) | {
+                            'last_price': 990.00,
+                        },
+                        'at': 1,
+                    },
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_cross_instrument_order_is_fired_by_the_instrument_it_watches',
+                dict(entry, synthetic={
+                    'type': 'cross_instrument',
+                    'watch_instrument_id': order_routes.OrderRoutesState.
+                    INSTRUMENT_IDENTIFIERS['reliance'],
+                    'trigger_price': 995,
+                    'limit_price': 990,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'an_indicator_triggered_order_watches_the_day_average',
+                dict(entry, synthetic={
+                    'type': 'indicator_triggered',
+                    'watch_field': 'average_price',
+                    'trigger_price': 999,
+                    'limit_price': 995,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {
+                        'quote': self.book_at(1000.00, 1000.05) | {
+                            'average_price': 998.50,
+                        },
+                        'at': 1,
+                    },
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_chaser_crosses_the_spread_once_its_time_is_up',
+                dict(entry, synthetic={
+                    'type': 'chaser',
+                    'step_ticks': 1,
+                    'step_seconds': 5,
+                    'cross_after_seconds': 10,
+                }),
+                [
+                    {'quote': self.book_at(1000.00, 1000.50), 'at': 0},
+                    {'quote': self.book_at(1000.00, 1000.50), 'at': 11},
+                ],
                 accepted,
             ),
         ]
@@ -2689,6 +4030,7 @@ class OrderEngineSuite:
             results.extend(self.run_follower_checks())
             results.extend(self.run_reaction_checks())
             results.extend(self.run_clock_checks())
+            results.extend(self.run_price_checks())
             results.extend(self.run_wiring_checks())
         finally:
             requests.Session.request = original_request

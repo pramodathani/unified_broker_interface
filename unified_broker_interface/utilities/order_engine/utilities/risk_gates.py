@@ -3,12 +3,15 @@
 from unified_broker_interface.utilities.broker_orders.utilities.refused_request import (
     RefusedRequestError,
 )
+from unified_broker_interface.utilities.order_engine.utilities.repricing_throttle import (
+    RepricingThrottle,
+)
 
 
 class RiskGates:
-    """The rate budget, the daily loss lockout and the order-to-trade ratio, held together.
+    """The rate budget, the daily loss lockout, the order-to-trade ratio and the re-pricing throttle, held together.
 
-    They are one object rather than three arguments because every order passes all of them and a new one should be added in one place rather than threaded through every caller.
+    They are one object rather than four arguments because every order passes all of them and a new one should be added in one place rather than threaded through every caller.
 
     This is the reason the order engine exists rather than a simpler design. A limit written into a gunicorn worker is enforced once per worker, which is to say enforced twice and therefore not at all; a limit here is enforced once, because exactly one engine runs and nothing else in engine mode sends a placement.
 
@@ -18,15 +21,17 @@ class RiskGates:
         rate_budget (RateBudget): How fast orders may be sent.
         loss_lockout (LossLockout): Whether the day has lost too much to place another.
         ratio (OrderToTradeRatio): How many orders are sent for each that trades.
+        throttle (RepricingThrottle): How often any one resting order may be moved.
     """
 
-    def __init__(self, rate_budget, loss_lockout, ratio):
+    def __init__(self, rate_budget, loss_lockout, ratio, throttle=None):
         """Builds the gates.
 
         Args:
             rate_budget (RateBudget): How fast orders may be sent.
             loss_lockout (LossLockout): Whether the day has lost too much.
             ratio (OrderToTradeRatio): How many orders are sent for each that trades.
+            throttle (RepricingThrottle | None): How often one order may be moved, or None for a throttle that allows every move.
 
         Returns:
             None: This method returns nothing.
@@ -34,6 +39,7 @@ class RiskGates:
         self.rate_budget = rate_budget
         self.loss_lockout = loss_lockout
         self.ratio = ratio
+        self.throttle = throttle if throttle is not None else RepricingThrottle(0)
 
     def check_before_accepting(self, intent):
         """Refuses an order before any work is done on it, when the day is already locked out.
@@ -100,14 +106,39 @@ class RiskGates:
         """
         self.ratio.count_traded(broker_name)
 
+    def allow_reprice(self, leg_id):
+        """Whether one resting order may be moved again yet.
+
+        This refuses rather than waits, which is the opposite of what the rate budget does, and the difference is deliberate. An order held back by the budget is one the system could not send yet and will want to send in a moment, unchanged. An order held back by the throttle wants to be moved to wherever the market is at the time it is finally sent, and a price worked out a second earlier is the wrong price. So it is dropped, and the next tick works out a fresh one.
+
+        Args:
+            leg_id (str): The leg being moved.
+
+        Returns:
+            bool: True when the move may be sent.
+        """
+        return self.throttle.allows(leg_id)
+
+    def record_reprice(self, leg_id):
+        """Remembers that one resting order has just been moved.
+
+        Args:
+            leg_id (str): The leg that moved.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.throttle.record(leg_id)
+
     def counts(self):
         """What every gate has done, for the engine's shutdown line.
 
         Returns:
-            dict: `rate`, `locked_out` and `order_to_trade`.
+            dict: `rate`, `locked_out`, `order_to_trade` and `repricing`.
         """
         return {
             'rate': self.rate_budget.counts(),
             'locked_out': self.loss_lockout.locked_out,
             'order_to_trade': self.ratio.counts(),
+            'repricing': self.throttle.counts(),
         }

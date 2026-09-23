@@ -1272,20 +1272,75 @@ order carries a price.
 A body may carry a `synthetic` object naming the kind of order to run. Without one the order is `simple`: one order sent
 to one broker, which is what every caller gets and what every other type is built from.
 
+There are forty-one of them. They divide into six families by what each one is waiting for, and that is the useful way
+to read the list: a type that waits for a fill needs the engine running only while it has legs at a broker, one that
+waits for a price needs it running every second, and one that waits for a morning needs it running for days.
+
+**Placed once, and that is the end of it.** These need nothing watching them afterwards.
+
 | Type | What it does |
 | --- | --- |
 | `simple` | One order to one broker |
 | `freeze_slicer` | Splits an order above the exchange's freeze limit into orders that each fit |
 | `ladder` | Places `steps` limit orders evenly spaced between `from_price` and `to_price` |
+| `post_only` | Refuses, or re-prices, an order that would take liquidity instead of resting |
+| `basket` | Several orders on several instruments, placed together and reported together |
+| `legged_spread` | Works the hard leg of a two-legged position and takes the other at the price that makes `net_price` |
+
+**Waiting for a fill.** These react to what happens to their own legs, so they need the engine while they are alive.
+
+| Type | What it does |
+| --- | --- |
 | `oto` | Places the order in `then`, sized to what the first one actually filled |
 | `oco` | Rests a stop and a target on a position you already hold; whatever fills reduces the other |
 | `bracket` | An entry that arms a stop and a target once it starts filling |
+| `cover` | An entry with a compulsory stop and no target |
+| `scale_out` | A bracket with several targets sharing the position, and a stop that shrinks behind them |
+| `two_sided_breakout` | A buy stop above a range and a sell stop below it; the first to fill cancels the other |
+| `oca` | Several candidate entries; the first to fill calls off the rest |
+| `iceberg` | Shows `slice_quantity` at a time and places the next when it fills |
+| `grid` | Buys below and sells above at fixed steps, each fill placing its opposite one step away |
+
+**Waiting for a time.** These act on the clock, in `Asia/Kolkata` whatever the server keeps.
+
+| Type | What it does |
+| --- | --- |
 | `scheduled` | Holds the order until `at_time`, then places it |
 | `good_till_time` | Places now and cancels whatever is still resting at `until_time` |
 | `time_stop` | Places now, then at `until_time` or after `minutes` cancels the rest and closes what filled |
-| `scale_out` | A bracket with several targets sharing the position, and a stop that shrinks behind them |
-| `two_sided_breakout` | A buy stop above a range and a sell stop below it; the first to fill cancels the other |
+| `square_off` | Cancels resting orders and closes intraday positions at `at_time`, before the broker does |
 | `twap` | Splits the order into `slices` sent at even intervals over `over_minutes` |
+| `vwap` | The same, with the slices weighted by how busy the market usually is at that hour |
+| `implementation_shortfall` | The same, front-loaded by `urgency`, so most of it trades near the arrival price |
+| `accumulation` | Buys a fixed quantity every `every_minutes`, `purchases` times, each one resting passively |
+
+**Watching the market.** These are given the live quote about once a second.
+
+| Type | What it does |
+| --- | --- |
+| `peg` | Follows a place in the book: `own_touch`, `mid` or `opposite_touch`, with an `offset_ticks` and a `cap_price` |
+| `chaser` | Joins its own side and steps `step_ticks` closer every `step_seconds` until it fills or reaches its cap |
+| `discretionary` | Shows a limit at one price and quietly takes the other side within `discretion_points` |
+| `market_if_touched` | Takes what is there once the price touches `trigger_price` |
+| `limit_if_touched` | Rests a limit at `limit_price` once the price touches `trigger_price` |
+| `cross_instrument` | The same, triggered by `watch_instrument_id` rather than by what it trades |
+| `indicator_triggered` | The same, triggered by a named field of the quote such as the day's average price |
+| `hidden_stop` | A stop held here, watching the book rather than the last trade, with an optional native backstop |
+| `candle_close_stop` | The same, but only when a whole `bar_minutes` candle has closed past the level |
+| `trailing_stop` | A native stop whose trigger ratchets behind the market by `trail_points` or `trail_percent` |
+| `atr_trail` | The same, at `atr_multiple` times the recent average true range |
+| `trailing_entry` | The mirror for entries: the trigger follows a falling market down until the first bounce |
+| `liquidity_seeking` | Shows nothing and strikes when `minimum_quantity` appears inside `limit_price` |
+| `participation` | Trades `participation_percent` of whatever the market itself trades |
+| `strategy_stop` | Marks every leg of a strategy to the market and closes the lot on `loss_limit` or `profit_target` |
+| `exposure_hedge` | Hedges on `hedge_instrument_id` when the watched positions' exposure leaves its band |
+
+**Waiting for days.** These outlive the session, so the engine has to be running on the morning they act.
+
+| Type | What it does |
+| --- | --- |
+| `gtt` | A limit-if-touched order that keeps waiting for `valid_days` rather than dying at the close |
+| `daily_stop` | Places a fresh native stop each morning at `arm_at`, or closes the position if the open gapped past it |
 
 ```json
 { "instrument_id": "…", "transaction_type": "BUY", "product": "NRML", "order_type": "LIMIT",
@@ -1380,11 +1435,152 @@ does: an entry still working while its position is being closed goes on opening 
 closes what *this order* filled, not what the account holds — an account holding the same instrument from somewhere
 else is not one order's business to flatten.
 
-!!! note "A cover order is a bracket with only a stop"
+!!! note "A cover order is a bracket that insists on its stop"
 
-    The Atlas lists the cover order as a type of its own: an entry with a compulsory stop and no target. It needs no
-    class here, because a `bracket` given `stop_price` and `stop_limit_price` but no `target_price` is exactly that.
-    Adding a second class for it would be a second copy of the double-fill rule.
+    `cover` is `bracket` plus two lines of validation: it **requires** `stop_price` and **refuses** `target_price`.
+    That sounds like a bracket with the target left out and is not. A bracket with no target is a bracket that happens
+    to have none; a cover order is one that cannot have no stop, which is why brokers once gave higher leverage on it.
+    Letting the two shade into each other would mean asking for a cover order and getting one with no stop.
+
+### The types that watch the market
+
+Sixteen types are handed the live quote about once a second, and they are the reason the engine polls
+`unified:quotes:live` rather than joining the tick feed. The whole open set's instruments are read in one `HMGET`,
+which measured 0.099 milliseconds for twenty instruments; subscribing instead would mean receiving every update for all
+105,719 mapped instruments in order to use a handful.
+
+```json
+{ "synthetic": { "type": "peg", "reference": "own_touch", "offset_ticks": 1, "cap_price": 1002 } }
+{ "synthetic": { "type": "chaser", "step_ticks": 1, "step_seconds": 5, "cross_after_seconds": 60 } }
+{ "synthetic": { "type": "trailing_stop", "trail_percent": 1, "stop_limit_offset": 2, "step_ticks": 4 } }
+{ "synthetic": { "type": "hidden_stop", "trigger_price": 995,
+                 "backstop_price": 990, "backstop_limit_price": 988 } }
+```
+
+Two limits apply to every one of them, and both live in the engine rather than in any type:
+
+1. **A change that would change nothing is never sent.** A type that works out where its order belongs on every tick
+   asks for where it already is most of the time, and sending that is a request an exchange counts and a broker charges
+   for in exchange for nothing.
+2. **One order may not be moved again within
+   `UNIFIED_BROKER_INTERFACE_API_ORDER_REPRICE_MINIMUM_SECONDS`.** The rate budget asks whether the system may send
+   another request; this asks whether *this* order has been left alone long enough to be worth moving. An account well
+   inside a budget of eight a second can still move one order eight times a second all day.
+
+The throttle **refuses** rather than waits, which is the opposite of what the rate budget does. An order held back by
+the budget is the same order a moment later; a price worked out a second ago is the wrong price, so the move is dropped
+and the next tick works out a fresh one.
+
+Placing, changing and cancelling all take a token from the rate budget, because an exchange counts all three the same
+way and SEBI's ten-orders-a-second threshold does too.
+
+!!! danger "A stop held here protects nothing while the engine is down"
+
+    `hidden_stop`, `candle_close_stop` and every triggered type live entirely in this process. They can watch the bid
+    rather than the last trade, fire in either direction and watch another instrument — none of which a native stop can
+    do — and they stop existing the moment the engine, the machine, the network or the quote feed does.
+
+    `backstop_price` and `backstop_limit_price` place a real stop-loss limit further away, which fires at exchange
+    speed whether or not anything of yours is running. A `candle_close_stop` deliberately sits through the move that
+    triggers it until the candle ends, so it is unprotected for up to a whole bar and wants one most of all.
+
+### The execution algorithms
+
+Six types answer the same question — how to trade something large without the market noticing — and differ in what
+they watch.
+
+```json
+{ "synthetic": { "type": "vwap", "slices": 8, "over_minutes": 240 } }
+{ "synthetic": { "type": "implementation_shortfall", "slices": 8, "over_minutes": 60, "urgency": 0.7 } }
+{ "synthetic": { "type": "participation", "participation_percent": 10, "most_slices": 60 } }
+{ "synthetic": { "type": "liquidity_seeking", "limit_price": 1000.10, "minimum_quantity": 300 } }
+{ "synthetic": { "type": "iceberg", "slice_quantity": 500, "randomise_percent": 20 } }
+{ "synthetic": { "type": "grid", "levels": 5, "step_points": 5, "most_inventory": 50 } }
+```
+
+`vwap` and `implementation_shortfall` are `twap` with a different share per slice. The volume curve is the ordinary
+Indian equity day — heavy at the open, quiet across lunch, heavy into the close — and it is **a shape, not a
+measurement of your instrument**; `volume_profile` takes a list of relative weights per half hour for anybody who has
+measured their own.
+
+`participation` reads the quote's cumulative `volume` and trades a share of the difference between ticks. A share below
+one unit is remembered rather than rounded, so a one per cent order on a quiet instrument neither sends nothing for
+ever nor doubles its rate. It has **no deadline**: a market that stops trading stops it too, and it can end the day
+with most of the order undone.
+
+`iceberg` cannot keep the time priority NSE's own disclosed quantity keeps. Each replenishment is a new order at the
+back of its price level's queue, which is the real cost of building it rather than using the exchange's.
+
+!!! danger "A grid must be told how much it may hold"
+
+    `most_inventory` is required and has no default. A trending market fills one side of a grid over and over at prices
+    that keep getting worse, and from the inside that looks exactly like a market about to come back. Once the net
+    position reaches the cap, every resting rung on the side that would grow it is **cancelled** and only the exits are
+    left.
+
+### The types that span several instruments
+
+`basket`, `oca`, `legged_spread`, `strategy_stop` and `exposure_hedge` hold legs on more than one instrument. Each
+names its instruments by `instrument_id` in a `candidates` list, and a candidate carries only what differs from the
+body around it:
+
+```json
+{ "transaction_type": "BUY", "product": "NRML", "order_type": "LIMIT", "quantity": 75, "price": 120,
+  "synthetic": { "type": "basket", "candidates": [
+      { "instrument_id": "…", "price": 120 },
+      { "instrument_id": "…", "transaction_type": "SELL", "price": 40 } ] } }
+```
+
+An id rather than a symbol, because resolving an identity is a set of rules about ambiguity, near matches and expiries
+that lives in one place in the REST layer. A second copy inside the engine would eventually disagree with the first, as
+an order on the wrong contract.
+
+**Legs go out in the order they were given**, and that order is yours to choose. It matters for futures and options
+margin: buying the hedge before selling the short leg gets the spread's benefit, where the other order briefly demands
+the full margin for a naked short and can be refused for it. Nothing is sorted.
+
+A basket is **not atomic** and no basket anywhere is. What it adds over separate requests is that they are one parent:
+one id finds them all, one event log records them in order, and the answer lists every leg's outcome rather than giving
+one verdict. Its `outcome` is `partial` when some legs were rejected, and the parent goes to `failed` when any leg's
+fate is unknown.
+
+`strategy_stop` marks every filled leg to the market on each tick and closes the lot when the total crosses a line. It
+closes **shorts before the hedges covering them**, because closing a hedge first turns a defined-risk position into a
+naked one for the seconds it takes, and a broker looking at the account in that instant can refuse the second order. A
+total with one leg unmarked does nothing rather than closing a strategy over a quote feed hiccup.
+
+`exposure_hedge` works in exposure rather than greeks: pass `exposure_per_unit` of 1 and it is a size limit, pass a
+delta computed elsewhere and it is a delta hedge recalculated against live positions every second. A hedge already sent
+counts towards the exposure straight away, because the positions document is several seconds behind and would otherwise
+have the same hedge sent on every tick until the fill was polled.
+
+### The types that outlive the day
+
+`gtt` and `daily_stop` keep working across sessions, which every native Indian order does not: a stop placed on Monday
+is gone on Tuesday morning.
+
+```json
+{ "synthetic": { "type": "gtt", "trigger_price": 900, "limit_price": 895, "valid_days": 30 } }
+{ "synthetic": { "type": "daily_stop", "stop_price": 990, "stop_limit_price": 988,
+                 "arm_at": "09:20", "valid_days": 30 } }
+```
+
+The engine's Redis caches expire at 06:00 IST like every other unified key. A carried parent would therefore vanish
+from the open set underneath a running engine and quietly stop working until somebody restarted the daemon, so the
+engine watches for crossing a reset and rebuilds the caches from the event log, which it reads back thirty days for
+these two types.
+
+`daily_stop` arms at 09:20 rather than at the bell, because the first minutes are the pre-open auction settling and a
+stop placed into that can be triggered by a price that lasts seconds. **If the market has already opened past the
+stop, no stop is placed** — one whose trigger is on the wrong side of the last price is either refused outright or
+fires instantly at whatever the gap left behind. The position is closed with a limit instead, which at least chooses a
+price.
+
+!!! danger "Neither of these protects against a gap"
+
+    Both watch a live price, so an instrument that opens twenty per cent below the level acts at the open, into a
+    market that has already moved. Nothing that watches prices can act on a price that never traded, and a broker's own
+    good-till-triggered product has exactly the same hole.
 
 ### The freeze slicer, and why the limit is read per broker
 
