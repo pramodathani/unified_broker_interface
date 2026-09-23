@@ -354,6 +354,7 @@ class OrderPlacement:
             broker_request,
             skipped,
             identifier_sent,
+            quantity,
         )
 
     def dry_run_answer(self, prepared_placement, started_at):

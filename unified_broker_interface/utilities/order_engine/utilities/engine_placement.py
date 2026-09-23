@@ -23,6 +23,7 @@ from unified_broker_interface.utilities.instrument_cache import InstrumentCache
 
 QUOTES_KEY = 'unified:quotes:live'
 POSITIONS_KEY = 'unified:portfolio:positions'
+ATTRIBUTES_SUFFIX = 'additional_attributes'
 
 
 class EnginePlacement:
@@ -159,6 +160,36 @@ class EnginePlacement:
             positions = self.decode(replies[position])
         return instrument, quote, positions
 
+    def broker_attributes(self, instrument_id):
+        """Every broker's extra fields for one instrument, such as the exchange freeze quantity.
+
+        These live in a hash of their own rather than in the order handle, which carries only the broker token, the order symbol, the lot size and the tick size. Only five of the ten brokers publish a freeze quantity at all, so the answer is often partly empty and a caller has to cope with that rather than assume.
+
+        Args:
+            instrument_id (str): The instrument.
+
+        Returns:
+            dict: Broker names to their attributes, which may be empty.
+        """
+        try:
+            mapping_date_text = self.cache.get(
+                'unified:catalogue:current_date',
+            )
+            if not mapping_date_text:
+                return {}
+            stored = self.cache.hget(
+                f'unified:catalogue:{mapping_date_text}:{ATTRIBUTES_SUFFIX}',
+                instrument_id,
+            )
+        except redis.RedisError as error:
+            self.logger.warning(
+                f"the extra attributes for {instrument_id} could not be read "
+                f'({error}), so anything that needs them will do without.'
+            )
+            return {}
+        document = self.decode(stored)
+        return document or {}
+
     def decode(self, text):
         """One JSON document from Redis, or None when there is none or it is not an object.
 
@@ -178,7 +209,7 @@ class EnginePlacement:
             return None
         return document
 
-    def prepare(self, order, instrument_id):
+    def prepare(self, order, instrument_id, broker_name=None):
         """Reads what the order needs, chooses its broker and builds the request, without sending anything.
 
         The seam between building and sending is where a synthetic order records that it is about to send, so that a crash mid-send leaves evidence of an order that may exist.
@@ -186,6 +217,7 @@ class EnginePlacement:
         Args:
             order (PlaceOrderRequest): The validated order.
             instrument_id (str): The instrument the intent named.
+            broker_name (str | None): The broker the order must go to, or None to let the selector choose.
 
         Returns:
             PreparedPlacement: The chosen broker and the request built for it.
@@ -222,6 +254,7 @@ class EnginePlacement:
             selector_replies,
             login_texts,
             settings_texts,
+            broker_name,
         )
 
     def send(self, prepared_placement, started_at):

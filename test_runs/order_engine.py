@@ -1142,6 +1142,173 @@ class OrderEngineScenarios:
                 ),
             ),
             self.intents(
+                'an_order_below_the_freeze_limit_is_sent_whole',
+                [
+                    self.bodies.market_order(
+                        dry_run=None,
+                        quantity=10,
+                        synthetic={
+                            'type': 'freeze_slicer',
+                        },
+                    ),
+                ],
+                attributes={
+                    'flattrade': {
+                        'freeze_quantity': '100',
+                    },
+                },
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
+                'an_order_above_the_freeze_limit_is_split_evenly',
+                [
+                    self.bodies.market_order(
+                        dry_run=None,
+                        quantity=250,
+                        synthetic={
+                            'type': 'freeze_slicer',
+                        },
+                    ),
+                ],
+                attributes={
+                    'flattrade': {
+                        'freeze_quantity': '100',
+                    },
+                },
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
+                'every_slice_goes_to_the_same_broker',
+                [
+                    self.bodies.market_order(
+                        dry_run=None,
+                        quantity=300,
+                        synthetic={
+                            'type': 'freeze_slicer',
+                        },
+                    ),
+                ],
+                attributes={
+                    'flattrade': {
+                        'freeze_quantity': '100',
+                    },
+                },
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
+                'a_broker_publishing_no_freeze_limit_sends_it_whole',
+                [
+                    self.bodies.market_order(
+                        dry_run=None,
+                        quantity=250,
+                        synthetic={
+                            'type': 'freeze_slicer',
+                        },
+                    ),
+                ],
+                attributes={
+                    'zerodha': {
+                        'freeze_quantity': '100',
+                    },
+                },
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
+                'an_order_needing_too_many_slices_is_refused',
+                [
+                    self.bodies.market_order(
+                        dry_run=None,
+                        quantity=5000,
+                        synthetic={
+                            'type': 'freeze_slicer',
+                        },
+                    ),
+                ],
+                attributes={
+                    'flattrade': {
+                        'freeze_quantity': '10',
+                    },
+                },
+            ),
+            self.intents(
+                'a_ladder_spreads_its_rungs_across_the_range',
+                [
+                    self.bodies.market_order(
+                        dry_run=None,
+                        order_type='LIMIT',
+                        price=1000,
+                        quantity=100,
+                        synthetic={
+                            'type': 'ladder',
+                            'from_price': 995,
+                            'to_price': 1000,
+                            'steps': 3,
+                        },
+                    ),
+                ],
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
+                'a_ladder_needs_a_quantity_for_every_rung',
+                [
+                    self.bodies.market_order(
+                        dry_run=None,
+                        order_type='LIMIT',
+                        price=1000,
+                        quantity=2,
+                        synthetic={
+                            'type': 'ladder',
+                            'from_price': 995,
+                            'to_price': 1000,
+                            'steps': 5,
+                        },
+                    ),
+                ],
+            ),
+            self.intents(
+                'a_ladder_with_one_step_is_refused',
+                [
+                    self.bodies.market_order(
+                        dry_run=None,
+                        order_type='LIMIT',
+                        price=1000,
+                        quantity=10,
+                        synthetic={
+                            'type': 'ladder',
+                            'from_price': 995,
+                            'to_price': 1000,
+                            'steps': 1,
+                        },
+                    ),
+                ],
+            ),
+            self.intents(
+                'an_unknown_synthetic_type_is_refused',
+                [
+                    self.bodies.market_order(
+                        dry_run=None,
+                        synthetic={
+                            'type': 'iron_condor',
+                        },
+                    ),
+                ],
+            ),
+            self.intents(
                 'closing_a_position_that_is_not_held_is_refused',
                 [
                     self.referenced(
@@ -1315,6 +1482,15 @@ class OrderEngineSuite:
                 order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS[
                     'reliance'
                 ]: json.dumps(scenario['quote']),
+            }
+        if scenario.get('attributes') is not None:
+            self.fake_redis.hashes[
+                f'unified:catalogue:{order_routes.MAPPING_DATE}:'
+                'additional_attributes'
+            ] = {
+                order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS[
+                    'reliance'
+                ]: json.dumps(scenario['attributes']),
             }
         if scenario.get('positions') is not None:
             self.fake_redis.strings['unified:portfolio:positions'] = json.dumps(

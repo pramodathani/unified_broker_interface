@@ -1266,3 +1266,38 @@ order carries a price.
 | `400` | The reference is malformed, names an unknown kind, or the price works out at zero or below |
 | `409` | A `reduce_position` or `liquidate_position` reference found no open position to close |
 | `503` | There is no live quote for the instrument, the depth is not that deep, the positions could not be read, or the brokers do not agree on a tick size |
+
+## Synthetic order types
+
+A body may carry a `synthetic` object naming the kind of order to run. Without one the order is `simple`: one order sent
+to one broker, which is what every caller gets and what every other type is built from.
+
+| Type | What it does |
+| --- | --- |
+| `simple` | One order to one broker |
+| `freeze_slicer` | Splits an order above the exchange's freeze limit into orders that each fit |
+| `ladder` | Places `steps` limit orders evenly spaced between `from_price` and `to_price` |
+
+```json
+{ "instrument_id": "…", "transaction_type": "BUY", "product": "NRML", "order_type": "LIMIT",
+  "price": 1000, "quantity": 100,
+  "synthetic": { "type": "ladder", "from_price": 995, "to_price": 1000, "steps": 3 } }
+```
+
+**Every leg of one parent goes to the same broker**, chosen once. Spreading them would look cheaper and would mean the
+position ends up split across brokers, where closing it needs one order per broker and each has its own lot size and
+its own freeze limit.
+
+### The freeze slicer, and why the limit is read per broker
+
+An exchange rejects any single derivative order above its freeze quantity outright. The engine reads that quantity from
+`unified:catalogue:<date>:additional_attributes` **for the broker the order is going to**, and compares it against the
+quantity in that same broker's terms.
+
+That is not fussiness. For one MCX silver option, brokers whose lot size is 30 report a freeze quantity of 600 and
+brokers whose lot size is 1 report 20 — and both mean twenty lots. Comparing one broker's figure against another
+broker's quantity would be wrong by a factor of thirty.
+
+Only five of the ten brokers publish a freeze quantity. When the chosen broker does not, the order is sent whole and the
+event log records that no limit was known; an exchange rejection is then visible and recoverable, where a limit guessed
+from another broker would be neither. An order needing more than twenty slices is refused rather than sent.

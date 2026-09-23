@@ -310,7 +310,7 @@ class SyntheticOrder:
                 'not be closed, so recovery will find it open.'
             )
 
-    def place_leg(self, role, order, started_at):
+    def place_leg(self, role, order, started_at, broker_name=None):
         """Records a leg, sends it, records the answer, and returns what the broker said.
 
         This is the only way an order reaches a broker. The `leg_requested` row is committed before the request is sent, which is what a crash between the two leaves behind, and the rate budget is taken between the two as well, so a leg that waits for a token has already been written down.
@@ -321,6 +321,7 @@ class SyntheticOrder:
             role (str): What the leg is for: `entry`, `stop`, `target`, `slice` or `chase`.
             order (PlaceOrderRequest): The order to send.
             started_at (float): `time.perf_counter()` when the engine took the intent.
+            broker_name (str | None): The broker this leg must go to, or None to let the selector choose. Every leg of one parent after the first names the broker the first one chose, because a position split across brokers takes one order per broker to close.
 
         Returns:
             tuple: The answer's body (dict), its HTTP status (int) and the leg's id (str).
@@ -328,7 +329,11 @@ class SyntheticOrder:
         Raises:
             RefusedRequestError: For an order answered without calling a broker, including one the rate budget would not give a token to.
         """
-        prepared = self.placement.prepare(order, self.parent.instrument_id)
+        prepared = self.placement.prepare(
+            order,
+            self.parent.instrument_id,
+            broker_name,
+        )
         leg_id = self.parent.next_leg_id()
         broker_request = prepared.broker_request
         self.record({
