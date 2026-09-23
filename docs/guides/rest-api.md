@@ -1280,6 +1280,9 @@ to one broker, which is what every caller gets and what every other type is buil
 | `oto` | Places the order in `then`, sized to what the first one actually filled |
 | `oco` | Rests a stop and a target on a position you already hold; whatever fills reduces the other |
 | `bracket` | An entry that arms a stop and a target once it starts filling |
+| `scheduled` | Holds the order until `at_time`, then places it |
+| `good_till_time` | Places now and cancels whatever is still resting at `until_time` |
+| `time_stop` | Places now, then at `until_time` or after `minutes` cancels the rest and closes what filled |
 
 ```json
 { "instrument_id": "…", "transaction_type": "BUY", "product": "NRML", "order_type": "LIMIT",
@@ -1321,6 +1324,36 @@ A stop needs **both** `stop_price` and `stop_limit_price`, and neither is defaul
 options and from BSE entirely, so a stop is a stop-limit, and a stop-limit whose limit sits at its trigger will not
 fill when the price runs through it — which is the one condition a stop exists for. NSE caps the gap between them, so a
 limit too far away is refused by the exchange.
+
+### The timed types
+
+`scheduled`, `good_till_time` and `time_stop` wait for a time of day rather than for a fill, so they need the engine
+running until they act. Times are wall-clock times on an Indian exchange's day, read in `Asia/Kolkata` whatever the
+server keeps.
+
+```json
+{ "synthetic": { "type": "time_stop", "until_time": "15:10" } }
+{ "synthetic": { "type": "time_stop", "minutes": 20 } }
+{ "synthetic": { "type": "scheduled", "at_time": "09:20" } }
+```
+
+A `scheduled` order answers **HTTP 202** with a `parent_id` and no `order_id`, because there is no broker order yet.
+That is the one place a synthetic type's answer differs in shape from an ordinary placement's, and it is unavoidable.
+
+A time already past today is **refused**, not taken to mean tomorrow. An order told to act at a time that has gone is
+far more likely to be a mistake than an instruction to wait eighteen hours, and holding a position overnight by
+inference is not something to do.
+
+`time_stop` cancels whatever is still resting **before** it closes what filled, for the same reason the kill switch
+does: an entry still working while its position is being closed goes on opening the position that is being closed. It
+closes what *this order* filled, not what the account holds — an account holding the same instrument from somewhere
+else is not one order's business to flatten.
+
+!!! note "A cover order is a bracket with only a stop"
+
+    The Atlas lists the cover order as a type of its own: an entry with a compulsory stop and no target. It needs no
+    class here, because a `bracket` given `stop_price` and `stop_limit_price` but no `target_price` is exactly that.
+    Adding a second class for it would be a second copy of the double-fill rule.
 
 ### The freeze slicer, and why the limit is read per broker
 

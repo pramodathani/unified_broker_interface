@@ -4,10 +4,15 @@ from unified_broker_interface.utilities.order_engine.bracket import Bracket
 from unified_broker_interface.utilities.order_engine.freeze_slicer import (
     FreezeSlicer,
 )
+from unified_broker_interface.utilities.order_engine.good_till_time import (
+    GoodTillTime,
+)
 from unified_broker_interface.utilities.order_engine.ladder import Ladder
 from unified_broker_interface.utilities.order_engine.oco import OneCancelsOther
 from unified_broker_interface.utilities.order_engine.oto import OneTriggersOther
+from unified_broker_interface.utilities.order_engine.scheduled import Scheduled
 from unified_broker_interface.utilities.order_engine.simple import SimpleOrder
+from unified_broker_interface.utilities.order_engine.time_stop import TimeStop
 
 SYNTHETIC_ORDER_CLASSES = {
     SimpleOrder.SYNTHETIC_TYPE: SimpleOrder,
@@ -16,4 +21,7 @@ SYNTHETIC_ORDER_CLASSES = {
     OneTriggersOther.SYNTHETIC_TYPE: OneTriggersOther,
     OneCancelsOther.SYNTHETIC_TYPE: OneCancelsOther,
     Bracket.SYNTHETIC_TYPE: Bracket,
+    Scheduled.SYNTHETIC_TYPE: Scheduled,
+    GoodTillTime.SYNTHETIC_TYPE: GoodTillTime,
+    TimeStop.SYNTHETIC_TYPE: TimeStop,
 }

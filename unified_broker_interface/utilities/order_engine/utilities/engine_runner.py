@@ -59,6 +59,7 @@ class OrderEngine:
         parent_store=None,
         follower=None,
         gates=None,
+        ticker=None,
     ):
         """Builds the engine.
 
@@ -73,6 +74,7 @@ class OrderEngine:
             parent_store (ParentStore | None): The Redis copy of the parents.
             follower (OrderUpdateFollower | None): What applies the brokers' order updates to the legs the engine owns.
             gates (RiskGates | None): The limits every order passes.
+            ticker (ClockTicker | None): What wakes the order types that are waiting for a time rather than a fill.
 
         Returns:
             None: This method returns nothing.
@@ -87,6 +89,7 @@ class OrderEngine:
         self.parent_store = parent_store
         self.follower = follower
         self.gates = gates
+        self.ticker = ticker
         self.placed = 0
         self.refused = 0
         self.expired = 0
@@ -167,6 +170,11 @@ class OrderEngine:
                         self.handle(entry_id, fields)
                     else:
                         self.handle_update(entry_id, fields)
+                # The read above blocks for about a second when nothing arrives, which is the tick
+                # the time-based types need. Doing it here rather than on a thread keeps one thing
+                # touching a parent at a time, so there is nothing to lock.
+                if self.ticker is not None and self.ticker.due():
+                    self.ticker.tick()
                 backoff = MINIMUM_BACKOFF_SECONDS
             except Exception as exception:
                 self.logger.error(
@@ -183,6 +191,11 @@ class OrderEngine:
             f'Stopped. Placed {self.placed}, refused {self.refused}, '
             f'expired {self.expired}, order updates followed {followed}.'
         )
+        if self.ticker is not None:
+            self.logger.info(
+                f'Clock: {self.ticker.ticks} ticks, {self.ticker.acted} '
+                'parents acted on one.'
+            )
         if self.gates is not None:
             self.logger.info(f'Risk gates: {self.gates.counts()}.')
         return exit_code

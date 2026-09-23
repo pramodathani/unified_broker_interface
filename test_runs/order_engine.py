@@ -14,11 +14,12 @@ Typical usage:
 
 import argparse
 import copy
+import datetime
 import json
-import pathlib
-import sys
 import logging
+import pathlib
 import re
+import sys
 import time
 import uuid
 
@@ -27,30 +28,44 @@ import requests
 from test_runs import order_engine_routes
 from test_runs import order_routes
 from unified_broker_interface.utilities.order_engine.utilities import engine_lock
-from unified_broker_interface.utilities.order_engine.utilities.engine_lock import EngineLock
+from unified_broker_interface.utilities.order_engine.utilities import moments
+from unified_broker_interface.utilities.order_engine.utilities.clock_ticker import (
+    ClockTicker,
+)
+from unified_broker_interface.utilities.order_engine.utilities.engine_lock import (
+    EngineLock,
+)
 from unified_broker_interface.utilities.order_engine.utilities.engine_placement import (
     EnginePlacement,
 )
-from unified_broker_interface.utilities.order_engine.utilities.engine_runner import OrderEngine
+from unified_broker_interface.utilities.order_engine.utilities.engine_recovery import (
+    EngineRecovery,
+)
+from unified_broker_interface.utilities.order_engine.utilities.engine_runner import (
+    OrderEngine,
+)
 from unified_broker_interface.utilities.order_engine.utilities.intent_handoff import (
     INTENT_STREAM_FIELD,
     INTENT_STREAM_KEY,
 )
-from unified_broker_interface.utilities.order_engine.utilities.order_intent import OrderIntent
-from unified_broker_interface.utilities.order_engine.utilities.parent_order import ParentOrder
-from unified_broker_interface.utilities.order_engine.utilities.engine_recovery import (
-    EngineRecovery,
-)
-from unified_broker_interface.utilities.order_engine.utilities.order_update_follower import (
-    OrderUpdateFollower,
-)
 from unified_broker_interface.utilities.order_engine.utilities.loss_lockout import (
     LossLockout,
+)
+from unified_broker_interface.utilities.order_engine.utilities.order_intent import (
+    OrderIntent,
 )
 from unified_broker_interface.utilities.order_engine.utilities.order_to_trade_ratio import (
     OrderToTradeRatio,
 )
-from unified_broker_interface.utilities.order_engine.utilities.parent_store import ParentStore
+from unified_broker_interface.utilities.order_engine.utilities.order_update_follower import (
+    OrderUpdateFollower,
+)
+from unified_broker_interface.utilities.order_engine.utilities.parent_order import (
+    ParentOrder,
+)
+from unified_broker_interface.utilities.order_engine.utilities.parent_store import (
+    ParentStore,
+)
 from unified_broker_interface.utilities.order_engine.utilities.rate_budget import (
     RateBudget,
 )
@@ -67,6 +82,9 @@ FIXTURE_PATH = (
 )
 STALE_INTENT_SECONDS = 30.0
 RESULT_TTL_SECONDS = 300
+# A fixed moment in the middle of an Indian trading day, so a scenario naming a time of day means
+# the same thing on every run and whatever timezone the machine keeps.
+FROZEN_NOW = datetime.datetime(2026, 9, 23, 10, 0, 0, tzinfo=moments.INDIA)
 
 
 class FakeEngineStoreRedis(order_engine_routes.FakeEngineRedis):
@@ -2256,6 +2274,201 @@ class OrderEngineSuite:
             ),
         ]
 
+    def clock_result(self, name, request_body, fills, tick_at, answer=None):
+        """Places one timed order, optionally fills it, then gives it a clock tick.
+
+        The tick is called with a chosen moment rather than waited for, so a scenario about half past ten costs no time and means the same thing on every run. A second tick follows, to check the type does not act twice on one instruction.
+
+        Args:
+            name (str): The check's name.
+            request_body (dict): The request body.
+            fills (list): Order updates to apply before the tick.
+            tick_at (float): The Unix time to tick at.
+            answer (dict | None): The stubbed broker answer.
+
+        Returns:
+            dict: The recorded result.
+        """
+        scenario = self.scenarios.intents(name, [request_body], answer=answer)
+        self.fake_redis = self.build_state()
+        self.network.reset(answer)
+        self.counting_uuid.reset()
+        reply_keys = self.write_intents(scenario)
+
+        logger = logging.getLogger('test_runs.order_engine')
+        placement = EnginePlacement(self.fake_redis, logger)
+        event_log = RecordingEventLog()
+        parent_store = ParentStore(self.fake_redis)
+        ticker = ClockTicker(parent_store, event_log, placement, logger, None)
+        engine = OrderEngine(
+            self.fake_redis,
+            placement,
+            EngineLock(self.fake_redis, logger),
+            logger,
+            STALE_INTENT_SECONDS,
+            RESULT_TTL_SECONDS,
+            event_log,
+            parent_store,
+        )
+        engine.run(OnePassStop(3))
+        reply = self.shown_replies(reply_keys)[0]
+
+        follower = OrderUpdateFollower(
+            parent_store,
+            event_log,
+            logger,
+            None,
+            placement,
+        )
+        for update in fills:
+            book = self.fake_redis.hashes.setdefault(
+                'flattrade:orders:orders',
+                {},
+            )
+            book[str(update['order_id'])] = self.broker_book_entry(
+                str(update['order_id']),
+                status=update.get('status', 'OPEN'),
+            )
+            changed = follower.follow({
+                'update': json.dumps(update),
+            })
+            if changed is not None:
+                parent_store.save(changed)
+
+        before = len(self.network.sent_requests)
+        acted = self.tick_at(ticker, tick_at)
+        after_first = len(self.network.sent_requests)
+        self.tick_at(ticker, tick_at + 60)
+
+        parents = [
+            ParentOrder.from_document(json.loads(one))
+            for one in self.fake_redis.hashes.get(
+                'unified:orders:parents',
+                {},
+            ).values()
+        ]
+        return {
+            'name': name,
+            'reply': reply,
+            'sent_before_tick': before,
+            'sent_after_tick': after_first,
+            'sent_after_second_tick': len(self.network.sent_requests),
+            'acted': acted,
+            'requests': [
+                request['url'].rsplit('/', 1)[-1]
+                for request in self.network.sent_requests
+            ],
+            'legs': [
+                {
+                    'role': leg.role,
+                    'state': leg.state,
+                    'quantity': leg.quantity,
+                }
+                for parent in parents
+                for leg in parent.legs
+            ],
+            'parent_states': [parent.state for parent in parents],
+        }
+
+    def tick_at(self, ticker, moment):
+        """Runs one tick as though it were `moment`.
+
+        Args:
+            ticker (ClockTicker): The ticker.
+            moment (float): The Unix time to tick at.
+
+        Returns:
+            int: How many parents acted.
+        """
+        original = time.time
+        time.time = lambda: moment
+        try:
+            return ticker.tick()
+        finally:
+            time.time = original
+
+    def run_clock_checks(self):
+        """Runs the types that wait for a time of day rather than for a fill.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        accepted = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        frozen = FROZEN_NOW.timestamp()
+        entry = self.scenarios.bodies.market_order(
+            dry_run=None,
+            order_type='LIMIT',
+            price=1000,
+            quantity=10,
+        )
+        return [
+            self.clock_result(
+                'a_scheduled_order_waits_for_its_time',
+                dict(entry, synthetic={
+                    'type': 'scheduled',
+                    'at_time': '10:30',
+                }),
+                [],
+                frozen + 60,
+                accepted,
+            ),
+            self.clock_result(
+                'a_scheduled_order_is_placed_once_its_time_comes',
+                dict(entry, synthetic={
+                    'type': 'scheduled',
+                    'at_time': '10:30',
+                }),
+                [],
+                frozen + 1900,
+                accepted,
+            ),
+            self.clock_result(
+                'a_good_till_time_order_is_cancelled_when_it_runs_out',
+                dict(entry, synthetic={
+                    'type': 'good_till_time',
+                    'until_time': '10:30',
+                }),
+                [],
+                frozen + 1900,
+                accepted,
+            ),
+            self.clock_result(
+                'a_time_stop_closes_what_it_filled',
+                dict(entry, synthetic={
+                    'type': 'time_stop',
+                    'until_time': '10:30',
+                }),
+                [
+                    self.update('26091500000021', 'OPEN', 6),
+                ],
+                frozen + 1900,
+                accepted,
+            ),
+            self.clock_result(
+                'a_time_stop_that_filled_nothing_just_cancels',
+                dict(entry, synthetic={
+                    'type': 'time_stop',
+                    'until_time': '10:30',
+                }),
+                [],
+                frozen + 1900,
+                accepted,
+            ),
+            self.clock_result(
+                'a_time_that_has_already_passed_is_refused',
+                dict(entry, synthetic={
+                    'type': 'scheduled',
+                    'at_time': '09:30',
+                }),
+                [],
+                frozen + 60,
+                accepted,
+            ),
+        ]
+
     def run_wiring_checks(self):
         """Checks the things a file move can quietly break without any test noticing.
 
@@ -2388,8 +2601,10 @@ class OrderEngineSuite:
         original_uuid4 = uuid.uuid4
         original_excluded = api_configuration['order_excluded_brokers']
         original_selector = api_configuration['order_broker_selector']
+        original_now = moments.Moments.now
         requests.Session.request = self.network.request
         uuid.uuid4 = self.counting_uuid
+        moments.Moments.now = lambda self: FROZEN_NOW
         api_configuration['order_excluded_brokers'] = [
             '',
         ]
@@ -2403,10 +2618,12 @@ class OrderEngineSuite:
             results.extend(self.run_recovery_checks())
             results.extend(self.run_follower_checks())
             results.extend(self.run_reaction_checks())
+            results.extend(self.run_clock_checks())
             results.extend(self.run_wiring_checks())
         finally:
             requests.Session.request = original_request
             uuid.uuid4 = original_uuid4
+            moments.Moments.now = original_now
             api_configuration['order_excluded_brokers'] = original_excluded
             api_configuration['order_broker_selector'] = original_selector
         return results

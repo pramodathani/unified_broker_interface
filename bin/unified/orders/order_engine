@@ -19,6 +19,11 @@ clock tick - cannot be expressed. Everything reaching a broker through one proce
 loss lockout a property of the system rather than a convention repeated in each worker. This is the first stage of that:
 it places plain orders only and behaves exactly as the REST API did, through a new path.
 
+**It keeps a clock.** Its read of the streams blocks for about a second when nothing arrives, which is turned into a
+tick rather than a thread, so the types waiting for a time of day - a nine-twenty entry, a half-past-two give-up, a
+square-off before the broker's own - are woken without anything else touching a parent at the same moment. Only types
+that ask for a tick are read at all, so an engine running nothing but plain orders does no extra work.
+
 **It follows the orders it placed.** Besides the intents, it reads `unified:order-updates:stream` - the one stream
 `bin/unified/orders/websocket_order_details` already fills with every broker's order updates - as a consumer group of
 its own, and applies an update to the leg it belongs to. An update naming no leg of this engine's is acknowledged and
@@ -90,6 +95,7 @@ def main():
     from utilities.configurations import api_configuration, get_cache, get_logger, get_postgres
     from unified_broker_interface.utilities.order_engine.utilities.engine_lock import EngineLock
     from unified_broker_interface.utilities.order_engine.utilities.engine_placement import EnginePlacement
+    from unified_broker_interface.utilities.order_engine.utilities.clock_ticker import ClockTicker
     from unified_broker_interface.utilities.order_engine.utilities.engine_recovery import EngineRecovery
     from unified_broker_interface.utilities.order_engine.utilities.engine_runner import OrderEngine
     from unified_broker_interface.utilities.order_engine.utilities.order_update_follower import OrderUpdateFollower
@@ -172,6 +178,7 @@ def main():
         parent_store,
         OrderUpdateFollower(parent_store, event_log, logger, gates, placement),
         gates,
+        ClockTicker(parent_store, event_log, placement, logger, gates),
     )
     exit_code = engine.run(stop)
     lock.release()

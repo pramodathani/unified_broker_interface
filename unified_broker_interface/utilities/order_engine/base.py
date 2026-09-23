@@ -44,6 +44,7 @@ class SyntheticOrder:
 
     Attributes:
         SYNTHETIC_TYPE (str): The name the caller's `synthetic.type` names this class by.
+        WANTS_CLOCK (bool): Whether this type is waiting for a time as well as for a fill, and so wants a tick about once a second.
         parent (ParentOrder): The parent being run.
         placement (EnginePlacement): What reads Redis, chooses a broker and sends.
         event_log (SyntheticOrderEventLog): Where transitions are recorded.
@@ -52,6 +53,7 @@ class SyntheticOrder:
     """
 
     SYNTHETIC_TYPE = None
+    WANTS_CLOCK = False
 
     def __init__(
         self,
@@ -219,6 +221,19 @@ class SyntheticOrder:
         Returns:
             None: This method returns nothing.
         """
+
+    def on_clock_tick(self, now):
+        """Acts on the time having passed, for a type that is waiting for one.
+
+        Only types that set `WANTS_CLOCK` are given this, and only while their parent is open. A type waiting for a fill leaves it alone.
+
+        Args:
+            now (float): The Unix time of the tick.
+
+        Returns:
+            bool: True when the parent did something, which is only used for the engine's counters.
+        """
+        return False
 
     def cancel_leg(self, leg, reason):
         """Cancels one leg at its broker and records both the asking and the answer.
