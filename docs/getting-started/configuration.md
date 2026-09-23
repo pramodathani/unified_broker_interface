@@ -67,7 +67,7 @@ with HTTP 504, how long that answer is kept for a worker that never collected it
 its deadline an order may be before the engine records it rather than placing it into a market that
 has moved.
 
-The order engine's risk gates are the last four. `..._ORDER_RATE_PER_SECOND` and
+The order engine's risk gates are the last five. `..._ORDER_RATE_PER_SECOND` and
 `..._ORDER_RATE_PER_BROKER_PER_SECOND` are a token bucket across every broker and for any one of them, defaulting well
 under the ten orders a second that SEBI's retail algorithmic trading framework treats as algorithmic trading needing
 registration. An order that finds the bucket empty waits up to `..._ORDER_RATE_WAIT_SECONDS` for a token and is
