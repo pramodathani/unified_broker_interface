@@ -48,6 +48,9 @@ from unified_broker_interface.utilities.broker_orders.utilities.order_request im
 from unified_broker_interface.utilities.broker_orders.utilities.place_order_request import (
     PlaceOrderRequest,
 )
+from unified_broker_interface.utilities.broker_orders.utilities.refused_request import (
+    RefusedRequestError,
+)
 from unified_broker_interface.utilities.broker_orders.utilities.registry import (
     BROKER_ORDER_CLASSES,
 )
@@ -69,29 +72,6 @@ ORDER_PLACEMENT_MODES = (
     'direct',
     'engine',
 )
-
-
-class RefusedRequestError(Exception):
-    """A request the order routes answer without calling a broker.
-
-    Attributes:
-        body (dict): The JSON body of the answer.
-        status (int): The HTTP status of the answer.
-    """
-
-    def __init__(self, body, status):
-        """Builds the refusal.
-
-        Args:
-            body (dict): The JSON body of the answer.
-            status (int): The HTTP status of the answer.
-
-        Returns:
-            None: This method returns nothing.
-        """
-        super().__init__(body.get('error'))
-        self.body = body
-        self.status = status
 
 
 class OrdersBlueprint(BaseBlueprint):
@@ -220,11 +200,7 @@ class OrdersBlueprint(BaseBlueprint):
         Returns:
             RefusedRequestError: The refusal, for the caller to raise.
         """
-        body = {
-            'error': message,
-        }
-        body.update(fields)
-        return RefusedRequestError(body, status)
+        return RefusedRequestError.refusal(message, status, **fields)
 
     def check_access_token(self, access_token, token_document_text):
         """Checks the request's access token against the API's token document from Redis.
