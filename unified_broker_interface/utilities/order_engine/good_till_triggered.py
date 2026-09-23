@@ -91,7 +91,7 @@ class GoodTillTriggered(LimitIfTouched):
         """
         expires_at = self.parent.parameters.get('expires_at')
         if isinstance(expires_at, (int, float)) and now >= expires_at:
-            if self.parent.parameters.get('triggered_at') is None:
+            if not self.has_fired():
                 self.record_state(
                     'cancelled',
                     f'the trigger was not touched within '

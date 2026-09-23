@@ -24,7 +24,7 @@ class PriceTrigger(SyntheticOrder):
 
     The shape is always the same. Nothing is sent when the caller asks. The parent is written down and answers `202 armed`, carrying the parent id the caller needs to find it later, and then every price tick asks one question: has the level been reached? The first tick that says yes sends the child order, and the parent stops watching.
 
-    **It fires once.** `triggered_at` goes into the parent's parameters before the child is placed, and a parent that already has one is not asked again. Without that, a level that stays crossed — which is the normal case, since a price that fell through a level tends to stay below it — would send a child order on every tick for the rest of the day.
+    **It fires once.** `triggered_at` goes into the parent's parameters before the child is placed, and a parent that already has one is not asked again. Without that, a level that stays crossed — which is the normal case, since a price that fell through a level tends to stay below it — would send a child order on every tick for the rest of the day. `triggered_at` is kept only in Redis, so a parent rebuilt from the event log after a restart does not have it; such a parent is known to have fired by the child leg it placed, which the event log does keep.
 
     A subclass says four things: which instrument to watch, which price out of that instrument's quote to compare, which way the comparison goes by default, and what order to send when it fires.
 
@@ -251,7 +251,7 @@ class PriceTrigger(SyntheticOrder):
         Returns:
             bool: True when the child order was placed on this tick.
         """
-        if self.parent.parameters.get('triggered_at') is not None:
+        if self.has_fired():
             return False
         order = self.read_order(self.parent.body)
         watched = self.view(quotes, self.watched_instrument())
@@ -274,6 +274,21 @@ class PriceTrigger(SyntheticOrder):
         self.parent.parameters['triggered_price'] = str(price)
         self.save()
         return self.fire(child, price, level)
+
+    def has_fired(self):
+        """Whether this trigger has already sent its child order.
+
+        `triggered_at` answers that while the engine keeps running. After a restart the parent is rebuilt from the event log, which does not hold it, but does hold every leg, so any leg other than the backstop a hidden stop leaves resting when it is armed means the trigger has fired.
+
+        Returns:
+            bool: True when the child order has been sent.
+        """
+        if self.parent.parameters.get('triggered_at') is not None:
+            return True
+        for leg in self.parent.legs:
+            if leg.role != 'backstop':
+                return True
+        return False
 
     def state_after_firing(self, outcome):
         """What the parent becomes once the child order has been sent.

@@ -2876,6 +2876,27 @@ class OrderEngineSuite:
             'parent_states': [parent.state for parent in parents],
         }
 
+    def restart_parents(self, event_log, parent_store):
+        """Rebuilds every parent from its recorded events alone, which is all an engine restart has.
+
+        Args:
+            event_log (RecordingEventLog): The recorded events.
+            parent_store (ParentStore): The Redis copy to replace.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        by_parent = {}
+        for event in event_log.read_since(None):
+            parent_order_id = str(event.get('parent_order_id'))
+            by_parent.setdefault(parent_order_id, []).append(event)
+        parents = []
+        for events in by_parent.values():
+            parent = ParentOrder.from_events(events)
+            if parent is not None:
+                parents.append(parent)
+        parent_store.rebuild(parents)
+
     def seed_quote(self, quote):
         """Puts one live quote where the engine and the price ticker both read it.
 
@@ -2904,6 +2925,7 @@ class OrderEngineSuite:
         book_overrides=None,
         fills=None,
         positions=None,
+        restart_between_ticks=False,
     ):
         """Places one watching order, then walks it through a sequence of quotes.
 
@@ -2918,6 +2940,7 @@ class OrderEngineSuite:
             book_overrides (dict | None): Fields to replace on the broker's order book entry, for a type whose order is not a plain limit.
             fills (list | None): Order updates to apply before the first tick, for a type that only acts once its legs are filled.
             positions (float | None): A net position in RELIANCE to seed, for a type that reads the account's holdings.
+            restart_between_ticks (bool): Whether to rebuild every parent from its recorded events after every tick, as an engine restart does.
 
         Returns:
             dict: The recorded result.
@@ -3002,6 +3025,8 @@ class OrderEngineSuite:
             before = len(self.network.sent_requests)
             self.tick_at(ticker, started + step.get('at', 0))
             moves.append(len(self.network.sent_requests) - before)
+            if restart_between_ticks:
+                self.restart_parents(event_log, parent_store)
 
         parents = [
             ParentOrder.from_document(json.loads(one))
@@ -3885,6 +3910,20 @@ class OrderEngineSuite:
                     {'quote': self.book_at(994.90, 994.95), 'at': 2},
                 ],
                 accepted,
+            ),
+            self.price_result(
+                'a_fired_trigger_does_not_fire_again_after_a_restart',
+                dict(entry, synthetic={
+                    'type': 'market_if_touched',
+                    'trigger_price': 995,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 2},
+                ],
+                accepted,
+                restart_between_ticks=True,
             ),
             self.price_result(
                 'a_market_if_touched_order_that_is_never_touched_sends_nothing',
