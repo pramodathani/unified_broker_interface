@@ -11,6 +11,9 @@ from unified_broker_interface.utilities.order_engine.freeze_slicer import (
 from unified_broker_interface.utilities.order_engine.good_till_time import (
     GoodTillTime,
 )
+from unified_broker_interface.utilities.order_engine.discretionary import (
+    Discretionary,
+)
 from unified_broker_interface.utilities.order_engine.hidden_stop import (
     HiddenStop,
 )
@@ -27,6 +30,7 @@ from unified_broker_interface.utilities.order_engine.market_if_touched import (
 from unified_broker_interface.utilities.order_engine.oco import OneCancelsOther
 from unified_broker_interface.utilities.order_engine.oto import OneTriggersOther
 from unified_broker_interface.utilities.order_engine.peg import Peg
+from unified_broker_interface.utilities.order_engine.post_only import PostOnly
 from unified_broker_interface.utilities.order_engine.scale_out import ScaleOut
 from unified_broker_interface.utilities.order_engine.scheduled import Scheduled
 from unified_broker_interface.utilities.order_engine.simple import SimpleOrder
@@ -64,4 +68,6 @@ SYNTHETIC_ORDER_CLASSES = {
     IndicatorTriggered.SYNTHETIC_TYPE: IndicatorTriggered,
     TrailingStop.SYNTHETIC_TYPE: TrailingStop,
     TrailingEntry.SYNTHETIC_TYPE: TrailingEntry,
+    PostOnly.SYNTHETIC_TYPE: PostOnly,
+    Discretionary.SYNTHETIC_TYPE: Discretionary,
 }

@@ -2859,6 +2859,74 @@ class OrderEngineSuite:
                 accepted,
             ),
             self.price_result(
+                'a_post_only_order_refuses_a_price_that_would_cross',
+                dict(entry, price=1000.10, synthetic={
+                    'type': 'post_only',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_post_only_order_can_be_told_to_rest_at_the_touch_instead',
+                dict(entry, price=1000.10, synthetic={
+                    'type': 'post_only',
+                    'on_crossing': 'rest',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_post_only_order_that_rests_is_sent_untouched',
+                dict(entry, price=999.50, synthetic={
+                    'type': 'post_only',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_discretionary_order_takes_the_offer_when_it_comes_within_reach',
+                dict(entry, price=1000.00, synthetic={
+                    'type': 'discretionary',
+                    'discretion_points': 0.25,
+                }),
+                [
+                    {'quote': self.book_at(1000.00, 1000.50), 'at': 0},
+                    {'quote': self.book_at(1000.00, 1000.20), 'at': 1},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_discretionary_order_leaves_the_rest_showing_when_it_takes_a_slice',
+                dict(entry, price=1000.00, synthetic={
+                    'type': 'discretionary',
+                    'discretion_points': 0.25,
+                    'discretion_quantity': 4,
+                }),
+                [
+                    {'quote': self.book_at(1000.00, 1000.50), 'at': 0},
+                    {'quote': self.book_at(1000.00, 1000.20), 'at': 1},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_discretionary_order_waits_while_the_offer_stays_out_of_reach',
+                dict(entry, price=1000.00, synthetic={
+                    'type': 'discretionary',
+                    'discretion_points': 0.25,
+                }),
+                [
+                    {'quote': self.book_at(1000.00, 1000.50), 'at': 0},
+                    {'quote': self.book_at(1000.00, 1000.40), 'at': 1},
+                ],
+                accepted,
+            ),
+            self.price_result(
                 'a_trailing_stop_follows_a_rising_market_and_not_a_falling_one',
                 dict(entry, synthetic={
                     'type': 'trailing_stop',
