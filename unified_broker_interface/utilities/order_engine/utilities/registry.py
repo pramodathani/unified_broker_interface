@@ -31,6 +31,12 @@ from unified_broker_interface.utilities.order_engine.scale_out import ScaleOut
 from unified_broker_interface.utilities.order_engine.scheduled import Scheduled
 from unified_broker_interface.utilities.order_engine.simple import SimpleOrder
 from unified_broker_interface.utilities.order_engine.time_stop import TimeStop
+from unified_broker_interface.utilities.order_engine.trailing_entry import (
+    TrailingEntry,
+)
+from unified_broker_interface.utilities.order_engine.trailing_stop import (
+    TrailingStop,
+)
 from unified_broker_interface.utilities.order_engine.twap import Twap
 from unified_broker_interface.utilities.order_engine.two_sided_breakout import (
     TwoSidedBreakout,
@@ -56,4 +62,6 @@ SYNTHETIC_ORDER_CLASSES = {
     HiddenStop.SYNTHETIC_TYPE: HiddenStop,
     CrossInstrument.SYNTHETIC_TYPE: CrossInstrument,
     IndicatorTriggered.SYNTHETIC_TYPE: IndicatorTriggered,
+    TrailingStop.SYNTHETIC_TYPE: TrailingStop,
+    TrailingEntry.SYNTHETIC_TYPE: TrailingEntry,
 }

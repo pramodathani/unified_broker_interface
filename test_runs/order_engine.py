@@ -2470,6 +2470,7 @@ class OrderEngineSuite:
         steps,
         answer=None,
         throttle_seconds=0,
+        book_overrides=None,
     ):
         """Places one watching order, then walks it through a sequence of quotes.
 
@@ -2481,6 +2482,7 @@ class OrderEngineSuite:
             steps (list): One `{"quote": dict | None, "at": float}` per tick, where `at` is seconds after the order was placed.
             answer (dict | None): The stubbed broker answer.
             throttle_seconds (float): The shortest gap the re-pricing throttle allows between two moves of one order.
+            book_overrides (dict | None): Fields to replace on the broker's order book entry, for a type whose order is not a plain limit.
 
         Returns:
             dict: The recorded result.
@@ -2538,6 +2540,7 @@ class OrderEngineSuite:
         book['26091500000021'] = self.broker_book_entry(
             '26091500000021',
             status='OPEN',
+            **(book_overrides or {}),
         )
 
         moves = []
@@ -2854,6 +2857,95 @@ class OrderEngineSuite:
                     {'quote': steady, 'at': 12},
                 ],
                 accepted,
+            ),
+            self.price_result(
+                'a_trailing_stop_follows_a_rising_market_and_not_a_falling_one',
+                dict(entry, synthetic={
+                    'type': 'trailing_stop',
+                    'trail_points': 10,
+                    'stop_limit_offset': 2,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1020.00, 1020.05), 'at': 1},
+                    {'quote': self.book_at(1040.00, 1040.05), 'at': 2},
+                    {'quote': self.book_at(1015.00, 1015.05), 'at': 3},
+                ],
+                accepted,
+                book_overrides={
+                    'order_type': 'SL',
+                    'trigger_price': 990.05,
+                },
+            ),
+            self.price_result(
+                'a_trailing_stop_measured_as_a_percentage_widens_as_it_goes',
+                dict(entry, synthetic={
+                    'type': 'trailing_stop',
+                    'trail_percent': 1,
+                    'stop_limit_offset': 2,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1100.00, 1100.05), 'at': 1},
+                ],
+                accepted,
+                book_overrides={
+                    'order_type': 'SL',
+                    'trigger_price': 990.05,
+                },
+            ),
+            self.price_result(
+                'a_trailing_stop_ignores_a_move_smaller_than_its_step',
+                dict(entry, synthetic={
+                    'type': 'trailing_stop',
+                    'trail_points': 10,
+                    'stop_limit_offset': 2,
+                    'step_ticks': 40,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1000.50, 1000.55), 'at': 1},
+                    {'quote': self.book_at(1010.00, 1010.05), 'at': 2},
+                ],
+                accepted,
+                book_overrides={
+                    'order_type': 'SL',
+                    'trigger_price': 990.05,
+                },
+            ),
+            self.price_result(
+                'a_trailing_entry_follows_a_falling_market_down',
+                dict(entry, synthetic={
+                    'type': 'trailing_entry',
+                    'trail_points': 10,
+                    'stop_limit_offset': 2,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(980.00, 980.05), 'at': 1},
+                    {'quote': self.book_at(960.00, 960.05), 'at': 2},
+                    {'quote': self.book_at(985.00, 985.05), 'at': 3},
+                ],
+                accepted,
+                book_overrides={
+                    'order_type': 'SL',
+                    'trigger_price': 990.05,
+                },
+            ),
+            self.price_result(
+                'a_trailing_order_without_a_distance_is_refused',
+                dict(entry, synthetic={
+                    'type': 'trailing_stop',
+                    'stop_limit_offset': 2,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+                book_overrides={
+                    'order_type': 'SL',
+                    'trigger_price': 990.05,
+                },
             ),
             self.price_result(
                 'a_market_if_touched_order_waits_and_then_takes_the_offer',
