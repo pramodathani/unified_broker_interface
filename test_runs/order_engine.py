@@ -733,6 +733,88 @@ class OrderEngineScenarios:
         scenario.update(settings)
         return scenario
 
+    def quote(self, **overrides):
+        """A live quote with five levels each side, as `unified:quotes:live` holds one.
+
+        Args:
+            **overrides: Fields to replace on the quote.
+
+        Returns:
+            dict: The quote.
+        """
+        document = {
+            'last_price': 1000.10,
+            'average_price': 999.80,
+            'previous_close': 995.00,
+            'depth': {
+                'buy': [
+                    {
+                        'price': 1000.00 - index * 0.05,
+                        'quantity': 100,
+                        'orders': 1,
+                    }
+                    for index in range(5)
+                ],
+                'sell': [
+                    {
+                        'price': 1000.05 + index * 0.05,
+                        'quantity': 100,
+                        'orders': 1,
+                    }
+                    for index in range(5)
+                ],
+            },
+        }
+        document.update(overrides)
+        return document
+
+    def positions(self, quantity, product='intraday'):
+        """A unified positions document holding one net position in RELIANCE.
+
+        Args:
+            quantity (float): The net quantity, signed.
+            product (str): The product, on the vocabulary the REST API answers with.
+
+        Returns:
+            dict: The document.
+        """
+        return {
+            'net': [
+                {
+                    'instrument_id': (
+                        order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS[
+                            'reliance'
+                        ]
+                    ),
+                    'product': product,
+                    'quantity': quantity,
+                },
+            ],
+            'day': [],
+        }
+
+    def referenced(self, price_reference=None, quantity_reference=None, **overrides):
+        """A LIMIT order that names a reference instead of a price or a quantity.
+
+        Args:
+            price_reference (dict | None): The price reference.
+            quantity_reference (dict | None): The quantity reference.
+            **overrides: Other body fields to replace.
+
+        Returns:
+            dict: The request body.
+        """
+        overrides.setdefault('order_type', 'LIMIT')
+        body = self.bodies.market_order(
+            dry_run=None,
+            **overrides,
+        )
+        if price_reference is not None:
+            body['price_reference'] = price_reference
+        if quantity_reference is not None:
+            body['quantity_reference'] = quantity_reference
+        return body
+
     def build(self):
         """Builds every scenario, in the order the recording holds them.
 
@@ -923,6 +1005,155 @@ class OrderEngineScenarios:
                 ],
                 instrument_id=None,
             ),
+            self.intents(
+                'an_offer_level_reference_becomes_a_price',
+                [
+                    self.referenced({
+                        'kind': 'offer_level',
+                        'level': 2,
+                    }),
+                ],
+                quote=self.quote(),
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
+                'a_mid_reference_rounds_to_the_passive_side',
+                [
+                    self.referenced({
+                        'kind': 'mid',
+                    }),
+                ],
+                quote=self.quote(),
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
+                'a_marketable_reference_crosses_with_a_buffer',
+                [
+                    self.referenced({
+                        'kind': 'marketable',
+                        'buffer_percent': 0.1,
+                    }),
+                ],
+                quote=self.quote(),
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
+                'a_vwap_reference_uses_the_average_price',
+                [
+                    self.referenced({
+                        'kind': 'vwap',
+                    }),
+                ],
+                quote=self.quote(),
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
+                'a_level_deeper_than_the_book_is_refused',
+                [
+                    self.referenced({
+                        'kind': 'bid_level',
+                        'level': 5,
+                    }),
+                ],
+                quote=self.quote(depth={
+                    'buy': [
+                        {
+                            'price': 1000.00,
+                            'quantity': 100,
+                        },
+                    ],
+                    'sell': [
+                        {
+                            'price': 1000.05,
+                            'quantity': 100,
+                        },
+                    ],
+                }),
+            ),
+            self.intents(
+                'a_reference_without_a_quote_is_refused',
+                [
+                    self.referenced({
+                        'kind': 'mid',
+                    }),
+                ],
+            ),
+            self.intents(
+                'liquidating_a_long_sells_all_of_it',
+                [
+                    self.referenced(
+                        quantity_reference={
+                            'kind': 'liquidate_position',
+                        },
+                        order_type='MARKET',
+                        quantity=None,
+                    ),
+                ],
+                positions=self.positions(75),
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
+                'liquidating_a_short_buys_it_back',
+                [
+                    self.referenced(
+                        quantity_reference={
+                            'kind': 'liquidate_position',
+                        },
+                        order_type='MARKET',
+                        quantity=None,
+                    ),
+                ],
+                positions=self.positions(-40),
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
+                'reducing_a_position_cannot_close_more_than_is_held',
+                [
+                    self.referenced(
+                        quantity_reference={
+                            'kind': 'reduce_position',
+                        },
+                        order_type='MARKET',
+                        quantity=500,
+                    ),
+                ],
+                positions=self.positions(75),
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
+                'closing_a_position_that_is_not_held_is_refused',
+                [
+                    self.referenced(
+                        quantity_reference={
+                            'kind': 'liquidate_position',
+                        },
+                        order_type='MARKET',
+                        quantity=None,
+                    ),
+                ],
+                positions=self.positions(0),
+            ),
         ]
 
 
@@ -1079,6 +1310,16 @@ class OrderEngineSuite:
             dict: The scenario's recorded result.
         """
         self.fake_redis = self.build_state()
+        if scenario.get('quote') is not None:
+            self.fake_redis.hashes['unified:quotes:live'] = {
+                order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS[
+                    'reliance'
+                ]: json.dumps(scenario['quote']),
+            }
+        if scenario.get('positions') is not None:
+            self.fake_redis.strings['unified:portfolio:positions'] = json.dumps(
+                scenario['positions'],
+            )
         self.network.reset(scenario.get('answer'))
         self.counting_uuid.reset()
         reply_keys = self.write_intents(scenario)

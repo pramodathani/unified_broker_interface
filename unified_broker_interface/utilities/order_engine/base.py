@@ -15,6 +15,12 @@ from unified_broker_interface.utilities.broker_orders.utilities.refused_request 
 from unified_broker_interface.utilities.order_engine.utilities.parent_order import (
     ParentOrder,
 )
+from unified_broker_interface.utilities.order_engine.utilities.price_reference import (
+    PriceReference,
+)
+from unified_broker_interface.utilities.order_engine.utilities.quantity_reference import (
+    QuantityReference,
+)
 
 OUTCOME_LEG_STATES = {
     'accepted': 'acknowledged',
@@ -143,6 +149,80 @@ class SyntheticOrder:
         except InvalidOrderError as error:
             raise RefusedRequestError.refusal(str(error), 400)
 
+    def concrete_order(self, order):
+        """Replaces any price or quantity reference with the number it works out to.
+
+        The result is an ordinary order, built by `PlaceOrderRequest` from an ordinary body, so every check a caller's own numbers face — the lot size, the tick size, the contract size, whether a priced order carries a price — applies to a number the engine worked out too. A reference is a way of saying which number, not a way around the checks.
+
+        Args:
+            order (PlaceOrderRequest): The validated order, which may carry references.
+
+        Returns:
+            PlaceOrderRequest: The order with real numbers, or the same order when it carried no references.
+
+        Raises:
+            RefusedRequestError: With HTTP 503 when the quote or the positions are missing, 409 when there is no position to close, and 400 when the price works out at zero or below.
+        """
+        price_reference = getattr(order, 'price_reference', None)
+        quantity_reference = getattr(order, 'quantity_reference', None)
+        if price_reference is None and quantity_reference is None:
+            return order
+
+        instrument, quote, positions = self.placement.market_context(
+            self.parent.instrument_id,
+            price_reference is not None,
+            quantity_reference is not None,
+        )
+        body = dict(self.parent.body)
+        body.pop('price_reference', None)
+        body.pop('quantity_reference', None)
+
+        transaction_type = order.transaction_type
+        if quantity_reference is not None:
+            quantity, transaction_type = QuantityReference().resolve(
+                quantity_reference,
+                positions,
+                self.parent.instrument_id,
+                transaction_type,
+                order.quantity,
+            )
+            body['quantity'] = quantity
+            body['transaction_type'] = transaction_type
+        if price_reference is not None:
+            tick_size = order.agreed_tick_size(instrument.handles)
+            if tick_size is None:
+                raise RefusedRequestError.refusal(
+                    'a price reference needs a tick size the brokers agree on '
+                    'and there is none for this instrument',
+                    503,
+                    instrument_id=self.parent.instrument_id,
+                )
+            price = PriceReference(order).resolve(
+                price_reference,
+                quote,
+                transaction_type,
+                tick_size,
+            )
+            body['price'] = str(price)
+        return self.read_order(body)
+
+    def json_number(self, value):
+        """A price as a number the parent's Redis record can hold.
+
+        `PlaceOrderRequest` keeps prices as `decimal.Decimal`, which is right for comparing them against a tick size and wrong for `json.dumps`, which refuses one outright. The parent record is written to Redis as JSON after every transition, so a Decimal reaching a leg would stop a limit order being saved at all — and every order the engine had placed until now happened to be a market order, so nothing noticed.
+
+        A price rounded to four decimal places, which is what `NUMERIC(18,4)` stores and what every other price in this system is, survives a float exactly.
+
+        Args:
+            value (decimal.Decimal | int | float | None): The price.
+
+        Returns:
+            float | None: The price as a float, or None.
+        """
+        if value is None:
+            return None
+        return float(value)
+
     def now(self):
         """The moment a transition is being recorded at.
 
@@ -266,8 +346,8 @@ class SyntheticOrder:
             'order_type': order.order_type,
             'validity': order.validity,
             'quantity': order.quantity,
-            'price': order.price,
-            'trigger_price': order.trigger_price,
+            'price': self.json_number(order.price),
+            'trigger_price': self.json_number(order.trigger_price),
             'detail': {
                 'request': broker_request.shown(),
             },

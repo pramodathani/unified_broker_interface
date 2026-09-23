@@ -1203,3 +1203,66 @@ what was cancelled, what is `still_open_after_waiting`, what was closed and whet
 | `400` | The body did not carry `confirm` set to `FLATTEN` |
 | `401` | The access token is missing, wrong or expired |
 | `503` | Redis cannot be read |
+
+## Price and quantity references
+
+`POST /api/orders/place` takes two optional fields that say **how to work a number out** rather than stating one. They
+need [the order engine](#flattening-everything), because the number is worked out from the live quote and the positions
+at the moment the order is sent.
+
+```json
+{ "instrument_id": "…", "transaction_type": "BUY", "product": "MIS", "order_type": "LIMIT",
+  "quantity": 100,
+  "price_reference":    { "kind": "offer_level", "level": 2, "buffer_percent": 0.1 },
+  "quantity_reference": { "kind": "reduce_position", "product": "intraday" } }
+```
+
+A priced order may leave out `price` when it carries a `price_reference`, and any order may leave out `quantity` when
+its `quantity_reference` works one out.
+
+### What a price reference can name
+
+| Kind | Resolves to |
+| --- | --- |
+| `absolute` | The `price` in the reference, which is the same as giving `price` |
+| `last` | The quote's `last_price` |
+| `mid` | Halfway between the best bid and the best offer |
+| `vwap` | The quote's `average_price`, which is what this system calls the volume weighted average price; there is no field named `vwap` |
+| `bid_level`, `offer_level` | That side of the depth at `level`, counting the touch as 1, up to 5, which is as deep as the unified quote carries |
+| `marketable` | The touch on the *other* side, which is what an order has to reach to fill now |
+
+Any of them may carry `buffer_percent`, `offset_percent` or `offset_ticks`. An offset always moves the price in the
+direction that makes the order **more** likely to fill, because that is what "the offer plus a tenth of a per cent"
+means; a negative offset improves the price instead.
+
+!!! note "Every resolved price is rounded to the instrument's tick size"
+
+    Towards the passive side, so a resting order rests. A midpoint of a one-tick spread falls exactly between two
+    ticks, and rounding a buy up there would cross the spread and take liquidity when the caller asked to rest. A
+    `marketable` reference rounds the other way, because taking liquidity is what it is for.
+
+    Prices read out of the depth are snapped to the nearest tick first. A quote is built from JSON floats, so a second
+    best offer of 1000.10 arrives as 1000.0999999999999, and rounding *that* towards the passive side would floor it a
+    whole tick to 1000.05 — the wrong level of the book entirely.
+
+### What a quantity reference can name
+
+| Kind | Resolves to |
+| --- | --- |
+| `absolute`, `add_to_position` | The `quantity` given, unchanged |
+| `reduce_position` | The smaller of `quantity` and what is held, and **the side that closes it** |
+| `liquidate_position` | All of what is held, and the side that closes it |
+
+`reduce_position` and `liquidate_position` also decide the side, because closing a long is selling and closing a short
+is buying, and making a caller work that out is the sort of arithmetic that goes wrong under pressure. They read
+[`unified:portfolio:positions`](#positions) and match on the instrument, and on `product` when the reference names one.
+
+A reference is a way of saying *which* number, not a way around the checks. Once resolved, the order is an ordinary one
+and faces every check a caller's own numbers face: the lot size, the tick size, the contract size, and whether a priced
+order carries a price.
+
+| Status | Meaning |
+| --- | --- |
+| `400` | The reference is malformed, names an unknown kind, or the price works out at zero or below |
+| `409` | A `reduce_position` or `liquidate_position` reference found no open position to close |
+| `503` | There is no live quote for the instrument, the depth is not that deep, the positions could not be read, or the brokers do not agree on a tick size |

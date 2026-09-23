@@ -19,7 +19,7 @@ class SimpleOrder(SyntheticOrder):
     def run(self, intent, started_at):
         """Places the caller's order and answers the waiting API worker.
 
-        A dry run is answered without recording anything, because nothing happened: no order exists, so there is no parent for recovery to find and nothing for a later reader to be misled by.
+        A price or quantity reference is turned into a real number first, so what is recorded and what is sent are the numbers, not the instruction that produced them. A dry run is answered without recording anything, because nothing happened: no order exists, so there is no parent for recovery to find and nothing for a later reader to be misled by.
 
         Args:
             intent (dict): The intent document.
@@ -31,7 +31,7 @@ class SimpleOrder(SyntheticOrder):
         Raises:
             RefusedRequestError: For an order answered without calling a broker.
         """
-        order = self.read_order(self.parent.body)
+        order = self.concrete_order(self.read_order(self.parent.body))
         if order.dry_run:
             prepared = self.placement.prepare(
                 order,

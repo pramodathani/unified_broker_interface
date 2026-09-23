@@ -1,5 +1,7 @@
 """Placing one intent's order: the Redis reads the engine makes, and the answer it sends back."""
 
+import json
+
 import redis
 
 from unified_broker_interface.utilities.broker_orders.utilities.instrument import (
@@ -18,6 +20,9 @@ from unified_broker_interface.utilities.broker_orders.utilities.refused_request 
     RefusedRequestError,
 )
 from unified_broker_interface.utilities.instrument_cache import InstrumentCache
+
+QUOTES_KEY = 'unified:quotes:live'
+POSITIONS_KEY = 'unified:portfolio:positions'
 
 
 class EnginePlacement:
@@ -59,6 +64,119 @@ class EnginePlacement:
             None: This method returns nothing.
         """
         self.order_placement.start_connection_warmers()
+
+    def market_context(self, instrument_id, needs_quote, needs_positions):
+        """Reads the instrument, and the quote and positions a reference needs, in one round trip.
+
+        This is a separate read from `prepare`'s, and deliberately queues none of the broker selector's commands. The selector's `round_robin` counts an `INCR` for every order it is asked about, so reading through `prepare` twice would advance the rotation twice and quietly skip a broker on every referenced order.
+
+        The instrument comes from the engine's own cache when it holds one, so after the first order of the day on an instrument this costs only the quote and the positions.
+
+        Args:
+            instrument_id (str): The instrument the order is for.
+            needs_quote (bool): Whether a price reference needs the live quote.
+            needs_positions (bool): Whether a quantity reference needs the positions.
+
+        Returns:
+            tuple: The instrument (Instrument), the quote (dict | None) and the positions (dict | None).
+
+        Raises:
+            RefusedRequestError: With HTTP 503 when Redis cannot be read or nothing has been mapped, and 404 when the instrument is not mapped.
+        """
+        try:
+            pipeline = self.cache.pipeline(transaction=False)
+            pipeline.get('unified:catalogue:current_date')
+            pipeline.get('unified:catalogue:warm_identifier')
+            replies = pipeline.execute()
+        except redis.RedisError as error:
+            raise RefusedRequestError.refusal(
+                f'Redis could not be read: {error}',
+                503,
+            )
+        mapping_date_text, warm_identifier = replies[0], replies[1]
+        if not mapping_date_text:
+            raise RefusedRequestError.refusal(
+                'no instruments have been mapped yet',
+                503,
+            )
+
+        catalogue_key_prefix = f'unified:catalogue:{mapping_date_text}:'
+        kept_texts = self.instrument_cache.instrument(
+            mapping_date_text,
+            warm_identifier,
+            instrument_id,
+        )
+        pipeline = self.cache.pipeline(transaction=False)
+        if kept_texts is None:
+            pipeline.hget(catalogue_key_prefix + 'identity', instrument_id)
+            pipeline.hget(
+                catalogue_key_prefix + 'order_handles',
+                instrument_id,
+            )
+            pipeline.hget(
+                catalogue_key_prefix + 'contract_sizes',
+                instrument_id,
+            )
+        if needs_quote:
+            pipeline.hget(QUOTES_KEY, instrument_id)
+        if needs_positions:
+            pipeline.get(POSITIONS_KEY)
+        try:
+            replies = pipeline.execute()
+        except redis.RedisError as error:
+            raise RefusedRequestError.refusal(
+                f'Redis could not be read: {error}',
+                503,
+            )
+
+        position = 0
+        if kept_texts is None:
+            identity_text, handles_text, contract_size_text = replies[0:3]
+            position = 3
+        else:
+            identity_text, handles_text, contract_size_text = kept_texts
+        instrument = Instrument.decoded(
+            instrument_id,
+            identity_text,
+            handles_text,
+            contract_size_text,
+        )
+        if kept_texts is None:
+            self.instrument_cache.keep_instrument(
+                mapping_date_text,
+                warm_identifier,
+                instrument_id,
+                identity_text,
+                handles_text,
+                contract_size_text,
+            )
+        quote = None
+        if needs_quote:
+            quote = self.decode(replies[position])
+            position = position + 1
+        positions = None
+        if needs_positions:
+            positions = self.decode(replies[position])
+        return instrument, quote, positions
+
+    def decode(self, text):
+        """One JSON document from Redis, or None when there is none or it is not an object.
+
+        Args:
+            text (str | None): The stored document.
+
+        Returns:
+            dict | None: The decoded document.
+        """
+        if not text:
+            return None
+        try:
+            document = json.loads(text)
+        except ValueError:
+            return None
+        if not isinstance(document, dict):
+            return None
+        return document
 
     def prepare(self, order, instrument_id):
         """Reads what the order needs, chooses its broker and builds the request, without sending anything.
