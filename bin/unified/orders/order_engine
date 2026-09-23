@@ -35,15 +35,25 @@ rather than sent, so a restart cannot fire an abandoned order into a market that
 
 **Nothing is placed twice on purpose.** An intent is acknowledged once its answer has been pushed, so an engine that
 dies between placing and acknowledging redelivers the intent at its next start; that intent is almost always past its
-deadline by then and is refused rather than placed. Recovering an order whose broker answer was lost is the next stage's
-work, not this one's.
+deadline by then and is refused rather than placed.
+
+**It rebuilds itself before it places anything.** Every transition is written to `unified.synthetic_order_events` and
+committed before it is acted on, so on start the engine replays the day's rows through the same state machine the live
+path uses and rebuilds every parent that had not finished. Legs are then brought up to date from each broker's own order
+book. A leg still in `sending` means a crash between recording an order and hearing the answer, so the order may be live
+at the broker under the caller's own tag: the orphan matcher attributes it only when exactly one unclaimed order matches
+every field that was sent, within seconds of when it was sent, and otherwise parks the parent in `failed` for a person
+to look at rather than guessing. Recovery reads Redis only for the brokers' order books, and rewrites its own keys from
+what it found, so a flushed Redis costs a slower start rather than a lost position.
 
 Exits 0 when stopped with Ctrl+C or SIGTERM after finishing the intent in hand; 1 when another engine holds the lock or
-takes it while this one runs; 2 for a bad argument or configuration. Redis that cannot be reached while running is
-retried with backoff.
+takes it while this one runs, when the event table cannot be prepared, or when its own state cannot be recovered; 2 for
+a bad argument or configuration. Redis that cannot be reached while running is retried with backoff.
 """
 
+import os
 import sys
+import socket
 import signal
 import argparse
 import threading
@@ -62,16 +72,27 @@ def main():
         description="Place every order the REST API accepts, from unified:orders:intents:stream, until stopped.")
     parser.parse_args()
 
-    from utilities.configurations import api_configuration, get_cache, get_logger
+    from utilities.configurations import api_configuration, get_cache, get_logger, get_postgres
     from unified_broker_interface.utilities.order_engine.utilities.engine_lock import EngineLock
     from unified_broker_interface.utilities.order_engine.utilities.engine_placement import EnginePlacement
+    from unified_broker_interface.utilities.order_engine.utilities.engine_recovery import EngineRecovery
     from unified_broker_interface.utilities.order_engine.utilities.engine_runner import OrderEngine
+    from unified_broker_interface.utilities.order_engine.utilities.parent_store import ParentStore
+    from unified_broker_interface.utilities.order_engine.utilities.synthetic_order_event_log import SyntheticOrderEventLog
 
     logger = get_logger("unified.order_engine")
     cache = get_cache()
 
     lock = EngineLock(cache, logger)
     if not lock.take():
+        return 1
+
+    event_log = SyntheticOrderEventLog(get_postgres, logger, f"{socket.gethostname()}:{os.getpid()}")
+    try:
+        event_log.apply_table()
+    except Exception as exception:
+        logger.error(f"Could not prepare unified.synthetic_order_events: {type(exception).__name__}: {exception}")
+        lock.release()
         return 1
 
     try:
@@ -84,6 +105,16 @@ def main():
         return 2
 
     placement.start_connection_warmers()
+
+    parent_store = ParentStore(cache)
+    try:
+        EngineRecovery(cache, event_log, parent_store, placement.order_placement.broker_names, logger).recover()
+    except Exception as exception:
+        # Placing new orders while the engine does not know what it already has at a broker is the
+        # one thing worse than not starting, so this is fatal rather than logged and carried on from.
+        logger.error(f"Could not recover the engine's own state: {type(exception).__name__}: {exception}")
+        lock.release()
+        return 1
 
     stop = threading.Event()
 
@@ -102,6 +133,8 @@ def main():
         logger,
         api_configuration["order_engine_stale_intent_seconds"],
         api_configuration["order_engine_result_ttl_seconds"],
+        event_log,
+        parent_store,
     )
     exit_code = engine.run(stop)
     lock.release()

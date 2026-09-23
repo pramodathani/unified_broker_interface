@@ -1,13 +1,16 @@
 """The engine's record of every transition, written to `unified.synthetic_order_events` before it is acted on."""
 
 import datetime
+import decimal
 import json
 import pathlib
 import uuid
 
 DDL_FILE = '340_unified_synthetic_order_events.sql'
+# The project root: this file is at unified_broker_interface/utilities/order_engine/utilities/, so
+# four parents up is unified_broker_interface/ and five is the root the DDL tree hangs off.
 DDL_DIRECTORY = (
-    pathlib.Path(__file__).resolve().parents[3]
+    pathlib.Path(__file__).resolve().parents[4]
     / 'stock_brokers'
     / 'instruments'
     / 'ticks'
@@ -231,5 +234,25 @@ class SyntheticOrderEventLog:
             raise
         events = []
         for values in fetched:
-            events.append(dict(zip(COLUMNS, values)))
+            event = {}
+            for column, value in zip(COLUMNS, values):
+                event[column] = self.json_ready(value)
+            events.append(event)
         return events
+
+    def json_ready(self, value):
+        """One value from the database as a type the rest of the engine can hold and serialise.
+
+        A `NUMERIC` column comes back as `decimal.Decimal` and a `UUID` column may come back as `uuid.UUID`, and neither survives `json.dumps` when a parent is written to Redis. Converting them here, at the one place rows leave the database, means nothing downstream has to know they were ever anything else. Four decimal places of a price fit a float without loss.
+
+        Args:
+            value (object): The value as the database returned it.
+
+        Returns:
+            object: The value as a float, a string, or unchanged.
+        """
+        if isinstance(value, decimal.Decimal):
+            return float(value)
+        if isinstance(value, uuid.UUID):
+            return str(value)
+        return value

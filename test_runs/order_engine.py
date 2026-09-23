@@ -37,7 +37,13 @@ from unified_broker_interface.utilities.order_engine.utilities.intent_handoff im
 )
 from unified_broker_interface.utilities.order_engine.utilities.order_intent import OrderIntent
 from unified_broker_interface.utilities.order_engine.utilities.parent_order import ParentOrder
+from unified_broker_interface.utilities.order_engine.utilities.engine_recovery import (
+    EngineRecovery,
+)
 from unified_broker_interface.utilities.order_engine.utilities.parent_store import ParentStore
+from unified_broker_interface.utilities.order_engine.utilities import (
+    synthetic_order_event_log,
+)
 from utilities.configurations import api_configuration
 
 FIXTURE_PATH = (
@@ -210,6 +216,17 @@ class FakeEngineStoreRedis(order_engine_routes.FakeEngineRedis):
         """
         self.start_round_trip()
         return set(self.sets.get(key, set()))
+
+    def run_hgetall(self, key):
+        """Every field in a hash, without counting a round trip of its own.
+
+        Args:
+            key (str): The hash key.
+
+        Returns:
+            dict: The fields and values, or an empty dictionary.
+        """
+        return dict(self.hashes.get(key, {}))
 
     def run_hset(self, key, field, value):
         """Sets a hash field, without counting a round trip of its own.
@@ -423,6 +440,18 @@ class FakeEnginePipeline(order_routes.FakePipeline):
         self.commands.append(('delete', (key,)))
         return self
 
+    def hgetall(self, key):
+        """Queues a read of every field in a hash.
+
+        Args:
+            key (str): The hash key.
+
+        Returns:
+            FakeEnginePipeline: This pipeline.
+        """
+        self.commands.append(('hgetall', (key,)))
+        return self
+
     def execute(self):
         """Runs every queued command in one round trip.
 
@@ -458,6 +487,8 @@ class FakeEnginePipeline(order_routes.FakePipeline):
                 replies.append(self.fake_redis.run_expireat(*arguments))
             elif command_name == 'delete':
                 replies.append(self.fake_redis.run_delete(*arguments))
+            elif command_name == 'hgetall':
+                replies.append(self.fake_redis.run_hgetall(*arguments))
             else:
                 raise ValueError(
                     f'unsupported stand-in command: {command_name!r}'
@@ -1095,6 +1126,26 @@ class OrderEngineSuite:
             'legs': len(rebuilt.legs),
         })
 
+        abandoned = ParentOrder.from_events(events[:2] + [
+            {
+                'time': '2026-09-23T10:00:30+00:00',
+                'parent_order_id': events[0]['parent_order_id'],
+                'sequence': 3,
+                'event': 'orphan_abandoned',
+                'parent_state': 'failed',
+                'leg_id': events[1]['leg_id'],
+                'leg_state': 'unknown',
+                'status_message': 'no order at the broker matches what was sent',
+            },
+        ])
+        results.append({
+            'name': 'an_abandoned_orphan_replays_as_a_finished_parent',
+            'state': abandoned.state,
+            'terminal': abandoned.is_terminal(),
+            'leg_states': [leg.state for leg in abandoned.legs],
+            'last_error': abandoned.last_error,
+        })
+
         fresh = ParentOrder('11111111-2222-4333-8444-555555555555')
         results.append({
             'name': 'the_state_machine_refuses_a_change_it_does_not_allow',
@@ -1105,6 +1156,274 @@ class OrderEngineSuite:
             'next_sequence': fresh.next_sequence(),
             'next_leg_id': fresh.next_leg_id(),
         })
+        return results
+
+    def crashed_events(self, leg_state='sending'):
+        """The transitions a crash between recording an order and hearing the answer leaves behind.
+
+        Args:
+            leg_state (str): The state the leg was left in.
+
+        Returns:
+            list: The events, oldest first.
+        """
+        parent_order_id = '99999999-8888-4777-8666-555555555555'
+        return [
+            {
+                'time': '2026-09-23T10:00:00+00:00',
+                'parent_order_id': parent_order_id,
+                'sequence': 1,
+                'event': 'parent_received',
+                'synthetic_type': 'simple',
+                'parent_state': 'received',
+                'instrument_id': '11111111-1111-5111-8111-000000000001',
+                'detail': {
+                    'body': {
+                        'quantity': 10,
+                    },
+                },
+            },
+            {
+                'time': '2026-09-23T10:00:01+00:00',
+                'parent_order_id': parent_order_id,
+                'sequence': 2,
+                'event': 'leg_requested',
+                'leg_id': f'{parent_order_id}:1',
+                'leg_role': 'entry',
+                'leg_state': leg_state,
+                'broker': 'flattrade',
+                'identifier_sent': 'RELIANCE-flattrade',
+                'transaction_type': 'BUY',
+                'product': 'MIS',
+                'order_type': 'LIMIT',
+                'validity': 'DAY',
+                'quantity': 10,
+                'price': 1000,
+            },
+        ]
+
+    def book_order(self, **overrides):
+        """One order in a broker's book, matching what the crashed leg sent unless overridden.
+
+        Args:
+            **overrides: Fields to replace on the order.
+
+        Returns:
+            str: The entry as Redis holds it.
+        """
+        order = {
+            'order_id': '26091500000021',
+            'status': 'OPEN',
+            'tradingsymbol': 'RELIANCE-flattrade',
+            'instrument_token': '2885',
+            'transaction_type': 'BUY',
+            'product': 'MIS',
+            'order_type': 'LIMIT',
+            'validity': 'DAY',
+            'quantity': 10,
+            'filled_quantity': 0,
+            'price': 1000,
+            'trigger_price': None,
+            'average_price': None,
+            'tag': None,
+            'order_timestamp': '2026-09-23T10:00:02+00:00',
+        }
+        order.update(overrides)
+        return json.dumps({
+            'observed_at': 1790000000.0,
+            'source': 'rest',
+            'order': order,
+            'data': {},
+        })
+
+    def recovery_result(self, name, events, book, polled_ago=5.0):
+        """Runs recovery once against a fresh stand-in and records what it decided.
+
+        Args:
+            name (str): The check's name.
+            events (list): The transitions already recorded.
+            book (dict): Flattrade's order book entries, by the broker's order id.
+            polled_ago (float): How long ago that book was last read, in seconds.
+
+        Returns:
+            dict: The recorded result.
+        """
+        self.fake_redis = self.build_state()
+        self.fake_redis.hashes['flattrade:orders:orders'] = dict(book)
+        self.fake_redis.strings['flattrade:orders:orders:polled_at'] = str(
+            time.time() - polled_ago,
+        )
+        event_log = RecordingEventLog()
+        event_log.events = [dict(event) for event in events]
+        logger = logging.getLogger('test_runs.order_engine')
+        parent_store = ParentStore(self.fake_redis)
+        recovery = EngineRecovery(
+            self.fake_redis,
+            event_log,
+            parent_store,
+            order_routes.BROKER_NAMES,
+            logger,
+        )
+        counts = recovery.recover()
+        # What recovery wrote to Redis, not a fresh replay of the events: the replay would discard
+        # every reconciliation recovery just made, which is the thing being checked.
+        stored = self.fake_redis.hashes.get('unified:orders:parents', {})
+        parents = [
+            ParentOrder.from_document(json.loads(document))
+            for document in stored.values()
+        ]
+        return {
+            'name': name,
+            'counts': counts,
+            'parent_states': [parent.state for parent in parents],
+            'leg_states': [
+                leg.state for parent in parents for leg in parent.legs
+            ],
+            'leg_order_ids': [
+                leg.broker_order_id
+                for parent in parents
+                for leg in parent.legs
+            ],
+            'leg_filled': [
+                leg.filled_quantity
+                for parent in parents
+                for leg in parent.legs
+            ],
+            'recorded_after': [
+                {
+                    'event': event['event'],
+                    'leg_state': event.get('leg_state'),
+                    'parent_state': event.get('parent_state'),
+                    'status_message': event.get('status_message'),
+                    'candidates': (event.get('detail') or {}).get('candidates'),
+                }
+                for event in event_log.events[len(events):]
+            ],
+            'open_parents': len(
+                self.fake_redis.sets.get('unified:orders:parents:open', set()),
+            ),
+        }
+
+    def run_wiring_checks(self):
+        """Checks the things a file move can quietly break without any test noticing.
+
+        The event log's DDL path is computed by counting parents of its own file. Moving the module one directory deeper made that path point one level short, and nothing caught it, because the stand-in event log has no table to apply. The daemon failed on its first real start instead.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        ddl_path = (
+            synthetic_order_event_log.DDL_DIRECTORY
+            / synthetic_order_event_log.DDL_FILE
+        )
+        return [
+            {
+                'name': 'the_event_table_ddl_is_where_the_log_looks_for_it',
+                'exists': ddl_path.exists(),
+                'relative_path': str(
+                    ddl_path.relative_to(
+                        pathlib.Path(__file__).resolve().parents[1],
+                    ),
+                ),
+            },
+        ]
+
+    def run_recovery_checks(self):
+        """Replays a crash and checks what recovery decides about the order it may have left behind.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        crashed = self.crashed_events()
+        results = []
+
+        results.append(self.recovery_result(
+            'one_matching_order_is_attributed',
+            crashed,
+            {
+                '26091500000021': self.book_order(),
+            },
+        ))
+        results.append(self.recovery_result(
+            'no_matching_order_is_abandoned',
+            crashed,
+            {},
+        ))
+        results.append(self.recovery_result(
+            'two_matching_orders_are_abandoned',
+            crashed,
+            {
+                '26091500000021': self.book_order(),
+                '26091500000022': self.book_order(
+                    order_id='26091500000022',
+                ),
+            },
+        ))
+        results.append(self.recovery_result(
+            'an_order_at_a_different_price_is_not_a_match',
+            crashed,
+            {
+                '26091500000021': self.book_order(price=1001),
+            },
+        ))
+        results.append(self.recovery_result(
+            'an_order_with_another_tag_is_not_a_match',
+            crashed,
+            {
+                '26091500000021': self.book_order(tag='someoneElse'),
+            },
+        ))
+        results.append(self.recovery_result(
+            'a_stale_broker_book_attributes_nothing',
+            crashed,
+            {
+                '26091500000021': self.book_order(),
+            },
+            polled_ago=600.0,
+        ))
+        results.append(self.recovery_result(
+            'a_live_leg_is_brought_up_to_date_from_the_book',
+            crashed[:1] + [
+                dict(
+                    crashed[1],
+                    leg_state='acknowledged',
+                    broker_order_id='26091500000021',
+                ),
+            ],
+            {
+                '26091500000021': self.book_order(
+                    status='COMPLETE',
+                    filled_quantity=10,
+                    average_price=999.5,
+                ),
+            },
+        ))
+        results.append(self.recovery_result(
+            'a_leg_the_book_has_lost_becomes_unknown',
+            crashed[:1] + [
+                dict(
+                    crashed[1],
+                    leg_state='acknowledged',
+                    broker_order_id='26091500000021',
+                ),
+            ],
+            {},
+        ))
+        results.append(self.recovery_result(
+            'a_finished_parent_is_left_alone',
+            crashed + [
+                {
+                    'time': '2026-09-23T10:00:05+00:00',
+                    'parent_order_id': crashed[0]['parent_order_id'],
+                    'sequence': 3,
+                    'event': 'parent_state_changed',
+                    'parent_state': 'completed',
+                },
+            ],
+            {
+                '26091500000021': self.book_order(),
+            },
+        ))
         return results
 
     def run_every_scenario(self):
@@ -1127,6 +1446,8 @@ class OrderEngineSuite:
                 results.append(self.run_scenario(scenario))
             results.extend(self.run_lock_checks())
             results.extend(self.run_parent_checks())
+            results.extend(self.run_recovery_checks())
+            results.extend(self.run_wiring_checks())
         finally:
             requests.Session.request = original_request
             api_configuration['order_excluded_brokers'] = original_excluded

@@ -320,6 +320,8 @@ class ParentOrder:
     def apply_orphan(self, name, event):
         """Applies the outcome of trying to attribute a leg left in `sending` by a crash.
 
+        The parent's own state is applied here as well as the leg's, because abandoning an orphan moves the parent to `failed`. Leaving that to the event's context would let a parent replay as `received` with an `unknown` leg: not terminal, so the open set keeps it, and not in `sending`, so nothing ever looks at it again.
+
         Args:
             name (str): The event's name.
             event (dict): The event.
@@ -328,6 +330,9 @@ class ParentOrder:
             None: This method returns nothing.
         """
         self.apply_to_leg('leg_update', event)
+        state = event.get('parent_state')
+        if state:
+            self.state = state
         if name == 'orphan_abandoned':
             self.last_error = event.get('status_message')
 
