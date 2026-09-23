@@ -16,8 +16,17 @@ from unified_broker_interface.utilities.broker_orders.utilities.place_order_requ
 from unified_broker_interface.utilities.broker_orders.utilities.placement import (
     OrderPlacement,
 )
+from unified_broker_interface.utilities.broker_orders.utilities.modify_order_request import (
+    ModifyOrderRequest,
+)
+from unified_broker_interface.utilities.broker_orders.utilities.order_modification import (
+    OrderModification,
+)
 from unified_broker_interface.utilities.broker_orders.utilities.refused_request import (
     RefusedRequestError,
+)
+from unified_broker_interface.utilities.broker_orders.utilities.stored_order import (
+    StoredOrder,
 )
 from unified_broker_interface.utilities.instrument_cache import InstrumentCache
 
@@ -159,6 +168,170 @@ class EnginePlacement:
         if needs_positions:
             positions = self.decode(replies[position])
         return instrument, quote, positions
+
+    def read_credentials_for(self, broker_name):
+        """One broker's login and settings, and the order book entry reader they go with.
+
+        Args:
+            broker_name (str): The broker.
+
+        Returns:
+            tuple: The broker's order class (BrokerOrders), its login (object) and its settings (dict).
+
+        Raises:
+            RefusedRequestError: With HTTP 503 when the broker is not one this engine knows or Redis cannot be read.
+        """
+        broker_orders = self.order_placement.broker_orders.get(broker_name)
+        if broker_orders is None:
+            raise RefusedRequestError.refusal(
+                f'{broker_name} is not a broker this engine places orders at',
+                503,
+                broker=broker_name,
+            )
+        try:
+            pipeline = self.cache.pipeline(transaction=False)
+            pipeline.hget('last_login', broker_name)
+            pipeline.hget('settings', broker_name)
+            replies = pipeline.execute()
+        except redis.RedisError as error:
+            raise RefusedRequestError.refusal(
+                f'Redis could not be read: {error}',
+                503,
+                broker=broker_name,
+            )
+        return (
+            broker_orders,
+            broker_orders.decode_login(replies[0]),
+            broker_orders.decode_settings(replies[1]),
+        )
+
+    def stored_order(self, broker_name, broker_order_id):
+        """One order as the broker's own order book in Redis holds it.
+
+        A cancel or a modification cannot be built from what the engine remembers sending. Several brokers need values only their order book carries — Zerodha's `variety`, Kotak's after-market flag, Wisdom Capital's unique identifier — and `docs/contributing/pitfalls.md` records each of them as a live failure found the hard way.
+
+        Args:
+            broker_name (str): The broker.
+            broker_order_id (str): The broker's own order id.
+
+        Returns:
+            StoredOrder: The stored order.
+
+        Raises:
+            RefusedRequestError: With HTTP 503 when Redis cannot be read, and 404 when the broker's order book does not hold the order yet.
+        """
+        try:
+            stored = self.cache.hget(
+                f'{broker_name}:orders:orders',
+                str(broker_order_id),
+            )
+        except redis.RedisError as error:
+            raise RefusedRequestError.refusal(
+                f'Redis could not be read: {error}',
+                503,
+                broker=broker_name,
+            )
+        entry = self.decode(stored)
+        if entry is None:
+            raise RefusedRequestError.refusal(
+                f"{broker_name}'s order book does not hold {broker_order_id} "
+                'yet, so it cannot be changed',
+                404,
+                broker=broker_name,
+                order_id=str(broker_order_id),
+            )
+        return StoredOrder(entry)
+
+    def cancel(self, broker_name, broker_order_id):
+        """Cancels one order at a broker.
+
+        Args:
+            broker_name (str): The broker.
+            broker_order_id (str): The broker's own order id.
+
+        Returns:
+            BrokerAnswer: What the broker said.
+
+        Raises:
+            RefusedRequestError: With HTTP 503 when the order cannot be read or the broker cannot take a cancel, and 404 when the order book does not hold it.
+        """
+        broker_orders, login, settings = self.read_credentials_for(broker_name)
+        problem = broker_orders.cancel_problem(login, settings)
+        if problem is not None:
+            raise RefusedRequestError.refusal(
+                problem,
+                503,
+                broker=broker_name,
+            )
+        stored = self.stored_order(broker_name, broker_order_id)
+        broker_request = broker_orders.build_cancel_request(
+            str(broker_order_id),
+            stored,
+            login,
+            settings,
+        )
+        return broker_orders.send_cancel(broker_request)
+
+    def modify_quantity(self, broker_name, broker_order_id, quantity):
+        """Changes one order's quantity at a broker, leaving everything else as it is.
+
+        This is what reduces the other leg of a linked pair when one of them partly fills, which the Atlas names as the correct way to run an OCO rather than cancelling and replacing.
+
+        The quantity is in the broker's own terms, as the order book stores it and as the leg records it, so nothing is converted here.
+
+        Args:
+            broker_name (str): The broker.
+            broker_order_id (str): The broker's own order id.
+            quantity (int): The new quantity, in the broker's own terms.
+
+        Returns:
+            BrokerAnswer: What the broker said.
+
+        Raises:
+            RefusedRequestError: With HTTP 501 when the broker takes no modifications, 503 when the order cannot be read, and 404 when the order book does not hold it.
+        """
+        broker_orders, login, settings = self.read_credentials_for(broker_name)
+        if not broker_orders.takes_modifications():
+            raise RefusedRequestError.refusal(
+                f'{broker_name} does not take modifications through its API',
+                501,
+                broker=broker_name,
+            )
+        problem = broker_orders.modify_problem(login, settings)
+        if problem is not None:
+            raise RefusedRequestError.refusal(
+                problem,
+                503,
+                broker=broker_name,
+            )
+        stored = self.stored_order(broker_name, broker_order_id)
+        modify_request = ModifyOrderRequest(
+            {
+                'order_id': str(broker_order_id),
+                'quantity': quantity,
+            },
+            {},
+            self.order_placement.broker_names,
+        )
+        # OrderModification holds the stored order with the request's changes laid over it, and it
+        # deliberately keeps the STORED quantity: the blueprint's modify route converts a caller's
+        # units into the broker's terms and only then calls with_quantities. The engine's quantity
+        # is already in the broker's terms, so there is nothing to convert, but the call still has
+        # to be made. Leaving it out sent the stored quantity while the engine recorded the new one,
+        # so the engine believed a leg had been reduced while the broker still had it whole.
+        modification = OrderModification(modify_request, stored)
+        modification = modification.with_quantities(
+            quantity,
+            min(modification.disclosed_quantity or 0, quantity),
+        )
+        broker_request = broker_orders.build_modify_request(
+            str(broker_order_id),
+            stored,
+            modification,
+            login,
+            settings,
+        )
+        return broker_orders.send_modify(broker_request)
 
     def broker_attributes(self, instrument_id):
         """Every broker's extra fields for one instrument, such as the exchange freeze quantity.

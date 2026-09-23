@@ -18,6 +18,7 @@ import json
 import pathlib
 import sys
 import logging
+import re
 import time
 import uuid
 
@@ -1341,6 +1342,7 @@ class OrderEngineSuite:
         self.fake_redis = FakeEngineStoreRedis()
         self.network = order_routes.FakeBrokerNetwork()
         self.counting_uuid = CountingUuid()
+        self.scenarios = OrderEngineScenarios()
 
     def build_state(self):
         """Builds a stand-in holding the order routes' starting contents.
@@ -2007,6 +2009,253 @@ class OrderEngineSuite:
             ),
         ]
 
+    def broker_book_entry(self, order_id, status='OPEN', **overrides):
+        """One entry in Flattrade's order book, which a cancel or a change is built from.
+
+        Args:
+            order_id (str): The broker's order id.
+            status (str): The status on the shared vocabulary.
+            **overrides: Fields to replace on the order.
+
+        Returns:
+            str: The entry as Redis holds it.
+        """
+        order = {
+            'order_id': order_id,
+            'status': status,
+            # The real order book carries the exchange as well as the symbol, and a broker's modify
+            # builder refuses without it rather than guessing. Leaving it out of this fixture is
+            # how the reduction scenarios first came back doing nothing at all.
+            'exchange': 'NSE',
+            'tradingsymbol': 'RELIANCE-flattrade',
+            'instrument_token': '1',
+            'transaction_type': 'SELL',
+            'product': 'MIS',
+            'order_type': 'LIMIT',
+            'validity': 'DAY',
+            'quantity': 10,
+            'filled_quantity': 0,
+            'price': 1010,
+        }
+        order.update(overrides)
+        return json.dumps({
+            'observed_at': 1790000000.0,
+            'source': 'rest',
+            'order': order,
+            'data': {
+                'norenordno': order_id,
+            },
+        })
+
+    def reaction_result(self, name, body, updates, answer=None):
+        """Places one order through the engine, then feeds it order updates and records what it does.
+
+        This is the only place the two halves of the engine run together: the intent loop places the
+        first leg, and the follower then hands each update to the order type, which may place, cancel
+        or reduce other legs. Every broker request is kept in the order it was sent.
+
+        Args:
+            name (str): The check's name.
+            body (dict): The request body.
+            updates (list): One order update per step, applied in order.
+            answer (dict | None): The stubbed broker answer.
+
+        Returns:
+            dict: The recorded result.
+        """
+        scenario = self.scenarios.intents(name, [body], answer=answer)
+        self.fake_redis = self.build_state()
+        self.network.reset(answer)
+        self.counting_uuid.reset()
+        reply_keys = self.write_intents(scenario)
+
+        logger = logging.getLogger('test_runs.order_engine')
+        placement = EnginePlacement(self.fake_redis, logger)
+        event_log = RecordingEventLog()
+        parent_store = ParentStore(self.fake_redis)
+        engine = OrderEngine(
+            self.fake_redis,
+            placement,
+            EngineLock(self.fake_redis, logger),
+            logger,
+            STALE_INTENT_SECONDS,
+            RESULT_TTL_SECONDS,
+            event_log,
+            parent_store,
+        )
+        engine.run(OnePassStop(3))
+
+        follower = OrderUpdateFollower(
+            parent_store,
+            event_log,
+            logger,
+            None,
+            placement,
+        )
+        for update in updates:
+            # The broker's own book has to hold the order before a cancel or a change can be built
+            # from it, exactly as it does in life.
+            book = self.fake_redis.hashes.setdefault(
+                'flattrade:orders:orders',
+                {},
+            )
+            book[str(update['order_id'])] = self.broker_book_entry(
+                str(update['order_id']),
+                status=update.get('status', 'OPEN'),
+            )
+            changed = follower.follow({
+                'update': json.dumps(update),
+            })
+            if changed is not None:
+                parent_store.save(changed)
+
+        stored = list(
+            self.fake_redis.hashes.get('unified:orders:parents', {}).values(),
+        )
+        parents = [ParentOrder.from_document(json.loads(one)) for one in stored]
+        return {
+            'name': name,
+            'reply': self.shown_replies(reply_keys)[0],
+            'sent': [
+                {
+                    'url': request['url'].rsplit('/', 1)[-1],
+                    'quantity': self.sent_quantity(request),
+                }
+                for request in self.network.sent_requests
+            ],
+            'events': [event['event'] for event in event_log.events],
+            'legs': [
+                {
+                    'role': leg.role,
+                    'state': leg.state,
+                    'quantity': leg.quantity,
+                    'filled': leg.filled_quantity,
+                }
+                for parent in parents
+                for leg in parent.legs
+            ],
+            'parent_states': [parent.state for parent in parents],
+            'followed': follower.followed,
+            'reacted': follower.reacted,
+        }
+
+    def sent_quantity(self, request):
+        """The quantity one captured broker request carries, where it carries one.
+
+        Args:
+            request (dict): The captured request.
+
+        Returns:
+            str | None: The quantity.
+        """
+        form = request.get('data') or ''
+        found = re.search(r'"qty": "([^"]*)"', form)
+        return found.group(1) if found else None
+
+    def update(self, order_id, status, filled, **overrides):
+        """One order update on the unified contract.
+
+        Args:
+            order_id (str): The broker's order id.
+            status (str): The status on the shared vocabulary.
+            filled (int): The filled quantity.
+            **overrides: Other fields.
+
+        Returns:
+            dict: The update.
+        """
+        document = {
+            'broker': 'flattrade',
+            'order_id': order_id,
+            'status': status,
+            'filled_quantity': filled,
+            'average_price': 1000.0,
+        }
+        document.update(overrides)
+        return document
+
+    def run_reaction_checks(self):
+        """Runs the linked order types through a fill, which is the only way they do anything.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        accepted = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        bracket_body = self.scenarios.bodies.market_order(
+            dry_run=None,
+            order_type='LIMIT',
+            price=1000,
+            quantity=10,
+            synthetic={
+                'type': 'bracket',
+                'stop_price': 990,
+                'stop_limit_price': 988,
+                'target_price': 1010,
+            },
+        )
+        return [
+            self.reaction_result(
+                'a_bracket_arms_its_exits_on_the_first_partial_fill',
+                bracket_body,
+                [
+                    self.update('26091500000021', 'OPEN', 4),
+                ],
+                accepted,
+            ),
+            self.reaction_result(
+                'a_bracket_grows_its_exits_as_the_entry_fills_further',
+                bracket_body,
+                [
+                    self.update('26091500000021', 'OPEN', 4),
+                    self.update('26091500000021', 'COMPLETE', 10),
+                ],
+                accepted,
+            ),
+            self.reaction_result(
+                'an_oco_reduces_the_sibling_rather_than_cancelling_it',
+                self.scenarios.bodies.market_order(
+                    dry_run=None,
+                    order_type='LIMIT',
+                    price=1000,
+                    quantity=10,
+                    synthetic={
+                        'type': 'oco',
+                        'stop_price': 990,
+                        'stop_limit_price': 988,
+                        'target_price': 1010,
+                    },
+                ),
+                [
+                    self.update('26091500000021', 'OPEN', 4),
+                ],
+                accepted,
+            ),
+            self.reaction_result(
+                'an_oto_places_its_child_sized_to_what_actually_filled',
+                self.scenarios.bodies.market_order(
+                    dry_run=None,
+                    order_type='LIMIT',
+                    price=1000,
+                    quantity=10,
+                    synthetic={
+                        'type': 'oto',
+                        'then': {
+                            'transaction_type': 'SELL',
+                            'order_type': 'LIMIT',
+                            'price': 1010,
+                        },
+                    },
+                ),
+                [
+                    self.update('26091500000021', 'OPEN', 6),
+                ],
+                accepted,
+            ),
+        ]
+
     def run_wiring_checks(self):
         """Checks the things a file move can quietly break without any test noticing.
 
@@ -2153,6 +2402,7 @@ class OrderEngineSuite:
             results.extend(self.run_parent_checks())
             results.extend(self.run_recovery_checks())
             results.extend(self.run_follower_checks())
+            results.extend(self.run_reaction_checks())
             results.extend(self.run_wiring_checks())
         finally:
             requests.Session.request = original_request

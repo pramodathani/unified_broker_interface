@@ -6,6 +6,9 @@ import json
 from unified_broker_interface.utilities.order_engine.utilities.parent_order import (
     ParentOrder,
 )
+from unified_broker_interface.utilities.order_engine.utilities.registry import (
+    SYNTHETIC_ORDER_CLASSES,
+)
 
 ORDER_UPDATES_STREAM_KEY = 'unified:order-updates:stream'
 ORDER_UPDATES_STREAM_FIELD = 'update'
@@ -34,7 +37,14 @@ class OrderUpdateFollower:
         ignored (int): How many updates belonged to nobody.
     """
 
-    def __init__(self, parent_store, event_log, logger, gates=None):
+    def __init__(
+        self,
+        parent_store,
+        event_log,
+        logger,
+        gates=None,
+        placement=None,
+    ):
         """Builds the follower.
 
         Args:
@@ -42,6 +52,7 @@ class OrderUpdateFollower:
             event_log (SyntheticOrderEventLog): The record.
             logger (logging.Logger): The logger.
             gates (RiskGates | None): The limits, which are told when an order trades.
+            placement (EnginePlacement | None): What an order type needs to place, cancel or change a leg when it reacts.
 
         Returns:
             None: This method returns nothing.
@@ -50,6 +61,8 @@ class OrderUpdateFollower:
         self.event_log = event_log
         self.logger = logger
         self.gates = gates
+        self.placement = placement
+        self.reacted = 0
         self.followed = 0
         self.ignored = 0
 
@@ -97,6 +110,7 @@ class OrderUpdateFollower:
         self.record(parent, leg, update, changes)
         if self.gates is not None and changes.get('leg_state') == 'filled':
             self.gates.count_traded(leg.broker)
+        self.react(parent, leg, changes)
         self.followed = self.followed + 1
         return parent
 
@@ -160,6 +174,45 @@ class OrderUpdateFollower:
         if exchange_order_id and exchange_order_id != leg.exchange_order_id:
             changes['exchange_order_id'] = exchange_order_id
         return changes
+
+    def react(self, parent, leg, changes):
+        """Hands the change to the order type, which may place, cancel or reduce other legs.
+
+        A type that does nothing after its order is placed, such as a plain one, has nothing to do here. A bracket arms its stop and its target when its entry fills; an OCO reduces the sibling of whatever just filled.
+
+        A failure to react is logged and swallowed. The update itself has already been recorded and applied, so losing the reaction costs the type its next step rather than the record of what happened, and raising here would stop every other parent's updates behind this one.
+
+        Args:
+            parent (ParentOrder): The parent the leg belongs to.
+            leg (OrderLeg): The leg that changed.
+            changes (dict): What the update changed.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        if self.placement is None:
+            return
+        synthetic_order_class = SYNTHETIC_ORDER_CLASSES.get(
+            parent.synthetic_type,
+        )
+        if synthetic_order_class is None:
+            return
+        runner = synthetic_order_class(
+            parent,
+            self.placement,
+            self.event_log,
+            self.parent_store,
+            self.logger,
+            self.gates,
+        )
+        try:
+            runner.on_leg_update(leg, changes)
+            self.reacted = self.reacted + 1
+        except Exception:
+            self.logger.exception(
+                f'Parent {parent.parent_order_id} could not react to its leg '
+                f'{leg.leg_id} changing; the change itself is recorded.'
+            )
 
     def record(self, parent, leg, update, changes):
         """Writes the change and applies it to the parent.

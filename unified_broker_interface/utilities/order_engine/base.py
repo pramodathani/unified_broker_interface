@@ -1,6 +1,7 @@
 """What every synthetic order type shares: starting a parent, recording a leg before sending it, and reading the answer."""
 
 import datetime
+import time
 import uuid
 
 from unified_broker_interface.utilities.broker_orders.utilities.order_request import (
@@ -120,7 +121,7 @@ class SyntheticOrder:
 
         Args:
             intent (dict): The intent document.
-            started_at (float): `time.perf_counter()` when the engine took the intent.
+            started_at (float | None): `time.perf_counter()` when the engine took the intent, or None for a leg placed in reaction to a fill, which nobody is waiting on.
 
         Returns:
             tuple: The answer's body (dict) and its HTTP status (int).
@@ -205,6 +206,127 @@ class SyntheticOrder:
             )
             body['price'] = str(price)
         return self.read_order(body)
+
+    def on_leg_update(self, leg, changes):
+        """Reacts to one of this parent's legs changing at a broker.
+
+        A type that does nothing after its order is placed leaves this alone. A bracket arms its stop and its target here; an OCO reduces the sibling of whatever just filled. Whatever it does, it must leave the parent consistent, because the update that follows may arrive before it has finished.
+
+        Args:
+            leg (OrderLeg): The leg the update was about, already changed.
+            changes (dict): What the update changed.
+
+        Returns:
+            None: This method returns nothing.
+        """
+
+    def cancel_leg(self, leg, reason):
+        """Cancels one leg at its broker and records both the asking and the answer.
+
+        A cancel is recorded as asked before it is sent, for the same reason a placement is: the engine has to be able to tell, after a crash, that it had begun.
+
+        Args:
+            leg (OrderLeg): The leg to cancel.
+            reason (str): Why, for a person reading the parent later.
+
+        Returns:
+            bool: True when the broker accepted the cancel.
+        """
+        self.record({
+            'event': 'leg_cancel_requested',
+            'parent_state': self.parent.state,
+            'leg_id': leg.leg_id,
+            'leg_role': leg.role,
+            'leg_state': leg.state,
+            'broker': leg.broker,
+            'broker_order_id': leg.broker_order_id,
+            'status_message': reason,
+        })
+        try:
+            answer = self.placement.cancel(leg.broker, leg.broker_order_id)
+        except Exception as error:
+            self.record({
+                'event': 'leg_cancelled',
+                'parent_state': self.parent.state,
+                'leg_id': leg.leg_id,
+                'leg_role': leg.role,
+                'leg_state': leg.state,
+                'broker': leg.broker,
+                'broker_order_id': leg.broker_order_id,
+                'outcome': 'unknown',
+                'status_message': f'the cancel could not be sent: {error}',
+            })
+            return False
+        self.record({
+            'event': 'leg_cancelled',
+            'parent_state': self.parent.state,
+            'leg_id': leg.leg_id,
+            'leg_role': leg.role,
+            # The broker's own order update decides when the leg is really cancelled. An accepted
+            # cancel is a promise, not a fact, and treating it as one is how an order that went on
+            # to fill anyway gets forgotten about.
+            'leg_state': leg.state,
+            'broker': leg.broker,
+            'broker_order_id': leg.broker_order_id,
+            'outcome': answer.outcome,
+            'status_message': answer.status_message,
+            'detail': {
+                'broker_response': answer.response_body,
+            },
+        })
+        return answer.outcome == 'accepted'
+
+    def reduce_leg(self, leg, quantity, reason):
+        """Reduces one leg's quantity at its broker, rather than cancelling and replacing it.
+
+        This is the Atlas's rule for every linked pair: when one leg fills, reduce the other by what filled instead of cancelling it. Cancelling leaves a window with nothing protecting the position, and replacing loses the order's place in the queue.
+
+        Args:
+            leg (OrderLeg): The leg to reduce.
+            quantity (int): The new quantity, in the broker's own terms.
+            reason (str): Why, for a person reading the parent later.
+
+        Returns:
+            bool: True when the broker accepted the change.
+        """
+        if quantity < 1:
+            return self.cancel_leg(leg, reason)
+        try:
+            answer = self.placement.modify_quantity(
+                leg.broker,
+                leg.broker_order_id,
+                quantity,
+            )
+        except Exception as error:
+            self.record({
+                'event': 'leg_update',
+                'parent_state': self.parent.state,
+                'leg_id': leg.leg_id,
+                'leg_role': leg.role,
+                'broker': leg.broker,
+                'broker_order_id': leg.broker_order_id,
+                'outcome': 'unknown',
+                'status_message': (
+                    f'{reason}; the change could not be sent: {error}'
+                ),
+            })
+            return False
+        accepted = answer.outcome == 'accepted'
+        self.record({
+            'event': 'leg_update',
+            'parent_state': self.parent.state,
+            'leg_id': leg.leg_id,
+            'leg_role': leg.role,
+            'broker': leg.broker,
+            'broker_order_id': leg.broker_order_id,
+            'quantity': quantity if accepted else leg.quantity,
+            'outcome': answer.outcome,
+            'status_message': f'{reason}; {answer.status_message or "accepted"}',
+            'detail': {
+                'broker_response': answer.response_body,
+            },
+        })
+        return accepted
 
     def json_number(self, value):
         """A price as a number the parent's Redis record can hold.
@@ -334,6 +456,11 @@ class SyntheticOrder:
             self.parent.instrument_id,
             broker_name,
         )
+        if started_at is None:
+            # A leg placed in reaction to a fill has no request waiting on it, so there is no
+            # arrival to measure from. Measuring from here reports the engine's own work on this
+            # leg, which is the only span that means anything.
+            started_at = time.perf_counter()
         leg_id = self.parent.next_leg_id()
         broker_request = prepared.broker_request
         self.record({

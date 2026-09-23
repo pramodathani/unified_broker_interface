@@ -170,7 +170,7 @@ def main():
         api_configuration["order_engine_result_ttl_seconds"],
         event_log,
         parent_store,
-        OrderUpdateFollower(parent_store, event_log, logger, gates),
+        OrderUpdateFollower(parent_store, event_log, logger, gates, placement),
         gates,
     )
     exit_code = engine.run(stop)

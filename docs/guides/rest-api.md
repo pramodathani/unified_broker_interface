@@ -1277,6 +1277,9 @@ to one broker, which is what every caller gets and what every other type is buil
 | `simple` | One order to one broker |
 | `freeze_slicer` | Splits an order above the exchange's freeze limit into orders that each fit |
 | `ladder` | Places `steps` limit orders evenly spaced between `from_price` and `to_price` |
+| `oto` | Places the order in `then`, sized to what the first one actually filled |
+| `oco` | Rests a stop and a target on a position you already hold; whatever fills reduces the other |
+| `bracket` | An entry that arms a stop and a target once it starts filling |
 
 ```json
 { "instrument_id": "…", "transaction_type": "BUY", "product": "NRML", "order_type": "LIMIT",
@@ -1287,6 +1290,37 @@ to one broker, which is what every caller gets and what every other type is buil
 **Every leg of one parent goes to the same broker**, chosen once. Spreading them would look cheaper and would mean the
 position ends up split across brokers, where closing it needs one order per broker and each has its own lot size and
 its own freeze limit.
+
+### The linked types, and the double fill
+
+`oto`, `oco` and `bracket` react to fills, so they need the engine running for as long as they are alive. They take
+their exit prices from the `synthetic` object:
+
+```json
+{ "order_type": "LIMIT", "price": 1000, "quantity": 100, "transaction_type": "BUY",
+  "synthetic": { "type": "bracket", "stop_price": 990, "stop_limit_price": 988, "target_price": 1010 } }
+```
+
+!!! danger "Both legs of a linked pair can fill before any cancel arrives"
+
+    This is the recurring bug in every linked order type, and no exchange offers an order that makes it impossible.
+    What the engine does is make the window as small as reading an update allows.
+
+Three rules follow, and all three are visible in the recording:
+
+1. **The sibling is reduced, never cancelled and replaced.** When one exit fills four of ten, the other is changed to
+   six. Cancelling would leave a window with nothing protecting the position; replacing would lose the order's place in
+   the queue.
+2. **A fill is acted on the moment it is seen, including a partial one.** A bracket arms its stop and target on the
+   first partial fill, sized to what filled, and grows them as the entry fills further. Waiting for the entry to
+   complete would leave the part already filled unprotected.
+3. **An exit filling stops the entry.** If the entry is still working when an exit starts filling, the rest of the
+   entry is cancelled first, so it cannot go on buying into a position the exits have already been sized for.
+
+A stop needs **both** `stop_price` and `stop_limit_price`, and neither is defaulted. Stop-loss-market is gone from NSE
+options and from BSE entirely, so a stop is a stop-limit, and a stop-limit whose limit sits at its trigger will not
+fill when the price runs through it — which is the one condition a stop exists for. NSE caps the gap between them, so a
+limit too far away is refused by the exchange.
 
 ### The freeze slicer, and why the limit is read per broker
 
