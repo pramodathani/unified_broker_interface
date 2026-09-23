@@ -35,3 +35,20 @@ So an intent read more than `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_STALE_INT
 ## Why a bad entry is acknowledged rather than retried
 
 An entry that is not JSON, or whose intent has no reply key, is logged and acknowledged unplaced. Redelivering it for ever would put it at the front of the pending list at every start, and every order written after it would wait behind an entry that can never succeed. The same reasoning is already recorded in `docs/contributing/pitfalls.md` for the candle writer: an unexpected failure must cost the one item, not the run.
+
+## What the handoff actually costs, measured
+
+The build plan set this stage a gate: if the queue hop added more than a millisecond or two to `timing_ms.preparation`, the design was to be reconsidered before anything was built on top of it. It was measured on 2026-09-23 against the live Redis this project uses, with dry runs, which build the broker request and answer with it without sending anything.
+
+Two hundred dry runs of the same NSE equity order in each mode, through Flask's test client so that only the HTTP transport is excluded, repeated three times:
+
+| Mode | Reported `preparation` | Wall clock, median | Wall clock, 95th |
+| --- | --- | --- | --- |
+| `direct` | 0.301 to 0.342 ms | 0.525 to 0.579 ms | 0.85 to 1.06 ms |
+| `engine` | 0.728 to 0.822 ms | 0.987 to 1.103 ms | about 1.5 ms |
+
+The handoff therefore adds about **0.46 ms**, against a broker call that takes 100 to 300 ms. The gate is passed with a great deal of room.
+
+A narrower measurement of the Redis work alone — the `XADD`, the engine's `RPUSH` and `EXPIRE`, and the `BLPOP` — gave a median of 0.201 ms and a 95th percentile of 0.588 ms over three hundred rounds. The rest of the 0.46 ms is the engine's own two round trips for credentials and the instrument, which is work the API worker used to do itself rather than anything new.
+
+The same run confirmed the whole path end to end: the route resolved RELIANCE from its identity fields, the engine picked the intent up, chose a broker by the rotation and built that broker's real order request, and the answer came back with its `intent_id`. Six hundred and one orders were placed as dry runs, none refused, and every answer was collected by a waiting worker.
