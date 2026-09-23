@@ -76,6 +76,7 @@ class OrdersBlueprint(BaseBlueprint):
         broker_names (list): Every broker's name, in the order the brokers take turns; the same list `order_placement` holds.
         broker_orders (dict): Each broker's name to its order class instance; the same dictionary `order_placement` holds.
         broker_selector (BrokerSelector): The algorithm that orders the brokers an order is offered to, named by `UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_SELECTOR`; the same object `order_placement` holds.
+        connection_warmers (list): One `ConnectionWarmer` per broker named in `UNIFIED_BROKER_INTERFACE_API_ORDER_WARM_BROKERS`, each running on its own daemon thread; the same list `order_placement` holds.
         placement_mode (str): `direct` when this worker sends orders to brokers itself, or `engine` when it hands them to the order engine, named by `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT`.
         instrument_cache (InstrumentCache): This worker's copy of the catalogue data placements and modifications have read under the current warm.
         logger (logging.Logger): The logger for failures that do not change an answer.
@@ -105,6 +106,7 @@ class OrdersBlueprint(BaseBlueprint):
         self.broker_names = self.order_placement.broker_names
         self.broker_orders = self.order_placement.broker_orders
         self.broker_selector = self.order_placement.broker_selector
+        self.connection_warmers = self.order_placement.connection_warmers
         self.placement_mode = api_configuration['order_placement']
         if self.placement_mode not in ORDER_PLACEMENT_MODES:
             known_modes = ', '.join(ORDER_PLACEMENT_MODES)
