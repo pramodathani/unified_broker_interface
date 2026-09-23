@@ -98,7 +98,7 @@ same way. What is still outside it is the REST API's own `PUT /api/orders/modify
 which go straight from a worker to a broker.
 
 `..._ORDER_DAILY_CAPS` names the brokers that refuse orders past a fixed number a day, as `broker=cap` pairs such as
-`zerodha=3000,dhan=7000`. The engine counts every order it sends to each broker in `unified:orders:daily_count:<broker>`,
+`zerodha=5000,dhan=7000`. The engine counts every order it sends to each broker in `unified:orders:daily_count:<broker>`,
 which expires at 06:00 IST, and **it is off when empty, which is the default**. A broker not named is counted but
 never refused. Only placements are counted, rejected ones included, because that is what Zerodha's published cap
 counts.
@@ -113,7 +113,7 @@ the REST API's direct modifies and cancels, are not in it.
 
 | Broker | Published daily cap | Source, as found on 2026-09-23 |
 | --- | --- | --- |
-| Zerodha | 3,000 a day across every platform, rejected orders included; Kite's documentation says 5,000 | Kite Connect forum and documentation; the current figure is unconfirmed |
+| Zerodha | 5,000 a day, rejected orders included | Kite Connect documentation, confirmed by the account holder on 2026-09-24; a 2023 forum post said 3,000 across every platform |
 | Dhan | 7,000 a day | DhanHQ API documentation |
 | Shoonya | Says there is no daily limit | Shoonya API FAQ |
 | The other seven | None published | Their API documentation |

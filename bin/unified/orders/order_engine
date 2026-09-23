@@ -37,7 +37,7 @@ after the leg has been written down and before its request is sent, defaulting w
 a burst waits for a token rather than being refused, and only a burst outlasting the whole wait is refused. The
 order-to-trade ratio is counted per broker and reported, and is what Stage 8's re-pricing types will consult. The daily
 order count keeps each broker's placements for the day in `unified:orders:daily_count:<broker>`, expiring at 06:00 IST,
-against the caps in `UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_CAPS` (`zerodha=3000,dhan=7000`); once a broker is within
+against the caps in `UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_CAPS` (`zerodha=5000,dhan=7000`); once a broker is within
 `UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_CAP_EXIT_RESERVE` (a share, 0.05 by default) of its cap, new entries to it are
 refused with 429 and only orders that close a position are sent, up to the cap itself. These are limits on placements: `PUT /api/orders/modify` and `DELETE /api/orders/cancel` still go straight from an API worker to
 a broker and are not counted.

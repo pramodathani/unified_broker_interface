@@ -16,7 +16,7 @@ from unified_broker_interface.utilities.order_engine.utilities.virtual_book impo
 class VirtualLimit(PriceTrigger):
     """A limit order held in the synthetic limit order book instead of resting at the exchange.
 
-    A resting limit order that never fills still spends one of a broker's daily orders, and at Zerodha, once 3,000 have been spent, not even an exit can be placed. This order spends one only when it will fill. It is held by the engine and sent, as a limit at the caller's own price, once the other side of the book reaches that price: for a buy, when the best offer is at or below it. An order sent then takes the offer and fills straight away, at the caller's price or better.
+    A resting limit order that never fills still spends one of a broker's daily orders, and at Zerodha, once 5,000 have been spent, not even an exit can be placed. This order spends one only when it will fill. It is held by the engine and sent, as a limit at the caller's own price, once the other side of the book reaches that price: for a buy, when the best offer is at or below it. An order sent then takes the offer and fills straight away, at the caller's price or better.
 
     What that gives up is the place in the queue. A resting order also fills when sellers come down and hit the bids at its price, even if the offer never reaches it. `bin/unified/orders/virtual_book` follows every held order through the quote stream and estimates how much such a resting order would have filled. When this order is sent, that estimate is recorded as `missed_quantity`: the cost of having held it back.
 

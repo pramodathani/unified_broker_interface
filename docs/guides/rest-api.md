@@ -1487,7 +1487,7 @@ way and SEBI's ten-orders-a-second threshold does too.
 
 ### The synthetic limit order book: `virtual_limit`
 
-Some brokers cap how many orders an account may send in a day: Zerodha at 3,000 across every platform, Dhan at 7,000.
+Some brokers cap how many orders an account may send in a day: Zerodha at 5,000, Dhan at 7,000.
 A limit order that rests at the exchange and never fills still spends one. `virtual_limit` spends one only when it will
 fill. The body is an ordinary limit order with the type added:
 

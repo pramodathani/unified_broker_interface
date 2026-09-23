@@ -4,11 +4,11 @@
 
 Some brokers refuse every order past a fixed number a day. It came up while designing the synthetic limit order book, whose whole purpose is to spend fewer of those orders, and nothing in the engine counted them: `OrderToTradeRatio` counts sends, but only in memory, so it starts again at every restart, and it never refuses anything.
 
-The caps found on 2026-09-23 were Zerodha at 3,000 a day across every platform (Kite's documentation says 5,000, and the forum answer is the more recent statement), Dhan at 7,000, Shoonya saying there is none, and the other seven publishing none. Zerodha counts placements only, rejections included; modifies and cancels do not count. Whether Dhan counts modifies was not found.
+The caps found on 2026-09-23 were Zerodha at 5,000 a day (Kite's documentation; a 2023 forum answer said 3,000 across every platform, and the account holder confirmed 5,000 on 2026-09-24), Dhan at 7,000, Shoonya saying there is none, and the other seven publishing none. Zerodha counts placements only, rejections included; modifies and cancels do not count. Whether Dhan counts modifies was not found.
 
 ## Why part of the cap is kept for exits
 
-At Zerodha, once the cap is reached, even the order that closes a position is refused. A count that let entries run right up to the cap could leave an open position that cannot be closed until support raises the limit. So entries stop at `cap - int(cap * exit_reserve)`, and exits may continue to the cap itself. The default reserve is 5 per cent: 150 orders of Zerodha's 3,000.
+At Zerodha, once the cap is reached, even the order that closes a position is refused. A count that let entries run right up to the cap could leave an open position that cannot be closed until support raises the limit. So entries stop at `cap - int(cap * exit_reserve)`, and exits may continue to the cap itself. The default reserve is 5 per cent: 250 orders of Zerodha's 5,000.
 
 ## How a leg is judged to be an exit
 
