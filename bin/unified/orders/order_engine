@@ -19,6 +19,12 @@ clock tick - cannot be expressed. Everything reaching a broker through one proce
 loss lockout a property of the system rather than a convention repeated in each worker. This is the first stage of that:
 it places plain orders only and behaves exactly as the REST API did, through a new path.
 
+**It follows the orders it placed.** Besides the intents, it reads `unified:order-updates:stream` - the one stream
+`bin/unified/orders/websocket_order_details` already fills with every broker's order updates - as a consumer group of
+its own, and applies an update to the leg it belongs to. An update naming no leg of this engine's is acknowledged and
+dropped, which is most of them. Both streams are read in one call, so a fill and a new order reach the same loop and
+neither starves the other.
+
 **What it does per order.** One or two Redis round trips and one broker call. The first reads the mapping marker and
 every broker's login and settings; the second reads the instrument's catalogue entry and whatever the broker selector
 queues, and is skipped when this process already holds the entry for the current warm and the selector queues nothing.
@@ -77,6 +83,7 @@ def main():
     from unified_broker_interface.utilities.order_engine.utilities.engine_placement import EnginePlacement
     from unified_broker_interface.utilities.order_engine.utilities.engine_recovery import EngineRecovery
     from unified_broker_interface.utilities.order_engine.utilities.engine_runner import OrderEngine
+    from unified_broker_interface.utilities.order_engine.utilities.order_update_follower import OrderUpdateFollower
     from unified_broker_interface.utilities.order_engine.utilities.parent_store import ParentStore
     from unified_broker_interface.utilities.order_engine.utilities.synthetic_order_event_log import SyntheticOrderEventLog
 
@@ -135,6 +142,7 @@ def main():
         api_configuration["order_engine_result_ttl_seconds"],
         event_log,
         parent_store,
+        OrderUpdateFollower(parent_store, event_log, logger),
     )
     exit_code = engine.run(stop)
     lock.release()

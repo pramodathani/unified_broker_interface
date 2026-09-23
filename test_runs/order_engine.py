@@ -40,6 +40,9 @@ from unified_broker_interface.utilities.order_engine.utilities.parent_order impo
 from unified_broker_interface.utilities.order_engine.utilities.engine_recovery import (
     EngineRecovery,
 )
+from unified_broker_interface.utilities.order_engine.utilities.order_update_follower import (
+    OrderUpdateFollower,
+)
 from unified_broker_interface.utilities.order_engine.utilities.parent_store import ParentStore
 from unified_broker_interface.utilities.order_engine.utilities import (
     synthetic_order_event_log,
@@ -91,9 +94,12 @@ class FakeEngineStoreRedis(order_engine_routes.FakeEngineRedis):
         Raises:
             Exception: With BUSYGROUP in its message when the group already exists.
         """
+        if not mkstream and key not in self.streams:
+            raise Exception(
+                'ERR The XGROUP subcommand requires the key to exist',
+            )
         del id
-        if mkstream:
-            self.streams.setdefault(key, [])
+        self.streams.setdefault(key, [])
         created = self.groups.setdefault(key, set())
         if group in created:
             raise Exception('BUSYGROUP Consumer Group name already exists')
@@ -1304,6 +1310,125 @@ class OrderEngineSuite:
             ),
         }
 
+    def followed_parent(self):
+        """A parent with one acknowledged leg, as the store would hold it after a placement.
+
+        Returns:
+            ParentOrder: The parent.
+        """
+        parent = ParentOrder.from_events([
+            {
+                'time': '2026-09-23T10:00:00+00:00',
+                'parent_order_id': '44444444-3333-4222-8111-000000000000',
+                'sequence': 1,
+                'event': 'parent_received',
+                'synthetic_type': 'simple',
+                'parent_state': 'working',
+                'instrument_id': '11111111-1111-5111-8111-000000000001',
+                'detail': {
+                    'body': {
+                        'quantity': 10,
+                    },
+                },
+            },
+            {
+                'time': '2026-09-23T10:00:01+00:00',
+                'parent_order_id': '44444444-3333-4222-8111-000000000000',
+                'sequence': 2,
+                'event': 'leg_answered',
+                'leg_id': '44444444-3333-4222-8111-000000000000:1',
+                'leg_role': 'entry',
+                'leg_state': 'acknowledged',
+                'broker': 'flattrade',
+                'broker_order_id': '26091500000021',
+                'quantity': 10,
+            },
+        ])
+        return parent
+
+    def follower_result(self, name, update):
+        """Applies one order update to a stored parent and records what changed.
+
+        Args:
+            name (str): The check's name.
+            update (dict): The update, on the order contract.
+
+        Returns:
+            dict: The recorded result.
+        """
+        self.fake_redis = self.build_state()
+        parent_store = ParentStore(self.fake_redis)
+        parent = self.followed_parent()
+        parent_store.save(parent)
+        event_log = RecordingEventLog()
+        follower = OrderUpdateFollower(
+            parent_store,
+            event_log,
+            logging.getLogger('test_runs.order_engine'),
+        )
+        changed = follower.follow({
+            'update': json.dumps(update),
+        })
+        if changed is not None:
+            parent_store.save(changed)
+        stored = ParentOrder.from_document(
+            parent_store.parent(parent.parent_order_id),
+        )
+        return {
+            'name': name,
+            'followed': follower.followed,
+            'ignored': follower.ignored,
+            'leg_state': stored.legs[0].state,
+            'leg_filled': stored.legs[0].filled_quantity,
+            'leg_average_price': stored.legs[0].average_price,
+            'events': [
+                {
+                    'event': event['event'],
+                    'leg_state': event.get('leg_state'),
+                    'filled_quantity': event.get('filled_quantity'),
+                    'average_price': event.get('average_price'),
+                }
+                for event in event_log.events
+            ],
+        }
+
+    def run_follower_checks(self):
+        """Applies the brokers' order updates to a leg the engine owns, and to ones it does not.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        ours = {
+            'broker': 'flattrade',
+            'order_id': '26091500000021',
+            'status': 'COMPLETE',
+            'filled_quantity': 10,
+            'average_price': 999.25,
+        }
+        return [
+            self.follower_result('a_fill_moves_the_leg_and_is_recorded', ours),
+            self.follower_result(
+                'a_partial_fill_is_recorded_without_finishing_the_leg',
+                dict(ours, status='OPEN', filled_quantity=4, average_price=999.0),
+            ),
+            self.follower_result(
+                'an_update_for_another_order_is_ignored',
+                dict(ours, order_id='99999999999999'),
+            ),
+            self.follower_result(
+                'an_update_from_another_broker_is_ignored',
+                dict(ours, broker='zerodha'),
+            ),
+            self.follower_result(
+                'an_update_that_changes_nothing_is_not_recorded',
+                {
+                    'broker': 'flattrade',
+                    'order_id': '26091500000021',
+                    'status': 'OPEN',
+                },
+            ),
+        ]
+
     def run_wiring_checks(self):
         """Checks the things a file move can quietly break without any test noticing.
 
@@ -1447,6 +1572,7 @@ class OrderEngineSuite:
             results.extend(self.run_lock_checks())
             results.extend(self.run_parent_checks())
             results.extend(self.run_recovery_checks())
+            results.extend(self.run_follower_checks())
             results.extend(self.run_wiring_checks())
         finally:
             requests.Session.request = original_request

@@ -13,6 +13,9 @@ from unified_broker_interface.utilities.order_engine.utilities.intent_handoff im
     INTENT_STREAM_FIELD,
     INTENT_STREAM_KEY,
 )
+from unified_broker_interface.utilities.order_engine.utilities.order_update_follower import (
+    ORDER_UPDATES_STREAM_KEY,
+)
 from unified_broker_interface.utilities.order_engine.utilities.registry import (
     SYNTHETIC_ORDER_CLASSES,
 )
@@ -54,6 +57,7 @@ class OrderEngine:
         result_ttl_seconds,
         event_log=None,
         parent_store=None,
+        follower=None,
     ):
         """Builds the engine.
 
@@ -66,6 +70,7 @@ class OrderEngine:
             result_ttl_seconds (int): How long an answer is kept for a worker that never came back for it.
             event_log (SyntheticOrderEventLog | None): Where transitions are recorded.
             parent_store (ParentStore | None): The Redis copy of the parents.
+            follower (OrderUpdateFollower | None): What applies the brokers' order updates to the legs the engine owns.
 
         Returns:
             None: This method returns nothing.
@@ -78,12 +83,32 @@ class OrderEngine:
         self.result_ttl_seconds = result_ttl_seconds
         self.event_log = event_log
         self.parent_store = parent_store
+        self.follower = follower
         self.placed = 0
         self.refused = 0
         self.expired = 0
 
+    def streams(self):
+        """The streams this engine reads, in the order a batch is handled.
+
+        The intents and the brokers' order updates are read in one call with one group, so a fill and a new order are noticed by the same loop and neither can starve the other. The order-update stream is the one `bin/unified/orders/websocket_order_details` already fills for the whole system, read here as a group of this engine's own.
+
+        Returns:
+            list: The stream keys.
+        """
+        keys = [
+            INTENT_STREAM_KEY,
+        ]
+        if self.follower is not None:
+            keys.append(ORDER_UPDATES_STREAM_KEY)
+        return keys
+
     def ensure_group(self):
-        """Creates the consumer group at the start of the stream, creating the stream too, unless it exists.
+        """Creates this engine's consumer group on each stream it reads, unless it is already there.
+
+        Both streams are created if they are missing. The engine may well start before any API worker has written an intent, and it may start before `bin/unified/orders/websocket_order_details` has seen its first order update; refusing to create the second would leave the engine failing and retrying for ever over a stream that is merely empty.
+
+        Where the group starts differs. On the intents it starts at the beginning, because an intent written while the engine was down is an order somebody is still owed an answer for. On the order updates it starts at the end, because the retained history is tens of thousands of updates about orders placed before this engine existed, and none of them is its business. A restart resumes from the group's own position either way.
 
         Returns:
             None: This method returns nothing.
@@ -91,19 +116,20 @@ class OrderEngine:
         Raises:
             Exception: Anything Redis raises other than the group already existing.
         """
-        try:
-            self.cache.xgroup_create(
-                INTENT_STREAM_KEY,
-                GROUP,
-                id='0',
-                mkstream=True,
-            )
-            self.logger.info(
-                f'Created consumer group {GROUP} on {INTENT_STREAM_KEY}.'
-            )
-        except Exception as exception:
-            if 'BUSYGROUP' not in str(exception):
-                raise
+        for stream_key in self.streams():
+            try:
+                self.cache.xgroup_create(
+                    stream_key,
+                    GROUP,
+                    id='0' if stream_key == INTENT_STREAM_KEY else '$',
+                    mkstream=True,
+                )
+                self.logger.info(
+                    f'Created consumer group {GROUP} on {stream_key}.'
+                )
+            except Exception as exception:
+                if 'BUSYGROUP' not in str(exception):
+                    raise
 
     def run(self, stop):
         """Places orders until `stop` is set or the lock is lost.
@@ -133,8 +159,11 @@ class OrderEngine:
                         pending_first = False
                 else:
                     entries = self.read(False)
-                for entry_id, fields in entries:
-                    self.handle(entry_id, fields)
+                for stream_key, entry_id, fields in entries:
+                    if stream_key == INTENT_STREAM_KEY:
+                        self.handle(entry_id, fields)
+                    else:
+                        self.handle_update(entry_id, fields)
                 backoff = MINIMUM_BACKOFF_SECONDS
             except Exception as exception:
                 self.logger.error(
@@ -146,9 +175,10 @@ class OrderEngine:
                     break
                 stop.wait(backoff)
                 backoff = min(backoff * 2, MAXIMUM_BACKOFF_SECONDS)
+        followed = self.follower.followed if self.follower else 0
         self.logger.info(
             f'Stopped. Placed {self.placed}, refused {self.refused}, '
-            f'expired {self.expired}.'
+            f'expired {self.expired}, order updates followed {followed}.'
         )
         return exit_code
 
@@ -159,20 +189,23 @@ class OrderEngine:
             pending (bool): True to read this consumer's unacknowledged entries instead of new ones.
 
         Returns:
-            list: The `(entry_id, fields)` pairs read.
+            list: The `(stream_key, entry_id, fields)` triples read.
         """
+        position = '0' if pending else '>'
+        requested = {}
+        for stream_key in self.streams():
+            requested[stream_key] = position
         response = self.cache.xreadgroup(
             GROUP,
             CONSUMER,
-            {
-                INTENT_STREAM_KEY: '0' if pending else '>',
-            },
+            requested,
             count=ENTRIES_PER_READ,
             block=None if pending else BLOCK_MILLISECONDS,
         )
         entries = []
-        for _, read_entries in response or []:
-            entries.extend(read_entries)
+        for stream_key, read_entries in response or []:
+            for entry_id, fields in read_entries:
+                entries.append((stream_key, entry_id, fields))
         return entries
 
     def handle(self, entry_id, fields):
@@ -335,13 +368,37 @@ class OrderEngine:
         pipeline.expire(intent['reply_key'], self.result_ttl_seconds)
         pipeline.execute()
 
-    def acknowledge(self, entry_id):
-        """Acknowledges one stream entry, so it is not redelivered.
+    def handle_update(self, entry_id, fields):
+        """Applies one broker order update to the leg it belongs to, if the engine owns one.
+
+        Most updates on that stream belong to orders placed somewhere else entirely, so an update that names no leg of ours is acknowledged and dropped. A failure to apply one is logged and the entry acknowledged: the broker's own book is read on the next start, so a lost update costs accuracy until then rather than correctness.
 
         Args:
             entry_id (str): The stream entry's id.
+            fields (dict): The stream entry's fields.
 
         Returns:
             None: This method returns nothing.
         """
-        self.cache.xack(INTENT_STREAM_KEY, GROUP, entry_id)
+        try:
+            parent = self.follower.follow(fields)
+            if parent is not None:
+                self.parent_store.save(parent)
+        except Exception:
+            self.logger.exception(
+                f'The order update in stream entry {entry_id} could not be '
+                'applied; the broker book is read again at the next start.'
+            )
+        self.acknowledge(entry_id, ORDER_UPDATES_STREAM_KEY)
+
+    def acknowledge(self, entry_id, stream_key=INTENT_STREAM_KEY):
+        """Acknowledges one stream entry, so it is not redelivered.
+
+        Args:
+            entry_id (str): The stream entry's id.
+            stream_key (str): The stream it came from.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.cache.xack(stream_key, GROUP, entry_id)

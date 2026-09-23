@@ -105,6 +105,26 @@ class ParentStore:
         """
         return self.cache.hget(CHILDREN_KEY, f'{broker}:{broker_order_id}')
 
+    def parent(self, parent_order_id):
+        """One parent as Redis holds it, or None.
+
+        Args:
+            parent_order_id (str): The parent's id.
+
+        Returns:
+            dict | None: The parent's document.
+        """
+        stored = self.cache.hget(PARENTS_KEY, parent_order_id)
+        if not stored:
+            return None
+        try:
+            document = json.loads(stored)
+        except ValueError:
+            return None
+        if not isinstance(document, dict):
+            return None
+        return document
+
     def rebuild(self, parents):
         """Replaces the whole cache with the parents recovery rebuilt from the event log.
 
