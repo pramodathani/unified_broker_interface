@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""
+Place every order the REST API accepts, reading them from the Redis Stream `unified:orders:intents:stream`, and keep
+placing until stopped.
+
+    bin/unified/orders/order_engine
+    redis-cli XINFO GROUPS unified:orders:intents:stream  # lag and pending count
+    redis-cli GET unified:orders:engine:lock              # the pid of the engine that is running
+
+This runs only when the REST API is configured with `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT=engine`. In that mode
+`POST /api/orders/place` checks the access token, validates the body and resolves the instrument, then writes the order
+to the stream as field `intent` and blocks on `unified:orders:intents:result:<intent_id>` for the answer. This reads the
+stream as the `engine` consumer group, places the order at the first broker the configured selector ranks that can take
+it, and pushes the answer onto that key.
+
+**Why the order engine exists.** An order placed from inside a gunicorn worker cannot outlive the request that asked
+for it, so a bracket, an OCO pair or a trailing stop - anything whose behaviour is a reaction to a later fill, price or
+clock tick - cannot be expressed. Everything reaching a broker through one process also makes a rate budget or a daily
+loss lockout a property of the system rather than a convention repeated in each worker. This is the first stage of that:
+it places plain orders only and behaves exactly as the REST API did, through a new path.
+
+**What it does per order.** One or two Redis round trips and one broker call. The first reads the mapping marker and
+every broker's login and settings; the second reads the instrument's catalogue entry and whatever the broker selector
+queues, and is skipped when this process already holds the entry for the current warm and the selector queues nothing.
+The instrument is not looked up here: the REST API resolves it and writes the id into the intent, so the rule that
+decides an identity is unknown or ambiguous lives in one place.
+
+**One engine at a time.** `unified:orders:engine:lock` holds this process's pid for 30 seconds and is refreshed every 10.
+A second engine cannot take it and exits 1, because two engines reading the same group would place every order twice.
+An engine that loses the lock to another process stops rather than placing orders beside it.
+
+**An order that waited too long is not placed.** Each intent carries the deadline the API worker gave up at. An intent
+read more than `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_STALE_INTENT_SECONDS` past that is answered 409 and recorded
+rather than sent, so a restart cannot fire an abandoned order into a market that has moved.
+
+**Nothing is placed twice on purpose.** An intent is acknowledged once its answer has been pushed, so an engine that
+dies between placing and acknowledging redelivers the intent at its next start; that intent is almost always past its
+deadline by then and is refused rather than placed. Recovering an order whose broker answer was lost is the next stage's
+work, not this one's.
+
+Exits 0 when stopped with Ctrl+C or SIGTERM after finishing the intent in hand; 1 when another engine holds the lock or
+takes it while this one runs; 2 for a bad argument or configuration. Redis that cannot be reached while running is
+retried with backoff.
+"""
+
+import sys
+import signal
+import argparse
+import threading
+from pathlib import Path
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+def main():
+    """Place orders from unified:orders:intents:stream until stopped."""
+    parser = argparse.ArgumentParser(
+        description="Place every order the REST API accepts, from unified:orders:intents:stream, until stopped.")
+    parser.parse_args()
+
+    from utilities.configurations import api_configuration, get_cache, get_logger
+    from unified_broker_interface.utilities.order_engine.engine_lock import EngineLock
+    from unified_broker_interface.utilities.order_engine.engine_placement import EnginePlacement
+    from unified_broker_interface.utilities.order_engine.engine_runner import OrderEngine
+
+    logger = get_logger("unified.order_engine")
+    cache = get_cache()
+
+    lock = EngineLock(cache, logger)
+    if not lock.take():
+        return 1
+
+    try:
+        placement = EnginePlacement(cache, logger)
+    except ValueError as error:
+        # A misspelt broker selector. Exit 2, which systemd does not restart, because retrying a
+        # configuration that cannot work would hide the message in a crash loop.
+        logger.error(f"The order engine is not configured correctly: {error}")
+        lock.release()
+        return 2
+
+    placement.start_connection_warmers()
+
+    stop = threading.Event()
+
+    def _handle_signal(signal_number, frame):
+        logger.info(f"Received signal {signal_number}. Finishing the order in hand, then stopping.")
+        stop.set()
+
+    for signal_number in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(signal_number, _handle_signal)
+
+    logger.info("Placing orders from unified:orders:intents:stream.")
+    engine = OrderEngine(
+        cache,
+        placement,
+        lock,
+        logger,
+        api_configuration["order_engine_stale_intent_seconds"],
+        api_configuration["order_engine_result_ttl_seconds"],
+    )
+    exit_code = engine.run(stop)
+    lock.release()
+    return exit_code
+
+if __name__ == "__main__":
+    raise SystemExit(main())

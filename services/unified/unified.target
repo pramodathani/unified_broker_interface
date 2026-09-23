@@ -13,6 +13,13 @@
 #         unified-exchanges@unified_details.service \
 #         unified-rest-api.service
 #
+# The order engine is deliberately not in that list. It is enabled only when the REST API is configured with
+# UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT=engine, and it runs under the same template as the rest:
+#
+#     systemctl --user enable --now unified-orders@order_engine.service
+#
+# Run one. A second engine refuses to start, because two would place every order twice.
+#
 # The unified scripts read what the bin/<broker>/ scripts write to Redis, so each broker's target should be running
 # for its data to appear.
 
