@@ -274,6 +274,40 @@ class OrderRequest:
             return None
         return agreed_tick_size
 
+    def rounded_to_tick(self, price, tick_size, towards_passive=None):
+        """Rounds a price to a whole number of ticks, which every price the engine computes must be.
+
+        Nothing in this project rounded a price before. The order routes only ever checked one, refusing an order whose price was not already a whole number of ticks, because until now every price came from a caller who had chosen it. A price the engine works out itself — a midpoint, a percentage offset, a level from the depth plus a buffer — will land between ticks most of the time, and an exchange refuses it.
+
+        A midpoint of a one-tick spread falls exactly between two ticks, so which way it goes has to be chosen rather than left to the arithmetic. `towards_passive` says whose side to round towards: `BUY` rounds down, which bids less and rests rather than crossing, and `SELL` rounds up. Left out, it rounds half away from zero, which is what a person expects of a number.
+
+        Args:
+            price (decimal.Decimal | float | int | str): The price to round.
+            tick_size (decimal.Decimal): The instrument's tick size, which must be above zero.
+            towards_passive (str | None): `BUY` to round down, `SELL` to round up, or None to round to the nearest.
+
+        Returns:
+            decimal.Decimal: The rounded price, a whole number of ticks.
+
+        Raises:
+            ValueError: When the tick size is not a positive number, since rounding to it would be meaningless.
+        """
+        if tick_size is None or tick_size <= 0:
+            raise ValueError(f'tick size must be above zero, not {tick_size!r}')
+        value = decimal.Decimal(str(price))
+        ticks = value / tick_size
+        if towards_passive == 'BUY':
+            whole_ticks = ticks.to_integral_value(rounding=decimal.ROUND_FLOOR)
+        elif towards_passive == 'SELL':
+            whole_ticks = ticks.to_integral_value(rounding=decimal.ROUND_CEILING)
+        else:
+            whole_ticks = ticks.to_integral_value(
+                rounding=decimal.ROUND_HALF_UP,
+            )
+        # Quantized to the tick's own exponent rather than normalized: normalizing turns a round
+        # 1000 into Decimal('1E+3'), which reaches a broker as the string "1E+3" and is refused.
+        return (whole_ticks * tick_size).quantize(tick_size)
+
     def prices_off_tick_problem(self, handles, prices):
         """Checks prices against the tick size most brokers agree on.
 
