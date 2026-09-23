@@ -66,8 +66,14 @@ from unified_broker_interface.utilities.order_engine.utilities.parent_order impo
 from unified_broker_interface.utilities.order_engine.utilities.parent_store import (
     ParentStore,
 )
+from unified_broker_interface.utilities.order_engine.utilities.price_ticker import (
+    PriceTicker,
+)
 from unified_broker_interface.utilities.order_engine.utilities.rate_budget import (
     RateBudget,
+)
+from unified_broker_interface.utilities.order_engine.utilities.repricing_throttle import (
+    RepricingThrottle,
 )
 from unified_broker_interface.utilities.order_engine.utilities.risk_gates import (
     RiskGates,
@@ -2439,11 +2445,142 @@ class OrderEngineSuite:
             'parent_states': [parent.state for parent in parents],
         }
 
+    def seed_quote(self, quote):
+        """Puts one live quote where the engine and the price ticker both read it.
+
+        Args:
+            quote (dict | None): The quote, or None to leave the instrument without one.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        instrument_id = order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS[
+            'reliance'
+        ]
+        quotes = self.fake_redis.hashes.setdefault('unified:quotes:live', {})
+        if quote is None:
+            quotes.pop(instrument_id, None)
+            return
+        quotes[instrument_id] = json.dumps(quote)
+
+    def price_result(
+        self,
+        name,
+        request_body,
+        steps,
+        answer=None,
+        throttle_seconds=0,
+    ):
+        """Places one watching order, then walks it through a sequence of quotes.
+
+        Each step is a quote and the moment it arrives at, so a scenario about a chaser stepping every five seconds costs no time and means the same thing on every run. Every broker request is kept in the order it was sent, which is what shows whether a type moved its order once, twice or not at all.
+
+        Args:
+            name (str): The check's name.
+            request_body (dict): The request body.
+            steps (list): One `{"quote": dict | None, "at": float}` per tick, where `at` is seconds after the order was placed.
+            answer (dict | None): The stubbed broker answer.
+            throttle_seconds (float): The shortest gap the re-pricing throttle allows between two moves of one order.
+
+        Returns:
+            dict: The recorded result.
+        """
+        scenario = self.scenarios.intents(name, [request_body], answer=answer)
+        self.fake_redis = self.build_state()
+        self.network.reset(answer)
+        self.counting_uuid.reset()
+        starting = steps[0]['quote'] if steps else None
+        self.seed_quote(starting)
+        reply_keys = self.write_intents(scenario)
+
+        logger = logging.getLogger('test_runs.order_engine')
+        placement = EnginePlacement(self.fake_redis, logger)
+        event_log = RecordingEventLog()
+        parent_store = ParentStore(self.fake_redis)
+        gates = RiskGates(
+            RateBudget(100, 100, 0, logger),
+            LossLockout(self.fake_redis, 0, logger),
+            OrderToTradeRatio(),
+            RepricingThrottle(throttle_seconds),
+        )
+        ticker = PriceTicker(
+            self.fake_redis,
+            parent_store,
+            event_log,
+            placement,
+            logger,
+            gates,
+        )
+        engine = OrderEngine(
+            self.fake_redis,
+            placement,
+            EngineLock(self.fake_redis, logger),
+            logger,
+            STALE_INTENT_SECONDS,
+            RESULT_TTL_SECONDS,
+            event_log,
+            parent_store,
+            None,
+            gates,
+        )
+        started = FROZEN_NOW.timestamp()
+        original_time = time.time
+        time.time = lambda: started
+        try:
+            engine.run(OnePassStop(3))
+        finally:
+            time.time = original_time
+        reply = self.shown_replies(reply_keys)[0]
+
+        # The broker's own book has to hold the order before a change can be built from it, exactly
+        # as it does in life.
+        book = self.fake_redis.hashes.setdefault('flattrade:orders:orders', {})
+        book['26091500000021'] = self.broker_book_entry(
+            '26091500000021',
+            status='OPEN',
+        )
+
+        moves = []
+        for step in steps:
+            self.seed_quote(step.get('quote'))
+            before = len(self.network.sent_requests)
+            self.tick_at(ticker, started + step.get('at', 0))
+            moves.append(len(self.network.sent_requests) - before)
+
+        parents = [
+            ParentOrder.from_document(json.loads(one))
+            for one in self.fake_redis.hashes.get(
+                'unified:orders:parents',
+                {},
+            ).values()
+        ]
+        return {
+            'name': name,
+            'reply': reply,
+            'requests': [
+                request['url'].rsplit('/', 1)[-1]
+                for request in self.network.sent_requests
+            ],
+            'moves_per_tick': moves,
+            'legs': [
+                {
+                    'role': leg.role,
+                    'state': leg.state,
+                    'quantity': leg.quantity,
+                    'price': leg.price,
+                }
+                for parent in parents
+                for leg in parent.legs
+            ],
+            'parent_states': [parent.state for parent in parents],
+            'repricing': gates.throttle.counts(),
+        }
+
     def tick_at(self, ticker, moment):
         """Runs one tick as though it were `moment`.
 
         Args:
-            ticker (ClockTicker): The ticker.
+            ticker (ClockTicker | PriceTicker): The ticker.
             moment (float): The Unix time to tick at.
 
         Returns:
@@ -2556,6 +2693,180 @@ class OrderEngineSuite:
                 }),
                 [],
                 frozen + 60,
+                accepted,
+            ),
+        ]
+
+    def book_at(self, bid, offer):
+        """A quote whose touch sits where a scenario wants it, with five levels behind each side.
+
+        Args:
+            bid (float): The best bid.
+            offer (float): The best offer.
+
+        Returns:
+            dict: The quote.
+        """
+        return self.scenarios.quote(
+            last_price=offer,
+            depth={
+                'buy': [
+                    {
+                        'price': round(bid - index * 0.05, 2),
+                        'quantity': 100,
+                        'orders': 1,
+                    }
+                    for index in range(5)
+                ],
+                'sell': [
+                    {
+                        'price': round(offer + index * 0.05, 2),
+                        'quantity': 100,
+                        'orders': 1,
+                    }
+                    for index in range(5)
+                ],
+            },
+        )
+
+    def run_price_checks(self):
+        """Runs the types that watch the market, which is the only way they do anything.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        accepted = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        entry = self.scenarios.bodies.market_order(
+            dry_run=None,
+            order_type='LIMIT',
+            price=1000,
+            quantity=10,
+        )
+        steady = self.book_at(1000.00, 1000.05)
+        return [
+            self.price_result(
+                'a_peg_follows_the_bid_it_is_pegged_to',
+                dict(entry, synthetic={
+                    'type': 'peg',
+                    'reference': 'own_touch',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1000.20, 1000.25), 'at': 1},
+                    {'quote': self.book_at(999.80, 999.85), 'at': 2},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_peg_sends_nothing_while_the_bid_stands_still',
+                dict(entry, synthetic={
+                    'type': 'peg',
+                    'reference': 'own_touch',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1},
+                    {'quote': steady, 'at': 2},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_peg_will_not_follow_the_bid_past_its_cap',
+                dict(entry, synthetic={
+                    'type': 'peg',
+                    'reference': 'own_touch',
+                    'cap_price': 1000.10,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1000.50, 1000.55), 'at': 1},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_peg_to_the_midpoint_rests_between_the_touch',
+                dict(entry, synthetic={
+                    'type': 'peg',
+                    'reference': 'mid',
+                }),
+                [
+                    {'quote': self.book_at(1000.00, 1000.10), 'at': 0},
+                    {'quote': self.book_at(1000.20, 1000.30), 'at': 1},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_peg_held_back_by_the_throttle_does_not_move',
+                dict(entry, synthetic={
+                    'type': 'peg',
+                    'reference': 'own_touch',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1000.20, 1000.25), 'at': 1},
+                    {'quote': self.book_at(1000.40, 1000.45), 'at': 2},
+                ],
+                accepted,
+                throttle_seconds=30,
+            ),
+            self.price_result(
+                'a_peg_does_nothing_on_a_tick_that_carried_no_quote',
+                dict(entry, synthetic={
+                    'type': 'peg',
+                    'reference': 'own_touch',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': None, 'at': 1},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_chaser_steps_towards_the_market_when_its_wait_is_up',
+                dict(entry, synthetic={
+                    'type': 'chaser',
+                    'step_ticks': 1,
+                    'step_seconds': 5,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1},
+                    {'quote': steady, 'at': 6},
+                    {'quote': steady, 'at': 7},
+                    {'quote': steady, 'at': 12},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_chaser_will_not_step_past_its_cap',
+                dict(entry, synthetic={
+                    'type': 'chaser',
+                    'step_ticks': 1,
+                    'step_seconds': 5,
+                    'cap_price': 1000.05,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 6},
+                    {'quote': steady, 'at': 12},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_chaser_crosses_the_spread_once_its_time_is_up',
+                dict(entry, synthetic={
+                    'type': 'chaser',
+                    'step_ticks': 1,
+                    'step_seconds': 5,
+                    'cross_after_seconds': 10,
+                }),
+                [
+                    {'quote': self.book_at(1000.00, 1000.50), 'at': 0},
+                    {'quote': self.book_at(1000.00, 1000.50), 'at': 11},
+                ],
                 accepted,
             ),
         ]
@@ -2710,6 +3021,7 @@ class OrderEngineSuite:
             results.extend(self.run_follower_checks())
             results.extend(self.run_reaction_checks())
             results.extend(self.run_clock_checks())
+            results.extend(self.run_price_checks())
             results.extend(self.run_wiring_checks())
         finally:
             requests.Session.request = original_request

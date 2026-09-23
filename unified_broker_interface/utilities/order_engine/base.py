@@ -1,6 +1,7 @@
 """What every synthetic order type shares: starting a parent, recording a leg before sending it, and reading the answer."""
 
 import datetime
+import decimal
 import time
 import uuid
 
@@ -12,6 +13,9 @@ from unified_broker_interface.utilities.broker_orders.utilities.place_order_requ
 )
 from unified_broker_interface.utilities.broker_orders.utilities.refused_request import (
     RefusedRequestError,
+)
+from unified_broker_interface.utilities.order_engine.utilities.market_view import (
+    MarketView,
 )
 from unified_broker_interface.utilities.order_engine.utilities.parent_order import (
     ParentOrder,
@@ -254,6 +258,67 @@ class SyntheticOrder:
             bool: True when the parent did something, which is only used for the engine's counters.
         """
         return False
+
+    def remember_tick_size(self, order):
+        """Works this instrument's tick size out once, and keeps it on the parent.
+
+        A type that watches the market needs the tick size on every tick, to snap a price it computed onto a boundary the exchange will accept. Reading it from the catalogue each time would put a Redis round trip inside the tick, once per parent per second, to fetch a number that cannot change while the parent is open.
+
+        So it is resolved when the parent is created, where a round trip is already being made, and kept as text in the parent's parameters. Text rather than a float, for the same reason the catalogue stores it as text: a tick size of 0.05 is not representable in binary floating point, and a price built from a tick size that is slightly wrong is off-tick and refused.
+
+        Args:
+            order (PlaceOrderRequest): The validated order, which carries the agreement rule.
+
+        Returns:
+            decimal.Decimal: The tick size.
+
+        Raises:
+            RefusedRequestError: With HTTP 503 when the brokers do not agree on a tick size for this instrument, since a type that computes prices cannot run without one.
+        """
+        instrument, _, _ = self.placement.market_context(
+            self.parent.instrument_id,
+            False,
+            False,
+        )
+        tick_size = order.agreed_tick_size(instrument.handles)
+        if tick_size is None:
+            raise RefusedRequestError.refusal(
+                'this order type works its prices out from the live quote, '
+                'which needs a tick size the brokers agree on, and there is '
+                'none for this instrument',
+                503,
+                instrument_id=self.parent.instrument_id,
+            )
+        self.parent.parameters = dict(self.parent.parameters)
+        self.parent.parameters['tick_size'] = str(tick_size)
+        return tick_size
+
+    def tick_size(self):
+        """The tick size `remember_tick_size` kept, read back as a number.
+
+        Returns:
+            decimal.Decimal | None: The tick size, or None when the parent has none.
+        """
+        text = self.parent.parameters.get('tick_size')
+        if not text:
+            return None
+        try:
+            return decimal.Decimal(str(text))
+        except decimal.InvalidOperation:
+            return None
+
+    def view(self, quotes, instrument_id=None):
+        """The market, as this parent's instrument's quote and tick size show it.
+
+        Args:
+            quotes (dict): The quotes the tick carried.
+            instrument_id (str | None): The instrument to look at, or None for this parent's own.
+
+        Returns:
+            MarketView: The reader, which answers None for everything when there is no quote.
+        """
+        wanted = instrument_id or self.parent.instrument_id
+        return MarketView(quotes.get(wanted), self.tick_size())
 
     def own_quote(self, quotes):
         """This parent's own instrument's quote, out of the ones a tick carried.
