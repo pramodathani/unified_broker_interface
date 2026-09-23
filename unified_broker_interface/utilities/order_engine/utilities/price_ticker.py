@@ -29,6 +29,8 @@ class PriceTicker:
 
     A parent usually watches the instrument it trades, and a few deliberately do not: a cross-instrument conditional exits a Nifty option when the index crosses a level, because the index does not spike the way an illiquid premium does. Such a parent names the second instrument in its `watch_instrument_id` parameter, and both quotes are read and handed over together. That is why a tick carries a dictionary of quotes rather than one quote.
 
+    A parent whose legs span several instruments — a spread, a basket, a strategy being watched for its total profit and loss — gets a quote for every instrument any of its legs trades, read from the legs themselves rather than from a parameter, because they are only known once the legs exist.
+
     A parent that raises is logged and the rest still get their tick, exactly as on the clock. One order type failing must not strand somebody's trailing stop.
 
     Attributes:
@@ -134,6 +136,10 @@ class PriceTicker:
         other = parameters.get('watch_instrument_id')
         if other and other not in watched:
             watched.append(other)
+        for leg in document.get('legs') or []:
+            of_leg = leg.get('instrument_id')
+            if of_leg and of_leg not in watched:
+                watched.append(of_leg)
         return watched
 
     def quotes(self, instrument_ids):

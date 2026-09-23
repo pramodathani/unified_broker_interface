@@ -2230,6 +2230,7 @@ class OrderEngineSuite:
             200,
             self.scenarios.answers.place_success('flattrade'),
         )
+        identifiers = order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS
         bracket_body = self.scenarios.bodies.market_order(
             dry_run=None,
             order_type='LIMIT',
@@ -2288,6 +2289,130 @@ class OrderEngineSuite:
                 ],
                 accepted,
                 gated=3,
+            ),
+            self.reaction_result(
+                'a_basket_places_every_leg_and_reports_each_one',
+                self.scenarios.bodies.market_order(
+                    dry_run=None,
+                    order_type='LIMIT',
+                    price=1000,
+                    quantity=10,
+                    synthetic={
+                        'type': 'basket',
+                        'candidates': [
+                            {
+                                'instrument_id': identifiers['reliance'],
+                                'quantity': 10,
+                                'price': 1000,
+                            },
+                            {
+                                'instrument_id': identifiers['kwil'],
+                                'quantity': 5,
+                                'price': 250,
+                            },
+                            {
+                                'instrument_id': identifiers['nifty_option'],
+                                'transaction_type': 'SELL',
+                                'quantity': 75,
+                                'price': 120,
+                            },
+                        ],
+                    },
+                ),
+                [],
+                accepted,
+            ),
+            self.reaction_result(
+                'a_basket_that_repeats_an_instrument_is_refused',
+                self.scenarios.bodies.market_order(
+                    dry_run=None,
+                    order_type='LIMIT',
+                    price=1000,
+                    quantity=10,
+                    synthetic={
+                        'type': 'basket',
+                        'candidates': [
+                            {
+                                'instrument_id': identifiers['reliance'],
+                                'quantity': 10,
+                            },
+                            {
+                                'instrument_id': identifiers['reliance'],
+                                'quantity': 5,
+                            },
+                        ],
+                    },
+                ),
+                [],
+                accepted,
+            ),
+            self.reaction_result(
+                'a_one_cancels_all_group_calls_off_the_rest_on_the_first_fill',
+                self.scenarios.bodies.market_order(
+                    dry_run=None,
+                    order_type='LIMIT',
+                    price=1000,
+                    quantity=10,
+                    synthetic={
+                        'type': 'oca',
+                        'candidates': [
+                            {
+                                'instrument_id': identifiers['reliance'],
+                                'quantity': 10,
+                                'price': 1000,
+                            },
+                            {
+                                'instrument_id': identifiers['kwil'],
+                                'quantity': 5,
+                                'price': 250,
+                            },
+                            {
+                                'instrument_id': identifiers['sensex_option'],
+                                'quantity': 20,
+                                'price': 80,
+                            },
+                        ],
+                    },
+                ),
+                [
+                    self.update('26091500000021', 'OPEN', 4),
+                ],
+                accepted,
+            ),
+            self.reaction_result(
+                'a_cover_order_arms_its_stop_and_has_no_target',
+                self.scenarios.bodies.market_order(
+                    dry_run=None,
+                    order_type='LIMIT',
+                    price=1000,
+                    quantity=10,
+                    synthetic={
+                        'type': 'cover',
+                        'stop_price': 990,
+                        'stop_limit_price': 988,
+                    },
+                ),
+                [
+                    self.update('26091500000021', 'OPEN', 4),
+                ],
+                accepted,
+            ),
+            self.reaction_result(
+                'a_cover_order_with_a_target_is_refused',
+                self.scenarios.bodies.market_order(
+                    dry_run=None,
+                    order_type='LIMIT',
+                    price=1000,
+                    quantity=10,
+                    synthetic={
+                        'type': 'cover',
+                        'stop_price': 990,
+                        'stop_limit_price': 988,
+                        'target_price': 1010,
+                    },
+                ),
+                [],
+                accepted,
             ),
             self.reaction_result(
                 'an_iceberg_shows_the_next_slice_only_once_the_last_one_filled',
