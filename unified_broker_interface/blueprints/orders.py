@@ -27,9 +27,6 @@ from unified_broker_interface.blueprints.base import authenticated
 from unified_broker_interface.utilities.broker_orders.utilities.cancel_order_request import (
     CancelOrderRequest,
 )
-from unified_broker_interface.utilities.broker_orders.utilities.connection_warmer import (
-    ConnectionWarmer,
-)
 from unified_broker_interface.utilities.broker_orders.utilities.instrument import (
     Instrument,
 )
@@ -48,20 +45,17 @@ from unified_broker_interface.utilities.broker_orders.utilities.order_request im
 from unified_broker_interface.utilities.broker_orders.utilities.place_order_request import (
     PlaceOrderRequest,
 )
+from unified_broker_interface.utilities.broker_orders.utilities.placement import (
+    OrderPlacement,
+)
 from unified_broker_interface.utilities.broker_orders.utilities.refused_request import (
     RefusedRequestError,
-)
-from unified_broker_interface.utilities.broker_orders.utilities.registry import (
-    BROKER_ORDER_CLASSES,
 )
 from unified_broker_interface.utilities.broker_orders.utilities.stored_order import (
     OrderNotReadyError,
 )
 from unified_broker_interface.utilities.broker_orders.utilities.stored_order import (
     StoredOrder,
-)
-from unified_broker_interface.utilities.broker_selection.utilities.registry import (
-    BROKER_SELECTOR_CLASSES,
 )
 from unified_broker_interface.utilities.instrument_cache import InstrumentCache
 from unified_broker_interface.utilities.unified_documents import read_document
@@ -78,12 +72,12 @@ class OrdersBlueprint(BaseBlueprint):
     """The `/api/orders` routes: order and trade books from Redis, and placing, modifying and cancelling orders.
 
     Attributes:
-        broker_names (list): Every broker's name, in the order the brokers take turns.
-        broker_orders (dict): Each broker's name to its order class instance, built once per worker.
-        broker_selector (BrokerSelector): The algorithm that orders the brokers an order is offered to, named by `UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_SELECTOR`.
+        order_placement (OrderPlacement): Everything an order goes through once Redis has been read: the turn, the broker, the request, the send and the answer.
+        broker_names (list): Every broker's name, in the order the brokers take turns; the same list `order_placement` holds.
+        broker_orders (dict): Each broker's name to its order class instance; the same dictionary `order_placement` holds.
+        broker_selector (BrokerSelector): The algorithm that orders the brokers an order is offered to, named by `UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_SELECTOR`; the same object `order_placement` holds.
         placement_mode (str): `direct` when this worker sends orders to brokers itself, or `engine` when it hands them to the order engine, named by `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT`.
         instrument_cache (InstrumentCache): This worker's copy of the catalogue data placements and modifications have read under the current warm.
-        connection_warmers (list): One `ConnectionWarmer` per broker named in `UNIFIED_BROKER_INTERFACE_API_ORDER_WARM_BROKERS`, each running on its own daemon thread.
         logger (logging.Logger): The logger for failures that do not change an answer.
     """
 
@@ -107,19 +101,10 @@ class OrdersBlueprint(BaseBlueprint):
         """
         super().__init__()
         self.logger = get_logger('rest_api.orders')
-        self.broker_names = []
-        self.broker_orders = {}
-        for broker_order_class in BROKER_ORDER_CLASSES:
-            broker_orders = broker_order_class()
-            self.broker_names.append(broker_orders.BROKER_NAME)
-            self.broker_orders[broker_orders.BROKER_NAME] = broker_orders
-        selector_name = api_configuration['order_broker_selector']
-        if selector_name not in BROKER_SELECTOR_CLASSES:
-            known_names = ', '.join(BROKER_SELECTOR_CLASSES)
-            raise ValueError(
-                f'unknown order broker selector {selector_name!r}; known selectors are {known_names}'
-            )
-        self.broker_selector = BROKER_SELECTOR_CLASSES[selector_name]()
+        self.order_placement = OrderPlacement(self.logger)
+        self.broker_names = self.order_placement.broker_names
+        self.broker_orders = self.order_placement.broker_orders
+        self.broker_selector = self.order_placement.broker_selector
         self.placement_mode = api_configuration['order_placement']
         if self.placement_mode not in ORDER_PLACEMENT_MODES:
             known_modes = ', '.join(ORDER_PLACEMENT_MODES)
@@ -127,33 +112,7 @@ class OrdersBlueprint(BaseBlueprint):
                 f'unknown order placement {self.placement_mode!r}; known modes are {known_modes}'
             )
         self.instrument_cache = InstrumentCache()
-        self.connection_warmers = []
-        self.start_connection_warmers()
-
-    def start_connection_warmers(self):
-        """Starts a connection warmer for each broker named in `UNIFIED_BROKER_INTERFACE_API_ORDER_WARM_BROKERS`.
-
-        Warming only saves time, so nothing about it may stop the API: an unknown broker name is logged and ignored, and any other failure is logged and leaves warming off. A broker without a `WARM_URL`, such as Kotak, is pinged only once a request has named its host.
-
-        Returns:
-            None: This method returns nothing.
-        """
-        try:
-            for broker_name in api_configuration['order_warm_brokers']:
-                if not broker_name:
-                    continue
-                broker_orders = self.broker_orders.get(broker_name)
-                if broker_orders is None:
-                    self.logger.warning(
-                        'not warming order connections to %r, which is not a broker',
-                        broker_name,
-                    )
-                    continue
-                warmer = ConnectionWarmer(broker_orders, self.logger)
-                warmer.start()
-                self.connection_warmers.append(warmer)
-        except Exception:
-            self.logger.exception('order connection warming could not start')
+        self.order_placement.start_connection_warmers()
 
     @authenticated
     def details(self):
@@ -267,9 +226,10 @@ class OrdersBlueprint(BaseBlueprint):
         """
         started_at = time.perf_counter()
         try:
-            return self.place_order(started_at)
+            body, status = self.place_order(started_at)
         except RefusedRequestError as refusal:
-            return jsonify(refusal.body), refusal.status
+            body, status = refusal.body, refusal.status
+        return jsonify(body), status
 
     def place_order(self, started_at):
         """Does the work of `place`, raising a refusal for any request answered without calling a broker.
@@ -278,7 +238,7 @@ class OrdersBlueprint(BaseBlueprint):
             started_at (float): `time.perf_counter()` when the request arrived.
 
         Returns:
-            tuple: The Flask JSON response (flask.Response) and its HTTP status (int).
+            tuple: The answer's body (dict) and its HTTP status (int), for `place` to turn into a JSON response.
 
         Raises:
             RefusedRequestError: For a request answered without calling a broker.
@@ -310,7 +270,7 @@ class OrdersBlueprint(BaseBlueprint):
         except InvalidOrderError as error:
             raise self.refuse(str(error), 400)
 
-        rotation = self.rotation()
+        rotation = self.order_placement.rotation()
         if not mapping_date_text:
             raise self.refuse('no instruments have been mapped yet', 503)
         catalogue_key_prefix = f'unified:catalogue:{mapping_date_text}:'
@@ -380,103 +340,15 @@ class OrdersBlueprint(BaseBlueprint):
                 handles_text,
                 contract_size_text,
             )
-        if not instrument.is_tradeable():
-            message = f'orders are not sent for {instrument.segment} instruments'
-            raise self.refuse(message, 400)
-        self.check_contract_size(order, instrument)
-
-        ranked_brokers = self.broker_selector.ranked_brokers(
+        return self.order_placement.place(
             order,
             instrument,
             rotation,
             selector_replies,
-        )
-        broker_orders, skipped = self.choose_broker(
-            order,
-            instrument,
-            rotation,
-            ranked_brokers,
             login_texts,
             settings_texts,
+            started_at,
         )
-        broker_name = broker_orders.BROKER_NAME
-        position = self.broker_names.index(broker_name)
-        handle = instrument.handles.get(broker_name)
-        login = broker_orders.decode_login(login_texts[position])
-        settings = broker_orders.decode_settings(settings_texts[position])
-
-        size_problem = None
-        if instrument.is_securities_market():
-            size_problem = order.lot_size_problem(handle)
-        if size_problem is None:
-            size_problem = order.tick_size_problem(instrument.handles)
-        if size_problem is not None:
-            raise self.refuse(size_problem, 400)
-
-        quantity, disclosed_quantity = broker_orders.order_quantities(
-            order,
-            instrument,
-            handle,
-        )
-        broker_order = order.with_quantities(quantity, disclosed_quantity)
-        broker_request = broker_orders.build_place_request(
-            broker_order,
-            instrument,
-            handle,
-            login,
-            settings,
-        )
-
-        if order.dry_run:
-            preparation_milliseconds = (time.perf_counter() - started_at) * 1000
-            return jsonify({
-                'broker': broker_name,
-                'instrument_id': instrument_id,
-                'tag': broker_request.tag,
-                'dry_run': True,
-                'request': broker_request.shown(),
-                'skipped': skipped,
-                'timing_ms': {
-                    'preparation': round(preparation_milliseconds, 3),
-                },
-            }), 200
-
-        answer = broker_orders.send_place(broker_request)
-        self.record_outcome(broker_name, answer)
-        preparation_milliseconds = (answer.sent_at - started_at) * 1000
-        return jsonify({
-            'broker': broker_name,
-            'instrument_id': instrument_id,
-            'tag': broker_request.tag,
-            'outcome': answer.outcome,
-            'order_id': answer.order_id,
-            'status_message': answer.status_message,
-            'broker_response': answer.response_body,
-            'skipped': skipped,
-            'timing_ms': {
-                'preparation': round(preparation_milliseconds, 3),
-                'broker': answer.broker_milliseconds(),
-            },
-        }), answer.http_status()
-
-    def rotation(self):
-        """Lists the brokers that take turns, which is every broker not excluded by configuration.
-
-        Returns:
-            list: The broker names, in turn order.
-
-        Raises:
-            RefusedRequestError: With HTTP 503 when every broker is excluded.
-        """
-        excluded_brokers = api_configuration['order_excluded_brokers']
-        rotation = []
-        for broker_name in self.broker_names:
-            if broker_name not in excluded_brokers:
-                rotation.append(broker_name)
-        if not rotation:
-            message = 'every broker is excluded from order placement'
-            raise self.refuse(message, 503)
-        return rotation
 
     def find_instrument_id(self, order, catalogue_key_prefix):
         """Finds the instrument an order names by identity fields, in the segment's catalogue.
@@ -513,108 +385,6 @@ class OrdersBlueprint(BaseBlueprint):
             )
             raise self.refuse(message, 400)
         return str(members[0]).rsplit('|', 1)[1]
-
-    def check_contract_size(self, order, instrument):
-        """Checks a currency or commodity order against the contract size decided this morning.
-
-        Such a contract's lot size is taken only from `unified.contract_sizes`, as the warm copies it to Redis, because the brokers' own lot sizes count lots in different units. An order on a contract whose size is not trusted today is refused.
-
-        Args:
-            order (PlaceOrderRequest): The validated order.
-            instrument (Instrument): The tradeable instrument.
-
-        Returns:
-            None: This method returns nothing.
-
-        Raises:
-            RefusedRequestError: With HTTP 503 when the contract's size is not trusted today, and 400 when a quantity is not a whole number of lots.
-        """
-        if instrument.is_securities_market():
-            return
-        units_per_lot = instrument.trusted_units_per_lot()
-        if units_per_lot is None:
-            status = instrument.contract_size_status()
-            raise self.refuse(
-                f'the contract size of this {instrument.segment} instrument is not trusted today ({status}), so no order is sent',
-                503,
-                instrument_id=instrument.instrument_id,
-                contract_size_status=status,
-            )
-        problem = order.contract_lot_problem(units_per_lot)
-        if problem is not None:
-            raise self.refuse(problem, 400)
-
-    def record_outcome(self, broker_name, answer):
-        """Hands a sent order's answer to the broker selector, so a selector's failure cannot change the answer to an order already sent.
-
-        Args:
-            broker_name (str): The broker the order was sent to.
-            answer (BrokerAnswer): The broker's answer.
-
-        Returns:
-            None: This method returns nothing.
-        """
-        try:
-            self.broker_selector.record_outcome(broker_name, answer)
-        except Exception:
-            self.logger.exception(
-                'broker selector %s failed to record an outcome from %s',
-                self.broker_selector.NAME,
-                broker_name,
-            )
-
-    def choose_broker(
-        self,
-        order,
-        instrument,
-        rotation,
-        ranked_brokers,
-        login_texts,
-        settings_texts,
-    ):
-        """Offers the order to the brokers in the selector's order, passing over every broker that cannot take it.
-
-        Args:
-            order (PlaceOrderRequest): The validated order.
-            instrument (Instrument): The tradeable instrument.
-            rotation (list): The broker names not excluded by configuration.
-            ranked_brokers (list): The broker names in the order the selector ranked them; a name not in `rotation` is ignored.
-            login_texts (list): Every broker's login as Redis holds it, in `broker_names` order.
-            settings_texts (list): Every broker's settings as Redis holds them, in `broker_names` order.
-
-        Returns:
-            tuple: `(broker_orders, skipped)`, where `broker_orders` is the chosen broker's order class instance and `skipped` lists each broker passed over as a dictionary with `broker` and `reason`.
-
-        Raises:
-            RefusedRequestError: With HTTP 503 when no broker can take the order.
-        """
-        skipped = []
-        offered = []
-        for broker_name in ranked_brokers:
-            if broker_name not in rotation or broker_name in offered:
-                continue
-            offered.append(broker_name)
-            position = self.broker_names.index(broker_name)
-            broker_orders = self.broker_orders[broker_name]
-            reason = broker_orders.place_skip_reason(
-                order,
-                instrument,
-                instrument.handles.get(broker_name),
-                broker_orders.decode_login(login_texts[position]),
-                broker_orders.decode_settings(settings_texts[position]),
-            )
-            if reason is None:
-                return broker_orders, skipped
-            skipped.append({
-                'broker': broker_name,
-                'reason': reason,
-            })
-        raise self.refuse(
-            'no broker can take this order',
-            503,
-            instrument_id=instrument.instrument_id,
-            skipped=skipped,
-        )
 
     def modify(self):
         """Changes one open order at the broker whose order book holds it.
