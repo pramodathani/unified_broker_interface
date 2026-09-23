@@ -43,7 +43,19 @@ from unified_broker_interface.utilities.order_engine.utilities.engine_recovery i
 from unified_broker_interface.utilities.order_engine.utilities.order_update_follower import (
     OrderUpdateFollower,
 )
+from unified_broker_interface.utilities.order_engine.utilities.loss_lockout import (
+    LossLockout,
+)
+from unified_broker_interface.utilities.order_engine.utilities.order_to_trade_ratio import (
+    OrderToTradeRatio,
+)
 from unified_broker_interface.utilities.order_engine.utilities.parent_store import ParentStore
+from unified_broker_interface.utilities.order_engine.utilities.rate_budget import (
+    RateBudget,
+)
+from unified_broker_interface.utilities.order_engine.utilities.risk_gates import (
+    RiskGates,
+)
 from unified_broker_interface.utilities.order_engine.utilities import (
     synthetic_order_event_log,
 )
@@ -598,6 +610,41 @@ class RecordingEventLog:
         return shown
 
 
+class CountingUuid:
+    """A stand-in for `uuid.uuid4` that counts rather than being random.
+
+    Two things in one scenario need different identifiers — two parents, and the tag Groww generates for itself — so replacing `uuid.uuid4` with one constant the way the route suites do is not open here. Counting gives values that are distinct within a scenario and the same on every run, and the count is reset before each scenario so one scenario's numbering does not depend on what ran before it.
+
+    Attributes:
+        count (int): How many identifiers have been handed out since the last reset.
+    """
+
+    def __init__(self):
+        """Builds the counter.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.count = 0
+
+    def reset(self):
+        """Starts the numbering again, before a scenario.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.count = 0
+
+    def __call__(self):
+        """The next identifier.
+
+        Returns:
+            uuid.UUID: A version 4 identifier whose value is the count.
+        """
+        self.count = self.count + 1
+        return uuid.UUID(int=self.count, version=4)
+
+
 class OnePassStop:
     """A stop event that lets the engine's loop run a fixed number of passes and then stop.
 
@@ -787,6 +834,82 @@ class OrderEngineScenarios:
                 ),
             ),
             self.intents(
+                'the_rate_budget_refuses_a_burst_it_cannot_absorb',
+                [
+                    order,
+                    order,
+                    order,
+                ],
+                gated=True,
+                rate_per_second=2,
+                rate_per_broker_per_second=2,
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
+                'a_losing_day_past_its_limit_places_nothing',
+                [
+                    order,
+                ],
+                gated=True,
+                loss_limit=5000,
+                funds={
+                    'pnl': {
+                        'realized': -4000.0,
+                        'unrealized': -2500.0,
+                    },
+                },
+            ),
+            self.intents(
+                'a_losing_day_inside_its_limit_still_trades',
+                [
+                    order,
+                ],
+                gated=True,
+                loss_limit=5000,
+                funds={
+                    'pnl': {
+                        'realized': -1000.0,
+                        'unrealized': -500.0,
+                    },
+                },
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
+                'no_loss_limit_means_no_lockout',
+                [
+                    order,
+                ],
+                gated=True,
+                funds={
+                    'pnl': {
+                        'realized': -900000.0,
+                        'unrealized': 0.0,
+                    },
+                },
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
+                'funds_that_cannot_be_read_do_not_lock_trading_out',
+                [
+                    order,
+                ],
+                gated=True,
+                loss_limit=5000,
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
                 'an_entry_that_is_not_an_intent_is_acknowledged',
                 [
                     order,
@@ -819,6 +942,7 @@ class OrderEngineSuite:
         """
         self.fake_redis = FakeEngineStoreRedis()
         self.network = order_routes.FakeBrokerNetwork()
+        self.counting_uuid = CountingUuid()
 
     def build_state(self):
         """Builds a stand-in holding the order routes' starting contents.
@@ -913,6 +1037,38 @@ class OrderEngineSuite:
             return str(parent_id)
         return f'<uuid{parsed.version}>'
 
+    def build_gates(self, scenario, logger):
+        """The risk gates for one scenario, or None when it names none.
+
+        Args:
+            scenario (dict): The scenario.
+            logger (logging.Logger): The logger.
+
+        Returns:
+            RiskGates | None: The gates.
+        """
+        if not scenario.get('gated'):
+            return None
+        funds = scenario.get('funds')
+        if funds is not None:
+            self.fake_redis.strings['unified:portfolio:funds'] = json.dumps(
+                funds,
+            )
+        return RiskGates(
+            RateBudget(
+                scenario.get('rate_per_second', 8),
+                scenario.get('rate_per_broker_per_second', 5),
+                scenario.get('rate_wait_seconds', 0),
+                logger,
+            ),
+            LossLockout(
+                self.fake_redis,
+                scenario.get('loss_limit', 0),
+                logger,
+            ),
+            OrderToTradeRatio(),
+        )
+
     def run_scenario(self, scenario):
         """Runs one scenario against a fresh stand-in and a fresh engine.
 
@@ -924,6 +1080,7 @@ class OrderEngineSuite:
         """
         self.fake_redis = self.build_state()
         self.network.reset(scenario.get('answer'))
+        self.counting_uuid.reset()
         reply_keys = self.write_intents(scenario)
 
         logger = logging.getLogger('test_runs.order_engine')
@@ -931,6 +1088,7 @@ class OrderEngineSuite:
         lock = EngineLock(self.fake_redis, logger)
         event_log = RecordingEventLog()
         event_log.failing_event = scenario.get('failing_event')
+        gates = self.build_gates(scenario, logger)
         engine = OrderEngine(
             self.fake_redis,
             placement,
@@ -940,6 +1098,8 @@ class OrderEngineSuite:
             RESULT_TTL_SECONDS,
             event_log,
             ParentStore(self.fake_redis),
+            None,
+            gates,
         )
         self.fake_redis.round_trips = 0
         exit_code = engine.run(OnePassStop(scenario.get('passes', 3)))
@@ -954,6 +1114,7 @@ class OrderEngineSuite:
             'open_parents': len(self.fake_redis.sets.get('unified:orders:parents:open', set())),
             'stored_parents': len(self.fake_redis.hashes.get('unified:orders:parents', {})),
             'children': sorted(self.fake_redis.hashes.get('unified:orders:children', {})),
+            'gates': gates.counts() if gates is not None else None,
             'unacknowledged': list(delivered),
             'placed': engine.placed,
             'refused': engine.refused,
@@ -1558,9 +1719,11 @@ class OrderEngineSuite:
             list: One recorded result per scenario, in order.
         """
         original_request = requests.Session.request
+        original_uuid4 = uuid.uuid4
         original_excluded = api_configuration['order_excluded_brokers']
         original_selector = api_configuration['order_broker_selector']
         requests.Session.request = self.network.request
+        uuid.uuid4 = self.counting_uuid
         api_configuration['order_excluded_brokers'] = [
             '',
         ]
@@ -1576,6 +1739,7 @@ class OrderEngineSuite:
             results.extend(self.run_wiring_checks())
         finally:
             requests.Session.request = original_request
+            uuid.uuid4 = original_uuid4
             api_configuration['order_excluded_brokers'] = original_excluded
             api_configuration['order_broker_selector'] = original_selector
         return results

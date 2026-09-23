@@ -56,7 +56,11 @@ api_configuration = {
     'order_placement': os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT', 'direct').strip().lower(),
     'order_engine_timeout_seconds': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_TIMEOUT_SECONDS', '5')),
     'order_engine_result_ttl_seconds': int(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_RESULT_TTL_SECONDS', '300')),
-    'order_engine_stale_intent_seconds': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_STALE_INTENT_SECONDS', '30'))
+    'order_engine_stale_intent_seconds': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_STALE_INTENT_SECONDS', '30')),
+    'order_rate_per_second': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_PER_SECOND', '8')),
+    'order_rate_per_broker_per_second': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_PER_BROKER_PER_SECOND', '5')),
+    'order_rate_wait_seconds': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_WAIT_SECONDS', '1')),
+    'order_daily_loss_limit': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_LOSS_LIMIT', '0'))
 }
 
 logging.basicConfig(format='%(asctime)s %(levelname)-8s %(name)s %(message)s', level=logging.INFO, datefmt="%Y-%m-%d %H:%M:%S")

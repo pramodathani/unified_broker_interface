@@ -46,7 +46,15 @@ class SyntheticOrder:
 
     SYNTHETIC_TYPE = None
 
-    def __init__(self, parent, placement, event_log, parent_store, logger):
+    def __init__(
+        self,
+        parent,
+        placement,
+        event_log,
+        parent_store,
+        logger,
+        gates=None,
+    ):
         """Builds the runner for one parent.
 
         Args:
@@ -55,6 +63,7 @@ class SyntheticOrder:
             event_log (SyntheticOrderEventLog): Where transitions are recorded.
             parent_store (ParentStore): The Redis copy of the parent.
             logger (logging.Logger): The logger.
+            gates (RiskGates | None): The limits every order passes, or None when there are none.
 
         Returns:
             None: This method returns nothing.
@@ -64,9 +73,18 @@ class SyntheticOrder:
         self.event_log = event_log
         self.parent_store = parent_store
         self.logger = logger
+        self.gates = gates
 
     @classmethod
-    def started(cls, intent, placement, event_log, parent_store, logger):
+    def started(
+        cls,
+        intent,
+        placement,
+        event_log,
+        parent_store,
+        logger,
+        gates=None,
+    ):
         """Builds the runner and its parent from an intent, without recording anything yet.
 
         Args:
@@ -75,6 +93,7 @@ class SyntheticOrder:
             event_log (SyntheticOrderEventLog): Where transitions are recorded.
             parent_store (ParentStore): The Redis copy of the parent.
             logger (logging.Logger): The logger.
+            gates (RiskGates | None): The limits every order passes.
 
         Returns:
             SyntheticOrder: The runner.
@@ -88,7 +107,7 @@ class SyntheticOrder:
         synthetic = parent.body.get('synthetic')
         if isinstance(synthetic, dict):
             parent.parameters = synthetic
-        return cls(parent, placement, event_log, parent_store, logger)
+        return cls(parent, placement, event_log, parent_store, logger, gates)
 
     def run(self, intent, started_at):
         """Runs the parent from its intent and answers the waiting API worker.
@@ -214,7 +233,9 @@ class SyntheticOrder:
     def place_leg(self, role, order, started_at):
         """Records a leg, sends it, records the answer, and returns what the broker said.
 
-        This is the only way an order reaches a broker. The `leg_requested` row is committed before the request is sent, which is what a crash between the two leaves behind.
+        This is the only way an order reaches a broker. The `leg_requested` row is committed before the request is sent, which is what a crash between the two leaves behind, and the rate budget is taken between the two as well, so a leg that waits for a token has already been written down.
+
+        Taking the token after recording and before sending is deliberate. Taking it first would mean an order refused by the budget had no record at all; taking it after sending would not be a limit.
 
         Args:
             role (str): What the leg is for: `entry`, `stop`, `target`, `slice` or `chase`.
@@ -225,7 +246,7 @@ class SyntheticOrder:
             tuple: The answer's body (dict), its HTTP status (int) and the leg's id (str).
 
         Raises:
-            RefusedRequestError: For an order answered without calling a broker.
+            RefusedRequestError: For an order answered without calling a broker, including one the rate budget would not give a token to.
         """
         prepared = self.placement.prepare(order, self.parent.instrument_id)
         leg_id = self.parent.next_leg_id()
@@ -252,7 +273,11 @@ class SyntheticOrder:
             },
         })
 
+        if self.gates is not None:
+            self.gates.take_rate_token(prepared.broker_name)
         body, status = self.placement.send(prepared, started_at)
+        if self.gates is not None:
+            self.gates.count_sent(prepared.broker_name)
         outcome = body.get('outcome')
         self.record({
             'event': 'leg_answered',

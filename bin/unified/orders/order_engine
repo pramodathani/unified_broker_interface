@@ -25,6 +25,15 @@ its own, and applies an update to the leg it belongs to. An update naming no leg
 dropped, which is most of them. Both streams are read in one call, so a fill and a new order reach the same loop and
 neither starves the other.
 
+**Every order passes the same gates.** The daily loss lockout is checked before the order is even understood, so a
+day that is past its limit costs nothing; it is off unless `UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_LOSS_LIMIT` is
+set, and the engine says so at startup when it is not. The rate budget is a token bucket, global and per broker, taken
+after the leg has been written down and before its request is sent, defaulting well under SEBI's ten orders a second;
+a burst waits for a token rather than being refused, and only a burst outlasting the whole wait is refused. The
+order-to-trade ratio is counted per broker and reported, and is what Stage 8's re-pricing types will consult. These are
+limits on placements: `PUT /api/orders/modify` and `DELETE /api/orders/cancel` still go straight from an API worker to
+a broker and are not counted.
+
 **What it does per order.** One or two Redis round trips and one broker call. The first reads the mapping marker and
 every broker's login and settings; the second reads the instrument's catalogue entry and whatever the broker selector
 queues, and is skipped when this process already holds the entry for the current warm and the selector queues nothing.
@@ -84,7 +93,11 @@ def main():
     from unified_broker_interface.utilities.order_engine.utilities.engine_recovery import EngineRecovery
     from unified_broker_interface.utilities.order_engine.utilities.engine_runner import OrderEngine
     from unified_broker_interface.utilities.order_engine.utilities.order_update_follower import OrderUpdateFollower
+    from unified_broker_interface.utilities.order_engine.utilities.loss_lockout import LossLockout
+    from unified_broker_interface.utilities.order_engine.utilities.order_to_trade_ratio import OrderToTradeRatio
     from unified_broker_interface.utilities.order_engine.utilities.parent_store import ParentStore
+    from unified_broker_interface.utilities.order_engine.utilities.rate_budget import RateBudget
+    from unified_broker_interface.utilities.order_engine.utilities.risk_gates import RiskGates
     from unified_broker_interface.utilities.order_engine.utilities.synthetic_order_event_log import SyntheticOrderEventLog
 
     logger = get_logger("unified.order_engine")
@@ -132,6 +145,21 @@ def main():
     for signal_number in (signal.SIGINT, signal.SIGTERM):
         signal.signal(signal_number, _handle_signal)
 
+    gates = RiskGates(
+        RateBudget(
+            api_configuration["order_rate_per_second"],
+            api_configuration["order_rate_per_broker_per_second"],
+            api_configuration["order_rate_wait_seconds"],
+            logger,
+        ),
+        LossLockout(cache, api_configuration["order_daily_loss_limit"], logger),
+        OrderToTradeRatio(),
+    )
+    if gates.loss_lockout.is_configured():
+        logger.info(f"Refusing new orders once the day is down {api_configuration['order_daily_loss_limit']}.")
+    else:
+        logger.warning("No daily loss limit is set, so nothing stops this engine placing orders on a losing day.")
+
     logger.info("Placing orders from unified:orders:intents:stream.")
     engine = OrderEngine(
         cache,
@@ -142,7 +170,8 @@ def main():
         api_configuration["order_engine_result_ttl_seconds"],
         event_log,
         parent_store,
-        OrderUpdateFollower(parent_store, event_log, logger),
+        OrderUpdateFollower(parent_store, event_log, logger, gates),
+        gates,
     )
     exit_code = engine.run(stop)
     lock.release()

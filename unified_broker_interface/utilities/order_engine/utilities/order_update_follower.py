@@ -34,13 +34,14 @@ class OrderUpdateFollower:
         ignored (int): How many updates belonged to nobody.
     """
 
-    def __init__(self, parent_store, event_log, logger):
+    def __init__(self, parent_store, event_log, logger, gates=None):
         """Builds the follower.
 
         Args:
             parent_store (ParentStore): The Redis copy of the parents.
             event_log (SyntheticOrderEventLog): The record.
             logger (logging.Logger): The logger.
+            gates (RiskGates | None): The limits, which are told when an order trades.
 
         Returns:
             None: This method returns nothing.
@@ -48,6 +49,7 @@ class OrderUpdateFollower:
         self.parent_store = parent_store
         self.event_log = event_log
         self.logger = logger
+        self.gates = gates
         self.followed = 0
         self.ignored = 0
 
@@ -93,6 +95,8 @@ class OrderUpdateFollower:
             return None
 
         self.record(parent, leg, update, changes)
+        if self.gates is not None and changes.get('leg_state') == 'filled':
+            self.gates.count_traded(leg.broker)
         self.followed = self.followed + 1
         return parent
 

@@ -58,6 +58,7 @@ class OrderEngine:
         event_log=None,
         parent_store=None,
         follower=None,
+        gates=None,
     ):
         """Builds the engine.
 
@@ -71,6 +72,7 @@ class OrderEngine:
             event_log (SyntheticOrderEventLog | None): Where transitions are recorded.
             parent_store (ParentStore | None): The Redis copy of the parents.
             follower (OrderUpdateFollower | None): What applies the brokers' order updates to the legs the engine owns.
+            gates (RiskGates | None): The limits every order passes.
 
         Returns:
             None: This method returns nothing.
@@ -84,6 +86,7 @@ class OrderEngine:
         self.event_log = event_log
         self.parent_store = parent_store
         self.follower = follower
+        self.gates = gates
         self.placed = 0
         self.refused = 0
         self.expired = 0
@@ -180,6 +183,8 @@ class OrderEngine:
             f'Stopped. Placed {self.placed}, refused {self.refused}, '
             f'expired {self.expired}, order updates followed {followed}.'
         )
+        if self.gates is not None:
+            self.logger.info(f'Risk gates: {self.gates.counts()}.')
         return exit_code
 
     def read(self, pending):
@@ -293,6 +298,8 @@ class OrderEngine:
                 'intent_id': intent.get('intent_id'),
                 'expired_seconds': round(expired_for, 3),
             }, 409
+        if self.gates is not None:
+            self.gates.check_before_accepting(intent)
         started_at = time.perf_counter()
         synthetic_order = self.synthetic_order(intent)
         try:
@@ -330,6 +337,7 @@ class OrderEngine:
             self.event_log,
             self.parent_store,
             self.logger,
+            self.gates,
         )
 
     def expiry_moment(self, intent):

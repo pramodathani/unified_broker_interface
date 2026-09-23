@@ -46,6 +46,10 @@ UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT=direct
 UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_TIMEOUT_SECONDS=5
 UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_RESULT_TTL_SECONDS=300
 UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_STALE_INTENT_SECONDS=30
+UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_PER_SECOND=8
+UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_PER_BROKER_PER_SECOND=5
+UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_WAIT_SECONDS=1
+UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_LOSS_LIMIT=0
 
 # Optional: the shortest time, in seconds, between ensure_session login attempts for one broker
 UNIFIED_BROKER_INTERFACE_LOGIN_MIN_INTERVAL=300
@@ -60,6 +64,22 @@ are read only in `engine` mode: how long a worker waits for the engine's answer 
 with HTTP 504, how long that answer is kept for a worker that never collected it, and how far past
 its deadline an order may be before the engine records it rather than placing it into a market that
 has moved.
+
+The order engine's risk gates are the last four. `..._ORDER_RATE_PER_SECOND` and
+`..._ORDER_RATE_PER_BROKER_PER_SECOND` are a token bucket across every broker and for any one of them, defaulting well
+under the ten orders a second that SEBI's retail algorithmic trading framework treats as algorithmic trading needing
+registration. An order that finds the bucket empty waits up to `..._ORDER_RATE_WAIT_SECONDS` for a token and is
+refused with HTTP 503 only if none arrives, because a burst within one tenth of a second is ordinary and a short delay
+beats a refusal.
+
+`..._ORDER_DAILY_LOSS_LIMIT` is the most the day may lose, realized plus unrealized across every broker, before the
+engine refuses new orders with HTTP 403. **It is off at zero, which is the default**, and the engine warns at startup
+when it is, because a limit guessed on your behalf would be worse than none: too low it stops a normal day, too high it
+is theatre. Unrealized loss counts, because a position held at a loss has lost the money whether or not it has been
+closed.
+
+These are limits on placements. `PUT /api/orders/modify` and `DELETE /api/orders/cancel` still go straight from an API
+worker to a broker and are not counted against the rate budget.
 
 !!! danger "`.env` holds live trading credentials"
 
