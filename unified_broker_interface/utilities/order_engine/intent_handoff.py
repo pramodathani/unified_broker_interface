@@ -70,13 +70,17 @@ class IntentHandoff:
         try:
             reply = self.cache.blpop(intent.reply_key, timeout=self.timeout_seconds)
         except redis.RedisError as error:
-            raise RefusedRequestError.refusal(
-                f'the order engine was written to but its answer could not be read: {error}',
-                503,
-                intent_id=intent.intent_id,
+            return self.unknown_answer(
+                intent,
+                started_at,
+                f'the order was written for the order engine but its answer could not be read ({error}), so this order may still be placed',
             )
         if reply is None:
-            return self.timed_out_answer(intent, started_at)
+            return self.unknown_answer(
+                intent,
+                started_at,
+                f'the order engine did not answer within {self.timeout_seconds} seconds, so this order may still be placed',
+            )
         return self.engine_answer(intent, reply[1], started_at)
 
     def engine_answer(self, intent, reply_text, started_at):
@@ -134,14 +138,17 @@ class IntentHandoff:
             total_milliseconds = total_milliseconds - broker_milliseconds
         timings['preparation'] = round(total_milliseconds, 3)
 
-    def timed_out_answer(self, intent, started_at):
+    def unknown_answer(self, intent, started_at, status_message):
         """Answers that the outcome is unknown, because the engine may still place the order.
 
-        The engine refuses to place an intent whose deadline has long passed, so the order does not arrive at the broker much later than the caller expected. Between the deadline and that refusal, though, the order may well be sent, and an answer claiming otherwise would be a lie the caller could act on.
+        Every way of failing after the intent has been written ends here: a wait that ran out, and a Redis that stopped answering while the wait was on. In both the order is already on the stream, so it may be placed, and only an answer that says the outcome is unknown is one the caller cannot be misled by. A refusal with HTTP 503 would say the opposite, that nothing happened.
+
+        The engine keeps the other half of this promise. It refuses to place an intent whose deadline passed more than `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_STALE_INTENT_SECONDS` ago, so an order abandoned here cannot arrive at the broker much later than the caller expected.
 
         Args:
             intent (OrderIntent): The intent that was not answered.
             started_at (float): `time.perf_counter()` when the request arrived.
+            status_message (str): Why the outcome is unknown.
 
         Returns:
             tuple: The answer's body (dict) and its HTTP status (int), which is always 504.
@@ -153,7 +160,7 @@ class IntentHandoff:
             'tag': intent.body.get('tag'),
             'outcome': 'unknown',
             'order_id': None,
-            'status_message': f'the order engine did not answer within {self.timeout_seconds} seconds, so this order may still be placed',
+            'status_message': status_message,
             'broker_response': None,
             'skipped': [],
             'intent_id': intent.intent_id,

@@ -31,6 +31,17 @@ test page, and a login check against the live brokers.
     order routes; after an intended change, `--record` rewrites the recording, and the diff of that file is the
     change to review.
 
+    **`order_engine_routes.py`** - `POST /api/orders/place` run the same way but with
+    `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT` set to `engine`, so the route writes the order to
+    `unified:orders:intents:stream` and waits instead of calling a broker. The engine is replaced by an answer
+    seeded onto the reply list before the request is sent, and the stand-in's `blpop` returns None rather than
+    waiting, so the timeout path costs no time. Each scenario keeps the HTTP status, the body, the intents that
+    reached the stream and the Redis round trips, and compares them with
+    `test_runs/fixtures/order_engine_routes.jsonl`.
+
+    It has its own recording on purpose. `--record` rewrites a whole fixture, so putting these scenarios in
+    `order_routes.jsonl` would silently rewrite the recording that proves the direct path never changed.
+
     **`connection_warming.py`** - the broker connection idle limit and connection warming, against a local
     HTTP server on 127.0.0.1 that answers warming pings by resetting the connection, closing it straight after
     answering or a moment later, answering with an error or a cookie, or answering too slowly, and that drops
@@ -58,6 +69,8 @@ test page, and a login check against the live brokers.
     python -m test_runs.connection_warming
     python -m test_runs.order_routes
     python -m test_runs.order_routes --record   # after an intended change
+    python -m test_runs.order_engine_routes
+    python -m test_runs.order_engine_routes --record
     ```
 
 === "Safe - infrastructure"
