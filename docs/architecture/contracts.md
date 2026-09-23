@@ -205,9 +205,45 @@ copies must agree with this page.
     `INITIATED`, `ABORTED` and the two `PARTIALLY FILLED - …` endings, come from its
     [order status types](https://api-docs.indstocks.com/normal_orders/).
 
+## The parent order
+
+Built by `bin/unified/orders/order_engine` and held in the `unified:orders:parents` hash, one entry per
+`parent_order_id`. A parent order is one thing a caller asked for; a leg is one order the engine actually sent to a
+broker on its behalf. A plain order is the degenerate case, one parent with one leg.
+
+| Field | Meaning |
+| --- | --- |
+| `parent_order_id`, `parent_tag` | The parent's id, and the sixteen-character tag a leg the engine invents carries to the broker |
+| `intent_id` | The intent `POST /api/orders/place` wrote for it |
+| `synthetic_type` | The kind of order, `simple` for a plain one |
+| `state` | `received`, `working`, `protecting`, or one of the four endings below |
+| `instrument_id`, `tag` | The instrument every leg is for, and the caller's own tag |
+| `body`, `parameters` | The caller's request verbatim, and what the order type needs beside it |
+| `legs` | One entry per broker order, with `leg_id`, `role`, `state`, `broker`, `broker_order_id`, `tag_sent`, `identifier_sent`, the quantities and prices, and `outcome` |
+| `sequence` | The last transition number recorded, which is what recovery folds duplicates on |
+| `created_at`, `updated_at`, `last_error` | When, and why it last failed |
+
+A parent ends in one of four states, and the difference between them matters to whoever reads it:
+
+| State | Meaning |
+| --- | --- |
+| `completed` | Everything the order was for has happened |
+| `cancelled` | It was stopped deliberately |
+| `rejected` | A broker refused it, or it was refused before anything was sent; nothing is live |
+| `failed` | The engine does not know what the broker has. A person must look. |
+
+A leg runs `planned`, `sending`, `sent`, `acknowledged`, `partially_filled`, then `filled`, `rejected`, `cancelled`
+or `unknown`. `sending` is written and committed *before* the request leaves, so a leg found in it after a restart
+means an order may exist at the broker that the engine never heard the answer to. `unknown` is deliberately neither
+live nor finished.
+
+The hash is a cache. `unified.synthetic_order_events` is the record: every transition is written and committed before
+it is acted on, and the engine rebuilds every unfinished parent from it on start by replaying the rows through the
+same state machine the live path uses.
+
 ## Where the contracts are enforced
 
 Nowhere, structurally - there is no schema validation at runtime. Each script builds its dictionaries with
 every key written out, and its docstring states where each field comes from.
-None of the offline checks tests these dictionaries; they are `python -m test_runs.candle_parse` for the candle parsers, `python -m test_runs.unified_ticks_sessions` for the session calendar, `python -m test_runs.order_routes` for the REST API's order routes, `python -m test_runs.contract_sizes` for the contract size rules and `python -m test_runs.connection_warming` for broker connection warming.
+None of the offline checks tests these dictionaries; they are `python -m test_runs.candle_parse` for the candle parsers, `python -m test_runs.unified_ticks_sessions` for the session calendar, `python -m test_runs.order_routes` for the REST API's order routes, `python -m test_runs.contract_sizes` for the contract size rules, `python -m test_runs.order_engine_routes` and `python -m test_runs.order_engine` for the order engine, and `python -m test_runs.connection_warming` for broker connection warming.
 See [Test runs](../guides/test-runs.md).

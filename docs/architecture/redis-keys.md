@@ -162,6 +162,13 @@ places it and pushes the answer back.
 | `unified:orders:intents:stream` | stream, field `intent` | `POST /api/orders/place` in engine mode | One accepted order awaiting placement, with `intent_id`, `created_at`, `deadline_at`, `reply_key`, `api_worker`, `synthetic_type` and the caller's `body` verbatim; capped at about 10,000 |
 | `unified:orders:intents:result:<intent_id>` | list, `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_RESULT_TTL_SECONDS` TTL | `bin/unified/orders/order_engine` | `{"body", "status"}`, the answer the waiting API worker pops |
 | `unified:orders:engine:lock` | string, 30 s TTL, refreshed while it runs | `bin/unified/orders/order_engine` | The pid of the one engine allowed to run, so two engines cannot both place an order |
+| `unified:orders:parents` | hash, keyed `parent_order_id`, expires 06:00 IST | `bin/unified/orders/order_engine` | Every parent order the engine is running, in the contract above |
+| `unified:orders:parents:open` | set, expires 06:00 IST | `bin/unified/orders/order_engine` | The parents that have not finished, for a quick recovery scan |
+| `unified:orders:children` | hash, keyed `broker:order_id`, expires 06:00 IST | `bin/unified/orders/order_engine` | Which parent a broker's order belongs to, so an order update finds its owner |
+
+The last three are a cache, not the record. `unified.synthetic_order_events` holds every transition, and the engine
+rebuilds all three from it on start, so a flushed Redis costs a slower start rather than a lost position. They expire
+at 06:00 IST like the brokers' merged hashes, which is the same boundary the recovery scan reads from.
 
 The intents are a stream rather than a list so that an engine restart finds the orders written while it
 was down, and so that a backlog can be read with `XINFO GROUPS` like every other queue here. The engine
