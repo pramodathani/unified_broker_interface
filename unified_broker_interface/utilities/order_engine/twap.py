@@ -118,8 +118,49 @@ class Twap(SyntheticOrder):
             )
         return slices, over_minutes
 
+    def slice_weights(self, slices):
+        """What share of the order each slice takes.
+
+        Every slice the same, which is what makes this a time-weighted average price order rather than one of the two types that subclass it. A volume-weighted order weights by when the market is busy; an implementation shortfall order weights the early slices heavier.
+
+        Args:
+            slices (int): How many slices there are.
+
+        Returns:
+            list: One weight per slice. They are relative, so they need not add up to anything in particular.
+        """
+        return [1.0] * slices
+
+    def slice_quantities(self, order, slices):
+        """How many units each slice carries, from the weights.
+
+        Whole units are shared out by the largest-remainder method: each slice gets the whole part of its share, and the units left over go to the slices whose fractions were biggest, earliest first. That is what keeps equal weights giving exactly what an even split gives, so a plain time-weighted order is unaffected by this existing.
+
+        Args:
+            order (PlaceOrderRequest): The validated order.
+            slices (int): How many slices there are.
+
+        Returns:
+            list: The quantity for each slice, adding up to the order's own.
+        """
+        weights = self.slice_weights(slices)
+        total_weight = sum(weights)
+        if total_weight <= 0:
+            weights = [1.0] * slices
+            total_weight = float(slices)
+        exact = [order.quantity * weight / total_weight for weight in weights]
+        quantities = [int(share) for share in exact]
+        left_over = order.quantity - sum(quantities)
+        fractions = sorted(
+            range(slices),
+            key=lambda index: (-(exact[index] - quantities[index]), index),
+        )
+        for position in range(left_over):
+            quantities[fractions[position % slices]] += 1
+        return quantities
+
     def slice_order(self, order, slices, index):
-        """The order for one slice, sharing the quantity as evenly as whole units allow.
+        """The order for one slice.
 
         Args:
             order (PlaceOrderRequest): The validated order.
@@ -129,10 +170,10 @@ class Twap(SyntheticOrder):
         Returns:
             PlaceOrderRequest: The slice.
         """
-        each = order.quantity // slices
-        remainder = order.quantity - each * slices
-        quantity = each + (1 if index < remainder else 0)
-        return order.with_quantities(quantity, 0)
+        return order.with_quantities(
+            self.slice_quantities(order, slices)[index],
+            0,
+        )
 
     def on_clock_tick(self, now):
         """Sends any slice whose time has come.

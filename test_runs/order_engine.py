@@ -2071,7 +2071,15 @@ class OrderEngineSuite:
             },
         })
 
-    def reaction_result(self, name, body, updates, answer=None, gated=False):
+    def reaction_result(
+        self,
+        name,
+        body,
+        updates,
+        answer=None,
+        gated=False,
+        quote=None,
+    ):
         """Places one order through the engine, then feeds it order updates and records what it does.
 
         This is the only place the two halves of the engine run together: the intent loop places the
@@ -2084,12 +2092,15 @@ class OrderEngineSuite:
             updates (list): One order update per step, applied in order.
             answer (dict | None): The stubbed broker answer.
             gated (int | bool): How many requests a second the rate budget allows, or False for no budget.
+            quote (dict | None): A live quote to seed, for a type that reads the book when it is placed.
 
         Returns:
             dict: The recorded result.
         """
         scenario = self.scenarios.intents(name, [body], answer=answer)
         self.fake_redis = self.build_state()
+        if quote is not None:
+            self.seed_quote(quote)
         self.network.reset(answer)
         self.counting_uuid.reset()
         reply_keys = self.write_intents(scenario)
@@ -2279,6 +2290,99 @@ class OrderEngineSuite:
                 gated=3,
             ),
             self.reaction_result(
+                'an_iceberg_shows_the_next_slice_only_once_the_last_one_filled',
+                self.scenarios.bodies.market_order(
+                    dry_run=None,
+                    order_type='LIMIT',
+                    price=1000,
+                    quantity=100,
+                    synthetic={
+                        'type': 'iceberg',
+                        'slice_quantity': 20,
+                    },
+                ),
+                [
+                    self.update('26091500000021', 'OPEN', 12),
+                    self.update('26091500000021', 'COMPLETE', 20),
+                ],
+                accepted,
+            ),
+            self.reaction_result(
+                'an_iceberg_varies_what_it_shows_when_asked_to',
+                self.scenarios.bodies.market_order(
+                    dry_run=None,
+                    order_type='LIMIT',
+                    price=1000,
+                    quantity=100,
+                    synthetic={
+                        'type': 'iceberg',
+                        'slice_quantity': 20,
+                        'randomise_percent': 25,
+                    },
+                ),
+                [
+                    self.update('26091500000021', 'COMPLETE', 20),
+                ],
+                accepted,
+            ),
+            self.reaction_result(
+                'a_grid_replaces_a_filled_rung_with_its_opposite',
+                self.scenarios.bodies.market_order(
+                    dry_run=None,
+                    order_type='LIMIT',
+                    price=1000,
+                    quantity=5,
+                    synthetic={
+                        'type': 'grid',
+                        'levels': 2,
+                        'step_points': 5,
+                        'most_inventory': 20,
+                    },
+                ),
+                [
+                    self.update('26091500000021', 'COMPLETE', 5),
+                ],
+                accepted,
+                quote=self.scenarios.quote(),
+            ),
+            self.reaction_result(
+                'a_grid_stops_adding_to_a_side_once_it_hits_its_cap',
+                self.scenarios.bodies.market_order(
+                    dry_run=None,
+                    order_type='LIMIT',
+                    price=1000,
+                    quantity=5,
+                    synthetic={
+                        'type': 'grid',
+                        'levels': 2,
+                        'step_points': 5,
+                        'most_inventory': 5,
+                    },
+                ),
+                [
+                    self.update('26091500000021', 'COMPLETE', 5),
+                ],
+                accepted,
+                quote=self.scenarios.quote(),
+            ),
+            self.reaction_result(
+                'a_grid_without_an_inventory_cap_is_refused',
+                self.scenarios.bodies.market_order(
+                    dry_run=None,
+                    order_type='LIMIT',
+                    price=1000,
+                    quantity=5,
+                    synthetic={
+                        'type': 'grid',
+                        'levels': 2,
+                        'step_points': 5,
+                    },
+                ),
+                [],
+                accepted,
+                quote=self.scenarios.quote(),
+            ),
+            self.reaction_result(
                 'a_scale_out_arms_one_stop_and_several_targets',
                 self.scenarios.bodies.market_order(
                     dry_run=None,
@@ -2342,7 +2446,15 @@ class OrderEngineSuite:
             ),
         ]
 
-    def clock_result(self, name, request_body, fills, tick_at, answer=None):
+    def clock_result(
+        self,
+        name,
+        request_body,
+        fills,
+        tick_at,
+        answer=None,
+        quote=None,
+    ):
         """Places one timed order, optionally fills it, then gives it a clock tick.
 
         The tick is called with a chosen moment rather than waited for, so a scenario about half past ten costs no time and means the same thing on every run. A second tick follows, to check the type does not act twice on one instruction.
@@ -2353,12 +2465,15 @@ class OrderEngineSuite:
             fills (list): Order updates to apply before the tick.
             tick_at (float): The Unix time to tick at.
             answer (dict | None): The stubbed broker answer.
+            quote (dict | None): A live quote to seed, for a type that reads the book when it is placed.
 
         Returns:
             dict: The recorded result.
         """
         scenario = self.scenarios.intents(name, [request_body], answer=answer)
         self.fake_redis = self.build_state()
+        if quote is not None:
+            self.seed_quote(quote)
         self.network.reset(answer)
         self.counting_uuid.reset()
         reply_keys = self.write_intents(scenario)
@@ -2689,6 +2804,55 @@ class OrderEngineSuite:
                 accepted,
             ),
             self.clock_result(
+                'a_vwap_gives_the_busiest_part_of_the_day_the_biggest_slice',
+                dict(entry, quantity=100, synthetic={
+                    'type': 'vwap',
+                    'slices': 4,
+                    'over_minutes': 240,
+                }),
+                [],
+                frozen + 20000,
+                accepted,
+            ),
+            self.clock_result(
+                'a_vwap_can_be_given_a_profile_of_its_own',
+                dict(entry, quantity=100, synthetic={
+                    'type': 'vwap',
+                    'slices': 4,
+                    'over_minutes': 240,
+                    'volume_profile': [1, 1, 1, 9, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+                }),
+                [],
+                frozen + 20000,
+                accepted,
+            ),
+            self.clock_result(
+                'an_implementation_shortfall_order_front_loads_its_slices',
+                dict(entry, quantity=100, synthetic={
+                    'type': 'implementation_shortfall',
+                    'slices': 4,
+                    'over_minutes': 20,
+                    'urgency': 1,
+                }),
+                [],
+                frozen + 2000,
+                accepted,
+                quote=self.scenarios.quote(),
+            ),
+            self.clock_result(
+                'an_implementation_shortfall_order_at_zero_urgency_is_a_twap',
+                dict(entry, quantity=100, synthetic={
+                    'type': 'implementation_shortfall',
+                    'slices': 4,
+                    'over_minutes': 20,
+                    'urgency': 0,
+                }),
+                [],
+                frozen + 2000,
+                accepted,
+                quote=self.scenarios.quote(),
+            ),
+            self.clock_result(
                 'a_time_that_has_already_passed_is_refused',
                 dict(entry, synthetic={
                     'type': 'scheduled',
@@ -2855,6 +3019,77 @@ class OrderEngineSuite:
                     {'quote': steady, 'at': 0},
                     {'quote': steady, 'at': 6},
                     {'quote': steady, 'at': 12},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_participation_order_takes_a_share_of_what_the_market_trades',
+                dict(entry, quantity=100, synthetic={
+                    'type': 'participation',
+                    'participation_percent': 10,
+                }),
+                [
+                    {'quote': steady | {'volume': 10000}, 'at': 0},
+                    {'quote': steady | {'volume': 10300}, 'at': 1},
+                    {'quote': steady | {'volume': 10300}, 'at': 2},
+                    {'quote': steady | {'volume': 10500}, 'at': 3},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_participation_order_sends_nothing_for_a_share_below_one_unit',
+                dict(entry, quantity=100, synthetic={
+                    'type': 'participation',
+                    'participation_percent': 1,
+                }),
+                [
+                    {'quote': steady | {'volume': 10000}, 'at': 0},
+                    {'quote': steady | {'volume': 10050}, 'at': 1},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_liquidity_seeking_order_strikes_when_the_size_appears',
+                dict(entry, quantity=500, synthetic={
+                    'type': 'liquidity_seeking',
+                    'limit_price': 1000.10,
+                    'minimum_quantity': 300,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {
+                        'quote': self.scenarios.quote(depth={
+                            'buy': [{'price': 1000.00, 'quantity': 100, 'orders': 1}],
+                            'sell': [
+                                {'price': 1000.05, 'quantity': 200, 'orders': 2},
+                                {'price': 1000.10, 'quantity': 250, 'orders': 3},
+                                {'price': 1000.15, 'quantity': 900, 'orders': 4},
+                            ],
+                        }),
+                        'at': 1,
+                    },
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_liquidity_seeking_order_ignores_size_beyond_its_limit',
+                dict(entry, quantity=500, synthetic={
+                    'type': 'liquidity_seeking',
+                    'limit_price': 1000.10,
+                    'minimum_quantity': 300,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {
+                        'quote': self.scenarios.quote(depth={
+                            'buy': [{'price': 1000.00, 'quantity': 100, 'orders': 1}],
+                            'sell': [
+                                {'price': 1000.05, 'quantity': 50, 'orders': 1},
+                                {'price': 1000.15, 'quantity': 900, 'orders': 4},
+                            ],
+                        }),
+                        'at': 1,
+                    },
                 ],
                 accepted,
             ),

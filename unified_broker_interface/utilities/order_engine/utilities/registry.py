@@ -14,15 +14,23 @@ from unified_broker_interface.utilities.order_engine.good_till_time import (
 from unified_broker_interface.utilities.order_engine.discretionary import (
     Discretionary,
 )
+from unified_broker_interface.utilities.order_engine.grid import Grid
 from unified_broker_interface.utilities.order_engine.hidden_stop import (
     HiddenStop,
 )
+from unified_broker_interface.utilities.order_engine.iceberg import Iceberg
 from unified_broker_interface.utilities.order_engine.indicator_triggered import (
     IndicatorTriggered,
+)
+from unified_broker_interface.utilities.order_engine.implementation_shortfall import (
+    ImplementationShortfall,
 )
 from unified_broker_interface.utilities.order_engine.ladder import Ladder
 from unified_broker_interface.utilities.order_engine.limit_if_touched import (
     LimitIfTouched,
+)
+from unified_broker_interface.utilities.order_engine.liquidity_seeking import (
+    LiquiditySeeking,
 )
 from unified_broker_interface.utilities.order_engine.market_if_touched import (
     MarketIfTouched,
@@ -30,6 +38,9 @@ from unified_broker_interface.utilities.order_engine.market_if_touched import (
 from unified_broker_interface.utilities.order_engine.oco import OneCancelsOther
 from unified_broker_interface.utilities.order_engine.oto import OneTriggersOther
 from unified_broker_interface.utilities.order_engine.peg import Peg
+from unified_broker_interface.utilities.order_engine.participation import (
+    Participation,
+)
 from unified_broker_interface.utilities.order_engine.post_only import PostOnly
 from unified_broker_interface.utilities.order_engine.scale_out import ScaleOut
 from unified_broker_interface.utilities.order_engine.scheduled import Scheduled
@@ -42,6 +53,7 @@ from unified_broker_interface.utilities.order_engine.trailing_stop import (
     TrailingStop,
 )
 from unified_broker_interface.utilities.order_engine.twap import Twap
+from unified_broker_interface.utilities.order_engine.vwap import Vwap
 from unified_broker_interface.utilities.order_engine.two_sided_breakout import (
     TwoSidedBreakout,
 )
@@ -70,4 +82,10 @@ SYNTHETIC_ORDER_CLASSES = {
     TrailingEntry.SYNTHETIC_TYPE: TrailingEntry,
     PostOnly.SYNTHETIC_TYPE: PostOnly,
     Discretionary.SYNTHETIC_TYPE: Discretionary,
+    Vwap.SYNTHETIC_TYPE: Vwap,
+    ImplementationShortfall.SYNTHETIC_TYPE: ImplementationShortfall,
+    Participation.SYNTHETIC_TYPE: Participation,
+    LiquiditySeeking.SYNTHETIC_TYPE: LiquiditySeeking,
+    Iceberg.SYNTHETIC_TYPE: Iceberg,
+    Grid.SYNTHETIC_TYPE: Grid,
 }
