@@ -58,6 +58,9 @@ from unified_broker_interface.utilities.broker_orders.utilities.stored_order imp
     StoredOrder,
 )
 from unified_broker_interface.utilities.instrument_cache import InstrumentCache
+from unified_broker_interface.utilities.order_engine.intent_handoff import (
+    IntentHandoff,
+)
 from unified_broker_interface.utilities.unified_documents import read_document
 from utilities.configurations import api_configuration
 from utilities.configurations import get_logger
@@ -78,6 +81,7 @@ class OrdersBlueprint(BaseBlueprint):
         broker_selector (BrokerSelector): The algorithm that orders the brokers an order is offered to, named by `UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_SELECTOR`; the same object `order_placement` holds.
         connection_warmers (list): One `ConnectionWarmer` per broker named in `UNIFIED_BROKER_INTERFACE_API_ORDER_WARM_BROKERS`, each running on its own daemon thread; the same list `order_placement` holds.
         placement_mode (str): `direct` when this worker sends orders to brokers itself, or `engine` when it hands them to the order engine, named by `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT`.
+        order_handoff (IntentHandoff | None): The handoff to the order engine in `engine` mode, and None in `direct` mode, which is what `place_order` branches on.
         instrument_cache (InstrumentCache): This worker's copy of the catalogue data placements and modifications have read under the current warm.
         logger (logging.Logger): The logger for failures that do not change an answer.
     """
@@ -114,6 +118,12 @@ class OrdersBlueprint(BaseBlueprint):
                 f'unknown order placement {self.placement_mode!r}; known modes are {known_modes}'
             )
         self.instrument_cache = InstrumentCache()
+        self.order_handoff = None
+        if self.placement_mode == 'engine':
+            self.order_handoff = IntentHandoff(
+                self.cache,
+                api_configuration['order_engine_timeout_seconds'],
+            )
         self.order_placement.start_connection_warmers()
 
     @authenticated
@@ -223,6 +233,9 @@ class OrdersBlueprint(BaseBlueprint):
         With `dry_run` it answers with the request it would have sent instead of sending it.
         Every failure is answered with an HTTP status rather than raised.
 
+        All of that describes `direct` placement, which is the default. When `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT` is `engine`, the method checks the token and the body itself and then writes the order to `unified:orders:intents:stream` for `bin/unified/orders/order_engine` to place, waiting on `unified:orders:intents:result:<intent_id>` for the answer.
+        The answer carries the same keys with one addition, `intent_id`, and an engine that does not answer in time is reported as outcome `unknown` with HTTP 504, because the order may still be placed.
+
         Returns:
             tuple: The Flask JSON response (flask.Response) and its HTTP status (int), which is 200 when the broker accepted the order or for a dry run, 422 when the broker refused it, 504 when the outcome is unknown, 400 for an order that is not valid, 401 for a missing, wrong or expired access token, 404 for an instrument that is not mapped, and 503 when Redis cannot be read or no broker can take the order.
         """
@@ -271,6 +284,9 @@ class OrdersBlueprint(BaseBlueprint):
             order = PlaceOrderRequest(request.get_json(silent=True))
         except InvalidOrderError as error:
             raise self.refuse(str(error), 400)
+
+        if self.order_handoff is not None:
+            return self.order_handoff.place(request.get_json(silent=True), started_at)
 
         rotation = self.order_placement.rotation()
         if not mapping_date_text:
