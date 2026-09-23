@@ -42,6 +42,15 @@ test page, and a login check against the live brokers.
     It has its own recording on purpose. `--record` rewrites a whole fixture, so putting these scenarios in
     `order_routes.jsonl` would silently rewrite the recording that proves the direct path never changed.
 
+    **`order_engine.py`** - `bin/unified/orders/order_engine` itself, driven through its own classes with
+    scripted intents on the stand-in's stream and every broker call stubbed. Its loop normally blocks for new
+    entries and runs until stopped, so the suite hands it a stop event that allows a fixed number of passes
+    and then reports that it should stop, which makes one deterministic pass over the stream. Each scenario
+    keeps what the engine pushed onto the waiting worker's reply key, every broker request, whether the intent
+    was acknowledged, the engine's counters and the Redis round trips, and compares them with
+    `test_runs/fixtures/order_engine.jsonl`. The single-engine lock is checked directly, because losing it
+    depends on a clock the loop owns.
+
     **`connection_warming.py`** - the broker connection idle limit and connection warming, against a local
     HTTP server on 127.0.0.1 that answers warming pings by resetting the connection, closing it straight after
     answering or a moment later, answering with an error or a cookie, or answering too slowly, and that drops
@@ -71,6 +80,8 @@ test page, and a login check against the live brokers.
     python -m test_runs.order_routes --record   # after an intended change
     python -m test_runs.order_engine_routes
     python -m test_runs.order_engine_routes --record
+    python -m test_runs.order_engine
+    python -m test_runs.order_engine --record
     ```
 
 === "Safe - infrastructure"

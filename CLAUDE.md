@@ -21,6 +21,7 @@ There is no `pyproject.toml`, no build step and no pytest suite. The project roo
 | Offline session calendar tests | `python -m test_runs.unified_ticks_sessions` |
 | Offline order route tests | `python -m test_runs.order_routes` (`--record` rewrites `test_runs/fixtures/order_routes.jsonl` after an intended change) |
 | Offline order engine route tests | `python -m test_runs.order_engine_routes` (engine placement mode; its own fixture, because `--record` rewrites a whole file) |
+| Offline order engine tests | `python -m test_runs.order_engine` (the daemon itself, against scripted intents and stubbed brokers) |
 | Offline contract size rule tests | `python -m test_runs.contract_sizes` |
 | Offline candle cache tests | `python -m test_runs.price_cache` |
 | Decide a date's currency and commodity contract sizes | `python -m stock_brokers.instruments.mapping.utilities.contract_sizes --date 2026-09-15` (the daily mapping run does this itself) |
@@ -30,6 +31,7 @@ There is no `pyproject.toml`, no build step and no pytest suite. The project roo
 | Apply price history DDL | `python -m stock_brokers.instruments.historical.utilities.sql.apply_ddl` |
 | Apply unified mapping DDL | `python -m stock_brokers.instruments.mapping.utilities.sql.apply_ddl` |
 | Run the REST API | `bin/rest-api` (gunicorn on 127.0.0.1:8080), or `bin/rest-api --dev` for Flask's development server |
+| Run the order engine | `bin/unified/orders/order_engine` (only with `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT=engine`; run one) |
 | Check every systemd unit and start the ones that are down | `bin/check-services` (`--check-only` to report without starting) |
 | Wait until Redis has finished loading its dataset | `bin/wait-for-redis` (`--timeout-seconds` to wait other than five minutes) |
 | REST API test page | `bin/rest-api-app` (Streamlit on port 8501; start the API first) |
