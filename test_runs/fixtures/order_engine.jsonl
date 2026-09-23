@@ -13,3 +13,8 @@
 {"held": true, "name": "the_holder_can_refresh_the_lock"}
 {"held": false, "name": "an_engine_that_lost_the_lock_stops"}
 {"holder": null, "name": "releasing_the_lock_removes_it"}
+{"filled_quantity": 10, "legs": [{"answered_at": "2026-09-23T10:00:02+00:00", "average_price": 999.75, "broker": "flattrade", "broker_order_id": "26091500000021", "exchange_order_id": null, "filled_quantity": 10, "identifier_sent": "RELIANCE-EQ", "leg_id": "11111111-2222-4333-8444-555555555555:1", "order_type": null, "outcome": "accepted", "price": 1000, "product": null, "quantity": 10, "requested_at": "2026-09-23T10:00:01+00:00", "role": "entry", "state": "filled", "status_message": null, "tag_sent": "callerTag", "transaction_type": null, "trigger_price": null, "validity": null}], "name": "a_plain_order_replays_to_completed", "parent_tag": "1111111122224333", "sequence": 6, "state": "completed", "tag": "callerTag", "terminal": true}
+{"legs": 1, "name": "a_transition_recorded_twice_changes_nothing", "same_as_once": true, "sequence": 6}
+{"leg_has_broker_order_id": false, "leg_is_finished": false, "leg_is_live": false, "leg_states": ["sending"], "name": "a_crash_after_requesting_leaves_the_leg_in_sending", "state": "received", "terminal": false}
+{"legs": 1, "name": "a_parent_survives_the_redis_round_trip", "same_document": true, "state": "completed"}
+{"completed_to_anything": false, "name": "the_state_machine_refuses_a_change_it_does_not_allow", "next_leg_id": "11111111-2222-4333-8444-555555555555:1", "next_sequence": 1, "received_to_completed": false, "received_to_protecting": false, "received_to_working": true}

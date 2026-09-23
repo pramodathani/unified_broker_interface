@@ -35,6 +35,7 @@ from unified_broker_interface.utilities.order_engine.utilities.intent_handoff im
     INTENT_STREAM_KEY,
 )
 from unified_broker_interface.utilities.order_engine.utilities.order_intent import OrderIntent
+from unified_broker_interface.utilities.order_engine.utilities.parent_order import ParentOrder
 from utilities.configurations import api_configuration
 
 FIXTURE_PATH = (
@@ -659,6 +660,141 @@ class OrderEngineSuite:
         })
         return results
 
+    def parent_events(self):
+        """The transitions a plain order records, from received to completed.
+
+        Returns:
+            list: The events, oldest first.
+        """
+        parent_order_id = '11111111-2222-4333-8444-555555555555'
+        leg_id = f'{parent_order_id}:1'
+        return [
+            {
+                'time': '2026-09-23T10:00:00+00:00',
+                'parent_order_id': parent_order_id,
+                'sequence': 1,
+                'event': 'parent_received',
+                'synthetic_type': 'simple',
+                'parent_state': 'received',
+                'intent_id': '66666666-7777-4888-8999-000000000000',
+                'instrument_id': '11111111-1111-5111-8111-000000000001',
+                'detail': {
+                    'body': {
+                        'quantity': 10,
+                        'tag': 'callerTag',
+                    },
+                },
+            },
+            {
+                'time': '2026-09-23T10:00:01+00:00',
+                'parent_order_id': parent_order_id,
+                'sequence': 2,
+                'event': 'leg_requested',
+                'leg_id': leg_id,
+                'leg_role': 'entry',
+                'leg_state': 'sending',
+                'broker': 'flattrade',
+                'tag_sent': 'callerTag',
+                'identifier_sent': 'RELIANCE-EQ',
+                'quantity': 10,
+                'price': 1000,
+            },
+            {
+                'time': '2026-09-23T10:00:02+00:00',
+                'parent_order_id': parent_order_id,
+                'sequence': 3,
+                'event': 'leg_answered',
+                'leg_id': leg_id,
+                'leg_state': 'acknowledged',
+                'broker_order_id': '26091500000021',
+                'outcome': 'accepted',
+            },
+            {
+                'time': '2026-09-23T10:00:03+00:00',
+                'parent_order_id': parent_order_id,
+                'sequence': 4,
+                'event': 'parent_state_changed',
+                'parent_state': 'working',
+            },
+            {
+                'time': '2026-09-23T10:00:09+00:00',
+                'parent_order_id': parent_order_id,
+                'sequence': 5,
+                'event': 'leg_update',
+                'leg_id': leg_id,
+                'leg_state': 'filled',
+                'filled_quantity': 10,
+                'average_price': 999.75,
+            },
+            {
+                'time': '2026-09-23T10:00:09+00:00',
+                'parent_order_id': parent_order_id,
+                'sequence': 6,
+                'event': 'parent_state_changed',
+                'parent_state': 'completed',
+            },
+        ]
+
+    def run_parent_checks(self):
+        """Replays recorded transitions through the state machine, which does no I/O at all.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        results = []
+        events = self.parent_events()
+
+        parent = ParentOrder.from_events(events)
+        results.append({
+            'name': 'a_plain_order_replays_to_completed',
+            'state': parent.state,
+            'terminal': parent.is_terminal(),
+            'sequence': parent.sequence,
+            'tag': parent.tag,
+            'parent_tag': parent.parent_tag,
+            'legs': [leg.document() for leg in parent.legs],
+            'filled_quantity': parent.filled_quantity(),
+        })
+
+        replayed_twice = ParentOrder.from_events(events + events)
+        results.append({
+            'name': 'a_transition_recorded_twice_changes_nothing',
+            'same_as_once': replayed_twice.document() == parent.document(),
+            'legs': len(replayed_twice.legs),
+            'sequence': replayed_twice.sequence,
+        })
+
+        halfway = ParentOrder.from_events(events[:2])
+        results.append({
+            'name': 'a_crash_after_requesting_leaves_the_leg_in_sending',
+            'state': halfway.state,
+            'terminal': halfway.is_terminal(),
+            'leg_states': [leg.state for leg in halfway.legs],
+            'leg_has_broker_order_id': bool(halfway.legs[0].broker_order_id),
+            'leg_is_live': halfway.legs[0].is_live(),
+            'leg_is_finished': halfway.legs[0].is_finished(),
+        })
+
+        rebuilt = ParentOrder.from_document(parent.document())
+        results.append({
+            'name': 'a_parent_survives_the_redis_round_trip',
+            'same_document': rebuilt.document() == parent.document(),
+            'state': rebuilt.state,
+            'legs': len(rebuilt.legs),
+        })
+
+        fresh = ParentOrder('11111111-2222-4333-8444-555555555555')
+        results.append({
+            'name': 'the_state_machine_refuses_a_change_it_does_not_allow',
+            'received_to_working': fresh.can_change_to('working'),
+            'received_to_protecting': fresh.can_change_to('protecting'),
+            'received_to_completed': fresh.can_change_to('completed'),
+            'completed_to_anything': ParentOrder.from_events(events).can_change_to('working'),
+            'next_sequence': fresh.next_sequence(),
+            'next_leg_id': fresh.next_leg_id(),
+        })
+        return results
+
     def run_every_scenario(self):
         """Runs every scenario with the broker network replaced.
 
@@ -678,6 +814,7 @@ class OrderEngineSuite:
             for scenario in OrderEngineScenarios().build():
                 results.append(self.run_scenario(scenario))
             results.extend(self.run_lock_checks())
+            results.extend(self.run_parent_checks())
         finally:
             requests.Session.request = original_request
             api_configuration['order_excluded_brokers'] = original_excluded
