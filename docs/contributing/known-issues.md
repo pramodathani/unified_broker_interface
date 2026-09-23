@@ -200,6 +200,14 @@ or the protocol, and the table in
 
 ## Broker limits
 
+**The daily order count cannot see orders the engine did not send.** `DailyOrderCount` counts each broker's
+placements in `unified:orders:daily_count:<broker>`, but Zerodha's cap of 3,000 covers every platform on the account.
+An order placed from Kite's app or website, a direct-mode API worker, or `PUT /api/orders/modify` and
+`DELETE /api/orders/cancel` spends the broker's cap without appearing in the count. So the count is a floor on what the
+broker has seen, and the configured cap should be set below the broker's real one by whatever is placed outside the
+engine. The published caps themselves were read from forum posts and documentation on 2026-09-23 and have not been
+confirmed with any broker.
+
 **Zerodha's quote feed runs past Kite's documented websocket limits, and has not been tried live.** On
 2026-09-16 `bin/zerodha/instruments/websocket_quotes` was changed to subscribe to every instrument in today's
 `zerodha:instruments:master` - 112,657 that day - split equally across 24 websockets, one part of 4,695 and

@@ -37,6 +37,12 @@ OUTCOME_PARENT_STATES = {
     'rejected': 'rejected',
     'unknown': 'failed',
 }
+EXIT_ROLES = (
+    'stop',
+    'target',
+    'close',
+    'backstop',
+)
 
 
 class SyntheticOrder:
@@ -51,6 +57,7 @@ class SyntheticOrder:
         WANTS_CLOCK (bool): Whether this type is waiting for a time as well as for a fill, and so wants a tick about once a second.
         WANTS_PRICES (bool): Whether this type is watching the market, and so wants the live quote about once a second.
         CARRIES_OVERNIGHT (bool): Whether a parent of this type outlives the trading day, so that recovery reads its events from further back than this morning.
+        CLOSES_POSITIONS (bool): Whether every leg this type places closes a position, whatever the leg's role is called, so that it may use the part of a broker's daily cap kept for exits.
         parent (ParentOrder): The parent being run.
         placement (EnginePlacement): What reads Redis, chooses a broker and sends.
         event_log (SyntheticOrderEventLog): Where transitions are recorded.
@@ -62,6 +69,7 @@ class SyntheticOrder:
     WANTS_CLOCK = False
     WANTS_PRICES = False
     CARRIES_OVERNIGHT = False
+    CLOSES_POSITIONS = False
 
     def __init__(
         self,
@@ -741,7 +749,7 @@ class SyntheticOrder:
             tuple: The answer's body (dict), its HTTP status (int) and the leg's id (str).
 
         Raises:
-            RefusedRequestError: For an order answered without calling a broker, including one the rate budget would not give a token to.
+            RefusedRequestError: For an order answered without calling a broker, including one the rate budget would not give a token to, and one refused because its broker is too close to the day's order cap.
         """
         instrument_id = instrument_id or self.parent.instrument_id
         prepared = self.placement.prepare(
@@ -749,6 +757,11 @@ class SyntheticOrder:
             instrument_id,
             broker_name,
         )
+        if self.gates is not None:
+            self.gates.refuse_if_capped(
+                prepared.broker_name,
+                self.closes_position(role),
+            )
         if started_at is None:
             # A leg placed in reaction to a fill has no request waiting on it, so there is no
             # arrival to measure from. Measuring from here reports the engine's own work on this
@@ -799,6 +812,23 @@ class SyntheticOrder:
             },
         })
         return body, status, leg_id
+
+    def closes_position(self, role):
+        """Whether a leg closes a position, and so may use the part of a broker's daily cap kept for exits.
+
+        A leg closes a position when its role says so, when its type only ever places exits, or when the caller said so with `closes_position` in the order's parameters. The last is how a plain order sent to get out of a position is told apart from one sent to get into it, which nothing else can tell.
+
+        Args:
+            role (str): The leg's role.
+
+        Returns:
+            bool: True when the leg closes a position.
+        """
+        if role in EXIT_ROLES:
+            return True
+        if self.CLOSES_POSITIONS:
+            return True
+        return self.parent.parameters.get('closes_position') is True
 
     def save(self):
         """Writes the parent to Redis, which is a cache and may fail without changing an answer.

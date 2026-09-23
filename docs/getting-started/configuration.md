@@ -52,6 +52,8 @@ UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_WAIT_SECONDS=1
 UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_LOSS_LIMIT=0
 UNIFIED_BROKER_INTERFACE_API_ORDER_FLATTEN_WAIT_SECONDS=5
 UNIFIED_BROKER_INTERFACE_API_ORDER_REPRICE_MINIMUM_SECONDS=1
+UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_CAPS=
+UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_CAP_EXIT_RESERVE=0.05
 
 # Optional: the shortest time, in seconds, between ensure_session login attempts for one broker
 UNIFIED_BROKER_INTERFACE_LOGIN_MIN_INTERVAL=300
@@ -67,7 +69,7 @@ with HTTP 504, how long that answer is kept for a worker that never collected it
 its deadline an order may be before the engine records it rather than placing it into a market that
 has moved.
 
-The order engine's risk gates are the last five. `..._ORDER_RATE_PER_SECOND` and
+The order engine's risk gates are the last seven. `..._ORDER_RATE_PER_SECOND` and
 `..._ORDER_RATE_PER_BROKER_PER_SECOND` are a token bucket across every broker and for any one of them, defaulting well
 under the ten orders a second that SEBI's retail algorithmic trading framework treats as algorithmic trading needing
 registration. An order that finds the bucket empty waits up to `..._ORDER_RATE_WAIT_SECONDS` for a token and is
@@ -94,6 +96,27 @@ run re-prices.
 A change and a cancel take a token from the rate budget as a placement does, because an exchange counts all three the
 same way. What is still outside it is the REST API's own `PUT /api/orders/modify` and `DELETE /api/orders/cancel`,
 which go straight from a worker to a broker.
+
+`..._ORDER_DAILY_CAPS` names the brokers that refuse orders past a fixed number a day, as `broker=cap` pairs such as
+`zerodha=3000,dhan=7000`. The engine counts every order it sends to each broker in `unified:orders:daily_count:<broker>`,
+which expires at 06:00 IST, and **it is off when empty, which is the default**. A broker not named is counted but
+never refused. Only placements are counted, rejected ones included, because that is what Zerodha's published cap
+counts.
+
+`..._ORDER_DAILY_CAP_EXIT_RESERVE` is the share of each cap kept for orders that close a position. Once a broker is
+inside it, new entries to that broker are refused with HTTP 429 and only exits are sent, up to the cap itself. The
+reserve exists because Zerodha, once its cap is reached, refuses even the order that would close a position. A leg
+counts as an exit when its role is a stop, a target, a close or a backstop, when its type is a hidden stop, or when the
+caller sets `closes_position: true` in the order's `synthetic` object, which is how a plain order sent to get out of a
+position says so. The count only sees orders this engine sent: orders placed from a broker's own app or website, and
+the REST API's direct modifies and cancels, are not in it.
+
+| Broker | Published daily cap | Source, as found on 2026-09-23 |
+| --- | --- | --- |
+| Zerodha | 3,000 a day across every platform, rejected orders included; Kite's documentation says 5,000 | Kite Connect forum and documentation; the current figure is unconfirmed |
+| Dhan | 7,000 a day | DhanHQ API documentation |
+| Shoonya | Says there is no daily limit | Shoonya API FAQ |
+| The other seven | None published | Their API documentation |
 
 `..._ORDER_FLATTEN_WAIT_SECONDS` is how long `POST /api/orders/flatten` re-reads the brokers' order books waiting for
 its cancels to be confirmed before it closes any position. Waiting matters more than being quick: a protective order

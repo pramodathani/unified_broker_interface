@@ -32,6 +32,10 @@ from unified_broker_interface.utilities.order_engine.utilities import moments
 from unified_broker_interface.utilities.order_engine.utilities.clock_ticker import (
     ClockTicker,
 )
+from unified_broker_interface.utilities.order_engine.utilities.daily_order_count import (
+    COUNT_KEY_PREFIX,
+    DailyOrderCount,
+)
 from unified_broker_interface.utilities.order_engine.utilities.engine_lock import (
     EngineLock,
 )
@@ -1036,6 +1040,78 @@ class OrderEngineScenarios:
                 ),
             ),
             self.intents(
+                'an_entry_inside_the_exit_reserve_of_the_daily_cap_is_refused',
+                [
+                    order,
+                ],
+                gated=True,
+                daily_caps={
+                    'flattrade': 100,
+                },
+                daily_sent={
+                    'flattrade': 95,
+                },
+            ),
+            self.intents(
+                'an_order_that_closes_a_position_may_use_the_exit_reserve',
+                [
+                    self.bodies.market_order(
+                        dry_run=None,
+                        synthetic={
+                            'type': 'simple',
+                            'closes_position': True,
+                        },
+                    ),
+                ],
+                gated=True,
+                daily_caps={
+                    'flattrade': 100,
+                },
+                daily_sent={
+                    'flattrade': 95,
+                },
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
+                'an_exit_at_the_full_daily_cap_is_refused',
+                [
+                    self.bodies.market_order(
+                        dry_run=None,
+                        synthetic={
+                            'type': 'simple',
+                            'closes_position': True,
+                        },
+                    ),
+                ],
+                gated=True,
+                daily_caps={
+                    'flattrade': 100,
+                },
+                daily_sent={
+                    'flattrade': 100,
+                },
+            ),
+            self.intents(
+                'a_broker_without_a_daily_cap_is_counted_and_never_refused',
+                [
+                    order,
+                ],
+                gated=True,
+                daily_caps={
+                    'zerodha': 10,
+                },
+                daily_sent={
+                    'flattrade': 5000,
+                },
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
                 'an_entry_that_is_not_an_intent_is_acknowledged',
                 [
                     order,
@@ -1510,7 +1586,40 @@ class OrderEngineSuite:
                 logger,
             ),
             OrderToTradeRatio(),
+            None,
+            self.build_daily_count(scenario, logger),
         )
+
+    def build_daily_count(self, scenario, logger):
+        """The daily order count for one scenario, with the day's counts so far written to Redis, or None when it caps nothing.
+
+        Args:
+            scenario (dict): The scenario.
+            logger (logging.Logger): The logger.
+
+        Returns:
+            DailyOrderCount | None: The count.
+        """
+        caps = scenario.get('daily_caps')
+        if caps is None:
+            return None
+        daily_count = DailyOrderCount(self.fake_redis, caps, 0.05, logger)
+        sent = scenario.get('daily_sent') or {}
+        for broker_name, count in sent.items():
+            self.fake_redis.strings[daily_count.key(broker_name)] = str(count)
+        return daily_count
+
+    def shown_daily_counts(self):
+        """Every broker's daily order count in the stand-in Redis.
+
+        Returns:
+            dict: Each count (str), by key.
+        """
+        shown = {}
+        for key in sorted(self.fake_redis.strings):
+            if key.startswith(COUNT_KEY_PREFIX):
+                shown[key] = self.fake_redis.strings[key]
+        return shown
 
     def run_scenario(self, scenario):
         """Runs one scenario against a fresh stand-in and a fresh engine.
@@ -1567,7 +1676,7 @@ class OrderEngineSuite:
         exit_code = engine.run(OnePassStop(scenario.get('passes', 3)))
 
         delivered = self.fake_redis.pending.get(INTENT_STREAM_KEY, [])
-        return {
+        result = {
             'name': scenario['name'],
             'exit_code': exit_code,
             'replies': self.shown_replies(reply_keys),
@@ -1587,6 +1696,9 @@ class OrderEngineSuite:
                 for reply_key in reply_keys
             ],
         }
+        if scenario.get('daily_caps') is not None:
+            result['daily_counts'] = self.shown_daily_counts()
+        return result
 
     def run_lock_checks(self):
         """Checks the single-engine lock directly, since losing it depends on a clock the loop owns.
