@@ -239,41 +239,6 @@ class OrdersBlueprint(BaseBlueprint):
         if expires_at is None or expires_at <= datetime.datetime.now():
             raise self.refuse('Access token has expired', 401)
 
-    def decode_login(self, login_text):
-        """Decodes a broker's login from Redis.
-
-        Args:
-            login_text (str | None): The login as Redis holds it.
-
-        Returns:
-            object: The decoded login, or None when there is none or it is not JSON.
-        """
-        if not login_text:
-            return None
-        try:
-            return json.loads(login_text)
-        except ValueError:
-            return None
-
-    def decode_settings(self, settings_text):
-        """Decodes a broker's settings from Redis.
-
-        Args:
-            settings_text (str | None): The settings as Redis holds them.
-
-        Returns:
-            dict: The decoded settings, or an empty dictionary when there are none or they are not a JSON object.
-        """
-        if not settings_text:
-            return {}
-        try:
-            settings = json.loads(settings_text)
-        except ValueError:
-            return {}
-        if not isinstance(settings, dict):
-            return {}
-        return settings
-
     def redis_unreadable(self, error):
         """Builds the refusal for a Redis read that failed.
 
@@ -400,7 +365,7 @@ class OrdersBlueprint(BaseBlueprint):
             contract_size_text = kept_texts[2]
             selector_replies = second_replies
 
-        instrument = self.decode_instrument(
+        instrument = Instrument.decoded(
             instrument_id,
             identity_text,
             handles_text,
@@ -437,8 +402,8 @@ class OrdersBlueprint(BaseBlueprint):
         broker_name = broker_orders.BROKER_NAME
         position = self.broker_names.index(broker_name)
         handle = instrument.handles.get(broker_name)
-        login = self.decode_login(login_texts[position])
-        settings = self.decode_settings(settings_texts[position])
+        login = broker_orders.decode_login(login_texts[position])
+        settings = broker_orders.decode_settings(settings_texts[position])
 
         size_problem = None
         if instrument.is_securities_market():
@@ -549,51 +514,6 @@ class OrdersBlueprint(BaseBlueprint):
             raise self.refuse(message, 400)
         return str(members[0]).rsplit('|', 1)[1]
 
-    def decode_instrument(
-        self,
-        instrument_id,
-        identity_text,
-        handles_text,
-        contract_size_text,
-    ):
-        """Decodes the instrument from its identity, order handles and contract size decision in Redis.
-
-        A contract size decision that is missing or not a JSON object is decoded as None, which leaves a currency or commodity derivative untradeable rather than refusing an order on any other instrument.
-
-        Args:
-            instrument_id (str): The instrument id.
-            identity_text (str | None): The identity as Redis holds it.
-            handles_text (str | None): The order handles as Redis holds them.
-            contract_size_text (str | None): The contract size decision as Redis holds it.
-
-        Returns:
-            Instrument: The instrument, which may not be tradeable.
-
-        Raises:
-            RefusedRequestError: With HTTP 404 when either is missing or not a JSON object.
-        """
-        identity = None
-        handles = None
-        try:
-            if identity_text:
-                identity = json.loads(identity_text)
-            if handles_text:
-                handles = json.loads(handles_text)
-        except ValueError:
-            identity = None
-            handles = None
-        if not isinstance(identity, dict) or not isinstance(handles, dict):
-            raise self.refuse('the instrument is not mapped', 404)
-        contract_size = None
-        if contract_size_text:
-            try:
-                contract_size = json.loads(contract_size_text)
-            except ValueError:
-                contract_size = None
-        if not isinstance(contract_size, dict):
-            contract_size = None
-        return Instrument(instrument_id, identity, handles, contract_size)
-
     def check_contract_size(self, order, instrument):
         """Checks a currency or commodity order against the contract size decided this morning.
 
@@ -680,8 +600,8 @@ class OrdersBlueprint(BaseBlueprint):
                 order,
                 instrument,
                 instrument.handles.get(broker_name),
-                self.decode_login(login_texts[position]),
-                self.decode_settings(settings_texts[position]),
+                broker_orders.decode_login(login_texts[position]),
+                broker_orders.decode_settings(settings_texts[position]),
             )
             if reason is None:
                 return broker_orders, skipped
@@ -786,8 +706,8 @@ class OrdersBlueprint(BaseBlueprint):
                 order_id=order_id,
             )
         position = self.broker_names.index(broker_name)
-        login = self.decode_login(login_texts[position])
-        settings = self.decode_settings(settings_texts[position])
+        login = broker_orders.decode_login(login_texts[position])
+        settings = broker_orders.decode_settings(settings_texts[position])
         problem = broker_orders.modify_problem(login, settings)
         if problem is not None:
             raise self.refuse(
@@ -1014,7 +934,7 @@ class OrdersBlueprint(BaseBlueprint):
             if texts is None:
                 continue
             try:
-                instrument = self.decode_instrument(
+                instrument = Instrument.decoded(
                     candidate_id,
                     texts[0],
                     texts[1],
@@ -1239,8 +1159,8 @@ class OrdersBlueprint(BaseBlueprint):
 
         broker_orders = self.broker_orders[broker_name]
         position = self.broker_names.index(broker_name)
-        login = self.decode_login(login_texts[position])
-        settings = self.decode_settings(settings_texts[position])
+        login = broker_orders.decode_login(login_texts[position])
+        settings = broker_orders.decode_settings(settings_texts[position])
         problem = broker_orders.cancel_problem(login, settings)
         if problem is not None:
             raise self.refuse(

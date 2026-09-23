@@ -1,6 +1,7 @@
 """What every broker's order class shares: whether it can take, modify or cancel an order, the one HTTP call, and the reading of error answers."""
 
 import decimal
+import json
 import re
 import threading
 import time
@@ -28,7 +29,7 @@ from unified_broker_interface.utilities.broker_orders.utilities.stored_order imp
 class BrokerOrders:
     """How one broker takes, modifies and cancels orders.
 
-    One instance is built per broker per gunicorn worker, when the blueprint is built. Its constructor opens no connection, and the class reads no store: the blueprint reads Redis and passes the decoded login, settings, handle and stored order in.
+    One instance is built per broker per gunicorn worker, and one per order engine. Its constructor opens no connection, and the class reads no store: the caller reads Redis and passes the login, settings, handle and stored order in, decoding the login and the settings with the two methods below.
 
     A subclass sets the class attributes and implements `build_place_request`, `build_cancel_request` and `read_order_id`, lists `MODIFIABLE_FIELDS` and implements `build_modify_request` when it modifies orders, and overrides the other methods only where its broker differs.
 
@@ -144,6 +145,41 @@ class BrokerOrders:
             if not settings.get(settings_field):
                 missing.append(settings_field)
         return missing
+
+    def decode_login(self, login_text):
+        """Decodes this broker's login from Redis.
+
+        Args:
+            login_text (str | None): The login as Redis holds it.
+
+        Returns:
+            object: The decoded login, or None when there is none or it is not JSON.
+        """
+        if not login_text:
+            return None
+        try:
+            return json.loads(login_text)
+        except ValueError:
+            return None
+
+    def decode_settings(self, settings_text):
+        """Decodes this broker's settings from Redis.
+
+        Args:
+            settings_text (str | None): The settings as Redis holds them.
+
+        Returns:
+            dict: The decoded settings, or an empty dictionary when there are none or they are not a JSON object.
+        """
+        if not settings_text:
+            return {}
+        try:
+            settings = json.loads(settings_text)
+        except ValueError:
+            return {}
+        if not isinstance(settings, dict):
+            return {}
+        return settings
 
     def place_skip_reason(self, order, instrument, handle, login, settings):
         """Decides whether the broker can take an order, before anything is built.
