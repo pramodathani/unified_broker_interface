@@ -50,6 +50,7 @@ come from the environment. All seven variables are optional, and each is read on
 | `POST` | `/api/orders/place` | `access-token` header | Places one order at the broker the configured selector chooses, see [Placing an order](#placing-an-order) |
 | `PUT` | `/api/orders/modify` | `access-token` header | Changes one open order at the broker that holds it, see [Modifying an order](#modifying-an-order) |
 | `DELETE` | `/api/orders/cancel` | `access-token` header | Cancels one order at the broker that holds it, see [Cancelling an order](#cancelling-an-order) |
+| `POST` | `/api/orders/flatten` | `access-token` header | Cancels every open order, waits, then closes every position, see [Flattening everything](#flattening-everything) |
 
 Errors come back as `{"error": "…"}`. A refused token is `401`, with a message saying whether it
 was missing, not the token in force, or expired. A detail collection with nothing in it is `404`.
@@ -1166,3 +1167,235 @@ place of the outcome.
 | `404` | | No broker's order book in Redis holds the order id |
 | `409` | | The order is already `COMPLETE`, `CANCELLED`, `REJECTED` or `EXPIRED`, or two brokers hold the id |
 | `503` | | Redis cannot be read, or it holds no login or settings for the broker, or no segment for a Groww order |
+
+## Flattening everything
+
+`POST /api/orders/flatten` is the panic button. It cancels every open order at every broker, waits until the brokers'
+own order books agree those orders are gone, and only then closes every position that is not flat.
+
+!!! danger "This sends real orders that close real positions"
+
+    The body must carry `confirm` set to `FLATTEN`, which exists so that a stray request cannot unwind an account.
+    Send it with `dry_run` first to see what it would do.
+
+```bash
+curl -s -X POST localhost:8080/api/orders/flatten -H "access-token: $TOKEN" -H 'Content-Type: application/json' \
+    -d '{"confirm": "FLATTEN", "dry_run": true}'
+```
+
+**The order of the two halves is the whole point.** A stop or a target still resting at the exchange when its position
+is closed will fill afterwards and open a new position in the opposite direction, turning an attempt to go flat into a
+trade nobody chose. So the cancels go first, the order books are re-read until they confirm, and the closes follow.
+`UNIFIED_BROKER_INTERFACE_API_ORDER_FLATTEN_WAIT_SECONDS` bounds that wait.
+
+Positions come from each broker's own `<broker>:portfolio:positions` rather than from the merged document
+[`GET /api/portfolio/positions`](#positions) answers, because a closing order has to go to the broker that actually
+holds the position and the merged document deliberately combines them. Only `NET` positions are closed; a broker that
+reports both bases would otherwise be traded twice.
+
+Nothing is retried, because a panic button that retries is a panic button that takes longer to finish. The answer says
+what was cancelled, what is `still_open_after_waiting`, what was closed and whether the account is `flat`.
+
+| Status | Meaning |
+| --- | --- |
+| `200` | Everything asked for was done, or a dry run |
+| `207` | Some part was not: a cancel never confirmed, a position whose broker token names no single instrument, or a closing order the broker refused, where the request went out but the position is still there |
+| `400` | The body did not carry `confirm` set to `FLATTEN` |
+| `401` | The access token is missing, wrong or expired |
+| `503` | Redis cannot be read |
+
+## Price and quantity references
+
+`POST /api/orders/place` takes two optional fields that say **how to work a number out** rather than stating one. They
+need [the order engine](#flattening-everything), because the number is worked out from the live quote and the positions
+at the moment the order is sent.
+
+```json
+{ "instrument_id": "…", "transaction_type": "BUY", "product": "MIS", "order_type": "LIMIT",
+  "quantity": 100,
+  "price_reference":    { "kind": "offer_level", "level": 2, "buffer_percent": 0.1 },
+  "quantity_reference": { "kind": "reduce_position", "product": "intraday" } }
+```
+
+A priced order may leave out `price` when it carries a `price_reference`, and any order may leave out `quantity` when
+its `quantity_reference` works one out.
+
+### What a price reference can name
+
+| Kind | Resolves to |
+| --- | --- |
+| `absolute` | The `price` in the reference, which is the same as giving `price` |
+| `last` | The quote's `last_price` |
+| `mid` | Halfway between the best bid and the best offer |
+| `vwap` | The quote's `average_price`, which is what this system calls the volume weighted average price; there is no field named `vwap` |
+| `bid_level`, `offer_level` | That side of the depth at `level`, counting the touch as 1, up to 5, which is as deep as the unified quote carries |
+| `marketable` | The touch on the *other* side, which is what an order has to reach to fill now |
+
+Any of them may carry `buffer_percent`, `offset_percent` or `offset_ticks`. An offset always moves the price in the
+direction that makes the order **more** likely to fill, because that is what "the offer plus a tenth of a per cent"
+means; a negative offset improves the price instead.
+
+!!! note "Every resolved price is rounded to the instrument's tick size"
+
+    Towards the passive side, so a resting order rests. A midpoint of a one-tick spread falls exactly between two
+    ticks, and rounding a buy up there would cross the spread and take liquidity when the caller asked to rest. A
+    `marketable` reference rounds the other way, because taking liquidity is what it is for.
+
+    Prices read out of the depth are snapped to the nearest tick first. A quote is built from JSON floats, so a second
+    best offer of 1000.10 arrives as 1000.0999999999999, and rounding *that* towards the passive side would floor it a
+    whole tick to 1000.05 — the wrong level of the book entirely.
+
+### What a quantity reference can name
+
+| Kind | Resolves to |
+| --- | --- |
+| `absolute`, `add_to_position` | The `quantity` given, unchanged |
+| `reduce_position` | The smaller of `quantity` and what is held, and **the side that closes it** |
+| `liquidate_position` | All of what is held, and the side that closes it |
+
+`reduce_position` and `liquidate_position` also decide the side, because closing a long is selling and closing a short
+is buying, and making a caller work that out is the sort of arithmetic that goes wrong under pressure. They read
+[`unified:portfolio:positions`](#positions) and match on the instrument, and on `product` when the reference names one.
+
+A reference is a way of saying *which* number, not a way around the checks. Once resolved, the order is an ordinary one
+and faces every check a caller's own numbers face: the lot size, the tick size, the contract size, and whether a priced
+order carries a price.
+
+| Status | Meaning |
+| --- | --- |
+| `400` | The reference is malformed, names an unknown kind, or the price works out at zero or below |
+| `409` | A `reduce_position` or `liquidate_position` reference found no open position to close |
+| `503` | There is no live quote for the instrument, the depth is not that deep, the positions could not be read, or the brokers do not agree on a tick size |
+
+## Synthetic order types
+
+A body may carry a `synthetic` object naming the kind of order to run. Without one the order is `simple`: one order sent
+to one broker, which is what every caller gets and what every other type is built from.
+
+| Type | What it does |
+| --- | --- |
+| `simple` | One order to one broker |
+| `freeze_slicer` | Splits an order above the exchange's freeze limit into orders that each fit |
+| `ladder` | Places `steps` limit orders evenly spaced between `from_price` and `to_price` |
+| `oto` | Places the order in `then`, sized to what the first one actually filled |
+| `oco` | Rests a stop and a target on a position you already hold; whatever fills reduces the other |
+| `bracket` | An entry that arms a stop and a target once it starts filling |
+| `scheduled` | Holds the order until `at_time`, then places it |
+| `good_till_time` | Places now and cancels whatever is still resting at `until_time` |
+| `time_stop` | Places now, then at `until_time` or after `minutes` cancels the rest and closes what filled |
+| `scale_out` | A bracket with several targets sharing the position, and a stop that shrinks behind them |
+| `two_sided_breakout` | A buy stop above a range and a sell stop below it; the first to fill cancels the other |
+| `twap` | Splits the order into `slices` sent at even intervals over `over_minutes` |
+
+```json
+{ "instrument_id": "…", "transaction_type": "BUY", "product": "NRML", "order_type": "LIMIT",
+  "price": 1000, "quantity": 100,
+  "synthetic": { "type": "ladder", "from_price": 995, "to_price": 1000, "steps": 3 } }
+```
+
+**Every leg of one parent goes to the same broker**, chosen once. Spreading them would look cheaper and would mean the
+position ends up split across brokers, where closing it needs one order per broker and each has its own lot size and
+its own freeze limit.
+
+### The linked types, and the double fill
+
+`oto`, `oco` and `bracket` react to fills, so they need the engine running for as long as they are alive. They take
+their exit prices from the `synthetic` object:
+
+```json
+{ "order_type": "LIMIT", "price": 1000, "quantity": 100, "transaction_type": "BUY",
+  "synthetic": { "type": "bracket", "stop_price": 990, "stop_limit_price": 988, "target_price": 1010 } }
+```
+
+!!! danger "Both legs of a linked pair can fill before any cancel arrives"
+
+    This is the recurring bug in every linked order type, and no exchange offers an order that makes it impossible.
+    What the engine does is make the window as small as reading an update allows.
+
+Three rules follow, and all three are visible in the recording:
+
+1. **The sibling is reduced, never cancelled and replaced.** When one exit fills four of ten, the other is changed to
+   six. Cancelling would leave a window with nothing protecting the position; replacing would lose the order's place in
+   the queue.
+2. **A fill is acted on the moment it is seen, including a partial one.** A bracket arms its stop and target on the
+   first partial fill, sized to what filled, and grows them as the entry fills further. Waiting for the entry to
+   complete would leave the part already filled unprotected.
+3. **An exit filling stops the entry.** If the entry is still working when an exit starts filling, the rest of the
+   entry is cancelled first, so it cannot go on buying into a position the exits have already been sized for.
+
+A stop needs **both** `stop_price` and `stop_limit_price`, and neither is defaulted. Stop-loss-market is gone from NSE
+options and from BSE entirely, so a stop is a stop-limit, and a stop-limit whose limit sits at its trigger will not
+fill when the price runs through it — which is the one condition a stop exists for. NSE caps the gap between them, so a
+limit too far away is refused by the exchange.
+
+### Scaling out, breaking out, and spreading over time
+
+```json
+{ "synthetic": { "type": "scale_out", "stop_price": 990, "stop_limit_price": 988,
+                 "target_prices": [1010, 1020, 1030], "breakeven_after": 1 } }
+
+{ "synthetic": { "type": "two_sided_breakout", "buy_trigger": 1010, "buy_limit": 1012,
+                 "sell_trigger": 990, "sell_limit": 988,
+                 "stop_price": 985, "stop_limit_price": 983 } }
+
+{ "synthetic": { "type": "twap", "slices": 4, "over_minutes": 20 } }
+```
+
+`scale_out` is a bracket whose target is several. **A target filling reduces only the stop, not the other targets** —
+the targets are tranches of one position and reducing each by what another took would leave the position uncovered
+after the first fill. Once `breakeven_after` targets have filled, the stop is **moved** to the entry's average price,
+as a price change on the resting order rather than a cancel and replace.
+
+`two_sided_breakout` places both entries as native stop orders, so they fire at exchange speed whether or not the
+engine is running. The first fill **cancels** the other side — cancelling rather than reducing, because the other entry
+is not a tranche of the same position, it is the opposite trade. A spike through both triggers in one tick can still
+fill both; nothing but the exchange could prevent that, and it offers no such order.
+
+`twap` is the freeze slicer's opposite in intent: the slicer splits an order an exchange will not take whole, while
+this splits one it would, because taking it whole would cost more than waiting. The first slice goes immediately so a
+caller gets an order id rather than a promise. Nothing here watches the price — a slice is sent because its time has
+come, which is what makes it a TWAP rather than a chaser.
+
+### The timed types
+
+`scheduled`, `good_till_time` and `time_stop` wait for a time of day rather than for a fill, so they need the engine
+running until they act. Times are wall-clock times on an Indian exchange's day, read in `Asia/Kolkata` whatever the
+server keeps.
+
+```json
+{ "synthetic": { "type": "time_stop", "until_time": "15:10" } }
+{ "synthetic": { "type": "time_stop", "minutes": 20 } }
+{ "synthetic": { "type": "scheduled", "at_time": "09:20" } }
+```
+
+A `scheduled` order answers **HTTP 202** with a `parent_id` and no `order_id`, because there is no broker order yet.
+That is the one place a synthetic type's answer differs in shape from an ordinary placement's, and it is unavoidable.
+
+A time already past today is **refused**, not taken to mean tomorrow. An order told to act at a time that has gone is
+far more likely to be a mistake than an instruction to wait eighteen hours, and holding a position overnight by
+inference is not something to do.
+
+`time_stop` cancels whatever is still resting **before** it closes what filled, for the same reason the kill switch
+does: an entry still working while its position is being closed goes on opening the position that is being closed. It
+closes what *this order* filled, not what the account holds — an account holding the same instrument from somewhere
+else is not one order's business to flatten.
+
+!!! note "A cover order is a bracket with only a stop"
+
+    The Atlas lists the cover order as a type of its own: an entry with a compulsory stop and no target. It needs no
+    class here, because a `bracket` given `stop_price` and `stop_limit_price` but no `target_price` is exactly that.
+    Adding a second class for it would be a second copy of the double-fill rule.
+
+### The freeze slicer, and why the limit is read per broker
+
+An exchange rejects any single derivative order above its freeze quantity outright. The engine reads that quantity from
+`unified:catalogue:<date>:additional_attributes` **for the broker the order is going to**, and compares it against the
+quantity in that same broker's terms.
+
+That is not fussiness. For one MCX silver option, brokers whose lot size is 30 report a freeze quantity of 600 and
+brokers whose lot size is 1 report 20 — and both mean twenty lots. Comparing one broker's figure against another
+broker's quantity would be wrong by a factor of thirty.
+
+Only five of the ten brokers publish a freeze quantity. When the chosen broker does not, the order is sent whole and the
+event log records that no limit was known; an exchange rejection is then visible and recoverable, where a limit guessed
+from another broker would be neither. An order needing more than twenty slices is refused rather than sent.

@@ -88,6 +88,18 @@ systemctl --user enable --now unified.target unified-mapping.timer unified-price
     unified-rest-api.service
 ```
 
+The order engine is not in that list on purpose. `bin/unified/orders/order_engine` runs only when the
+REST API is configured with `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT=engine`, so it is enabled as a
+separate step, under the same template as every other script in its folder:
+
+```bash
+systemctl --user enable --now unified-orders@order_engine.service
+```
+
+Run exactly one. The engine takes `unified:orders:engine:lock` before it does anything else and exits 1
+if another process holds it, because two engines reading the same consumer group would place every order
+twice.
+
 `systemctl --user link` symlinks the files, so editing a unit in `services/` takes effect after a
 `daemon-reload` - and moving the repository breaks every installed unit.
 

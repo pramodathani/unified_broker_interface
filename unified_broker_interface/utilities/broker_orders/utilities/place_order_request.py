@@ -43,6 +43,23 @@ class PlaceOrderRequest(OrderRequest):
         catalogue_prefix (str | None): The catalogue member prefix the identity fields make.
     """
 
+    PRICE_REFERENCE_KINDS = (
+        'absolute',
+        'last',
+        'mid',
+        'vwap',
+        'bid_level',
+        'offer_level',
+        'marketable',
+    )
+    QUANTITY_REFERENCE_KINDS = (
+        'absolute',
+        'add_to_position',
+        'reduce_position',
+        'liquidate_position',
+    )
+    DEEPEST_LEVEL = 5
+
     def __init__(self, body):
         """Validates a request body into an order.
 
@@ -96,6 +113,8 @@ class PlaceOrderRequest(OrderRequest):
                 'IOC',
             ],
         )
+        self.price_reference = self.parse_price_reference(body)
+        self.quantity_reference = self.parse_quantity_reference(body)
         self.parse_quantities(body)
         self.price = self.parse_price(body, 'price')
         self.trigger_price = self.parse_price(body, 'trigger_price')
@@ -115,6 +134,162 @@ class PlaceOrderRequest(OrderRequest):
         self.catalogue_prefix = None
         self.parse_instrument(body)
 
+    def parse_price_reference(self, body):
+        """Reads the optional `price_reference`, which says how to work a price out rather than stating one.
+
+        A reference is resolved by the order engine at the moment the order is sent, from the live quote, so a caller can ask for the second best offer plus a tenth of a per cent without knowing what either is. It is validated here for shape only; whether the depth actually has five levels is not knowable until the quote is read.
+
+        Args:
+            body (dict): The request body.
+
+        Returns:
+            dict | None: The reference, or None when there is none.
+
+        Raises:
+            InvalidOrderError: When the reference is not an object, names an unknown kind, or is missing what its kind needs.
+        """
+        reference = body.get('price_reference')
+        if reference is None:
+            return None
+        kind = self.reference_kind(
+            reference,
+            'price_reference',
+            self.PRICE_REFERENCE_KINDS,
+        )
+        parsed = {
+            'kind': kind,
+        }
+        if kind == 'absolute':
+            price = self.parse_price(reference, 'price')
+            if not price:
+                message = 'an absolute price_reference needs a price above zero'
+                raise InvalidOrderError(message)
+            parsed['price'] = price
+        if kind in ('bid_level', 'offer_level'):
+            parsed['level'] = self.parse_level(reference)
+        for name in ('buffer_percent', 'offset_percent'):
+            if reference.get(name) is not None:
+                parsed[name] = self.parse_signed_number(reference, name)
+        if reference.get('offset_ticks') is not None:
+            parsed['offset_ticks'] = self.parse_signed_whole_number(
+                reference,
+                'offset_ticks',
+            )
+        return parsed
+
+    def parse_quantity_reference(self, body):
+        """Reads the optional `quantity_reference`, which says how to work a quantity out from the position held.
+
+        Args:
+            body (dict): The request body.
+
+        Returns:
+            dict | None: The reference, or None when there is none.
+
+        Raises:
+            InvalidOrderError: When the reference is not an object or names an unknown kind.
+        """
+        reference = body.get('quantity_reference')
+        if reference is None:
+            return None
+        kind = self.reference_kind(
+            reference,
+            'quantity_reference',
+            self.QUANTITY_REFERENCE_KINDS,
+        )
+        parsed = {
+            'kind': kind,
+        }
+        product = reference.get('product')
+        if product is not None:
+            parsed['product'] = str(product).strip().lower()
+        return parsed
+
+    def reference_kind(self, reference, field_name, kinds):
+        """Reads and checks a reference's `kind`.
+
+        Args:
+            reference (object): The reference as received.
+            field_name (str): Which reference it is, for the message.
+            kinds (tuple): The kinds that field takes.
+
+        Returns:
+            str: The kind.
+
+        Raises:
+            InvalidOrderError: When the reference is not an object or the kind is not one of `kinds`.
+        """
+        if not isinstance(reference, dict):
+            raise InvalidOrderError(f'{field_name} must be a JSON object')
+        kind = str(reference.get('kind') or '').strip().lower()
+        if kind not in kinds:
+            known = ', '.join(kinds)
+            message = f'{field_name} kind must be one of {known}'
+            raise InvalidOrderError(message)
+        return kind
+
+    def parse_level(self, reference):
+        """Reads which level of the depth a bid or offer reference means.
+
+        Args:
+            reference (dict): The reference.
+
+        Returns:
+            int: The level, counting the touch as 1.
+
+        Raises:
+            InvalidOrderError: When the level is not a whole number from 1 to 5.
+        """
+        level = self.parse_whole_number(reference, 'level', 1)
+        if level is None:
+            level = 1
+        if level > self.DEEPEST_LEVEL:
+            message = (
+                f'level must be a whole number from 1 to {self.DEEPEST_LEVEL}, '
+                'which is as deep as the unified quote carries'
+            )
+            raise InvalidOrderError(message)
+        return level
+
+    def parse_signed_number(self, reference, field_name):
+        """Reads a number that may be negative, such as an offset that improves a price.
+
+        Args:
+            reference (dict): The reference.
+            field_name (str): The field's name.
+
+        Returns:
+            decimal.Decimal: The number.
+
+        Raises:
+            InvalidOrderError: When the value is not a finite number.
+        """
+        try:
+            value = decimal.Decimal(str(reference.get(field_name)))
+        except decimal.InvalidOperation:
+            value = None
+        if value is None or not value.is_finite():
+            raise InvalidOrderError(f'{field_name} must be a number')
+        return value
+
+    def parse_signed_whole_number(self, reference, field_name):
+        """Reads a whole number that may be negative, such as an offset in ticks.
+
+        Args:
+            reference (dict): The reference.
+            field_name (str): The field's name.
+
+        Returns:
+            int: The number.
+
+        Raises:
+            InvalidOrderError: When the value is not a whole number.
+        """
+        value = self.parse_signed_number(reference, field_name)
+        if value != value.to_integral_value():
+            raise InvalidOrderError(f'{field_name} must be a whole number')
+        return int(value)
+
     def parse_quantities(self, body):
         """Reads `quantity` and `disclosed_quantity` and checks them against each other.
 
@@ -129,7 +304,12 @@ class PlaceOrderRequest(OrderRequest):
         """
         quantity = self.parse_whole_number(body, 'quantity', 1)
         if quantity is None:
-            raise InvalidOrderError('quantity is required')
+            if self.quantity_reference is None:
+                raise InvalidOrderError('quantity is required')
+            # A quantity_reference works the quantity out from the position held, so an order that
+            # liquidates one need not state a number it cannot know. It becomes a real quantity
+            # before any broker sees it, and is checked then like any other.
+            quantity = 0
         disclosed_quantity = self.parse_whole_number(
             body,
             'disclosed_quantity',
@@ -155,7 +335,7 @@ class PlaceOrderRequest(OrderRequest):
         order_type = self.order_type
         priced = order_type in self.PRICED_ORDER_TYPES
         triggered = order_type in self.TRIGGERED_ORDER_TYPES
-        if priced and not self.price:
+        if priced and not self.price and self.price_reference is None:
             raise InvalidOrderError(f'a {order_type} order needs a price')
         if not priced and self.price:
             raise InvalidOrderError(f'a {order_type} order takes no price')

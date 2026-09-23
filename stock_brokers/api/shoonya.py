@@ -50,7 +50,8 @@ class ShoonyaAPI(BrokerAPI):
             txt_user_name = driver.find_element(By.XPATH, r'//*[@id="lgnusrid"]')
             txt_password = driver.find_element(By.XPATH, r'//*[@id="lgnpwd"]')
             txt_otp = driver.find_element(By.XPATH, r'//*[@id="lgnotp"]')
-            btn_login = driver.find_element(By.XPATH, r'//*[@id="app"]/div[9]/div/div/div[2]/div/div[2]/form/button')
+            # btn_login = driver.find_element(By.XPATH, r'//*[@id="app"]/div[9]/div/div/div[2]/div/div[2]/form/button')
+            btn_login = driver.find_element(By.XPATH, r'//*[@id="mainContent"]/div/div[2]/form/button') # new login button xpath            
 
             txt_user_name.send_keys(self._settings['ucc_code'])
             txt_password.send_keys(self._settings['password'])

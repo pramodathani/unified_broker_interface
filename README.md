@@ -140,6 +140,8 @@ There is no pytest suite. The five offline suites are plain scripts that need no
 .venv/bin/python -m test_runs.candle_parse            # broker candle parsers
 .venv/bin/python -m test_runs.unified_ticks_sessions  # trading session calendars
 .venv/bin/python -m test_runs.order_routes            # the REST API's order routes, against a recording
+.venv/bin/python -m test_runs.order_engine_routes     # the place route in engine mode, against its own recording
+.venv/bin/python -m test_runs.order_engine            # the order engine daemon, against scripted intents
 .venv/bin/python -m test_runs.contract_sizes          # currency and commodity contract size rules
 .venv/bin/python -m test_runs.connection_warming      # a local HTTP server that misbehaves; about 40 seconds
 .venv/bin/ruff check .                                # ruff 0.11.2, no config file, so default rules

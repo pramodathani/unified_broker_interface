@@ -31,6 +31,34 @@ test page, and a login check against the live brokers.
     order routes; after an intended change, `--record` rewrites the recording, and the diff of that file is the
     change to review.
 
+    **`order_engine_routes.py`** - `POST /api/orders/place` run the same way but with
+    `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT` set to `engine`, so the route writes the order to
+    `unified:orders:intents:stream` and waits instead of calling a broker. The engine is replaced by an answer
+    seeded onto the reply list before the request is sent, and the stand-in's `blpop` returns None rather than
+    waiting, so the timeout path costs no time. Each scenario keeps the HTTP status, the body, the intents that
+    reached the stream and the Redis round trips, and compares them with
+    `test_runs/fixtures/order_engine_routes.jsonl`.
+
+    It has its own recording on purpose. `--record` rewrites a whole fixture, so putting these scenarios in
+    `order_routes.jsonl` would silently rewrite the recording that proves the direct path never changed.
+
+    **`order_engine.py`** - `bin/unified/orders/order_engine` itself, driven through its own classes with
+    scripted intents on the stand-in's stream and every broker call stubbed. Its loop normally blocks for new
+    entries and runs until stopped, so the suite hands it a stop event that allows a fixed number of passes
+    and then reports that it should stop, which makes one deterministic pass over the stream. Each scenario
+    keeps what the engine pushed onto the waiting worker's reply key, every broker request, whether the intent
+    was acknowledged, the engine's counters and the Redis round trips, and compares them with
+    `test_runs/fixtures/order_engine.jsonl`. The single-engine lock is checked directly, because losing it
+    depends on a clock the loop owns.
+
+    **`order_flatten.py`** - `POST /api/orders/flatten`, the panic button, run in-process against the same
+    stand-in with every broker call stubbed. Each scenario keeps the status, the body, every broker request **in the
+    order it was sent** and the Redis round trips, and compares them with `test_runs/fixtures/order_flatten.jsonl`.
+    The ordering is the point: a cancel appearing after a close would change the recording, and that ordering is the
+    whole reason the route exists. The brokers' order books report the cancelled orders as `CANCELLED` from the second
+    read onward, which is what the pollers do a moment after a cancel lands; a scenario can leave them open instead,
+    to check what the route says when a cancel is never confirmed.
+
     **`connection_warming.py`** - the broker connection idle limit and connection warming, against a local
     HTTP server on 127.0.0.1 that answers warming pings by resetting the connection, closing it straight after
     answering or a moment later, answering with an error or a cookie, or answering too slowly, and that drops
@@ -58,6 +86,12 @@ test page, and a login check against the live brokers.
     python -m test_runs.connection_warming
     python -m test_runs.order_routes
     python -m test_runs.order_routes --record   # after an intended change
+    python -m test_runs.order_engine_routes
+    python -m test_runs.order_engine_routes --record
+    python -m test_runs.order_engine
+    python -m test_runs.order_engine --record
+    python -m test_runs.order_flatten
+    python -m test_runs.order_flatten --record
     ```
 
 === "Safe - infrastructure"

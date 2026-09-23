@@ -1,7 +1,11 @@
 """The instrument an order is for, as today's mapping describes it."""
 
 import decimal
+import json
 
+from unified_broker_interface.utilities.broker_orders.utilities.refused_request import (
+    RefusedRequestError,
+)
 from unified_broker_interface.utilities.broker_orders.utilities.tradeable_segments import (
     TradeableSegments,
 )
@@ -40,6 +44,46 @@ class Instrument:
         self.exchange = exchange
         self.bare_segment = bare_segment
         self.contract_size = contract_size
+
+    @classmethod
+    def decoded(cls, instrument_id, identity_text, handles_text, contract_size_text):
+        """Builds the instrument from its identity, order handles and contract size decision as Redis holds them.
+
+        A contract size decision that is missing or not a JSON object is decoded as None, which leaves a currency or commodity derivative untradeable rather than refusing an order on any other instrument.
+
+        Args:
+            instrument_id (str): The instrument id.
+            identity_text (str | None): The identity as Redis holds it.
+            handles_text (str | None): The order handles as Redis holds them.
+            contract_size_text (str | None): The contract size decision as Redis holds it.
+
+        Returns:
+            Instrument: The instrument, which may not be tradeable.
+
+        Raises:
+            RefusedRequestError: With HTTP 404 when the identity or the handles are missing or not a JSON object.
+        """
+        identity = None
+        handles = None
+        try:
+            if identity_text:
+                identity = json.loads(identity_text)
+            if handles_text:
+                handles = json.loads(handles_text)
+        except ValueError:
+            identity = None
+            handles = None
+        if not isinstance(identity, dict) or not isinstance(handles, dict):
+            raise RefusedRequestError.refusal('the instrument is not mapped', 404)
+        contract_size = None
+        if contract_size_text:
+            try:
+                contract_size = json.loads(contract_size_text)
+            except ValueError:
+                contract_size = None
+        if not isinstance(contract_size, dict):
+            contract_size = None
+        return cls(instrument_id, identity, handles, contract_size)
 
     def is_tradeable(self):
         """Whether orders are sent for this instrument's exchange and segment.

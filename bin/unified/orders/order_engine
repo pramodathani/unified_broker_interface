@@ -1,0 +1,188 @@
+#!/usr/bin/env python3
+"""
+Place every order the REST API accepts, reading them from the Redis Stream `unified:orders:intents:stream`, and keep
+placing until stopped.
+
+    bin/unified/orders/order_engine
+    redis-cli XINFO GROUPS unified:orders:intents:stream  # lag and pending count
+    redis-cli GET unified:orders:engine:lock              # the pid of the engine that is running
+
+This runs only when the REST API is configured with `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT=engine`. In that mode
+`POST /api/orders/place` checks the access token, validates the body and resolves the instrument, then writes the order
+to the stream as field `intent` and blocks on `unified:orders:intents:result:<intent_id>` for the answer. This reads the
+stream as the `engine` consumer group, places the order at the first broker the configured selector ranks that can take
+it, and pushes the answer onto that key.
+
+**Why the order engine exists.** An order placed from inside a gunicorn worker cannot outlive the request that asked
+for it, so a bracket, an OCO pair or a trailing stop - anything whose behaviour is a reaction to a later fill, price or
+clock tick - cannot be expressed. Everything reaching a broker through one process also makes a rate budget or a daily
+loss lockout a property of the system rather than a convention repeated in each worker. This is the first stage of that:
+it places plain orders only and behaves exactly as the REST API did, through a new path.
+
+**It keeps a clock.** Its read of the streams blocks for about a second when nothing arrives, which is turned into a
+tick rather than a thread, so the types waiting for a time of day - a nine-twenty entry, a half-past-two give-up, a
+square-off before the broker's own - are woken without anything else touching a parent at the same moment. Only types
+that ask for a tick are read at all, so an engine running nothing but plain orders does no extra work.
+
+**It follows the orders it placed.** Besides the intents, it reads `unified:order-updates:stream` - the one stream
+`bin/unified/orders/websocket_order_details` already fills with every broker's order updates - as a consumer group of
+its own, and applies an update to the leg it belongs to. An update naming no leg of this engine's is acknowledged and
+dropped, which is most of them. Both streams are read in one call, so a fill and a new order reach the same loop and
+neither starves the other.
+
+**Every order passes the same gates.** The daily loss lockout is checked before the order is even understood, so a
+day that is past its limit costs nothing; it is off unless `UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_LOSS_LIMIT` is
+set, and the engine says so at startup when it is not. The rate budget is a token bucket, global and per broker, taken
+after the leg has been written down and before its request is sent, defaulting well under SEBI's ten orders a second;
+a burst waits for a token rather than being refused, and only a burst outlasting the whole wait is refused. The
+order-to-trade ratio is counted per broker and reported, and is what Stage 8's re-pricing types will consult. These are
+limits on placements: `PUT /api/orders/modify` and `DELETE /api/orders/cancel` still go straight from an API worker to
+a broker and are not counted.
+
+**What it does per order.** One or two Redis round trips and one broker call. The first reads the mapping marker and
+every broker's login and settings; the second reads the instrument's catalogue entry and whatever the broker selector
+queues, and is skipped when this process already holds the entry for the current warm and the selector queues nothing.
+The instrument is not looked up here: the REST API resolves it and writes the id into the intent, so the rule that
+decides an identity is unknown or ambiguous lives in one place.
+
+**One engine at a time.** `unified:orders:engine:lock` holds this process's pid for 30 seconds and is refreshed every 10.
+A second engine cannot take it and exits 1, because two engines reading the same group would place every order twice.
+An engine that loses the lock to another process stops rather than placing orders beside it.
+
+**An order that waited too long is not placed.** Each intent carries the deadline the API worker gave up at. An intent
+read more than `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_STALE_INTENT_SECONDS` past that is answered 409 and recorded
+rather than sent, so a restart cannot fire an abandoned order into a market that has moved.
+
+**Nothing is placed twice on purpose.** An intent is acknowledged once its answer has been pushed, so an engine that
+dies between placing and acknowledging redelivers the intent at its next start; that intent is almost always past its
+deadline by then and is refused rather than placed.
+
+**It rebuilds itself before it places anything.** Every transition is written to `unified.synthetic_order_events` and
+committed before it is acted on, so on start the engine replays the day's rows through the same state machine the live
+path uses and rebuilds every parent that had not finished. Legs are then brought up to date from each broker's own order
+book. A leg still in `sending` means a crash between recording an order and hearing the answer, so the order may be live
+at the broker under the caller's own tag: the orphan matcher attributes it only when exactly one unclaimed order matches
+every field that was sent, within seconds of when it was sent, and otherwise parks the parent in `failed` for a person
+to look at rather than guessing. Recovery reads Redis only for the brokers' order books, and rewrites its own keys from
+what it found, so a flushed Redis costs a slower start rather than a lost position.
+
+Exits 0 when stopped with Ctrl+C or SIGTERM after finishing the intent in hand; 1 when another engine holds the lock or
+takes it while this one runs, when the event table cannot be prepared, or when its own state cannot be recovered; 2 for
+a bad argument or configuration. Redis that cannot be reached while running is retried with backoff.
+"""
+
+import os
+import sys
+import socket
+import signal
+import argparse
+import threading
+from pathlib import Path
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+def main():
+    """Place orders from unified:orders:intents:stream until stopped."""
+    parser = argparse.ArgumentParser(
+        description="Place every order the REST API accepts, from unified:orders:intents:stream, until stopped.")
+    parser.parse_args()
+
+    from utilities.configurations import api_configuration, get_cache, get_logger, get_postgres
+    from unified_broker_interface.utilities.order_engine.utilities.engine_lock import EngineLock
+    from unified_broker_interface.utilities.order_engine.utilities.engine_placement import EnginePlacement
+    from unified_broker_interface.utilities.order_engine.utilities.clock_ticker import ClockTicker
+    from unified_broker_interface.utilities.order_engine.utilities.engine_recovery import EngineRecovery
+    from unified_broker_interface.utilities.order_engine.utilities.engine_runner import OrderEngine
+    from unified_broker_interface.utilities.order_engine.utilities.order_update_follower import OrderUpdateFollower
+    from unified_broker_interface.utilities.order_engine.utilities.loss_lockout import LossLockout
+    from unified_broker_interface.utilities.order_engine.utilities.order_to_trade_ratio import OrderToTradeRatio
+    from unified_broker_interface.utilities.order_engine.utilities.parent_store import ParentStore
+    from unified_broker_interface.utilities.order_engine.utilities.rate_budget import RateBudget
+    from unified_broker_interface.utilities.order_engine.utilities.risk_gates import RiskGates
+    from unified_broker_interface.utilities.order_engine.utilities.synthetic_order_event_log import SyntheticOrderEventLog
+
+    logger = get_logger("unified.order_engine")
+    cache = get_cache()
+
+    lock = EngineLock(cache, logger)
+    if not lock.take():
+        return 1
+
+    event_log = SyntheticOrderEventLog(get_postgres, logger, f"{socket.gethostname()}:{os.getpid()}")
+    try:
+        event_log.apply_table()
+    except Exception as exception:
+        logger.error(f"Could not prepare unified.synthetic_order_events: {type(exception).__name__}: {exception}")
+        lock.release()
+        return 1
+
+    try:
+        placement = EnginePlacement(cache, logger)
+    except ValueError as error:
+        # A misspelt broker selector. Exit 2, which systemd does not restart, because retrying a
+        # configuration that cannot work would hide the message in a crash loop.
+        logger.error(f"The order engine is not configured correctly: {error}")
+        lock.release()
+        return 2
+
+    placement.start_connection_warmers()
+
+    parent_store = ParentStore(cache)
+    try:
+        EngineRecovery(cache, event_log, parent_store, placement.order_placement.broker_names, logger).recover()
+    except Exception as exception:
+        # Placing new orders while the engine does not know what it already has at a broker is the
+        # one thing worse than not starting, so this is fatal rather than logged and carried on from.
+        logger.error(f"Could not recover the engine's own state: {type(exception).__name__}: {exception}")
+        lock.release()
+        return 1
+
+    stop = threading.Event()
+
+    def _handle_signal(signal_number, frame):
+        logger.info(f"Received signal {signal_number}. Finishing the order in hand, then stopping.")
+        stop.set()
+
+    for signal_number in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(signal_number, _handle_signal)
+
+    gates = RiskGates(
+        RateBudget(
+            api_configuration["order_rate_per_second"],
+            api_configuration["order_rate_per_broker_per_second"],
+            api_configuration["order_rate_wait_seconds"],
+            logger,
+        ),
+        LossLockout(cache, api_configuration["order_daily_loss_limit"], logger),
+        OrderToTradeRatio(),
+    )
+    if gates.loss_lockout.is_configured():
+        logger.info(f"Refusing new orders once the day is down {api_configuration['order_daily_loss_limit']}.")
+    else:
+        logger.warning("No daily loss limit is set, so nothing stops this engine placing orders on a losing day.")
+
+    logger.info("Placing orders from unified:orders:intents:stream.")
+    engine = OrderEngine(
+        cache,
+        placement,
+        lock,
+        logger,
+        api_configuration["order_engine_stale_intent_seconds"],
+        api_configuration["order_engine_result_ttl_seconds"],
+        event_log,
+        parent_store,
+        OrderUpdateFollower(parent_store, event_log, logger, gates, placement),
+        gates,
+        ClockTicker(parent_store, event_log, placement, logger, gates),
+    )
+    exit_code = engine.run(stop)
+    lock.release()
+    return exit_code
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -41,9 +41,50 @@ UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_SELECTOR=round_robin
 UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_PRIORITY=
 UNIFIED_BROKER_INTERFACE_API_ORDER_WARM_BROKERS=
 
+# Optional: the order engine
+UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT=direct
+UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_TIMEOUT_SECONDS=5
+UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_RESULT_TTL_SECONDS=300
+UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_STALE_INTENT_SECONDS=30
+UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_PER_SECOND=8
+UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_PER_BROKER_PER_SECOND=5
+UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_WAIT_SECONDS=1
+UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_LOSS_LIMIT=0
+UNIFIED_BROKER_INTERFACE_API_ORDER_FLATTEN_WAIT_SECONDS=5
+
 # Optional: the shortest time, in seconds, between ensure_session login attempts for one broker
 UNIFIED_BROKER_INTERFACE_LOGIN_MIN_INTERVAL=300
 ```
+
+`UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT` chooses where an order is sent from. At `direct`,
+which is the default and today's behaviour, the API worker that accepted the order also sends it to
+the broker. At `engine`, the worker writes the order to a Redis stream and waits for
+`bin/unified/orders/order_engine` to place it and answer. Any other value stops the worker from
+starting, the same way an unknown broker selector does. The three `..._ORDER_ENGINE_...` variables
+are read only in `engine` mode: how long a worker waits for the engine's answer before giving up
+with HTTP 504, how long that answer is kept for a worker that never collected it, and how far past
+its deadline an order may be before the engine records it rather than placing it into a market that
+has moved.
+
+The order engine's risk gates are the last four. `..._ORDER_RATE_PER_SECOND` and
+`..._ORDER_RATE_PER_BROKER_PER_SECOND` are a token bucket across every broker and for any one of them, defaulting well
+under the ten orders a second that SEBI's retail algorithmic trading framework treats as algorithmic trading needing
+registration. An order that finds the bucket empty waits up to `..._ORDER_RATE_WAIT_SECONDS` for a token and is
+refused with HTTP 503 only if none arrives, because a burst within one tenth of a second is ordinary and a short delay
+beats a refusal.
+
+`..._ORDER_DAILY_LOSS_LIMIT` is the most the day may lose, realized plus unrealized across every broker, before the
+engine refuses new orders with HTTP 403. **It is off at zero, which is the default**, and the engine warns at startup
+when it is, because a limit guessed on your behalf would be worse than none: too low it stops a normal day, too high it
+is theatre. Unrealized loss counts, because a position held at a loss has lost the money whether or not it has been
+closed.
+
+These are limits on placements. `PUT /api/orders/modify` and `DELETE /api/orders/cancel` still go straight from an API
+worker to a broker and are not counted against the rate budget.
+
+`..._ORDER_FLATTEN_WAIT_SECONDS` is how long `POST /api/orders/flatten` re-reads the brokers' order books waiting for
+its cancels to be confirmed before it closes any position. Waiting matters more than being quick: a protective order
+still live when its position closes will fill afterwards and open a new position the other way.
 
 !!! danger "`.env` holds live trading credentials"
 

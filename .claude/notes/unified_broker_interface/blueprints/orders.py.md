@@ -8,16 +8,29 @@ On 2026-09-15 the user asked for the method to be split up again, after measurin
 
 | Piece | Holds |
 | --- | --- |
-| `OrdersBlueprint` in this module | The token check, both Redis pipelines, the catalogue lookup, the turn and the answers |
+| `OrdersBlueprint` in this module | The token check, every Redis pipeline, the catalogue lookup and the modify and cancel answers |
+| `OrderPlacement` | Everything a placement does once Redis has been read: the turn, ranking, choosing the broker, building the request, sending it and the place answer |
+| `PreparedPlacement` | One order with a broker and a built request, not yet sent |
+| `RefusedRequestError` | A request answered without calling a broker, as a body and a status both processes can read |
 | `PlaceOrderRequest`, `ModifyOrderRequest`, `CancelOrderRequest` | Validation of the body and query string, which costs no I/O; the checks all three share live in `OrderRequest` |
 | `OrderModification` | A stored order with a modification's changes laid over it, which also costs no I/O |
-| `Instrument` and `TradeableSegments` | The instrument's segment, whether orders are sent for it, and its market key |
+| `Instrument` and `TradeableSegments` | The instrument's segment, whether orders are sent for it, its market key, and decoding all of that from the text Redis holds |
 | One `BrokerOrders` subclass per broker | The skip checks, the request, the reading of success answers and which server errors are settled refusals |
-| `BrokerOrders` itself | The HTTP call, error answers, and the accepted, rejected and unknown rules |
+| `BrokerOrders` itself | The HTTP call, error answers, the accepted, rejected and unknown rules, and decoding its own login and settings |
+
+On 2026-09-23 the placement half was moved again, into `OrderPlacement` in `unified_broker_interface/utilities/broker_orders/utilities/placement.py`, so that the order engine can place an order without building a blueprint. The rule above is unchanged and is what the new class was written around: it reads no store, and the blueprint still makes every Redis call and still calls `rotation()` itself so that the "every broker is excluded" refusal keeps costing one round trip rather than two. `orders.py` fell from 1352 lines to 1030, and all 618 recorded scenarios matched unchanged.
 
 The split was checked with `python -m test_runs.order_routes`, whose recording was made before it: all 440 scenarios, including every outgoing request's headers, body, timeout and certificate check, matched unchanged.
 
 A refusal that is answered without calling a broker is raised as `RefusedRequestError` and turned into its JSON answer in `place`, `modify` and `cancel`, so each step can be a method of its own without every caller checking a returned status.
+
+## The placement mode, and why it is a switch rather than a branch in git
+
+The order engine replaces this module's broker call with a handoff to a daemon, so that an order can outlive the HTTP request that asked for it and become a bracket, an OCO pair or a chaser. That is a large change to the one path in this project that spends real money, and merging it would leave no way back except reverting a commit under pressure during a session.
+
+`UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT` is the way back. At `direct` the module behaves exactly as it always has, so the engine's code can be merged into `main` long before anyone trusts it, and a session that goes wrong is recovered with an environment variable and a restart. `ORDER_PLACEMENT_MODES` lists the two accepted values, and `__init__` refuses anything else with a `ValueError`, exactly as it already refuses an unknown broker selector. Both checks are deliberately fatal: a misspelt mode that quietly fell back to `direct` would look like a working engine that silently was not one, which is the worst of the three outcomes.
+
+The mode is read once in `__init__` rather than per request, because it cannot change without a restart and because reading it per request would put a dictionary lookup on the measured path for no benefit.
 
 ## What an order costs
 

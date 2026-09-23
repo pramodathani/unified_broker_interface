@@ -151,6 +151,36 @@ REST API answers with. Every document carries `brokers`, saying for each broker 
 | `unified:orders:trades` | string | `bin/unified/orders/api_trade_details`, every half second | `{"trades", "summary", "brokers", "as_of"}` |
 | `unified:orders:round_robin` | string | `POST /api/orders/place`, one `INCR` per checked order | A counter with no expiry; the broker whose turn it is is this count modulo the number of brokers not excluded |
 
+### The order engine
+
+These exist only when `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT` is `engine`. The REST API then
+stops calling brokers itself: it writes the order down and waits, and `bin/unified/orders/order_engine`
+places it and pushes the answer back.
+
+| Key | Type | Written by | Holds |
+| --- | --- | --- | --- |
+| `unified:orders:intents:stream` | stream, field `intent` | `POST /api/orders/place` in engine mode | One accepted order awaiting placement, with `intent_id`, `created_at`, `deadline_at`, `reply_key`, `api_worker`, `synthetic_type` and the caller's `body` verbatim; capped at about 10,000 |
+| `unified:orders:intents:result:<intent_id>` | list, `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_RESULT_TTL_SECONDS` TTL | `bin/unified/orders/order_engine` | `{"body", "status"}`, the answer the waiting API worker pops |
+| `unified:orders:engine:lock` | string, 30 s TTL, refreshed while it runs | `bin/unified/orders/order_engine` | The pid of the one engine allowed to run, so two engines cannot both place an order |
+| `unified:orders:parents` | hash, keyed `parent_order_id`, expires 06:00 IST | `bin/unified/orders/order_engine` | Every parent order the engine is running, in the contract above |
+| `unified:orders:parents:open` | set, expires 06:00 IST | `bin/unified/orders/order_engine` | The parents that have not finished, for a quick recovery scan |
+| `unified:orders:children` | hash, keyed `broker:order_id`, expires 06:00 IST | `bin/unified/orders/order_engine` | Which parent a broker's order belongs to, so an order update finds its owner |
+
+The last three are a cache, not the record. `unified.synthetic_order_events` holds every transition, and the engine
+rebuilds all three from it on start, so a flushed Redis costs a slower start rather than a lost position. They expire
+at 06:00 IST like the brokers' merged hashes, which is the same boundary the recovery scan reads from.
+
+The intents are a stream rather than a list so that an engine restart finds the orders written while it
+was down, and so that a backlog can be read with `XINFO GROUPS` like every other queue here. The engine
+reads them as the consumer group `engine`.
+
+The result is a list rather than a string because a string cannot be blocked on: the worker waits with
+`BLPOP`, which takes the answer and removes the key in one step, so the TTL only ever expires an answer
+nobody came back for. A worker that gives up first answers outcome `unknown` with HTTP 504, and the
+engine refuses to place an intent whose `deadline_at` passed more than
+`UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_STALE_INTENT_SECONDS` ago, so a restart cannot fire a stale
+order into a market that has moved.
+
 ### Order and position updates
 
 | Key | Type | Written by | Holds |
@@ -284,6 +314,7 @@ redis-cli XINFO GROUPS zerodha:quotes:stream            # each group's lag and p
 redis-cli XREVRANGE unified:order-updates:stream + - COUNT 5
 redis-cli GET unified:portfolio:positions | python3 -m json.tool
 redis-cli HGET unified:broker_tokens dhan:2885
+redis-cli XINFO GROUPS unified:orders:intents:stream    # how far behind the order engine is
 ```
 
 ## Login lock and request log
