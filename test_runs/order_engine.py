@@ -2291,6 +2291,60 @@ class OrderEngineSuite:
                 gated=3,
             ),
             self.reaction_result(
+                'a_legged_spread_prices_its_second_leg_from_the_first_fill',
+                self.scenarios.bodies.market_order(
+                    dry_run=None,
+                    order_type='LIMIT',
+                    price=1000,
+                    quantity=10,
+                    synthetic={
+                        'type': 'legged_spread',
+                        'net_price': 20,
+                        'candidates': [
+                            {
+                                'instrument_id': identifiers['reliance'],
+                                'transaction_type': 'BUY',
+                                'quantity': 500,
+                                'price': 1000,
+                            },
+                            {
+                                'instrument_id': (
+                                    identifiers['reliance_future']
+                                ),
+                                'transaction_type': 'SELL',
+                                'quantity': 500,
+                                'price': 980,
+                            },
+                        ],
+                    },
+                ),
+                [
+                    self.update('26091500000021', 'COMPLETE', 500,
+                                average_price=1002.0),
+                ],
+                accepted,
+            ),
+            self.reaction_result(
+                'a_legged_spread_with_three_legs_is_refused',
+                self.scenarios.bodies.market_order(
+                    dry_run=None,
+                    order_type='LIMIT',
+                    price=1000,
+                    quantity=10,
+                    synthetic={
+                        'type': 'legged_spread',
+                        'net_price': 20,
+                        'candidates': [
+                            {'instrument_id': identifiers['reliance']},
+                            {'instrument_id': identifiers['kwil']},
+                            {'instrument_id': identifiers['nifty_option']},
+                        ],
+                    },
+                ),
+                [],
+                accepted,
+            ),
+            self.reaction_result(
                 'a_basket_places_every_leg_and_reports_each_one',
                 self.scenarios.bodies.market_order(
                     dry_run=None,
@@ -2711,6 +2765,8 @@ class OrderEngineSuite:
         answer=None,
         throttle_seconds=0,
         book_overrides=None,
+        fills=None,
+        positions=None,
     ):
         """Places one watching order, then walks it through a sequence of quotes.
 
@@ -2723,6 +2779,8 @@ class OrderEngineSuite:
             answer (dict | None): The stubbed broker answer.
             throttle_seconds (float): The shortest gap the re-pricing throttle allows between two moves of one order.
             book_overrides (dict | None): Fields to replace on the broker's order book entry, for a type whose order is not a plain limit.
+            fills (list | None): Order updates to apply before the first tick, for a type that only acts once its legs are filled.
+            positions (float | None): A net position in RELIANCE to seed, for a type that reads the account's holdings.
 
         Returns:
             dict: The recorded result.
@@ -2733,6 +2791,10 @@ class OrderEngineSuite:
         self.counting_uuid.reset()
         starting = steps[0]['quote'] if steps else None
         self.seed_quote(starting)
+        if positions is not None:
+            self.fake_redis.strings['unified:portfolio:positions'] = json.dumps(
+                self.scenarios.positions(positions),
+            )
         reply_keys = self.write_intents(scenario)
 
         logger = logging.getLogger('test_runs.order_engine')
@@ -2782,6 +2844,20 @@ class OrderEngineSuite:
             status='OPEN',
             **(book_overrides or {}),
         )
+
+        follower = OrderUpdateFollower(
+            parent_store,
+            event_log,
+            logger,
+            gates,
+            placement,
+        )
+        for update in fills or []:
+            changed = follower.follow({
+                'update': json.dumps(update),
+            })
+            if changed is not None:
+                parent_store.save(changed)
 
         moves = []
         for step in steps:
@@ -3037,6 +3113,7 @@ class OrderEngineSuite:
             price=1000,
             quantity=10,
         )
+        identifiers = order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS
         steady = self.book_at(1000.00, 1000.05)
         return [
             self.price_result(
@@ -3146,6 +3223,107 @@ class OrderEngineSuite:
                     {'quote': steady, 'at': 12},
                 ],
                 accepted,
+            ),
+            self.price_result(
+                'a_strategy_stop_closes_every_leg_when_the_total_is_past_its_limit',
+                dict(entry, synthetic={
+                    'type': 'strategy_stop',
+                    'loss_limit': -500,
+                    'candidates': [
+                        {
+                            'instrument_id': identifiers['reliance'],
+                            'quantity': 10,
+                            'price': 1000,
+                        },
+                        {
+                            'instrument_id': identifiers['kwil'],
+                            'transaction_type': 'SELL',
+                            'quantity': 10,
+                            'price': 250,
+                        },
+                    ],
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(900.00, 900.05), 'at': 1},
+                ],
+                accepted,
+                fills=[
+                    self.update('26091500000021', 'COMPLETE', 10,
+                                average_price=1000.0),
+                ],
+            ),
+            self.price_result(
+                'a_strategy_stop_leaves_a_strategy_inside_its_limits_alone',
+                dict(entry, synthetic={
+                    'type': 'strategy_stop',
+                    'loss_limit': -500,
+                    'candidates': [
+                        {
+                            'instrument_id': identifiers['reliance'],
+                            'quantity': 10,
+                            'price': 1000,
+                        },
+                        {
+                            'instrument_id': identifiers['kwil'],
+                            'transaction_type': 'SELL',
+                            'quantity': 10,
+                            'price': 250,
+                        },
+                    ],
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(990.00, 990.05), 'at': 1},
+                ],
+                accepted,
+                fills=[
+                    self.update('26091500000021', 'COMPLETE', 10,
+                                average_price=1000.0),
+                ],
+            ),
+            self.price_result(
+                'an_exposure_hedge_trades_when_the_band_is_left',
+                dict(entry, synthetic={
+                    'type': 'exposure_hedge',
+                    'watched': [
+                        {
+                            'instrument_id': identifiers['reliance'],
+                            'exposure_per_unit': 1,
+                        },
+                    ],
+                    'hedge_instrument_id': identifiers['reliance'],
+                    'hedge_exposure_per_unit': 1,
+                    'lower_band': -10,
+                    'upper_band': 10,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1},
+                ],
+                accepted,
+                positions=100,
+            ),
+            self.price_result(
+                'an_exposure_hedge_inside_its_band_does_nothing',
+                dict(entry, synthetic={
+                    'type': 'exposure_hedge',
+                    'watched': [
+                        {
+                            'instrument_id': identifiers['reliance'],
+                            'exposure_per_unit': 1,
+                        },
+                    ],
+                    'hedge_instrument_id': identifiers['reliance'],
+                    'lower_band': -10,
+                    'upper_band': 10,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1},
+                ],
+                accepted,
+                positions=5,
             ),
             self.price_result(
                 'a_participation_order_takes_a_share_of_what_the_market_trades',

@@ -7,6 +7,9 @@ from unified_broker_interface.utilities.order_engine.cover import Cover
 from unified_broker_interface.utilities.order_engine.cross_instrument import (
     CrossInstrument,
 )
+from unified_broker_interface.utilities.order_engine.exposure_hedge import (
+    ExposureHedge,
+)
 from unified_broker_interface.utilities.order_engine.freeze_slicer import (
     FreezeSlicer,
 )
@@ -31,6 +34,9 @@ from unified_broker_interface.utilities.order_engine.ladder import Ladder
 from unified_broker_interface.utilities.order_engine.limit_if_touched import (
     LimitIfTouched,
 )
+from unified_broker_interface.utilities.order_engine.legged_spread import (
+    LeggedSpread,
+)
 from unified_broker_interface.utilities.order_engine.liquidity_seeking import (
     LiquiditySeeking,
 )
@@ -50,6 +56,9 @@ from unified_broker_interface.utilities.order_engine.post_only import PostOnly
 from unified_broker_interface.utilities.order_engine.scale_out import ScaleOut
 from unified_broker_interface.utilities.order_engine.scheduled import Scheduled
 from unified_broker_interface.utilities.order_engine.simple import SimpleOrder
+from unified_broker_interface.utilities.order_engine.strategy_stop import (
+    StrategyStop,
+)
 from unified_broker_interface.utilities.order_engine.time_stop import TimeStop
 from unified_broker_interface.utilities.order_engine.trailing_entry import (
     TrailingEntry,
@@ -96,4 +105,7 @@ SYNTHETIC_ORDER_CLASSES = {
     Basket.SYNTHETIC_TYPE: Basket,
     OneCancelsAll.SYNTHETIC_TYPE: OneCancelsAll,
     Cover.SYNTHETIC_TYPE: Cover,
+    LeggedSpread.SYNTHETIC_TYPE: LeggedSpread,
+    StrategyStop.SYNTHETIC_TYPE: StrategyStop,
+    ExposureHedge.SYNTHETIC_TYPE: ExposureHedge,
 }
