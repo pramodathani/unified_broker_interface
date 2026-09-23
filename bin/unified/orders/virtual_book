@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+"""
+Keep the synthetic limit order book: a queue estimate for every held `virtual_limit` order, moved on by every quote
+for its instrument, in the Redis hash `unified:orders:virtual_queue`, until stopped.
+
+    bin/unified/orders/virtual_book
+    redis-cli HGET unified:orders:virtual_queue <parent order id>
+
+Nothing here calls a broker or places an order. The order engine holds a `virtual_limit` order instead of sending it,
+and sends a real limit at the caller's price only when the other side of the book reaches that price. What it cannot
+see from the one quote it reads a second is how the order would have fared resting at the exchange. This script
+works that out from `unified:quotes:stream`, which `bin/unified/instruments/websocket_quotes` writes, one estimate per
+held order: how much is ahead of it in the queue at its price (`ahead`), how much the queue would have filled
+(`queue_filled`), and whether the other side has reached its price (`touched_at`). For an order sent to a broker,
+`queue_filled` at the moment it is sent is the cost of holding it back; for a paper order, `filled` is what the engine
+fills it with.
+
+**Which orders.** Every open `virtual_limit` parent in the engine's parent cache whose trigger has not fired, read
+every two seconds. A fired order's last estimate stays in the hash, unchanged, until its parent is no longer open, and
+is then removed.
+
+**Reading the stream.** A plain `XREAD` from the moment the script starts, 1,000 entries at a time, blocking for one
+second, not a consumer group: old quotes are of no use to an estimate. The stream carries every instrument's quotes and
+all of them are decoded; only those for an instrument with a held order are used. After a restart, or a spell when
+Redis could not be reached, every estimate takes its next quote as a new baseline, so the trading it missed is not
+counted as trading at its price.
+
+**The estimate.** `unified_broker_interface/utilities/order_engine/utilities/virtual_queue.py` has the arithmetic and
+its limits: trades at the price serve the queue ahead first, a trade through the price fills everything, cancellations
+come off the queue ahead in proportion to its share of the level, a price beyond the five visible levels has no place
+until it comes into view, and a stale quote, a change of owning broker or a new session is not read as trading.
+
+Runs until Ctrl+C or SIGTERM. Redis that cannot be reached is retried with backoff. Exits 0 when stopped.
+"""
+
+import sys
+import signal
+import threading
+from pathlib import Path
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+from utilities.configurations import get_cache, get_logger  # noqa: E402
+from unified_broker_interface.utilities.order_engine.utilities.parent_store import ParentStore  # noqa: E402
+from unified_broker_interface.utilities.order_engine.utilities.virtual_book import VirtualBook  # noqa: E402
+
+
+class VirtualBookScript:
+    """The script: builds the book, stops it cleanly on a signal, and runs it.
+
+    Attributes:
+        logger (logging.Logger): The logger.
+        stop (threading.Event): Set by Ctrl+C or SIGTERM.
+    """
+
+    def __init__(self):
+        """Builds the script.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.logger = get_logger("unified.virtual_book")
+        self.stop = threading.Event()
+
+    def handle_signal(self, signal_number, frame):
+        """Asks the book to stop after the pass in hand.
+
+        Args:
+            signal_number (int): The signal received.
+            frame (object): The interrupted frame, unused.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        del frame
+        self.logger.info(f"Received signal {signal_number}. Finishing the pass in hand, then stopping.")
+        self.stop.set()
+
+    def run(self):
+        """Runs the book until stopped.
+
+        Returns:
+            int: The exit code.
+        """
+        for signal_number in (signal.SIGINT, signal.SIGTERM):
+            signal.signal(signal_number, self.handle_signal)
+        cache = get_cache()
+        book = VirtualBook(cache, ParentStore(cache), self.logger)
+        self.logger.info("Following held virtual limit orders on unified:quotes:stream.")
+        return book.run(self.stop)
+
+
+if __name__ == "__main__":
+    raise SystemExit(VirtualBookScript().run())
