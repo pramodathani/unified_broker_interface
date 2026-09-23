@@ -8,12 +8,17 @@ On 2026-09-15 the user asked for the method to be split up again, after measurin
 
 | Piece | Holds |
 | --- | --- |
-| `OrdersBlueprint` in this module | The token check, both Redis pipelines, the catalogue lookup, the turn and the answers |
+| `OrdersBlueprint` in this module | The token check, every Redis pipeline, the catalogue lookup and the modify and cancel answers |
+| `OrderPlacement` | Everything a placement does once Redis has been read: the turn, ranking, choosing the broker, building the request, sending it and the place answer |
+| `PreparedPlacement` | One order with a broker and a built request, not yet sent |
+| `RefusedRequestError` | A request answered without calling a broker, as a body and a status both processes can read |
 | `PlaceOrderRequest`, `ModifyOrderRequest`, `CancelOrderRequest` | Validation of the body and query string, which costs no I/O; the checks all three share live in `OrderRequest` |
 | `OrderModification` | A stored order with a modification's changes laid over it, which also costs no I/O |
-| `Instrument` and `TradeableSegments` | The instrument's segment, whether orders are sent for it, and its market key |
+| `Instrument` and `TradeableSegments` | The instrument's segment, whether orders are sent for it, its market key, and decoding all of that from the text Redis holds |
 | One `BrokerOrders` subclass per broker | The skip checks, the request, the reading of success answers and which server errors are settled refusals |
-| `BrokerOrders` itself | The HTTP call, error answers, and the accepted, rejected and unknown rules |
+| `BrokerOrders` itself | The HTTP call, error answers, the accepted, rejected and unknown rules, and decoding its own login and settings |
+
+On 2026-09-23 the placement half was moved again, into `OrderPlacement` in `unified_broker_interface/utilities/broker_orders/utilities/placement.py`, so that the order engine can place an order without building a blueprint. The rule above is unchanged and is what the new class was written around: it reads no store, and the blueprint still makes every Redis call and still calls `rotation()` itself so that the "every broker is excluded" refusal keeps costing one round trip rather than two. `orders.py` fell from 1352 lines to 1030, and all 618 recorded scenarios matched unchanged.
 
 The split was checked with `python -m test_runs.order_routes`, whose recording was made before it: all 440 scenarios, including every outgoing request's headers, body, timeout and certificate check, matched unchanged.
 
