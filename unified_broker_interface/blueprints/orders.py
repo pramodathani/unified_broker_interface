@@ -65,6 +65,11 @@ from unified_broker_interface.utilities.unified_documents import read_document
 from utilities.configurations import api_configuration
 from utilities.configurations import get_logger
 
+ORDER_PLACEMENT_MODES = (
+    'direct',
+    'engine',
+)
+
 
 class RefusedRequestError(Exception):
     """A request the order routes answer without calling a broker.
@@ -96,6 +101,7 @@ class OrdersBlueprint(BaseBlueprint):
         broker_names (list): Every broker's name, in the order the brokers take turns.
         broker_orders (dict): Each broker's name to its order class instance, built once per worker.
         broker_selector (BrokerSelector): The algorithm that orders the brokers an order is offered to, named by `UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_SELECTOR`.
+        placement_mode (str): `direct` when this worker sends orders to brokers itself, or `engine` when it hands them to the order engine, named by `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT`.
         instrument_cache (InstrumentCache): This worker's copy of the catalogue data placements and modifications have read under the current warm.
         connection_warmers (list): One `ConnectionWarmer` per broker named in `UNIFIED_BROKER_INTERFACE_API_ORDER_WARM_BROKERS`, each running on its own daemon thread.
         logger (logging.Logger): The logger for failures that do not change an answer.
@@ -117,7 +123,7 @@ class OrdersBlueprint(BaseBlueprint):
             None: This method returns nothing.
 
         Raises:
-            ValueError: When the configured broker selector is not a known one, so a misspelt name stops the worker from starting rather than routing orders some other way.
+            ValueError: When the configured broker selector or the configured order placement mode is not a known one, so a misspelt name stops the worker from starting rather than routing orders some other way.
         """
         super().__init__()
         self.logger = get_logger('rest_api.orders')
@@ -134,6 +140,12 @@ class OrdersBlueprint(BaseBlueprint):
                 f'unknown order broker selector {selector_name!r}; known selectors are {known_names}'
             )
         self.broker_selector = BROKER_SELECTOR_CLASSES[selector_name]()
+        self.placement_mode = api_configuration['order_placement']
+        if self.placement_mode not in ORDER_PLACEMENT_MODES:
+            known_modes = ', '.join(ORDER_PLACEMENT_MODES)
+            raise ValueError(
+                f'unknown order placement {self.placement_mode!r}; known modes are {known_modes}'
+            )
         self.instrument_cache = InstrumentCache()
         self.connection_warmers = []
         self.start_connection_warmers()

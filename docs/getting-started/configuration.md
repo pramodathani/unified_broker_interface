@@ -41,9 +41,25 @@ UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_SELECTOR=round_robin
 UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_PRIORITY=
 UNIFIED_BROKER_INTERFACE_API_ORDER_WARM_BROKERS=
 
+# Optional: the order engine
+UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT=direct
+UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_TIMEOUT_SECONDS=5
+UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_RESULT_TTL_SECONDS=300
+UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_STALE_INTENT_SECONDS=30
+
 # Optional: the shortest time, in seconds, between ensure_session login attempts for one broker
 UNIFIED_BROKER_INTERFACE_LOGIN_MIN_INTERVAL=300
 ```
+
+`UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT` chooses where an order is sent from. At `direct`,
+which is the default and today's behaviour, the API worker that accepted the order also sends it to
+the broker. At `engine`, the worker writes the order to a Redis stream and waits for
+`bin/unified/orders/order_engine` to place it and answer. Any other value stops the worker from
+starting, the same way an unknown broker selector does. The three `..._ORDER_ENGINE_...` variables
+are read only in `engine` mode: how long a worker waits for the engine's answer before giving up
+with HTTP 504, how long that answer is kept for a worker that never collected it, and how far past
+its deadline an order may be before the engine records it rather than placing it into a market that
+has moved.
 
 !!! danger "`.env` holds live trading credentials"
 

@@ -52,7 +52,11 @@ api_configuration = {
     'order_excluded_brokers': os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_EXCLUDED_BROKERS', '').replace(' ', '').lower().split(','),
     'order_broker_selector': os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_SELECTOR', 'round_robin').strip().lower(),
     'order_broker_priority': os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_PRIORITY', '').replace(' ', '').lower().split(','),
-    'order_warm_brokers': os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_WARM_BROKERS', '').replace(' ', '').lower().split(',')
+    'order_warm_brokers': os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_WARM_BROKERS', '').replace(' ', '').lower().split(','),
+    'order_placement': os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT', 'direct').strip().lower(),
+    'order_engine_timeout_seconds': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_TIMEOUT_SECONDS', '5')),
+    'order_engine_result_ttl_seconds': int(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_RESULT_TTL_SECONDS', '300')),
+    'order_engine_stale_intent_seconds': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_STALE_INTENT_SECONDS', '30'))
 }
 
 logging.basicConfig(format='%(asctime)s %(levelname)-8s %(name)s %(message)s', level=logging.INFO, datefmt="%Y-%m-%d %H:%M:%S")
