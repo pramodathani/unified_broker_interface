@@ -45,6 +45,7 @@ class SyntheticOrder:
     Attributes:
         SYNTHETIC_TYPE (str): The name the caller's `synthetic.type` names this class by.
         WANTS_CLOCK (bool): Whether this type is waiting for a time as well as for a fill, and so wants a tick about once a second.
+        WANTS_PRICES (bool): Whether this type is watching the market, and so wants the live quote about once a second.
         parent (ParentOrder): The parent being run.
         placement (EnginePlacement): What reads Redis, chooses a broker and sends.
         event_log (SyntheticOrderEventLog): Where transitions are recorded.
@@ -54,6 +55,7 @@ class SyntheticOrder:
 
     SYNTHETIC_TYPE = None
     WANTS_CLOCK = False
+    WANTS_PRICES = False
 
     def __init__(
         self,
@@ -235,6 +237,35 @@ class SyntheticOrder:
         """
         return False
 
+    def on_price_tick(self, quotes, now):
+        """Acts on where the market is, for a type that is watching it.
+
+        Only types that set `WANTS_PRICES` are given this, and only while their parent is open. A quote is the instrument's whole entry in `unified:quotes:live`, read once for every parent watching that instrument, so two parents can never act on two different pictures of the same moment.
+
+        It is a dictionary rather than one quote because a few types deliberately watch something other than what they trade: a cross-instrument conditional exits an option when the index moves. Most types want `own_quote` and nothing else.
+
+        A quote is None when the feed has not carried that instrument yet, which is normal early in the morning and after a feed restart. A type that cannot act without a price returns False and waits for the next tick rather than guessing.
+
+        Args:
+            quotes (dict): The live quote for each instrument this parent watches, with None where there was none.
+            now (float): The Unix time of the tick.
+
+        Returns:
+            bool: True when the parent did something, which is only used for the engine's counters.
+        """
+        return False
+
+    def own_quote(self, quotes):
+        """This parent's own instrument's quote, out of the ones a tick carried.
+
+        Args:
+            quotes (dict): The quotes the tick carried.
+
+        Returns:
+            dict | None: The quote, or None when the feed has not carried this instrument.
+        """
+        return quotes.get(self.parent.instrument_id)
+
     def cancel_leg(self, leg, reason):
         """Cancels one leg at its broker and records both the asking and the answer.
 
@@ -361,6 +392,10 @@ class SyntheticOrder:
         Returns:
             bool: True when the broker accepted the change.
         """
+        if not self.moves_the_price(leg, price, trigger_price):
+            return False
+        if not self.allowed_to_reprice(leg, reason):
+            return False
         if not self.take_rate_token(leg, reason):
             return False
         try:
@@ -385,6 +420,8 @@ class SyntheticOrder:
             })
             return False
         accepted = answer.outcome == 'accepted'
+        if accepted and self.gates is not None:
+            self.gates.record_reprice(leg.leg_id)
         self.record({
             'event': 'leg_update',
             'parent_state': self.parent.state,
@@ -405,6 +442,61 @@ class SyntheticOrder:
             },
         })
         return accepted
+
+    def moves_the_price(self, leg, price, trigger_price):
+        """Whether a change would actually move this leg, or would send the prices it already has.
+
+        A type that works out where its order should be and asks for that on every tick will most of the time ask for exactly where the order already is, because the market has not moved. Sending that is a request an exchange counts, a broker charges for and a ratio remembers, in exchange for nothing at all.
+
+        This is not a configured limit and there is nothing to tune. Moving an order to where it already is is never what the caller meant, so it is refused wherever it comes from, and nothing is recorded either: nothing happened, and a log full of moves that moved nothing would bury the ones that did.
+
+        Args:
+            leg (OrderLeg): The leg being moved.
+            price (decimal.Decimal | None): The new limit price, or None to leave it.
+            trigger_price (decimal.Decimal | None): The new trigger price, or None to leave it.
+
+        Returns:
+            bool: True when at least one of the two prices differs from what the leg carries.
+        """
+        if price is not None and self.json_number(price) != leg.price:
+            return True
+        if (
+            trigger_price is not None
+            and self.json_number(trigger_price) != leg.trigger_price
+        ):
+            return True
+        return False
+
+    def allowed_to_reprice(self, leg, reason):
+        """Whether this leg has been left alone long enough to be moved again.
+
+        A type following the market has no limit of its own, so the throttle gives it one. A refusal is recorded against the leg, because unlike a move that would change nothing this one is a move the type did want and did not get, and somebody reading the parent back needs to see that the order stayed where it was on purpose.
+
+        Args:
+            leg (OrderLeg): The leg being moved.
+            reason (str): What the move was for, for the message.
+
+        Returns:
+            bool: True when the move may be sent.
+        """
+        if self.gates is None:
+            return True
+        if self.gates.allow_reprice(leg.leg_id):
+            return True
+        self.record({
+            'event': 'leg_update',
+            'parent_state': self.parent.state,
+            'leg_id': leg.leg_id,
+            'leg_role': leg.role,
+            'broker': leg.broker,
+            'broker_order_id': leg.broker_order_id,
+            'outcome': 'rejected',
+            'status_message': (
+                f'{reason}; not sent: this order was moved less than '
+                f'{self.gates.throttle.minimum_seconds} seconds ago'
+            ),
+        })
+        return False
 
     def take_rate_token(self, leg, reason):
         """Waits for the rate budget to allow one more request to this leg's broker.

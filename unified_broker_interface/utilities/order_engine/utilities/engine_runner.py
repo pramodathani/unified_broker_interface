@@ -60,6 +60,7 @@ class OrderEngine:
         follower=None,
         gates=None,
         ticker=None,
+        price_ticker=None,
     ):
         """Builds the engine.
 
@@ -75,6 +76,7 @@ class OrderEngine:
             follower (OrderUpdateFollower | None): What applies the brokers' order updates to the legs the engine owns.
             gates (RiskGates | None): The limits every order passes.
             ticker (ClockTicker | None): What wakes the order types that are waiting for a time rather than a fill.
+            price_ticker (PriceTicker | None): What hands the live quote to the order types that are watching the market.
 
         Returns:
             None: This method returns nothing.
@@ -90,6 +92,7 @@ class OrderEngine:
         self.follower = follower
         self.gates = gates
         self.ticker = ticker
+        self.price_ticker = price_ticker
         self.placed = 0
         self.refused = 0
         self.expired = 0
@@ -175,6 +178,8 @@ class OrderEngine:
                 # touching a parent at a time, so there is nothing to lock.
                 if self.ticker is not None and self.ticker.due():
                     self.ticker.tick()
+                if self.price_ticker is not None and self.price_ticker.due():
+                    self.price_ticker.tick()
                 backoff = MINIMUM_BACKOFF_SECONDS
             except Exception as exception:
                 self.logger.error(
@@ -195,6 +200,12 @@ class OrderEngine:
             self.logger.info(
                 f'Clock: {self.ticker.ticks} ticks, {self.ticker.acted} '
                 'parents acted on one.'
+            )
+        if self.price_ticker is not None:
+            self.logger.info(
+                f'Prices: {self.price_ticker.ticks} ticks, '
+                f'{self.price_ticker.quotes_read} quotes read, '
+                f'{self.price_ticker.acted} parents acted on one.'
             )
         if self.gates is not None:
             self.logger.info(f'Risk gates: {self.gates.counts()}.')

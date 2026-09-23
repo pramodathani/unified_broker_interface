@@ -61,6 +61,7 @@ api_configuration = {
     'order_rate_per_broker_per_second': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_PER_BROKER_PER_SECOND', '5')),
     'order_rate_wait_seconds': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_WAIT_SECONDS', '1')),
     'order_daily_loss_limit': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_LOSS_LIMIT', '0')),
+    'order_reprice_minimum_seconds': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_REPRICE_MINIMUM_SECONDS', '1')),
     'order_flatten_wait_seconds': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_FLATTEN_WAIT_SECONDS', '5'))
 }
 

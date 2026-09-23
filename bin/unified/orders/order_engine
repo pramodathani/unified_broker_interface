@@ -102,7 +102,9 @@ def main():
     from unified_broker_interface.utilities.order_engine.utilities.loss_lockout import LossLockout
     from unified_broker_interface.utilities.order_engine.utilities.order_to_trade_ratio import OrderToTradeRatio
     from unified_broker_interface.utilities.order_engine.utilities.parent_store import ParentStore
+    from unified_broker_interface.utilities.order_engine.utilities.price_ticker import PriceTicker
     from unified_broker_interface.utilities.order_engine.utilities.rate_budget import RateBudget
+    from unified_broker_interface.utilities.order_engine.utilities.repricing_throttle import RepricingThrottle
     from unified_broker_interface.utilities.order_engine.utilities.risk_gates import RiskGates
     from unified_broker_interface.utilities.order_engine.utilities.synthetic_order_event_log import SyntheticOrderEventLog
 
@@ -160,6 +162,7 @@ def main():
         ),
         LossLockout(cache, api_configuration["order_daily_loss_limit"], logger),
         OrderToTradeRatio(),
+        RepricingThrottle(api_configuration["order_reprice_minimum_seconds"]),
     )
     if gates.loss_lockout.is_configured():
         logger.info(f"Refusing new orders once the day is down {api_configuration['order_daily_loss_limit']}.")
@@ -179,6 +182,7 @@ def main():
         OrderUpdateFollower(parent_store, event_log, logger, gates, placement),
         gates,
         ClockTicker(parent_store, event_log, placement, logger, gates),
+        PriceTicker(cache, parent_store, event_log, placement, logger, gates),
     )
     exit_code = engine.run(stop)
     lock.release()
