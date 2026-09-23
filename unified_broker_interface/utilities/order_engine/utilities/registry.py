@@ -1,7 +1,14 @@
 """The synthetic order types, by the name a caller's `synthetic.type` selects them with."""
 
 from unified_broker_interface.utilities.order_engine.bracket import Bracket
+from unified_broker_interface.utilities.order_engine.accumulation import (
+    Accumulation,
+)
+from unified_broker_interface.utilities.order_engine.atr_trail import AtrTrail
 from unified_broker_interface.utilities.order_engine.basket import Basket
+from unified_broker_interface.utilities.order_engine.candle_close_stop import (
+    CandleCloseStop,
+)
 from unified_broker_interface.utilities.order_engine.chaser import Chaser
 from unified_broker_interface.utilities.order_engine.cover import Cover
 from unified_broker_interface.utilities.order_engine.cross_instrument import (
@@ -56,6 +63,7 @@ from unified_broker_interface.utilities.order_engine.post_only import PostOnly
 from unified_broker_interface.utilities.order_engine.scale_out import ScaleOut
 from unified_broker_interface.utilities.order_engine.scheduled import Scheduled
 from unified_broker_interface.utilities.order_engine.simple import SimpleOrder
+from unified_broker_interface.utilities.order_engine.square_off import SquareOff
 from unified_broker_interface.utilities.order_engine.strategy_stop import (
     StrategyStop,
 )
@@ -108,4 +116,8 @@ SYNTHETIC_ORDER_CLASSES = {
     LeggedSpread.SYNTHETIC_TYPE: LeggedSpread,
     StrategyStop.SYNTHETIC_TYPE: StrategyStop,
     ExposureHedge.SYNTHETIC_TYPE: ExposureHedge,
+    CandleCloseStop.SYNTHETIC_TYPE: CandleCloseStop,
+    AtrTrail.SYNTHETIC_TYPE: AtrTrail,
+    SquareOff.SYNTHETIC_TYPE: SquareOff,
+    Accumulation.SYNTHETIC_TYPE: Accumulation,
 }

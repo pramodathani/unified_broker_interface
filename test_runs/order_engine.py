@@ -2633,6 +2633,7 @@ class OrderEngineSuite:
         tick_at,
         answer=None,
         quote=None,
+        positions=None,
     ):
         """Places one timed order, optionally fills it, then gives it a clock tick.
 
@@ -2645,6 +2646,7 @@ class OrderEngineSuite:
             tick_at (float): The Unix time to tick at.
             answer (dict | None): The stubbed broker answer.
             quote (dict | None): A live quote to seed, for a type that reads the book when it is placed.
+            positions (float | None): A net position in RELIANCE to seed, for a type that reads the account's holdings.
 
         Returns:
             dict: The recorded result.
@@ -2653,6 +2655,10 @@ class OrderEngineSuite:
         self.fake_redis = self.build_state()
         if quote is not None:
             self.seed_quote(quote)
+        if positions is not None:
+            self.fake_redis.strings['unified:portfolio:positions'] = json.dumps(
+                self.scenarios.positions(positions),
+            )
         self.network.reset(answer)
         self.counting_uuid.reset()
         reply_keys = self.write_intents(scenario)
@@ -3003,6 +3009,53 @@ class OrderEngineSuite:
                 [],
                 frozen + 10,
                 accepted,
+            ),
+            self.clock_result(
+                'a_square_off_cancels_what_is_resting_and_closes_what_is_held',
+                dict(entry, synthetic={
+                    'type': 'square_off',
+                    'at_time': '15:10',
+                }),
+                [],
+                frozen + 20000,
+                accepted,
+                quote=self.scenarios.quote(),
+                positions=8,
+            ),
+            self.clock_result(
+                'a_square_off_with_nothing_held_closes_nothing',
+                dict(entry, synthetic={
+                    'type': 'square_off',
+                    'at_time': '15:10',
+                }),
+                [],
+                frozen + 20000,
+                accepted,
+                quote=self.scenarios.quote(),
+            ),
+            self.clock_result(
+                'an_accumulation_buys_again_when_its_gap_is_up',
+                dict(entry, quantity=5, synthetic={
+                    'type': 'accumulation',
+                    'every_minutes': 30,
+                    'purchases': 4,
+                }),
+                [],
+                frozen + 2000,
+                accepted,
+                quote=self.scenarios.quote(),
+            ),
+            self.clock_result(
+                'an_accumulation_waits_out_the_gap_between_purchases',
+                dict(entry, quantity=5, synthetic={
+                    'type': 'accumulation',
+                    'every_minutes': 30,
+                    'purchases': 4,
+                }),
+                [],
+                frozen + 60,
+                accepted,
+                quote=self.scenarios.quote(),
             ),
             self.clock_result(
                 'a_vwap_gives_the_busiest_part_of_the_day_the_biggest_slice',
@@ -3463,6 +3516,78 @@ class OrderEngineSuite:
                     {'quote': self.book_at(1000.00, 1000.40), 'at': 1},
                 ],
                 accepted,
+            ),
+            self.price_result(
+                'a_candle_close_stop_sits_through_a_wick',
+                dict(entry, synthetic={
+                    'type': 'candle_close_stop',
+                    'trigger_price': 995,
+                    'bar_minutes': 1,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(990.00, 990.05), 'at': 10},
+                    {'quote': steady, 'at': 50},
+                    {'quote': steady, 'at': 70},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_candle_close_stop_fires_on_a_bar_that_closed_below',
+                dict(entry, synthetic={
+                    'type': 'candle_close_stop',
+                    'trigger_price': 995,
+                    'bar_minutes': 1,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(990.00, 990.05), 'at': 10},
+                    {'quote': self.book_at(990.00, 990.05), 'at': 50},
+                    {'quote': self.book_at(990.00, 990.05), 'at': 70},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'an_average_range_trail_uses_its_fixed_fallback_until_it_has_bars',
+                dict(entry, synthetic={
+                    'type': 'atr_trail',
+                    'trail_points': 10,
+                    'stop_limit_offset': 2,
+                    'bar_minutes': 1,
+                    'periods': 2,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1020.00, 1020.05), 'at': 1},
+                ],
+                accepted,
+                book_overrides={
+                    'order_type': 'SL',
+                    'trigger_price': 990.05,
+                },
+            ),
+            self.price_result(
+                'an_average_range_trail_widens_once_enough_bars_have_closed',
+                dict(entry, synthetic={
+                    'type': 'atr_trail',
+                    'trail_points': 10,
+                    'stop_limit_offset': 2,
+                    'bar_minutes': 1,
+                    'periods': 2,
+                    'atr_multiple': 1,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1040.00, 1040.05), 'at': 10},
+                    {'quote': self.book_at(1010.00, 1010.05), 'at': 70},
+                    {'quote': self.book_at(1060.00, 1060.05), 'at': 130},
+                    {'quote': self.book_at(1080.00, 1080.05), 'at': 190},
+                ],
+                accepted,
+                book_overrides={
+                    'order_type': 'SL',
+                    'trigger_price': 990.05,
+                },
             ),
             self.price_result(
                 'a_trailing_stop_follows_a_rising_market_and_not_a_falling_one',

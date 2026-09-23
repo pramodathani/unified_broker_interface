@@ -148,6 +148,21 @@ class FakeRedis:
         self.start_round_trip()
         return self.run_hmget(key, fields)
 
+    def hgetall(self, key):
+        """Reads every field of a hash in its own round trip.
+
+        Args:
+            key (str): The hash key.
+
+        Returns:
+            dict: The hash's fields to their values, empty when there is no such hash.
+
+        Raises:
+            redis.RedisError: When this round trip is set to fail.
+        """
+        self.start_round_trip()
+        return dict(self.hashes.get(key, {}))
+
     def incr(self, key):
         """Adds one to a string key in its own round trip.
 
