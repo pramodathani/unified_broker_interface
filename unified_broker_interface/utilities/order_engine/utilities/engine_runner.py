@@ -13,6 +13,9 @@ from unified_broker_interface.utilities.order_engine.utilities.intent_handoff im
     INTENT_STREAM_FIELD,
     INTENT_STREAM_KEY,
 )
+from unified_broker_interface.utilities.order_engine.utilities.registry import (
+    SYNTHETIC_ORDER_CLASSES,
+)
 
 GROUP = 'engine'
 CONSUMER = 'order_engine'
@@ -49,6 +52,8 @@ class OrderEngine:
         logger,
         stale_intent_seconds,
         result_ttl_seconds,
+        event_log=None,
+        parent_store=None,
     ):
         """Builds the engine.
 
@@ -59,6 +64,8 @@ class OrderEngine:
             logger (logging.Logger): The logger.
             stale_intent_seconds (float): How far past its deadline an intent may be and still be placed.
             result_ttl_seconds (int): How long an answer is kept for a worker that never came back for it.
+            event_log (SyntheticOrderEventLog | None): Where transitions are recorded.
+            parent_store (ParentStore | None): The Redis copy of the parents.
 
         Returns:
             None: This method returns nothing.
@@ -69,6 +76,8 @@ class OrderEngine:
         self.logger = logger
         self.stale_intent_seconds = stale_intent_seconds
         self.result_ttl_seconds = result_ttl_seconds
+        self.event_log = event_log
+        self.parent_store = parent_store
         self.placed = 0
         self.refused = 0
         self.expired = 0
@@ -251,10 +260,44 @@ class OrderEngine:
                 'intent_id': intent.get('intent_id'),
                 'expired_seconds': round(expired_for, 3),
             }, 409
-        intent['engine_started_at'] = time.perf_counter()
-        body, status = self.placement.place(intent)
+        started_at = time.perf_counter()
+        synthetic_order = self.synthetic_order(intent)
+        try:
+            body, status = synthetic_order.run(intent, started_at)
+        except RefusedRequestError as refusal:
+            synthetic_order.abandon(refusal.body.get('error'))
+            raise
         self.placed = self.placed + 1
         return body, status
+
+    def synthetic_order(self, intent):
+        """The runner for the kind of order an intent asks for.
+
+        Args:
+            intent (dict): The intent document.
+
+        Returns:
+            SyntheticOrder: The runner, with its parent built but nothing recorded yet.
+
+        Raises:
+            RefusedRequestError: With HTTP 400 when the named type is not one the engine runs, which is a caller's mistake rather than the engine's.
+        """
+        named_type = intent.get('synthetic_type') or 'simple'
+        synthetic_order_class = SYNTHETIC_ORDER_CLASSES.get(named_type)
+        if synthetic_order_class is None:
+            known_types = ', '.join(sorted(SYNTHETIC_ORDER_CLASSES))
+            raise RefusedRequestError.refusal(
+                f'the order engine does not run {named_type!r} orders; it runs {known_types}',
+                400,
+                intent_id=intent.get('intent_id'),
+            )
+        return synthetic_order_class.started(
+            intent,
+            self.placement,
+            self.event_log,
+            self.parent_store,
+            self.logger,
+        )
 
     def expiry_moment(self, intent):
         """The Unix time after which an intent is too old to place.

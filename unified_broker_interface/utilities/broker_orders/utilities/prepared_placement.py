@@ -12,9 +12,17 @@ class PreparedPlacement:
         broker_orders (BrokerOrders): The chosen broker's order class instance.
         broker_request (BrokerRequest): The request built for that broker, not yet sent.
         skipped (list): Each broker passed over before this one, as a dictionary with `broker` and `reason`.
+        identifier_sent (str | None): The handle value the request named the instrument by, which is the broker token or the order symbol depending on that broker's `IDENTIFIER_FIELD`.
     """
 
-    def __init__(self, instrument_id, broker_orders, broker_request, skipped):
+    def __init__(
+        self,
+        instrument_id,
+        broker_orders,
+        broker_request,
+        skipped,
+        identifier_sent=None,
+    ):
         """Builds the prepared placement.
 
         Args:
@@ -22,6 +30,7 @@ class PreparedPlacement:
             broker_orders (BrokerOrders): The chosen broker's order class instance.
             broker_request (BrokerRequest): The request built for that broker.
             skipped (list): Each broker passed over before this one.
+            identifier_sent (str | None): The handle value the request named the instrument by.
 
         Returns:
             None: This method returns nothing.
@@ -31,3 +40,4 @@ class PreparedPlacement:
         self.broker_name = broker_orders.BROKER_NAME
         self.broker_request = broker_request
         self.skipped = skipped
+        self.identifier_sent = identifier_sent

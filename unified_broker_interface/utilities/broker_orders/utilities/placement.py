@@ -283,11 +283,15 @@ class OrderPlacement:
             login,
             settings,
         )
+        identifier_sent = None
+        if isinstance(handle, dict):
+            identifier_sent = handle.get(broker_orders.IDENTIFIER_FIELD)
         return PreparedPlacement(
             instrument.instrument_id,
             broker_orders,
             broker_request,
             skipped,
+            identifier_sent,
         )
 
     def dry_run_answer(self, prepared_placement, started_at):

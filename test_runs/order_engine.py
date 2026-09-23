@@ -19,6 +19,7 @@ import pathlib
 import sys
 import logging
 import time
+import uuid
 
 import requests
 
@@ -36,6 +37,7 @@ from unified_broker_interface.utilities.order_engine.utilities.intent_handoff im
 )
 from unified_broker_interface.utilities.order_engine.utilities.order_intent import OrderIntent
 from unified_broker_interface.utilities.order_engine.utilities.parent_order import ParentOrder
+from unified_broker_interface.utilities.order_engine.utilities.parent_store import ParentStore
 from utilities.configurations import api_configuration
 
 FIXTURE_PATH = (
@@ -66,6 +68,7 @@ class FakeEngineStoreRedis(order_engine_routes.FakeEngineRedis):
         self.delivered = {}
         self.pending = {}
         self.expiries = {}
+        self.sets = {}
 
     def xgroup_create(self, key, group, id=None, mkstream=False):
         """Creates a consumer group, raising when it is already there, as Redis does.
@@ -196,6 +199,96 @@ class FakeEngineStoreRedis(order_engine_routes.FakeEngineRedis):
             return 1
         return 0
 
+    def smembers(self, key):
+        """Every member of a set.
+
+        Args:
+            key (str): The set key.
+
+        Returns:
+            set: The members.
+        """
+        self.start_round_trip()
+        return set(self.sets.get(key, set()))
+
+    def run_hset(self, key, field, value):
+        """Sets a hash field, without counting a round trip of its own.
+
+        Args:
+            key (str): The hash key.
+            field (str): The field.
+            value (str): The value.
+
+        Returns:
+            int: 1 when the field is new, and 0 when it was replaced.
+        """
+        fields = self.hashes.setdefault(key, {})
+        new_field = field not in fields
+        fields[field] = value
+        return 1 if new_field else 0
+
+    def run_sadd(self, key, member):
+        """Adds a set member, without counting a round trip of its own.
+
+        Args:
+            key (str): The set key.
+            member (str): The member.
+
+        Returns:
+            int: 1 when the member is new, and 0 when it was already there.
+        """
+        members = self.sets.setdefault(key, set())
+        new_member = member not in members
+        members.add(member)
+        return 1 if new_member else 0
+
+    def run_srem(self, key, member):
+        """Removes a set member, without counting a round trip of its own.
+
+        Args:
+            key (str): The set key.
+            member (str): The member.
+
+        Returns:
+            int: 1 when the member was there, and 0 otherwise.
+        """
+        members = self.sets.setdefault(key, set())
+        if member in members:
+            members.discard(member)
+            return 1
+        return 0
+
+    def run_expireat(self, key, moment):
+        """Records an absolute expiry on a key, without counting a round trip of its own.
+
+        Args:
+            key (str): The key.
+            moment (int): The epoch the key expires at.
+
+        Returns:
+            bool: True.
+        """
+        self.expiries[key] = moment
+        return True
+
+    def run_delete(self, key):
+        """Removes a key of any type, without counting a round trip of its own.
+
+        Args:
+            key (str): The key.
+
+        Returns:
+            int: 1 when the key existed, and 0 otherwise.
+        """
+        self.expiries.pop(key, None)
+        existed = (
+            self.strings.pop(key, None) is not None
+            or self.hashes.pop(key, None) is not None
+            or self.sets.pop(key, None) is not None
+            or self.lists.pop(key, None) is not None
+        )
+        return 1 if existed else 0
+
     def run_rpush(self, key, value):
         """Appends to a list, without counting a round trip of its own.
 
@@ -265,6 +358,71 @@ class FakeEnginePipeline(order_routes.FakePipeline):
         self.commands.append(('expire', (key, seconds)))
         return self
 
+    def hset(self, key, field, value):
+        """Queues a hash write.
+
+        Args:
+            key (str): The hash key.
+            field (str): The field.
+            value (str): The value.
+
+        Returns:
+            FakeEnginePipeline: This pipeline.
+        """
+        self.commands.append(('hset', (key, field, value)))
+        return self
+
+    def sadd(self, key, member):
+        """Queues a set addition.
+
+        Args:
+            key (str): The set key.
+            member (str): The member.
+
+        Returns:
+            FakeEnginePipeline: This pipeline.
+        """
+        self.commands.append(('sadd', (key, member)))
+        return self
+
+    def srem(self, key, member):
+        """Queues a set removal.
+
+        Args:
+            key (str): The set key.
+            member (str): The member.
+
+        Returns:
+            FakeEnginePipeline: This pipeline.
+        """
+        self.commands.append(('srem', (key, member)))
+        return self
+
+    def expireat(self, key, moment):
+        """Queues an absolute expiry.
+
+        Args:
+            key (str): The key.
+            moment (int): The epoch the key expires at.
+
+        Returns:
+            FakeEnginePipeline: This pipeline.
+        """
+        self.commands.append(('expireat', (key, moment)))
+        return self
+
+    def delete(self, key):
+        """Queues a key removal.
+
+        Args:
+            key (str): The key.
+
+        Returns:
+            FakeEnginePipeline: This pipeline.
+        """
+        self.commands.append(('delete', (key,)))
+        return self
+
     def execute(self):
         """Runs every queued command in one round trip.
 
@@ -290,12 +448,117 @@ class FakeEnginePipeline(order_routes.FakePipeline):
                 replies.append(self.fake_redis.run_rpush(*arguments))
             elif command_name == 'expire':
                 replies.append(self.fake_redis.run_expire(*arguments))
+            elif command_name == 'hset':
+                replies.append(self.fake_redis.run_hset(*arguments))
+            elif command_name == 'sadd':
+                replies.append(self.fake_redis.run_sadd(*arguments))
+            elif command_name == 'srem':
+                replies.append(self.fake_redis.run_srem(*arguments))
+            elif command_name == 'expireat':
+                replies.append(self.fake_redis.run_expireat(*arguments))
+            elif command_name == 'delete':
+                replies.append(self.fake_redis.run_delete(*arguments))
             else:
                 raise ValueError(
                     f'unsupported stand-in command: {command_name!r}'
                 )
         self.commands = []
         return replies
+
+
+class RecordingEventLog:
+    """Stands in for the event log, keeping every transition in a list instead of a database.
+
+    The engine's recovery reads this back, so the stand-in has to behave like the table in the one way that matters: `read_since` returns rows oldest first within each parent.
+
+    Attributes:
+        events (list): Every event recorded, in the order it was written.
+        failing_event (int | None): The 1-based write that raises, or None when none does.
+        writes (int): How many events have been written.
+    """
+
+    def __init__(self):
+        """Builds an empty log.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.events = []
+        self.failing_event = None
+        self.writes = 0
+
+    def apply_table(self):
+        """Does nothing, since there is no table.
+
+        Returns:
+            None: This method returns nothing.
+        """
+
+    def record(self, event):
+        """Keeps one transition.
+
+        Args:
+            event (dict): The event.
+
+        Returns:
+            None: This method returns nothing.
+
+        Raises:
+            RuntimeError: When this write is the one set to fail.
+        """
+        self.writes = self.writes + 1
+        if self.writes == self.failing_event:
+            raise RuntimeError('stand-in event log failure')
+        self.events.append(dict(event))
+
+    def record_many(self, events):
+        """Keeps several transitions.
+
+        Args:
+            events (list): The events.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        for event in events:
+            self.record(event)
+
+    def read_since(self, moment):
+        """Every transition kept, ordered as the table orders them.
+
+        Args:
+            moment (datetime.datetime): Ignored, since the stand-in keeps only one run's events.
+
+        Returns:
+            list: The events, by parent and then sequence.
+        """
+        del moment
+        return sorted(
+            self.events,
+            key=lambda event: (
+                str(event.get('parent_order_id')),
+                event.get('sequence') or 0,
+            ),
+        )
+
+    def shown(self):
+        """The events with the values that differ between runs left out.
+
+        Returns:
+            list: One dictionary per event, carrying only what a recording can compare.
+        """
+        shown = []
+        for event in self.events:
+            kept = {}
+            for name, value in event.items():
+                if name in ('time', 'engine_instance', 'parent_order_id', 'intent_id'):
+                    continue
+                if name == 'leg_id' and value:
+                    kept[name] = 'leg:' + str(value).rsplit(':', 1)[1]
+                    continue
+                kept[name] = value
+            shown.append(kept)
+        return shown
 
 
 class OnePassStop:
@@ -465,6 +728,28 @@ class OrderEngineScenarios:
                 ),
             ),
             self.intents(
+                'the_event_log_fails_before_the_order_is_sent',
+                [
+                    order,
+                ],
+                failing_event=2,
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
+                'the_event_log_fails_after_the_order_is_sent',
+                [
+                    order,
+                ],
+                failing_event=3,
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
                 'an_entry_that_is_not_an_intent_is_acknowledged',
                 [
                     order,
@@ -569,8 +854,27 @@ class OrderEngineSuite:
                     body['timing_ms'] = sorted(body['timing_ms'])
                 if isinstance(body.get('expired_seconds'), (int, float)):
                     body['expired_seconds'] = round(body['expired_seconds'])
+                if body.get('parent_id') is not None:
+                    body['parent_id'] = self.shown_parent_id(body['parent_id'])
             shown.append(reply)
         return shown
+
+    def shown_parent_id(self, parent_id):
+        """A parent's id as the recording holds it, which is its shape rather than its value.
+
+        A parent gets a fresh `uuid4` every run, and two parents in one scenario must have different ones, so patching `uuid.uuid4` the way the route suites do is not open here. What is worth pinning is that the answer carries a parent id at all and that it is a real identifier.
+
+        Args:
+            parent_id (str): The parent's id.
+
+        Returns:
+            str: `<uuid4>` when it parses as one, and the value itself when it does not.
+        """
+        try:
+            parsed = uuid.UUID(str(parent_id))
+        except ValueError:
+            return str(parent_id)
+        return f'<uuid{parsed.version}>'
 
     def run_scenario(self, scenario):
         """Runs one scenario against a fresh stand-in and a fresh engine.
@@ -588,6 +892,8 @@ class OrderEngineSuite:
         logger = logging.getLogger('test_runs.order_engine')
         placement = EnginePlacement(self.fake_redis, logger)
         lock = EngineLock(self.fake_redis, logger)
+        event_log = RecordingEventLog()
+        event_log.failing_event = scenario.get('failing_event')
         engine = OrderEngine(
             self.fake_redis,
             placement,
@@ -595,6 +901,8 @@ class OrderEngineSuite:
             logger,
             STALE_INTENT_SECONDS,
             RESULT_TTL_SECONDS,
+            event_log,
+            ParentStore(self.fake_redis),
         )
         self.fake_redis.round_trips = 0
         exit_code = engine.run(OnePassStop(scenario.get('passes', 3)))
@@ -605,6 +913,10 @@ class OrderEngineSuite:
             'exit_code': exit_code,
             'replies': self.shown_replies(reply_keys),
             'sent': copy.deepcopy(self.network.sent_requests),
+            'events': event_log.shown(),
+            'open_parents': len(self.fake_redis.sets.get('unified:orders:parents:open', set())),
+            'stored_parents': len(self.fake_redis.hashes.get('unified:orders:parents', {})),
+            'children': sorted(self.fake_redis.hashes.get('unified:orders:children', {})),
             'unacknowledged': list(delivered),
             'placed': engine.placed,
             'refused': engine.refused,

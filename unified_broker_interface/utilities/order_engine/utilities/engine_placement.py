@@ -60,20 +60,21 @@ class EnginePlacement:
         """
         self.order_placement.start_connection_warmers()
 
-    def place(self, intent):
-        """Places the order one intent describes and builds the answer for the waiting API worker.
+    def prepare(self, order, instrument_id):
+        """Reads what the order needs, chooses its broker and builds the request, without sending anything.
+
+        The seam between building and sending is where a synthetic order records that it is about to send, so that a crash mid-send leaves evidence of an order that may exist.
 
         Args:
-            intent (dict): The intent document read off the stream.
+            order (PlaceOrderRequest): The validated order.
+            instrument_id (str): The instrument the intent named.
 
         Returns:
-            tuple: The answer's body (dict) and its HTTP status (int).
+            PreparedPlacement: The chosen broker and the request built for it.
 
         Raises:
             RefusedRequestError: For an order answered without calling a broker.
         """
-        order = self.read_order(intent)
-        instrument_id = intent.get('instrument_id')
         if not instrument_id:
             raise RefusedRequestError.refusal(
                 'the intent names no instrument, so the order cannot be placed',
@@ -96,14 +97,40 @@ class EnginePlacement:
             mapping_date_text,
             warm_identifier,
         )
-        return self.order_placement.place(
+        return self.order_placement.prepare(
             order,
             instrument,
             rotation,
             selector_replies,
             login_texts,
             settings_texts,
-            intent['engine_started_at'],
+        )
+
+    def send(self, prepared_placement, started_at):
+        """Sends a prepared order to its broker and reads the answer.
+
+        Args:
+            prepared_placement (PreparedPlacement): The chosen broker and its built request.
+            started_at (float): `time.perf_counter()` when the engine took the intent.
+
+        Returns:
+            tuple: The answer's body (dict) and its HTTP status (int).
+        """
+        return self.order_placement.send(prepared_placement, started_at)
+
+    def dry_run_answer(self, prepared_placement, started_at):
+        """Answers with the request that would have been sent, without sending it.
+
+        Args:
+            prepared_placement (PreparedPlacement): The chosen broker and its built request.
+            started_at (float): `time.perf_counter()` when the engine took the intent.
+
+        Returns:
+            tuple: The answer's body (dict) and its HTTP status (int).
+        """
+        return self.order_placement.dry_run_answer(
+            prepared_placement,
+            started_at,
         )
 
     def read_order(self, intent):
