@@ -2,7 +2,9 @@
 
 import json
 import struct
+import types
 
+from stock_brokers.websockets import stoxkart as stoxkart_websockets
 from test_runs.websocket_feeds import harness
 
 QUOTES_SCRIPT = 'bin/stoxkart/instruments/websocket_quotes'
@@ -29,44 +31,6 @@ class StubStoxkartAPI(harness.StubBrokerAPI):
         'ucc_code': 'SK0001',
         'api_key': 'sk-api-key',
     }
-
-
-class ContextProviders:
-    """Stand-ins for the `get_cache` and `get_logger` the Stoxkart scripts import when they load.
-
-    Attributes:
-        context (harness.ScenarioContext): The scenario being run.
-    """
-
-    def __init__(self, context):
-        """Keeps the scenario.
-
-        Args:
-            context (harness.ScenarioContext): The scenario being run.
-
-        Returns:
-            None: This method returns nothing.
-        """
-        self.context = context
-
-    def get_cache(self):
-        """The scenario's stand-in Redis client.
-
-        Returns:
-            harness.RecordingRedis: The client.
-        """
-        return self.context.redis
-
-    def get_logger(self, name=None):
-        """The scenario's recording logger.
-
-        Args:
-            name (str | None): The logger name the script asked for.
-
-        Returns:
-            logging.Logger: The logger.
-        """
-        return self.context.logger
 
 
 class BroadcastPackets:
@@ -185,12 +149,15 @@ class StoxkartFeedCases:
             dict: Module names to stand-ins.
         """
         harness.StubBrokerAPI.logins = context.logins
+        api_module = types.ModuleType('stock_brokers.api.stoxkart')
+        api_module.StoxkartAPI = StubStoxkartAPI
         return {
+            'stock_brokers.api.stoxkart': api_module,
             'requests': context.requests_module,
         }
 
     def attribute_patches(self, context):
-        """The names the two scripts bind when they load, replaced with the scenario's stand-ins.
+        """The attributes replaced while a scenario runs; none for this broker.
 
         Args:
             context (harness.ScenarioContext): The scenario being run.
@@ -198,19 +165,7 @@ class StoxkartFeedCases:
         Returns:
             list: Tuples of an object, an attribute name and its value.
         """
-        providers = ContextProviders(context)
-        quotes = self.loader.load(QUOTES_SCRIPT)
-        orders = self.loader.load(ORDERS_SCRIPT)
-        return [
-            (quotes, 'websocket', context.websocket_module),
-            (quotes, 'get_cache', providers.get_cache),
-            (quotes, 'get_logger', providers.get_logger),
-            (orders, 'websocket', context.websocket_module),
-            (orders, 'requests', context.requests_module),
-            (orders, 'StoxkartAPI', StubStoxkartAPI),
-            (orders, 'get_cache', providers.get_cache),
-            (orders, 'get_logger', providers.get_logger),
-        ]
+        return []
 
     def datetime_holders(self):
         """The modules whose `datetime` name is frozen while a scenario runs.
@@ -220,6 +175,7 @@ class StoxkartFeedCases:
         """
         return [
             self.loader.load(ORDERS_SCRIPT),
+            stoxkart_websockets,
         ]
 
     def build_quote_stream(self, context, instruments, names):
@@ -234,7 +190,8 @@ class StoxkartFeedCases:
             object: The stream, with an instant stop event.
         """
         script = self.loader.load(QUOTES_SCRIPT)
-        stream = script.StoxkartQuoteStream(instruments, names)
+        store = script.StoxkartQuotesStore(context.redis)
+        stream = stoxkart_websockets.StoxkartQuoteStream(instruments, names, store.write_ticks, context.logger)
         context.use_instant_stop_event(stream)
         return stream
 
@@ -248,8 +205,9 @@ class StoxkartFeedCases:
             object: The socket, with an instant stop event.
         """
         script = self.loader.load(ORDERS_SCRIPT)
-        stoxkart = script.StoxkartAPI()
-        socket = script.StoxkartOrderSocket(stoxkart)
+        session = stoxkart_websockets.StoxkartSession()
+        store = script.StoxkartOrderUpdatesStore(context.redis, context.logger)
+        socket = stoxkart_websockets.StoxkartOrderSocket(session, store.write_updates, context.logger)
         context.use_instant_stop_event(socket)
         return socket
 

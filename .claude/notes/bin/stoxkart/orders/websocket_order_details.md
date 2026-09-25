@@ -27,3 +27,7 @@ No order update had been received when the script was written, because Stoxkart 
 ## Why the stream entry carries the normalized order
 
 Other brokers' stream entries are `{"timestamp", "data"}`, and `bin/<broker>/orders/store_orders_to_db` and `bin/unified/orders/websocket_order_details` each carry a copy of that broker's normalizer to rebuild the order. Because Stoxkart's normalizer is provisional, three copies would have to be corrected together when the real format is seen. The entry therefore also carries `order`, which `bin/stoxkart/orders/store_orders_to_db` stores and `bin/unified/orders/websocket_order_details` uses directly, so the one normalizer in this script is the only one to correct.
+
+## Where the socket went
+
+On 2026-09-25 the socket this note describes moved out of the script into `StoxkartOrderSocket` in `stock_brokers/websockets/stoxkart.py`, which also has a note of its own. The script now writes to Redis what the socket hands it. Where this note names the old class or function, the same code now lives there, and the offline recording in `test_runs/websocket_feeds/` shows the move changed nothing the script writes to Redis.

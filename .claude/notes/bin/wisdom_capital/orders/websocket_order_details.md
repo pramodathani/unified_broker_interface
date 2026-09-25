@@ -23,3 +23,7 @@ If the token never changes, for example because something outside this project l
 ## How it was checked
 
 An offline harness in the session scratchpad loaded the script with `SourceFileLoader`, replaced `pinned_get`, `websocket.WebSocketApp` and the API class with fakes, and ran the real `run_forever` through three cases: a logout followed by a new token (reconnects with the new token and never constructs the API), a logout with an unchanged token (constructs the API once), and no stored token at first (constructs the API once, then connects). `_user_id_from_token` was also checked to return a user id for the real stored token and None for malformed tokens.
+
+## Where the socket went
+
+On 2026-09-25 the socket this note describes moved out of the script into `WisdomCapitalOrderUpdatesSocket` in `stock_brokers/websockets/wisdom_capital.py`, which also has a note of its own. The script now writes to Redis what the socket hands it. Where this note names the old class or function, the same code now lives there, and the offline recording in `test_runs/websocket_feeds/` shows the move changed nothing the script writes to Redis.

@@ -17,7 +17,7 @@ others.
 
 ```text
 bin/
-├── <broker>/                 self-contained scripts: login, pollers, feeds, persisters, instruments, history
+├── <broker>/                 scripts: login, pollers, feeds, persisters, instruments, history
 ├── unified/                  scripts that combine every broker from Redis and the database
 └── rest-api, rest-api-app, search-instruments, zerodha-quote, check-broker-connections, check-services, import-api-details, wait-for-redis
 services/
@@ -106,14 +106,19 @@ broker's class in `stock_brokers/api/`. The line between the two is Redis:
 | The reconnect loop, from `BrokerWebsocket` in `base.py` | Arguments, signals, threads and exit codes |
 
 A socket hands what it decodes to a function its script gives it, on the socket's own thread, at the moment
-the old self-contained script wrote Redis, so the order and timing of the writes are what they were. Each
+the scripts wrote Redis when they carried their own sockets, so the order and timing of the writes are what
+they were. Each
 broker's file is self-contained: sockets share only the reconnect loop, and a broker's two sockets share its
 session. The script's docstring stays the reference for its keys, fields and exit codes, and the socket
 module's docstring for the protocol. The pollers are unchanged: each still carries its own requests and
 normalization.
 
-Every broker's sockets but Stoxkart's have moved. Stoxkart's scripts still carry their sockets inside them
-until they move, checked against the offline recording in `test_runs/websocket_feeds/`.
+Most sockets run the loop in `base.py` as it is. Dhan's, Groww's and Kotak's quote sockets give up only
+after six more failed connects, through the one method a subclass may override. Fyers' quote socket and
+Wisdom Capital's order socket keep a loop of their own - the base loop plus a pause after a Cloudflare ban,
+and a wait for the replacing login after a logout. Stoxkart's two streams read a synchronous connection and
+do not use `BrokerWebsocket` at all. Every socket is covered by the offline recording in
+`test_runs/websocket_feeds/`, which is what a change to one is checked against.
 
 ## Two connections per broker, not one
 

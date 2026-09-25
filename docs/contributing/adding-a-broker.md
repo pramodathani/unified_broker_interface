@@ -87,8 +87,9 @@ is a million series and up, and a walk that repeats one window is much cheaper t
 Create `bin/<broker>/`, one self-contained script per job, each starting with the `run_under_venv`
 bootstrap and carrying a module docstring that is its full reference. The existing brokers' directories are
 the pattern; take the script from the broker on the same platform where there is one. For the two websocket
-scripts, follow Zerodha's, whose sockets are in `stock_brokers/websockets/zerodha.py`, and add the broker's
-cases to `test_runs/websocket_feeds/`.
+scripts, first add `stock_brokers/websockets/<broker>.py` with the broker's session and its two
+`BrokerWebsocket` subclasses, following Zerodha's, then the scripts that run them, and add the broker's cases
+to `test_runs/websocket_feeds/` and its name to `BROKER_CASES` there.
 
 | Script | What it needs from the broker |
 | --- | --- |
