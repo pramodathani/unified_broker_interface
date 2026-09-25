@@ -1,0 +1,68 @@
+<svg class="ubi-svg" viewBox="0 0 960 400" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="market-data-title market-data-description">
+  <title id="market-data-title">One tick from a broker socket to the unified quote</title>
+  <desc id="market-data-description">Ticks leave each broker's websocket, a per-broker script writes them to a live hash and a stream in Redis, a persister copies the stream into the broker's ticks table, and the unified script reads every broker's stream, keeps one owner per instrument and writes the unified live hash, the unified stream and the unified ticks table.</desc>
+  <text class="small" x="90" y="48" text-anchor="middle">broker websockets</text>
+  <rect class="box" x="20" y="60" width="140" height="36" rx="4"/><text x="90" y="83" text-anchor="middle">Kite ticker</text>
+  <rect class="box" x="20" y="120" width="140" height="36" rx="4"/><text x="90" y="143" text-anchor="middle">DhanHQ feed</text>
+  <rect class="box" x="20" y="180" width="140" height="36" rx="4"/><text x="90" y="203" text-anchor="middle">Noren feeds</text>
+  <rect class="box" x="20" y="240" width="140" height="36" rx="4"/><text x="90" y="263" text-anchor="middle">six more feeds</text>
+  <path id="market-data-feed-one" class="wire" d="M160,78 C178,78 178,175 195,175"/>
+  <path id="market-data-feed-two" class="wire" d="M160,138 C178,138 178,175 195,175"/>
+  <path id="market-data-feed-three" class="wire" d="M160,198 C178,198 178,175 195,175"/>
+  <path id="market-data-feed-four" class="wire" d="M160,258 C178,258 178,175 195,175"/>
+  <rect class="box" x="195" y="130" width="150" height="90" rx="8"/>
+  <text class="title" x="270" y="160" text-anchor="middle">websocket_quotes</text>
+  <text class="small" x="270" y="180" text-anchor="middle">one per broker</text>
+  <text class="small" x="270" y="196" text-anchor="middle">bin/&lt;broker&gt;/instruments</text>
+  <path id="market-data-live" class="wire" d="M345,160 C362,160 362,75 380,75"/>
+  <path id="market-data-stream" class="wire" d="M345,175 L380,175"/>
+  <rect class="store" x="380" y="50" width="180" height="50" rx="8"/>
+  <text x="470" y="71" text-anchor="middle">latest tick per instrument</text>
+  <text class="mono" x="470" y="89" text-anchor="middle">&lt;broker&gt;:quotes:live</text>
+  <rect class="store" x="380" y="150" width="180" height="50" rx="8"/>
+  <text x="470" y="171" text-anchor="middle">every tick, in order</text>
+  <text class="mono" x="470" y="189" text-anchor="middle">&lt;broker&gt;:quotes:stream</text>
+  <path id="market-data-persist" class="wire" d="M470,200 L470,250"/>
+  <text class="small" x="478" y="230">group persist</text>
+  <rect class="box" x="380" y="250" width="180" height="40" rx="6"/>
+  <text class="mono" x="470" y="274" text-anchor="middle">store_quotes_to_db</text>
+  <path id="market-data-copy" class="wire" d="M470,290 L470,325"/>
+  <rect class="store" x="380" y="325" width="180" height="50" rx="8"/>
+  <text class="title" x="470" y="346" text-anchor="middle">TimescaleDB</text>
+  <text class="mono" x="470" y="364" text-anchor="middle">&lt;broker&gt;.ticks</text>
+  <path id="market-data-unified" class="wire" d="M560,175 L600,175"/>
+  <text class="small" x="580" y="163" text-anchor="middle">group unified</text>
+  <rect class="accent-box" x="600" y="135" width="160" height="80" rx="8"/>
+  <text class="title" x="680" y="160" text-anchor="middle">unified</text>
+  <text class="title" x="680" y="178" text-anchor="middle">websocket_quotes</text>
+  <text class="small" x="680" y="198" text-anchor="middle">resolve, gate, one owner</text>
+  <path id="market-data-unified-live" class="wire" d="M760,160 C775,160 775,75 790,75"/>
+  <path id="market-data-unified-stream" class="wire" d="M760,175 L790,175"/>
+  <rect class="store" x="790" y="50" width="160" height="50" rx="8"/>
+  <text x="870" y="71" text-anchor="middle">one quote per instrument</text>
+  <text class="mono" x="870" y="89" text-anchor="middle">unified:quotes:live</text>
+  <rect class="store" x="790" y="150" width="160" height="50" rx="8"/>
+  <text x="870" y="171" text-anchor="middle">every quote written</text>
+  <text class="mono" x="870" y="189" text-anchor="middle">unified:quotes:stream</text>
+  <path id="market-data-unified-persist" class="wire" d="M870,200 L870,250"/>
+  <text class="small" x="878" y="230">group persist</text>
+  <rect class="box" x="790" y="250" width="160" height="40" rx="6"/>
+  <text class="mono" x="870" y="274" text-anchor="middle">store_quotes_to_db</text>
+  <path id="market-data-unified-copy" class="wire" d="M870,290 L870,325"/>
+  <rect class="store" x="790" y="325" width="160" height="50" rx="8"/>
+  <text class="title" x="870" y="346" text-anchor="middle">TimescaleDB</text>
+  <text class="mono" x="870" y="364" text-anchor="middle">unified.ticks</text>
+  <circle class="dot" r="5"><animateMotion dur="1.6s" repeatCount="indefinite"><mpath href="#market-data-feed-one"/></animateMotion></circle>
+  <circle class="dot" r="5"><animateMotion dur="1.6s" begin="-0.4s" repeatCount="indefinite"><mpath href="#market-data-feed-two"/></animateMotion></circle>
+  <circle class="dot" r="5"><animateMotion dur="1.6s" begin="-0.8s" repeatCount="indefinite"><mpath href="#market-data-feed-three"/></animateMotion></circle>
+  <circle class="dot" r="5"><animateMotion dur="1.6s" begin="-1.2s" repeatCount="indefinite"><mpath href="#market-data-feed-four"/></animateMotion></circle>
+  <circle class="dot" r="5"><animateMotion dur="1.2s" repeatCount="indefinite"><mpath href="#market-data-live"/></animateMotion></circle>
+  <circle class="dot" r="5"><animateMotion dur="0.8s" repeatCount="indefinite"><mpath href="#market-data-stream"/></animateMotion></circle>
+  <circle class="dot alt" r="5"><animateMotion dur="1.4s" repeatCount="indefinite"><mpath href="#market-data-persist"/></animateMotion></circle>
+  <circle class="dot alt" r="5"><animateMotion dur="1.2s" begin="-0.5s" repeatCount="indefinite"><mpath href="#market-data-copy"/></animateMotion></circle>
+  <circle class="dot" r="5"><animateMotion dur="0.9s" begin="-0.2s" repeatCount="indefinite"><mpath href="#market-data-unified"/></animateMotion></circle>
+  <circle class="dot ok" r="5"><animateMotion dur="1.2s" begin="-0.6s" repeatCount="indefinite"><mpath href="#market-data-unified-live"/></animateMotion></circle>
+  <circle class="dot ok" r="5"><animateMotion dur="0.8s" begin="-0.6s" repeatCount="indefinite"><mpath href="#market-data-unified-stream"/></animateMotion></circle>
+  <circle class="dot alt" r="5"><animateMotion dur="1.4s" begin="-0.9s" repeatCount="indefinite"><mpath href="#market-data-unified-persist"/></animateMotion></circle>
+  <circle class="dot alt" r="5"><animateMotion dur="1.2s" begin="-1.3s" repeatCount="indefinite"><mpath href="#market-data-unified-copy"/></animateMotion></circle>
+</svg>
