@@ -225,7 +225,7 @@ class KotakAPI(BrokerAPI):
             self._cache.rpush('broker_api_calls', rest_api_message)
             self._logger.info(rest_api_message)        
 
-        response = requests.request(method=method, url=url, params=params, data=data, headers=headers, json=json)
+        response = requests.request(method=method, url=url, params=params, data=data, headers=headers, cookies=cookies, files=files, auth=auth, timeout=timeout, allow_redirects=allow_redirects, proxies=proxies, hooks=hooks, stream=stream, verify=verify, cert=cert, json=json)
         
         if response.status_code < 300:
             content = {
