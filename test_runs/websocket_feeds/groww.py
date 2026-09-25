@@ -67,8 +67,11 @@ class GrowwFeedCases:
             'requests': context.requests_module,
         }
 
-    def attribute_patches(self):
+    def attribute_patches(self, context):
         """Makes every generated ed25519 key the same fixed key while a scenario runs.
+
+        Args:
+            context (harness.ScenarioContext): The scenario being run.
 
         Returns:
             list: Tuples of an object, an attribute name and its value.

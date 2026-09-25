@@ -749,16 +749,98 @@ class FakeWebsocketApplication:
         self.module.event_log.add('close_connection')
 
 
+class FakeSynchronousConnection:
+    """A stand-in for the `websocket.WebSocket` that `websocket.create_connection` returns, playing one scripted connection.
+
+    A step is `('receive', opcode, data)` for a frame `recv_data` returns, `('timeout',)` for a receive that times out, `('raise', error)` for one that fails, or `('call', function)` to change the world between receives.
+    When the steps run out, the scenario ends: the plan's `on_exhausted` is called and the receive times out.
+
+    Attributes:
+        module (FakeWebsocketModule): The fake module that made it.
+        steps (list): The receives still to play.
+    """
+
+    def __init__(self, module, steps):
+        """Keeps the steps.
+
+        Args:
+            module (FakeWebsocketModule): The fake module that made it.
+            steps (list): The scripted receives.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.module = module
+        self.steps = list(steps)
+
+    def send_binary(self, data):
+        """Records a binary frame sent to the broker.
+
+        Args:
+            data (bytes): The frame.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.module.event_log.add('send', data, FakeAbnf.OPCODE_BINARY)
+
+    def send(self, data):
+        """Records a text frame sent to the broker.
+
+        Args:
+            data (str): The frame.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.module.event_log.add('send', data, None)
+
+    def recv_data(self):
+        """Plays the next scripted receive.
+
+        Returns:
+            tuple: The opcode and the frame's bytes.
+
+        Raises:
+            TimeoutError: For a timed-out receive, and once the steps run out.
+            Exception: The step's error, for a `raise` step.
+        """
+        while self.steps:
+            step = self.steps.pop(0)
+            if step[0] == 'call':
+                step[1]()
+                continue
+            if step[0] == 'receive':
+                return step[1], step[2]
+            if step[0] == 'timeout':
+                raise TimeoutError('timed out')
+            if step[0] == 'raise':
+                raise step[1]
+            raise ValueError(f'Unknown receive step: {step!r}')
+        self.module.plan.on_exhausted()
+        raise TimeoutError('timed out')
+
+    def close(self):
+        """Records that the socket closed its connection.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.module.event_log.add('close_connection')
+
+
 class FakeAbnf:
     """The websocket frame opcodes websocket-client names on its `ABNF` class.
 
     Attributes:
         OPCODE_TEXT (int): The text frame opcode.
         OPCODE_BINARY (int): The binary frame opcode.
+        OPCODE_CLOSE (int): The close frame opcode.
     """
 
     OPCODE_TEXT = 0x1
     OPCODE_BINARY = 0x2
+    OPCODE_CLOSE = 0x8
 
 
 class FakeWebsocketModule(types.ModuleType):
@@ -788,6 +870,29 @@ class FakeWebsocketModule(types.ModuleType):
         self.event_log = event_log
         self.plan = plan
         self.peer_certificate = None
+
+    def create_connection(self, url, **keyword_arguments):
+        """Opens a fake synchronous connection that plays the next scripted connection, as `websocket.create_connection` would.
+
+        Args:
+            url (str): The URL to connect to.
+            **keyword_arguments: The options, such as the timeout.
+
+        Returns:
+            FakeSynchronousConnection: The connection.
+
+        Raises:
+            ConnectionRefusedError: When every scripted connection has been played, after ending the scenario.
+            Exception: The step's error, when the connection's first step is `('raise', error)`.
+        """
+        self.event_log.add('connect', url, keyword_arguments)
+        steps = self.plan.next_connection()
+        if steps is None:
+            self.plan.on_exhausted()
+            raise ConnectionRefusedError(111, 'No scripted connection is left')
+        if steps and steps[0][0] == 'raise':
+            raise steps[0][1]
+        return FakeSynchronousConnection(self, steps)
 
     def WebSocketApp(self, url, **keyword_arguments):  # pylint: disable=invalid-name
         """Builds a fake application, as `websocket.WebSocketApp(...)` would.
@@ -1218,6 +1323,20 @@ class ScenarioContext:
         """
         socket._stop = InstantEvent(self.event_log, self.clock)
         self.plan.on_exhausted = socket.close
+
+    def use_instant_stop_event(self, stream):
+        """Replaces the public stop event of a stream that runs its own loop, so its waits return at once and are recorded.
+
+        The scenario ends by setting the stop event when the scripted connections run out.
+
+        Args:
+            stream (object): The stream, which keeps its stop event in `stop`.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        stream.stop = InstantEvent(self.event_log, self.clock)
+        self.plan.on_exhausted = stream.stop.set
 
 
 class ScriptLoader:

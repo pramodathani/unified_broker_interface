@@ -59,8 +59,11 @@ class ShoonyaFeedCases:
             'stock_brokers.api.shoonya': api_module,
         }
 
-    def attribute_patches(self):
+    def attribute_patches(self, context):
         """The attributes replaced while a scenario runs; none for this broker.
+
+        Args:
+            context (harness.ScenarioContext): The scenario being run.
 
         Returns:
             list: Tuples of an object, an attribute name and its value.
