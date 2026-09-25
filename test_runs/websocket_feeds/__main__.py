@@ -9,6 +9,7 @@ import time
 
 from test_runs.websocket_feeds import dhan
 from test_runs.websocket_feeds import flattrade
+from test_runs.websocket_feeds import fyers
 from test_runs.websocket_feeds import groww
 from test_runs.websocket_feeds import harness
 from test_runs.websocket_feeds import indmoney
@@ -23,6 +24,7 @@ FIXTURE_PATH = (
 BROKER_CASES = {
     'dhan': dhan.DhanFeedCases,
     'flattrade': flattrade.FlattradeFeedCases,
+    'fyers': fyers.FyersFeedCases,
     'groww': groww.GrowwFeedCases,
     'indmoney': indmoney.IndmoneyFeedCases,
     'shoonya': shoonya.ShoonyaFeedCases,
