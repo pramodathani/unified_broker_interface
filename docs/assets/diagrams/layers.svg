@@ -1,0 +1,60 @@
+<svg class="ubi-svg" viewBox="0 0 900 390" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="layers-title layers-description">
+  <title id="layers-title">One tick through the three layers</title>
+  <desc id="layers-description">A tick leaves a broker websocket, is decoded by the broker's quote script and appended to the Redis Stream of that broker. The unified combiner reads the stream as the consumer group unified and writes the unified quote into the Redis hash unified:quotes:live, which GET /api/instruments/ltp reads for your program. In parallel the persister reads the same stream as the consumer group persist and copies the tick into TimescaleDB.</desc>
+  <text class="small" x="100" y="24" text-anchor="middle">broker</text>
+  <text class="small" x="330" y="24" text-anchor="middle">broker layer: bin/&lt;broker&gt;/</text>
+  <text class="small" x="580" y="24" text-anchor="middle">shared store</text>
+  <text class="small" x="800" y="24" text-anchor="middle">unified layer: bin/unified/</text>
+  <rect class="box" x="20" y="40" width="160" height="60" rx="8"/>
+  <text class="title" x="100" y="66" text-anchor="middle">Broker websocket</text>
+  <text class="small" x="100" y="85" text-anchor="middle">the broker's own protocol</text>
+  <path id="layers-decode" class="wire" d="M180,70 L240,70"/>
+  <rect class="box" x="240" y="40" width="180" height="60" rx="8"/>
+  <text class="title" x="330" y="66" text-anchor="middle">Broker quote script</text>
+  <text class="mono" x="330" y="85" text-anchor="middle">websocket_quotes</text>
+  <path id="layers-append" class="wire" d="M420,70 L480,70"/>
+  <text class="small" x="450" y="60" text-anchor="middle">XADD</text>
+  <rect class="store" x="480" y="35" width="200" height="70" rx="8"/>
+  <text class="title" x="580" y="58" text-anchor="middle">Redis Stream</text>
+  <text class="mono" x="580" y="76" text-anchor="middle">&lt;broker&gt;:quotes:stream</text>
+  <text class="small" x="580" y="93" text-anchor="middle">capped near 1,000,000 entries</text>
+  <path id="layers-unified-read" class="wire" d="M680,70 L715,70"/>
+  <rect class="box" x="715" y="40" width="170" height="60" rx="8"/>
+  <text class="title" x="800" y="62" text-anchor="middle">Unified combiner</text>
+  <text class="mono" x="800" y="78" text-anchor="middle">websocket_quotes</text>
+  <text class="small" x="800" y="93" text-anchor="middle">consumer group unified</text>
+  <path id="layers-live-write" class="wire" d="M800,100 L800,165"/>
+  <text class="small" x="808" y="137">HSET</text>
+  <rect class="store" x="715" y="165" width="170" height="64" rx="8"/>
+  <text class="title" x="800" y="190" text-anchor="middle">Redis hash</text>
+  <text class="mono" x="800" y="208" text-anchor="middle">unified:quotes:live</text>
+  <text class="small" x="800" y="222" text-anchor="middle">one quote per instrument</text>
+  <path id="layers-api-read" class="wire" d="M800,229 L800,295"/>
+  <text class="small" x="808" y="266">HGET</text>
+  <rect class="accent-box" x="715" y="295" width="170" height="64" rx="8"/>
+  <text class="title" x="800" y="318" text-anchor="middle">REST API</text>
+  <text class="mono" x="800" y="336" text-anchor="middle">GET /api/instruments/ltp</text>
+  <text class="small" x="800" y="351" text-anchor="middle">unified_broker_interface/</text>
+  <path id="layers-answer" class="wire" d="M715,327 L630,327"/>
+  <rect class="box" x="480" y="307" width="150" height="40" rx="20"/>
+  <text x="555" y="332" text-anchor="middle">Your program</text>
+  <path id="layers-persist-read" class="wire" d="M580,105 L580,170"/>
+  <rect class="box" x="480" y="170" width="200" height="60" rx="8"/>
+  <text class="title" x="580" y="192" text-anchor="middle">Persister</text>
+  <text class="mono" x="580" y="208" text-anchor="middle">store_quotes_to_db</text>
+  <text class="small" x="580" y="222" text-anchor="middle">consumer group persist</text>
+  <path id="layers-copy" class="wire" d="M480,200 L420,200"/>
+  <text class="small" x="450" y="191" text-anchor="middle">COPY</text>
+  <rect class="store" x="240" y="170" width="180" height="60" rx="8"/>
+  <text class="title" x="330" y="192" text-anchor="middle">TimescaleDB</text>
+  <text class="mono" x="330" y="208" text-anchor="middle">&lt;broker&gt;.ticks</text>
+  <text class="small" x="330" y="222" text-anchor="middle">a batch at a time</text>
+  <text class="small" x="130" y="265">The broker script never writes PostgreSQL,</text>
+  <text class="small" x="130" y="281">and the unified combiner never calls a broker.</text>
+  <text class="small" x="130" y="297">Both groups read every entry of the same stream.</text>
+  <path id="layers-route-live" fill="none" d="M100,70 L800,70 L800,327 L555,327"/>
+  <path id="layers-route-persist" fill="none" d="M100,70 L580,70 L580,200 L330,200"/>
+  <circle class="dot" r="6"><animateMotion dur="5s" repeatCount="indefinite" calcMode="linear"><mpath href="#layers-route-live"/></animateMotion></circle>
+  <circle class="dot alt" r="6"><animateMotion dur="5s" repeatCount="indefinite" calcMode="linear" keyPoints="0;0.558;1" keyTimes="0;0.4;1"><mpath href="#layers-route-persist"/></animateMotion></circle>
+  <circle class="dot ok" r="4"><animateMotion dur="1.2s" repeatCount="indefinite"><mpath href="#layers-answer"/></animateMotion></circle>
+</svg>

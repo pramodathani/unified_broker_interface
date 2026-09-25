@@ -1,12 +1,11 @@
 site_name: Unified Broker Interface
-site_description: One normalized interface over ten Indian retail brokers - REST, market data, order updates, positions and instrument masters.
+site_description: One REST API over ten Indian stock brokers - quotes, candles, orders, positions and instrument masters, combined into one account.
 site_author: Pramod Athani
 copyright: Copyright &copy; Pramod Athani
-
-# Uncomment once this project has a remote, to get "Edit this page" links and a repo card.
-# repo_url: https://github.com/<owner>/unified_broker_interface
-# repo_name: unified_broker_interface
-# edit_uri: edit/main/docs/
+site_url: https://pramodathani.github.io/unified_broker_interface/
+repo_url: https://github.com/pramodathani/unified_broker_interface
+repo_name: pramodathani/unified_broker_interface
+edit_uri: edit/main/docs/
 
 theme:
   name: material
@@ -21,15 +20,15 @@ theme:
         name: Follow the system theme
     - media: "(prefers-color-scheme: light)"
       scheme: default
-      primary: indigo
-      accent: indigo
+      primary: deep orange
+      accent: deep orange
       toggle:
         icon: material/brightness-7
         name: Switch to dark mode
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
-      primary: indigo
-      accent: indigo
+      primary: deep orange
+      accent: deep orange
       toggle:
         icon: material/brightness-4
         name: Switch to light mode
@@ -37,20 +36,29 @@ theme:
     - navigation.instant
     - navigation.tracking
     - navigation.tabs
+    - navigation.tabs.sticky
     - navigation.sections
     - navigation.indexes
     - navigation.top
+    - navigation.footer
     - toc.follow
     - search.suggest
     - search.highlight
     - search.share
     - content.code.copy
+    - content.action.edit
+    - content.action.view
     - content.code.annotate
     - content.tabs.link
     - content.tooltips
 
 extra_css:
   - stylesheets/extra.css
+
+extra_javascript:
+  - https://cdn.jsdelivr.net/npm/vega@5
+  - https://cdn.jsdelivr.net/npm/vega-lite@5
+  - https://cdn.jsdelivr.net/npm/vega-embed@6
 
 markdown_extensions:
   - abbr
@@ -64,7 +72,6 @@ markdown_extensions:
       permalink: true
       toc_depth: 3
   - pymdownx.details
-  # Renders the :material-…: and :octicons-…: shortcodes as inline SVG icons.
   - pymdownx.emoji:
       emoji_index: !!python/name:material.extensions.emoji.twemoji
       emoji_generator: !!python/name:material.extensions.emoji.to_svg
@@ -80,6 +87,9 @@ markdown_extensions:
         - name: mermaid
           class: mermaid
           format: !!python/name:pymdownx.superfences.fence_code_format
+        - name: vegalite
+          class: vegalite
+          format: !!python/name:mkdocs_charts_plugin.fences.fence_vegalite
   - pymdownx.tabbed:
       alternate_style: true
       slugify: !!python/object/apply:pymdownx.slugs.slugify
@@ -94,6 +104,9 @@ markdown_extensions:
 
 plugins:
   - search
+  - charts:
+      vega_theme_light: default
+      vega_theme_dark: dark
   - gen-files:
       scripts:
         - utilities/gen_ref_pages.py
@@ -109,9 +122,6 @@ plugins:
             docstring_style: google
             docstring_section_style: table
             docstring_options:
-              # Docstrings here write "Returns:\n    pandas.DataFrame: ...", which is a type and
-              # not a named value. Without this, griffe reads the type as a name and then warns
-              # that the return has no type - which --strict turns into a build failure.
               returns_named_value: false
               warn_unknown_params: false
             show_root_heading: true
@@ -131,38 +141,57 @@ plugins:
 
 watch:
   - stock_brokers
+  - unified_broker_interface
   - utilities
 
 nav:
   - Home: index.md
-  - Getting started:
-      - getting-started/index.md
-      - Installation: getting-started/installation.md
-      - Configuration: getting-started/configuration.md
-      - Data stores: getting-started/data-stores.md
+  - Get started:
+      - get-started/index.md
+      - Installation: get-started/installation.md
+      - Configuration: get-started/configuration.md
+      - First run: get-started/first-run.md
+  - REST API:
+      - rest-api/index.md
+      - Session: rest-api/session.md
+      - Users, brokers and exchanges: rest-api/details.md
+      - Instruments: rest-api/instruments.md
+      - Market quotes: rest-api/market-quotes.md
+      - Historical data: rest-api/historical-data.md
+      - Portfolio: rest-api/portfolio.md
+      - Orders: rest-api/orders.md
+      - Flatten everything: rest-api/flatten.md
+      - Order engine: rest-api/order-engine.md
+      - Synthetic orders: rest-api/synthetic-orders.md
+      - Price and quantity references: rest-api/price-quantity-references.md
+      - Constants: rest-api/constants.md
+      - Errors and status codes: rest-api/errors.md
+      - Test page: rest-api/test-page.md
   - Architecture:
       - architecture/index.md
-      - Normalized contracts: architecture/contracts.md
-      - Redis keys: architecture/redis-keys.md
-  - Brokers:
-      - brokers/index.md
-      - Coverage matrix: brokers/coverage.md
-  - Guides:
-      - Broker scripts: guides/broker-scripts.md
-      - Unified scripts: guides/unified-scripts.md
-      - Instrument masters: guides/instruments.md
-      - Instrument mapping: guides/instrument-mapping.md
-      - Price history: guides/price-history.md
-      - Unified price history: guides/unified-price-history.md
-      - Running it as a service: guides/services.md
-      - REST API: guides/rest-api.md
-      - Test runs: guides/test-runs.md
-  - Database:
-      - database/index.md
-      - DDL and migrations: database/ddl.md
-  - Contributing:
-      - Adding a broker: contributing/adding-a-broker.md
-      - Pitfalls: contributing/pitfalls.md
-      - Known issues: contributing/known-issues.md
-      - Writing docs: contributing/documentation.md
-  - API reference: reference/
+      - Design choices: architecture/design-choices.md
+      - Data contracts: architecture/contracts.md
+      - Redis keys and streams: architecture/redis-keys.md
+      - Database: architecture/database.md
+      - Sessions and logins: architecture/sessions.md
+  - Data pipelines:
+      - pipelines/index.md
+      - Market data: pipelines/market-data.md
+      - Orders and positions: pipelines/orders-and-positions.md
+      - Portfolio: pipelines/portfolio.md
+      - Instrument masters and mapping: pipelines/instrument-masters.md
+      - Price history: pipelines/price-history.md
+  - Brokers: brokers/index.md
+  - Operations:
+      - operations/index.md
+      - Services: operations/services.md
+      - Daily schedule: operations/schedule.md
+      - Scripts: operations/scripts.md
+      - Offline tests: operations/tests.md
+  - Project:
+      - project/index.md
+      - Repository structure: project/structure.md
+      - Per-broker packages: project/per-broker-packages.md
+      - Adding a broker: project/adding-a-broker.md
+      - Writing these docs: project/writing-docs.md
+  - Code reference: reference/

@@ -1,0 +1,80 @@
+<svg class="ubi-svg" viewBox="0 0 900 420" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="direct-vs-engine-title direct-vs-engine-description">
+  <title id="direct-vs-engine-title">Direct placement and engine placement</title>
+  <desc id="direct-vs-engine-description">In direct mode the API worker sends the order to the broker itself. In engine mode the API worker writes an intent to a Redis stream, the single order engine reads it and sends the order, and the engine pushes the answer onto a per-intent Redis list that the waiting API worker is blocked on.</desc>
+  <text class="title" x="20" y="28">direct (the default)</text>
+  <rect class="box" x="20" y="50" width="130" height="44" rx="22"/>
+  <text x="85" y="77" text-anchor="middle">Your program</text>
+  <rect class="accent-box" x="210" y="45" width="160" height="54" rx="8"/>
+  <text class="title" x="290" y="68" text-anchor="middle">API worker</text>
+  <text class="small" x="290" y="86" text-anchor="middle">validates, chooses, sends</text>
+  <rect class="box" x="720" y="50" width="160" height="44" rx="6"/>
+  <text x="800" y="77" text-anchor="middle">Broker</text>
+  <path id="direct-vs-engine-top-request" class="wire" d="M150,72 L210,72"/>
+  <path id="direct-vs-engine-top-send" class="wire" d="M370,72 L720,72"/>
+  <text class="small" x="545" y="62" text-anchor="middle">one HTTP request</text>
+  <line class="wire-solid" x1="20" y1="130" x2="880" y2="130" stroke-dasharray="2 4"/>
+  <text class="title" x="20" y="162">engine</text>
+  <rect class="box" x="20" y="240" width="130" height="44" rx="22"/>
+  <text x="85" y="267" text-anchor="middle">Your program</text>
+  <rect class="box" x="210" y="235" width="160" height="54" rx="8"/>
+  <text class="title" x="290" y="258" text-anchor="middle">API worker</text>
+  <text class="small" x="290" y="276" text-anchor="middle">validates, resolves, waits</text>
+  <rect class="store" x="400" y="180" width="200" height="50" rx="8"/>
+  <text x="500" y="201" text-anchor="middle">intent stream</text>
+  <text class="mono" x="500" y="219" text-anchor="middle">unified:orders:intents:stream</text>
+  <rect class="accent-box" x="630" y="220" width="110" height="90" rx="8"/>
+  <text class="title" x="685" y="252" text-anchor="middle">Order</text>
+  <text class="title" x="685" y="270" text-anchor="middle">engine</text>
+  <text class="small" x="685" y="290" text-anchor="middle">group engine</text>
+  <rect class="box" x="770" y="243" width="110" height="44" rx="6"/>
+  <text x="825" y="270" text-anchor="middle">Broker</text>
+  <rect class="store" x="400" y="340" width="200" height="50" rx="8"/>
+  <text x="500" y="361" text-anchor="middle">answer list</text>
+  <text class="mono" x="500" y="379" text-anchor="middle">…:intents:result:&lt;intent_id&gt;</text>
+  <path id="direct-vs-engine-request" class="wire" d="M150,258 L210,258"/>
+  <path id="direct-vs-engine-xadd" class="wire" d="M370,250 C390,250 380,205 400,205"/>
+  <path id="direct-vs-engine-read" class="wire" d="M600,205 C625,205 610,240 630,240"/>
+  <path id="direct-vs-engine-send" class="wire" d="M740,265 L770,265"/>
+  <path id="direct-vs-engine-push" class="wire" d="M685,310 C685,365 640,365 600,365"/>
+  <path id="direct-vs-engine-blpop" class="wire" d="M400,365 C320,365 290,330 290,289"/>
+  <path id="direct-vs-engine-answer" class="wire" d="M210,272 L150,272"/>
+  <text class="small" x="372" y="186" text-anchor="end">XADD</text>
+  <text class="small" x="330" y="340" text-anchor="end">BLPOP</text>
+  <text class="small" x="700" y="382">RPUSH</text>
+  <circle class="dot alt" r="6" opacity="0">
+    <animateMotion dur="7s" repeatCount="indefinite" keyPoints="0;1;1" keyTimes="0;0.08;1" calcMode="linear"><mpath href="#direct-vs-engine-top-request"/></animateMotion>
+    <animate attributeName="opacity" dur="7s" repeatCount="indefinite" values="1;1;0;0" keyTimes="0;0.08;0.09;1"/>
+  </circle>
+  <circle class="dot alt" r="6" opacity="0">
+    <animateMotion dur="7s" repeatCount="indefinite" keyPoints="0;0;1;1" keyTimes="0;0.1;0.3;1" calcMode="linear"><mpath href="#direct-vs-engine-top-send"/></animateMotion>
+    <animate attributeName="opacity" dur="7s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.1;0.11;0.3;0.31;1"/>
+  </circle>
+  <circle class="dot" r="6" opacity="0">
+    <animateMotion dur="7s" repeatCount="indefinite" keyPoints="0;1;1" keyTimes="0;0.08;1" calcMode="linear"><mpath href="#direct-vs-engine-request"/></animateMotion>
+    <animate attributeName="opacity" dur="7s" repeatCount="indefinite" values="1;1;0;0" keyTimes="0;0.08;0.09;1"/>
+  </circle>
+  <circle class="dot" r="6" opacity="0">
+    <animateMotion dur="7s" repeatCount="indefinite" keyPoints="0;0;1;1" keyTimes="0;0.1;0.18;1" calcMode="linear"><mpath href="#direct-vs-engine-xadd"/></animateMotion>
+    <animate attributeName="opacity" dur="7s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.1;0.11;0.18;0.19;1"/>
+  </circle>
+  <circle class="dot" r="6" opacity="0">
+    <animateMotion dur="7s" repeatCount="indefinite" keyPoints="0;0;1;1" keyTimes="0;0.2;0.28;1" calcMode="linear"><mpath href="#direct-vs-engine-read"/></animateMotion>
+    <animate attributeName="opacity" dur="7s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.2;0.21;0.28;0.29;1"/>
+  </circle>
+  <circle class="dot" r="6" opacity="0">
+    <animateMotion dur="7s" repeatCount="indefinite" keyPoints="0;0;1;1" keyTimes="0;0.31;0.38;1" calcMode="linear"><mpath href="#direct-vs-engine-send"/></animateMotion>
+    <animate attributeName="opacity" dur="7s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.31;0.32;0.38;0.39;1"/>
+  </circle>
+  <circle class="dot ok" r="6" opacity="0">
+    <animateMotion dur="7s" repeatCount="indefinite" keyPoints="0;0;1;1" keyTimes="0;0.45;0.56;1" calcMode="linear"><mpath href="#direct-vs-engine-push"/></animateMotion>
+    <animate attributeName="opacity" dur="7s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.45;0.46;0.56;0.57;1"/>
+  </circle>
+  <circle class="dot ok" r="6" opacity="0">
+    <animateMotion dur="7s" repeatCount="indefinite" keyPoints="0;0;1;1" keyTimes="0;0.58;0.7;1" calcMode="linear"><mpath href="#direct-vs-engine-blpop"/></animateMotion>
+    <animate attributeName="opacity" dur="7s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.58;0.59;0.7;0.71;1"/>
+  </circle>
+  <circle class="dot ok" r="6" opacity="0">
+    <animateMotion dur="7s" repeatCount="indefinite" keyPoints="0;0;1;1" keyTimes="0;0.72;0.8;1" calcMode="linear"><mpath href="#direct-vs-engine-answer"/></animateMotion>
+    <animate attributeName="opacity" dur="7s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.72;0.73;0.8;0.81;1"/>
+  </circle>
+</svg>

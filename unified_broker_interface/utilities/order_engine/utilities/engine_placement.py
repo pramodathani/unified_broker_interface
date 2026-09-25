@@ -208,7 +208,7 @@ class EnginePlacement:
     def stored_order(self, broker_name, broker_order_id):
         """One order as the broker's own order book in Redis holds it.
 
-        A cancel or a modification cannot be built from what the engine remembers sending. Several brokers need values only their order book carries — Zerodha's `variety`, Kotak's after-market flag, Wisdom Capital's unique identifier — and `docs/contributing/pitfalls.md` records each of them as a live failure found the hard way.
+        A cancel or a modification cannot be built from what the engine remembers sending. Several brokers need values only their order book carries — Zerodha's `variety`, Kotak's after-market flag, Wisdom Capital's unique identifier — and each of them was found the hard way, as a live failure.
 
         Args:
             broker_name (str): The broker.

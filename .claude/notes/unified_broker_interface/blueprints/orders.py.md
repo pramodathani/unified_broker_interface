@@ -128,7 +128,7 @@ How a broker's order API counts quantity on these markets is a per-broker fact k
 
 ## The midnight gap
 
-The `unified:catalogue:` keys expire at midnight and are warmed after the 07:45 mapping, so the endpoint refuses every order in between. Falling back to PostgreSQL would break the rule that an order never waits on the database. This is recorded in `docs/contributing/known-issues.md`.
+The `unified:catalogue:` keys expire at midnight and are warmed after the 07:45 mapping, so the endpoint refuses every order in between. Falling back to PostgreSQL would break the rule that an order never waits on the database. This is recorded in `docs/contributing/known-issues.md` (removed in the documentation rebuild; read it with `git show b884d54:docs/contributing/known-issues.md`).
 
 ## Why Stoxkart's Algo-ID goes in a header
 
@@ -244,7 +244,7 @@ The same evening, at the user's request and with their approval before each orde
 
 ## The live round at every broker
 
-Later that evening the user asked for one round of place, modify and cancel at every broker, and gave permission to run it without asking before each order. A scratchpad helper ran the round in-process at one broker at a time, with every other broker excluded, on an after-market NSE buy of one KWIL share at ₹33, near ₹41 in the market, and checked each change in Redis before the next step. The results, and each broker's refusal, are in `docs/contributing/known-issues.md` and `docs/contributing/pitfalls.md`.
+Later that evening the user asked for one round of place, modify and cancel at every broker, and gave permission to run it without asking before each order. A scratchpad helper ran the round in-process at one broker at a time, with every other broker excluded, on an after-market NSE buy of one KWIL share at ₹33, near ₹41 in the market, and checked each change in Redis before the next step. The results, and each broker's refusal, are in `docs/contributing/known-issues.md` (removed in the documentation rebuild; read it with `git show b884d54:docs/contributing/known-issues.md`) and `docs/contributing/pitfalls.md` (removed in the documentation rebuild; read it with `git show b884d54:docs/contributing/pitfalls.md`).
 
 The round changed three things in the code:
 

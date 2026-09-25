@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The project connects to ten Indian stock brokers (Dhan, Flattrade, Fyers, Groww, INDmoney, Kotak, Shoonya, Stoxkart, Wisdom Capital and Zerodha) and presents them as one account. Broker scripts collect sessions, quotes, orders, positions, instrument masters and candles into Redis and TimescaleDB, unified scripts combine every broker's data into one view, and a Flask REST API serves that view.
 
-The `docs/` directory is a detailed MkDocs site and is the authoritative reference. Read the relevant page before changing a subsystem, and read `docs/contributing/pitfalls.md` before touching sessions, feeds, the candle queue or database writes, because every entry there is a bug that passed review and only failed against a live broker.
+The `docs/` directory is a detailed MkDocs site and is the authoritative reference. Read the relevant page before changing a subsystem. The REST API has its own tab, `docs/rest-api/`, with one page per endpoint group.
 
 ## Commands
 
@@ -44,7 +44,7 @@ There is no `pyproject.toml`, no build step and no pytest suite. The project roo
 | Load the REST API's detail collections | `bin/import-api-details /path/to/exports` (`--calendars-only` re-copies trading hours and holidays) |
 | Show one Zerodha symbol's master row, LTP, OHLC and book | `bin/zerodha-quote INFY` (a live Zerodha account) |
 | Docs, live reload | `mkdocs serve` |
-| Docs, as CI should build them | `mkdocs build --strict` |
+| Docs, as CI builds them | `mkdocs build --strict` (`.github/workflows/docs.yml` runs it on every pull request and publishes `main` to https://pramodathani.github.io/unified_broker_interface/) |
 
 Lint is not clean on an untouched tree. `ruff check .` reports 41 findings on `main`, almost all of them in `stock_brokers/api/` and `test_runs/`: star imports and the names they hide (`F403`, `F405`), assigned but unused variables (`F841`), comparisons to `True` and `False` with `==` (`E712`), unused imports (`F401`) and one lambda bound to a name (`E731`). Treat that as the baseline, and judge a change by whether it adds a finding rather than by whether the run is silent.
 
@@ -107,13 +107,13 @@ Seven packages read this way: `api/`, `websockets/`, `instruments/mapping/`, `in
 | `unified_broker_interface/utilities/broker_quotes/` | `BrokerQuoteSource` | Fetching a quote and turning it into a tick |
 | `unified_broker_interface/utilities/broker_orders/` | `BrokerOrders` | `MARKETS`, the place, modify and cancel requests, `MODIFIABLE_FIELDS`, and reading a success answer; the blueprint does every Redis read |
 
-Adding a broker touches many registries (`INGESTERS`, `ADAPTERS`, `MAPPED_BROKERS`, `DOWNLOADERS`, `NORMALIZERS`, `SOURCES`, `API_CLASSES`, `BROKER_ORDER_CLASSES`, and the `BROKERS` lists inside each `bin/unified/` combiner). `docs/contributing/adding-a-broker.md` lists them in order. `MAPPED_BROKERS` in `mapping/utilities/segments.py` is a processing order, not an unordered list.
+Adding a broker touches many registries (`INGESTERS`, `ADAPTERS`, `MAPPED_BROKERS`, `DOWNLOADERS`, `NORMALIZERS`, `SOURCES`, `API_CLASSES`, `BROKER_ORDER_CLASSES`, and the `BROKERS` lists inside each `bin/unified/` combiner). `docs/project/adding-a-broker.md` lists them in order. `MAPPED_BROKERS` in `mapping/utilities/segments.py` is a processing order, not an unordered list.
 
 ### Choosing a broker for an order
 
 `POST /api/orders/place` names an instrument, not a broker, so something has to decide which broker receives it. That decision is a class of its own in `unified_broker_interface/utilities/broker_selection/`, subclassing `BrokerSelector` and registered in `BROKER_SELECTOR_CLASSES` in `utilities/registry.py`. Two exist: `round_robin.py`, which is the default and keeps its turn counter in the Redis key `unified:orders:round_robin` so every gunicorn worker shares one rotation, and `fixed_priority.py`, which puts the brokers named in `UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_PRIORITY` first and needs no Redis at all. `UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_SELECTOR` picks between them, and an unknown name stops the API from starting rather than falling back.
 
-A selector reads Redis by queueing commands onto the pipeline the blueprint is already sending, through `queue_redis_commands`, instead of opening a round trip of its own. `docs/guides/rest-api.md` counts the round trips each one costs.
+A selector reads Redis by queueing commands onto the pipeline the blueprint is already sending, through `queue_redis_commands`, instead of opening a round trip of its own. `docs/rest-api/orders.md` counts the round trips each one costs.
 
 ### Sessions and logins
 
@@ -125,7 +125,7 @@ A broker API class first tries an authenticated call with the stored token and o
 
 Each broker has its own PostgreSQL schema named after it (`zerodha.ticks`, `zerodha.instruments`, `zerodha.price_history`), and cross-broker data lives in the `unified` schema. There is no shared table with a broker column. Tables are TimescaleDB hypertables.
 
-Schemas live only in numbered `.sql` files under four `sql/ddl/` directories, applied in filename order. There is no migration tool and no version table: every statement must be re-runnable (`IF NOT EXISTS`, `CREATE OR REPLACE`), and adding a column means appending `ALTER TABLE … ADD COLUMN IF NOT EXISTS` to the table's existing file. A file runs inside one transaction, so it must not contain continuous aggregates or `CREATE INDEX CONCURRENTLY`. The tick stream DDL has no runner; each `persist_*` script applies its own broker's file when it starts. `docs/database/ddl.md` has the ordering rules for a fresh database.
+Schemas live only in numbered `.sql` files under four `sql/ddl/` directories, applied in filename order. There is no migration tool and no version table: every statement must be re-runnable (`IF NOT EXISTS`, `CREATE OR REPLACE`), and adding a column means appending `ALTER TABLE … ADD COLUMN IF NOT EXISTS` to the table's existing file. A file runs inside one transaction, so it must not contain continuous aggregates or `CREATE INDEX CONCURRENTLY`. The tick stream DDL has no runner; each `persist_*` script applies its own broker's file when it starts. `docs/architecture/database.md` has the ordering rules for a fresh database.
 
 ### Services
 
@@ -135,7 +135,7 @@ Everything runs as systemd **user** units in `services/<broker>/`, `services/uni
 
 ## Documentation
 
-Docs live with the code and change in the same commit. Narrative pages are hand-written under `docs/` and must be added to `nav` in `mkdocs.yml`. API reference pages are generated at build time from docstrings by `utilities/gen_ref_pages.py`, so a new module appears without edits. Cross-reference code with `[`Name`][dotted.path.to.Name]`; `mkdocs build --strict` fails on an unresolvable reference. Use `!!! danger` only for anything that can place a live order or lose data. When a broker is added or its behaviour changes, update `docs/brokers/coverage.md`, `docs/brokers/index.md` and the tables in `docs/guides/broker-scripts.md`. Record unfixed problems in `docs/contributing/known-issues.md` and live-only bugs in `docs/contributing/pitfalls.md`.
+Docs live with the code and change in the same commit. Narrative pages are hand-written under `docs/` and must be added to `nav` in `mkdocs.yml`. API reference pages are generated at build time from docstrings by `utilities/gen_ref_pages.py`, so a new module appears without edits. Cross-reference code with `[`Name`][dotted.path.to.Name]`; `mkdocs build --strict` fails on an unresolvable reference. Use `!!! danger` only for anything that can place a live order or lose data. When a broker is added or its behaviour changes, update the coverage matrix and the broker's tab in `docs/brokers/index.md` and the tables in `docs/operations/scripts.md`. When a route is added or changed, update its page under `docs/rest-api/` and the master table in `docs/rest-api/index.md`; every endpoint page follows the Kite Connect style template described in `docs/project/writing-docs.md`, which also lists the site's visual conventions (method badges, Mermaid, Vega-Lite charts and animated SVG diagrams in `docs/assets/diagrams/`).
 
 ## Testing against live feeds
 

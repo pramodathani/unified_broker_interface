@@ -1,146 +1,143 @@
 # Architecture
 
-The project is two layers of scripts and a REST API over one set of shared stores, built on the packages
-in `stock_brokers`. The layers are deliberately independent: each broker's scripts run without any other
-broker's, every script does one thing and needs no other process running, the unified scripts read only
-Redis and the database and never call a broker, and a broker missing from one part does not hold up the
-others.
+The system is built as three independent layers sitting over three shared data stores. The bottom layer talks to the brokers, the middle layer combines what the brokers said into one view, and the top layer serves that view over HTTP. The layers never call each other; each one reads what the layer below it left in Redis or TimescaleDB, and writes its own results there.
 
-| Layer | Where | What it does |
-| --- | --- | --- |
-| Broker scripts | `bin/<broker>/` | The only code that talks to a broker: sessions, pollers, quote and order update feeds, persisters, instrument masters and candles. See [Broker scripts](../guides/broker-scripts.md) |
-| Unified scripts | `bin/unified/` | Every broker combined from Redis and the database: instruments, price history, quotes, orders and the portfolio. See [Unified scripts](../guides/unified-scripts.md) |
-| REST API | `unified_broker_interface` | One HTTP interface over the unified layer. See [REST API](../guides/rest-api.md) |
-| Services | `services/<broker>/`, `services/unified/`, `services/databases/` | The systemd user units that run all of it, and the ones that keep the database containers up. See [Running it as a service](../guides/services.md) |
+A useful way to picture it is a newsroom. Ten reporters (the broker scripts) each file raw copy in their own language onto their own spike (a Redis Stream). An editor (the unified layer) reads every spike, translates, picks the best version of each story and pins it on one board (a Redis hash). Readers (your program, through the REST API) only ever look at the board. The archive clerk (a persister) reads the same spikes independently and files everything into the archive (TimescaleDB).
 
-## Package layout
+## One tick through the system
 
-```text
-bin/
-├── <broker>/                 scripts: login, pollers, feeds, persisters, instruments, history
-├── unified/                  scripts that combine every broker from Redis and the database
-└── rest-api, rest-api-app, search-instruments, zerodha-quote, check-broker-connections, check-services, import-api-details, wait-for-redis
-services/
-├── <broker>/                 the systemd user units that run bin/<broker>/
-├── unified/                  the units that run bin/unified/ and the REST API
-└── databases/                the units that start any stopped container from docker-compose.yml
+The animation below follows a single price update from a broker's server to your program. The orange dot is the tick on its way to the API. The blue dot is the same tick being archived, which happens in parallel and never delays the orange one.
 
-stock_brokers/
-├── api/                      REST: login, then authenticated requests
-│   ├── base.py               BrokerAPI, BrokerAPIException
-│   ├── <broker>.py           one per broker
-│   └── utilities/session.py  ensure_session: log in once, safely, from any process
-├── websockets/               the quote and order update feeds' connections, logins and frame decoding
-│   ├── base.py               BrokerWebsocket: the reconnect loop, backoff and giving up
-│   └── <broker>.py           one per broker: its session, quotes socket and order updates socket
-└── instruments/              daily instrument masters
-    ├── base.py               BrokerInstruments: clean, dedupe, write
-    ├── orchestrator.py       run every broker, one try/except each
-    ├── sql/apply_ddl.py      the DDL runner
-    ├── sql/ddl/*.sql         schemas and instrument tables
-    ├── <broker>.py           one per broker: where the file is, what shape it arrives in
-    ├── mapping/              every broker's instruments onto unified.instruments and unified.broker_mappings
-    │   ├── base.py           BrokerMappingAdapter: rules, identity, the database writes
-    │   ├── <broker>.py       one per broker: only what its rules file cannot express
-    │   └── utilities/        rules files, orchestrator, cache, resolution, collisions, and the mapping DDL
-    ├── historical/           historical candles into <broker>.price_history
-    │   ├── base.py           BrokerCandles: the queue, rate limiter, watermarks
-    │   ├── noren.py          the platform Flattrade and Shoonya share
-    │   ├── <broker>.py       one per broker: endpoint, intervals, window caps
-    │   └── utilities/        the registry, the unified price history, and the price history DDL and its runner
-    └── ticks/                what each broker's tick values mean, for the REST API's broker quotes
-        ├── base.py           TickNormalizer: token segments, lots, close, timestamps
-        ├── <broker>.py       one per broker
-        └── utilities/        pipeline, registry, resolution, sessions and calendars, sources, and the stream DDL
+<figure class="diagram">
+--8<-- "docs/assets/diagrams/layers.svg"
+<figcaption>The orange dot is one tick travelling from the broker's websocket to GET /api/instruments/ltp; the blue dot is the same tick read from the same stream by the persister and copied into TimescaleDB.</figcaption>
+</figure>
 
-unified_broker_interface/     the REST API
-├── api.py, wsgi.py           the Flask application and the gunicorn entry point
-├── blueprints/               one module per group of endpoints
-└── utilities/                the token store, instrument lookups, the per-broker order and quote modules,
-                              and the order route's broker selectors
+The numbered steps below describe the same journey in words, with the script and the Redis key at each step.
 
-utilities/
-├── configurations.py         the environment, and the clients built from it
-├── bootstrap.py              runs a bin/ script under the virtual environment
-├── poll_reporter.py          PollReporter: one journal line per change, not per cycle
-└── gen_ref_pages.py          builds the API reference pages during a docs build
+1. `bin/<broker>/instruments/websocket_quotes` receives the tick on the broker's websocket and decodes it into the [tick shape](contracts.md#the-tick) every broker shares.
+2. In one Redis pipeline, it replaces the instrument's entry in the hash `<broker>:quotes:live` and appends the tick to the stream `<broker>:quotes:stream`, which is capped near 1,000,000 entries.
+3. `bin/unified/instruments/websocket_quotes` reads all ten brokers' streams as the consumer group `unified`. It resolves the broker's token to a unified instrument, drops ticks outside the trading session and ticks from a broker that does not currently own the instrument, normalizes prices and quantities, and writes the [unified quote](contracts.md#the-unified-quote) into the hash `unified:quotes:live`.
+4. `GET /api/instruments/ltp` reads the instrument's entry from `unified:quotes:live`. Only when no fresh quote is there does it ask a broker directly.
+5. Separately, `bin/<broker>/instruments/store_quotes_to_db` reads the same stream as the consumer group `persist` and writes the tick into `<broker>.ticks` with `COPY`, a batch at a time.
 
-test_runs/                    manual scripts: offline suites, the REST API test page, a live login check
+## The three layers
+
+The diagram below shows the layers and the stores between them. Solid arrows are writes and dashed arrows are reads.
+
+```mermaid
+flowchart TB
+    B["Broker REST APIs<br/>and websockets"]
+    subgraph L1["Broker layer: bin/&lt;broker&gt;/"]
+        S1["session, user, orders,<br/>portfolio, instruments scripts"]
+        P1["store_*_to_db persisters"]
+    end
+    subgraph ST["Shared stores"]
+        R[("Redis<br/>hashes + streams")]
+        PG[("TimescaleDB<br/>one schema per broker<br/>+ unified schema")]
+        M[("MongoDB<br/>settings, last_login,<br/>detail collections")]
+    end
+    subgraph L2["Unified layer: bin/unified/"]
+        U1["combiners, mapping,<br/>price history, persisters"]
+    end
+    subgraph L3["REST API: unified_broker_interface/"]
+        A["Flask blueprints"]
+    end
+    B <--> S1
+    S1 --> R
+    S1 --> M
+    R -.-> P1
+    P1 --> PG
+    R -.-> U1
+    PG -.-> U1
+    M -.-> U1
+    U1 --> R
+    U1 --> PG
+    R -.-> A
+    PG -.-> A
+    M -.-> A
+    A -->|orders, quote fallback| B
 ```
 
-## What lives beside the broker modules
+Each layer can run without the others, and each broker's scripts run without any other broker's. If the Zerodha scripts stop, the other nine brokers keep flowing and the unified layer keeps combining them. If the unified layer stops, the broker scripts keep collecting and the persisters keep archiving; the REST API then answers `503` for documents that have gone stale and names the key.
 
-A package that implements something once per broker holds exactly three kinds of file:
-`__init__.py`, a `base.py` with the class the brokers subclass, and one `<broker>.py` each.
-Everything else the subsystem needs - an orchestrator or registry, SQL and its runner, schema
-definitions, helpers - goes in a `utilities/` subpackage inside that same package.
+## Which layer may talk to what
 
-`api/`, `websockets/`, `instruments/mapping/`, `instruments/historical/`, `instruments/ticks/` and the REST API's `broker_quotes/`
-and `broker_orders/` all read this way, which is what makes "which brokers are implemented here" a question answered by listing the
-directory. In `historical/`, `ticks/` and `broker_orders/` the module Flattrade and Shoonya share, as deployments of one
-platform, sits beside them as `noren.py`.
+The rules below are what keep the layers independent. The table shows, for each part of the system, whether it talks to each other part.
 
-The top level of the repository is deliberately small - `stock_brokers/`, `unified_broker_interface/`,
-`utilities/`, `test_runs/`, `docs/`, `bin/`, `services/` - and a helper script belongs in the existing
-`utilities` package rather than in a new folder of its own.
+| Part | Brokers | Redis | TimescaleDB | MongoDB |
+|---|---|---|---|---|
+| Broker scripts, `bin/<broker>/` except persisters | :material-check: the only code that polls or streams from a broker | Writes `<broker>:*` keys and streams | :material-close: never, not even the websocket scripts | Reads `settings`; a login writes `last_login` |
+| Broker persisters, `bin/<broker>/*/store_*_to_db` | :material-close: | Reads streams as group `persist` | Writes `<broker>.ticks`, `order_updates`, `positions` | :material-close: |
+| Broker downloads, `daily_feed` and `price_history` | :material-check: | `daily_feed` writes `<broker>:instruments:*` | Writes `<broker>.instruments`, `price_history` | Through the login, when one is needed |
+| Unified scripts, `bin/unified/` | :material-close: never, with the order engine as the one exception | Reads `<broker>:*`, writes `unified:*` | Reads broker tables, writes `unified.*` | Reads detail collections and `settings` |
+| Order engine, `bin/unified/orders/order_engine` | :material-check: places orders, only when `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT=engine` | Reads intents, writes answers and its caches | Writes `unified.synthetic_order_events` | :material-close: |
+| REST API, `unified_broker_interface/` | :material-check: for order routes, and for a quote when no fresh one is cached; it never logs a broker in | Reads `unified:*`, the `last_login` and `settings` hashes | Reads the unified tables | Reads `settings`, writes its own `last_login` document |
 
-## `utilities` at every level
+The REST API reads a broker's token but never logs a broker in. When a broker refuses a quote request because the session is dead, the API starts that broker's `<broker>-login.service` and moves on to the next broker. [Sessions and logins](sessions.md#what-the-rest-api-does-with-a-dead-session) describes this.
 
-There is a `utilities` package at the project root, one in `unified_broker_interface`, and a `utilities/`
-subpackage inside each per-broker package, and they are different things. The root one holds configuration,
-the shared clients and the helpers every `bin/` script uses; the nested ones hold what their own package
-needs beside its broker modules. All keep the descriptive name rather than being shortened to `utils`, so
-imports read plainly and none is mistaken for a scratch drawer.
+## The three stores
 
-## Feed scripts over socket classes
+Each store does one job. The table below says what each one holds and why that store was chosen for it.
 
-A broker's quote feed and order update feed are scripts in `bin/<broker>/`, but the websocket each one runs
-is a class in `stock_brokers/websockets/<broker>.py`, in the same way that every REST call goes through the
-broker's class in `stock_brokers/api/`. The line between the two is Redis:
+| Store | Holds | Why this store |
+|---|---|---|
+| Redis | Current state (the latest quote, order, position and document), the streams that buffer every feed, the instrument caches, locks and counters | Every read route answers from memory, and a stream lets a slow reader fall behind without slowing the writer |
+| TimescaleDB | Ticks, order updates, position snapshots, instrument snapshots and price history | Hypertables split the time series into chunks and compress old ones |
+| MongoDB | Broker credentials (`settings`), login tokens (`last_login`) and the three detail collections | Each broker needs a different set of credential fields, which suits documents better than columns |
 
-| `stock_brokers/websockets/<broker>.py` | The script in `bin/<broker>/` |
-| --- | --- |
-| The session the sockets log in with, and logging in again when a token is refused | Which instruments to subscribe to, and how they are split across sockets |
-| Connecting, subscribing, pings, the broker's refusals | Every Redis write: the live hash, the stream, the instruments hash, the order merge |
-| Decoding frames into [normalized ticks](contracts.md), and picking the order messages out of the feed | Normalizing orders and positions, with the same tables as the broker's poller |
-| The reconnect loop, from `BrokerWebsocket` in `base.py` | Arguments, signals, threads and exit codes |
+## Where to go next
 
-A socket hands what it decodes to a function its script gives it, on the socket's own thread, at the moment
-the scripts wrote Redis when they carried their own sockets, so the order and timing of the writes are what
-they were. Each
-broker's file is self-contained: sockets share only the reconnect loop, and a broker's two sockets share its
-session. The script's docstring stays the reference for its keys, fields and exit codes, and the socket
-module's docstring for the protocol. The pollers are unchanged: each still carries its own requests and
-normalization.
+The pages in this tab go deeper into each part of the design.
 
-Most sockets run the loop in `base.py` as it is. Dhan's, Groww's and Kotak's quote sockets give up only
-after six more failed connects, through the one method a subclass may override. Fyers' quote socket and
-Wisdom Capital's order socket keep a loop of their own - the base loop plus a pause after a Cloudflare ban,
-and a wait for the replacing login after a logout. Stoxkart's two streams read a synchronous connection and
-do not use `BrokerWebsocket` at all. Every socket is covered by the offline recording in
-`test_runs/websocket_feeds/`, which is what a change to one is checked against.
+<div class="grid cards" markdown>
 
-## Two connections per broker, not one
+-   :material-scale-balance:{ .lg .middle } **Design choices**
 
-Each broker's `websocket_order_details` script holds its own connection, separate from `websocket_quotes`, even where the broker
-would allow both on one. A quote feed reconnect then can never drop an order event, and the order stream can
-run without spending any market data quota. Flattrade permits only one websocket per session, so there
-`flattrade-orders@websocket_order_details` is not run and its orders come from the poller alone. Zerodha is the other
-exception, in the opposite direction: `bin/zerodha/instruments/websocket_quotes` splits today's whole instrument master across 24
-websockets, so Zerodha holds 25 connections rather than two. See
-[Known issues](../contributing/known-issues.md#broker-limits).
+    ---
 
-## What a subclass has to write
+    Why the system is built this way: each decision with its problem, its reasoning and its cost.
 
-The base classes are built so that a broker module is only the part that is genuinely
-broker-specific.
+    [:octicons-arrow-right-24: Design choices](design-choices.md)
 
-| Subsystem | A subclass implements | Everything else |
-| --- | --- | --- |
-| REST | `__init__` (the login flow) and `_request` | `get`, `post`, `put`, `patch`, `delete` |
-| Instruments | `download()`, plus the dedupe key | Cleaning, de-duplication, the database write, the row count canary |
-| Mapping | `BROKER_NAME` and a rules file; `classify`, `to_identity` or `read_raw_rows` only where the rules cannot say it | Classification, identity, the upsert |
-| Price history | Six class attributes, `fetch_candles` and `parse_response` | The rate limiter, the queue, the watermarks, the backoff, the upsert |
-| Tick normalization | `feed_key` and the class attributes stating lots, close policy and trusted timestamps | Resolution plans, unit conversion, rounding, instants |
-| Broker quotes | `fetch` and `is_authentication_error` | The cache check, the order brokers are tried in, normalization through the broker's `TickNormalizer` |
-| Broker orders | `MARKETS`, `build_place_request`, `build_cancel_request` and `read_order_id`; `MODIFIABLE_FIELDS` and `build_modify_request` where the broker modifies orders | Settings and quantity checks, the pooled session, sending, reading refusals, connection warming; the blueprint does every Redis read |
+-   :material-file-document-outline:{ .lg .middle } **Data contracts**
+
+    ---
+
+    The four dictionary shapes every broker is converted into, and the shared vocabulary for status, product, order type and validity.
+
+    [:octicons-arrow-right-24: Data contracts](contracts.md)
+
+-   :material-key-chain:{ .lg .middle } **Redis keys and streams**
+
+    ---
+
+    Every key and stream, who writes it, who reads it, and how long it lives.
+
+    [:octicons-arrow-right-24: Redis keys](redis-keys.md)
+
+-   :material-database:{ .lg .middle } **Database**
+
+    ---
+
+    Every schema, table, view and function in TimescaleDB, the DDL rules, and the MongoDB collections.
+
+    [:octicons-arrow-right-24: Database](database.md)
+
+-   :material-login:{ .lg .middle } **Sessions and logins**
+
+    ---
+
+    How each broker logs in, how one token is shared by every process, and the lock that stops two logins racing.
+
+    [:octicons-arrow-right-24: Sessions](sessions.md)
+
+-   :material-pipe:{ .lg .middle } **Data pipelines**
+
+    ---
+
+    Follow market data, orders, positions and instruments stage by stage.
+
+    [:octicons-arrow-right-24: Market data](../pipelines/market-data.md)
+
+</div>

@@ -1,0 +1,65 @@
+<svg class="ubi-svg" viewBox="0 0 900 400" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="flatten-title flatten-description">
+  <title id="flatten-title">Flatten: cancel first, then close</title>
+  <desc id="flatten-description">The API sends a cancel for every open order to the broker holding it, then re-reads the brokers' order books in Redis every quarter second until the cancels are confirmed or the wait runs out, and only then sends one market order per position to the broker that holds it.</desc>
+  <rect class="box" x="20" y="165" width="130" height="50" rx="25"/>
+  <text x="85" y="186" text-anchor="middle">Your program</text>
+  <text class="mono" x="85" y="203" text-anchor="middle">confirm: FLATTEN</text>
+  <path id="flatten-request" class="wire" d="M150,190 L250,190"/>
+  <rect class="accent-box" x="250" y="150" width="170" height="80" rx="8"/>
+  <text class="title" x="335" y="178" text-anchor="middle">API worker</text>
+  <text class="mono" x="335" y="198" text-anchor="middle">POST /api/orders/flatten</text>
+  <text class="small" x="335" y="216" text-anchor="middle">KillSwitch decides</text>
+  <rect class="store" x="260" y="300" width="150" height="56" rx="8"/>
+  <text class="title" x="335" y="324" text-anchor="middle">Redis</text>
+  <text class="mono" x="335" y="342" text-anchor="middle">&lt;broker&gt;:orders:orders</text>
+  <path id="flatten-poll" class="wire" d="M320,230 L320,300 M350,300 L350,230"/>
+  <path id="flatten-poll-down" class="wire-solid" d="M320,230 L320,300" stroke-opacity="0"/>
+  <path id="flatten-poll-up" class="wire-solid" d="M350,300 L350,230" stroke-opacity="0"/>
+  <text class="small" x="430" y="318">2. wait: re-read every 0.25 s</text>
+  <text class="small" x="430" y="334">until cancelled or</text>
+  <text class="mono" x="430" y="350">ORDER_FLATTEN_WAIT_SECONDS</text>
+  <rect class="box" x="720" y="40" width="160" height="50" rx="6"/>
+  <text x="800" y="62" text-anchor="middle">Broker A</text>
+  <text class="small" x="800" y="79" text-anchor="middle">open stop, long position</text>
+  <rect class="box" x="720" y="165" width="160" height="50" rx="6"/>
+  <text x="800" y="187" text-anchor="middle">Broker B</text>
+  <text class="small" x="800" y="204" text-anchor="middle">open target</text>
+  <rect class="box" x="720" y="290" width="160" height="50" rx="6"/>
+  <text x="800" y="312" text-anchor="middle">Broker C</text>
+  <text class="small" x="800" y="329" text-anchor="middle">short position</text>
+  <path id="flatten-cancel-a" class="wire" d="M420,170 C560,170 580,58 720,58"/>
+  <path id="flatten-cancel-b" class="wire" d="M420,182 L720,182"/>
+  <path id="flatten-close-a" class="wire" d="M420,200 C580,200 600,74 720,74"/>
+  <path id="flatten-close-c" class="wire" d="M420,212 C580,212 600,315 720,315"/>
+  <text class="small" x="560" y="112">1. cancels go out first</text>
+  <text class="small" x="560" y="262">3. then one MARKET close</text>
+  <text class="small" x="560" y="276">per position, same broker</text>
+  <circle class="dot" r="6" opacity="0">
+    <animateMotion dur="9s" repeatCount="indefinite" keyPoints="0;1;1" keyTimes="0;0.12;1" calcMode="linear"><mpath href="#flatten-request"/></animateMotion>
+    <animate attributeName="opacity" dur="9s" repeatCount="indefinite" values="1;1;0;0" keyTimes="0;0.12;0.13;1"/>
+  </circle>
+  <circle class="dot" r="6" opacity="0">
+    <animateMotion dur="9s" repeatCount="indefinite" keyPoints="0;0;1;1" keyTimes="0;0.13;0.3;1" calcMode="linear"><mpath href="#flatten-cancel-a"/></animateMotion>
+    <animate attributeName="opacity" dur="9s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.13;0.14;0.3;0.31;1"/>
+  </circle>
+  <circle class="dot" r="6" opacity="0">
+    <animateMotion dur="9s" repeatCount="indefinite" keyPoints="0;0;1;1" keyTimes="0;0.15;0.3;1" calcMode="linear"><mpath href="#flatten-cancel-b"/></animateMotion>
+    <animate attributeName="opacity" dur="9s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.15;0.16;0.3;0.31;1"/>
+  </circle>
+  <circle class="dot alt" r="5" opacity="0">
+    <animateMotion dur="9s" repeatCount="indefinite" keyPoints="0;0;1;0;1;0;1;1" keyTimes="0;0.32;0.38;0.44;0.5;0.56;0.62;1" calcMode="linear"><mpath href="#flatten-poll-down"/></animateMotion>
+    <animate attributeName="opacity" dur="9s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.32;0.33;0.62;0.63;1"/>
+  </circle>
+  <circle class="dot alt" r="5" opacity="0">
+    <animateMotion dur="9s" repeatCount="indefinite" keyPoints="0;0;1;0;1;0;1;1" keyTimes="0;0.35;0.41;0.47;0.53;0.59;0.65;1" calcMode="linear"><mpath href="#flatten-poll-up"/></animateMotion>
+    <animate attributeName="opacity" dur="9s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.35;0.36;0.65;0.66;1"/>
+  </circle>
+  <circle class="dot ok" r="6" opacity="0">
+    <animateMotion dur="9s" repeatCount="indefinite" keyPoints="0;0;1;1" keyTimes="0;0.68;0.86;1" calcMode="linear"><mpath href="#flatten-close-a"/></animateMotion>
+    <animate attributeName="opacity" dur="9s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.68;0.69;0.86;0.87;1"/>
+  </circle>
+  <circle class="dot ok" r="6" opacity="0">
+    <animateMotion dur="9s" repeatCount="indefinite" keyPoints="0;0;1;1" keyTimes="0;0.71;0.88;1" calcMode="linear"><mpath href="#flatten-close-c"/></animateMotion>
+    <animate attributeName="opacity" dur="9s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.71;0.72;0.88;0.89;1"/>
+  </circle>
+</svg>

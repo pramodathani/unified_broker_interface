@@ -1,14 +1,225 @@
-/* Wider content column: the broker coverage tables and the flattened tick schema both have
-   more columns than Material's default 61rem comfortably holds. */
-.md-grid {
-  max-width: 72rem;
+:root {
+  --ubi-get: #1b8a3a;
+  --ubi-post: #1565c0;
+  --ubi-put: #b26a00;
+  --ubi-delete: #c62828;
+  --ubi-diagram-stroke: #5f6368;
+  --ubi-diagram-fill: #fff7f2;
+  --ubi-diagram-accent: #ff5722;
+  --ubi-diagram-store: #eef3fb;
+  --ubi-diagram-text: #202124;
+  --ubi-diagram-muted: #6b7280;
 }
 
-/* Tables of icons - the coverage matrix - set their column alignment in the Markdown itself,
-   so nothing is centred globally here. Prose columns read badly centred. */
+[data-md-color-scheme="slate"] {
+  --ubi-get: #4caf50;
+  --ubi-post: #64b5f6;
+  --ubi-put: #ffb74d;
+  --ubi-delete: #ef5350;
+  --ubi-diagram-stroke: #9aa0a6;
+  --ubi-diagram-fill: #2a2522;
+  --ubi-diagram-accent: #ff8a65;
+  --ubi-diagram-store: #1f2633;
+  --ubi-diagram-text: #e8eaed;
+  --ubi-diagram-muted: #9aa0a6;
+}
 
-/* The live-order warning appears on several pages and needs to be impossible to skim past. */
+.md-grid {
+  max-width: 76rem;
+}
+
 .md-typeset .admonition.danger,
 .md-typeset details.danger {
   border-left-width: 0.4rem;
+}
+
+.md-typeset .method {
+  display: inline-block;
+  min-width: 4.2em;
+  padding: 0.1em 0.5em;
+  border-radius: 0.2rem;
+  color: #fff;
+  font-family: var(--md-code-font-family);
+  font-size: 0.75em;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-align: center;
+  vertical-align: middle;
+}
+
+.md-typeset .method.get {
+  background-color: var(--ubi-get);
+}
+
+.md-typeset .method.post {
+  background-color: var(--ubi-post);
+}
+
+.md-typeset .method.put {
+  background-color: var(--ubi-put);
+}
+
+.md-typeset .method.delete {
+  background-color: var(--ubi-delete);
+}
+
+.md-typeset .endpoint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6em;
+  margin: 1em 0;
+  padding: 0.6em 0.8em;
+  border-left: 0.25rem solid var(--md-accent-fg-color);
+  border-radius: 0.2rem;
+  background-color: var(--md-code-bg-color);
+  font-family: var(--md-code-font-family);
+  font-size: 0.85em;
+  overflow-wrap: anywhere;
+}
+
+.md-typeset .endpoint .auth {
+  margin-left: auto;
+  color: var(--md-default-fg-color--light);
+  font-family: var(--md-text-font-family);
+  font-size: 0.8em;
+}
+
+.md-typeset .status {
+  display: inline-block;
+  padding: 0 0.45em;
+  border-radius: 0.2rem;
+  font-family: var(--md-code-font-family);
+  font-size: 0.85em;
+  font-weight: 700;
+  color: #fff;
+  background-color: var(--md-default-fg-color--light);
+}
+
+.md-typeset .status.s2 {
+  background-color: var(--ubi-get);
+}
+
+.md-typeset .status.s4 {
+  background-color: var(--ubi-put);
+}
+
+.md-typeset .status.s5 {
+  background-color: var(--ubi-delete);
+}
+
+.md-typeset .hero {
+  margin: 0 0 1.5em;
+}
+
+.md-typeset .hero p.lead {
+  font-size: 1.15em;
+  line-height: 1.6;
+}
+
+.md-typeset figure.diagram,
+.md-typeset .diagram {
+  display: block;
+  width: 100%;
+  max-width: none;
+  margin: 1.5em 0;
+  text-align: center;
+}
+
+.md-typeset .diagram svg {
+  width: 100%;
+  max-width: 60rem;
+  height: auto;
+}
+
+.md-typeset .diagram figcaption {
+  margin-top: 0.5em;
+  color: var(--md-default-fg-color--light);
+  font-size: 0.8em;
+}
+
+.ubi-svg .box {
+  fill: var(--ubi-diagram-fill);
+  stroke: var(--ubi-diagram-stroke);
+  stroke-width: 1.5;
+}
+
+.ubi-svg .store {
+  fill: var(--ubi-diagram-store);
+  stroke: var(--ubi-diagram-stroke);
+  stroke-width: 1.5;
+}
+
+.ubi-svg .accent-box {
+  fill: var(--ubi-diagram-fill);
+  stroke: var(--ubi-diagram-accent);
+  stroke-width: 2.5;
+}
+
+.ubi-svg .wire {
+  fill: none;
+  stroke: var(--ubi-diagram-stroke);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+}
+
+.ubi-svg .wire-solid {
+  fill: none;
+  stroke: var(--ubi-diagram-stroke);
+  stroke-width: 1.5;
+}
+
+.ubi-svg text {
+  fill: var(--ubi-diagram-text);
+  font-family: var(--md-text-font-family);
+  font-size: 13px;
+}
+
+.ubi-svg text.title {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.ubi-svg text.small {
+  fill: var(--ubi-diagram-muted);
+  font-size: 11px;
+}
+
+.ubi-svg text.mono {
+  font-family: var(--md-code-font-family);
+  font-size: 11px;
+}
+
+.ubi-svg .dot {
+  fill: var(--ubi-diagram-accent);
+}
+
+.ubi-svg .dot.alt {
+  fill: var(--ubi-post);
+}
+
+.ubi-svg .dot.ok {
+  fill: var(--ubi-get);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .ubi-svg .wire {
+    animation: ubi-march 1.2s linear infinite;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ubi-svg .dot {
+    display: none;
+  }
+}
+
+@keyframes ubi-march {
+  to {
+    stroke-dashoffset: -18;
+  }
+}
+
+.md-typeset .vegalite {
+  width: 100%;
 }

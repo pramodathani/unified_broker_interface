@@ -18,4 +18,4 @@ This is a deliberate exception to the project rule that data is stored exactly a
 
 The check lives in the base class rather than in `ZerodhaCandles.parse_response` because the limit belongs to the table, which every broker's table shares, not to Zerodha's response format.
 
-The issue is also recorded in `docs/contributing/known-issues.md` and `docs/contributing/pitfalls.md`.
+The issue is also recorded in `docs/contributing/known-issues.md` (removed in the documentation rebuild; read it with `git show b884d54:docs/contributing/known-issues.md`) and `docs/contributing/pitfalls.md` (removed in the documentation rebuild; read it with `git show b884d54:docs/contributing/pitfalls.md`).

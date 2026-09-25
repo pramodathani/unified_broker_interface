@@ -18,7 +18,7 @@ The plan said `CARRIES_OVERNIGHT`. It was left off deliberately: an exchange DAY
 
 ## Why nothing is sent on shutdown
 
-The earlier session proposed pushing every held order to the exchange on SIGTERM. The user chose instead to keep them held and resume on restart, because sending them would spend the daily orders the type exists to save. The danger admonition in `docs/guides/rest-api.md` says what that costs.
+The earlier session proposed pushing every held order to the exchange on SIGTERM. The user chose instead to keep them held and resume on restart, because sending them would spend the daily orders the type exists to save. The danger admonition on `virtual_limit` in `docs/rest-api/synthetic-orders.md` says what that costs.
 
 ## Paper fills
 
