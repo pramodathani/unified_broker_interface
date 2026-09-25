@@ -198,6 +198,15 @@ lots and both times the same day, but none of the three is yet marked verified. 
 or the protocol, and the table in
 [Unified scripts](../guides/unified-scripts.md#what-each-brokers-values-mean) marks which.
 
+**In `direct` mode the order engine's fields are ignored rather than refused.** `PlaceOrderRequest` reads
+`price_reference` and `quantity_reference` only to relax its own checks, and nothing on the `direct` path reads
+`synthetic` at all; the engine is the only code that acts on any of the three. With
+`UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT=direct`, the default, a bracket is therefore sent as its entry order alone,
+a `virtual_limit` goes to the exchange at once, a priced order whose price was left to a `price_reference` reaches the
+broker with no price, and an order whose quantity was left to a `quantity_reference` reaches it with a quantity of 0.
+This was found by reading the code and has not been reproduced with `dry_run`. The fix is for the `direct` path to
+refuse a body carrying any of the three with `400`, which changes the answers `test_runs/order_routes.py` records.
+
 ## Broker limits
 
 **The daily order count cannot see orders sent from outside this system.** `DailyOrderCount` counts every

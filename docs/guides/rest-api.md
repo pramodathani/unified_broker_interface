@@ -1204,10 +1204,84 @@ what was cancelled, what is `still_open_after_waiting`, what was closed and whet
 | `401` | The access token is missing, wrong or expired |
 | `503` | Redis cannot be read |
 
+## The order engine
+
+`POST /api/orders/place` sends an order in one of two ways, chosen by `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT`
+(see [Configuration](../getting-started/configuration.md#the-environment)). At `direct`, the default, the API worker
+that accepted the order sends it to the broker itself, as described above. At `engine`, the worker checks the token and
+the body, resolves the instrument, and hands the order to `bin/unified/orders/order_engine`, one long-running process
+that places it and sends the answer back.
+
+```text
+direct   client ──► API worker ──► broker
+
+engine   client ──► API worker ──► unified:orders:intents:stream ──► order engine ──► broker
+                        ▲                                                 │    ▲
+                        └──── unified:orders:intents:result:<intent_id> ◄─┘    │
+                                                                               │
+                                     unified:order-updates:stream (every fill) ┘
+```
+
+The caller sees no difference in shape. The worker waits for the engine's answer and returns it as the answer to the
+same request, with `intent_id` added.
+
+**Why it exists.** An order sent from inside a gunicorn worker cannot outlive the request that asked for it, so nothing
+that reacts to a later fill, price or time of day can be built there: a bracket arming its stop once the entry fills, a
+trailing stop following the price, a TWAP sending its next slice. A limit enforced in each worker is also enforced once
+per worker, which is to say not at all. One engine process gives both a place to live.
+
+| What it does | How |
+| --- | --- |
+| Runs alone | It holds `unified:orders:engine:lock` with its process id, refreshed every 10 seconds. A second engine exits 1, because two engines reading the same consumer group would place every order twice. |
+| Keeps a clock | When nothing arrives, its read of the streams returns after about a second, and that becomes a tick for the types waiting on a time or a price. |
+| Follows its own orders | It reads `unified:order-updates:stream`, which `bin/unified/orders/websocket_order_details` fills with every broker's order updates, and applies each update to the leg it belongs to. |
+| Checks every placement | A rate budget, a daily loss lockout, a re-pricing throttle and the daily order-message cap, all set in [Configuration](../getting-started/configuration.md#the-environment). |
+| Refuses stale orders | An order read more than `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_STALE_INTENT_SECONDS` after the worker stopped waiting for it is recorded and not placed, so a restart cannot fire an abandoned order into a market that has moved. |
+| Survives a restart | Every change is written to `unified.synthetic_order_events` and committed before it is acted on. On start the engine replays the day's rows to rebuild every unfinished order, then brings each leg up to date from the brokers' order books. |
+
+The engine thinks in **parents** and **legs**. A parent is what the caller asked for, such as a bracket on 100 shares.
+A leg is one real broker order belonging to it, with a role such as `entry`, `stop`, `target` or `slice`. A leg is
+marked `sending` and committed before its request leaves the machine, so a leg found in `sending` after a crash means
+an order may exist at the broker that the engine never heard back about. The engine then claims a broker order for it
+only when exactly one unclaimed order matches everything that was sent; otherwise it moves the parent to `failed`,
+which it never retries out of, for a person to look at.
+
+In engine mode `POST /api/orders/place` has these answers besides the ones above:
+
+| Status | Outcome | Meaning |
+| --- | --- | --- |
+| `202` | `armed` | The order is held by the engine and nothing has been sent yet, as for `scheduled`, `virtual_limit` and the other types that wait for a time or a price; the answer carries `parent_id` |
+| `403` | | The day's loss has reached `UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_LOSS_LIMIT` |
+| `409` | | The order waited past its deadline before the engine read it, and was recorded rather than placed |
+| `429` | | The broker is inside the reserve kept for closing positions under its daily order-message cap |
+| `503` | | The rate budget had no room within `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_WAIT_SECONDS` |
+| `504` | `unknown` | The engine did not answer within `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_TIMEOUT_SECONDS`; the order may still be placed, so check the order book before sending again |
+
+Run it as a service, beside `virtual_book` when `virtual_limit` orders are used; see
+[Services](services.md#installing).
+
+```bash
+systemctl --user enable --now unified-orders@order_engine.service
+redis-cli GET unified:orders:engine:lock
+redis-cli XINFO GROUPS unified:orders:intents:stream
+```
+
+`PUT /api/orders/modify`, `DELETE /api/orders/cancel` and `POST /api/orders/flatten` do not go through the engine in
+either mode. Each is sent straight from the API worker, so the rate budget and the loss lockout do not hold them back,
+although every message is still counted against a broker's daily cap.
+
+!!! danger "In `direct` mode a synthetic order is sent as a plain order"
+
+    Only the engine reads `synthetic`, `price_reference` and `quantity_reference`, and in `direct` mode nothing
+    refuses them either. A body carrying `"synthetic": {"type": "bracket", ...}` is placed as its entry order alone,
+    with no stop and no target, and a `virtual_limit` is sent to the exchange at once instead of being held. Send
+    these fields only when `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT` is `engine`. See
+    [Known issues](../contributing/known-issues.md).
+
 ## Price and quantity references
 
 `POST /api/orders/place` takes two optional fields that say **how to work a number out** rather than stating one. They
-need [the order engine](#flattening-everything), because the number is worked out from the live quote and the positions
+need [the order engine](#the-order-engine), because the number is worked out from the live quote and the positions
 at the moment the order is sent.
 
 ```json
