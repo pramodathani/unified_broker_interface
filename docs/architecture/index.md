@@ -30,6 +30,9 @@ stock_brokers/
 │   ├── base.py               BrokerAPI, BrokerAPIException
 │   ├── <broker>.py           one per broker
 │   └── utilities/session.py  ensure_session: log in once, safely, from any process
+├── websockets/               the quote and order update feeds' connections, logins and frame decoding
+│   ├── base.py               BrokerWebsocket: the reconnect loop, backoff and giving up
+│   └── <broker>.py           one per broker: its session, quotes socket and order updates socket
 └── instruments/              daily instrument masters
     ├── base.py               BrokerInstruments: clean, dedupe, write
     ├── orchestrator.py       run every broker, one try/except each
@@ -72,7 +75,7 @@ A package that implements something once per broker holds exactly three kinds of
 Everything else the subsystem needs - an orchestrator or registry, SQL and its runner, schema
 definitions, helpers - goes in a `utilities/` subpackage inside that same package.
 
-`api/`, `instruments/mapping/`, `instruments/historical/`, `instruments/ticks/` and the REST API's `broker_quotes/`
+`api/`, `websockets/`, `instruments/mapping/`, `instruments/historical/`, `instruments/ticks/` and the REST API's `broker_quotes/`
 and `broker_orders/` all read this way, which is what makes "which brokers are implemented here" a question answered by listing the
 directory. In `historical/`, `ticks/` and `broker_orders/` the module Flattrade and Shoonya share, as deployments of one
 platform, sits beside them as `noren.py`.
@@ -89,14 +92,29 @@ the shared clients and the helpers every `bin/` script uses; the nested ones hol
 needs beside its broker modules. All keep the descriptive name rather than being shortened to `utils`, so
 imports read plainly and none is mistaken for a scratch drawer.
 
-## Self-contained scripts, not shared socket classes
+## Feed scripts over socket classes
 
-A broker's quote feed, order update feed and pollers are scripts in `bin/<broker>/`, and each carries its own
-connection, decoding and normalization rather than inheriting them from a shared class. A script logs in
-through the broker's API class in `stock_brokers.api`, logs in again when its token is refused, and writes
-what it reads to Redis under keys named for the broker. Each script's module docstring is its full reference,
-and the [normalized contracts](contracts.md) are what keeps the output of every broker's scripts the same
-shape.
+A broker's quote feed and order update feed are scripts in `bin/<broker>/`, but the websocket each one runs
+is a class in `stock_brokers/websockets/<broker>.py`, in the same way that every REST call goes through the
+broker's class in `stock_brokers/api/`. The line between the two is Redis:
+
+| `stock_brokers/websockets/<broker>.py` | The script in `bin/<broker>/` |
+| --- | --- |
+| The session the sockets log in with, and logging in again when a token is refused | Which instruments to subscribe to, and how they are split across sockets |
+| Connecting, subscribing, pings, the broker's refusals | Every Redis write: the live hash, the stream, the instruments hash, the order merge |
+| Decoding frames into [normalized ticks](contracts.md), and picking the order messages out of the feed | Normalizing orders and positions, with the same tables as the broker's poller |
+| The reconnect loop, from `BrokerWebsocket` in `base.py` | Arguments, signals, threads and exit codes |
+
+A socket hands what it decodes to a function its script gives it, on the socket's own thread, at the moment
+the old self-contained script wrote Redis, so the order and timing of the writes are what they were. Each
+broker's file is self-contained: sockets share only the reconnect loop, and a broker's two sockets share its
+session. The script's docstring stays the reference for its keys, fields and exit codes, and the socket
+module's docstring for the protocol. The pollers are unchanged: each still carries its own requests and
+normalization.
+
+Zerodha's sockets are the first to have moved. The other nine brokers still carry their sockets inside their
+scripts, and move one broker at a time, each checked against the offline recording in
+`test_runs/websocket_feeds/`.
 
 ## Two connections per broker, not one
 

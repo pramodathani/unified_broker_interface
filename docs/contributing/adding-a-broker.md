@@ -86,14 +86,16 @@ is a million series and up, and a walk that repeats one window is much cheaper t
 
 Create `bin/<broker>/`, one self-contained script per job, each starting with the `run_under_venv`
 bootstrap and carrying a module docstring that is its full reference. The existing brokers' directories are
-the pattern; take the script from the broker on the same platform where there is one.
+the pattern; take the script from the broker on the same platform where there is one. For the two websocket
+scripts, follow Zerodha's, whose sockets are in `stock_brokers/websockets/zerodha.py`, and add the broker's
+cases to `test_runs/websocket_feeds/`.
 
 | Script | What it needs from the broker |
 | --- | --- |
 | `session/connect`, `session/disconnect` | The API class; `connect` writes `<broker>:session:status` |
 | `user/details`, `orders/api_order_details`, `orders/api_trade_details`, `portfolio/holdings`, `portfolio/positions`, `portfolio/funds` | Each endpoint, and how the broker signals a dead session, so the poller logs in again **before** its next request |
-| `instruments/websocket_quotes` | The feed's connection, subscription and decoding, producing the [normalized tick](../architecture/contracts.md#the-tick) |
-| `orders/websocket_order_details` | The order feed's connection and decoding, producing the [normalized order](../architecture/contracts.md#the-order), and positions where the broker streams them |
+| `instruments/websocket_quotes` | A quotes socket in `stock_brokers/websockets/<broker>.py` - a `BrokerWebsocket` subclass with the feed's connection, subscription and decoding, producing the [normalized tick](../architecture/contracts.md#the-tick) and handing it to a callback - and a script that chooses the instruments and writes the ticks to Redis |
+| `orders/websocket_order_details` | An order updates socket in the same module, which picks the broker's order messages out of the feed and hands them to a callback, and a script that turns them into the [normalized order](../architecture/contracts.md#the-order), and positions where the broker streams them, and merges them into Redis |
 | `instruments/store_quotes_to_db`, `orders/store_orders_to_db`, `portfolio/store_positions_to_db` | Only the column mapping; `store_positions_to_db` only if the broker streams positions |
 | `instruments/daily_feed` | Runs the ingester from step 2 and writes `<broker>:instruments:master` |
 | `instruments/price_history` | Wraps the `BrokerCandles` subclass from step 3, logging in through the API class |

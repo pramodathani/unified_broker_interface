@@ -4,6 +4,7 @@ import json
 import struct
 import types
 
+from stock_brokers.websockets import zerodha as zerodha_websockets
 from test_runs.websocket_feeds import harness
 
 QUOTES_SCRIPT = 'bin/zerodha/instruments/websocket_quotes'
@@ -203,6 +204,7 @@ class ZerodhaFeedCases:
         """
         return [
             self.loader.load(ORDERS_SCRIPT),
+            zerodha_websockets,
         ]
 
     def build_quotes_socket(self, context, tokens, names):
@@ -217,8 +219,16 @@ class ZerodhaFeedCases:
             object: The socket, with instant waits.
         """
         script = self.loader.load(QUOTES_SCRIPT)
-        session = script.ZerodhaSession(context.logger)
-        socket = script.QuotesSocket('socket_0', tokens, names, session, context.redis, context.logger)
+        session = zerodha_websockets.ZerodhaSession(context.logger)
+        store = script.ZerodhaQuotesStore(context.redis)
+        socket = zerodha_websockets.ZerodhaQuotesSocket(
+            'socket_0',
+            tokens,
+            names,
+            session,
+            store.write_ticks,
+            context.logger,
+        )
         context.use_instant_waits(socket)
         return socket
 
@@ -232,7 +242,9 @@ class ZerodhaFeedCases:
             object: The socket, with instant waits.
         """
         script = self.loader.load(ORDERS_SCRIPT)
-        socket = script.OrderUpdatesSocket(context.redis, context.logger)
+        session = zerodha_websockets.ZerodhaSession(context.logger)
+        store = script.ZerodhaOrderUpdatesStore(context.redis, context.logger)
+        socket = zerodha_websockets.ZerodhaOrderUpdatesSocket(session, store.write_updates, context.logger)
         context.use_instant_waits(socket)
         return socket
 
