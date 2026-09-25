@@ -9,6 +9,7 @@ import time
 
 from test_runs.websocket_feeds import dhan
 from test_runs.websocket_feeds import flattrade
+from test_runs.websocket_feeds import groww
 from test_runs.websocket_feeds import harness
 from test_runs.websocket_feeds import indmoney
 from test_runs.websocket_feeds import shoonya
@@ -22,6 +23,7 @@ FIXTURE_PATH = (
 BROKER_CASES = {
     'dhan': dhan.DhanFeedCases,
     'flattrade': flattrade.FlattradeFeedCases,
+    'groww': groww.GrowwFeedCases,
     'indmoney': indmoney.IndmoneyFeedCases,
     'shoonya': shoonya.ShoonyaFeedCases,
     'wisdom_capital': wisdom_capital.WisdomCapitalFeedCases,
@@ -58,7 +60,7 @@ class WebsocketFeedsSuite:
         context = harness.ScenarioContext(name, connections)
         context.logins.failing_logins = set(failing_logins)
         stub_modules = cases.stub_modules(context)
-        with harness.PatchedWorld(context, stub_modules, cases.datetime_holders()):
+        with harness.PatchedWorld(context, stub_modules, cases.datetime_holders(), cases.attribute_patches()):
             outcome = runner(context)
         return {
             'name': name,

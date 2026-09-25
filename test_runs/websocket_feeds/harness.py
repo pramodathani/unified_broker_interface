@@ -9,6 +9,7 @@ import datetime
 import hashlib
 import importlib.machinery
 import importlib.util
+import json
 import logging
 import pathlib
 import sys
@@ -895,6 +896,113 @@ class FakeUrllib3Module(types.ModuleType):
         return FakeHttpsPool(self, host, port, assert_fingerprint)
 
 
+class FakeRequestsHTTPError(Exception):
+    """An HTTP error status, as `requests.HTTPError` reports it."""
+
+
+class FakeRequestsResponse:
+    """An answer from the fake `requests` module, shaped like a `requests.Response`.
+
+    Attributes:
+        status_code (int): The HTTP status.
+        text (str): The body as text.
+        body (object): The decoded JSON body, or None for a body that is not JSON.
+    """
+
+    def __init__(self, status_code, body):
+        """Keeps the status and the body.
+
+        Args:
+            status_code (int): The HTTP status.
+            body (object): A JSON-ready body, or a string sent as it is.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.status_code = status_code
+        if isinstance(body, str):
+            self.text = body
+            self.body = None
+        else:
+            self.text = json.dumps(body)
+            self.body = body
+
+    def json(self):
+        """The decoded JSON body.
+
+        Returns:
+            object: The body.
+
+        Raises:
+            ValueError: When the body is not JSON.
+        """
+        if self.body is None:
+            raise ValueError(f'Not JSON: {self.text[:80]}')
+        return self.body
+
+    def raise_for_status(self):
+        """Raises for an error status, as `requests.Response.raise_for_status` does.
+
+        Returns:
+            None: This method returns nothing.
+
+        Raises:
+            FakeRequestsHTTPError: For a status of 400 or more.
+        """
+        if self.status_code >= 400:
+            raise FakeRequestsHTTPError(f'{self.status_code} Error: {self.text[:80]}')
+
+
+class FakeRequestsModule(types.ModuleType):
+    """A stand-in for the `requests` package that records each POST and plays the next scripted answer.
+
+    A random `x-request-id` header is recorded as `<uuid>`, so the recording is the same on every run.
+
+    Attributes:
+        event_log (EventLog): Where requests are recorded.
+        answers (list): The scripted answers still to give, each a tuple of status and body.
+    """
+
+    HTTPError = FakeRequestsHTTPError
+
+    def __init__(self, event_log):
+        """Starts with no answers.
+
+        Args:
+            event_log (EventLog): Where requests are recorded.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        super().__init__('requests')
+        self.event_log = event_log
+        self.answers = []
+
+    def post(self, url, headers=None, json=None, timeout=None):  # pylint: disable=redefined-outer-name
+        """Records a POST and answers it with the next scripted answer.
+
+        Args:
+            url (str): The URL.
+            headers (dict | None): The request headers.
+            json (object | None): The JSON body.
+            timeout (float | None): The timeout.
+
+        Returns:
+            FakeRequestsResponse: The next scripted answer.
+
+        Raises:
+            AssertionError: When a request arrives after the last scripted answer, which is a mistake in the scenario.
+        """
+        recorded_headers = dict(headers or {})
+        if 'x-request-id' in recorded_headers:
+            recorded_headers['x-request-id'] = '<uuid>'
+        self.event_log.add('http_post', url, recorded_headers, json, timeout)
+        if not self.answers:
+            raise AssertionError(f'No scripted answer is left for POST {url}')
+        status_code, body = self.answers.pop(0)
+        return FakeRequestsResponse(status_code, body)
+
+
 class CapturingHandler(logging.Handler):
     """A logging handler that puts each record into the event log.
 
@@ -1059,6 +1167,7 @@ class ScenarioContext:
         logins (LoginLedger): The broker's login state.
         clock (FakeMonotonicClock): The clock `time.monotonic` reads, moved on by recorded waits.
         urllib3_module (FakeUrllib3Module): The stand-in `urllib3` package, for brokers that make HTTPS calls of their own.
+        requests_module (FakeRequestsModule): The stand-in `requests` package, for brokers whose sockets call REST endpoints.
         logger (logging.Logger): A logger whose lines go into the record.
     """
 
@@ -1079,6 +1188,7 @@ class ScenarioContext:
         self.logins = LoginLedger(self.event_log)
         self.clock = FakeMonotonicClock()
         self.urllib3_module = FakeUrllib3Module(self.event_log)
+        self.requests_module = FakeRequestsModule(self.event_log)
         self.logger = logging.Logger(f'websocket_feeds.{name}', level=logging.DEBUG)
         self.logger.addHandler(CapturingHandler(self.event_log))
 
@@ -1144,15 +1254,18 @@ class PatchedWorld:
         saved_datetimes (list): Pairs of a module and the `datetime` it held before.
         saved_time (callable | None): The real `time.time`, while it is replaced.
         saved_monotonic (callable | None): The real `time.monotonic`, while it is replaced.
+        attribute_patches (list): Tuples of an object, an attribute name and the value it holds while the scenario runs.
+        saved_attributes (list): Tuples of an object, an attribute name and the value it held before.
     """
 
-    def __init__(self, context, stub_modules, datetime_holders):
+    def __init__(self, context, stub_modules, datetime_holders, attribute_patches):
         """Keeps what to replace.
 
         Args:
             context (ScenarioContext): The scenario being run.
             stub_modules (dict): Module names to the stand-ins placed in `sys.modules`; `websocket` is always added.
             datetime_holders (list): Modules whose `datetime` name is replaced with `FrozenDatetime`.
+            attribute_patches (list): Tuples of an object, an attribute name and the value it holds while the scenario runs.
 
         Returns:
             None: This method returns nothing.
@@ -1161,6 +1274,8 @@ class PatchedWorld:
         self.stub_modules = dict(stub_modules)
         self.stub_modules['websocket'] = context.websocket_module
         self.datetime_holders = list(datetime_holders)
+        self.attribute_patches = list(attribute_patches)
+        self.saved_attributes = []
         self.saved_modules = {}
         self.saved_datetimes = []
         self.saved_time = None
@@ -1178,6 +1293,9 @@ class PatchedWorld:
         for holder in self.datetime_holders:
             self.saved_datetimes.append((holder, holder.datetime))
             holder.datetime = FrozenDatetime
+        for owner, attribute_name, value in self.attribute_patches:
+            self.saved_attributes.append((owner, attribute_name, owner.__dict__[attribute_name]))
+            setattr(owner, attribute_name, value)
         self.saved_time = time.time
         self.saved_monotonic = time.monotonic
         time.time = self.frozen_time
@@ -1199,6 +1317,8 @@ class PatchedWorld:
         time.monotonic = self.saved_monotonic
         for holder, original in self.saved_datetimes:
             holder.datetime = original
+        for owner, attribute_name, original in self.saved_attributes:
+            setattr(owner, attribute_name, original)
         for name, original in self.saved_modules.items():
             if original is None:
                 del sys.modules[name]

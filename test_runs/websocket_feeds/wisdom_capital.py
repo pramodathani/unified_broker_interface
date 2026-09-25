@@ -143,6 +143,14 @@ class WisdomCapitalFeedCases:
             'urllib3': context.urllib3_module,
         }
 
+    def attribute_patches(self):
+        """The attributes replaced while a scenario runs; none for this broker.
+
+        Returns:
+            list: Tuples of an object, an attribute name and its value.
+        """
+        return []
+
     def datetime_holders(self):
         """The modules whose `datetime` name is frozen while a scenario runs.
 
