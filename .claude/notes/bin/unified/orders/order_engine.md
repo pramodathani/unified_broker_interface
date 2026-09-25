@@ -34,7 +34,7 @@ So an intent read more than `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_STALE_INT
 
 ## Why a bad entry is acknowledged rather than retried
 
-An entry that is not JSON, or whose intent has no reply key, is logged and acknowledged unplaced. Redelivering it for ever would put it at the front of the pending list at every start, and every order written after it would wait behind an entry that can never succeed. The same reasoning is already recorded in `docs/contributing/pitfalls.md` for the candle writer: an unexpected failure must cost the one item, not the run.
+An entry that is not JSON, or whose intent has no reply key, is logged and acknowledged unplaced. Redelivering it for ever would put it at the front of the pending list at every start, and every order written after it would wait behind an entry that can never succeed. The same reasoning is already recorded in `docs/contributing/pitfalls.md` (removed in the documentation rebuild; read it with `git show b884d54:docs/contributing/pitfalls.md`) for the candle writer: an unexpected failure must cost the one item, not the run.
 
 ## What the handoff actually costs, measured
 

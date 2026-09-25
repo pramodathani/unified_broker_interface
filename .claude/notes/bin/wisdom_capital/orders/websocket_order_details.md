@@ -18,7 +18,7 @@ If the token never changes, for example because something outside this project l
 
 ## Why only the event named `logout` is handled
 
-`docs/contributing/pitfalls.md` records a "Your session has been expired" message that arrives alongside the join when `apiType=INTERACTIVE` is missing, and that message is noise. Every event the socket has logged under `apiType=INTERACTIVE` is either `joined` or `logout` with "You have been logged out by another user.", so matching the event name exactly avoids reacting to anything else.
+`docs/contributing/pitfalls.md` (removed in the documentation rebuild; read it with `git show b884d54:docs/contributing/pitfalls.md`) records a "Your session has been expired" message that arrives alongside the join when `apiType=INTERACTIVE` is missing, and that message is noise. Every event the socket has logged under `apiType=INTERACTIVE` is either `joined` or `logout` with "You have been logged out by another user.", so matching the event name exactly avoids reacting to anything else.
 
 ## How it was checked
 

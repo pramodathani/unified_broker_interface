@@ -10,7 +10,7 @@ Acknowledging before placing would be worse in the other direction: an engine th
 
 ## Why the loop's shape was copied rather than invented
 
-The pending-first read, the doubling backoff to a minute, and the `stop.wait` instead of `time.sleep` all come from `bin/unified/orders/store_orders_to_db`. They are not incidental: reading pending entries before new ones at every start and after every failure is what stops a failed batch being overtaken by newer work, and `stop.wait` is what lets SIGTERM interrupt a backoff rather than waiting it out. `docs/contributing/pitfalls.md` records both a signal handler installed too late and a drain loop that counted the wrong thing, so the shape is worth copying exactly.
+The pending-first read, the doubling backoff to a minute, and the `stop.wait` instead of `time.sleep` all come from `bin/unified/orders/store_orders_to_db`. They are not incidental: reading pending entries before new ones at every start and after every failure is what stops a failed batch being overtaken by newer work, and `stop.wait` is what lets SIGTERM interrupt a backoff rather than waiting it out. `docs/contributing/pitfalls.md` (removed in the documentation rebuild; read it with `git show b884d54:docs/contributing/pitfalls.md`) records both a signal handler installed too late and a drain loop that counted the wrong thing, so the shape is worth copying exactly.
 
 ## Why a failure to place does not stop the engine
 

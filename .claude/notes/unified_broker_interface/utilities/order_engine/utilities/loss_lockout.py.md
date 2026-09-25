@@ -14,7 +14,7 @@ Realized plus unrealized. A position held at a large loss has lost the money whe
 
 The gate fails open, deliberately, and that is the one choice here a reader might disagree with.
 
-Redis being briefly unreadable is common — a restart, a brief network fault, the store still loading its dataset after a reboot, which `docs/contributing/pitfalls.md` already records as having taken seven services down. A gate that turned every such moment into a halt would be its own outage, and would do it at exactly the times the rest of the system is already struggling.
+Redis being briefly unreadable is common — a restart, a brief network fault, the store still loading its dataset after a reboot, which `docs/contributing/pitfalls.md` (removed in the documentation rebuild; read it with `git show b884d54:docs/contributing/pitfalls.md`) already records as having taken seven services down. A gate that turned every such moment into a halt would be its own outage, and would do it at exactly the times the rest of the system is already struggling.
 
 The failure is logged at warning so it is visible rather than silent. The position taken is that a loss limit protects against a strategy behaving badly, not against the infrastructure failing, and the second needs a different answer.
 

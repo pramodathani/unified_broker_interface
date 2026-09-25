@@ -46,7 +46,7 @@ Ten brokers are implemented. A dash means no module or script exists for that ca
 | Wisdom Capital | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Stoxkart | ✓ | ✓ | ✓ | — | ✓ | ✓ | — |
 
-The gaps have reasons rather than being work left undone. Only four brokers send position updates on their order update socket, so only those four have a `store_positions_to_db`; every broker's positions still arrive through its `positions` poller. Groww answers 403 on the historical endpoint, which is an entitlement rather than a bug, while Kotak and Stoxkart publish no candle endpoint at all. `docs/brokers/coverage.md` carries the full matrix and the reason behind every dash.
+The gaps have reasons rather than being work left undone. Only four brokers send position updates on their order update socket, so only those four have a `store_positions_to_db`; every broker's positions still arrive through its `positions` poller. Groww answers 403 on the historical endpoint, which is an entitlement rather than a bug, while Kotak and Stoxkart publish no candle endpoint at all. `docs/brokers/index.md` carries the full matrix and the reason behind every dash.
 
 ## Requirements
 
@@ -73,7 +73,7 @@ Nothing runs until the environment is filled in, because `utilities/configuratio
    .venv/bin/pip install -r requirements.txt
    ```
 
-2. **Write a `.env` file at the project root.** It needs a `PYTHONPATH` entry pointing at the project, because there is no `pyproject.toml` installing the packages, and one host, port, database, username and password for each of the three stores. `docs/getting-started/configuration.md` lists every variable with its default. This file holds live trading credentials and is excluded by `.gitignore`; never commit it.
+2. **Write a `.env` file at the project root.** It needs a `PYTHONPATH` entry pointing at the project, because there is no `pyproject.toml` installing the packages, and one host, port, database, username and password for each of the three stores. `docs/get-started/configuration.md` lists every variable with its default. This file holds live trading credentials and is excluded by `.gitignore`; never commit it.
 
 3. **Bring the data stores up.** Docker Compose reads the same `.env`, so the ports and passwords come from the variables you just set.
 
@@ -158,4 +158,4 @@ mkdocs serve           # http://127.0.0.1:8000, with live reload
 mkdocs build --strict  # what CI should run: broken links and references fail the build
 ```
 
-Two pages are worth knowing about before you change anything. `docs/contributing/pitfalls.md` records bugs that passed review and only failed against a live broker, and covers sessions, feeds, the candle queue and database writes. `docs/contributing/adding-a-broker.md` walks through the registries a new broker has to be added to, in order.
+Two pages are worth knowing about before you change anything. `docs/rest-api/index.md` lists every REST API endpoint and links to one page per endpoint group. `docs/project/adding-a-broker.md` walks through the registries a new broker has to be added to, in order.

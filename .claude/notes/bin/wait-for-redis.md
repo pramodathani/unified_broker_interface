@@ -11,9 +11,9 @@ memory`, which the script treats as a failed first login and reports with exit 2
 `RestartPreventExitStatus=2`, so systemd left all seven failed and they stayed down until someone ran
 `bin/check-services`.
 
-The entry in `docs/contributing/known-issues.md` named two possible fixes: treat `BusyLoadingError` as
+The entry in `docs/contributing/known-issues.md` (removed in the documentation rebuild; read it with `git show b884d54:docs/contributing/known-issues.md`) named two possible fixes: treat `BusyLoadingError` as
 a temporary error inside the login path, or order the units after Redis. The user chose the second,
-and asked for it as an `ExecStartPre`. That entry has been moved to `docs/contributing/pitfalls.md`,
+and asked for it as an `ExecStartPre`. That entry has been moved to `docs/contributing/pitfalls.md` (removed in the documentation rebuild; read it with `git show b884d54:docs/contributing/pitfalls.md`),
 since the bug is now fixed and the page records exactly this kind of failure.
 
 ## Why `INFO persistence` rather than `PING`

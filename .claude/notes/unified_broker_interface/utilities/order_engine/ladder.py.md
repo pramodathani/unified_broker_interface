@@ -20,4 +20,4 @@ A range that does not divide evenly into ticks produces prices between them. Rou
 
 Nothing here reacts to anything. Every rung is placed once and left, and the type is finished the moment the last one is sent. That is what makes it belong with the freeze slicer in the stateless tier rather than with the types that watch fills.
 
-The rungs are ordinary limit orders at a broker, so they keep working whether or not the engine is running, which is the property the `docs/contributing/pitfalls.md` reasoning about native orders keeps coming back to.
+The rungs are ordinary limit orders at a broker, so they keep working whether or not the engine is running, which is the property the `docs/contributing/pitfalls.md` (removed in the documentation rebuild; read it with `git show b884d54:docs/contributing/pitfalls.md`) reasoning about native orders keeps coming back to.
