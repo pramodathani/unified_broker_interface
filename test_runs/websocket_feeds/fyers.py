@@ -5,6 +5,7 @@ import json
 import struct
 import types
 
+from stock_brokers.websockets import fyers as fyers_websockets
 from test_runs.websocket_feeds import harness
 
 QUOTES_SCRIPT = 'bin/fyers/instruments/websocket_quotes'
@@ -254,6 +255,7 @@ class FyersFeedCases:
         """
         return [
             self.loader.load(ORDERS_SCRIPT),
+            fyers_websockets,
         ]
 
     def build_quotes_socket(self, context, symbols):
@@ -267,8 +269,9 @@ class FyersFeedCases:
             object: The socket, with instant waits.
         """
         script = self.loader.load(QUOTES_SCRIPT)
-        session = script.FyersSession(context.logger)
-        socket = script.QuotesSocket('socket_0', symbols, session, context.redis, context.logger)
+        session = fyers_websockets.FyersSession(context.logger)
+        store = script.FyersQuotesStore(context.redis)
+        socket = fyers_websockets.FyersQuotesSocket('socket_0', symbols, session, store.write_ticks, context.logger)
         context.use_instant_waits(socket)
         return socket
 
@@ -282,7 +285,9 @@ class FyersFeedCases:
             object: The socket, with instant waits.
         """
         script = self.loader.load(ORDERS_SCRIPT)
-        socket = script.OrderUpdatesSocket(context.redis, context.logger)
+        store = script.FyersOrderUpdatesStore(context.redis, context.logger)
+        session = fyers_websockets.FyersSession(context.logger)
+        socket = fyers_websockets.FyersOrderUpdatesSocket(session, store.write_updates, context.logger)
         context.use_instant_waits(socket)
         return socket
 

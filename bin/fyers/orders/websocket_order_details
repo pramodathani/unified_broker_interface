@@ -8,8 +8,10 @@ Stream Fyers order and position updates over a websocket and merge them into the
     redis-cli HGET fyers:orders:orders <order id>
     redis-cli HGETALL fyers:portfolio:positions
 
-Self-contained: it logs in with `FyersAPI` and carries its own connection to Fyers' order update stream at
-`wss://socket.fyers.in/trade/v3`, so it needs no other feed process or key.
+The connection and the login are `FyersOrderUpdatesSocket` and `FyersSession` in `stock_brokers/websockets/fyers.py`,
+whose module docstring describes the handshake and the messages at `wss://socket.fyers.in/trade/v3`. This script
+runs the socket and turns the orders and positions it hands over into the Redis writes below, so it needs no other
+feed process or key.
 
 **The stream.** The session is authenticated during the websocket handshake, by an `authorization` header of
 the app id and access token joined by a colon, so a bad credential fails the HTTP upgrade itself. Once open it
@@ -47,8 +49,8 @@ which `bin/fyers/orders/store_orders_to_db` writes to `fyers.order_updates`, and
 
 **Sessions.** The token is read afresh on every connect, so a login made by any process is picked up. A token
 whose expiry has passed, a handshake refused with HTTP 401 or 403, an error message carrying a session code
-(-8, -15, -16, -17), or a socket that fails to open six times running logs in again through `FyersAPI` -
-confirmed against the profile - before reconnecting; refused again straight after that login, it gives up
+(-8, -15, -16, -17), or a socket that fails to open six times running logs in again - confirmed against the
+profile, and without checking whether another process has already replaced the token - before reconnecting; refused again straight after that login, it gives up
 rather than keep sending refused requests, which Cloudflare punishes with an address ban. A reconnect otherwise
 backs off from 1 to 60 seconds. Updates arrive only when an order or position changes, so a quiet socket is
 not a broken one.
@@ -59,8 +61,6 @@ logging in again. Reads only - it never places, modifies or cancels an order.
 
 import sys
 import json
-import time
-import base64
 import signal
 import threading
 from datetime import datetime, timedelta
@@ -74,8 +74,6 @@ from utilities.bootstrap import run_under_venv
 
 PROJECT_ROOT = run_under_venv(__file__)
 
-ORDER_UPDATES_URL = "wss://socket.fyers.in/trade/v3"
-PROFILE_URL = "https://api-t1.fyers.in/api/v3/profile"
 ORDERS_KEY = "fyers:orders:orders"
 POSITIONS_KEY = "fyers:portfolio:positions"
 
@@ -84,20 +82,6 @@ POSITIONS_KEY = "fyers:portfolio:positions"
 ORDER_STREAM_KEY = "fyers:order-updates:stream"
 POSITION_STREAM_KEY = "fyers:positions_updates:stream"
 STREAM_MAX_LENGTH = 20000
-
-SUBSCRIBE_CHANNELS = ["orders", "positions"]
-SUBSCRIBED_CODE = 1605
-
-# Fyers' codes for a dead session: -8 token expired, -15 invalid token, -16 could not authenticate, -17 invalid or
-# expired.
-AUTHENTICATION_ERROR_CODES = {-8, -15, -16, -17}
-AUTHENTICATION_HANDSHAKE_STATUSES = {401, 403}
-
-PING_INTERVAL_SECONDS = 30
-PING_TIMEOUT_SECONDS = 10
-MIN_BACKOFF_SECONDS = 1
-MAX_BACKOFF_SECONDS = 60
-MAX_FAILED_CONNECTS = 6
 
 INDIA = ZoneInfo("Asia/Kolkata")
 RESET_HOUR = 6
@@ -365,150 +349,53 @@ def position_from_update(data):
     }
 
 
-def token_expired(access_token):
+class FyersOrderUpdatesStore:
     """
-    Whether a Fyers access token, a JWT, has passed its expiry or cannot be read.
-
-    - `access_token` is the token from the REST login.
-    """
-    try:
-        claims = json.loads(base64.urlsafe_b64decode(str(access_token).split('.')[1] + '===').decode())
-    except Exception:
-        return True
-    return claims.get('exp', 0) <= time.time()
-
-class OrderUpdatesSocket:
-    """
-    Fyers' order update websocket, reconnecting and logging in again until stopped.
+    Where the order stream's orders and positions are written: the merged hashes and their streams.
     """
 
     def __init__(self, cache, logger):
         """
-        Construct FyersAPI, which logs in when its probe raises, and confirm the session against the profile.
+        Registers the merge script on the Redis client the updates are written to.
 
-        - `cache` is the Redis client.
-        - `logger` is where the connection reports.
+        Args:
+            cache (redis.Redis): The Redis client.
+            logger (logging.Logger): Where writes are reported.
+
+        Returns:
+            None: This method returns nothing.
         """
-        from stock_brokers.api.fyers import FyersAPI
-
-        self._api_class = FyersAPI
         self._cache = cache
         self._merge = cache.register_script(MERGE_SCRIPT)
         self._logger = logger
-        self._fyers = self._confirmed(FyersAPI())
-        self._stop = threading.Event()
-        self._ws = None
-        self._opened = False
-        self._authentication_rejected = False
-        self.gave_up = False
 
-    @staticmethod
-    def _confirmed(fyers):
+    def write_updates(self, orders, positions, received_at):
         """
-        Raise unless the profile is served. FyersAPI only logs in when its probe raises, and Fyers can refuse a dead
-        session inside an HTTP 200, so a constructor that returned is no proof of a session.
+        Merges one message's orders and positions into their hashes, and appends every one of them to its stream.
 
-        - `fyers` is a FyersAPI.
+        The hashes keep the latest state.
+        The streams keep every update, even two of one order in one message, in the shape `bin/fyers/orders/store_orders_to_db` and `bin/fyers/portfolio/store_positions_to_db` read.
+
+        Args:
+            orders (list[dict]): The message's orders, exactly as Fyers sent them.
+            positions (list[dict]): The message's positions, exactly as Fyers sent them.
+            received_at (datetime): When the message was received, as a naive India wall clock time.
+
+        Returns:
+            None: This method returns nothing.
         """
-        body = (fyers.get(url=PROFILE_URL, timeout=30) or {}).get('data')
-        if not isinstance(body, dict) or body.get('s') not in (None, 'ok'):
-            raise RuntimeError(f"the Fyers profile was refused: {str(body)[:200]}")
-        return fyers
-
-    def close(self):
-        """Close the websocket and stop reconnecting."""
-        self._stop.set()
-        if self._ws is not None:
-            self._ws.close()
-
-    def run_forever(self):
-        """Connect, and reconnect with backoff, until closed or unable to recover."""
-        backoff = MIN_BACKOFF_SECONDS
-        failed_connects = 0
-        logged_in_again = False
-        while not self._stop.is_set():
-            self._opened = False
-            self._authentication_rejected = False
-            try:
-                self._connect()
-            except Exception as exception:
-                self._logger.error(f"Order updates connection failed: {type(exception).__name__}: {exception}")
-            if self._stop.is_set():
-                break
-
-            if self._opened and not self._authentication_rejected:
-                failed_connects, logged_in_again, backoff = 0, False, MIN_BACKOFF_SECONDS
-            else:
-                failed_connects += 1
-
-            if self._authentication_rejected or failed_connects >= MAX_FAILED_CONNECTS:
-                if logged_in_again and (self._authentication_rejected or failed_connects >= MAX_FAILED_CONNECTS):
-                    self.gave_up = True
-                    self._logger.error("Order updates are still refused after logging in again. Giving up.")
-                    break
-                try:
-                    # A dead session: log in again before connecting again.
-                    self._logger.warning("Logging in to Fyers again.")
-                    self._fyers = self._confirmed(self._api_class())
-                except Exception as exception:
-                    self.gave_up = True
-                    self._logger.error(f"Could not log in to Fyers again: {type(exception).__name__}: {exception}")
-                    break
-                failed_connects, logged_in_again = 0, True
-
-            self._logger.warning(f"Order updates disconnected. Reconnecting in {backoff} seconds.")
-            self._stop.wait(backoff)
-            backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
-        self._logger.info("Order updates socket stopped.")
-
-    def _connect(self):
-        """Open the websocket with the token in force now, authenticated in the handshake, and block until it closes."""
-        import websocket
-
-        login = self._fyers._current_login() or {}
-        token = login.get('access_token')
-        if token_expired(token):
-            self._logger.warning("The Fyers access token has expired.")
-            self._authentication_rejected = True
-            return
-        self._ws = websocket.WebSocketApp(ORDER_UPDATES_URL, header={"authorization": f"{self._fyers._settings.get('app_id')}:{token}"},
-                                          on_open=self._on_open, on_message=self._on_message,
-                                          on_error=self._on_error, on_close=self._on_close)
-        self._ws.run_forever(ping_interval=PING_INTERVAL_SECONDS, ping_timeout=PING_TIMEOUT_SECONDS)
-
-    def _on_open(self, ws):
-        """Subscribe to orders and positions. The session was authenticated by the handshake."""
-        self._opened = True
-        ws.send(json.dumps({"T": "SUB_ORD", "SLIST": SUBSCRIBE_CHANNELS, "SUB_T": 1}))
-        self._logger.info(f"Order updates socket opened and subscribed to {', '.join(SUBSCRIBE_CHANNELS)}.")
-
-    def _on_error(self, ws, error):
-        # A refused handshake surfaces here, with the HTTP status of the failed upgrade.
-        if getattr(error, 'status_code', None) in AUTHENTICATION_HANDSHAKE_STATUSES:
-            self._authentication_rejected = True
-        self._logger.error(f"Order updates error: {error}")
-
-    def _on_close(self, ws, status_code, message):
-        self._logger.info(f"Order updates socket closed with status {status_code}: {message}")
-
-    def _on_message(self, ws, message):
-        """Merge each order and position into its hash, and append every one of them to its stream."""
-        received_at = datetime.now()
         received = received_at.strftime("%Y-%m-%d %H:%M:%S.%f")
         observed_at = received_at.timestamp()
-        orders, positions = self.parse(message)
-
-        merged_orders, merged_positions = [], []
+        merged_orders = []
+        merged_positions = []
         for data in orders:
             order = order_from_update(data)
-            merged_orders += [order["order_id"], json.dumps({"observed_at": observed_at, "source": "websocket",
-                                                             "order": order, "data": data})]
+            merged_orders.append(order["order_id"])
+            merged_orders.append(json.dumps({"observed_at": observed_at, "source": "websocket", "order": order, "data": data}))
         for data in positions:
-            merged_positions += [position_key(data.get('symbol'), data.get('product_type')),
-                                 json.dumps({"observed_at": observed_at, "source": "websocket",
-                                             "position": position_from_update(data), "data": data})]
-        # The hashes keep the latest state; the streams keep every update, even two of one order in one message, in the
-        # shape bin/fyers/orders/store_orders_to_db and bin/fyers/portfolio/store_positions_to_db read.
+            merged_positions.append(position_key(data.get("symbol"), data.get("product_type")))
+            merged_positions.append(json.dumps({"observed_at": observed_at, "source": "websocket",
+                                                "position": position_from_update(data), "data": data}))
         for key, merged in ((ORDERS_KEY, merged_orders), (POSITIONS_KEY, merged_positions)):
             if merged:
                 self._merge(keys=[key], args=[next_reset(), "websocket", repr(observed_at)] + merged)
@@ -516,71 +403,27 @@ class OrderUpdatesSocket:
             pipeline = self._cache.pipeline(transaction=False)
             for stream, field, updates in ((ORDER_STREAM_KEY, "update", orders), (POSITION_STREAM_KEY, "position", positions)):
                 for data in updates:
-                    pipeline.xadd(stream, {field: json.dumps({'timestamp': received, 'data': data})},
+                    pipeline.xadd(stream, {field: json.dumps({"timestamp": received, "data": data})},
                                   maxlen=STREAM_MAX_LENGTH, approximate=True)
             pipeline.execute()
         if orders:
             self._logger.info(f"Merged {len(orders)} order update(s) into {ORDERS_KEY}: {', '.join(merged_orders[0::2])}")
         if positions:
-            self._logger.info(f"Merged {len(positions)} position update(s) into {POSITIONS_KEY}: "
-                              f"{', '.join(merged_positions[0::2])}")
-        if self._authentication_rejected and self._ws is not None:
-            self._ws.close()
-
-    def parse(self, message):
-        """
-        The order and position objects a message carries, each a list of Fyers' objects in arrival order.
-
-        - `message` is the message received.
-        """
-        if isinstance(message, (bytes, bytearray)):
-            message = bytes(message).decode('utf-8', errors='replace')
-        # Fyers answers its keepalive with a bare word rather than a frame.
-        if not isinstance(message, str) or message.strip() in ('', 'ping', 'pong'):
-            return [], []
-        try:
-            payload = json.loads(message)
-        except json.JSONDecodeError:
-            self._logger.debug(f"Ignoring a frame that is not JSON: {message[:160]}")
-            return [], []
-
-        orders, positions = [], []
-        for entry in (payload if isinstance(payload, list) else [payload]):
-            if not isinstance(entry, dict):
-                continue
-            if entry.get('s') == 'error':
-                try:
-                    code = int(entry.get('code'))
-                except (TypeError, ValueError):
-                    code = None
-                if code in AUTHENTICATION_ERROR_CODES:
-                    self._authentication_rejected = True
-                self._logger.error(f"Fyers reported an error: {entry.get('message') or entry}")
-                continue
-            if entry.get('code') == SUBSCRIBED_CODE:
-                self._logger.info(f"Fyers: {entry.get('message')}.")
-                continue
-
-            order = entry.get('orders')
-            position = entry.get('positions')
-            if isinstance(order, dict) and text(order.get('id')) is not None:
-                orders.append(order)
-            elif isinstance(position, dict) and text(position.get('symbol')) is not None:
-                positions.append(position)
-            elif 'trades' not in entry:
-                self._logger.info(f"Ignoring a message: {json.dumps(entry)[:200]}")
-        return orders, positions
+            self._logger.info(f"Merged {len(positions)} position update(s) into {POSITIONS_KEY}: {', '.join(merged_positions[0::2])}")
 
 def main():
     """Stream Fyers order and position updates into Redis until stopped."""
+    from stock_brokers.websockets.fyers import FyersOrderUpdatesSocket, FyersSession
     from utilities.configurations import get_cache, get_logger
 
     logger = get_logger("fyers.websocket_order_details")
+    store = FyersOrderUpdatesStore(get_cache(), logger)
     try:
-        socket = OrderUpdatesSocket(get_cache(), logger)
+        session = FyersSession(logger)
     except Exception as exception:
         logger.error(f"Could not log in to Fyers: {type(exception).__name__}: {exception}")
         return 1
+    socket = FyersOrderUpdatesSocket(session, store.write_updates, logger)
 
     # Installed before the thread starts: systemd stops a unit with SIGTERM, and the default action would kill
     # the process without closing the connection.
