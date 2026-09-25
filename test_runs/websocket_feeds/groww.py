@@ -2,6 +2,7 @@
 
 import types
 
+from stock_brokers.websockets import groww as groww_websockets
 from test_runs.websocket_feeds import harness
 
 QUOTES_SCRIPT = 'bin/groww/instruments/websocket_quotes'
@@ -90,6 +91,7 @@ class GrowwFeedCases:
         """
         return [
             self.loader.load(ORDERS_SCRIPT),
+            groww_websockets,
         ]
 
     def quote_message_class(self):
@@ -98,7 +100,7 @@ class GrowwFeedCases:
         Returns:
             type: The protobuf message class.
         """
-        return self.loader.load(QUOTES_SCRIPT).stocks_response_class()
+        return groww_websockets.GrowwMessageClasses().stocks_response_class()
 
     def order_message_classes(self):
         """The `OrderDetailsBroadCastDto` and `PositionDetailProto` classes the order payloads are built with.
@@ -106,7 +108,7 @@ class GrowwFeedCases:
         Returns:
             tuple: The two protobuf message classes.
         """
-        return self.loader.load(ORDERS_SCRIPT).message_classes()
+        return groww_websockets.GrowwMessageClasses().order_and_position_classes()
 
     def build_quotes_socket(self, context, tokens, names):
         """Builds a quotes socket the way `bin/groww/instruments/websocket_quotes` does.
@@ -120,8 +122,16 @@ class GrowwFeedCases:
             object: The socket, with instant waits.
         """
         script = self.loader.load(QUOTES_SCRIPT)
-        session = script.GrowwSession(context.logger)
-        socket = script.QuotesSocket('socket_0', tokens, names, session, context.redis, context.logger)
+        session = groww_websockets.GrowwSession(context.logger)
+        store = script.GrowwQuotesStore(context.redis)
+        socket = groww_websockets.GrowwQuotesSocket(
+            'socket_0',
+            tokens,
+            names,
+            session,
+            store.write_ticks,
+            context.logger,
+        )
         context.use_instant_waits(socket)
         return socket
 
@@ -135,7 +145,9 @@ class GrowwFeedCases:
             object: The socket, with instant waits.
         """
         script = self.loader.load(ORDERS_SCRIPT)
-        socket = script.OrderUpdatesSocket(context.redis, context.logger)
+        session = groww_websockets.GrowwSession(context.logger)
+        store = script.GrowwOrderUpdatesStore(context.redis, context.logger)
+        socket = groww_websockets.GrowwOrderUpdatesSocket(session, store.write_updates, context.logger)
         context.use_instant_waits(socket)
         return socket
 
