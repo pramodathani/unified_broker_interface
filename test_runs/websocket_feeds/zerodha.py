@@ -18,40 +18,16 @@ BSE_CURRENCY_TOKEN = 8198
 CRUDE_TOKEN = 12295
 
 
-class StubZerodhaAPI:
-    """A stand-in for `ZerodhaAPI` whose construction is a login recorded in the scenario's ledger.
+class StubZerodhaAPI(harness.StubBrokerAPI):
+    """A stand-in for `ZerodhaAPI`.
 
     Attributes:
-        logins (harness.LoginLedger): The ledger of the scenario being run, set before each scenario.
+        SETTINGS (dict): The api key the sockets put in the feed URL.
     """
 
-    logins = None
-
-    def __init__(self):
-        """Logs in, as constructing the real class does when the stored session is dead.
-
-        Returns:
-            None: This method returns nothing.
-
-        Raises:
-            RuntimeError: When the ledger scripts this login to fail.
-        """
-        StubZerodhaAPI.logins.log_in()
-        self._settings = {
-            'api_key': 'kite-api-key',
-        }
-
-    def _current_login(self):
-        """The login in force now, as the Redis `last_login` hash would hold it.
-
-        Returns:
-            dict | None: The access token in force, or None before any login.
-        """
-        if StubZerodhaAPI.logins.current_token is None:
-            return None
-        return {
-            'access_token': StubZerodhaAPI.logins.current_token,
-        }
+    SETTINGS = {
+        'api_key': 'kite-api-key',
+    }
 
 
 class KitePackets:
@@ -189,7 +165,7 @@ class ZerodhaFeedCases:
         Returns:
             dict: Module names to stand-ins.
         """
-        StubZerodhaAPI.logins = context.logins
+        harness.StubBrokerAPI.logins = context.logins
         api_module = types.ModuleType('stock_brokers.api.zerodha')
         api_module.ZerodhaAPI = StubZerodhaAPI
         return {
@@ -485,7 +461,7 @@ class ZerodhaFeedCases:
         Returns:
             None: This method returns nothing.
         """
-        StubZerodhaAPI.logins.replace_elsewhere('token-from-another-process')
+        harness.StubBrokerAPI.logins.replace_elsewhere('token-from-another-process')
 
     def failed_connects(self, count):
         """Connection attempts that each fail before opening.

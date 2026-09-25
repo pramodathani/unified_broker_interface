@@ -521,6 +521,25 @@ class ConnectionPlan:
         self.connections = list(connections)
         self.on_exhausted = None
 
+    @staticmethod
+    def failed_connects(count):
+        """Scripted connection attempts that each fail before opening.
+
+        Args:
+            count (int): How many attempts fail.
+
+        Returns:
+            list: One scripted connection per attempt.
+        """
+        connections = []
+        for _ in range(count):
+            connections.append(
+                [
+                    ('raise', ConnectionRefusedError(111, 'Connection refused')),
+                ]
+            )
+        return connections
+
     def next_connection(self):
         """Takes the next connection attempt's steps.
 
@@ -789,6 +808,44 @@ class LoginLedger:
         """
         self.current_token = token
         self.event_log.add('login_elsewhere', token)
+
+
+class StubBrokerAPI:
+    """A stand-in for a broker's API class whose construction is a login recorded in the scenario's ledger.
+
+    A broker's case file subclasses it and sets `SETTINGS` to what the sockets read from `_settings`.
+
+    Attributes:
+        logins (LoginLedger): The ledger of the scenario being run, set before each scenario.
+        SETTINGS (dict): The broker's settings document, as the real class loads it from MongoDB.
+    """
+
+    logins = None
+    SETTINGS = {}
+
+    def __init__(self):
+        """Logs in, as constructing the real class does when the stored session is dead.
+
+        Returns:
+            None: This method returns nothing.
+
+        Raises:
+            RuntimeError: When the ledger scripts this login to fail.
+        """
+        StubBrokerAPI.logins.log_in()
+        self._settings = dict(self.SETTINGS)
+
+    def _current_login(self):
+        """The login in force now, as the Redis `last_login` hash would hold it.
+
+        Returns:
+            dict | None: The access token in force, or None before any login.
+        """
+        if StubBrokerAPI.logins.current_token is None:
+            return None
+        return {
+            'access_token': StubBrokerAPI.logins.current_token,
+        }
 
 
 class ScenarioContext:
