@@ -26,7 +26,26 @@ Always finish with `mkdocs build --strict`. In strict mode, every warning is an 
 
 ### Publishing
 
-There is no CI in this repository: there is no `.github/` directory, and nothing builds or checks the site automatically on a push. The comment in `.gitignore` says the site is published to the `gh-pages` branch with `mkdocs gh-deploy`, and that the generated `site/` directory never belongs on the source branch. No `gh-pages` branch exists in the local clone today, so run the strict build yourself before every commit that touches the docs.
+The site is published on GitHub Pages at <https://pramodathani.github.io/unified_broker_interface/>. The GitHub Actions workflow `.github/workflows/docs.yml` builds it with `mkdocs build --strict` and deploys it, so nobody publishes by hand. The table below shows what the workflow does for each kind of event.
+
+| Event | Builds and checks the site | Publishes it |
+|---|:---:|:---:|
+| A push to `main`, which includes merging a pull request | :material-check: | :material-check: |
+| A pull request | :material-check: | :material-close: |
+| A manual run from the Actions tab | :material-check: | Only on `main` |
+
+```mermaid
+flowchart LR
+    PR["Pull request"] --> B["build job<br/>mkdocs build --strict"]
+    M["Push to main"] --> B
+    B -->|"pull request"| X["stop: check only"]
+    B -->|"main"| D["deploy job<br/>actions/deploy-pages"]
+    D --> S["pramodathani.github.io/<br/>unified_broker_interface"]
+```
+
+The workflow installs only the eight documentation packages from `requirements.txt`, the lines starting with `mkdocs` or `pymdown`. It does not install the trading stack, because mkdocstrings reads source files without importing them. It needs no data store and no credentials. A pull request that breaks a link or a code reference fails its check before it can be merged. Running the strict build locally before pushing still saves a round trip.
+
+The generated `site/` directory is ignored by git and never belongs on a branch.
 
 ## The configuration
 

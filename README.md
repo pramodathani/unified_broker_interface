@@ -151,11 +151,11 @@ There is no pytest suite. The five offline suites are plain scripts that need no
 
 ## Documentation
 
-The `docs/` directory is a full MkDocs site and is the authoritative reference for every subsystem. Narrative pages are hand-written, and the API reference is generated from docstrings at build time, so a new module appears without any edit.
+The `docs/` directory is a full MkDocs site and is the authoritative reference for every subsystem. It is published at https://pramodathani.github.io/unified_broker_interface/, and the REST API endpoints are under its REST API tab. Narrative pages are hand-written, and the API reference is generated from docstrings at build time, so a new module appears without any edit.
 
 ```bash
 mkdocs serve           # http://127.0.0.1:8000, with live reload
-mkdocs build --strict  # what CI should run: broken links and references fail the build
+mkdocs build --strict  # what CI runs: broken links and references fail the build
 ```
 
 Two pages are worth knowing about before you change anything. `docs/rest-api/index.md` lists every REST API endpoint and links to one page per endpoint group. `docs/project/adding-a-broker.md` walks through the registries a new broker has to be added to, in order.

@@ -10,6 +10,5 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 
-# MkDocs build output. The site is published to the gh-pages branch by `mkdocs gh-deploy`,
-# so the generated HTML never belongs on the source branch.
+# MkDocs build output
 site/

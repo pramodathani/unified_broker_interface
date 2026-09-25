@@ -44,7 +44,7 @@ There is no `pyproject.toml`, no build step and no pytest suite. The project roo
 | Load the REST API's detail collections | `bin/import-api-details /path/to/exports` (`--calendars-only` re-copies trading hours and holidays) |
 | Show one Zerodha symbol's master row, LTP, OHLC and book | `bin/zerodha-quote INFY` (a live Zerodha account) |
 | Docs, live reload | `mkdocs serve` |
-| Docs, as CI should build them | `mkdocs build --strict` |
+| Docs, as CI builds them | `mkdocs build --strict` (`.github/workflows/docs.yml` runs it on every pull request and publishes `main` to https://pramodathani.github.io/unified_broker_interface/) |
 
 Lint is not clean on an untouched tree. `ruff check .` reports 41 findings on `main`, almost all of them in `stock_brokers/api/` and `test_runs/`: star imports and the names they hide (`F403`, `F405`), assigned but unused variables (`F841`), comparisons to `True` and `False` with `==` (`E712`), unused imports (`F401`) and one lambda bound to a name (`E731`). Treat that as the baseline, and judge a change by whether it adds a finding rather than by whether the run is silent.
 

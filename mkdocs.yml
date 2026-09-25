@@ -2,6 +2,10 @@ site_name: Unified Broker Interface
 site_description: One REST API over ten Indian stock brokers - quotes, candles, orders, positions and instrument masters, combined into one account.
 site_author: Pramod Athani
 copyright: Copyright &copy; Pramod Athani
+site_url: https://pramodathani.github.io/unified_broker_interface/
+repo_url: https://github.com/pramodathani/unified_broker_interface
+repo_name: pramodathani/unified_broker_interface
+edit_uri: edit/main/docs/
 
 theme:
   name: material
@@ -42,6 +46,8 @@ theme:
     - search.highlight
     - search.share
     - content.code.copy
+    - content.action.edit
+    - content.action.view
     - content.code.annotate
     - content.tabs.link
     - content.tooltips
