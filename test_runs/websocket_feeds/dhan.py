@@ -4,6 +4,7 @@ import json
 import struct
 import types
 
+from stock_brokers.websockets import dhan as dhan_websockets
 from test_runs.websocket_feeds import harness
 
 QUOTES_SCRIPT = 'bin/dhan/instruments/websocket_quotes'
@@ -203,6 +204,7 @@ class DhanFeedCases:
         """
         return [
             self.loader.load(ORDERS_SCRIPT),
+            dhan_websockets,
         ]
 
     def build_quotes_socket(self, context, tokens, names):
@@ -217,8 +219,16 @@ class DhanFeedCases:
             object: The socket, with instant waits.
         """
         script = self.loader.load(QUOTES_SCRIPT)
-        session = script.DhanSession(context.logger)
-        socket = script.QuotesSocket('socket_0', tokens, names, session, context.redis, context.logger)
+        session = dhan_websockets.DhanSession(context.logger)
+        store = script.DhanQuotesStore(context.redis)
+        socket = dhan_websockets.DhanQuotesSocket(
+            'socket_0',
+            tokens,
+            names,
+            session,
+            store.write_ticks,
+            context.logger,
+        )
         context.use_instant_waits(socket)
         return socket
 
@@ -232,7 +242,9 @@ class DhanFeedCases:
             object: The socket, with instant waits.
         """
         script = self.loader.load(ORDERS_SCRIPT)
-        socket = script.OrderUpdatesSocket(context.redis, context.logger)
+        session = dhan_websockets.DhanSession(context.logger)
+        store = script.DhanOrderUpdatesStore(context.redis, context.logger)
+        socket = dhan_websockets.DhanOrderUpdatesSocket(session, store.write_updates, context.logger)
         context.use_instant_waits(socket)
         return socket
 
