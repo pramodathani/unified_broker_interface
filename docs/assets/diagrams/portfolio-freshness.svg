@@ -1,0 +1,48 @@
+<svg class="ubi-svg" viewBox="0 0 900 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="portfolio-freshness-title portfolio-freshness-description">
+  <title id="portfolio-freshness-title">How a portfolio answer is kept fresh</title>
+  <desc id="portfolio-freshness-description">Each broker's own portfolio scripts poll the broker and store its funds, holdings and positions in Redis. The unified combiners read every broker's keys and the live quotes, write one document per subject, and the REST API serves that document when it is recent enough.</desc>
+  <text class="small" x="80" y="20" text-anchor="middle">ten brokers</text>
+  <rect class="box" x="20" y="30" width="120" height="30" rx="4"/><text x="80" y="50" text-anchor="middle">Dhan</text>
+  <rect class="box" x="20" y="70" width="120" height="30" rx="4"/><text x="80" y="90" text-anchor="middle">Zerodha</text>
+  <rect class="box" x="20" y="110" width="120" height="30" rx="4"/><text x="80" y="130" text-anchor="middle">… 8 more</text>
+  <path id="portfolio-freshness-poll-a" class="wire" d="M140,45 C170,45 170,85 200,85"/>
+  <path id="portfolio-freshness-poll-b" class="wire" d="M140,85 L200,85"/>
+  <path id="portfolio-freshness-poll-c" class="wire" d="M140,125 C170,125 170,85 200,85"/>
+  <rect class="box" x="200" y="55" width="140" height="60" rx="8"/>
+  <text class="title" x="270" y="80" text-anchor="middle">Broker pollers</text>
+  <text class="mono" x="270" y="100" text-anchor="middle">bin/&lt;broker&gt;/portfolio/*</text>
+  <path id="portfolio-freshness-store" class="wire" d="M340,85 L380,85"/>
+  <rect class="store" x="380" y="55" width="150" height="60" rx="8"/>
+  <text class="title" x="455" y="80" text-anchor="middle">Redis</text>
+  <text class="mono" x="455" y="100" text-anchor="middle">&lt;broker&gt;:portfolio:*</text>
+  <rect class="store" x="380" y="190" width="150" height="60" rx="8"/>
+  <text class="title" x="455" y="215" text-anchor="middle">Live quotes</text>
+  <text class="mono" x="455" y="235" text-anchor="middle">unified:quotes:live</text>
+  <path id="portfolio-freshness-combine" class="wire" d="M530,85 L570,85"/>
+  <path id="portfolio-freshness-price" class="wire" d="M530,220 C560,220 560,110 600,115"/>
+  <text class="small" x="560" y="250">prices holdings and positions</text>
+  <rect class="box" x="570" y="55" width="140" height="60" rx="8"/>
+  <text class="title" x="640" y="80" text-anchor="middle">Combiners</text>
+  <text class="mono" x="640" y="100" text-anchor="middle">bin/unified/portfolio/*</text>
+  <path id="portfolio-freshness-write" class="wire" d="M640,55 L640,20 L730,20"/>
+  <rect class="store" x="730" y="5" width="160" height="30" rx="6"/>
+  <text class="mono" x="810" y="25" text-anchor="middle">unified:portfolio:*</text>
+  <path id="portfolio-freshness-read" class="wire" d="M810,35 L810,60"/>
+  <rect class="accent-box" x="740" y="60" width="140" height="60" rx="8"/>
+  <text class="title" x="810" y="85" text-anchor="middle">REST API</text>
+  <text class="small" x="810" y="104" text-anchor="middle">checks as_of first</text>
+  <path id="portfolio-freshness-client" class="wire" d="M810,120 L810,160"/>
+  <rect class="box" x="745" y="160" width="130" height="34" rx="17"/>
+  <text x="810" y="182" text-anchor="middle">Your program</text>
+  <text class="small" x="270" y="140" text-anchor="middle">each broker's own cadence</text>
+  <text class="small" x="640" y="140" text-anchor="middle">every 0.5 s, holdings every 60 s</text>
+  <circle class="dot" r="5"><animateMotion dur="1.6s" repeatCount="indefinite"><mpath href="#portfolio-freshness-poll-a"/></animateMotion></circle>
+  <circle class="dot" r="5"><animateMotion dur="1.6s" begin="-0.5s" repeatCount="indefinite"><mpath href="#portfolio-freshness-poll-b"/></animateMotion></circle>
+  <circle class="dot" r="5"><animateMotion dur="1.6s" begin="-1s" repeatCount="indefinite"><mpath href="#portfolio-freshness-poll-c"/></animateMotion></circle>
+  <circle class="dot" r="5"><animateMotion dur="0.9s" repeatCount="indefinite"><mpath href="#portfolio-freshness-store"/></animateMotion></circle>
+  <circle class="dot" r="5"><animateMotion dur="0.9s" begin="-0.3s" repeatCount="indefinite"><mpath href="#portfolio-freshness-combine"/></animateMotion></circle>
+  <circle class="dot alt" r="5"><animateMotion dur="1.8s" repeatCount="indefinite"><mpath href="#portfolio-freshness-price"/></animateMotion></circle>
+  <circle class="dot" r="5"><animateMotion dur="1.2s" repeatCount="indefinite"><mpath href="#portfolio-freshness-write"/></animateMotion></circle>
+  <circle class="dot ok" r="5"><animateMotion dur="0.8s" repeatCount="indefinite"><mpath href="#portfolio-freshness-read"/></animateMotion></circle>
+  <circle class="dot ok" r="5"><animateMotion dur="0.8s" begin="-0.4s" repeatCount="indefinite"><mpath href="#portfolio-freshness-client"/></animateMotion></circle>
+</svg>
