@@ -13,11 +13,6 @@ class INDMoneyAPI(BrokerAPI):
     INDMoneyAPI class
     """
 
-    quote_api_calls = []
-    historical_api_calls = []
-    order_api_calls = []
-    other_api_calls = []
-
     def __init__(self):
         """
         INDMoneyAPI class
