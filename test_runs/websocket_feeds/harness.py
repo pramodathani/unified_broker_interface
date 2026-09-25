@@ -749,6 +749,18 @@ class FakeWebsocketApplication:
         self.module.event_log.add('close_connection')
 
 
+class FakeAbnf:
+    """The websocket frame opcodes websocket-client names on its `ABNF` class.
+
+    Attributes:
+        OPCODE_TEXT (int): The text frame opcode.
+        OPCODE_BINARY (int): The binary frame opcode.
+    """
+
+    OPCODE_TEXT = 0x1
+    OPCODE_BINARY = 0x2
+
+
 class FakeWebsocketModule(types.ModuleType):
     """A stand-in for the `websocket` package, placed in `sys.modules` while a scenario runs.
 
@@ -760,6 +772,7 @@ class FakeWebsocketModule(types.ModuleType):
 
     WebSocketException = FakeWebsocketError
     WebSocketTimeoutException = TimeoutError
+    ABNF = FakeAbnf
 
     def __init__(self, event_log, plan):
         """Keeps the log and the plan.
