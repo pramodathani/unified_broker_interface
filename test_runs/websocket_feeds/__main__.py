@@ -9,6 +9,7 @@ import time
 
 from test_runs.websocket_feeds import dhan
 from test_runs.websocket_feeds import harness
+from test_runs.websocket_feeds import shoonya
 from test_runs.websocket_feeds import zerodha
 
 FIXTURE_PATH = (
@@ -17,6 +18,7 @@ FIXTURE_PATH = (
 
 BROKER_CASES = {
     'dhan': dhan.DhanFeedCases,
+    'shoonya': shoonya.ShoonyaFeedCases,
     'zerodha': zerodha.ZerodhaFeedCases,
 }
 
