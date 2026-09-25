@@ -5,13 +5,7 @@
     redis-cli HGETALL stoxkart:orders:orders
     redis-cli XRANGE stoxkart:order-updates:stream - + COUNT 5
 
-**The socket.** Stoxkart's API documentation mentions only a postback URL for order status. Stoxkart's own trading website instead receives order updates on `wss://openapi-v2.stoxkart.com/websocket/v2/connect`, and on 2026-09-15 that socket accepted the API app's own session:
-
-1. `POST https://openapi-v2.stoxkart.com/websocket/authenticate` with the headers `x-client-id` (the `ucc_code` setting), `x-access-token` (the API access token), `x-platform: api` and `x-api-key` answers `{"message": "Authentication successful, server ready to accept WS", "status": "success", "data": {"ClientId": ..., "RequestId": ...}}`. The same call with `x-platform: web` is refused with `AuthorizationError`, so this is the API platform's access, not the website's.
-2. The socket is opened at `wss://openapi-v2.stoxkart.com/websocket/v2/connect?x-client-id=<client>&x-platform=api&RequestId=<RequestId>`.
-3. `{"type": "heartbeat"}` is sent on connecting and every 30 seconds, as Stoxkart's website does. Updates arrive as JSON text.
-
-Stoxkart keeps one order socket per client. A new connection closes the older one with a close reason containing `new incoming connection`, so this script and a logged-in Stoxkart website or app knock each other off. When that happens here the script waits five minutes before reclaiming the socket, so a person using the website is not fought over every few seconds.
+**The socket** - the RequestId authentication, the connection, the heartbeat and the eviction by another session - is `StoxkartOrderSocket` and `StoxkartSession` in `stock_brokers/websockets/stoxkart.py`, whose module docstring describes it. This script runs the socket and turns the messages it hands over into the Redis writes below.
 
 **What an update holds** was first seen on 2026-09-15, when three KWIL orders sent after the close were rejected: an update arrived within a second of each order, carrying `client_id`, `user_id`, `order_id`, `exch_order_id`, `order_timestamp` (blank on a rejection), `variety`, `exchange`, `trading_symbol`, `symbol`, `token`, `segment`, `order_type`, `transaction_type`, `validity`, `product`, `quantity`, `disclose_quantity`, `disclose_quantity_remaining`, `price`, `trigger_price`, `traded_quantity`, `pending_quantity`, `order_status`, `reason`, `expiry_date`, `strike_price`, `option_type` and `lot_size`, every value a string. No update arrived when two after-market orders were placed the same evening, which only `bin/stoxkart/orders/api_order_details` recorded, but one arrived for each when they were cancelled, with `order_status` `AMO CANCELLED`. Updates for open, partly filled and filled orders have not been seen yet. Every JSON object received is logged at INFO with its first 300 characters.
 
@@ -36,7 +30,7 @@ Any other object - an acknowledgement, a heartbeat reply - is logged and not sto
 | `cancelled_quantity`, `exchange_timestamp` | null |
 | `tag` | `tag` |
 
-**Sessions.** The access token is read afresh for every authentication, so a login made by any process is picked up. An authentication refused with `AuthorizationError` logs in again through `StoxkartAPI` before retrying. Other failures reconnect with a backoff from 1 to 60 seconds.
+**Sessions.** The access token is read afresh for every authentication, so a login made by any process is picked up. An authentication refused with `AuthorizationError` logs in again through `StoxkartSession` before retrying. Other failures reconnect with a backoff from 1 to 60 seconds.
 
 Exits 0 when stopped with Ctrl+C or SIGTERM, and 1 when the first login, or a login after the session died, fails. Reads only - it never places, modifies or cancels an order.
 """
@@ -44,8 +38,6 @@ Exits 0 when stopped with Ctrl+C or SIGTERM, and 1 when the first login, or a lo
 import json
 import signal
 import sys
-import threading
-import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -55,24 +47,11 @@ from utilities.bootstrap import run_under_venv
 
 PROJECT_ROOT = run_under_venv(__file__)
 
-import requests
-import websocket
-
-from stock_brokers.api.stoxkart import StoxkartAPI
 from utilities.configurations import get_cache, get_logger
 
-AUTHENTICATE_URL = "https://openapi-v2.stoxkart.com/websocket/authenticate"
-SOCKET_URL = "wss://openapi-v2.stoxkart.com/websocket/v2/connect"
 ORDERS_KEY = "stoxkart:orders:orders"
 STREAM_KEY = "stoxkart:order-updates:stream"
 STREAM_MAX_LENGTH = 20000
-HEARTBEAT_SECONDS = 30
-RECEIVE_TIMEOUT_SECONDS = 1
-TIMEOUT_SECONDS = 15
-MINIMUM_BACKOFF_SECONDS = 1
-MAXIMUM_BACKOFF_SECONDS = 60
-EVICTED_WAIT_SECONDS = 300
-EVICTION_REASON = "new incoming connection"
 INDIA = ZoneInfo("Asia/Kolkata")
 RESET_HOUR = 6
 
@@ -101,10 +80,6 @@ end
 if #ARGV >= 4 then redis.call('EXPIREAT', KEYS[1], ARGV[1]) end
 return written
 """
-
-
-class StoxkartSessionRefused(Exception):
-    """Stoxkart refused the order socket's authentication because the session is dead."""
 
 
 class StoxkartUpdateNormalizer:
@@ -363,158 +338,38 @@ class StoxkartUpdateNormalizer:
         return None
 
 
-class StoxkartOrderSocket:
-    """The order update websocket, authenticated with the API session and reconnected until stopped.
+class StoxkartOrderUpdatesStore:
+    """Where the order socket's updates are written: the merged orders hash and the persistence stream.
 
     Attributes:
-        logger (logging.Logger): Where connections, updates and failures are reported.
-        cache (redis.Redis): The Redis client updates are written with.
         normalizer (StoxkartUpdateNormalizer): Builds the normalized order from each update.
-        stop (threading.Event): Set when streaming should end.
     """
 
-    def __init__(self, stoxkart):
-        """Remembers the API session and prepares the Redis merge script.
+    def __init__(self, cache, logger):
+        """Registers the merge script on the Redis client the updates are written to.
 
         Args:
-            stoxkart (StoxkartAPI): The logged-in API session whose token authenticates the socket.
+            cache (redis.Redis): The Redis client.
+            logger (logging.Logger): Where writes are reported.
+
+        Returns:
+            None: This method returns nothing.
         """
-        self.logger = get_logger("stoxkart.websocket_order_details")
-        self.cache = get_cache()
+        self._cache = cache
+        self._logger = logger
         self.normalizer = StoxkartUpdateNormalizer()
-        self.stop = threading.Event()
-        self._merge = self.cache.register_script(MERGE_SCRIPT)
-        self._stoxkart = stoxkart
+        self._merge = cache.register_script(MERGE_SCRIPT)
 
-    def run(self):
-        """Authenticates, connects and stores updates, reconnecting with a backoff, until stopped.
-
-        Returns:
-            int: 0 once stopped, and 1 when logging in again after a refused session failed.
-        """
-        backoff = MINIMUM_BACKOFF_SECONDS
-        while not self.stop.is_set():
-            wait = backoff
-            try:
-                request_id = self._authenticate()
-                close_reason = self._stream(request_id)
-                backoff = MINIMUM_BACKOFF_SECONDS
-                wait = MINIMUM_BACKOFF_SECONDS
-                if EVICTION_REASON in close_reason.lower():
-                    self.logger.warning(f"Another Stoxkart session took the order socket; reclaiming it in {EVICTED_WAIT_SECONDS} seconds.")
-                    wait = EVICTED_WAIT_SECONDS
-            except StoxkartSessionRefused as error:
-                self.logger.warning(f"Stoxkart session expired, logging in again: {error}")
-                try:
-                    self._stoxkart = StoxkartAPI()
-                except Exception as login_error:
-                    self.logger.error(f"Could not log in to Stoxkart: {type(login_error).__name__}: {login_error}")
-                    return 1
-                wait = 0
-            except Exception as error:
-                self.logger.error(f"Order socket failed, reconnecting in {backoff} seconds: {type(error).__name__}: {error}")
-                backoff = min(backoff * 2, MAXIMUM_BACKOFF_SECONDS)
-            if wait:
-                self.stop.wait(wait)
-        self.logger.info("Stopped")
-        return 0
-
-    def _authenticate(self):
-        """Asks Stoxkart for the RequestId the socket connects with.
-
-        Returns:
-            str: The RequestId.
-
-        Raises:
-            StoxkartSessionRefused: Stoxkart refused the access token.
-            RuntimeError: Stoxkart answered without a RequestId.
-            requests.RequestException: The request could not be sent.
-        """
-        login = self._stoxkart._current_login() or {}
-        settings = self._stoxkart._settings
-        headers = {
-            "x-client-id": settings["ucc_code"],
-            "x-access-token": login.get("access_token") or "",
-            "x-platform": "api",
-            "x-api-key": settings["api_key"],
-        }
-        response = requests.post(AUTHENTICATE_URL, headers=headers, timeout=TIMEOUT_SECONDS)
-        try:
-            body = response.json()
-        except ValueError:
-            body = {}
-        if response.status_code == 401 or body.get("code") == "AuthorizationError":
-            raise StoxkartSessionRefused(body.get("message") or f"HTTP {response.status_code}")
-        request_id = (body.get("data") or {}).get("RequestId")
-        if response.status_code >= 300 or not request_id:
-            raise RuntimeError(f"authentication answered HTTP {response.status_code}: {response.text[:200]}")
-        return request_id
-
-    def _stream(self, request_id):
-        """Opens the socket and reads it until it closes or streaming stops.
+    def write_updates(self, items, received_at):
+        """Stores every order update in one frame's messages, keeping a variety the order book already gave.
 
         Args:
-            request_id (str): The RequestId from the authentication.
+            items (list): The frame's messages, as dictionaries exactly as Stoxkart sent them.
+            received_at (datetime): When the frame was read, as a naive India wall clock time.
 
         Returns:
-            str: The close reason Stoxkart gave, or an empty string.
-
-        Raises:
-            websocket.WebSocketException: The socket could not be opened or broke.
+            None: This method returns nothing.
         """
-        client_id = self._stoxkart._settings["ucc_code"]
-        url = f"{SOCKET_URL}?x-client-id={client_id}&x-platform=api&RequestId={request_id}"
-        socket = websocket.create_connection(url, timeout=RECEIVE_TIMEOUT_SECONDS)
-        self.logger.info(f"Connected to {SOCKET_URL}.")
-        try:
-            return self._read(socket)
-        finally:
-            socket.close()
-
-    def _read(self, socket):
-        """Sends heartbeats and stores updates until the socket closes or streaming stops.
-
-        Args:
-            socket (websocket.WebSocket): The open connection.
-
-        Returns:
-            str: The close reason Stoxkart gave, or an empty string.
-        """
-        heartbeat = json.dumps({"type": "heartbeat"})
-        socket.send(heartbeat)
-        last_heartbeat_at = time.monotonic()
-        while not self.stop.is_set():
-            if time.monotonic() - last_heartbeat_at >= HEARTBEAT_SECONDS:
-                socket.send(heartbeat)
-                last_heartbeat_at = time.monotonic()
-            try:
-                opcode, frame = socket.recv_data()
-            except websocket.WebSocketTimeoutException:
-                continue
-            if opcode == websocket.ABNF.OPCODE_CLOSE:
-                reason = frame[2:].decode("utf-8", errors="replace")
-                self.logger.warning(f"Stoxkart closed the order socket: {reason!r}")
-                return reason
-            if opcode == websocket.ABNF.OPCODE_TEXT:
-                self._handle(frame.decode("utf-8", errors="replace"))
-        return ""
-
-    def _handle(self, text):
-        """Stores every order update in one text frame.
-
-        Args:
-            text (str): The frame's text.
-        """
-        try:
-            payload = json.loads(text)
-        except ValueError:
-            self.logger.info(f"Ignoring a frame that is not JSON: {text[:200]}")
-            return
-        items = payload
-        if not isinstance(payload, list):
-            items = [payload]
-
-        received_at = datetime.now()
         observed_at = received_at.timestamp()
         received = received_at.strftime("%Y-%m-%d %H:%M:%S.%f")
         merge_arguments = [
@@ -525,9 +380,6 @@ class StoxkartOrderSocket:
         stream_entries = []
         orders = []
         for item in items:
-            if not isinstance(item, dict):
-                continue
-            self.logger.info(f"Order socket message: {json.dumps(item)[:300]}")
             order = self.normalizer.normalize(item)
             if order is not None:
                 orders.append((order, item))
@@ -547,11 +399,11 @@ class StoxkartOrderSocket:
         if not stream_entries:
             return
         self._merge(keys=[ORDERS_KEY], args=merge_arguments)
-        pipeline = self.cache.pipeline(transaction=False)
+        pipeline = self._cache.pipeline(transaction=False)
         for update in stream_entries:
             pipeline.xadd(STREAM_KEY, {"update": update}, maxlen=STREAM_MAX_LENGTH, approximate=True)
         pipeline.execute()
-        self.logger.info(f"Merged {len(stream_entries)} order update(s) into {ORDERS_KEY}")
+        self._logger.info(f"Merged {len(stream_entries)} order update(s) into {ORDERS_KEY}")
 
     def _stored_varieties(self, orders):
         """Reads the variety already stored for each order, from the entries in `stoxkart:orders:orders`.
@@ -567,7 +419,7 @@ class StoxkartOrderSocket:
         order_ids = []
         for order, _ in orders:
             order_ids.append(order["order_id"])
-        stored = self.cache.hmget(ORDERS_KEY, order_ids)
+        stored = self._cache.hmget(ORDERS_KEY, order_ids)
         varieties = {}
         for order_id, value in zip(order_ids, stored):
             if not value:
@@ -630,14 +482,17 @@ class StoxkartOrderUpdatesApplication:
         Returns:
             int: 0 when stopped, and 1 when a login failed.
         """
+        from stock_brokers.websockets.stoxkart import StoxkartOrderSocket, StoxkartSession
+
         logger = get_logger("stoxkart.websocket_order_details")
         try:
-            stoxkart = StoxkartAPI()
+            session = StoxkartSession()
         except Exception as error:
             logger.error(f"Could not log in to Stoxkart: {type(error).__name__}: {error}")
             return 1
 
-        socket = StoxkartOrderSocket(stoxkart)
+        store = StoxkartOrderUpdatesStore(get_cache(), logger)
+        socket = StoxkartOrderSocket(session, store.write_updates, logger)
 
         def stop_socket(signal_number, frame):
             """Sets the socket's stop event.

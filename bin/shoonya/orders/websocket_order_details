@@ -7,9 +7,11 @@ streaming until stopped.
     redis-cli HGETALL shoonya:orders:orders
     redis-cli HGET shoonya:orders:orders <norenordno>
 
-Self-contained: it logs in with `ShoonyaAPI` and carries its own connection to Shoonya's Noren stream at
-`wss://api.shoonya.com/NorenWSTP/`, so it needs no other feed process or key. It opens its own connection, apart
-from any market feed, so a market data reconnect can never drop an order event.
+The connection and the login are `ShoonyaOrderUpdatesSocket` and `ShoonyaSession` in
+`stock_brokers/websockets/shoonya.py`, whose module docstring describes Noren's connect frame and heartbeat at
+`wss://api.shoonya.com/NorenWSTP/`. This script runs the socket and turns the updates it hands over into the
+Redis writes below, so it needs no other feed process or key. The socket opens its own connection, apart from
+any market feed, so a market data reconnect can never drop an order event.
 
 **The stream.** On open the socket sends Noren's connect frame, `{"t": "a", "uid", "actid", "source": "API",
 "accesstoken"}`, with the account's UCC code as the user id. Once the `ak` acknowledgement says `OK` it subscribes
@@ -34,8 +36,8 @@ so the history the hash overwrites is kept there. Capped at about 20,000 entries
 fills `shoonya:portfolio:positions` from the REST position book.
 
 **Sessions.** The token is read afresh on every connect, so a login made by any process is picked up. When Noren
-refuses the connect frame, or the socket fails to open six times running, it logs in again through `ShoonyaAPI` -
-a headless Chrome login - before reconnecting. A reconnect otherwise backs off from 1 to 60 seconds. Updates
+refuses the connect frame, or the socket fails to open six times running, it logs in again - a headless Chrome
+login, without checking whether another process has already replaced the token - before reconnecting. A reconnect otherwise backs off from 1 to 60 seconds. Updates
 arrive only when an order changes, so a quiet socket is not a broken one.
 
 Exits 0 when stopped with Ctrl+C or SIGTERM, and 1 when a login fails or the connect frame is still refused after
@@ -57,22 +59,11 @@ from utilities.bootstrap import run_under_venv
 
 PROJECT_ROOT = run_under_venv(__file__)
 
-ORDER_UPDATES_URL = "wss://api.shoonya.com/NorenWSTP/"
 ORDERS_KEY = "shoonya:orders:orders"
 
 # Every update is also appended here for bin/shoonya/orders/store_orders_to_db, which reads it with a consumer group.
 STREAM_KEY = "shoonya:order-updates:stream"
 STREAM_MAX_LENGTH = 20000
-
-CONNECT_ACK = "ak"
-ORDER_UPDATE = "om"
-
-HEARTBEAT = '{"t":"h"}'
-HEARTBEAT_INTERVAL_SECONDS = 3
-HEARTBEAT_TIMEOUT_SECONDS = 2
-MIN_BACKOFF_SECONDS = 1
-MAX_BACKOFF_SECONDS = 60
-MAX_FAILED_CONNECTS = 6
 
 INDIA = ZoneInfo("Asia/Kolkata")
 RESET_HOUR = 6
@@ -253,144 +244,53 @@ def order_from_noren(row):
     }
 
 
-class OrderUpdatesSocket:
+class ShoonyaOrderUpdatesStore:
     """
-    Shoonya's order update websocket, reconnecting and logging in again until stopped.
+    Where the order updates socket's updates are written: the merged orders hash and the persistence stream.
     """
 
     def __init__(self, cache, logger):
         """
-        Construct ShoonyaAPI, which logs in when the stored session is dead.
+        Registers the merge script on the Redis client the updates are written to.
 
-        - `cache` is the Redis client.
-        - `logger` is where the connection reports.
+        Args:
+            cache (redis.Redis): The Redis client.
+            logger (logging.Logger): Where writes are reported.
+
+        Returns:
+            None: This method returns nothing.
         """
-        from stock_brokers.api.shoonya import ShoonyaAPI
-
-        self._api_class = ShoonyaAPI
-        self._shoonya = ShoonyaAPI()
         self._cache = cache
         self._merge = cache.register_script(MERGE_SCRIPT)
         self._logger = logger
-        self._stop = threading.Event()
-        self._ws = None
-        self._user_id = None
-        self._opened = False
-        self._authentication_rejected = False
-        self.gave_up = False
 
-    def close(self):
-        """Close the websocket and stop reconnecting."""
-        self._stop.set()
-        if self._ws is not None:
-            self._ws.close()
-
-    def run_forever(self):
-        """Connect, and reconnect with backoff, until closed or unable to recover."""
-        backoff = MIN_BACKOFF_SECONDS
-        failed_connects = 0
-        logged_in_again = False
-        while not self._stop.is_set():
-            self._opened = False
-            self._authentication_rejected = False
-            try:
-                self._connect()
-            except Exception as exception:
-                self._logger.error(f"Order updates connection failed: {type(exception).__name__}: {exception}")
-            if self._stop.is_set():
-                break
-
-            if self._opened and not self._authentication_rejected:
-                failed_connects, logged_in_again, backoff = 0, False, MIN_BACKOFF_SECONDS
-            else:
-                failed_connects += 1
-
-            if self._authentication_rejected or failed_connects >= MAX_FAILED_CONNECTS:
-                if logged_in_again:
-                    self.gave_up = True
-                    self._logger.error("Order updates are still refused after logging in again. Giving up.")
-                    break
-                try:
-                    # A dead session: log in again before connecting again.
-                    self._logger.warning("Logging in to Shoonya again.")
-                    self._shoonya = self._api_class()
-                except Exception as exception:
-                    self.gave_up = True
-                    self._logger.error(f"Could not log in to Shoonya again: {type(exception).__name__}: {exception}")
-                    break
-                failed_connects, logged_in_again = 0, True
-
-            self._logger.warning(f"Order updates disconnected. Reconnecting in {backoff} seconds.")
-            self._stop.wait(backoff)
-            backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
-        self._logger.info("Order updates socket stopped.")
-
-    def _connect(self):
-        """Open the websocket and block until it closes."""
-        import websocket
-
-        self._ws = websocket.WebSocketApp(ORDER_UPDATES_URL, on_open=self._on_open, on_message=self._on_message,
-                                          on_error=self._on_error, on_close=self._on_close)
-        self._ws.run_forever(ping_interval=HEARTBEAT_INTERVAL_SECONDS, ping_timeout=HEARTBEAT_TIMEOUT_SECONDS,
-                             ping_payload=HEARTBEAT)
-
-    def _on_open(self, ws):
+    def write_updates(self, orders, received_at):
         """
-        Authenticate with the token in force now. The subscription waits for the acknowledgement.
+        Merges one message's order updates into the orders hash, keyed by `norenordno`, and appends each to the stream.
 
-        The frame is `a` with the token named `accesstoken`: Noren also parses a `c` frame naming it `susertoken`,
-        and refuses a perfectly good token that way, which reads exactly like an expired session.
+        The hash keeps each order's latest state.
+        The stream keeps every transition, even two of one order in the same message, in the shape `bin/shoonya/orders/store_orders_to_db` reads.
+        An update the normalizer cannot read as an order is skipped without a log line, as it always was.
+
+        Args:
+            orders (list): The message's `om` updates, exactly as Noren sent them.
+            received_at (datetime): When the message was received, as a naive India wall clock time.
+
+        Returns:
+            None: This method returns nothing.
         """
-        self._opened = True
-        login = self._shoonya._current_login() or {}
-        self._user_id = self._shoonya._settings.get('ucc_code')
-        ws.send(json.dumps({"t": "a", "uid": self._user_id, "actid": self._user_id, "source": "API",
-                            "accesstoken": login.get('access_token')}))
-        self._logger.info("Order updates socket opened. Authenticating.")
-
-    def _on_error(self, ws, error):
-        self._logger.error(f"Order updates error: {error}")
-
-    def _on_close(self, ws, status_code, message):
-        self._logger.info(f"Order updates socket closed with status {status_code}: {message}")
-
-    def _on_message(self, ws, message):
-        """Subscribe on the connect acknowledgement, and merge each order update into the orders hash and the stream."""
-        if isinstance(message, (bytes, bytearray)):
-            message = message.decode('utf-8', errors='replace')
-        try:
-            payload = json.loads(message)
-        except (TypeError, json.JSONDecodeError):
-            self._logger.debug(f"Ignoring a frame that is not JSON: {str(message)[:160]}")
-            return
-
-        received_at = datetime.now()
         received = received_at.strftime("%Y-%m-%d %H:%M:%S.%f")
         observed_at = received_at.timestamp()
-        merged, appended = [], []
-        for entry in (payload if isinstance(payload, list) else [payload]):
-            if not isinstance(entry, dict):
+        merged = []
+        appended = []
+        for entry in orders:
+            order = order_from_noren(entry)
+            if order is None:
                 continue
-            message_type = entry.get('t')
-            if message_type == CONNECT_ACK:
-                # Documented as "Ok" at Shoonya and seen as "OK" on the wire, so the comparison ignores case.
-                if str(entry.get('s', '')).upper() == 'OK':
-                    ws.send(json.dumps({"t": "o", "actid": self._user_id}))
-                    self._logger.info("Authenticated and subscribed. Waiting for order updates.")
-                else:
-                    self._logger.error(f"Authentication refused: {entry}")
-                    self._authentication_rejected = True
-                    ws.close()
-            elif message_type == ORDER_UPDATE and entry.get('norenordno'):
-                order = order_from_noren(entry)
-                if order is None:
-                    continue
-                merged += [order["order_id"], json.dumps({"observed_at": observed_at, "source": "websocket",
-                                                          "order": order, "data": entry})]
-                appended.append(json.dumps({'timestamp': received, 'data': entry}))
+            merged.append(order["order_id"])
+            merged.append(json.dumps({"observed_at": observed_at, "source": "websocket", "order": order, "data": entry}))
+            appended.append(json.dumps({"timestamp": received, "data": entry}))
         if merged:
-            # The hash keeps each order's latest state; the stream keeps every transition, even two of one order in the
-            # same message, in the shape bin/shoonya/orders/store_orders_to_db reads.
             self._merge(keys=[ORDERS_KEY], args=[next_reset(), "websocket", repr(observed_at)] + merged)
             pipeline = self._cache.pipeline(transaction=False)
             for update in appended:
@@ -400,14 +300,17 @@ class OrderUpdatesSocket:
 
 def main():
     """Stream Shoonya order updates into shoonya:orders:orders until stopped."""
+    from stock_brokers.websockets.shoonya import ShoonyaOrderUpdatesSocket, ShoonyaSession
     from utilities.configurations import get_cache, get_logger
 
     logger = get_logger("shoonya.websocket_order_details")
     try:
-        socket = OrderUpdatesSocket(get_cache(), logger)
+        session = ShoonyaSession(logger)
     except Exception as exception:
         logger.error(f"Could not log in to Shoonya: {type(exception).__name__}: {exception}")
         return 1
+    store = ShoonyaOrderUpdatesStore(get_cache(), logger)
+    socket = ShoonyaOrderUpdatesSocket(session, store.write_updates, logger)
 
     # Installed before the thread starts: systemd stops a unit with SIGTERM, and the default action would kill
     # the process without closing the connection.

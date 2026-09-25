@@ -1,10 +1,10 @@
 # Broker scripts
 
 Each broker has a directory of small, self-contained scripts under `bin/<broker>/`. A script does one
-thing - log in, poll the order book, stream quotes, persist a stream - and carries everything it needs
-to do it: it logs in by itself through the broker's API class, logs in again when its token is refused,
-and writes what it reads to Redis under keys named for the broker. No script depends on another process
-running.
+thing - log in, poll the order book, stream quotes, persist a stream - and needs no other process to do
+it: it logs in through the broker's classes in `stock_brokers` - the API class, and for the two websocket
+feeds the socket classes in `stock_brokers/websockets` - logs in again when its token is refused, and
+writes what it reads to Redis under keys named for the broker.
 
 The scripts are grouped into five folders by what they are about, the same five at every broker:
 
@@ -218,7 +218,10 @@ Orders are keyed by the broker's order id (`order_id`, `norenordno`, `nOrdNo`, `
 
 ### Quotes
 
-`websocket_quotes` logs in, opens its own connections and decodes the broker's packets itself. It writes three keys:
+`websocket_quotes` chooses the instruments, runs the broker's quote sockets and writes what they decode to
+Redis. The sockets themselves - the login, the connection and the packet decoding - are classes in
+`stock_brokers/websockets/<broker>.py`, most of them built on the reconnect loop in
+`stock_brokers/websockets/base.py`; Stoxkart's stream runs a loop of its own. The script writes three keys:
 
 | Key | Type | Holds |
 | --- | --- | --- |

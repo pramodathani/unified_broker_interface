@@ -38,3 +38,7 @@ Updates name the instrument by bare security id (`"instrument":"11536"`), not `N
 ## How it was checked
 
 An offline check parsed the captured `full` frame as a string, a two-line frame as bytes, a message without data and a line that is not JSON. A live check at 10:36 IST ran `QuotesSocket` for 45 seconds with an in-memory stand-in for Redis, without logging in, and got 441 ticks for the five subscribed NSE stocks. Against Zerodha's last tick at the same moment, last prices, open, high and low matched; INFY and ICICIBANK volume matched exactly and TCS by one share; the last trade time matched within three seconds and the exchange timestamp within two. The median delay from exchange timestamp to receipt was 0.8 seconds, which is why both normalizers now trust both times.
+
+## Where the socket went
+
+On 2026-09-25 the socket this note describes moved out of the script into `IndmoneyQuotesSocket` in `stock_brokers/websockets/indmoney.py`, which also has a note of its own. The script now writes to Redis what the socket hands it. Where this note names the old class or function, the same code now lives there, and the offline recording in `test_runs/websocket_feeds/` shows the move changed nothing the script writes to Redis.

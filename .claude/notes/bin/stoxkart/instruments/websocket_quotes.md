@@ -55,3 +55,7 @@ A future or option is named by its `symbol_description` only when that descripti
 ## The subscription set
 
 `stoxkart:quotes:subscriptions` was seeded on 2026-09-15 with the fifteen instruments `zerodha:quotes:subscriptions` held, so the unified layer can compare the brokers on the same instruments. The MCX members are dated contracts and have to be rolled when they expire, as the other brokers' sets do.
+
+## Where the socket went
+
+On 2026-09-25 the socket this note describes moved out of the script into `StoxkartQuoteStream` in `stock_brokers/websockets/stoxkart.py`, which also has a note of its own. The script now writes to Redis what the socket hands it. Where this note names the old class or function, the same code now lives there, and the offline recording in `test_runs/websocket_feeds/` shows the move changed nothing the script writes to Redis.

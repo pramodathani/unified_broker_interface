@@ -84,6 +84,15 @@ test page, and a login check against the live brokers.
     price, and the sell side. The virtual book that keeps the estimates is run against a stand-in Redis. Needs no
     Redis, database or network. Run it after touching `virtual_queue.py` or `virtual_book.py`.
 
+    **`websocket_feeds/`** - each broker's quotes socket and order updates socket, driven through scripted
+    connections: hand-built frames for every packet shape the decoder handles, the broker's text and error
+    messages, a refused handshake followed by a second login, a token another process has already replaced, and
+    failures until the socket gives up. The `websocket` package, Redis, the broker's API class, the clock and the
+    backoff waits are stand-ins. Every Redis command, frame sent, log line, login and wait is kept in order and
+    compared with `test_runs/fixtures/websocket_feeds.jsonl`. Needs no Redis, database or network. Name brokers
+    to run only those; `--record` rewrites only the named brokers' lines. Run it after touching a
+    `websocket_quotes` or `websocket_order_details` script.
+
     ```bash
     python -m test_runs.candle_parse
     python -m test_runs.virtual_queue
@@ -99,6 +108,8 @@ test page, and a login check against the live brokers.
     python -m test_runs.order_engine --record
     python -m test_runs.order_flatten
     python -m test_runs.order_flatten --record
+    python -m test_runs.websocket_feeds
+    python -m test_runs.websocket_feeds zerodha --record
     ```
 
 === "Safe - infrastructure"

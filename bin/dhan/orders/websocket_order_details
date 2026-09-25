@@ -7,8 +7,10 @@ until stopped.
     redis-cli HGETALL dhan:orders:orders
     redis-cli HGET dhan:orders:orders <order number>
 
-Self-contained: it logs in with `DhanAPI` and carries its own connection to Dhan's order update stream at
-`wss://api-order-update.dhan.co`, so it needs no other feed process or key.
+The connection and the login are `DhanOrderUpdatesSocket` and `DhanSession` in
+`stock_brokers/websockets/dhan.py`, whose module docstring describes the protocol at
+`wss://api-order-update.dhan.co`. This script runs the socket and turns the order alerts it hands over into the
+Redis writes below, so it needs no other feed process or key.
 
 **The stream.** After connecting it sends Dhan's login message - `{"LoginReq": {"MsgCode": 42, "ClientId": ...,
 "Token": ...}, "UserType": "SELF"}` - and from then on every change to an order in the account arrives as a
@@ -32,11 +34,12 @@ the history the hash overwrites is kept there. Capped at about 20,000 entries.
 
 **Positions.** Dhan's order update stream carries orders only - its documentation describes `order_alert`
 messages and nothing for positions - so this script writes no positions; `bin/dhan/portfolio/positions` fills
-`dhan:portfolio:positions` from the REST positions. A message of any other `Type` is logged, so one appearing would be noticed.
+`dhan:portfolio:positions` from the REST positions. A message of any other `Type` is logged, so one appearing would be noticed, and so is an `order_alert` without an order number.
 
 **Sessions.** Dhan does not answer a successful login: a good token holds the socket open and a bad one is
 answered with a binary rejection frame and a disconnect. So a binary frame, or a socket that fails to open six
-times running, is taken as a dead session: it logs in again through `DhanAPI` before reconnecting. The token
+times running, is taken as a dead session: it logs in again before reconnecting, without checking whether
+another process has already replaced the token. The token
 is read afresh on every connect, so a login made by any process is picked up. A reconnect otherwise backs off
 from 1 to 60 seconds. Updates arrive only when an order changes, so a quiet socket is not a broken one.
 
@@ -59,21 +62,11 @@ from utilities.bootstrap import run_under_venv
 
 PROJECT_ROOT = run_under_venv(__file__)
 
-ORDER_UPDATES_URL = "wss://api-order-update.dhan.co"
 ORDERS_KEY = "dhan:orders:orders"
 
 # Every update is also appended here for bin/dhan/orders/store_orders_to_db, which reads it with a consumer group.
 STREAM_KEY = "dhan:order-updates:stream"
 STREAM_MAX_LENGTH = 20000
-
-LOGIN_MESSAGE_CODE = 42
-ORDER_ALERT = "order_alert"
-
-PING_INTERVAL_SECONDS = 30
-PING_TIMEOUT_SECONDS = 10
-MIN_BACKOFF_SECONDS = 1
-MAX_BACKOFF_SECONDS = 60
-MAX_FAILED_CONNECTS = 6
 
 INDIA = ZoneInfo("Asia/Kolkata")
 RESET_HOUR = 6
@@ -262,133 +255,53 @@ def order_from_update(data):
         "tag": text(data.get('CorrelationId')),
     }
 
-class OrderUpdatesSocket:
+class DhanOrderUpdatesStore:
     """
-    Dhan's order update websocket, reconnecting and logging in again until stopped.
+    Where the order updates socket's order alerts are written: the merged orders hash and the persistence stream.
     """
 
     def __init__(self, cache, logger):
         """
-        Construct DhanAPI, which logs in when the stored session is dead.
+        Registers the merge script on the Redis client the updates are written to.
 
-        - `cache` is the Redis client.
-        - `logger` is where the connection reports.
+        Args:
+            cache (redis.Redis): The Redis client.
+            logger (logging.Logger): Where writes and skipped updates are reported.
+
+        Returns:
+            None: This method returns nothing.
         """
-        from stock_brokers.api.dhan import DhanAPI
-
-        self._api_class = DhanAPI
-        self._dhan = DhanAPI()
         self._cache = cache
         self._merge = cache.register_script(MERGE_SCRIPT)
         self._logger = logger
-        self._stop = threading.Event()
-        self._ws = None
-        self._opened = False
-        self._authentication_rejected = False
-        self.gave_up = False
 
-    def close(self):
-        """Close the websocket and stop reconnecting."""
-        self._stop.set()
-        if self._ws is not None:
-            self._ws.close()
+    def write_updates(self, orders, received_at):
+        """
+        Merges one message's order alerts into the orders hash, keyed by order number, and appends each to the stream.
 
-    def run_forever(self):
-        """Connect, and reconnect with backoff, until closed or unable to recover."""
-        backoff = MIN_BACKOFF_SECONDS
-        failed_connects = 0
-        logged_in_again = False
-        while not self._stop.is_set():
-            self._opened = False
-            self._authentication_rejected = False
-            try:
-                self._connect()
-            except Exception as exception:
-                self._logger.error(f"Order updates connection failed: {type(exception).__name__}: {exception}")
-            if self._stop.is_set():
-                break
+        The hash keeps each order's latest state.
+        The stream keeps every transition, even two of one order in the same message, in the shape `bin/dhan/orders/store_orders_to_db` reads.
 
-            if self._opened and not self._authentication_rejected:
-                failed_connects, logged_in_again, backoff = 0, False, MIN_BACKOFF_SECONDS
-            else:
-                failed_connects += 1
+        Args:
+            orders (list): The `Data` of each `order_alert` in the message, exactly as Dhan sent it.
+            received_at (datetime): When the message was received, as a naive India wall clock time.
 
-            if self._authentication_rejected or failed_connects >= MAX_FAILED_CONNECTS:
-                if logged_in_again and (self._authentication_rejected or failed_connects >= MAX_FAILED_CONNECTS):
-                    self.gave_up = True
-                    self._logger.error("Order updates are still refused after logging in again. Giving up.")
-                    break
-                try:
-                    # A dead session: log in again before connecting again.
-                    self._logger.warning("Logging in to Dhan again.")
-                    self._dhan = self._api_class()
-                except Exception as exception:
-                    self.gave_up = True
-                    self._logger.error(f"Could not log in to Dhan again: {type(exception).__name__}: {exception}")
-                    break
-                failed_connects, logged_in_again = 0, True
-
-            self._logger.warning(f"Order updates disconnected. Reconnecting in {backoff} seconds.")
-            self._stop.wait(backoff)
-            backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
-        self._logger.info("Order updates socket stopped.")
-
-    def _connect(self):
-        """Open the websocket and block until it closes."""
-        import websocket
-
-        self._ws = websocket.WebSocketApp(ORDER_UPDATES_URL, on_open=self._on_open, on_message=self._on_message,
-                                          on_error=self._on_error, on_close=self._on_close)
-        self._ws.run_forever(ping_interval=PING_INTERVAL_SECONDS, ping_timeout=PING_TIMEOUT_SECONDS)
-
-    def _on_open(self, ws):
-        """Send the login message with the token in force now."""
-        self._opened = True
-        login = self._dhan._current_login() or {}
-        ws.send(json.dumps({"LoginReq": {"MsgCode": LOGIN_MESSAGE_CODE, "ClientId": str(self._dhan._settings.get('client_id')),
-                                         "Token": login.get('access_token')},
-                            "UserType": "SELF"}))
-        self._logger.info("Order updates socket opened and logged in. Waiting for order updates.")
-
-    def _on_error(self, ws, error):
-        self._logger.error(f"Order updates error: {error}")
-
-    def _on_close(self, ws, status_code, message):
-        self._logger.info(f"Order updates socket closed with status {status_code}: {message}")
-
-    def _on_message(self, ws, message):
-        """Merge each order alert into the orders hash, keyed by order number, and append it to the stream."""
-        if isinstance(message, (bytes, bytearray)):
-            # Order updates are JSON text; Dhan answers a refused login with a binary frame and a disconnect.
-            self._logger.warning(f"Dhan sent a binary frame, taken as a refused login: {bytes(message)[:80]!r}")
-            self._authentication_rejected = True
-            ws.close()
-            return
-
-        try:
-            payload = json.loads(message)
-        except (TypeError, json.JSONDecodeError):
-            self._logger.debug(f"Ignoring a frame that is not JSON: {str(message)[:160]}")
-            return
-
-        received_at = datetime.now()
+        Returns:
+            None: This method returns nothing.
+        """
         received = received_at.strftime("%Y-%m-%d %H:%M:%S.%f")
         observed_at = received_at.timestamp()
-        merged, appended = [], []
-        for entry in (payload if isinstance(payload, list) else [payload]):
-            if not isinstance(entry, dict):
-                continue
-            data = entry.get('Data')
-            order = order_from_update(data) if entry.get('Type') == ORDER_ALERT else None
+        merged = []
+        appended = []
+        for data in orders:
+            order = order_from_update(data)
             if order is None:
-                self._logger.info(f"Ignoring a message of type {entry.get('Type')!r}: {json.dumps(entry)[:200]}")
+                self._logger.info(f"Ignoring an order update without an order number: {json.dumps(data)[:200]}")
                 continue
-            merged += [order["order_id"], json.dumps({"observed_at": observed_at, "source": "websocket", "order": order,
-                                                      "data": data})]
-            appended.append(json.dumps({'timestamp': received, 'data': data}))
+            merged.append(order["order_id"])
+            merged.append(json.dumps({"observed_at": observed_at, "source": "websocket", "order": order, "data": data}))
+            appended.append(json.dumps({"timestamp": received, "data": data}))
         if merged:
-            # The hash keeps each order's latest state; the stream keeps every transition, even two of one order in the
-            # same message, in the shape bin/dhan/orders/store_orders_to_db reads.
             self._merge(keys=[ORDERS_KEY], args=[next_reset(), "websocket", repr(observed_at)] + merged)
             pipeline = self._cache.pipeline(transaction=False)
             for update in appended:
@@ -398,14 +311,17 @@ class OrderUpdatesSocket:
 
 def main():
     """Stream Dhan order updates into dhan:orders:orders until stopped."""
+    from stock_brokers.websockets.dhan import DhanOrderUpdatesSocket, DhanSession
     from utilities.configurations import get_cache, get_logger
 
     logger = get_logger("dhan.websocket_order_details")
     try:
-        socket = OrderUpdatesSocket(get_cache(), logger)
+        session = DhanSession(logger)
     except Exception as exception:
         logger.error(f"Could not log in to Dhan: {type(exception).__name__}: {exception}")
         return 1
+    store = DhanOrderUpdatesStore(get_cache(), logger)
+    socket = DhanOrderUpdatesSocket(session, store.write_updates, logger)
 
     # Installed before the thread starts: systemd stops a unit with SIGTERM, and the default action would kill
     # the process without closing the connection.

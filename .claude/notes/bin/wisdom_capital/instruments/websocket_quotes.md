@@ -11,3 +11,7 @@ The script now drops the stale subscription with `PUT /apimarketdata/instruments
 ## Why the market data token comes from `WisdomCapitalAPI`
 
 The token used to be minted here, in a copy of the same login that `bin/wisdom_capital/instruments/price_history` carried, published under the Redis key `wisdom_capital:session:marketdata`. Since 2026-09-22 constructing `WisdomCapitalAPI` establishes both of Wisdom Capital's sessions and publishes the market data one in the shared `last_login` document, so this script reads `market_data_access_token` and `market_data_user_id` from there and asks that class to replace a refused token. The lock `wisdom_capital:session:marketdata:lock` is still the thing that keeps two processes from minting at once, and it now lives in the API class. See the note beside `stock_brokers/api/wisdom_capital.py`.
+
+## Where the socket went
+
+On 2026-09-25 the socket this note describes moved out of the script into `WisdomCapitalQuotesSocket` in `stock_brokers/websockets/wisdom_capital.py`, which also has a note of its own. The script now writes to Redis what the socket hands it. Where this note names the old class or function, the same code now lives there, and the offline recording in `test_runs/websocket_feeds/` shows the move changed nothing the script writes to Redis.

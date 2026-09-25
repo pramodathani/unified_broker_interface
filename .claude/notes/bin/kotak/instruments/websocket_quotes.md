@@ -41,3 +41,7 @@ Last price, average price, close, last trade time and exchange timestamp matched
 ## What is not handled
 
 Index topics (`if|`) are not subscribed. Kotak names indices by name rather than a numeric `pSymbol`, which `_resolve_tokens` rejects, and the index topic's fields were not measured live.
+
+## Where the socket went
+
+On 2026-09-25 the socket this note describes moved out of the script into `KotakQuotesSocket` in `stock_brokers/websockets/kotak.py`, which also has a note of its own. The script now writes to Redis what the socket hands it. Where this note names the old class or function, the same code now lives there, and the offline recording in `test_runs/websocket_feeds/` shows the move changed nothing the script writes to Redis.
