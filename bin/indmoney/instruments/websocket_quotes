@@ -11,9 +11,11 @@ streaming until stopped.
     redis-cli HGET indmoney:quotes:live "NSE:RELIANCE"
     redis-cli HGETALL indmoney:quotes:instruments
 
-Self-contained: it logs in with `INDMoneyAPI` and carries its own connection, subscription and parsing for the
-INDstocks price feed at `wss://ws-prices.indstocks.com/api/v1/ws/prices`, so it needs no other feed process or
-key.
+The connection, the login and the parsing for the INDstocks price feed at
+`wss://ws-prices.indstocks.com/api/v1/ws/prices` are `IndmoneyQuotesSocket` and `IndmoneySession` in
+`stock_brokers/websockets/indmoney.py`, whose module docstring describes the protocol. This script chooses the
+instruments, splits them across sockets, runs the sockets and writes the ticks they decode to Redis, so it needs
+no other feed process or key.
 
 **Instruments** are `--tokens` when given, otherwise the members of the Redis set `indmoney:quotes:subscriptions`,
 each as `SEGMENT:TOKEN` with INDstocks' segment names - `NSE` and `BSE` for equity, `NFO` and `BFO` for
@@ -38,12 +40,9 @@ by its token, and a warning says how many.
   `bin/indmoney/instruments/store_quotes_to_db` writes to `indmoney.ticks`. Capped at about 1,000,000 entries, so ticks that arrive
   while the persister is down for long enough are trimmed before they are persisted.
 
-**The feed.** After connecting, one JSON message subscribes the batch in `full` mode, the richest the feed serves:
-`ltp` carries only the last price, `quote` carries `open`, `high`, `low`, `close` and `volume` without a last price,
-and `depth`, `market_depth`, `depth5` and `snapquote` send nothing. Every update arrives as a JSON string whose
-content is itself JSON - `"{\"mode\":\"full\",\"instrument\":\"11536\",...}"` followed by a newline - so each line of
-a frame is decoded twice. An update names the instrument by its bare security id, a millisecond `timestamp`, and a
-`data` object. A message without `data` is logged, not silently dropped.
+**The feed.** The socket subscribes in `full` mode and merges each instrument's fields across updates; how
+INDstocks encodes them is in `stock_brokers/websockets/indmoney.py`. A message without `data` is logged, not
+silently dropped.
 
 A tick has the same fields as every broker's here, taken from `full` mode's `data` as measured against Zerodha's
 ticks on 2026-09-15:
@@ -63,8 +62,9 @@ quantity, average price or previous close. `mode` is always `quote`, since the f
 **Sessions.** The token travels as an `Authorization` header in the websocket handshake, so a dead token fails the
 upgrade itself - INDstocks answers 401, 403 or 513 - rather than a message. Each connection reads the current token
 when it connects, so a login made by any process is picked up. A refused handshake, or a socket failing to open six
-times running, logs in again through `INDMoneyAPI` - one socket at a time - before reconnecting. A reconnect
-otherwise backs off from 1 to 60 seconds.
+times running, logs in again through the shared `IndmoneySession` - one socket at a time, and only if no other
+socket or process already replaced the token - before reconnecting. A reconnect otherwise backs off from 1 to 60
+seconds.
 
 Exits 0 when stopped with Ctrl+C or SIGTERM, 1 when a login fails or a socket still cannot open after logging in
 again, and 2 when there is nothing to subscribe to. Reads only - it places no orders.
@@ -72,7 +72,6 @@ again, and 2 when there is nothing to subscribe to. Reads only - it places no or
 
 import sys
 import json
-import time
 import signal
 import argparse
 import threading
@@ -84,8 +83,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from utilities.bootstrap import run_under_venv
 
 PROJECT_ROOT = run_under_venv(__file__)
-
-FEED_URL = "wss://ws-prices.indstocks.com/api/v1/ws/prices"
 
 LIVE_KEY = "indmoney:quotes:live"
 INSTRUMENTS_KEY = "indmoney:quotes:instruments"
@@ -104,358 +101,42 @@ SEGMENTS = {"NSE": ("NSE", "E"), "BSE": ("BSE", "E"), "NFO": ("NSE", "D"), "BFO"
             "NIDX": ("NSE", None), "BIDX": ("BSE", None)}
 
 DEFAULT_INSTRUMENTS_PER_CONNECTION = 1000
-SUBSCRIPTION_MODE = "full"
 
-# Handshake statuses that mean the token was refused. INDstocks answers a bad token with 513.
-AUTHENTICATION_STATUS_CODES = (401, 403, 513)
-
-PING_INTERVAL_SECONDS = 30
-PING_TIMEOUT_SECONDS = 10
-MIN_BACKOFF_SECONDS = 1
-MAX_BACKOFF_SECONDS = 60
-MAX_FAILED_CONNECTS = 6
-
-class IndmoneySession:
+class IndmoneyQuotesStore:
     """
-    The INDmoney login every socket authenticates with, logged in again by one socket at a time.
+    Where the quotes sockets' ticks are written: the live hash and the persistence stream.
     """
 
-    def __init__(self, logger):
+    def __init__(self, cache):
         """
-        Construct INDMoneyAPI, which logs in when the stored session is dead.
+        Keeps the Redis client the ticks are written to.
 
-        - `logger` is where logins are reported.
-        """
-        from stock_brokers.api.indmoney import INDMoneyAPI
+        Args:
+            cache (redis.Redis): The Redis client.
 
-        self._api_class = INDMoneyAPI
-        self._logger = logger
-        self._lock = threading.Lock()
-        self._indmoney = INDMoneyAPI()
-
-    def credentials(self):
+        Returns:
+            None: This method returns nothing.
         """
-        The api key (client id) and the access token in force now, which may be one another process has just obtained.
-        """
-        login = self._indmoney._current_login() or {}
-        return self._indmoney._settings.get('client_id'), login.get('access_token')
-
-    def log_in_again(self, stale_token):
-        """
-        Log in again, unless another socket already replaced the token that failed.
-
-        - `stale_token` is the access token the failing connection used.
-        """
-        with self._lock:
-            if self.credentials()[1] != stale_token:
-                return
-            self._logger.warning("Logging in to INDmoney again.")
-            self._indmoney = self._api_class()
-
-class QuotesSocket:
-    """
-    One INDstocks price feed websocket for a batch of instruments, reconnecting until stopped.
-    """
-
-    def __init__(self, name, tokens, names, session, cache, logger):
-        """
-        - `name` is the connection's name, for the log.
-        - `tokens` is the batch of `SEGMENT:TOKEN` instrument tokens.
-        - `names` maps `SEGMENT:TOKEN` to the instrument's name.
-        - `session` is the shared IndmoneySession.
-        - `cache` is the Redis client.
-        - `logger` is where the connection reports.
-        """
-        self.name = name
-        self._tokens = tokens
-        self._names = names
-        self._session = session
         self._cache = cache
-        self._logger = logger
-        self._stop = threading.Event()
-        self._ws = None
-        self._token = None
-        self._opened = False
-        self._authentication_rejected = False
-        # Each instrument's fields merged across updates, since an update carries only what changed.
-        self._state = {}
-        self.gave_up = False
 
-    def close(self):
-        """Close the websocket and stop reconnecting."""
-        self._stop.set()
-        if self._ws is not None:
-            self._ws.close()
-
-    def run_forever(self):
-        """Connect, and reconnect with backoff, until closed or unable to recover."""
-        backoff = MIN_BACKOFF_SECONDS
-        failed_connects = 0
-        logged_in_again = False
-        while not self._stop.is_set():
-            self._opened = False
-            self._authentication_rejected = False
-            try:
-                self._connect()
-            except Exception as exception:
-                self._logger.error(f"{self.name} connection failed: {type(exception).__name__}: {exception}")
-            if self._stop.is_set():
-                break
-
-            if self._opened and not self._authentication_rejected:
-                failed_connects, logged_in_again, backoff = 0, False, MIN_BACKOFF_SECONDS
-            else:
-                failed_connects += 1
-
-            if self._authentication_rejected or failed_connects >= MAX_FAILED_CONNECTS:
-                if logged_in_again and (self._authentication_rejected or failed_connects >= MAX_FAILED_CONNECTS):
-                    self.gave_up = True
-                    self._logger.error(f"{self.name} is still refused after logging in again. Giving up.")
-                    break
-                try:
-                    # A dead session: log in again before connecting again.
-                    self._session.log_in_again(self._token)
-                except Exception as exception:
-                    self.gave_up = True
-                    self._logger.error(f"{self.name} could not log in to INDmoney again: {type(exception).__name__}: {exception}")
-                    break
-                failed_connects, logged_in_again = 0, True
-
-            self._logger.warning(f"{self.name} disconnected. Reconnecting in {backoff} seconds.")
-            self._stop.wait(backoff)
-            backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
-        self._logger.info(f"{self.name} stopped.")
-
-    def _connect(self):
-        """Open the websocket with the token in force now, presented in the handshake, and block until it closes."""
-        import websocket
-
-        client_id, self._token = self._session.credentials()
-        headers = {"Authorization": str(self._token)}
-        if client_id:
-            headers["x-api-key"] = str(client_id)
-        self._ws = websocket.WebSocketApp(FEED_URL, header=headers, on_open=self._on_open, on_message=self._on_message,
-                                          on_error=self._on_error, on_close=self._on_close)
-        self._ws.run_forever(ping_interval=PING_INTERVAL_SECONDS, ping_timeout=PING_TIMEOUT_SECONDS)
-
-    def _on_open(self, ws):
-        """Subscribes the batch in SUBSCRIPTION_MODE.
-
-        Args:
-            ws (websocket.WebSocketApp): The connection that opened.
+    def write_ticks(self, ticks):
         """
-        self._opened = True
-        self._state = {}
-        ws.send(json.dumps({"action": "subscribe", "mode": SUBSCRIPTION_MODE, "instruments": list(self._tokens)}))
-        self._logger.info(f"{self.name} opened and subscribed to {len(self._tokens)} instrument(s) in {SUBSCRIPTION_MODE} mode.")
-
-    def _on_error(self, ws, error):
-        """Log the error, and take a refused handshake as a dead session."""
-        status = getattr(error, "status_code", None)
-        if status in AUTHENTICATION_STATUS_CODES:
-            self._authentication_rejected = True
-            self._logger.warning(f"{self.name} handshake refused with HTTP {status}, taken as a dead session.")
-            return
-        self._logger.error(f"{self.name} error: {error}")
-
-    def _on_close(self, ws, status_code, message):
-        self._logger.info(f"{self.name} closed with status {status_code}: {message}")
-
-    def _on_message(self, ws, message):
-        """Decode a JSON message and write its ticks to the live quotes hash."""
-        ticks = self.parse_ticks(message)
-        if ticks:
-            encoded = [(tick['id'], json.dumps(tick)) for tick in ticks]
-            # The latest tick per instrument and every tick in arrival order, in one round trip.
-            pipeline = self._cache.pipeline(transaction=False)
-            pipeline.hset(LIVE_KEY, mapping=dict(encoded))
-            for _, payload in encoded:
-                pipeline.xadd(STREAM_KEY, {"tick": payload}, maxlen=STREAM_MAX_LENGTH, approximate=True)
-            pipeline.execute()
-
-    def _decode_entries(self, message):
-        """Decodes one frame into its update dictionaries.
-
-        Each line of a frame is a JSON string whose content is itself JSON, so a line that decodes to a string is decoded a second time. A line that is not JSON is logged at debug level and skipped.
+        Writes one frame's ticks: the latest tick per instrument and every tick in arrival order, in one round trip.
 
         Args:
-            message (str | bytes): The frame received.
+            ticks (list[dict]): The frame's ticks, in arrival order.
 
         Returns:
-            list[dict]: The decoded updates, in order.
+            None: This method returns nothing.
         """
-        if isinstance(message, (bytes, bytearray)):
-            message = message.decode("utf-8", errors="replace")
-        if not isinstance(message, str):
-            return []
-
-        entries = []
-        for line in message.splitlines():
-            if not line.strip():
-                continue
-            try:
-                payload = json.loads(line)
-                if isinstance(payload, str):
-                    payload = json.loads(payload)
-            except json.JSONDecodeError:
-                self._logger.debug(f"{self.name} ignored a line that is not JSON: {line[:120]}")
-                continue
-            if isinstance(payload, list):
-                for item in payload:
-                    if isinstance(item, dict):
-                        entries.append(item)
-            elif isinstance(payload, dict):
-                entries.append(payload)
-        return entries
-
-    def parse_ticks(self, message):
-        """Returns the normalized ticks in one INDstocks frame, merging each instrument's fields across updates.
-
-        Args:
-            message (str | bytes): The frame received.
-
-        Returns:
-            list[dict]: One tick per update that carried a last price.
-        """
-        ticks = []
-        for entry in self._decode_entries(message):
-            data = entry.get("data")
-            instrument = entry.get("instrument")
-            if not isinstance(data, dict) or instrument is None:
-                self._logger.info(f"{self.name} message without instrument data: {json.dumps(entry)[:200]}")
-                continue
-
-            instrument = str(instrument)
-            if ":" in instrument:
-                token = instrument
-            else:
-                token = self._subscribed_token(instrument)
-            state = self._state.setdefault(token, {})
-            state.update(data)
-            if entry.get("timestamp") is not None:
-                state["timestamp"] = entry["timestamp"]
-
-            tick = self._build_tick(token, state)
-            if tick["last_price"] is None:
-                continue
-            ticks.append(tick)
-        return ticks
-
-    def _subscribed_token(self, bare):
-        """Returns the subscribed `SEGMENT:TOKEN` for a bare security id.
-
-        Every socket carries one segment, so at most one subscribed token ends in the bare id.
-
-        Args:
-            bare (str): The security id as the feed sent it.
-
-        Returns:
-            str: The subscribed token, or the bare id when this socket did not subscribe it.
-        """
-        for token in self._tokens:
-            if token.endswith(f":{bare}"):
-                return token
-        return bare
-
-    @staticmethod
-    def _epoch_seconds(value):
-        """Converts a feed time to whole epoch seconds.
-
-        Args:
-            value (int | float | str | None): The time as sent, in milliseconds, or in seconds for a small value.
-
-        Returns:
-            int | None: Epoch seconds, or None for a missing or zero time.
-        """
-        moment = number(value)
-        if not moment:
-            return None
-        if moment > 1e11:
-            return int(moment / 1000)
-        return int(moment)
-
-    def _build_tick(self, token, state):
-        """Builds a normalized tick from an instrument's merged `full` mode fields.
-
-        Args:
-            token (str): The instrument's `SEGMENT:TOKEN`.
-            state (dict): Its fields merged across updates, with the latest update's `timestamp`.
-
-        Returns:
-            dict: The tick.
-        """
-        buy_levels = []
-        bid_price = number(state.get("bid_price"))
-        if bid_price is not None:
-            buy_levels.append({
-                "quantity": None,
-                "price": bid_price,
-                "orders": None,
-            })
-        sell_levels = []
-        ask_price = number(state.get("ask_price"))
-        if ask_price is not None:
-            sell_levels.append({
-                "quantity": None,
-                "price": ask_price,
-                "orders": None,
-            })
-
-        exchange = None
-        if ":" in token:
-            exchange = token.split(":", 1)[0]
-        return {
-            "id": self._names.get(token) or token,
-            "broker": "indmoney",
-            "instrument_token": token,
-            "exchange": exchange,
-            "mode": "quote",
-            "last_price": number(state.get("ltp")),
-            "last_quantity": None,
-            "average_price": None,
-            "volume": whole(state.get("volume")),
-            "buy_quantity": whole(state.get("total_buy_qty")),
-            "sell_quantity": whole(state.get("total_sell_qty")),
-            "ohlc": {
-                "open": number(state.get("open")),
-                "high": number(state.get("high")),
-                "low": number(state.get("low")),
-                "close": number(state.get("close")),
-            },
-            "change": None,
-            "oi": whole(state.get("oi")),
-            "oi_day_high": None,
-            "oi_day_low": None,
-            "last_trade_time": self._epoch_seconds(state.get("ltt")),
-            "exchange_timestamp": self._epoch_seconds(state.get("timestamp")),
-            "depth": {
-                "buy": buy_levels,
-                "sell": sell_levels,
-            },
-            "received_at": time.time(),
-        }
-
-def number(value):
-    """
-    A feed value as a float, or None for a blank, null or unreadable one.
-
-    - `value` is the raw value.
-    """
-    if value is None or value == "":
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-def whole(value):
-    """
-    A feed quantity as an integer, or None. Quantities are counts, so a float such as 12.0 is published as 12.
-
-    - `value` is the raw value.
-    """
-    value = number(value)
-    return int(round(value)) if value is not None else None
+        encoded = []
+        for tick in ticks:
+            encoded.append((tick["id"], json.dumps(tick)))
+        pipeline = self._cache.pipeline(transaction=False)
+        pipeline.hset(LIVE_KEY, mapping=dict(encoded))
+        for _, payload in encoded:
+            pipeline.xadd(STREAM_KEY, {"tick": payload}, maxlen=STREAM_MAX_LENGTH, approximate=True)
+        pipeline.execute()
 
 def resolve_tokens(tokens, cache, logger):
     """
@@ -528,6 +209,7 @@ def main():
                         help=f"instruments per websocket connection, default {DEFAULT_INSTRUMENTS_PER_CONNECTION}")
     arguments = parser.parse_args()
 
+    from stock_brokers.websockets.indmoney import IndmoneyQuotesSocket, IndmoneySession
     from utilities.configurations import get_cache, get_logger
 
     logger = get_logger("indmoney.websocket_quotes")
@@ -568,7 +250,10 @@ def main():
         logger.warning(f"{len(unnamed)} instrument(s) are not in {MASTER_KEY} and are keyed by token: "
                        f"{', '.join(unnamed[:20])}{' ...' if len(unnamed) > 20 else ''}")
 
-    sockets = [QuotesSocket(f"socket_{index}", batch, names, session, cache, logger) for index, batch in enumerate(batches)]
+    store = IndmoneyQuotesStore(cache)
+    sockets = []
+    for index, batch in enumerate(batches):
+        sockets.append(IndmoneyQuotesSocket(f"socket_{index}", batch, names, session, store.write_ticks, logger))
 
     # Installed before the sockets start: systemd stops a unit with SIGTERM, and the default action would kill
     # the process without closing anything.

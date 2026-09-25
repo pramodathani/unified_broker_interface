@@ -3,6 +3,7 @@
 import json
 import types
 
+from stock_brokers.websockets import indmoney as indmoney_websockets
 from test_runs.websocket_feeds import harness
 
 QUOTES_SCRIPT = 'bin/indmoney/instruments/websocket_quotes'
@@ -68,6 +69,7 @@ class IndmoneyFeedCases:
         """
         return [
             self.loader.load(ORDERS_SCRIPT),
+            indmoney_websockets,
         ]
 
     def build_quotes_socket(self, context, tokens, names):
@@ -82,8 +84,16 @@ class IndmoneyFeedCases:
             object: The socket, with instant waits.
         """
         script = self.loader.load(QUOTES_SCRIPT)
-        session = script.IndmoneySession(context.logger)
-        socket = script.QuotesSocket('socket_0', tokens, names, session, context.redis, context.logger)
+        session = indmoney_websockets.IndmoneySession(context.logger)
+        store = script.IndmoneyQuotesStore(context.redis)
+        socket = indmoney_websockets.IndmoneyQuotesSocket(
+            'socket_0',
+            tokens,
+            names,
+            session,
+            store.write_ticks,
+            context.logger,
+        )
         context.use_instant_waits(socket)
         return socket
 
@@ -97,7 +107,9 @@ class IndmoneyFeedCases:
             object: The socket, with instant waits.
         """
         script = self.loader.load(ORDERS_SCRIPT)
-        socket = script.OrderUpdatesSocket(context.redis, context.logger)
+        session = indmoney_websockets.IndmoneySession(context.logger)
+        store = script.IndmoneyOrderUpdatesStore(context.redis, context.logger)
+        socket = indmoney_websockets.IndmoneyOrderUpdatesSocket(session, store.write_updates, context.logger)
         context.use_instant_waits(socket)
         return socket
 
