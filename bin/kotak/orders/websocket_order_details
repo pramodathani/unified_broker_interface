@@ -8,8 +8,9 @@ and `kotak:portfolio:positions`, and keep streaming until stopped.
     redis-cli HGET kotak:orders:orders <order number>
     redis-cli HGETALL kotak:portfolio:positions
 
-Self-contained: it logs in with `KotakAPI` and carries its own connection to Kotak's order update stream, so it
-needs no other feed process or key.
+The connection and the login are `KotakOrderUpdatesSocket` and `KotakSession` in `stock_brokers/websockets/kotak.py`,
+whose module docstring describes the host, the connection frame and the messages. This script runs the socket and
+turns the orders and positions it hands over into the Redis writes below, so it needs no other feed process or key.
 
 **The stream.** The host is account specific: `wss://<host>/realtime`, where the host is the `base_url` Kotak
 assigned the session at login - `e21`, `e43` and so on - read afresh on every connect. After connecting it sends
@@ -46,7 +47,9 @@ history the hashes overwrite is kept there - in the shape `{"timestamp": ..., "d
 entries.
 
 **Sessions.** A refused connection frame, or a socket that fails to open six times running, is taken as a dead
-session: it logs in again through `KotakAPI` before reconnecting, which also refreshes the host. A reconnect
+session: it logs in again before reconnecting, without checking whether another process has already replaced the
+session, which also refreshes the host. An order without an order number, or a position that names no segment,
+instrument or product, is logged and skipped. A reconnect
 otherwise backs off from 1 to 60 seconds. Updates arrive only when an order or position changes, so a quiet socket
 is not a broken one.
 
@@ -69,7 +72,6 @@ from utilities.bootstrap import run_under_venv
 
 PROJECT_ROOT = run_under_venv(__file__)
 
-REALTIME_PATH = "/realtime"
 ORDERS_KEY = "kotak:orders:orders"
 POSITIONS_KEY = "kotak:portfolio:positions"
 
@@ -78,14 +80,6 @@ POSITIONS_KEY = "kotak:portfolio:positions"
 ORDER_STREAM_KEY = "kotak:order-updates:stream"
 POSITION_STREAM_KEY = "kotak:positions_updates:stream"
 STREAM_MAX_LENGTH = 20000
-
-ORDER, POSITION, CONNECT_ACK = "order", "position", "cn"
-
-PING_INTERVAL_SECONDS = 30
-PING_TIMEOUT_SECONDS = 10
-MIN_BACKOFF_SECONDS = 1
-MAX_BACKOFF_SECONDS = 60
-MAX_FAILED_CONNECTS = 6
 
 INDIA = ZoneInfo("Asia/Kolkata")
 RESET_HOUR = 6
@@ -347,180 +341,92 @@ def normalized_position(data):
     }
 
 
-def realtime_url(base_url):
+class KotakOrderUpdatesStore:
     """
-    The order update URL for the host a session was assigned.
-
-    - `base_url` is the stored login's `base_url`, with or without a scheme or trailing slash.
-    """
-    host = str(base_url).split("://", 1)[-1].strip("/")
-    return f"wss://{host}{REALTIME_PATH}"
-
-class OrderUpdatesSocket:
-    """
-    Kotak's order update websocket, reconnecting and logging in again until stopped.
+    Where the order stream's orders and positions are written: the merged hashes and their streams.
     """
 
     def __init__(self, cache, logger):
         """
-        Construct KotakAPI, which logs in when the stored session is dead.
+        Registers the merge script on the Redis client the updates are written to.
 
-        - `cache` is the Redis client.
-        - `logger` is where the connection reports.
+        Args:
+            cache (redis.Redis): The Redis client.
+            logger (logging.Logger): Where writes and unreadable updates are reported.
+
+        Returns:
+            None: This method returns nothing.
         """
-        from stock_brokers.api.kotak import KotakAPI
-
-        self._api_class = KotakAPI
-        self._kotak = KotakAPI()
         self._cache = cache
         self._merge = cache.register_script(MERGE_SCRIPT)
         self._logger = logger
-        self._stop = threading.Event()
-        self._ws = None
-        self._opened = False
-        self._authentication_rejected = False
-        self.gave_up = False
 
-    def close(self):
-        """Close the websocket and stop reconnecting."""
-        self._stop.set()
-        if self._ws is not None:
-            self._ws.close()
+    def write_updates(self, orders, positions, received_at):
+        """
+        Merges one message's orders and positions into their hashes and appends each to its stream.
 
-    def run_forever(self):
-        """Connect, and reconnect with backoff, until closed or unable to recover."""
-        backoff = MIN_BACKOFF_SECONDS
-        failed_connects = 0
-        logged_in_again = False
-        while not self._stop.is_set():
-            self._opened = False
-            self._authentication_rejected = False
-            try:
-                self._connect()
-            except Exception as exception:
-                self._logger.error(f"Order updates connection failed: {type(exception).__name__}: {exception}")
-            if self._stop.is_set():
-                break
+        Each hash keeps the latest state; each stream keeps every update, even two of one order in one message, in the shape `bin/kotak/orders/store_orders_to_db` and `bin/kotak/portfolio/store_positions_to_db` read.
+        An order without an order number, or a position that names no segment, instrument or product, is logged and skipped.
 
-            if self._opened and not self._authentication_rejected:
-                failed_connects, logged_in_again, backoff = 0, False, MIN_BACKOFF_SECONDS
-            else:
-                failed_connects += 1
+        Args:
+            orders (list): The `data` of each order message, exactly as Kotak sent it.
+            positions (list): The `data` of each position message, exactly as Kotak sent it.
+            received_at (datetime): When the message was received, as a naive India wall clock time.
 
-            if self._authentication_rejected or failed_connects >= MAX_FAILED_CONNECTS:
-                if logged_in_again:
-                    self.gave_up = True
-                    self._logger.error("Order updates are still refused after logging in again. Giving up.")
-                    break
-                try:
-                    # A dead session: log in again before connecting again.
-                    self._logger.warning("Logging in to Kotak again.")
-                    self._kotak = self._api_class()
-                except Exception as exception:
-                    self.gave_up = True
-                    self._logger.error(f"Could not log in to Kotak again: {type(exception).__name__}: {exception}")
-                    break
-                failed_connects, logged_in_again = 0, True
-
-            self._logger.warning(f"Order updates disconnected. Reconnecting in {backoff} seconds.")
-            self._stop.wait(backoff)
-            backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
-        self._logger.info("Order updates socket stopped.")
-
-    def _connect(self):
-        """Open the websocket on the session's own host and block until it closes."""
-        import websocket
-
-        login = self._kotak._current_login() or {}
-        if not login.get('base_url') or login.get('base_url') == 'None':
-            raise RuntimeError("the stored Kotak login has no base_url, so there is no order update host")
-        self._ws = websocket.WebSocketApp(realtime_url(login['base_url']), on_open=self._on_open,
-                                          on_message=self._on_message, on_error=self._on_error, on_close=self._on_close)
-        self._ws.run_forever(ping_interval=PING_INTERVAL_SECONDS, ping_timeout=PING_TIMEOUT_SECONDS)
-
-    def _on_open(self, ws):
-        """Send the raw connection frame with the token and session id in force now."""
-        self._opened = True
-        login = self._kotak._current_login() or {}
-        ws.send(f"{{type:cn,Authorization:{login.get('access_token')},Sid:{login.get('sid')},src:WEB}}")
-        self._logger.info("Order updates socket opened. Waiting for Kotak's acknowledgement.")
-
-    def _on_error(self, ws, error):
-        self._logger.error(f"Order updates error: {error}")
-
-    def _on_close(self, ws, status_code, message):
-        self._logger.info(f"Order updates socket closed with status {status_code}: {message}")
-
-    def _on_message(self, ws, message):
-        """Merge each order and position message into its hash and append it to its stream; notice a refused connection frame."""
-        if isinstance(message, (bytes, bytearray)):
-            message = bytes(message).decode('utf-8', errors='replace')
-        try:
-            payload = json.loads(message)
-        except (TypeError, json.JSONDecodeError):
-            self._logger.debug(f"Ignoring a frame that is not JSON: {str(message)[:160]}")
-            return
-
-        received_at = datetime.now()
+        Returns:
+            None: This method returns nothing.
+        """
         received = received_at.strftime("%Y-%m-%d %H:%M:%S.%f")
         observed_at = received_at.timestamp()
-        orders, positions = [], []
-        for entry in (payload if isinstance(payload, list) else [payload]):
-            if not isinstance(entry, dict):
+        order_updates = []
+        for data in orders:
+            order = normalized_order(data)
+            if order is None:
+                self._logger.info(f"Ignoring an order update without an order number: {json.dumps(data)[:200]}")
                 continue
-            message_type = entry.get('type')
-            data = entry.get('data')
+            order_updates.append((order["order_id"], {"observed_at": observed_at, "source": "websocket", "order": order, "data": data},
+                                  json.dumps({"timestamp": received, "data": data})))
+        position_updates = []
+        for data in positions:
+            key = position_key(data)
+            if key is None:
+                self._logger.info(f"Ignoring a position update that names no segment, instrument or product: {json.dumps(data)[:200]}")
+                continue
+            position_updates.append((key, {"observed_at": observed_at, "source": "websocket", "position": normalized_position(data), "data": data},
+                                     json.dumps({"timestamp": received, "data": data})))
 
-            if entry.get('ak') == 'nk' or message_type == 'failed to connect':
-                self._logger.error(f"Kotak refused the order update connection: {entry.get('msg') or entry}")
-                self._authentication_rejected = True
-                ws.close()
-                return
-            if message_type == CONNECT_ACK or entry.get('ak') == 'ok':
-                self._logger.info("Order updates socket authenticated. Waiting for updates.")
-            elif message_type == ORDER and normalized_order(data) is not None:
-                order = normalized_order(data)
-                orders.append((order["order_id"], {"observed_at": observed_at, "source": "websocket", "order": order,
-                                                   "data": data}, json.dumps({'timestamp': received, 'data': data})))
-            elif message_type == POSITION and position_key(data) is not None:
-                positions.append((position_key(data), {"observed_at": observed_at, "source": "websocket",
-                                                       "position": normalized_position(data), "data": data},
-                                  json.dumps({'timestamp': received, 'data': data})))
-            else:
-                self._logger.info(f"Ignoring a message of type {message_type!r}: {json.dumps(entry)[:200]}")
-
-        if not orders and not positions:
+        if not order_updates and not position_updates:
             return
-        # Each hash keeps the latest state; each stream keeps every update, even two of one order in one message, in the
-        # shape bin/kotak/orders/store_orders_to_db and bin/kotak/portfolio/store_positions_to_db read.
         pipeline = self._cache.pipeline(transaction=False)
-        for hash_key, stream_key, field, updates in ((ORDERS_KEY, ORDER_STREAM_KEY, "update", orders),
-                                                     (POSITIONS_KEY, POSITION_STREAM_KEY, "position", positions)):
+        for hash_key, stream_key, field, updates in ((ORDERS_KEY, ORDER_STREAM_KEY, "update", order_updates),
+                                                     (POSITIONS_KEY, POSITION_STREAM_KEY, "position", position_updates)):
             if updates:
                 arguments = [next_reset(), "websocket", repr(observed_at)]
                 for key, value, _ in updates:
-                    arguments += [key, json.dumps(value)]
+                    arguments.append(key)
+                    arguments.append(json.dumps(value))
                 self._merge(keys=[hash_key], args=arguments)
                 for _, _, update in updates:
                     pipeline.xadd(stream_key, {field: update}, maxlen=STREAM_MAX_LENGTH, approximate=True)
         pipeline.execute()
-        if orders:
-            self._logger.info(f"Merged {len(orders)} order update(s) into {ORDERS_KEY}: "
-                              f"{', '.join(key for key, _, _ in orders)}")
-        if positions:
-            self._logger.info(f"Merged {len(positions)} position update(s) into {POSITIONS_KEY}: "
-                              f"{', '.join(key for key, _, _ in positions)}")
+        if order_updates:
+            self._logger.info(f"Merged {len(order_updates)} order update(s) into {ORDERS_KEY}: {', '.join(key for key, _, _ in order_updates)}")
+        if position_updates:
+            self._logger.info(f"Merged {len(position_updates)} position update(s) into {POSITIONS_KEY}: {', '.join(key for key, _, _ in position_updates)}")
 
 def main():
     """Stream Kotak order and position updates into Redis until stopped."""
+    from stock_brokers.websockets.kotak import KotakOrderUpdatesSocket, KotakSession
     from utilities.configurations import get_cache, get_logger
 
     logger = get_logger("kotak.websocket_order_details")
     try:
-        socket = OrderUpdatesSocket(get_cache(), logger)
+        session = KotakSession(logger)
     except Exception as exception:
         logger.error(f"Could not log in to Kotak: {type(exception).__name__}: {exception}")
         return 1
+    store = KotakOrderUpdatesStore(get_cache(), logger)
+    socket = KotakOrderUpdatesSocket(session, store.write_updates, logger)
 
     # Installed before the thread starts: systemd stops a unit with SIGTERM, and the default action would kill
     # the process without closing the connection.

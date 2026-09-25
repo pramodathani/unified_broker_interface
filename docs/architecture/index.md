@@ -112,9 +112,8 @@ session. The script's docstring stays the reference for its keys, fields and exi
 module's docstring for the protocol. The pollers are unchanged: each still carries its own requests and
 normalization.
 
-Dhan's, Flattrade's, Fyers', Groww's, INDmoney's, Shoonya's, Wisdom Capital's and Zerodha's sockets have moved. Kotak and Stoxkart still carry their sockets inside their
-scripts, and move one broker at a time, each checked against the offline recording in
-`test_runs/websocket_feeds/`.
+Every broker's sockets but Stoxkart's have moved. Stoxkart's scripts still carry their sockets inside them
+until they move, checked against the offline recording in `test_runs/websocket_feeds/`.
 
 ## Two connections per broker, not one
 

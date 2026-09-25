@@ -221,8 +221,8 @@ Orders are keyed by the broker's order id (`order_id`, `norenordno`, `nOrdNo`, `
 `websocket_quotes` chooses the instruments, runs the broker's quote sockets and writes what they decode to
 Redis. The sockets themselves - the login, the connection and the packet decoding - are classes in
 `stock_brokers/websockets/<broker>.py`, built on the reconnect loop in `stock_brokers/websockets/base.py`.
-Dhan's, Flattrade's, Fyers', Groww's, INDmoney's, Shoonya's, Wisdom Capital's and Zerodha's are there already; the other brokers' scripts still carry their sockets inside them
-until each is moved. Either way the script writes three keys:
+Every broker's but Stoxkart's are there already; Stoxkart's scripts still carry their sockets inside them
+until they move. Either way the script writes three keys:
 
 | Key | Type | Holds |
 | --- | --- | --- |

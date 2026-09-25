@@ -3,6 +3,7 @@
 import json
 import types
 
+from stock_brokers.websockets import kotak as kotak_websockets
 from test_runs.websocket_feeds import harness
 
 QUOTES_SCRIPT = 'bin/kotak/instruments/websocket_quotes'
@@ -220,6 +221,7 @@ class KotakFeedCases:
         """
         return [
             self.loader.load(ORDERS_SCRIPT),
+            kotak_websockets,
         ]
 
     def build_quotes_socket(self, context, instrument_tokens, names):
@@ -234,8 +236,17 @@ class KotakFeedCases:
             object: The socket, with instant waits.
         """
         script = self.loader.load(QUOTES_SCRIPT)
-        session = script.KotakSession(context.logger)
-        socket = script.QuotesSocket('socket_0', instrument_tokens, names, session, context.redis, context.logger)
+        session = kotak_websockets.KotakSession(context.logger)
+        store = script.KotakQuotesStore(context.redis)
+        socket = kotak_websockets.KotakQuotesSocket(
+            'socket_0',
+            instrument_tokens,
+            names,
+            session,
+            store.write_name,
+            store.write_ticks,
+            context.logger,
+        )
         context.use_instant_waits(socket)
         return socket
 
@@ -249,7 +260,9 @@ class KotakFeedCases:
             object: The socket, with instant waits.
         """
         script = self.loader.load(ORDERS_SCRIPT)
-        socket = script.OrderUpdatesSocket(context.redis, context.logger)
+        session = kotak_websockets.KotakSession(context.logger)
+        store = script.KotakOrderUpdatesStore(context.redis, context.logger)
+        socket = kotak_websockets.KotakOrderUpdatesSocket(session, store.write_updates, context.logger)
         context.use_instant_waits(socket)
         return socket
 
