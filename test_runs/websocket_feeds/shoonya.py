@@ -3,6 +3,7 @@
 import json
 import types
 
+from stock_brokers.websockets import shoonya as shoonya_websockets
 from test_runs.websocket_feeds import harness
 
 QUOTES_SCRIPT = 'bin/shoonya/instruments/websocket_quotes'
@@ -66,6 +67,7 @@ class ShoonyaFeedCases:
         """
         return [
             self.loader.load(ORDERS_SCRIPT),
+            shoonya_websockets,
         ]
 
     def build_quotes_socket(self, context, tokens, names):
@@ -80,8 +82,17 @@ class ShoonyaFeedCases:
             object: The socket, with instant waits.
         """
         script = self.loader.load(QUOTES_SCRIPT)
-        session = script.ShoonyaSession(context.logger)
-        socket = script.QuotesSocket('socket_0', tokens, names, session, context.redis, context.logger)
+        session = shoonya_websockets.ShoonyaSession(context.logger)
+        store = script.ShoonyaQuotesStore(context.redis)
+        socket = shoonya_websockets.ShoonyaQuotesSocket(
+            'socket_0',
+            tokens,
+            names,
+            session,
+            store.write_name,
+            store.write_tick,
+            context.logger,
+        )
         context.use_instant_waits(socket)
         return socket
 
@@ -95,7 +106,9 @@ class ShoonyaFeedCases:
             object: The socket, with instant waits.
         """
         script = self.loader.load(ORDERS_SCRIPT)
-        socket = script.OrderUpdatesSocket(context.redis, context.logger)
+        session = shoonya_websockets.ShoonyaSession(context.logger)
+        store = script.ShoonyaOrderUpdatesStore(context.redis, context.logger)
+        socket = shoonya_websockets.ShoonyaOrderUpdatesSocket(session, store.write_updates, context.logger)
         context.use_instant_waits(socket)
         return socket
 
