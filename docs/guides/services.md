@@ -98,7 +98,20 @@ systemctl --user enable --now unified-orders@order_engine.service
 
 Run exactly one. The engine takes `unified:orders:engine:lock` before it does anything else and exits 1
 if another process holds it, because two engines reading the same consumer group would place every order
-twice.
+twice. [The order engine](rest-api.md#the-order-engine) describes what it does.
+
+`bin/unified/orders/virtual_book` keeps the synthetic limit order book: a queue estimate for every
+`virtual_limit` order the engine is holding. It is needed only beside the engine, and only when
+`virtual_limit` orders are used, so it is enabled as a separate step as well:
+
+```bash
+systemctl --user enable --now unified-orders@virtual_book.service
+```
+
+Without it a held order is still sent when the other side of the book reaches its price, but no
+`missed_quantity` is recorded and a `paper: true` order never fills. Unlike the engine, more than one copy
+does no harm beyond wasted work, because it only writes estimates and never places an order. See
+[The synthetic limit order book](unified-scripts.md#the-synthetic-limit-order-book-virtual_book).
 
 `systemctl --user link` symlinks the files, so editing a unit in `services/` takes effect after a
 `daemon-reload` - and moving the repository breaks every installed unit.
