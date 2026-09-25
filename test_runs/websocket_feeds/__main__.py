@@ -12,6 +12,7 @@ from test_runs.websocket_feeds import flattrade
 from test_runs.websocket_feeds import harness
 from test_runs.websocket_feeds import indmoney
 from test_runs.websocket_feeds import shoonya
+from test_runs.websocket_feeds import wisdom_capital
 from test_runs.websocket_feeds import zerodha
 
 FIXTURE_PATH = (
@@ -23,6 +24,7 @@ BROKER_CASES = {
     'flattrade': flattrade.FlattradeFeedCases,
     'indmoney': indmoney.IndmoneyFeedCases,
     'shoonya': shoonya.ShoonyaFeedCases,
+    'wisdom_capital': wisdom_capital.WisdomCapitalFeedCases,
     'zerodha': zerodha.ZerodhaFeedCases,
 }
 

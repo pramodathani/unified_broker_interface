@@ -415,24 +415,63 @@ class RecordingRedis:
         return set(self.sets.get(key, set()))
 
 
+class FakeMonotonicClock:
+    """A stand-in for `time.monotonic` that moves only when a recorded wait says it should.
+
+    Attributes:
+        seconds (float): The clock's reading.
+    """
+
+    def __init__(self):
+        """Starts the clock at an arbitrary reading.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.seconds = 1000.0
+
+    def monotonic(self):
+        """Reads the clock.
+
+        Returns:
+            float: The clock's reading.
+        """
+        return self.seconds
+
+    def advance(self, seconds):
+        """Moves the clock forward.
+
+        Args:
+            seconds (float | None): How far to move it; None moves it not at all.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        if seconds:
+            self.seconds = self.seconds + seconds
+
+
 class InstantEvent:
-    """A stand-in for `threading.Event` whose waits return at once and are recorded.
+    """A stand-in for `threading.Event` whose waits return at once, are recorded, and move the fake clock on.
 
     Attributes:
         event_log (EventLog): Where waits are recorded.
+        clock (FakeMonotonicClock): The clock each wait moves on by its timeout.
         flag (bool): Whether the event is set.
     """
 
-    def __init__(self, event_log):
+    def __init__(self, event_log, clock):
         """Starts unset.
 
         Args:
             event_log (EventLog): Where waits are recorded.
+            clock (FakeMonotonicClock): The clock each wait moves on by its timeout.
 
         Returns:
             None: This method returns nothing.
         """
         self.event_log = event_log
+        self.clock = clock
         self.flag = False
 
     def set(self):
@@ -469,6 +508,7 @@ class InstantEvent:
             bool: Whether the event is set.
         """
         self.event_log.add('wait', timeout)
+        self.clock.advance(timeout)
         return self.flag
 
 
@@ -551,6 +591,55 @@ class ConnectionPlan:
         return self.connections.pop(0)
 
 
+class FakePeerSocket:
+    """The TLS socket beneath a websocket, far enough to answer `getpeercert`.
+
+    Attributes:
+        certificate (bytes): The certificate the peer presents, in DER form.
+    """
+
+    def __init__(self, certificate):
+        """Keeps the certificate.
+
+        Args:
+            certificate (bytes): The certificate the peer presents.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.certificate = certificate
+
+    def getpeercert(self, binary_form=False):  # pylint: disable=invalid-name
+        """Answers the peer's certificate.
+
+        Args:
+            binary_form (bool): Whether the DER bytes are wanted, as they always are here.
+
+        Returns:
+            bytes: The certificate.
+        """
+        return self.certificate
+
+
+class FakeSocketHolder:
+    """The websocket-client object whose `sock` is the TLS socket.
+
+    Attributes:
+        sock (FakePeerSocket): The TLS socket.
+    """
+
+    def __init__(self, certificate):
+        """Wraps a peer socket presenting the certificate.
+
+        Args:
+            certificate (bytes): The certificate the peer presents.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.sock = FakePeerSocket(certificate)
+
+
 class FakeWebsocketApplication:
     """A stand-in for `websocket.WebSocketApp` that plays one scripted connection per `run_forever`.
 
@@ -574,6 +663,8 @@ class FakeWebsocketApplication:
         self.module = module
         self.url = url
         self.callbacks = {}
+        if module.peer_certificate is not None:
+            self.sock = FakeSocketHolder(module.peer_certificate)
         options = {}
         for name, value in keyword_arguments.items():
             if name.startswith('on_'):
@@ -663,6 +754,7 @@ class FakeWebsocketModule(types.ModuleType):
     Attributes:
         event_log (EventLog): Where connections and frames are recorded.
         plan (ConnectionPlan): The scripted connections.
+        peer_certificate (bytes | None): The certificate every connection's TLS socket presents, or None for connections that have no reachable TLS socket.
     """
 
     WebSocketException = FakeWebsocketError
@@ -681,6 +773,7 @@ class FakeWebsocketModule(types.ModuleType):
         super().__init__('websocket')
         self.event_log = event_log
         self.plan = plan
+        self.peer_certificate = None
 
     def WebSocketApp(self, url, **keyword_arguments):  # pylint: disable=invalid-name
         """Builds a fake application, as `websocket.WebSocketApp(...)` would.
@@ -693,6 +786,113 @@ class FakeWebsocketModule(types.ModuleType):
             FakeWebsocketApplication: The fake application.
         """
         return FakeWebsocketApplication(self, url, keyword_arguments)
+
+
+class FakeHttpsResponse:
+    """An answer from the fake HTTPS pool, shaped like a urllib3 response.
+
+    Attributes:
+        status (int): The HTTP status.
+        data (bytes): The body.
+    """
+
+    def __init__(self, status, body):
+        """Keeps the status and the body.
+
+        Args:
+            status (int): The HTTP status.
+            body (str): The body, as text.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.status = status
+        self.data = body.encode('utf-8')
+
+
+class FakeHttpsPool:
+    """A stand-in for `urllib3.HTTPSConnectionPool` that records each request and plays the next scripted answer.
+
+    Attributes:
+        module (FakeUrllib3Module): The fake module that made it, which holds the answers.
+        host (str): The host the pool connects to.
+        port (int): The port.
+        assert_fingerprint (str | None): The certificate fingerprint the pool pins.
+    """
+
+    def __init__(self, module, host, port, assert_fingerprint=None):
+        """Keeps where the pool connects.
+
+        Args:
+            module (FakeUrllib3Module): The fake module that made it.
+            host (str): The host.
+            port (int): The port.
+            assert_fingerprint (str | None): The pinned certificate fingerprint.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.module = module
+        self.host = host
+        self.port = port
+        self.assert_fingerprint = assert_fingerprint
+
+    def request(self, method, path, body=None, headers=None, timeout=None):
+        """Records a request and answers it with the next scripted answer.
+
+        Args:
+            method (str): The HTTP method.
+            path (str): The path.
+            body (str | None): The request body.
+            headers (dict | None): The request headers.
+            timeout (float | None): The timeout.
+
+        Returns:
+            FakeHttpsResponse: The next scripted answer.
+
+        Raises:
+            AssertionError: When a request arrives after the last scripted answer, which is a mistake in the scenario.
+        """
+        self.module.event_log.add('https', method, self.host, self.port, path, headers, body, self.assert_fingerprint, timeout)
+        if not self.module.answers:
+            raise AssertionError(f'No scripted answer is left for {method} {path}')
+        status, answer_body = self.module.answers.pop(0)
+        return FakeHttpsResponse(status, answer_body)
+
+
+class FakeUrllib3Module(types.ModuleType):
+    """A stand-in for the `urllib3` package, placed in `sys.modules` while a scenario that makes HTTPS calls runs.
+
+    Attributes:
+        event_log (EventLog): Where requests are recorded.
+        answers (list): The scripted answers still to give, each a tuple of status and body.
+    """
+
+    def __init__(self, event_log):
+        """Starts with no answers.
+
+        Args:
+            event_log (EventLog): Where requests are recorded.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        super().__init__('urllib3')
+        self.event_log = event_log
+        self.answers = []
+
+    def HTTPSConnectionPool(self, host, port, assert_fingerprint=None):  # pylint: disable=invalid-name
+        """Builds a fake pool, as `urllib3.HTTPSConnectionPool(...)` would.
+
+        Args:
+            host (str): The host.
+            port (int): The port.
+            assert_fingerprint (str | None): The pinned certificate fingerprint.
+
+        Returns:
+            FakeHttpsPool: The fake pool.
+        """
+        return FakeHttpsPool(self, host, port, assert_fingerprint)
 
 
 class CapturingHandler(logging.Handler):
@@ -857,6 +1057,8 @@ class ScenarioContext:
         plan (ConnectionPlan): The scripted connections.
         websocket_module (FakeWebsocketModule): The stand-in `websocket` package.
         logins (LoginLedger): The broker's login state.
+        clock (FakeMonotonicClock): The clock `time.monotonic` reads, moved on by recorded waits.
+        urllib3_module (FakeUrllib3Module): The stand-in `urllib3` package, for brokers that make HTTPS calls of their own.
         logger (logging.Logger): A logger whose lines go into the record.
     """
 
@@ -875,6 +1077,8 @@ class ScenarioContext:
         self.plan = ConnectionPlan(connections)
         self.websocket_module = FakeWebsocketModule(self.event_log, self.plan)
         self.logins = LoginLedger(self.event_log)
+        self.clock = FakeMonotonicClock()
+        self.urllib3_module = FakeUrllib3Module(self.event_log)
         self.logger = logging.Logger(f'websocket_feeds.{name}', level=logging.DEBUG)
         self.logger.addHandler(CapturingHandler(self.event_log))
 
@@ -889,7 +1093,7 @@ class ScenarioContext:
         Returns:
             None: This method returns nothing.
         """
-        socket._stop = InstantEvent(self.event_log)
+        socket._stop = InstantEvent(self.event_log, self.clock)
         self.plan.on_exhausted = socket.close
 
 
@@ -939,6 +1143,7 @@ class PatchedWorld:
         saved_modules (dict): Module names to what `sys.modules` held before, or None.
         saved_datetimes (list): Pairs of a module and the `datetime` it held before.
         saved_time (callable | None): The real `time.time`, while it is replaced.
+        saved_monotonic (callable | None): The real `time.monotonic`, while it is replaced.
     """
 
     def __init__(self, context, stub_modules, datetime_holders):
@@ -959,6 +1164,7 @@ class PatchedWorld:
         self.saved_modules = {}
         self.saved_datetimes = []
         self.saved_time = None
+        self.saved_monotonic = None
 
     def __enter__(self):
         """Installs the stand-ins.
@@ -973,7 +1179,9 @@ class PatchedWorld:
             self.saved_datetimes.append((holder, holder.datetime))
             holder.datetime = FrozenDatetime
         self.saved_time = time.time
+        self.saved_monotonic = time.monotonic
         time.time = self.frozen_time
+        time.monotonic = self.context.clock.monotonic
         return self
 
     def __exit__(self, exception_type, exception, traceback):
@@ -988,6 +1196,7 @@ class PatchedWorld:
             bool: False, so an exception is never swallowed.
         """
         time.time = self.saved_time
+        time.monotonic = self.saved_monotonic
         for holder, original in self.saved_datetimes:
             holder.datetime = original
         for name, original in self.saved_modules.items():
