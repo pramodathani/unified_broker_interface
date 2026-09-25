@@ -1,0 +1,36 @@
+<svg class="ubi-svg" viewBox="0 0 900 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="docs-build-title docs-build-description">
+  <title id="docs-build-title">How this site is built</title>
+  <desc id="docs-build-description">Hand-written Markdown pages from docs/ and docstrings from the Python packages flow into MkDocs. The gen-files plugin turns every module into a reference page, mkdocstrings fills each page from the docstrings, and MkDocs writes the finished HTML site.</desc>
+  <rect class="box" x="20" y="30" width="190" height="60" rx="8"/>
+  <text class="title" x="115" y="56" text-anchor="middle">docs/*.md</text>
+  <text class="small" x="115" y="75" text-anchor="middle">hand-written pages</text>
+  <rect class="box" x="20" y="120" width="190" height="60" rx="8"/>
+  <text class="title" x="115" y="146" text-anchor="middle">Python packages</text>
+  <text class="small" x="115" y="165" text-anchor="middle">docstrings of three packages</text>
+  <rect class="box" x="20" y="210" width="190" height="60" rx="8"/>
+  <text class="title" x="115" y="236" text-anchor="middle">mkdocs.yml</text>
+  <text class="small" x="115" y="255" text-anchor="middle">nav, theme, plugins</text>
+  <rect class="box" x="290" y="120" width="190" height="60" rx="8"/>
+  <text class="title" x="385" y="146" text-anchor="middle">gen-files</text>
+  <text class="mono" x="385" y="165" text-anchor="middle">utilities/gen_ref_pages.py</text>
+  <path id="docs-build-code" class="wire" d="M210,150 L290,150"/>
+  <rect class="accent-box" x="560" y="80" width="150" height="140" rx="8"/>
+  <text class="title" x="635" y="112" text-anchor="middle">MkDocs</text>
+  <text class="small" x="635" y="134" text-anchor="middle">Material theme</text>
+  <text class="small" x="635" y="152" text-anchor="middle">mkdocstrings</text>
+  <text class="small" x="635" y="170" text-anchor="middle">literate-nav</text>
+  <text class="small" x="635" y="188" text-anchor="middle">charts, Mermaid</text>
+  <path id="docs-build-pages" class="wire" d="M210,60 C400,60 450,110 560,110"/>
+  <path id="docs-build-reference" class="wire" d="M480,150 L560,150"/>
+  <text class="small" x="520" y="142" text-anchor="middle">reference/</text>
+  <path id="docs-build-config" class="wire" d="M210,240 C400,240 450,190 560,190"/>
+  <rect class="store" x="760" y="115" width="120" height="70" rx="8"/>
+  <text class="title" x="820" y="145" text-anchor="middle">site/</text>
+  <text class="small" x="820" y="165" text-anchor="middle">static HTML</text>
+  <path id="docs-build-output" class="wire" d="M710,150 L760,150"/>
+  <circle class="dot" r="5"><animateMotion dur="2.2s" repeatCount="indefinite"><mpath href="#docs-build-pages"/></animateMotion></circle>
+  <circle class="dot alt" r="5"><animateMotion dur="1.2s" repeatCount="indefinite"><mpath href="#docs-build-code"/></animateMotion></circle>
+  <circle class="dot alt" r="5"><animateMotion dur="1.2s" begin="-0.6s" repeatCount="indefinite"><mpath href="#docs-build-reference"/></animateMotion></circle>
+  <circle class="dot" r="5"><animateMotion dur="2.2s" begin="-1s" repeatCount="indefinite"><mpath href="#docs-build-config"/></animateMotion></circle>
+  <circle class="dot ok" r="6"><animateMotion dur="1s" repeatCount="indefinite"><mpath href="#docs-build-output"/></animateMotion></circle>
+</svg>
