@@ -3,6 +3,7 @@
 import json
 import types
 
+from stock_brokers.websockets import flattrade as flattrade_websockets
 from test_runs.websocket_feeds import harness
 
 QUOTES_SCRIPT = 'bin/flattrade/instruments/websocket_quotes'
@@ -95,6 +96,7 @@ class FlattradeFeedCases:
         """
         return [
             self.loader.load(ORDERS_SCRIPT),
+            flattrade_websockets,
         ]
 
     def build_quotes_socket(self, context, tokens, names):
@@ -109,8 +111,17 @@ class FlattradeFeedCases:
             object: The socket, with instant waits.
         """
         script = self.loader.load(QUOTES_SCRIPT)
-        session = script.FlattradeSession(context.logger)
-        socket = script.QuotesSocket('socket_0', tokens, names, session, context.redis, context.logger)
+        session = flattrade_websockets.FlattradeSession(context.logger)
+        store = script.FlattradeQuotesStore(context.redis)
+        socket = flattrade_websockets.FlattradeQuotesSocket(
+            'socket_0',
+            tokens,
+            names,
+            session,
+            store.write_names,
+            store.write_ticks,
+            context.logger,
+        )
         context.use_instant_waits(socket)
         return socket
 
@@ -124,7 +135,9 @@ class FlattradeFeedCases:
             object: The socket, with instant waits.
         """
         script = self.loader.load(ORDERS_SCRIPT)
-        socket = script.OrderUpdatesSocket(context.redis, context.logger)
+        store = script.FlattradeOrderUpdatesStore(context.redis, context.logger)
+        session = flattrade_websockets.FlattradeSession(context.logger)
+        socket = flattrade_websockets.FlattradeOrderUpdatesSocket(session, store.write_updates, context.logger)
         context.use_instant_waits(socket)
         return socket
 
