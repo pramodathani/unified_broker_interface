@@ -8,8 +8,10 @@ Stream Wisdom Capital order and position updates over its XTS interactive socket
     redis-cli HGET wisdom_capital:orders:orders <AppOrderID>
     redis-cli HGETALL wisdom_capital:portfolio:positions
 
-Self-contained: it logs in with `WisdomCapitalAPI` and carries its own XTS transport - pinned TLS, the Engine.IO
-handshake, socket.io framing and heartbeat - so it needs no other feed process or key.
+The XTS transport - pinned TLS, the Engine.IO handshake, socket.io framing and heartbeat - and the shared
+interactive login are `WisdomCapitalOrderUpdatesSocket` and `WisdomCapitalInteractiveSession` in
+`stock_brokers/websockets/wisdom_capital.py`, whose module docstring describes them. This script runs the socket
+and turns the events it hands over into the Redis writes below, so it needs no other feed process or key.
 
 **The session.** XTS splits a broker into a market data application and an interactive (trading) one; orders and
 positions live in the interactive one. XTS keeps one interactive session per application key, and a new login logs
@@ -18,11 +20,6 @@ through the Redis `last_login` hash, the same token the orders, positions, trade
 and reads the user id from that token's payload. Nothing is subscribed to: joining the namespace with
 `apiType=INTERACTIVE` is enough, and XTS pushes every order, trade and position event for the account. Without that
 parameter the server cuts the connection after ten seconds.
-
-**The transport.** The host's certificate is issued to the platform provider's domain, so the exact certificate
-is pinned instead of the hostname being checked. A connection opens an Engine.IO session over HTTPS, attaches a
-websocket, completes the upgrade with a probe, then heartbeats at half the shorter of the intervals the server
-asks for - the interactive namespace waits only twenty seconds.
 
 **The keys.** Events arrive as socket.io frames `42["<event>", <payload>]`:
 
@@ -65,13 +62,9 @@ Exits 0 when stopped with Ctrl+C or SIGTERM, and 1 when a login fails or the soc
 logging in again. Reads only - it never places, modifies or cancels an order.
 """
 
-import ssl
 import sys
 import json
-import time
-import base64
 import signal
-import hashlib
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -84,14 +77,6 @@ from utilities.bootstrap import run_under_venv
 
 PROJECT_ROOT = run_under_venv(__file__)
 
-HOST = "trade.wisdomcapital.in"
-PORT = 443
-APPLICATION_PATH = "/interactive"
-
-# SHA-256 of the certificate trade.wisdomcapital.in serves, valid to 2027-01-20. Refresh with:
-#   echo | openssl s_client -connect trade.wisdomcapital.in:443 2>/dev/null | openssl x509 -noout -fingerprint -sha256
-CERTIFICATE_FINGERPRINT = "1ACF7CA747F2D678B6CB7E01189FE43142DE8B2A2039231F905F9C5E6AB1F7AF"
-
 ORDERS_KEY = "wisdom_capital:orders:orders"
 POSITIONS_KEY = "wisdom_capital:portfolio:positions"
 
@@ -100,15 +85,6 @@ POSITIONS_KEY = "wisdom_capital:portfolio:positions"
 ORDER_STREAM_KEY = "wisdom_capital:order-updates:stream"
 POSITION_STREAM_KEY = "wisdom_capital:positions_updates:stream"
 STREAM_MAX_LENGTH = 20000
-
-# What XTS says when a token is refused, lowercased.
-AUTHENTICATION_MARKERS = ("e-session", "e-token", "invalid token")
-
-DEFAULT_HEARTBEAT_SECONDS = 10.0
-MIN_BACKOFF_SECONDS = 1
-MAX_BACKOFF_SECONDS = 60
-MAX_FAILED_CONNECTS = 6
-REPLACEMENT_LOGIN_WAIT_SECONDS = 10
 
 INDIA = ZoneInfo("Asia/Kolkata")
 RESET_HOUR = 6
@@ -384,318 +360,86 @@ def position_from_row(row, basis=None):
     }
 
 
-def pinned_get(path):
+class WisdomCapitalOrderUpdatesStore:
     """
-    An HTTPS GET to the platform over a connection pinned to its certificate.
-
-    - `path` is the path to request.
-    """
-    import urllib3
-
-    pool = urllib3.HTTPSConnectionPool(HOST, PORT, assert_fingerprint=CERTIFICATE_FINGERPRINT)
-    return pool.request("GET", path, headers={"Content-Type": "application/json"}, timeout=30)
-
-def first_json_object(text):
-    """
-    The first balanced `{...}` in an Engine.IO polling body, decoded, or None.
-
-    - `text` is the body, which frames the handshake JSON with a length prefix.
-    """
-    start, depth = text.find('{'), 0
-    if start == -1:
-        return None
-    for index in range(start, len(text)):
-        depth += 1 if text[index] == '{' else (-1 if text[index] == '}' else 0)
-        if depth == 0:
-            return json.loads(text[start:index + 1])
-    return None
-
-class OrderUpdatesSocket:
-    """
-    Wisdom Capital's XTS interactive socket, reconnecting and logging in again until stopped.
+    Where the interactive socket's events are written: the merged orders and positions hashes and their streams.
     """
 
     def __init__(self, cache, logger):
         """
-        Construct WisdomCapitalAPI, which logs in when the stored session is dead.
+        Registers the merge script on the Redis client the updates are written to.
 
-        - `cache` is the Redis client.
-        - `logger` is where the connection reports.
+        Args:
+            cache (redis.Redis): The Redis client.
+            logger (logging.Logger): Where writes are reported.
+
+        Returns:
+            None: This method returns nothing.
         """
-        from stock_brokers.api.wisdom_capital import WisdomCapitalAPI
-
-        self._api_class = WisdomCapitalAPI
-        self._api = WisdomCapitalAPI()
         self._cache = cache
         self._merge = cache.register_script(MERGE_SCRIPT)
         self._logger = logger
-        self._stop = threading.Event()
-        self._ws = None
-        self._opened = False
-        self._authentication_rejected = False
-        self._logged_out = False
-        self._token = None
-        self._heartbeat_seconds = DEFAULT_HEARTBEAT_SECONDS
-        self._connection_closed = threading.Event()
-        self.gave_up = False
 
-    def close(self):
-        """Close the websocket and stop reconnecting."""
-        self._stop.set()
-        if self._ws is not None:
-            self._ws.close()
-
-    def run_forever(self):
-        """Connect, and reconnect with backoff, until closed or unable to recover."""
-        backoff = MIN_BACKOFF_SECONDS
-        failed_connects = 0
-        logged_in_again = False
-        while not self._stop.is_set():
-            self._opened = False
-            self._authentication_rejected = False
-            self._logged_out = False
-            try:
-                self._connect()
-            except Exception as exception:
-                self._logger.error(f"Order updates connection failed: {type(exception).__name__}: {exception}")
-            if self._stop.is_set():
-                break
-
-            if self._logged_out and not self._wait_for_replacement_login():
-                if self._stop.is_set():
-                    break
-                self._logger.warning("The stored Wisdom Capital token is still the one that was logged out.")
-                self._authentication_rejected = True
-
-            if self._opened and not self._authentication_rejected:
-                failed_connects, logged_in_again, backoff = 0, False, MIN_BACKOFF_SECONDS
-            else:
-                failed_connects += 1
-
-            if self._authentication_rejected or failed_connects >= MAX_FAILED_CONNECTS:
-                if logged_in_again and (self._authentication_rejected or failed_connects >= MAX_FAILED_CONNECTS):
-                    self.gave_up = True
-                    self._logger.error("Order updates are still refused after logging in again. Giving up.")
-                    break
-                try:
-                    # A dead session: log in again before connecting again.
-                    self._logger.warning("Checking the Wisdom Capital login, and logging in again if it is dead.")
-                    self._api = self._api_class()
-                except Exception as exception:
-                    self.gave_up = True
-                    self._logger.error(f"Could not log in to Wisdom Capital again: {type(exception).__name__}: {exception}")
-                    break
-                failed_connects, logged_in_again = 0, True
-
-            self._logger.warning(f"Order updates disconnected. Reconnecting in {backoff} seconds.")
-            self._stop.wait(backoff)
-            backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
-        self._logger.info("Order updates socket stopped.")
-
-    def _wait_for_replacement_login(self):
-        """Waits for the login that logged this socket out to reach the shared last_login hash.
-
-        Returns:
-            bool: True when the shared login holds a token other than the one this connection used, and False when it still holds that token after REPLACEMENT_LOGIN_WAIT_SECONDS or the socket is stopped first.
+    def write_updates(self, orders, positions, received_at):
         """
-        deadline = time.monotonic() + REPLACEMENT_LOGIN_WAIT_SECONDS
-        while not self._stop.is_set():
-            login = self._api._current_login() or {}
-            if login.get("access_token") != self._token:
-                return True
-            if time.monotonic() >= deadline:
-                return False
-            self._stop.wait(1)
-        return False
+        Merges one event's orders or positions into their hash and appends each to its stream.
 
-    @staticmethod
-    def _user_id_from_token(token):
-        """Reads the user id that XTS signs into an interactive token.
+        An order the normalizer cannot read, or a position without a hash field, is skipped without a log line, as it always was.
 
         Args:
-            token (str): The interactive access token, a JWT.
+            orders (list): The event's orders, exactly as XTS sent them.
+            positions (list): The event's positions, exactly as XTS sent them.
+            received_at (datetime): When the event was received, as a naive India wall clock time.
 
         Returns:
-            str | None: The token's `userID` claim, or None when the token is not a readable JWT or has no such claim.
+            None: This method returns nothing.
         """
-        parts = token.split(".")
-        if len(parts) != 3:
-            return None
-        padded_payload = parts[1] + "=" * (-len(parts[1]) % 4)
-        try:
-            payload = json.loads(base64.urlsafe_b64decode(padded_payload))
-        except ValueError:
-            return None
-        if not isinstance(payload, dict):
-            return None
-        return payload.get("userID")
+        received = received_at.strftime("%Y-%m-%d %H:%M:%S.%f")
+        observed_at = received_at.timestamp()
 
-    def _shared_session(self):
-        """Reads the interactive login that every Wisdom Capital process shares.
-
-        Returns:
-            tuple[str, str]: The access token, and the user id it was issued to.
-
-        Raises:
-            RuntimeError: No usable token is stored, or the stored token carries no user id.
-        """
-        login = self._api._current_login() or {}
-        token = login.get("access_token")
-        if not token or token == "None":
-            raise RuntimeError("no Wisdom Capital access token is stored in last_login")
-        user_id = self._user_id_from_token(token)
-        if user_id is None:
-            raise RuntimeError("the stored Wisdom Capital access token carries no userID")
-        return token, user_id
-
-    def _connect(self):
-        """Opens an Engine.IO session with the shared login, attaches the websocket and blocks until it closes.
-
-        Raises:
-            RuntimeError: No usable token is stored, or the Engine.IO handshake is refused.
-        """
-        import websocket
-
-        try:
-            token, user_id = self._shared_session()
-        except RuntimeError:
-            self._authentication_rejected = True
-            raise
-        self._token = token
-        query = f"token={token}&userID={user_id}&apiType=INTERACTIVE"
-
-        response = pinned_get(f"{APPLICATION_PATH}/socket.io/?EIO=3&transport=polling&{query}")
-        body = response.data.decode('utf-8', errors='replace')
-        handshake = first_json_object(body) if response.status < 300 else None
-        if not handshake or not handshake.get('sid'):
-            self._authentication_rejected = any(marker in body.lower() for marker in AUTHENTICATION_MARKERS)
-            raise RuntimeError(f"Engine.IO handshake failed with {response.status}: {body[:200]}")
-        # The interactive namespace asks for a ping every 25 seconds but waits only 20, so half the shorter of the
-        # two sits inside both.
-        limits = [float(value) / 1000.0 for value in (handshake.get('pingInterval'), handshake.get('pingTimeout')) if value]
-        self._heartbeat_seconds = max(1.0, min(limits) / 2.0) if limits else DEFAULT_HEARTBEAT_SECONDS
-
-        url = f"wss://{HOST}{APPLICATION_PATH}/socket.io/?EIO=3&transport=websocket&sid={handshake['sid']}&{query}"
-        self._connection_closed = threading.Event()
-        self._ws = websocket.WebSocketApp(url, on_open=self._on_open, on_message=self._on_message,
-                                          on_error=self._on_error, on_close=self._on_close)
-        # websocket-client cannot pin a fingerprint, so the chain is verified, the hostname check relaxed, and the
-        # pin checked on the live socket in _on_open.
-        context = ssl.create_default_context()
-        context.check_hostname = False
-        self._ws.run_forever(sslopt={"context": context})
-
-    def _on_open(self, ws):
-        """Check the pinned certificate, then begin the Engine.IO upgrade."""
-        try:
-            fingerprint = hashlib.sha256(ws.sock.sock.getpeercert(True)).hexdigest().upper()
-        except (AttributeError, TypeError):
-            fingerprint = CERTIFICATE_FINGERPRINT
-        if fingerprint != CERTIFICATE_FINGERPRINT:
-            self._logger.error(f"{HOST} presented certificate {fingerprint}, which does not match the pin. "
-                               f"If Wisdom Capital has renewed, refresh CERTIFICATE_FINGERPRINT.")
-            ws.close()
-            return
-        self._opened = True
-        ws.send("2probe")
-
-    def _on_error(self, ws, error):
-        self._logger.error(f"Order updates error: {error}")
-
-    def _on_close(self, ws, status_code, message):
-        self._connection_closed.set()
-        self._logger.info(f"Order updates socket closed with status {status_code}: {message}")
-
-    def _start_heartbeat(self, ws):
-        """Send the Engine.IO ping on the interval the server asked for, until this connection closes."""
-        closed, interval = self._connection_closed, self._heartbeat_seconds
-
-        def beat():
-            while not closed.wait(interval) and not self._stop.is_set():
-                try:
-                    ws.send("2")
-                except Exception:
-                    return
-
-        threading.Thread(target=beat, name="wisdom_capital_order_updates_heartbeat", daemon=True).start()
-
-    def _on_message(self, ws, message):
-        """Handle Engine.IO control frames and merge the orders and positions each socket.io event carries."""
-        if isinstance(message, (bytes, bytearray)):
-            message = message.decode('utf-8', errors='replace')
-        if message == "3probe":
-            ws.send("5")                                  # complete the websocket upgrade
-            self._start_heartbeat(ws)
-            self._logger.info("Joined the interactive namespace. Waiting for order and position updates.")
-            return
-        if message == "2":
-            ws.send("3")
-            return
-        if not isinstance(message, str) or not message.startswith("42"):
-            return
-
-        try:
-            event = json.loads(message[2:])
-        except json.JSONDecodeError:
-            return
-        if not isinstance(event, list) or not event:
-            return
-        name = str(event[0]).lower()
-        payload = event[1] if len(event) > 1 else None
-        if isinstance(payload, str):
-            try:
-                payload = json.loads(payload)
-            except json.JSONDecodeError:
-                pass
-        if name == "logout":
-            self._logger.warning(f"Wisdom Capital logged this socket out: {json.dumps(payload)[:200]}. Reconnecting with the login now in force.")
-            self._logged_out = True
-            ws.close()
-            return
-        entries = [entry for entry in (payload if isinstance(payload, list) else [payload]) if isinstance(entry, dict)]
-        received_at = datetime.now()
-        received, observed_at = received_at.strftime("%Y-%m-%d %H:%M:%S.%f"), received_at.timestamp()
-
-        if "position" in name:
-            merged, appended = [], []
-            for entry in entries:
+        if positions:
+            merged = []
+            appended = []
+            for entry in positions:
                 field = position_field(entry)
                 if field is None:
                     continue
-                merged += [field, json.dumps({"observed_at": observed_at, "source": "websocket",
-                                              "position": position_from_row(entry), "data": entry})]
-                appended.append(json.dumps({'timestamp': received, 'data': entry}))
+                merged.append(field)
+                merged.append(json.dumps({"observed_at": observed_at, "source": "websocket",
+                                          "position": position_from_row(entry), "data": entry}))
+                appended.append(json.dumps({"timestamp": received, "data": entry}))
             if merged:
                 self._write(POSITIONS_KEY, POSITION_STREAM_KEY, "position", observed_at, merged, appended)
                 self._logger.info(f"Merged {len(appended)} position update(s) into {POSITIONS_KEY}: {', '.join(merged[0::2])}")
-        elif "trade" in name:
-            self._logger.debug("Trade event received; the matching order event carries the fill.")
-        elif "order" in name or "interactive" in name:
-            merged, appended = [], []
-            for entry in entries:
+
+        if orders:
+            merged = []
+            appended = []
+            for entry in orders:
                 order = normalized_order(entry)
                 if order is None:
                     continue
-                merged += [order["order_id"], json.dumps({"observed_at": observed_at, "source": "websocket",
-                                                          "order": order, "data": entry})]
-                appended.append(json.dumps({'timestamp': received, 'data': entry}))
+                merged.append(order["order_id"])
+                merged.append(json.dumps({"observed_at": observed_at, "source": "websocket", "order": order, "data": entry}))
+                appended.append(json.dumps({"timestamp": received, "data": entry}))
             if merged:
                 self._write(ORDERS_KEY, ORDER_STREAM_KEY, "update", observed_at, merged, appended)
                 self._logger.info(f"Merged {len(appended)} order update(s) into {ORDERS_KEY}: {', '.join(merged[0::2])}")
-        else:
-            self._logger.info(f"Event {event[0]!r}: {json.dumps(payload)[:200]}")
 
     def _write(self, hash_key, stream_key, field, observed_at, merged, appended):
         """
-        Merge the latest state into a hash, then append every update, in arrival order, to its stream.
+        Merges the latest state into a hash, then appends every update, in arrival order, to its stream.
 
-        - `hash_key` is the merged hash.
-        - `stream_key` is the stream keeping every update.
-        - `field` names the stream entry's field.
-        - `observed_at` is when the event was received, as an epoch.
-        - `merged` is the flat list of hash field and value pairs; two of one field in the same message are both sent,
-          and the later one wins.
-        - `appended` is each update's `{"timestamp", "data"}` JSON, in the shape the persisters read.
+        Args:
+            hash_key (str): The merged hash.
+            stream_key (str): The stream keeping every update.
+            field (str): The stream entry's field name.
+            observed_at (float): When the event was received, as an epoch.
+            merged (list): The flat list of hash field and value pairs; two of one field in the same event are both sent, and the later one wins.
+            appended (list): Each update's `{"timestamp", "data"}` JSON, in the shape the persisters read.
+
+        Returns:
+            None: This method returns nothing.
         """
         self._merge(keys=[hash_key], args=[next_reset(), "websocket", repr(observed_at)] + merged)
         pipeline = self._cache.pipeline(transaction=False)
@@ -705,14 +449,17 @@ class OrderUpdatesSocket:
 
 def main():
     """Stream Wisdom Capital order and position updates into Redis until stopped."""
+    from stock_brokers.websockets.wisdom_capital import WisdomCapitalInteractiveSession, WisdomCapitalOrderUpdatesSocket
     from utilities.configurations import get_cache, get_logger
 
     logger = get_logger("wisdom_capital.websocket_order_details")
     try:
-        socket = OrderUpdatesSocket(get_cache(), logger)
+        session = WisdomCapitalInteractiveSession(logger)
     except Exception as exception:
         logger.error(f"Could not log in to Wisdom Capital: {type(exception).__name__}: {exception}")
         return 1
+    store = WisdomCapitalOrderUpdatesStore(get_cache(), logger)
+    socket = WisdomCapitalOrderUpdatesSocket(session, store.write_updates, logger)
 
     # Installed before the thread starts: systemd stops a unit with SIGTERM, and the default action would kill
     # the process without closing the connection.

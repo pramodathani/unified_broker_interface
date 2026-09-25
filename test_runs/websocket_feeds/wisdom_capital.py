@@ -4,6 +4,7 @@ import base64
 import json
 import types
 
+from stock_brokers.websockets import wisdom_capital as wisdom_capital_websockets
 from test_runs.websocket_feeds import harness
 
 QUOTES_SCRIPT = 'bin/wisdom_capital/instruments/websocket_quotes'
@@ -150,6 +151,7 @@ class WisdomCapitalFeedCases:
         """
         return [
             self.loader.load(ORDERS_SCRIPT),
+            wisdom_capital_websockets,
         ]
 
     def build_quotes_socket(self, context, tokens, names):
@@ -164,8 +166,16 @@ class WisdomCapitalFeedCases:
             object: The socket, with instant waits.
         """
         script = self.loader.load(QUOTES_SCRIPT)
-        session = script.WisdomCapitalSession(context.logger)
-        socket = script.QuotesSocket('socket_0', tokens, names, session, context.redis, context.logger)
+        session = wisdom_capital_websockets.WisdomCapitalMarketDataSession(context.logger)
+        store = script.WisdomCapitalQuotesStore(context.redis)
+        socket = wisdom_capital_websockets.WisdomCapitalQuotesSocket(
+            'socket_0',
+            tokens,
+            names,
+            session,
+            store.write_ticks,
+            context.logger,
+        )
         context.use_instant_waits(socket)
         return socket
 
@@ -179,7 +189,9 @@ class WisdomCapitalFeedCases:
             object: The socket, with instant waits.
         """
         script = self.loader.load(ORDERS_SCRIPT)
-        socket = script.OrderUpdatesSocket(context.redis, context.logger)
+        session = wisdom_capital_websockets.WisdomCapitalInteractiveSession(context.logger)
+        store = script.WisdomCapitalOrderUpdatesStore(context.redis, context.logger)
+        socket = wisdom_capital_websockets.WisdomCapitalOrderUpdatesSocket(session, store.write_updates, context.logger)
         context.use_instant_waits(socket)
         return socket
 

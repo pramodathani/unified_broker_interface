@@ -11,9 +11,11 @@ streaming until stopped.
     redis-cli HGET wisdom_capital:quotes:live "NSECM:RELIANCE-EQ"
     redis-cli HGETALL wisdom_capital:quotes:instruments
 
-Self-contained: it logs in with `WisdomCapitalAPI` and carries its own XTS transport - pinned TLS, the Engine.IO
-handshake, socket.io framing and heartbeat, REST subscription and quote decoding - so it needs no other feed
-process or key.
+The XTS transport - pinned TLS, the Engine.IO handshake, socket.io framing and heartbeat, REST subscription and
+quote decoding - and the market data login are `WisdomCapitalQuotesSocket` and `WisdomCapitalMarketDataSession`
+in `stock_brokers/websockets/wisdom_capital.py`, whose module docstring describes them. This script chooses the
+instruments, splits them across sockets, runs the sockets and writes the ticks they decode to Redis, so it needs
+no other feed process or key.
 
 **Instruments** are `--tokens` when given, otherwise the members of the Redis set
 `wisdom_capital:quotes:subscriptions`, each as `SEGMENT:EXCHANGEINSTRUMENTID` with XTS's segment number: 1 NSECM,
@@ -28,12 +30,6 @@ exactly one market data session per application key, a second login invalidating
 `market_data_access_token` and `market_data_user_id`, shared with `bin/wisdom_capital/instruments/price_history`.
 A new one is minted only when none is stored or the one in use has been refused and nobody has replaced it,
 under `wisdom_capital:session:marketdata:lock`. Each connection reads it afresh.
-
-**The transport.** The host's certificate is issued to the platform provider's domain, so the exact certificate
-is pinned instead of the hostname being checked. A connection opens an Engine.IO session over HTTPS, attaches a
-websocket with `publishFormat=JSON&broadcastMode=Full`, completes the upgrade with a probe, then heartbeats at half
-the shorter of the intervals the server asks for. Subscription is a REST call, for touchline (1501) and market
-depth (1502), and its answer carries the current snapshot, which is written straight away.
 
 **Keys.**
 
@@ -65,12 +61,9 @@ Exits 0 when stopped with Ctrl+C or SIGTERM, 1 when a login fails or a socket st
 was replaced, and 2 when there is nothing to subscribe to. Reads only - it places no orders.
 """
 
-import ssl
 import sys
 import json
-import time
 import signal
-import hashlib
 import argparse
 import threading
 from pathlib import Path
@@ -82,15 +75,7 @@ from utilities.bootstrap import run_under_venv
 
 PROJECT_ROOT = run_under_venv(__file__)
 
-HOST = "trade.wisdomcapital.in"
-PORT = 443
-APPLICATION_PATH = "/apimarketdata"
-MARKET_DATA_LOGIN_URL = f"https://{HOST}{APPLICATION_PATH}/auth/login"
-INSTRUMENTS_MASTER_URL = f"https://{HOST}{APPLICATION_PATH}/instruments/master"
-
-# SHA-256 of the certificate trade.wisdomcapital.in serves, valid to 2027-01-20. Refresh with:
-#   echo | openssl s_client -connect trade.wisdomcapital.in:443 2>/dev/null | openssl x509 -noout -fingerprint -sha256
-CERTIFICATE_FINGERPRINT = "1ACF7CA747F2D678B6CB7E01189FE43142DE8B2A2039231F905F9C5E6AB1F7AF"
+INSTRUMENTS_MASTER_URL = "https://trade.wisdomcapital.in/apimarketdata/instruments/master"
 
 LIVE_KEY = "wisdom_capital:quotes:live"
 INSTRUMENTS_KEY = "wisdom_capital:quotes:instruments"
@@ -105,421 +90,43 @@ STREAM_MAX_LENGTH = 1000000
 SEGMENT_NAMES = {1: "NSECM", 2: "NSEFO", 3: "NSECD", 4: "NSECO", 11: "BSECM", 12: "BSEFO", 13: "BSECD",
                  21: "NCDEX", 51: "MCXFO"}
 
-# XTS message codes subscribed to: touchline and market depth.
-TOUCHLINE, MARKET_DEPTH = 1501, 1502
-
-# XTS counts seconds from 1980-01-01 IST, so its timestamps read ten years early; this was measured against
-# Zerodha reporting the same trade to the second.
-EPOCH_OFFSET_SECONDS = 315513000
-
-# What XTS says when a token is refused, lowercased.
-AUTHENTICATION_MARKERS = ("e-session", "e-token", "invalid token")
-
-# What it says when the instruments are already subscribed on this session, which it reports with a code carrying
-# the same e-session prefix as a refused token. See the note beside this script.
-ALREADY_SUBSCRIBED_MARKER = "already subscribed"
-
 DEFAULT_INSTRUMENTS_PER_SOCKET = 1000
-DEFAULT_HEARTBEAT_SECONDS = 25.0
-MIN_BACKOFF_SECONDS = 1
-MAX_BACKOFF_SECONDS = 60
-MAX_FAILED_CONNECTS = 6
 
-class WisdomCapitalSession:
+class WisdomCapitalQuotesStore:
     """
-    The broker login, which carries both the trading token and the market data token every socket authenticates with.
+    Where the quotes sockets' ticks are written: the live hash and the persistence stream.
     """
 
-    def __init__(self, logger):
+    def __init__(self, cache):
         """
-        Construct WisdomCapitalAPI, which establishes both of Wisdom Capital's sessions when either has stopped working.
+        Keeps the Redis client the ticks are written to.
 
-        - `logger` is where logins are reported.
+        Args:
+            cache (redis.Redis): The Redis client.
+
+        Returns:
+            None: This method returns nothing.
         """
-        from stock_brokers.api.wisdom_capital import WisdomCapitalAPI
-
-        self._api = WisdomCapitalAPI()
-        self._logger = logger
-        self._lock = threading.Lock()
-        if self._api.market_data_session_error:
-            raise self._api.market_data_session_error
-
-    def market_data(self):
-        """The market data session in force now, `{"access_token", "user_id"}`."""
-        return self._api.market_data_session()
-
-    def replace(self, stale_token):
-        """
-        Replace a refused market data token, unless another socket or process already has.
-
-        - `stale_token` is the token the failing connection used.
-        """
-        with self._lock:
-            self._logger.warning("Replacing the Wisdom Capital market data token.")
-            self._api.replace_market_data_session(stale_access_token=stale_token)
-
-def pinned_request(method, path, token=None, body=None):
-    """
-    An HTTPS request to the platform over a connection pinned to its certificate.
-
-    - `method` is the HTTP method.
-    - `path` is the path to request.
-    - `token` is the market data token to authorize with, if any.
-    - `body` is an object to send as JSON, if any.
-    """
-    import urllib3
-
-    headers = {"Content-Type": "application/json"}
-    if token:
-        headers["authorization"] = token
-    pool = urllib3.HTTPSConnectionPool(HOST, PORT, assert_fingerprint=CERTIFICATE_FINGERPRINT)
-    return pool.request(method, path, body=json.dumps(body) if body is not None else None, headers=headers, timeout=30)
-
-def is_authentication_refusal(text):
-    """
-    Whether a response body says the token was refused.
-
-    - `text` is the response body.
-    """
-    return any(marker in str(text).lower() for marker in AUTHENTICATION_MARKERS)
-
-def is_already_subscribed(text):
-    """
-    Whether a response body says the instruments are subscribed already, rather than that the token was refused.
-
-    - `text` is the response body.
-    """
-    return ALREADY_SUBSCRIBED_MARKER in str(text).lower()
-
-def first_json_object(text):
-    """
-    The first balanced `{...}` in an Engine.IO polling body, decoded, or None.
-
-    - `text` is the body, which frames the handshake JSON with a length prefix.
-    """
-    start, depth = text.find('{'), 0
-    if start == -1:
-        return None
-    for index in range(start, len(text)):
-        depth += 1 if text[index] == '{' else (-1 if text[index] == '}' else 0)
-        if depth == 0:
-            return json.loads(text[start:index + 1])
-    return None
-
-class QuotesSocket:
-    """
-    One XTS market data socket for a batch of instruments, reconnecting until stopped.
-    """
-
-    def __init__(self, name, tokens, names, session, cache, logger):
-        """
-        - `name` is the connection's name, for the log.
-        - `tokens` is the batch of `SEGMENT:EXCHANGEINSTRUMENTID` instrument tokens.
-        - `names` maps a token to the instrument's name.
-        - `session` is the shared WisdomCapitalSession.
-        - `cache` is the Redis client.
-        - `logger` is where the connection reports.
-        """
-        self.name = name
-        self._tokens = tokens
-        self._names = names
-        self._session = session
         self._cache = cache
-        self._logger = logger
-        self._stop = threading.Event()
-        self._ws = None
-        self._token = None
-        self._opened = False
-        self._authentication_rejected = False
-        self._heartbeat_seconds = DEFAULT_HEARTBEAT_SECONDS
-        self._connection_closed = threading.Event()
-        # The merged touchline and depth state per instrument, rebuilt on every connection.
-        self._state = {}
-        self.gave_up = False
 
-    def close(self):
-        """Close the websocket and stop reconnecting."""
-        self._stop.set()
-        if self._ws is not None:
-            self._ws.close()
-
-    def run_forever(self):
-        """Connect, and reconnect with backoff, until closed or unable to recover."""
-        backoff = MIN_BACKOFF_SECONDS
-        failed_connects = 0
-        replaced_token = False
-        while not self._stop.is_set():
-            self._opened = False
-            self._authentication_rejected = False
-            try:
-                self._connect()
-            except Exception as exception:
-                self._logger.error(f"{self.name} connection failed: {type(exception).__name__}: {exception}")
-            if self._stop.is_set():
-                break
-
-            if self._opened and not self._authentication_rejected:
-                failed_connects, replaced_token, backoff = 0, False, MIN_BACKOFF_SECONDS
-            else:
-                failed_connects += 1
-
-            if self._authentication_rejected or failed_connects >= MAX_FAILED_CONNECTS:
-                if replaced_token and (self._authentication_rejected or failed_connects >= MAX_FAILED_CONNECTS):
-                    self.gave_up = True
-                    self._logger.error(f"{self.name} is still refused after replacing the market data token. Giving up.")
-                    break
-                try:
-                    # A dead session: replace the token before connecting again.
-                    self._session.replace(self._token)
-                except Exception as exception:
-                    self.gave_up = True
-                    self._logger.error(f"{self.name} could not log in to the market data API: "
-                                       f"{type(exception).__name__}: {exception}")
-                    break
-                failed_connects, replaced_token = 0, True
-
-            self._logger.warning(f"{self.name} disconnected. Reconnecting in {backoff} seconds.")
-            self._stop.wait(backoff)
-            backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
-        self._logger.info(f"{self.name} stopped.")
-
-    def _connect(self):
-        """Open an Engine.IO session with the token in force now, attach the websocket and block until it closes."""
-        import websocket
-
-        session = self._session.market_data()
-        self._token, user_id = session["access_token"], session["user_id"]
-        query = f"token={self._token}&userID={user_id}&publishFormat=JSON&broadcastMode=Full"
-
-        response = pinned_request("GET", f"{APPLICATION_PATH}/socket.io/?EIO=3&transport=polling&{query}")
-        body = response.data.decode('utf-8', errors='replace')
-        handshake = first_json_object(body) if response.status < 300 else None
-        if not handshake or not handshake.get('sid'):
-            self._authentication_rejected = is_authentication_refusal(body)
-            raise RuntimeError(f"Engine.IO handshake failed with {response.status}: {body[:200]}")
-        # The server's ping interval and timeout disagree, so half the shorter of the two sits inside both.
-        limits = [float(value) / 1000.0 for value in (handshake.get('pingInterval'), handshake.get('pingTimeout')) if value]
-        self._heartbeat_seconds = max(1.0, min(limits) / 2.0) if limits else DEFAULT_HEARTBEAT_SECONDS
-
-        url = f"wss://{HOST}{APPLICATION_PATH}/socket.io/?EIO=3&transport=websocket&sid={handshake['sid']}&{query}"
-        self._connection_closed = threading.Event()
-        self._ws = websocket.WebSocketApp(url, on_open=self._on_open, on_message=self._on_message,
-                                          on_error=self._on_error, on_close=self._on_close)
-        # websocket-client cannot pin a fingerprint, so the chain is verified, the hostname check relaxed, and the
-        # pin checked on the live socket in _on_open.
-        context = ssl.create_default_context()
-        context.check_hostname = False
-        self._ws.run_forever(sslopt={"context": context})
-
-    def _on_open(self, ws):
-        """Check the pinned certificate, then begin the Engine.IO upgrade."""
-        try:
-            fingerprint = hashlib.sha256(ws.sock.sock.getpeercert(True)).hexdigest().upper()
-        except (AttributeError, TypeError):
-            fingerprint = CERTIFICATE_FINGERPRINT
-        if fingerprint != CERTIFICATE_FINGERPRINT:
-            self._logger.error(f"{self.name}: {HOST} presented certificate {fingerprint}, which does not match the pin. "
-                               f"If Wisdom Capital has renewed, refresh CERTIFICATE_FINGERPRINT.")
-            ws.close()
-            return
-        self._opened = True
-        self._state = {}
-        ws.send("2probe")
-
-    def _on_error(self, ws, error):
-        self._logger.error(f"{self.name} error: {error}")
-
-    def _on_close(self, ws, status_code, message):
-        self._connection_closed.set()
-        self._logger.info(f"{self.name} closed with status {status_code}: {message}")
-
-    def _start_heartbeat(self, ws):
-        """Send the Engine.IO ping on the interval the server asked for, until this connection closes."""
-        closed, interval = self._connection_closed, self._heartbeat_seconds
-
-        def beat():
-            while not closed.wait(interval) and not self._stop.is_set():
-                try:
-                    ws.send("2")
-                except Exception:
-                    return
-
-        threading.Thread(target=beat, name=f"wisdom_capital_quotes_{self.name}_heartbeat", daemon=True).start()
-
-    def _on_message(self, ws, message):
-        """Handle Engine.IO control frames and write the quotes each socket.io event carries."""
-        if isinstance(message, (bytes, bytearray)):
-            message = message.decode('utf-8', errors='replace')
-        if message == "3probe":
-            ws.send("5")                                  # complete the websocket upgrade
-            self._start_heartbeat(ws)
-            self._subscribe(ws)
-            return
-        if message == "2":
-            ws.send("3")
-            return
-        self._write([self._tick(token) for token in self._apply_events(message)])
-
-    def _subscribe(self, ws):
-        """Subscribe the batch over REST for touchline and depth, and write the snapshot the answer carries."""
-        instruments = [{"exchangeSegment": int(token.split(':')[0]), "exchangeInstrumentID": int(token.split(':')[1])}
-                       for token in self._tokens]
-        seeded = set()
-        for code in (TOUCHLINE, MARKET_DEPTH):
-            response, body = self._ask_to_subscribe(instruments, code)
-            if response.status >= 300 and is_already_subscribed(body):
-                self._logger.info(f"{self.name}: message code {code} is still subscribed from an earlier connection. "
-                                  f"Dropping that subscription and asking again.")
-                pinned_request("PUT", f"{APPLICATION_PATH}/instruments/subscription", token=self._token,
-                               body={"instruments": instruments, "xtsMessageCode": code})
-                response, body = self._ask_to_subscribe(instruments, code)
-            if response.status >= 300:
-                if is_authentication_refusal(body):
-                    self._logger.warning(f"{self.name}: subscription refused the market data token: {body[:200]}")
-                    self._authentication_rejected = True
-                    ws.close()
-                    return
-                self._logger.warning(f"{self.name}: subscription for message code {code} returned {response.status}: {body[:200]}")
-                continue
-            try:
-                quotes = (json.loads(body).get('result') or {}).get('listQuotes') or []
-            except (ValueError, AttributeError):
-                quotes = []
-            for quote in quotes:
-                token = self._apply_quote(json.loads(quote) if isinstance(quote, str) else quote)
-                if token:
-                    seeded.add(token)
-        self._write([self._tick(token) for token in seeded])
-        self._logger.info(f"{self.name} subscribed to {len(self._tokens)} instrument(s).")
-
-    def _ask_to_subscribe(self, instruments, code):
+    def write_ticks(self, ticks):
         """
-        Ask for one message code's subscription and return the answer.
+        Writes ticks: the latest tick per instrument and every tick in arrival order, in one round trip.
 
-        - `instruments` is the batch as XTS wants it, segment and instrument id per entry.
-        - `code` is the XTS message code, touchline or market depth.
+        Args:
+            ticks (list[dict]): The ticks, in arrival order.
 
-        Returns the response and its decoded body.
+        Returns:
+            None: This method returns nothing.
         """
-        response = pinned_request("POST", f"{APPLICATION_PATH}/instruments/subscription", token=self._token,
-                                  body={"instruments": instruments, "xtsMessageCode": code})
-        return response, response.data.decode('utf-8', errors='replace')
-
-    def _apply_events(self, message):
-        """
-        The tokens whose state the socket.io events in a frame updated.
-
-        - `message` is the frame; only `42[...]` event frames carry quotes.
-        """
-        if not isinstance(message, str) or not message.startswith("42"):
-            return []
-        try:
-            event = json.loads(message[2:])
-        except json.JSONDecodeError:
-            return []
-        if not isinstance(event, list) or len(event) < 2:
-            return []
-        payload = event[1]
-        if isinstance(payload, str):
-            try:
-                payload = json.loads(payload)
-            except json.JSONDecodeError:
-                return []
-        tokens = []
-        for quote in (payload if isinstance(payload, list) else [payload]):
-            token = self._apply_quote(quote)
-            if token and token not in tokens:
-                tokens.append(token)
-        return tokens
-
-    def _apply_quote(self, quote):
-        """
-        Merge an XTS quote into its instrument's state and return the instrument's token, or None.
-
-        - `quote` is a decoded XTS quote.
-        """
-        if not isinstance(quote, dict) or quote.get('ExchangeSegment') is None or quote.get('ExchangeInstrumentID') is None:
-            return None
-        token = f"{quote['ExchangeSegment']}:{quote['ExchangeInstrumentID']}"
-        state = self._state.setdefault(token, {})
-        state.update(quote)
-        # A depth message nests the touchline fields rather than repeating them.
-        touchline = quote.get('Touchline')
-        if isinstance(touchline, dict):
-            state.update(touchline)
-        return token
-
-    def _tick(self, token):
-        """
-        A normalized tick from an instrument's merged state.
-
-        - `token` is the instrument's `SEGMENT:EXCHANGEINSTRUMENTID`.
-        """
-        state = self._state.get(token) or {}
-        depth = {"buy": levels(state.get('Bids')), "sell": levels(state.get('Asks'))}
-        if not depth['buy'] and isinstance(state.get('BidInfo'), dict):
-            depth['buy'] = levels([state['BidInfo']])
-        if not depth['sell'] and isinstance(state.get('AskInfo'), dict):
-            depth['sell'] = levels([state['AskInfo']])
-        last_price, close = state.get('LastTradedPrice'), state.get('Close')
-        segment = state.get('ExchangeSegment')
-        return {
-            "id": self._names.get(token) or token,
-            "broker": "wisdom_capital",
-            "instrument_token": token,
-            "exchange": SEGMENT_NAMES.get(segment, str(segment) if segment is not None else None),
-            "mode": "full" if depth['buy'] or depth['sell'] else "quote",
-            "last_price": last_price,
-            # XTS misspells the last traded quantity, and sends the key with a null value rather than omitting it.
-            "last_quantity": (state.get('LastTradedQunatity') if state.get('LastTradedQunatity') is not None
-                              else state.get('LastTradedQuantity')),
-            "average_price": state.get('AverageTradedPrice'),
-            "volume": state.get('TotalTradedQuantity'),
-            "buy_quantity": state.get('TotalBuyQuantity'),
-            "sell_quantity": state.get('TotalSellQuantity'),
-            "ohlc": {"open": state.get('Open'), "high": state.get('High'), "low": state.get('Low'), "close": close},
-            "change": (last_price - close) * 100 / close if last_price is not None and close else None,
-            "oi": state.get('OpenInterest'),
-            "oi_day_high": None,
-            "oi_day_low": None,
-            "last_trade_time": true_epoch(state.get('LastTradedTime')),
-            "exchange_timestamp": true_epoch(state.get('ExchangeTimeStamp') or state.get('LastUpdateTime')),
-            "depth": depth,
-            "received_at": time.time(),
-        }
-
-    def _write(self, ticks):
-        """
-        Write the ticks that carry a price or a book to the live quotes hash.
-
-        - `ticks` is the list of normalized ticks.
-        """
-        encoded = [(tick['id'], json.dumps(tick)) for tick in ticks
-                   if tick['last_price'] is not None or tick['depth']['buy'] or tick['depth']['sell']]
-        if encoded:
-            # The latest tick per instrument and every tick in arrival order, in one round trip.
-            pipeline = self._cache.pipeline(transaction=False)
-            pipeline.hset(LIVE_KEY, mapping=dict(encoded))
-            for _, payload in encoded:
-                pipeline.xadd(STREAM_KEY, {"tick": payload}, maxlen=STREAM_MAX_LENGTH, approximate=True)
-            pipeline.execute()
-
-def levels(rows):
-    """
-    Depth levels from an XTS bid or ask list, dropping the zero rows XTS pads the book with.
-
-    - `rows` is the list of depth rows.
-    """
-    return [{"quantity": row.get('Size'), "price": row.get('Price'), "orders": row.get('TotalOrders')}
-            for row in rows or [] if isinstance(row, dict) and (row.get('Price') or row.get('Size'))]
-
-def true_epoch(timestamp):
-    """
-    An XTS timestamp on the true Unix epoch, leaving a missing one as None.
-
-    - `timestamp` is the timestamp XTS sent.
-    """
-    return timestamp + EPOCH_OFFSET_SECONDS if timestamp else None
+        encoded = []
+        for tick in ticks:
+            encoded.append((tick["id"], json.dumps(tick)))
+        pipeline = self._cache.pipeline(transaction=False)
+        pipeline.hset(LIVE_KEY, mapping=dict(encoded))
+        for _, payload in encoded:
+            pipeline.xadd(STREAM_KEY, {"tick": payload}, maxlen=STREAM_MAX_LENGTH, approximate=True)
+        pipeline.execute()
 
 def resolve_tokens(tokens, cache, logger):
     """
@@ -584,6 +191,7 @@ def main():
                         help=f"instruments per socket, default {DEFAULT_INSTRUMENTS_PER_SOCKET}")
     arguments = parser.parse_args()
 
+    from stock_brokers.websockets.wisdom_capital import WisdomCapitalMarketDataSession, WisdomCapitalQuotesSocket
     from utilities.configurations import get_cache, get_logger
 
     logger = get_logger("wisdom_capital.websocket_quotes")
@@ -600,7 +208,7 @@ def main():
         return 2
 
     try:
-        session = WisdomCapitalSession(logger)
+        session = WisdomCapitalMarketDataSession(logger)
     except Exception as exception:
         logger.error(f"Could not log in to Wisdom Capital: {type(exception).__name__}: {exception}")
         return 1
@@ -617,7 +225,10 @@ def main():
                        f"{', '.join(unnamed[:20])}{' ...' if len(unnamed) > 20 else ''}")
 
     batches = [tokens[start:start + arguments.per_socket] for start in range(0, len(tokens), arguments.per_socket)]
-    sockets = [QuotesSocket(f"socket_{index}", batch, names, session, cache, logger) for index, batch in enumerate(batches)]
+    store = WisdomCapitalQuotesStore(cache)
+    sockets = []
+    for index, batch in enumerate(batches):
+        sockets.append(WisdomCapitalQuotesSocket(f"socket_{index}", batch, names, session, store.write_ticks, logger))
 
     # Installed before the sockets start: systemd stops a unit with SIGTERM, and the default action would kill
     # the process without closing anything.
