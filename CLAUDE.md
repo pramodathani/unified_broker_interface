@@ -26,6 +26,7 @@ There is no `pyproject.toml`, no build step and no pytest suite. The project roo
 | Offline contract size rule tests | `python -m test_runs.contract_sizes` |
 | Offline candle cache tests | `python -m test_runs.price_cache` |
 | Offline synthetic order book tests | `python -m test_runs.virtual_queue` (the queue estimate and the process that keeps it) |
+| Offline websocket feed tests | `python -m test_runs.websocket_feeds` (every broker's quotes and order sockets against scripted connections; name brokers to run only those, and `--record` rewrites only their lines) |
 | Run the synthetic limit order book | `bin/unified/orders/virtual_book` (beside the order engine; follows held `virtual_limit` orders) |
 | Decide a date's currency and commodity contract sizes | `python -m stock_brokers.instruments.mapping.utilities.contract_sizes --date 2026-09-15` (the daily mapping run does this itself) |
 | Offline connection warming tests | `python -m test_runs.connection_warming` (a local HTTP server that misbehaves; about 40 seconds) |
