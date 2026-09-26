@@ -8,7 +8,9 @@ On 2026-09-15 the user asked for the method to be split up again, after measurin
 
 | Piece | Holds |
 | --- | --- |
-| `OrdersBlueprint` in this module | The token check, every Redis pipeline, the catalogue lookup and the modify and cancel answers |
+| `OrdersBlueprint` in this module | The token check, every Redis pipeline, the catalogue lookup, and the checks that turn a modify or cancel into a prepared change |
+| `PreparedModification`, `PreparedCancel` | One checked change with a built request, answered by showing it for a dry run or by sending it, for the single form and for each order of a list |
+| `OrderChangeList` | The `orders` list form of modify and cancel: validating the list and each item, refusing repeated orders, and building the result entries |
 | `OrderPlacement` | Everything a placement does once Redis has been read: the turn, ranking, choosing the broker, building the request, sending it and the place answer |
 | `PreparedPlacement` | One order with a broker and a built request, not yet sent |
 | `RefusedRequestError` | A request answered without calling a broker, as a body and a status both processes can read |
@@ -286,3 +288,15 @@ The same review found that flatten's `flat` meant only that every close had been
 The second wait reuses `UNIFIED_BROKER_INTERFACE_API_ORDER_FLATTEN_WAIT_SECONDS` rather than adding a setting, because both waits are for the same thing: a poller writing what the broker now reports. Nine positions pollers refresh every 0.5 or 1 second; Fyers's refreshes every 5 seconds, so a Fyers position closed late in the wait can be reported as still held. That is a false alarm on the safe side, and the answer says so rather than claiming a flat account it has not seen.
 
 Only closes the broker accepted are waited for. A close that was not sent or was refused is already a failure, and waiting for its position would hold the answer for the whole wait without changing it.
+
+## Lists of modifications and cancels
+
+On 2026-09-27 `modify` and `cancel` learned to take a list, in a body with an `orders` key, on the same paths. The user made four choices: the same paths rather than new ones, the whole response always 200 once the list is readable with each order's status in its entry, up to four broker requests at once, and each entry carrying the single form's status and body under `response`. The user also asked for no limit on the list's length, unlike the instrument routes' 50.
+
+To keep the single form and the list form from drifting apart, the checks were lifted out of `modify_order` and `cancel_order` into `prepare_modification` and `prepare_cancel`, which return a `PreparedModification` or `PreparedCancel` or raise a refusal. The single form prepares one and answers from it. The list form prepares each order, keeps a refusal as that order's answer, and sends the rest through `answer_prepared_list`. `read_order_state` is the one pipeline both forms read, with a list simply adding every order's `HGET`s to it, so a cancel list costs one round trip at any length. `test_runs/order_routes.py` matched all 619 scenarios unchanged after the split, round trips and failing-round-trip scenarios included.
+
+A modify list first calls `warm_order_instruments`, which reads every order's token candidates in one pipeline and their catalogue data in another and keeps them in the worker's instrument cache, so `resolve_order_instrument` then finds everything held. Without it, a list of one order at each of ten brokers cost 11 round trips; with it, three, and every status, body and broker request stayed identical. The warm step refuses nothing: any order it cannot find or check is skipped and refused later, by `prepare_modification`, with the usual status.
+
+`send_prepared` catches every exception from one send and answers it as a 504 entry, because by then other orders of the list may already be at their brokers, and a 500 for the whole request would hide their outcomes. 504 is the status the single form already uses for an unknown outcome.
+
+Broker requests of one list go out on up to `ORDER_SEND_THREADS` (4) threads, matching gunicorn's threads per worker. The broker order classes were already shared by those threads, and their connection pools and origin tracking hold locks for that reason. A single change, or a list with one order to send, is sent on the request's own thread with no pool.

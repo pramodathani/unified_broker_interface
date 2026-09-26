@@ -6,10 +6,10 @@
 | `GET /details` | Every broker's orders, from `unified:orders:orders`, kept by `bin/unified/orders/api_order_details` every half second |
 | `GET /trades` | Every broker's trades, from `unified:orders:trades`, kept by `bin/unified/orders/api_trade_details` every half second |
 | `POST /place` | Places one order at the first broker the configured selector ranks that can take it, reading only Redis before the broker's place-order call |
-| `PUT /modify` | Changes one open order at the broker whose order book in Redis holds its order id |
-| `DELETE /cancel` | Cancels one order at the broker whose order book in Redis holds its order id |
+| `PUT /modify` | Changes one open order at the broker whose order book in Redis holds its order id, or each order of an `orders` list |
+| `DELETE /cancel` | Cancels one order at the broker whose order book in Redis holds its order id, or each order of an `orders` list |
 
-`GET /details` and `GET /trades` ask no broker. `POST /place`, `PUT /modify` and `DELETE /cancel` each send exactly one request to one broker and never read MongoDB or PostgreSQL, so that the API's own work adds as little as possible to the time the broker takes.
+`GET /details` and `GET /trades` ask no broker. `POST /place`, `PUT /modify` and `DELETE /cancel` each send exactly one request to one broker per order and never read MongoDB or PostgreSQL, so that the API's own work adds as little as possible to the time the broker takes. A list of modifications or cancels is read from Redis in one round trip like a single one, and its requests go out up to ORDER_SEND_THREADS at once; see `utilities/broker_orders/utilities/order_change_list.py`.
 
 Every Redis read the three order routes make is in this module. What differs between brokers, building the request and reading the answer, is in `unified_broker_interface/utilities/broker_orders/`, whose classes are handed decoded dictionaries and read no store themselves.
 """
@@ -18,6 +18,7 @@ import datetime
 import hmac
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import redis
 from flask import jsonify, request
@@ -39,6 +40,9 @@ from unified_broker_interface.utilities.broker_orders.utilities.kill_switch impo
 from unified_broker_interface.utilities.broker_orders.utilities.modify_order_request import (
     ModifyOrderRequest,
 )
+from unified_broker_interface.utilities.broker_orders.utilities.order_change_list import (
+    OrderChangeList,
+)
 from unified_broker_interface.utilities.broker_orders.utilities.order_modification import (
     OrderModification,
 )
@@ -53,6 +57,12 @@ from unified_broker_interface.utilities.broker_orders.utilities.place_order_requ
 )
 from unified_broker_interface.utilities.broker_orders.utilities.placement import (
     OrderPlacement,
+)
+from unified_broker_interface.utilities.broker_orders.utilities.prepared_cancel import (
+    PreparedCancel,
+)
+from unified_broker_interface.utilities.broker_orders.utilities.prepared_modification import (
+    PreparedModification,
 )
 from unified_broker_interface.utilities.broker_orders.utilities.refused_request import (
     RefusedRequestError,
@@ -73,6 +83,8 @@ from unified_broker_interface.utilities.order_engine.utilities.intent_handoff im
 from unified_broker_interface.utilities.unified_documents import read_document
 from utilities.configurations import api_configuration
 from utilities.configurations import get_logger
+
+ORDER_SEND_THREADS = 4
 
 ORDER_PLACEMENT_MODES = (
     'direct',
@@ -507,6 +519,8 @@ class OrdersBlueprint(BaseBlueprint):
     def modify_order(self, started_at):
         """Does the work of `modify`, raising a refusal for any request answered without calling a broker.
 
+        A body holding an `orders` list is the list form, answered by `modify_order_list`.
+
         Args:
             started_at (float): `time.perf_counter()` when the request arrived.
 
@@ -519,41 +533,262 @@ class OrdersBlueprint(BaseBlueprint):
         access_token = request.headers.get('access-token')
         if not access_token:
             raise self.refuse('Access token is required', 401)
+        body = request.get_json(silent=True)
+        if isinstance(body, dict) and 'orders' in body:
+            return self.modify_order_list(access_token, body, started_at)
 
         try:
             modify_request = ModifyOrderRequest(
-                request.get_json(silent=True),
+                body,
                 request.args,
                 self.broker_names,
             )
         except InvalidOrderError as error:
             raise self.refuse(str(error), 400)
-        order_id = modify_request.order_id
 
+        state = self.read_order_state(
+            [
+                modify_request.order_id,
+            ],
+            True,
+        )
+        self.check_access_token(access_token, state['token_document_text'])
+        prepared = self.prepare_modification(modify_request, state)
+        if modify_request.dry_run:
+            answer_body, status = prepared.dry_run_answer(started_at)
+        else:
+            answer_body, status = prepared.send(started_at)
+        return jsonify(answer_body), status
+
+    def modify_order_list(self, access_token, body, started_at):
+        """Modifies every order of a list, answering each on its own.
+
+        Every order's entries and the catalogue markers are read from Redis in one round trip, each order is checked as a single modification is, and the modifications that pass are sent to their brokers, up to ORDER_SEND_THREADS at once.
+
+        Args:
+            access_token (str): The `access-token` header.
+            body (dict): The decoded JSON body, which holds `orders`.
+            started_at (float): `time.perf_counter()` when the request arrived.
+
+        Returns:
+            tuple: The Flask JSON response `{"results": [...]}` (flask.Response) and the HTTP status 200.
+
+        Raises:
+            RefusedRequestError: With 400 for an invalid list, 401 for a wrong or expired access token, and 503 when Redis cannot be read.
+        """
+        try:
+            order_list = OrderChangeList(
+                body,
+                request.args,
+                ModifyOrderRequest,
+                self.broker_names,
+            )
+        except InvalidOrderError as error:
+            raise self.refuse(str(error), 400)
+        state = self.read_order_state(order_list.order_ids(), True)
+        self.check_access_token(access_token, state['token_document_text'])
+        self.warm_order_instruments(order_list, state)
+
+        prepared_entries = []
+        for entry in order_list.entries:
+            if isinstance(entry, RefusedRequestError):
+                prepared_entries.append(entry)
+                continue
+            try:
+                prepared_entries.append(self.prepare_modification(entry, state))
+            except RefusedRequestError as refusal:
+                prepared_entries.append(refusal)
+        answers = self.answer_prepared_list(prepared_entries, order_list.dry_run, started_at)
+        return jsonify({
+            'results': order_list.results(answers),
+        }), 200
+
+    def warm_order_instruments(self, order_list, state):
+        """Reads the catalogue entries of every order in a modify list into this worker's instrument cache, in at most two round trips.
+
+        `resolve_order_instrument` reads an order's token candidates and then the candidates' identities, handles and contract sizes, each read skipped when this worker already holds it. Reading them here for the whole list first means each order then finds them held, so the list costs the same round trips however many orders it has. Nothing here refuses anything: an order that cannot be found or checked is skipped, and `prepare_modification` refuses it with the usual status.
+
+        Args:
+            order_list (OrderChangeList): The validated list.
+            state (dict): What `read_order_state` read with the catalogue markers.
+
+        Returns:
+            None: This method returns nothing.
+
+        Raises:
+            RefusedRequestError: With HTTP 503 when Redis cannot be read.
+        """
+        mapping_date_text = state['mapping_date_text']
+        warm_identifier = state['warm_identifier']
+        if not mapping_date_text:
+            return
+        catalogue_key_prefix = f'unified:catalogue:{mapping_date_text}:'
+
+        wanted_tokens = []
+        for entry in order_list.entries:
+            if isinstance(entry, RefusedRequestError):
+                continue
+            try:
+                broker_name, stored_order = self.find_stored_order(entry, state['order_texts'][entry.order_id])
+                modification = OrderModification(entry, stored_order)
+            except (RefusedRequestError, InvalidOrderError, UnmodifiableOrderError, OrderNotReadyError):
+                continue
+            broker_token = modification.instrument_token
+            if broker_token is None or (broker_name, broker_token) in wanted_tokens:
+                continue
+            wanted_tokens.append((broker_name, broker_token))
+
+        candidates_by_token = {}
+        unread_tokens = []
+        for broker_name, broker_token in wanted_tokens:
+            candidates_text = self.instrument_cache.token_candidates_text(
+                mapping_date_text,
+                warm_identifier,
+                broker_name,
+                broker_token,
+            )
+            if candidates_text is None:
+                unread_tokens.append((broker_name, broker_token))
+            else:
+                candidates_by_token[(broker_name, broker_token)] = candidates_text
+        if unread_tokens:
+            try:
+                pipeline = self.cache.pipeline(transaction=False)
+                for broker_name, broker_token in unread_tokens:
+                    pipeline.hget(catalogue_key_prefix + 'tokens:' + broker_name, broker_token)
+                replies = pipeline.execute()
+            except redis.RedisError as error:
+                raise self.redis_unreadable(error)
+            for index, token_key in enumerate(unread_tokens):
+                candidates_text = replies[index]
+                if not candidates_text:
+                    continue
+                broker_name, broker_token = token_key
+                self.instrument_cache.keep_token_candidates(
+                    mapping_date_text,
+                    warm_identifier,
+                    broker_name,
+                    broker_token,
+                    candidates_text,
+                )
+                candidates_by_token[token_key] = candidates_text
+
+        unread_ids = []
+        for candidates_text in candidates_by_token.values():
+            for candidate_id in candidates_text.split(','):
+                if not candidate_id or candidate_id in unread_ids:
+                    continue
+                if self.instrument_cache.instrument(mapping_date_text, warm_identifier, candidate_id) is None:
+                    unread_ids.append(candidate_id)
+        if not unread_ids:
+            return
         try:
             pipeline = self.cache.pipeline(transaction=False)
-            pipeline.hget('last_login', 'unified_broker_interface')
-            pipeline.get('unified:catalogue:current_date')
-            pipeline.get('unified:catalogue:warm_identifier')
-            pipeline.hmget('last_login', self.broker_names)
-            pipeline.hmget('settings', self.broker_names)
-            for broker_name in self.broker_names:
-                pipeline.hget(f'{broker_name}:orders:orders', order_id)
+            for candidate_id in unread_ids:
+                pipeline.hget(catalogue_key_prefix + 'identity', candidate_id)
+                pipeline.hget(catalogue_key_prefix + 'order_handles', candidate_id)
+                pipeline.hget(catalogue_key_prefix + 'contract_sizes', candidate_id)
             replies = pipeline.execute()
         except redis.RedisError as error:
             raise self.redis_unreadable(error)
-        token_document_text = replies[0]
-        mapping_date_text = replies[1]
-        warm_identifier = replies[2]
-        login_texts = replies[3]
-        settings_texts = replies[4]
-        order_texts = replies[5:]
+        for index, candidate_id in enumerate(unread_ids):
+            texts = (
+                replies[3 * index],
+                replies[3 * index + 1],
+                replies[3 * index + 2],
+            )
+            try:
+                Instrument.decoded(candidate_id, texts[0], texts[1], texts[2])
+            except RefusedRequestError:
+                continue
+            self.instrument_cache.keep_instrument(
+                mapping_date_text,
+                warm_identifier,
+                candidate_id,
+                texts[0],
+                texts[1],
+                texts[2],
+            )
 
-        self.check_access_token(access_token, token_document_text)
+    def answer_prepared_list(self, prepared_entries, dry_run, started_at):
+        """Answers every entry of a list: a refusal as it is, and a prepared change by showing or sending it.
 
+        The changes to send go out on up to ORDER_SEND_THREADS threads at once, and a single one is sent on the request's own thread. Nothing is retried.
+
+        Args:
+            prepared_entries (list): One entry per item, in order: a `PreparedCancel` or `PreparedModification`, or a `RefusedRequestError`.
+            dry_run (bool): Whether to show every prepared change instead of sending it.
+            started_at (float): `time.perf_counter()` when the request arrived.
+
+        Returns:
+            list: One `(body, status)` pair per entry, in the same order.
+        """
+        answers = [None] * len(prepared_entries)
+        positions_to_send = []
+        for position, entry in enumerate(prepared_entries):
+            if isinstance(entry, RefusedRequestError):
+                answers[position] = (entry.body, entry.status)
+            elif dry_run:
+                answers[position] = entry.dry_run_answer(started_at)
+            else:
+                positions_to_send.append(position)
+
+        if len(positions_to_send) == 1:
+            position = positions_to_send[0]
+            answers[position] = self.send_prepared(prepared_entries[position], started_at)
+        elif positions_to_send:
+            threads = min(ORDER_SEND_THREADS, len(positions_to_send))
+            with ThreadPoolExecutor(max_workers=threads, thread_name_prefix='order') as executor:
+                futures = {}
+                for position in positions_to_send:
+                    futures[position] = executor.submit(self.send_prepared, prepared_entries[position], started_at)
+                for position, future in futures.items():
+                    answers[position] = future.result()
+        return answers
+
+    def send_prepared(self, prepared, started_at):
+        """Sends one prepared change of a list, answering an unexpected failure instead of raising it.
+
+        The other changes of the list may already have been sent, so one failure must not hide their answers behind a 500.
+
+        Args:
+            prepared (PreparedCancel | PreparedModification): The change to send.
+            started_at (float): `time.perf_counter()` when the request arrived.
+
+        Returns:
+            tuple: The answer's body (dict) and its HTTP status (int): the broker's answer, or 504 when sending failed unexpectedly and whether the broker received the change is unknown.
+        """
+        try:
+            return prepared.send(started_at)
+        except Exception as error:
+            self.logger.exception(
+                'sending a change to %s order %s failed unexpectedly',
+                prepared.broker_name,
+                prepared.order_id,
+            )
+            return {
+                'error': f'sending failed unexpectedly, so whether the broker received it is unknown: {error}',
+                'broker': prepared.broker_name,
+                'order_id': prepared.order_id,
+            }, 504
+
+    def prepare_modification(self, modify_request, state):
+        """Checks one modification against the order books, the broker and the instrument, and builds its request.
+
+        Args:
+            modify_request (ModifyOrderRequest): The validated modification.
+            state (dict): What `read_order_state` read with the catalogue markers, holding this order's entries.
+
+        Returns:
+            PreparedModification: The modification, ready to show or send.
+
+        Raises:
+            RefusedRequestError: For every reason `modify` documents for answering without calling a broker.
+        """
+        order_id = modify_request.order_id
         broker_name, stored_order = self.find_stored_order(
             modify_request,
-            order_texts,
+            state['order_texts'][order_id],
         )
         if stored_order.is_finished():
             raise self.refuse(
@@ -572,8 +807,8 @@ class OrdersBlueprint(BaseBlueprint):
                 order_id=order_id,
             )
         position = self.broker_names.index(broker_name)
-        login = broker_orders.decode_login(login_texts[position])
-        settings = broker_orders.decode_settings(settings_texts[position])
+        login = broker_orders.decode_login(state['login_texts'][position])
+        settings = broker_orders.decode_settings(state['settings_texts'][position])
         problem = broker_orders.modify_problem(login, settings)
         if problem is not None:
             raise self.refuse(
@@ -618,8 +853,8 @@ class OrdersBlueprint(BaseBlueprint):
         instrument = self.resolve_order_instrument(
             broker_orders,
             modification,
-            mapping_date_text,
-            warm_identifier,
+            state['mapping_date_text'],
+            state['warm_identifier'],
         )
         instrument_id = None
         if instrument is not None:
@@ -668,36 +903,56 @@ class OrdersBlueprint(BaseBlueprint):
                 broker=broker_name,
                 order_id=order_id,
             )
+        return PreparedModification(broker_orders, order_id, stored_order, instrument_id, broker_request)
 
-        if modify_request.dry_run:
-            preparation_milliseconds = (time.perf_counter() - started_at) * 1000
-            return jsonify({
-                'broker': broker_name,
-                'order_id': order_id,
-                'instrument_id': instrument_id,
-                'status_before_modify': stored_order.status,
-                'dry_run': True,
-                'request': broker_request.shown(),
-                'timing_ms': {
-                    'preparation': round(preparation_milliseconds, 3),
-                },
-            }), 200
+    def read_order_state(self, order_ids, with_catalogue):
+        """Reads, in one Redis round trip, everything a modify or cancel of some orders checks before calling a broker.
 
-        answer = broker_orders.send_modify(broker_request)
-        preparation_milliseconds = (answer.sent_at - started_at) * 1000
-        return jsonify({
-            'broker': broker_name,
-            'order_id': order_id,
-            'instrument_id': instrument_id,
-            'status_before_modify': stored_order.status,
-            'outcome': answer.outcome,
-            'status_message': answer.status_message,
-            'broker_response': answer.response_body,
-            'timing_ms': {
-                'preparation': round(preparation_milliseconds, 3),
-                'broker': answer.broker_milliseconds(),
-            },
-        }), answer.http_status()
+        Args:
+            order_ids (list): The broker order ids to look up in every broker's order book.
+            with_catalogue (bool): Whether to read the catalogue's mapping date and warm identifier as well, which a modify needs to find the order's instrument.
+
+        Returns:
+            dict: `token_document_text`, `mapping_date_text` and `warm_identifier` (str or None, the last two None unless read), `login_texts` and `settings_texts` (one entry per broker, in `broker_names` order), and `order_texts`, mapping each order id to its entry in each broker's order book, in `broker_names` order.
+
+        Raises:
+            RefusedRequestError: With HTTP 503 when Redis cannot be read.
+        """
+        try:
+            pipeline = self.cache.pipeline(transaction=False)
+            pipeline.hget('last_login', 'unified_broker_interface')
+            if with_catalogue:
+                pipeline.get('unified:catalogue:current_date')
+                pipeline.get('unified:catalogue:warm_identifier')
+            pipeline.hmget('last_login', self.broker_names)
+            pipeline.hmget('settings', self.broker_names)
+            for order_id in order_ids:
+                for broker_name in self.broker_names:
+                    pipeline.hget(f'{broker_name}:orders:orders', order_id)
+            replies = pipeline.execute()
+        except redis.RedisError as error:
+            raise self.redis_unreadable(error)
+
+        state = {
+            'token_document_text': replies[0],
+            'mapping_date_text': None,
+            'warm_identifier': None,
+        }
+        position = 1
+        if with_catalogue:
+            state['mapping_date_text'] = replies[1]
+            state['warm_identifier'] = replies[2]
+            position = 3
+        state['login_texts'] = replies[position]
+        state['settings_texts'] = replies[position + 1]
+        position = position + 2
+        broker_count = len(self.broker_names)
+        order_texts = {}
+        for order_id in order_ids:
+            order_texts[order_id] = replies[position:position + broker_count]
+            position = position + broker_count
+        state['order_texts'] = order_texts
+        return state
 
     def resolve_order_instrument(
         self,
@@ -971,6 +1226,8 @@ class OrdersBlueprint(BaseBlueprint):
     def cancel_order(self, started_at):
         """Does the work of `cancel`, raising a refusal for any request answered without calling a broker.
 
+        A body holding an `orders` list is the list form, answered by `cancel_order_list`.
+
         Args:
             started_at (float): `time.perf_counter()` when the request arrived.
 
@@ -983,37 +1240,92 @@ class OrdersBlueprint(BaseBlueprint):
         access_token = request.headers.get('access-token')
         if not access_token:
             raise self.refuse('Access token is required', 401)
+        body = request.get_json(silent=True)
+        if isinstance(body, dict) and 'orders' in body:
+            return self.cancel_order_list(access_token, body, started_at)
 
         try:
             cancel_request = CancelOrderRequest(
-                request.get_json(silent=True),
+                body,
                 request.args,
                 self.broker_names,
             )
         except InvalidOrderError as error:
             raise self.refuse(str(error), 400)
-        order_id = cancel_request.order_id
 
+        state = self.read_order_state(
+            [
+                cancel_request.order_id,
+            ],
+            False,
+        )
+        self.check_access_token(access_token, state['token_document_text'])
+        prepared = self.prepare_cancel(cancel_request, state)
+        if cancel_request.dry_run:
+            answer_body, status = prepared.dry_run_answer(started_at)
+        else:
+            answer_body, status = prepared.send(started_at)
+        return jsonify(answer_body), status
+
+    def cancel_order_list(self, access_token, body, started_at):
+        """Cancels every order of a list, answering each on its own.
+
+        Every order's entries are read from Redis in one round trip, each order is checked as a single cancel is, and the cancels that pass are sent to their brokers, up to ORDER_SEND_THREADS at once.
+
+        Args:
+            access_token (str): The `access-token` header.
+            body (dict): The decoded JSON body, which holds `orders`.
+            started_at (float): `time.perf_counter()` when the request arrived.
+
+        Returns:
+            tuple: The Flask JSON response `{"results": [...]}` (flask.Response) and the HTTP status 200.
+
+        Raises:
+            RefusedRequestError: With 400 for an invalid list, 401 for a wrong or expired access token, and 503 when Redis cannot be read.
+        """
         try:
-            pipeline = self.cache.pipeline(transaction=False)
-            pipeline.hget('last_login', 'unified_broker_interface')
-            pipeline.hmget('last_login', self.broker_names)
-            pipeline.hmget('settings', self.broker_names)
-            for broker_name in self.broker_names:
-                pipeline.hget(f'{broker_name}:orders:orders', order_id)
-            replies = pipeline.execute()
-        except redis.RedisError as error:
-            raise self.redis_unreadable(error)
-        token_document_text = replies[0]
-        login_texts = replies[1]
-        settings_texts = replies[2]
-        order_texts = replies[3:]
+            order_list = OrderChangeList(
+                body,
+                request.args,
+                CancelOrderRequest,
+                self.broker_names,
+            )
+        except InvalidOrderError as error:
+            raise self.refuse(str(error), 400)
+        state = self.read_order_state(order_list.order_ids(), False)
+        self.check_access_token(access_token, state['token_document_text'])
 
-        self.check_access_token(access_token, token_document_text)
+        prepared_entries = []
+        for entry in order_list.entries:
+            if isinstance(entry, RefusedRequestError):
+                prepared_entries.append(entry)
+                continue
+            try:
+                prepared_entries.append(self.prepare_cancel(entry, state))
+            except RefusedRequestError as refusal:
+                prepared_entries.append(refusal)
+        answers = self.answer_prepared_list(prepared_entries, order_list.dry_run, started_at)
+        return jsonify({
+            'results': order_list.results(answers),
+        }), 200
 
+    def prepare_cancel(self, cancel_request, state):
+        """Checks one cancel against the order books and the broker's login, and builds its request.
+
+        Args:
+            cancel_request (CancelOrderRequest): The validated cancel.
+            state (dict): What `read_order_state` read, holding this order's entries.
+
+        Returns:
+            PreparedCancel: The cancel, ready to show or send.
+
+        Raises:
+            RefusedRequestError: When no broker or more than one holds the order, the order has finished, or the broker's login, settings or the order's details are missing.
+        """
+        order_id = cancel_request.order_id
         broker_name, stored_order = self.find_stored_order(
             cancel_request,
-            order_texts,
+            state['order_texts'][order_id],
         )
         if stored_order.is_finished():
             raise self.refuse(
@@ -1025,8 +1337,8 @@ class OrdersBlueprint(BaseBlueprint):
 
         broker_orders = self.broker_orders[broker_name]
         position = self.broker_names.index(broker_name)
-        login = broker_orders.decode_login(login_texts[position])
-        settings = broker_orders.decode_settings(settings_texts[position])
+        login = broker_orders.decode_login(state['login_texts'][position])
+        settings = broker_orders.decode_settings(state['settings_texts'][position])
         problem = broker_orders.cancel_problem(login, settings)
         if problem is not None:
             raise self.refuse(
@@ -1049,34 +1361,7 @@ class OrdersBlueprint(BaseBlueprint):
                 broker=broker_name,
                 order_id=order_id,
             )
-
-        if cancel_request.dry_run:
-            preparation_milliseconds = (time.perf_counter() - started_at) * 1000
-            return jsonify({
-                'broker': broker_name,
-                'order_id': order_id,
-                'status_before_cancel': stored_order.status,
-                'dry_run': True,
-                'request': broker_request.shown(),
-                'timing_ms': {
-                    'preparation': round(preparation_milliseconds, 3),
-                },
-            }), 200
-
-        answer = broker_orders.send_cancel(broker_request)
-        preparation_milliseconds = (answer.sent_at - started_at) * 1000
-        return jsonify({
-            'broker': broker_name,
-            'order_id': order_id,
-            'status_before_cancel': stored_order.status,
-            'outcome': answer.outcome,
-            'status_message': answer.status_message,
-            'broker_response': answer.response_body,
-            'timing_ms': {
-                'preparation': round(preparation_milliseconds, 3),
-                'broker': answer.broker_milliseconds(),
-            },
-        }), answer.http_status()
+        return PreparedCancel(broker_orders, order_id, stored_order, broker_request)
 
     def flatten(self):
         """Cancels every open order at every broker, waits for the cancels, then closes every position.

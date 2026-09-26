@@ -101,6 +101,8 @@ The matrix below has one row for each of the 26 routes, plus a `POST` row for ea
 
 The `POST` rows of the instrument routes describe the whole response. Inside a 200, each instrument's entry carries its own status, which is one of the statuses in the matching `GET` row; [Several instruments at once](instruments.md#several-instruments-at-once) explains the split.
 
+The `PUT /api/orders/modify` and `DELETE /api/orders/cancel` rows describe the single form. A list sent to either route answers the whole response with 200, 400, 401 or 503 only, and each order's entry inside a 200 carries one of the statuses in the route's row; [Several orders in one request](orders.md#several-orders-in-one-request) explains the split.
+
 Only `place` changes behavior between the two placement modes. `modify`, `cancel` and `flatten` always talk to the broker directly.
 
 ## I got an error: what now?

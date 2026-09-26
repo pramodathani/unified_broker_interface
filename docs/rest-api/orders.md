@@ -1,9 +1,9 @@
 # Orders
 
-The order routes read today's orders and trades across every broker, and place, change and cancel one order at a time. You name an instrument when you place an order, and the API decides which broker receives it. When you change or cancel an order, the API finds the broker that holds it by looking the order id up in every broker's order book.
+The order routes read today's orders and trades across every broker, place one order at a time, and change or cancel one order or a whole list of them. You name an instrument when you place an order, and the API decides which broker receives it. When you change or cancel an order, the API finds the broker that holds it by looking the order id up in every broker's order book.
 
 !!! danger "These routes place, change and cancel real orders"
-    `POST /api/orders/place`, `PUT /api/orders/modify` and `DELETE /api/orders/cancel` send real requests to real broker accounts, and nothing is retried or undone for you. Every one of them accepts `"dry_run": true`, which builds the exact broker request and returns it without sending it. Send a dry run first whenever you are unsure.
+    `POST /api/orders/place`, `PUT /api/orders/modify` and `DELETE /api/orders/cancel` send real requests to real broker accounts, and nothing is retried or undone for you. Every one of them accepts `"dry_run": true`, which builds the exact broker request and returns it without sending it. Send a dry run first whenever you are unsure. A list sent to `modify` or `cancel` sends a request for every order in it that passes its checks, and its `dry_run` covers the whole list.
 
 The table below lists the five routes on this page. The emergency route that cancels and closes everything has a page of its own, [Flatten everything](flatten.md).
 
@@ -12,8 +12,8 @@ The table below lists the five routes on this page. The emergency route that can
 | <span class="method get">GET</span> | [`/api/orders/details`](#order-book) | Today's orders at every broker, from a document kept in Redis |
 | <span class="method get">GET</span> | [`/api/orders/trades`](#trade-book) | Today's trades at every broker, from a document kept in Redis |
 | <span class="method post">POST</span> | [`/api/orders/place`](#place-an-order) | Places one order at a broker the API chooses |
-| <span class="method put">PUT</span> | [`/api/orders/modify`](#modify-an-order) | Changes one open order at the broker that holds it |
-| <span class="method delete">DELETE</span> | [`/api/orders/cancel`](#cancel-an-order) | Cancels one open order at the broker that holds it |
+| <span class="method put">PUT</span> | [`/api/orders/modify`](#modify-an-order) | Changes one open order at the broker that holds it, or [each order of a list](#several-orders-in-one-request) |
+| <span class="method delete">DELETE</span> | [`/api/orders/cancel`](#cancel-an-order) | Cancels one open order at the broker that holds it, or [each order of a list](#several-orders-in-one-request) |
 
 ## Glossary of constants
 
@@ -724,8 +724,30 @@ Every refusal after the order has been found carries `broker` and `order_id` bes
 
 A price-only change never needs the instrument, so it goes ahead even when the instrument cannot be found or its contract size is not trusted; only the tick check is skipped.
 
+#### Modify several orders
+
+<div class="endpoint" markdown><span class="method put">PUT</span> `/api/orders/modify`<span class="auth">access-token</span></div>
+
+A body with an `orders` list changes each order in it. Each item carries what the single body carries, `order_id`, an optional `broker` and the fields to change, and each order is checked exactly as a single modification is. [Several orders in one request](#several-orders-in-one-request) describes the list, its answer and its statuses.
+
+=== "curl"
+
+    ```bash
+    curl -X PUT "http://127.0.0.1:8080/api/orders/modify" \
+      -H "access-token: $ACCESS_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "orders": [
+          {"order_id": "250926000123456", "price": 2501.5},
+          {"order_id": "112509260000012", "quantity": 20, "price": 2499}
+        ],
+        "dry_run": true
+      }'
+    ```
+
 ??? note "Under the hood"
     - **Redis keys read:** `last_login`, `settings`, `unified:catalogue:current_date`, `unified:catalogue:warm_identifier`, every broker's `<broker>:orders:orders` (one `HGET` each), then `unified:catalogue:<date>:tokens:<broker>` and the candidates' `identity`, `order_handles` and `contract_sizes`.
+    - **A list:** `modify_order_list` reads every order's entries in the first pipeline, then `warm_order_instruments` reads every order's token candidates in one pipeline and their catalogue data in another, each skipped when this worker holds it. Each order is then prepared as a single one is, by `prepare_modification`, into a [`PreparedModification`][unified_broker_interface.utilities.broker_orders.utilities.prepared_modification.PreparedModification].
     - **How the instrument is found:** the stored order's broker token is looked up in `tokens:<broker>`. A candidate is kept only when it is tradeable, its market is one the broker takes, the broker's handle carries the same token, and its market matches the stored exchange code. Exactly one candidate must remain, because several brokers number tokens per exchange.
     - **Classes:** [`ModifyOrderRequest`][unified_broker_interface.utilities.broker_orders.utilities.modify_order_request.ModifyOrderRequest] validates the parameters and [`OrderModification`][unified_broker_interface.utilities.broker_orders.utilities.order_modification.OrderModification] lays the change over the stored order.
     - **Engine mode:** this route still goes straight from the API worker to the broker. The order engine's rate budget and loss lockout do not hold it, though the daily order count does count it.
@@ -875,10 +897,123 @@ sequenceDiagram
     end
 ```
 
+#### Cancel several orders
+
+<div class="endpoint" markdown><span class="method delete">DELETE</span> `/api/orders/cancel`<span class="auth">access-token</span></div>
+
+A body with an `orders` list cancels each order in it. Each item carries `order_id` and an optional `broker`, and each order is checked exactly as a single cancel is. [Several orders in one request](#several-orders-in-one-request) describes the list, its answer and its statuses.
+
+=== "curl"
+
+    ```bash
+    curl -X DELETE "http://127.0.0.1:8080/api/orders/cancel" \
+      -H "access-token: $ACCESS_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "orders": [
+          {"order_id": "250926000123456"},
+          {"order_id": "26092600000021", "broker": "flattrade"}
+        ]
+      }'
+    ```
+
+=== "Python"
+
+    ```python
+    import os
+
+    import requests
+
+    response = requests.delete(
+        'http://127.0.0.1:8080/api/orders/cancel',
+        headers={
+            'access-token': os.environ['ACCESS_TOKEN'],
+        },
+        json={
+            'orders': [
+                {
+                    'order_id': '250926000123456',
+                },
+                {
+                    'order_id': '26092600000021',
+                    'broker': 'flattrade',
+                },
+            ],
+        },
+        timeout=30,
+    )
+    for result in response.json()['results']:
+        print(result['request_index'], result['status'], result['response'].get('outcome') or result['response'].get('error'))
+    ```
+
 ??? note "Under the hood"
     - **Redis keys read:** `last_login`, `settings`, and `<broker>:orders:orders` for every broker.
     - **Why the stored order matters:** several brokers' cancel requests need values only their own order book carries, such as Zerodha's variety (the `amo` in the URL above comes from the stored order), Kotak's after-market flag or Wisdom Capital's identifier.
     - **Class:** [`CancelOrderRequest`][unified_broker_interface.utilities.broker_orders.utilities.cancel_order_request.CancelOrderRequest].
+    - **A list:** `cancel_order_list` reads every order's entries in the same single pipeline, however many orders it has, and prepares each with `prepare_cancel` into a [`PreparedCancel`][unified_broker_interface.utilities.broker_orders.utilities.prepared_cancel.PreparedCancel].
+
+## Several orders in one request
+
+`PUT /api/orders/modify` and `DELETE /api/orders/cancel` take a list of orders on the same paths. The list form is chosen by the body: a body with an `orders` key is a list and is answered with `{"results": [...]}`, even when it holds one order, and a body without one is the single form, answered exactly as described above. The shape of the answer follows the form of the request, never the number of orders.
+
+#### Request body
+
+| Name | In | Type | Required | Description |
+|---|---|---|---|---|
+| `access-token` | header | string | Yes | The token from [`connect`](session.md#connect) |
+| `orders` | body | array of objects | Yes | One item per order, with no limit on the number. An item carries `order_id`, an optional `broker` and, for `modify`, the fields to change, exactly as the single body does. |
+| `dry_run` | body or query | boolean | No | `true` shows every order's broker request instead of sending it. It applies to the whole list. |
+
+The list takes no other key, in the body or the query string, so a field such as `price` or `broker` has to go inside each order. That rule is there so that nobody can put `price` beside the list expecting it to apply to every order, and it is why `dry_run` is refused inside an order: one order must never go live while its neighbours are only shown.
+
+#### Response
+
+Each entry carries the order's position in the list, the status the single form would have answered with, and in `response` exactly the body the single form would have answered with. The example below is shortened.
+
+```json
+{
+  "results": [
+    {"request_index": 0, "status": 200, "response": {"broker": "zerodha", "order_id": "250926000123456", "status_before_cancel": "OPEN", "outcome": "accepted", "...": "..."}},
+    {"request_index": 1, "status": 422, "response": {"broker": "dhan", "order_id": "112509260000012", "outcome": "rejected", "status_message": "bad request", "...": "..."}},
+    {"request_index": 2, "status": 409, "response": {"error": "the order is already COMPLETE", "broker": "zerodha", "order_id": "250926000099999"}},
+    {"request_index": 3, "status": 400, "response": {"error": "this order is already named at request_index 0", "order_id": "250926000123456"}}
+  ]
+}
+```
+
+| Attribute | Type | Description |
+|---|---|---|
+| `results` | array of objects | One entry per item of `orders`, in the same order |
+| `results[].request_index` | integer | The item's position in `orders`, counting from 0 |
+| `results[].status` | integer | The status the single form answers this order with: 200, 422 or 504 once a request was sent, or the refusal's status |
+| `results[].response` | object | The body the single form answers this order with |
+
+#### Status codes
+
+The status of the whole response says only whether the list could be read. Check each entry's `status` to learn what happened to each order, because a 200 can hold orders that were refused or whose outcome is unknown.
+
+| Status | When |
+|---|---|
+| <span class="status s2">200</span> | The list was read and every order has an entry. |
+| <span class="status s4">400</span> | `orders must be a non-empty list`, `a list takes only orders and dry_run, so give <name> inside each order`, `a list takes only dry_run in the query string, so give <name> inside each order`, or `dry_run must be true or false`. |
+| <span class="status s4">401</span> | `Access token is required`, `Invalid access token` or `Access token has expired`. |
+| <span class="status s5">503</span> | `Redis could not be read: <error>`. |
+
+An entry gets any status the single form gives. Three refusals exist only in a list, each with <span class="status s4">400</span>: `each entry of orders must be an object`, `dry_run applies to the whole list, so give it beside orders rather than inside an order`, and `this order is already named at request_index <n>` for an item that names an order an earlier item already names. Two items name the same order when their `order_id` is the same and their `broker` is the same or either leaves it out, so the same id at two named brokers is two orders.
+
+#### How a list is sent
+
+Every order is checked before anything is sent, and the orders that pass are sent to their brokers up to four at a time, each exactly once. The requests of one list therefore leave in no fixed order, and a list is not all-or-nothing: an order that is refused, or whose outcome is unknown, does not stop the others. A sending failure that the broker code did not expect is answered as a <span class="status s5">504</span> entry with `sending failed unexpectedly, so whether the broker received it is unknown: <error>`, so that it cannot hide the answers of orders already sent.
+
+Every order sent counts towards its broker's [daily order cap](#daily-order-caps), exactly as a single request does.
+
+| List | Redis round trips before the broker calls |
+|---|---|
+| `DELETE /cancel` | 1, whatever the number of orders |
+| `PUT /modify` | 1 to 3, whatever the number of orders: the first pipeline, then every order's token candidates, then their catalogue data, each skipped when this worker already holds it |
+
+These counts are recorded by `test_runs/order_change_lists.py`: a cancel list of 60 orders costs one round trip, and a modify list of one order at each of the ten brokers costs three.
+
 
 ## How the broker is chosen
 
@@ -1027,7 +1162,9 @@ The order routes were written so that the API's own work adds as little as possi
 | `POST /place` (direct, `fixed_priority`) | 1 to 3 | As above, but the second pipeline is skipped when this worker already holds the instrument |
 | `POST /place` (engine) | 3 or 4 | The first pipeline, an optional lookup by fields, then `XADD` of the intent and `BLPOP` for the answer |
 | `PUT /modify` | 1 to 3 | The first pipeline with every broker's order book; the token candidates; their catalogue data, each skipped when held by this worker |
+| `PUT /modify`, a list | 1 to 3 | The same three, each read once for the whole list |
 | `DELETE /cancel` | 1 | One pipeline with the token, logins, settings and every broker's order book |
+| `DELETE /cancel`, a list | 1 | The same pipeline, holding every order of the list |
 | `POST /flatten` | 1, plus more | One read of everything; one re-read of the order books every 0.25 s while waiting for the cancels; three per position closed in direct mode; one re-read of the position books every 0.25 s while waiting for the closed positions to show zero |
 
 When a broker is capped by `ORDER_DAILY_CAPS`, each request sent to it costs one more pipeline afterwards, to increment the count.

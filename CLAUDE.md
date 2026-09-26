@@ -21,6 +21,7 @@ There is no `pyproject.toml`, no build step and no pytest suite. The project roo
 | Offline session calendar tests | `python -m test_runs.unified_ticks_sessions` |
 | Offline order route tests | `python -m test_runs.order_routes` (`--record` rewrites `test_runs/fixtures/order_routes.jsonl` after an intended change) |
 | Offline order engine route tests | `python -m test_runs.order_engine_routes` (engine placement mode; its own fixture, because `--record` rewrites a whole file) |
+| Offline order list tests | `python -m test_runs.order_change_lists` (the `orders` list form of `modify` and `cancel`; its own fixture) |
 | Offline order engine tests | `python -m test_runs.order_engine` (the daemon itself, against scripted intents and stubbed brokers) |
 | Offline flatten route tests | `python -m test_runs.order_flatten` (the panic button; pins that cancels are sent before closes) |
 | Offline instrument route tests | `python -m test_runs.instrument_routes` (`/details` to `/ticks` against a stubbed mapping cache, quote cache, brokers and tick table; its own fixture) |
