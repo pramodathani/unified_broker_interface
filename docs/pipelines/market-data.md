@@ -58,6 +58,8 @@ redis-cli SADD flattrade:quotes:subscriptions "NSE|2885" "MCX|565899"
 !!! warning "Zerodha asks for more than Kite documents"
     Kite documents three websockets per API key and 3,000 instruments per websocket. Twenty-four sockets of about 4,700 instruments each exceeds both, so Kite is expected to refuse the sockets past its limit. A refused socket reconnects with backoff and leaves the others streaming, as the script's docstring explains.
 
+    Every login at Zerodha invalidates the previous token, and logins are taken one at a time under a cross-process lock. When the token dies, all 24 sockets need the new one at once, so they lean on that lock far harder than the two sockets Zerodha used to run. How long that recovery takes has not been measured live.
+
 ### What the script writes
 
 Every script writes one frame's ticks in a single Redis round trip, as a pipeline of two kinds of command:
@@ -193,6 +195,22 @@ Every stream in this pipeline is trimmed approximately (`XADD ... MAXLEN ~`) to 
 |---|---|---:|
 | `<broker>:quotes:stream`, all ten brokers | `bin/<broker>/instruments/websocket_quotes` | 1,000,000 |
 | `unified:quotes:stream` | `bin/unified/instruments/websocket_quotes` | 1,000,000 |
+
+### How much memory a full stream takes
+
+The caps were raised from 100,000 entries (200,000 for the unified stream) to 1,000,000 on 2026-09-16, when Zerodha's feed grew to its whole instrument master. The sizes below were measured from stored ticks that day and have not been re-measured since. They count the JSON payload only, before Redis's own overhead per stream entry.
+
+| What | Measured size per entry | At the full cap |
+|---|---:|---:|
+| A Zerodha tick | 940 bytes | about 940 MB |
+| Ticks at the other brokers | from 504 bytes at Fyers to 1,071 at Groww | only Zerodha subscribes to enough instruments to fill its stream |
+| All ten brokers' streams full at once | | about 7.8 GB |
+| A unified quote in `unified:quotes:stream` | 823 bytes | about 820 MB |
+| `unified:quotes:live`, one document per instrument | 823 bytes | about 92 MB for about 112,400 instruments |
+
+The machine had 123 GB of memory and was using 3 GB at the time, so there is room. Redis runs with `maxmemory` unset and the `noeviction` policy, though, so nothing bounds it below the machine's own memory, and a persister that stays down lets its stream grow to the cap.
+
+The unified quote process had not yet been run at this size. It is one process reading all ten streams 500 entries at a time. Its hourly purge of stale quotes reads and parses every document in `unified:quotes:live` on the same thread that handles ticks, and its start-up recovery of previous closes does the same scan once. The first time it runs at full size during market hours, watch `unified:quotes:stats` and the `unified` consumer group's lag on `zerodha:quotes:stream`.
 
 !!! note "The unified persister's docstring gives an older number"
     The docstring of `bin/unified/instruments/store_quotes_to_db` says the unified stream is capped at about 200,000 entries, but the constant `QUOTES_STREAM_MAX_LENGTH` in the script that writes the stream is 1,000,000. The table above follows the code.
