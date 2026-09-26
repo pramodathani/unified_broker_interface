@@ -482,6 +482,41 @@ class MappingRedisTier:
             return None
         return [self.decode_catalogue_member(member) for member in members]
 
+    def read_catalogue_for_prefixes(self, mapping_date, segment_prefixes):
+        """
+        The first instrument under each of several catalogue prefixes, read in one round trip.
+
+        Each prefix is looked up as read_catalogue_for_prefix looks up one with a limit of one, but the look-ups share one pipeline, so finding many instruments by their identity fields costs one round trip rather than one each.
+
+        Args:
+            mapping_date (datetime.date): The mapping date to read.
+            segment_prefixes (list[tuple[str, str]]): Pairs of an exchange-prefixed segment and a member prefix from catalogue_prefix, the prefix ending in "|".
+
+        Returns:
+            list[str | None] | None: The first instrument id under each prefix, or None where no member starts with it, in the order asked; None when Redis is not usable.
+        """
+        client = self.connection.client()
+        if client is None:
+            return None
+        if not segment_prefixes:
+            return []
+        pipeline = client.pipeline(transaction=False)
+        for segment, prefix in segment_prefixes:
+            encoded_prefix = prefix.encode()
+            pipeline.zrangebylex(self.catalogue_key(mapping_date, segment),
+                                 b"[" + encoded_prefix, b"(" + encoded_prefix + b"\xff", start=0, num=1)
+        try:
+            replies = pipeline.execute()
+        except redis.RedisError:
+            return None
+        identifiers = []
+        for members in replies:
+            if members:
+                identifiers.append(self.decode_catalogue_member(members[0]))
+            else:
+                identifiers.append(None)
+        return identifiers
+
     def read_names(self, mapping_date, segment):
         """
         Every distinct name in a segment's catalogue, in lexical order.

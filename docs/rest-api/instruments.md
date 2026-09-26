@@ -2,7 +2,7 @@
 
 The instrument routes let you browse and look up every instrument the ten brokers carry, merged into one list. Each real-world instrument appears once, however many brokers list it, and each one has a single `instrument_id` that the quote, history and order routes accept.
 
-The table below lists the five routes on this page.
+The table below lists the five routes on this page. The last two also take a list of instruments by `POST`, as described under [Several instruments at once](#several-instruments-at-once).
 
 | Method | Endpoint | Description |
 |---|---|---|
@@ -10,7 +10,9 @@ The table below lists the five routes on this page.
 | <span class="method get">GET</span> | [`/api/instruments/master`](#master) | Every instrument in a segment, an exchange or everywhere, streamed as one JSON array |
 | <span class="method get">GET</span> | [`/api/instruments/search`](#search) | Instruments in one segment whose symbol or underlying contains a search term |
 | <span class="method get">GET</span> | [`/api/instruments/details`](#details) | One instrument, its lot and tick size, and how each broker names it |
+| <span class="method post">POST</span> | [`/api/instruments/details`](#details-for-several-instruments) | The same for up to 50 instruments in one request |
 | <span class="method get">GET</span> | [`/api/instruments/additional_details`](#additional-details) | One instrument and the extra attributes each broker's instrument file carries |
+| <span class="method post">POST</span> | [`/api/instruments/additional_details`](#additional-details-for-several-instruments) | The same for up to 50 instruments in one request |
 
 ## Glossary of constants
 
@@ -68,6 +70,144 @@ flowchart TD
 ```
 
 The symbol and underlying are upper-cased before the lookup, so `infy` finds `INFY`. The option type is upper-cased as well, so `ce` is accepted.
+
+## Several instruments at once
+
+The seven routes that act on one instrument (`details`, `additional_details`, [`ltp`, `ohlc` and `quote`](market-quotes.md), and [`prices` and `ticks`](historical-data.md)) also accept a list of up to 50 instruments in one request. You send the same path with `POST` instead of `GET`, and put the instruments in a JSON body. The `GET` form is unchanged, so existing callers are not affected.
+
+The rule to remember is that **the method decides the shape of the answer, not the number of instruments**. A `GET` always answers with one instrument's object, exactly as described on each route's page. A `POST` always answers `{"results": [...]}`, even when its list holds a single instrument, so client code never needs a special case for a list of one.
+
+#### Request body
+
+Each item of `instruments` names one instrument with the same fields the `GET` form takes in its query string, so an item is either `{"instrument_id": ...}` or the exchange, segment and identity fields described under [Naming an instrument](#naming-an-instrument). The two spellings can be mixed in one list. Every other key in the body is a parameter shared by all the instruments, with the same name and spelling as in the query string.
+
+| Name | In | Type | Required | Description |
+|---|---|---|---|---|
+| `access-token` | header | string | Yes | The token from [`connect`](session.md#connect) |
+| `instruments` | body | array of objects | Yes | 1 to 50 instruments, each named as under [Naming an instrument](#naming-an-instrument) |
+| Shared parameters | body | string, number or boolean | Depends on the route | Applied to every instrument; the table below lists them |
+
+The table below lists the shared parameters each route reads. JSON numbers and booleans are accepted wherever the query string takes text, so `"strike_price": 25000` and `"adjusted": false` both work.
+
+| Route | Shared parameters |
+|---|---|
+| `details`, `additional_details` | `date` |
+| `ltp`, `ohlc`, `quote` | none |
+| `prices` | `interval`, then `from` and `to` or `days`, and `adjusted`, `known_as_of` |
+| `ticks` | `start`, `end`, `adjusted` |
+
+#### Example
+
+=== "curl"
+
+    ```bash
+    curl -X POST "http://127.0.0.1:8080/api/instruments/details" \
+      -H "access-token: $ACCESS_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "instruments": [
+          {"instrument_id": "11111111-1111-5111-8111-000000000002"},
+          {"exchange": "nse", "segment": "equities", "symbol": "RELIANCE"},
+          {"exchange": "nse", "segment": "equity_index_futures", "underlying_symbol": "NIFTY", "expiry_date": "2026-10-27"},
+          {"exchange": "nse", "segment": "equities", "symbol": "NOSUCHSTOCK"}
+        ]
+      }'
+    ```
+
+=== "Python"
+
+    ```python
+    import os
+
+    import requests
+
+    response = requests.post(
+        'http://127.0.0.1:8080/api/instruments/details',
+        headers={
+            'access-token': os.environ['ACCESS_TOKEN'],
+        },
+        json={
+            'instruments': [
+                {
+                    'instrument_id': '11111111-1111-5111-8111-000000000002',
+                },
+                {
+                    'exchange': 'nse',
+                    'segment': 'equities',
+                    'symbol': 'RELIANCE',
+                },
+            ],
+        },
+        timeout=10,
+    )
+    for result in response.json()['results']:
+        if result['status'] == 200:
+            print(result['request_index'], result['data']['symbol'], result['data']['lot_size'])
+        else:
+            print(result['request_index'], result['status'], result['error'])
+    ```
+
+#### Response
+
+The example below shortens each `data` object, which in a real answer holds every field the `GET` form returns. The ids and dates are placeholders.
+
+```json
+{
+  "results": [
+    {"request_index": 0, "status": 200, "data": {"instrument_id": "11111111-1111-5111-8111-000000000002", "symbol": "INFY", "lot_size": 1, "...": "..."}},
+    {"request_index": 1, "status": 200, "data": {"instrument_id": "11111111-1111-5111-8111-000000000003", "symbol": "RELIANCE", "lot_size": 1, "...": "..."}},
+    {"request_index": 2, "status": 200, "data": {"instrument_id": "11111111-1111-5111-8111-000000000007", "underlying_symbol": "NIFTY", "lot_size": 75, "...": "..."}},
+    {"request_index": 3, "status": 404, "error": "no instrument nse_equities NOSUCHSTOCK is mapped on 2026-09-26"}
+  ]
+}
+```
+
+#### Response attributes
+
+| Attribute | Type | Description |
+|---|---|---|
+| `results` | array of objects | One entry per item of `instruments`, in the same order |
+| `results[].request_index` | integer | The item's position in `instruments`, counting from 0 |
+| `results[].status` | integer | The status the `GET` form would have answered this instrument with |
+| `results[].data` | object | Present when `status` is 200: exactly the object the `GET` form returns |
+| `results[].error` | string | Present otherwise: exactly the message the `GET` form returns |
+| `results[].ticks` | array of objects | `ticks` only: the instrument's ticks, beside its `data` |
+
+Match results to your request by `request_index` or by position, not by `instrument_id`. An instrument named by its fields has no id until it is found, and an instrument that is not found never gets one.
+
+#### Status codes
+
+The status of the whole response and the status of each entry answer different questions. The table below shows the statuses of the whole response.
+
+| Status | When |
+|---|---|
+| <span class="status s2">200</span> | The body was readable. Each entry then carries its own status, so a 200 can hold failed entries. |
+| <span class="status s4">400</span> | `the body must be a JSON object with an instruments list`, `instruments must be a non-empty list`, `instruments may hold at most 50 entries, not <n>`, `<name> must be text, a number or true or false` for a shared parameter, or any message about a shared parameter that the `GET` form gives, such as `interval is required` or `end must be after start`. |
+| <span class="status s4">401</span> | `Access token is required`, `Invalid access token` or `Access token has expired`. |
+| <span class="status s4">404</span> | `nothing had been mapped on or before <date>`. |
+| <span class="status s5">503</span> | `no instruments have been mapped yet`. |
+
+An entry's status is one of the statuses the `GET` form gives for one instrument. An item that is not an object gets <span class="status s4">400</span> `each entry of instruments must be an object`, and an item whose field is an object or a list gets <span class="status s4">400</span> `<name> must be text, a number or true or false`. The other items are still answered.
+
+#### What a list costs
+
+A list costs a fixed number of Redis round trips rather than a number that grows with the list, because each kind of read is sent for every instrument at once. The table below shows counts recorded by the offline suite `test_runs/instrument_routes.py`, including the access token check.
+
+| Request | Instruments | Redis round trips |
+|---|---:|---:|
+| `GET /details` by symbol | 1 | 7 |
+| `POST /details`, named by id, symbol, future fields and option fields | 4 | 7 |
+| `GET /details` by id | 1 | 6 |
+| `POST /details`, all by id | 3 | 6 |
+| `GET /ltp`, a stale quote fetched from a broker | 1 | 6 |
+| `POST /ltp`, cached, stale, uncached and unknown instruments mixed | 7 | 6 |
+
+Two kinds of work still grow with the list. A broker quote is one HTTP call per instrument that has no usable cached quote, and a `POST` runs up to four of them at once; [Where a quote comes from](market-quotes.md#where-a-quote-comes-from) explains when that happens. `prices` reads each instrument's candles separately, and `ticks` runs one query per instrument while it streams.
+
+??? note "Under the hood"
+    - Body parsing and result entries: [`InstrumentBatch`][unified_broker_interface.utilities.instrument_batch.InstrumentBatch] in `unified_broker_interface/utilities/instrument_batch.py`. `MAX_BATCH_INSTRUMENTS` is 50.
+    - Resolving the list: [`InstrumentCatalogue.resolve_many`][unified_broker_interface.utilities.instrument_catalogue.InstrumentCatalogue.resolve_many]. The catalogue look-ups share one pipeline through [`MappingRedisTier.read_catalogue_for_prefixes`][stock_brokers.instruments.mapping.utilities.cache.MappingRedisTier.read_catalogue_for_prefixes], and every identity is read with one `HMGET`.
+    - An instrument that the cache cannot answer for, because of a past `date`, a cold cache, or history of an instrument no longer mapped, is looked up in Postgres on its own.
 
 ## Mapping dates
 
@@ -519,8 +659,16 @@ The sizes are sent as text in `carried_by` on purpose. A lot size or tick size t
 | <span class="status s4">404</span> | `no instrument <id or fields> is mapped on <mapping date>`, or `nothing had been mapped on or before <date>`. |
 | <span class="status s5">503</span> | `no instruments have been mapped yet`. |
 
+#### Details for several instruments
+
+<div class="endpoint" markdown><span class="method post">POST</span> `/api/instruments/details`<span class="auth">access-token</span></div>
+
+The `POST` form takes up to 50 instruments in a JSON body and answers `{"results": [...]}`, with each answered entry's `data` exactly as above. The body can carry `date`, which applies to every instrument. [Several instruments at once](#several-instruments-at-once) describes the body, the entries and the statuses, and uses this route as its example.
+
+The seen dates and handles of every instrument found in the cache are read with one `HMGET` each, so a list costs the same Redis round trips as one instrument.
+
 ??? note "Under the hood"
-    - Route: `InstrumentsBlueprint.details`, which calls [`InstrumentCatalogue.details`][unified_broker_interface.utilities.instrument_catalogue.InstrumentCatalogue.details].
+    - Route: `InstrumentsBlueprint.details`, which calls [`InstrumentCatalogue.details`][unified_broker_interface.utilities.instrument_catalogue.InstrumentCatalogue.details], or [`InstrumentCatalogue.details_many`][unified_broker_interface.utilities.instrument_catalogue.InstrumentCatalogue.details_many] for a `POST`. The single method passes a list of one to the list method, so both forms share one path.
     - Parameter parsing: [`parse_instrument`][unified_broker_interface.utilities.instrument_identity.parse_instrument] in `unified_broker_interface/utilities/instrument_identity.py`.
     - Redis: `unified:catalogue:<date>:identity`, `unified:catalogue:<date>:order_handles` and `unified:catalogue:<date>:seen`.
     - Fallback: `unified.instruments` for the identity and seen dates, and `unified.broker_mappings` for the handles.
@@ -641,8 +789,25 @@ Values are always text, exactly as the broker's file held them, because the raw 
 | <span class="status s4">404</span> | `no instrument <id or fields> is mapped on <mapping date>`, or `nothing had been mapped on or before <date>`. |
 | <span class="status s5">503</span> | `no instruments have been mapped yet`. |
 
+#### Additional details for several instruments
+
+<div class="endpoint" markdown><span class="method post">POST</span> `/api/instruments/additional_details`<span class="auth">access-token</span></div>
+
+The `POST` form takes up to 50 instruments in a JSON body and answers `{"results": [...]}`, with each answered entry's `data` exactly as above. The body can carry `date`, which applies to every instrument. [Several instruments at once](#several-instruments-at-once) describes the body, the entries and the statuses.
+
+=== "curl"
+
+    ```bash
+    curl -X POST "http://127.0.0.1:8080/api/instruments/additional_details" \
+      -H "access-token: $ACCESS_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d '{"instruments": [{"instrument_id": "11111111-1111-5111-8111-000000000002"}, {"instrument_id": "11111111-1111-5111-8111-000000000003"}]}'
+    ```
+
+The attributes of every instrument found in the cache are read with one `HMGET`. When some come back empty, one `EXISTS` tells an instrument whose brokers publish nothing apart from a hash that was never warmed, and in the second case those instruments are read from TimescaleDB together, in one query.
+
 ??? note "Under the hood"
-    - Route: `InstrumentsBlueprint.additional_details`, which calls [`InstrumentCatalogue.additional_details`][unified_broker_interface.utilities.instrument_catalogue.InstrumentCatalogue.additional_details].
+    - Route: `InstrumentsBlueprint.additional_details`, which calls [`InstrumentCatalogue.additional_details`][unified_broker_interface.utilities.instrument_catalogue.InstrumentCatalogue.additional_details], or [`InstrumentCatalogue.additional_details_many`][unified_broker_interface.utilities.instrument_catalogue.InstrumentCatalogue.additional_details_many] for a `POST`.
     - Vocabulary: [`RawAttributes`][stock_brokers.instruments.mapping.utilities.raw_attributes.RawAttributes] in `stock_brokers/instruments/mapping/utilities/raw_attributes.py` maps each broker's column names onto the shared names. Storage keeps only what a broker published, and `RawAttributes.fill` adds the missing names back as `null` for the answer.
     - Redis: `unified:catalogue:<date>:additional_attributes`, warmed by the same daily run as the rest of the catalogue.
     - Fallback: the mapping table in TimescaleDB, for a past date or when that hash is missing. Each fallback is logged.

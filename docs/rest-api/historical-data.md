@@ -2,14 +2,16 @@
 
 The historical data routes return what has already been stored about one instrument: its candles from the unified price history, and every tick the live feed recorded. Neither route calls a broker. Both read TimescaleDB, and the candle route keeps a copy of each answer in Redis so that a repeated request costs no database query.
 
-The table below lists the two routes on this page.
+The table below lists the two routes on this page. Each also takes a list of up to 50 instruments by `POST`.
 
 | Method | Endpoint | Description |
 |---|---|---|
 | <span class="method get">GET</span> | [`/api/instruments/prices`](#prices) | Candles between two dates, or for the last so many days, adjusted for corporate actions where that applies |
+| <span class="method post">POST</span> | [`/api/instruments/prices`](#prices-for-several-instruments) | The same interval and range for up to 50 instruments in one request |
 | <span class="method get">GET</span> | [`/api/instruments/ticks`](#ticks) | Every recorded tick between two instants, streamed as one JSON array |
+| <span class="method post">POST</span> | [`/api/instruments/ticks`](#ticks-for-several-instruments) | The same period for up to 50 instruments, streamed instrument by instrument |
 
-Both take the instrument the same way as the [instrument routes](instruments.md#naming-an-instrument). Unlike those routes, they also find an instrument that is no longer listed today, such as an expired future or a delisted stock, because such an instrument still has history.
+Both take the instrument the same way as the [instrument routes](instruments.md#naming-an-instrument), and the `POST` form takes a list of them in a JSON body, as described under [Several instruments at once](instruments.md#several-instruments-at-once). Unlike those routes, they also find an instrument that is no longer listed today, such as an expired future or a delisted stock, because such an instrument still has history.
 
 ## Glossary of constants
 
@@ -217,8 +219,34 @@ The rules that keep the copy honest are listed below.
 - An entry larger than 2 MB is served but not stored, because a year of one-minute bars is several megabytes and the same Redis holds the live quotes and the instrument catalogue.
 - Any Redis failure means the request is answered from the database, and the failure is logged rather than returned.
 
+#### Prices for several instruments
+
+<div class="endpoint" markdown><span class="method post">POST</span> `/api/instruments/prices`<span class="auth">access-token</span></div>
+
+The `POST` form reads the same interval and range for up to 50 instruments. The body carries `instruments` and, beside it, the parameters above other than the instrument: `interval`, then `from` and `to` or `days`, and optionally `adjusted` and `known_as_of`. The answer is `{"results": [...]}`, with each answered entry's `data` exactly as above, including its own `source` and `price_basis`. A problem with a shared parameter, such as a missing `interval` or an intraday range longer than 366 days, refuses the whole request with <span class="status s4">400</span> before any instrument is read. [Several instruments at once](instruments.md#several-instruments-at-once) describes the entries and statuses.
+
+=== "curl"
+
+    ```bash
+    curl -X POST "http://127.0.0.1:8080/api/instruments/prices" \
+      -H "access-token: $ACCESS_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "instruments": [
+          {"exchange": "nse", "segment": "equities", "symbol": "INFY"},
+          {"exchange": "nse", "segment": "equities", "symbol": "RELIANCE"}
+        ],
+        "interval": "day",
+        "from": "2026-09-01",
+        "to": "2026-09-25",
+        "adjusted": true
+      }'
+    ```
+
+Each instrument's series is read on its own, from its own Redis copy or from the database, so this form saves request overhead but not database work.
+
 ??? note "Under the hood"
-    - Route: `InstrumentsBlueprint.prices` in `unified_broker_interface/blueprints/instruments.py`.
+    - Route: `InstrumentsBlueprint.prices` in `unified_broker_interface/blueprints/instruments.py`., or `InstrumentsBlueprint._prices_batch` for a `POST`, which checks the shared range once with `check_candle_range`.
     - Candles: `candles` in `unified_broker_interface/utilities/instrument_history.py`. `MAX_INTRADAY_DAYS` is 366.
     - Cache: [`PriceCache`][unified_broker_interface.utilities.price_cache.PriceCache] in `unified_broker_interface/utilities/price_cache.py`. The key is `unified:prices:cache:<instrument id>:<interval>:<basis>:<known_as_of or latest>`.
     - Database: the function `unified.adjusted_bars(instrument_id, interval, from, to, known_as_of)` for `adjusted`, and the table `unified.price_history` otherwise.
@@ -355,8 +383,60 @@ A tick has no identity fields, no `received_at` and no `stale`, because the head
 !!! warning "Ask for short periods"
     There is no limit on the length of the period, and a busy instrument records many ticks a second during market hours. A stream that fails part way through ends the array early with the status still <span class="status s2">200</span>, as described in the [REST API overview](index.md#response-format).
 
+#### Ticks for several instruments
+
+<div class="endpoint" markdown><span class="method post">POST</span> `/api/instruments/ticks`<span class="auth">access-token</span></div>
+
+The `POST` form streams the same period for up to 50 instruments. The body carries `instruments` and, beside it, `start`, `end` and optionally `adjusted`. Every instrument is looked up before the stream starts, so an unknown one gets its own entry with its status. Each instrument's ticks are then read from the database as the stream reaches its entry, one instrument after another.
+
+Headers can describe only one instrument, so a batch puts that description in each entry instead. An answered entry's `data` holds the nine identity fields plus `adjustable`, `price_basis`, `start` and `end`, which are the values the `GET` form sends as `X-` headers. The instrument's ticks follow in `ticks`, beside `data`, so they can be written as they are read.
+
+=== "curl"
+
+    ```bash
+    curl -X POST "http://127.0.0.1:8080/api/instruments/ticks" \
+      -H "access-token: $ACCESS_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "instruments": [
+          {"instrument_id": "11111111-1111-5111-8111-000000000002"},
+          {"exchange": "nse", "segment": "equity_index_futures", "underlying_symbol": "NIFTY", "expiry_date": "2026-10-27"}
+        ],
+        "start": "2026-09-25 09:15",
+        "end": "2026-09-25 09:16"
+      }'
+    ```
+
+The example below shortens each `data` object and shows one tick per instrument; the values are illustrative.
+
+```json
+{
+  "results": [
+    {
+      "request_index": 0,
+      "status": 200,
+      "data": {"instrument_id": "11111111-1111-5111-8111-000000000002", "symbol": "INFY", "adjustable": true, "price_basis": "adjusted", "start": "2026-09-25T09:15:00+05:30", "end": "2026-09-25T09:16:00+05:30", "...": "..."},
+      "ticks": [
+        {"time": "2026-09-25T03:45:01+00:00", "broker": "zerodha", "last_price": 1520.0, "...": "..."}
+      ]
+    },
+    {
+      "request_index": 1,
+      "status": 200,
+      "data": {"instrument_id": "11111111-1111-5111-8111-000000000007", "underlying_symbol": "NIFTY", "adjustable": false, "price_basis": "as_served", "...": "..."},
+      "ticks": [
+        {"time": "2026-09-25T03:45:02+00:00", "broker": "zerodha", "last_price": 25300.0, "...": "..."}
+      ]
+    }
+  ]
+}
+```
+
+!!! warning "A stream that fails part way ends early"
+    Once the stream has started, the status is already <span class="status s2">200</span>. If a query fails part way, the entry being written has its `ticks` array closed where it stopped and the entries after it are left out, and the answer is still valid JSON. Compare the number of `results` with the number of instruments you sent to tell a complete answer from one that ended early.
+
 ??? note "Under the hood"
-    - Route: `InstrumentsBlueprint.ticks` in `unified_broker_interface/blueprints/instruments.py`.
-    - Stream: `tick_stream` in `unified_broker_interface/utilities/instrument_history.py`, reading 5,000 rows at a time.
+    - Route: `InstrumentsBlueprint.ticks` in `unified_broker_interface/blueprints/instruments.py`, or `InstrumentsBlueprint._ticks_batch` for a `POST`.
+    - Stream: `tick_stream` in `unified_broker_interface/utilities/instrument_history.py`, reading 5,000 rows at a time. It builds its headers from `tick_series` and returns the generator `tick_documents`, which a `POST` calls once per instrument. The batch is written by `json_results_response` in `unified_broker_interface/utilities/json_stream.py`.
     - Database: the view `unified.ticks_adjusted` when the basis is `adjusted`, and the table `unified.ticks` otherwise. The book is stored flat, as `bid1_price` to `ask5_orders`, and nested into `depth` on the way out.
     - How ticks reach `unified.ticks` is described in [Market data](../pipelines/market-data.md).

@@ -280,34 +280,99 @@ class InstrumentCatalogue:
         - `mapped_only` requires the instrument to be mapped on that date. History endpoints pass False,
           so an expired contract or a delisted stock is still found in the instrument table.
         """
+        mapping_date, resolutions = self.resolve_many([instrument], as_of, mapped_only)
+        resolution = resolutions[0]
+        if isinstance(resolution, RequestError):
+            raise resolution
+        identity, cached = resolution
+        return identity, mapping_date, cached
+
+    def resolve_many(self, instruments, as_of=None, mapped_only=True):
+        """
+        The identities of several instruments, resolved together on one mapping date.
+
+        Instruments named by id are read with one HMGET, and instruments named by their identity fields are found with one pipeline of catalogue look-ups, so a list costs the same Redis round trips as one instrument. An instrument the cache cannot answer for is looked up in Postgres on its own, which happens only for a past date, a cold cache, or the history of an instrument no longer mapped.
+
+        Args:
+            instruments (list[InstrumentQuery]): The instruments the request named, in order.
+            as_of (datetime.date | None): The date asked about, or None for today.
+            mapped_only (bool): Whether each instrument must be mapped on that date. History endpoints pass False, so an expired contract or a delisted stock is still found in the instrument table.
+
+        Returns:
+            tuple: A pair (mapping_date, resolutions), where mapping_date is the datetime.date answered on and resolutions holds one entry per instrument in order: a pair (identity, cached) of the identity dict and whether it came from the cache, or the RequestError saying why that instrument was not found.
+
+        Raises:
+            RequestError: When nothing has been mapped yet, or nothing had been mapped on or before as_of.
+        """
         mapping_date, counts = self.mapping_date(as_of)
         if counts is not None:
-            identity = self._resolve_from_cache(mapping_date, instrument)
+            cached_identities = self._resolve_many_from_cache(mapping_date, instruments)
+        else:
+            cached_identities = [None] * len(instruments)
+
+        resolutions = []
+        for position, instrument in enumerate(instruments):
+            identity = cached_identities[position]
             if identity is not None:
-                return identity, mapping_date, True
-            if mapped_only:
-                raise RequestError(self._not_found(instrument, mapping_date), 404)
-            logger.info(f"instrument not in today's cache; looking for its history in {tables.MASTER}")
+                resolutions.append((identity, True))
+                continue
+            if counts is not None:
+                if mapped_only:
+                    resolutions.append(RequestError(self._not_found(instrument, mapping_date), 404))
+                    continue
+                logger.info(f"instrument not in today's cache; looking for its history in {tables.MASTER}")
+            identity = self._resolve_from_postgres(mapping_date, instrument, mapped_only)
+            if identity is None:
+                message = self._not_found(instrument, mapping_date if mapped_only else None)
+                resolutions.append(RequestError(message, 404))
+            else:
+                resolutions.append((identity, False))
+        return mapping_date, resolutions
 
-        identity = self._resolve_from_postgres(mapping_date, instrument, mapped_only)
-        if identity is None:
-            raise RequestError(self._not_found(instrument, mapping_date if mapped_only else None), 404)
-        return identity, mapping_date, False
+    def _resolve_many_from_cache(self, mapping_date, instruments):
+        """
+        Find several instruments in the cache, by id or by their catalogue members.
 
-    def _resolve_from_cache(self, mapping_date, instrument):
+        Args:
+            mapping_date (datetime.date): The mapping date the cache holds.
+            instruments (list[InstrumentQuery]): The instruments the request named, in order.
+
+        Returns:
+            list[dict | None]: One identity per instrument in order, or None where the cache does not hold it.
         """
-        Find an instrument in the cache by id, or by its catalogue member.
-        """
-        identifier = instrument.instrument_id
-        if identifier is None:
-            prefix = self.redis.catalogue_prefix(instrument.name, instrument.fields.get("expiry_date"),
-                                                 instrument.fields.get("strike_price"),
-                                                 instrument.fields.get("option_type"))
-            found = self.redis.read_catalogue_for_prefix(mapping_date, instrument.segment, prefix, 1)
-            if not found:
-                return None
-            identifier = found[0]
-        return self.redis.read_identities(mapping_date, [identifier]).get(identifier)
+        identifiers = []
+        segment_prefixes = []
+        prefix_positions = []
+        for position, instrument in enumerate(instruments):
+            identifiers.append(instrument.instrument_id)
+            if instrument.instrument_id is None:
+                prefix = self.redis.catalogue_prefix(instrument.name, instrument.fields.get("expiry_date"),
+                                                     instrument.fields.get("strike_price"),
+                                                     instrument.fields.get("option_type"))
+                segment_prefixes.append((instrument.segment, prefix))
+                prefix_positions.append(position)
+
+        if segment_prefixes:
+            found = self.redis.read_catalogue_for_prefixes(mapping_date, segment_prefixes)
+            if found is not None:
+                for index, position in enumerate(prefix_positions):
+                    identifiers[position] = found[index]
+
+        wanted = []
+        for identifier in identifiers:
+            if identifier is not None:
+                wanted.append(identifier)
+        identities = {}
+        if wanted:
+            identities = self.redis.read_identities(mapping_date, wanted)
+
+        cached_identities = []
+        for identifier in identifiers:
+            if identifier is None:
+                cached_identities.append(None)
+            else:
+                cached_identities.append(identities.get(identifier))
+        return cached_identities
 
     def _resolve_from_postgres(self, mapping_date, instrument, mapped_only):
         """
@@ -351,18 +416,72 @@ class InstrumentCatalogue:
         - `instrument` is the `InstrumentQuery` the request parsed to.
         - `as_of` is the date asked about, or None for today.
         """
-        identity, mapping_date, cached = self.resolve(instrument, as_of)
-        identifier = str(identity["instrument_id"])
-        if cached:
-            first_seen, last_seen = self.redis.read_seen(mapping_date, [identifier]).get(identifier, (None, None))
-            handles = self.redis.read_order_handles(mapping_date, [identifier]).get(identifier, {})
-            carried_by = [{"broker": broker, **handles[broker]} for broker in sorted(handles)]
-        else:
-            first_seen, last_seen = identity.get("first_seen_date"), identity.get("last_seen_date")
-            carried_by = [{key: row[key] for key in ("broker", "broker_token", "order_symbol")}
-                          | {"lot_size": None if row["lot_size"] is None else str(row["lot_size"]),
-                             "tick_size": None if row["tick_size"] is None else str(row["tick_size"])}
-                          for row in self._resolver.broker_rows_on_date(identifier, mapping_date)]
+        answer = self.details_many([instrument], as_of)[0]
+        if isinstance(answer, RequestError):
+            raise answer
+        return answer
+
+    def details_many(self, instruments, as_of=None):
+        """
+        Several instruments' details, as details gives them, read together.
+
+        The seen dates and handles of every instrument found in the cache are read with one HMGET each, whatever the number of instruments. An instrument answered from Postgres has its broker rows read on its own.
+
+        Args:
+            instruments (list[InstrumentQuery]): The instruments the request named, in order.
+            as_of (datetime.date | None): The date asked about, or None for today.
+
+        Returns:
+            list: One entry per instrument in order: the details dict, or the RequestError saying why that instrument was not found.
+
+        Raises:
+            RequestError: When nothing has been mapped yet, or nothing had been mapped on or before as_of.
+        """
+        mapping_date, resolutions = self.resolve_many(instruments, as_of)
+        cached_identifiers = []
+        for resolution in resolutions:
+            if isinstance(resolution, RequestError):
+                continue
+            identity, cached = resolution
+            if cached:
+                cached_identifiers.append(str(identity["instrument_id"]))
+        seen_by_instrument = self.redis.read_seen(mapping_date, cached_identifiers)
+        handles_by_instrument = self.redis.read_order_handles(mapping_date, cached_identifiers)
+
+        answers = []
+        for resolution in resolutions:
+            if isinstance(resolution, RequestError):
+                answers.append(resolution)
+                continue
+            identity, cached = resolution
+            identifier = str(identity["instrument_id"])
+            if cached:
+                first_seen, last_seen = seen_by_instrument.get(identifier, (None, None))
+                handles = handles_by_instrument.get(identifier, {})
+                carried_by = [{"broker": broker, **handles[broker]} for broker in sorted(handles)]
+            else:
+                first_seen, last_seen = identity.get("first_seen_date"), identity.get("last_seen_date")
+                carried_by = [{key: row[key] for key in ("broker", "broker_token", "order_symbol")}
+                              | {"lot_size": None if row["lot_size"] is None else str(row["lot_size"]),
+                                 "tick_size": None if row["tick_size"] is None else str(row["tick_size"])}
+                              for row in self._resolver.broker_rows_on_date(identifier, mapping_date)]
+            answers.append(self._details_answer(identity, mapping_date, first_seen, last_seen, carried_by))
+        return answers
+
+    def _details_answer(self, identity, mapping_date, first_seen, last_seen, carried_by):
+        """
+        One instrument's details answer, from what was read for it.
+
+        Args:
+            identity (dict): The instrument's identity.
+            mapping_date (datetime.date): The mapping date answered on.
+            first_seen (datetime.date | None): The first date the instrument was mapped.
+            last_seen (datetime.date | None): The last date the instrument was mapped.
+            carried_by (list[dict]): Each broker's handle, with its broker name, in broker order.
+
+        Returns:
+            dict: The details, as the `/details` route sends them.
+        """
         handles_by_broker = {}
         for handle in carried_by:
             handles_by_broker[handle["broker"]] = handle
@@ -388,31 +507,72 @@ class InstrumentCatalogue:
         - `instrument` is the `InstrumentQuery` the request parsed to.
         - `as_of` is the date asked about, or None for today.
         """
-        identity, mapping_date, cached = self.resolve(instrument, as_of)
-        identifier = str(identity["instrument_id"])
-        attributes_by_broker = None
-        if cached:
-            attributes_by_broker = self.redis.read_additional_attributes(mapping_date, [identifier]).get(identifier)
-            if attributes_by_broker is None and not self.redis.has_additional_attributes(mapping_date):
-                logger.warning(f"the additional attributes for {mapping_date} are not in Redis; reading Postgres")
-                cached = False
-        if not cached:
-            attributes_by_broker = self.cache.postgres_tier.read_additional_attributes(
-                mapping_date, [identifier]).get(identifier)
-        if attributes_by_broker is None:
-            attributes_by_broker = {}
+        answer = self.additional_details_many([instrument], as_of)[0]
+        if isinstance(answer, RequestError):
+            raise answer
+        return answer
 
-        carried_by = []
-        for broker in sorted(attributes_by_broker):
-            entry = {"broker": broker}
-            entry.update(self._raw_attributes.fill(attributes_by_broker[broker]))
-            carried_by.append(entry)
-        return {
-            **identity_to_json(identity),
-            "mapping_date": mapping_date.isoformat(),
-            "attribute_names": list(ATTRIBUTE_NAMES),
-            "carried_by": carried_by,
-        }
+    def additional_details_many(self, instruments, as_of=None):
+        """
+        Several instruments' additional attributes, as additional_details gives them, read together.
+
+        The attributes of every instrument found in the cache are read with one HMGET. When some came back empty, one EXISTS tells an instrument whose brokers publish nothing apart from a hash that was never warmed; in the second case those instruments join the ones answered from Postgres, which are read with one query.
+
+        Args:
+            instruments (list[InstrumentQuery]): The instruments the request named, in order.
+            as_of (datetime.date | None): The date asked about, or None for today.
+
+        Returns:
+            list: One entry per instrument in order: the additional details dict, or the RequestError saying why that instrument was not found.
+
+        Raises:
+            RequestError: When nothing has been mapped yet, or nothing had been mapped on or before as_of.
+        """
+        mapping_date, resolutions = self.resolve_many(instruments, as_of)
+        cached_identifiers = []
+        uncached_identifiers = []
+        for resolution in resolutions:
+            if isinstance(resolution, RequestError):
+                continue
+            identity, cached = resolution
+            if cached:
+                cached_identifiers.append(str(identity["instrument_id"]))
+            else:
+                uncached_identifiers.append(str(identity["instrument_id"]))
+
+        attributes_by_instrument = {}
+        if cached_identifiers:
+            attributes_by_instrument = self.redis.read_additional_attributes(mapping_date, cached_identifiers)
+            missing = []
+            for identifier in cached_identifiers:
+                if identifier not in attributes_by_instrument:
+                    missing.append(identifier)
+            if missing and not self.redis.has_additional_attributes(mapping_date):
+                logger.warning(f"the additional attributes for {mapping_date} are not in Redis; reading Postgres")
+                uncached_identifiers.extend(missing)
+        if uncached_identifiers:
+            attributes_by_instrument.update(self.cache.postgres_tier.read_additional_attributes(
+                mapping_date, uncached_identifiers))
+
+        answers = []
+        for resolution in resolutions:
+            if isinstance(resolution, RequestError):
+                answers.append(resolution)
+                continue
+            identity, _ = resolution
+            attributes_by_broker = attributes_by_instrument.get(str(identity["instrument_id"]), {})
+            carried_by = []
+            for broker in sorted(attributes_by_broker):
+                entry = {"broker": broker}
+                entry.update(self._raw_attributes.fill(attributes_by_broker[broker]))
+                carried_by.append(entry)
+            answers.append({
+                **identity_to_json(identity),
+                "mapping_date": mapping_date.isoformat(),
+                "attribute_names": list(ATTRIBUTE_NAMES),
+                "carried_by": carried_by,
+            })
+        return answers
 
     @staticmethod
     def agreed_tick_size(handles):

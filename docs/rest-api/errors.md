@@ -61,7 +61,7 @@ The API registers no error handlers of its own. A path that matches no route the
 
 ## Which route returns which status
 
-The matrix below has one row for each of the 26 routes and one column for each status code the API returns. A :material-check: means the route can return that status in either placement mode. A :material-cog: means the route returns it only when `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT` is `engine` (see [Order engine](order-engine.md)).
+The matrix below has one row for each of the 26 routes, plus a `POST` row for each of the seven instrument routes that also take a list, and one column for each status code the API returns. A :material-check: means the route can return that status in either placement mode. A :material-cog: means the route returns it only when `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT` is `engine` (see [Order engine](order-engine.md)).
 
 | Route | 200 | 202 | 207 | 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500 | 501 | 502 | 503 | 504 |
 |---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
@@ -76,12 +76,19 @@ The matrix below has one row for each of the 26 routes and one column for each s
 | `GET /api/instruments/master` | :material-check: | | | :material-check: | :material-check: | | :material-check: | | | | | | | :material-check: | |
 | `GET /api/instruments/search` | :material-check: | | | :material-check: | :material-check: | | :material-check: | | | | | | | :material-check: | |
 | `GET /api/instruments/details` | :material-check: | | | :material-check: | :material-check: | | :material-check: | | | | | | | :material-check: | |
+| `POST /api/instruments/details` | :material-check: | | | :material-check: | :material-check: | | :material-check: | | | | | | | :material-check: | |
 | `GET /api/instruments/additional_details` | :material-check: | | | :material-check: | :material-check: | | :material-check: | | | | | | | :material-check: | |
+| `POST /api/instruments/additional_details` | :material-check: | | | :material-check: | :material-check: | | :material-check: | | | | | | | :material-check: | |
 | `GET /api/instruments/ltp` | :material-check: | | | :material-check: | :material-check: | | :material-check: | | | | | | | :material-check: | |
+| `POST /api/instruments/ltp` | :material-check: | | | :material-check: | :material-check: | | :material-check: | | | | | | | :material-check: | |
 | `GET /api/instruments/ohlc` | :material-check: | | | :material-check: | :material-check: | | :material-check: | | | | | | | :material-check: | |
+| `POST /api/instruments/ohlc` | :material-check: | | | :material-check: | :material-check: | | :material-check: | | | | | | | :material-check: | |
 | `GET /api/instruments/quote` | :material-check: | | | :material-check: | :material-check: | | :material-check: | | | | | | | :material-check: | |
+| `POST /api/instruments/quote` | :material-check: | | | :material-check: | :material-check: | | :material-check: | | | | | | | :material-check: | |
 | `GET /api/instruments/prices` | :material-check: | | | :material-check: | :material-check: | | :material-check: | | | | | | | :material-check: | |
+| `POST /api/instruments/prices` | :material-check: | | | :material-check: | :material-check: | | :material-check: | | | | | | | :material-check: | |
 | `GET /api/instruments/ticks` | :material-check: | | | :material-check: | :material-check: | | :material-check: | | | | | | | :material-check: | |
+| `POST /api/instruments/ticks` | :material-check: | | | :material-check: | :material-check: | | :material-check: | | | | | | | :material-check: | |
 | `GET /api/portfolio/funds` | :material-check: | | | | :material-check: | | | | | | | | :material-check: | :material-check: | |
 | `GET /api/portfolio/holdings` | :material-check: | | | | :material-check: | | | | | | | | :material-check: | :material-check: | |
 | `GET /api/portfolio/positions` | :material-check: | | | | :material-check: | | | | | | | | :material-check: | :material-check: | |
@@ -91,6 +98,8 @@ The matrix below has one row for each of the 26 routes and one column for each s
 | `PUT /api/orders/modify` | :material-check: | | | :material-check: | :material-check: | | :material-check: | :material-check: | :material-check: | | | :material-check: | | :material-check: | :material-check: |
 | `DELETE /api/orders/cancel` | :material-check: | | | :material-check: | :material-check: | | :material-check: | :material-check: | :material-check: | | | | | :material-check: | :material-check: |
 | `POST /api/orders/flatten` | :material-check: | | :material-check: | :material-check: | :material-check: | | | | | | | | | :material-check: | |
+
+The `POST` rows of the instrument routes describe the whole response. Inside a 200, each instrument's entry carries its own status, which is one of the statuses in the matching `GET` row; [Several instruments at once](instruments.md#several-instruments-at-once) explains the split.
 
 Only `place` changes behavior between the two placement modes. `modify`, `cancel` and `flatten` always talk to the broker directly.
 

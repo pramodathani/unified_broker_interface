@@ -2,15 +2,18 @@
 
 The market quote routes return the live price of one instrument, at three levels of detail. All three read the same unified quote document, which is built from whichever broker is currently streaming that instrument, so the answer looks the same whichever broker it came from.
 
-The table below lists the three routes on this page.
+The table below lists the three routes on this page. Each also takes a list of up to 50 instruments by `POST`.
 
 | Method | Endpoint | Description |
 |---|---|---|
 | <span class="method get">GET</span> | [`/api/instruments/ltp`](#ltp) | The last traded price, with the instrument's identity and when the price was received |
+| <span class="method post">POST</span> | [`/api/instruments/ltp`](#ltp-for-several-instruments) | The same for up to 50 instruments in one request |
 | <span class="method get">GET</span> | [`/api/instruments/ohlc`](#ohlc) | The last traded price plus the day's open, high and low, the previous close and the change |
+| <span class="method post">POST</span> | [`/api/instruments/ohlc`](#ohlc-for-several-instruments) | The same for up to 50 instruments in one request |
 | <span class="method get">GET</span> | [`/api/instruments/quote`](#quote) | The whole unified quote document, including volume, open interest and five levels of market depth |
+| <span class="method post">POST</span> | [`/api/instruments/quote`](#quote-for-several-instruments) | The same for up to 50 instruments in one request |
 
-All three take the instrument the same way as the [instrument routes](instruments.md#naming-an-instrument): either `instrument_id`, or `exchange`, `segment` and the identity fields.
+All three take the instrument the same way as the [instrument routes](instruments.md#naming-an-instrument): either `instrument_id`, or `exchange`, `segment` and the identity fields. The `POST` form takes a list of them in a JSON body, as described under [Several instruments at once](instruments.md#several-instruments-at-once).
 
 ## Glossary of constants
 
@@ -70,6 +73,12 @@ A fetched quote is normalized by the same code that normalizes the live feed, so
 
 !!! note "A broker fallback costs time"
     A `source: broker` answer includes a round trip to a broker, and possibly a login. A client that polls prices for many instruments should rely on the live feed covering them, and treat `source: broker` as the exception.
+
+### Several instruments in one request
+
+A `POST` runs the same decision for every instrument in its list, but it reads Redis for all of them at once. One pipeline reads both hashes for every instrument, and one read fetches the broker handles of the instruments whose cached quote was not good enough. Only those instruments are then asked of a broker.
+
+When more than one instrument needs a broker, up to four are fetched at the same time, each trying its brokers in the priority order above. A list with several quiet instruments therefore waits for roughly its slowest broker call rather than for every call in turn. An instrument whose brokers all fail gets its own 503 entry, and the rest of the list is still answered.
 
 ## The unified quote document
 
@@ -195,9 +204,77 @@ Every field is described in [The unified quote document](#the-unified-quote-docu
 | <span class="status s4">404</span> | `no instrument <id or fields> is mapped on <mapping date>`. |
 | <span class="status s5">503</span> | `no recent quote is cached, and no broker that serves quotes carries this instrument`, `no recent quote is cached, and every broker failed - <broker>: <reason>; ...`, or `no instruments have been mapped yet`. |
 
+#### LTP for several instruments
+
+<div class="endpoint" markdown><span class="method post">POST</span> `/api/instruments/ltp`<span class="auth">access-token</span></div>
+
+The `POST` form takes up to 50 instruments in a JSON body and answers `{"results": [...]}`, one entry per instrument in request order, with each answered entry's `data` exactly as above. [Several instruments at once](instruments.md#several-instruments-at-once) describes the body, the entries and the statuses.
+
+=== "curl"
+
+    ```bash
+    curl -X POST "http://127.0.0.1:8080/api/instruments/ltp" \
+      -H "access-token: $ACCESS_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "instruments": [
+          {"instrument_id": "11111111-1111-5111-8111-000000000002"},
+          {"exchange": "nse", "segment": "equities", "symbol": "RELIANCE"},
+          {"exchange": "nse", "segment": "equity_index_options", "underlying_symbol": "NIFTY", "expiry_date": "2026-10-27", "strike_price": 25000, "option_type": "CE"}
+        ]
+      }'
+    ```
+
+=== "Python"
+
+    ```python
+    import os
+
+    import requests
+
+    response = requests.post(
+        'http://127.0.0.1:8080/api/instruments/ltp',
+        headers={
+            'access-token': os.environ['ACCESS_TOKEN'],
+        },
+        json={
+            'instruments': [
+                {
+                    'instrument_id': '11111111-1111-5111-8111-000000000002',
+                },
+                {
+                    'exchange': 'nse',
+                    'segment': 'equities',
+                    'symbol': 'RELIANCE',
+                },
+            ],
+        },
+        timeout=30,
+    )
+    for result in response.json()['results']:
+        if result['status'] == 200:
+            print(result['data']['symbol'], result['data']['last_price'], result['data']['source'])
+        else:
+            print(result['request_index'], result['status'], result['error'])
+    ```
+
+The example below shortens each `data` object to a few of its keys; a real one carries every key the `GET` form returns. The values are illustrative.
+
+```json
+{
+  "results": [
+    {"request_index": 0, "status": 200, "data": {"instrument_id": "11111111-1111-5111-8111-000000000002", "symbol": "INFY", "last_price": 1521.4, "source": "cache", "...": "..."}},
+    {"request_index": 1, "status": 200, "data": {"instrument_id": "11111111-1111-5111-8111-000000000003", "symbol": "RELIANCE", "last_price": 2875.5, "source": "broker", "...": "..."}},
+    {"request_index": 2, "status": 503, "error": "no recent quote is cached, and every broker failed - zerodha: Kite returned no quote"}
+  ]
+}
+```
+
+A `POST` can take longer than a `GET` when several instruments need a broker, so allow a longer client timeout than for one instrument.
+
 ??? note "Under the hood"
     - Route: `InstrumentsBlueprint.ltp` in `unified_broker_interface/blueprints/instruments.py`, which keeps only the keys in `_LTP_KEYS`.
-    - Quote: [`QuoteService.quote`][unified_broker_interface.utilities.broker_quotes.utilities.service.QuoteService.quote] in `unified_broker_interface/utilities/broker_quotes/utilities/service.py`.
+    - Quote: [`QuoteService.quote`][unified_broker_interface.utilities.broker_quotes.utilities.service.QuoteService.quote] in `unified_broker_interface/utilities/broker_quotes/utilities/service.py`, which passes a list of one to [`QuoteService.quotes`][unified_broker_interface.utilities.broker_quotes.utilities.service.QuoteService.quotes]. A `POST` calls `quotes` with the whole list, and `QUOTE_FETCH_THREADS` (4) caps how many broker fetches run at once.
     - Redis: reads `unified:quotes:live` and `unified:quotes:fetched` in one pipeline, and writes `unified:quotes:fetched` with a per-field expiry of two days after a broker fetch.
     - Broker modules: `unified_broker_interface/utilities/broker_quotes/<broker>.py`, one per broker that has one, each subclassing [`BrokerQuoteSource`][unified_broker_interface.utilities.broker_quotes.base.BrokerQuoteSource].
 
@@ -277,6 +354,12 @@ Every field is described in [The unified quote document](#the-unified-quote-docu
 #### Status codes
 
 The status codes are the same as for [`ltp`](#ltp).
+
+#### OHLC for several instruments
+
+<div class="endpoint" markdown><span class="method post">POST</span> `/api/instruments/ohlc`<span class="auth">access-token</span></div>
+
+The `POST` form takes up to 50 instruments in a JSON body and answers `{"results": [...]}`, with each answered entry's `data` exactly as above. It works exactly like [`ltp` for several instruments](#ltp-for-several-instruments), and [Several instruments at once](instruments.md#several-instruments-at-once) describes the body, the entries and the statuses.
 
 ??? note "Under the hood"
     - Route: `InstrumentsBlueprint.ohlc`, which keeps only the keys in `_OHLC_KEYS`, the `ltp` keys plus `ohlc`, `previous_close` and `change_percent`.
@@ -386,6 +469,12 @@ Every field is described in [The unified quote document](#the-unified-quote-docu
 #### Status codes
 
 The status codes are the same as for [`ltp`](#ltp).
+
+#### Quote for several instruments
+
+<div class="endpoint" markdown><span class="method post">POST</span> `/api/instruments/quote`<span class="auth">access-token</span></div>
+
+The `POST` form takes up to 50 instruments in a JSON body and answers `{"results": [...]}`, with each answered entry's `data` exactly as above. It works exactly like [`ltp` for several instruments](#ltp-for-several-instruments), and [Several instruments at once](instruments.md#several-instruments-at-once) describes the body, the entries and the statuses.
 
 ??? note "Under the hood"
     - Route: `InstrumentsBlueprint.quote`, which returns the document from [`QuoteService.quote`][unified_broker_interface.utilities.broker_quotes.utilities.service.QuoteService.quote] unchanged apart from `source`.

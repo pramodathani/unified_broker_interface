@@ -23,6 +23,7 @@ There is no `pyproject.toml`, no build step and no pytest suite. The project roo
 | Offline order engine route tests | `python -m test_runs.order_engine_routes` (engine placement mode; its own fixture, because `--record` rewrites a whole file) |
 | Offline order engine tests | `python -m test_runs.order_engine` (the daemon itself, against scripted intents and stubbed brokers) |
 | Offline flatten route tests | `python -m test_runs.order_flatten` (the panic button; pins that cancels are sent before closes) |
+| Offline instrument route tests | `python -m test_runs.instrument_routes` (`/details` to `/ticks` against a stubbed mapping cache, quote cache, brokers and tick table; its own fixture) |
 | Offline contract size rule tests | `python -m test_runs.contract_sizes` |
 | Offline candle cache tests | `python -m test_runs.price_cache` |
 | Offline synthetic order book tests | `python -m test_runs.virtual_queue` (the queue estimate and the process that keeps it) |
