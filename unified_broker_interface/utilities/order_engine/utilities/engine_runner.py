@@ -3,6 +3,9 @@
 import json
 import time
 
+from unified_broker_interface.utilities.broker_orders.utilities.catalogue_availability import (
+    CatalogueAvailability,
+)
 from unified_broker_interface.utilities.broker_orders.utilities.refused_request import (
     RefusedRequestError,
 )
@@ -42,6 +45,7 @@ class OrderEngine:
         logger (logging.Logger): The logger.
         stale_intent_seconds (float): How far past its deadline an intent may be and still be placed.
         result_ttl_seconds (int): How long an answer is kept for a worker that never came back for it.
+        catalogue_availability (CatalogueAvailability): What turns a "not mapped" refusal into a 503 when the day's catalogue has expired and the next one is not published yet.
         placed (int): How many intents have been placed.
         refused (int): How many intents have been answered without calling a broker.
         expired (int): How many intents were too old to place.
@@ -96,6 +100,7 @@ class OrderEngine:
         self.ticker = ticker
         self.price_ticker = price_ticker
         self.day_roll = day_roll
+        self.catalogue_availability = CatalogueAvailability(cache)
         self.placed = 0
         self.refused = 0
         self.expired = 0
@@ -271,6 +276,7 @@ class OrderEngine:
             body, status = self.answer(intent)
         except RefusedRequestError as refusal:
             self.refused = self.refused + 1
+            refusal = self.catalogue_availability.explained(refusal)
             body, status = refusal.body, refusal.status
         except Exception as exception:
             self.refused = self.refused + 1

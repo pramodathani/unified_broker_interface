@@ -116,6 +116,27 @@ class FakeRedis:
         self.start_round_trip()
         return self.run_get(key)
 
+    def exists(self, key):
+        """Counts whether a key is held, in its own round trip.
+
+        Args:
+            key (str): The key.
+
+        Returns:
+            int: 1 when the key is held as a string, hash or sorted set, and 0 when it is not.
+
+        Raises:
+            redis.RedisError: When this round trip is set to fail.
+        """
+        self.start_round_trip()
+        if key in self.strings:
+            return 1
+        if self.hashes.get(key):
+            return 1
+        if self.sorted_sets.get(key):
+            return 1
+        return 0
+
     def hget(self, key, field):
         """Reads one hash field in its own round trip.
 
@@ -2533,6 +2554,16 @@ class OrderRoutesScenarios:
                 self.market_order(),
                 changes=[
                     self.string_change('unified:catalogue:current_date', None),
+                ],
+            ),
+            self.place(
+                'catalogue_expired',
+                self.market_order(),
+                changes=[
+                    self.string_change(
+                        'unified:catalogue:current_date',
+                        '2026-09-14',
+                    ),
                 ],
             ),
             self.place(

@@ -8,6 +8,7 @@ import redis
 from unified_broker_interface.utilities.broker_orders.utilities.refused_request import (
     RefusedRequestError,
 )
+from unified_broker_interface.utilities.order_engine.utilities.engine_lock import LOCK_KEY
 from unified_broker_interface.utilities.order_engine.utilities.order_intent import OrderIntent
 
 INTENT_STREAM_KEY = 'unified:orders:intents:stream'
@@ -52,8 +53,9 @@ class IntentHandoff:
             tuple: The answer's body (dict) and its HTTP status (int).
 
         Raises:
-            RefusedRequestError: With HTTP 503 when the order cannot be written for the engine.
+            RefusedRequestError: With HTTP 503 when the order engine is not running or the order cannot be written for it.
         """
+        self.refuse_unless_engine_running()
         intent = OrderIntent(body, instrument_id, self.timeout_seconds)
         try:
             self.cache.xadd(
@@ -85,6 +87,30 @@ class IntentHandoff:
                 f'the order engine did not answer within {self.timeout_seconds} seconds, so this order may still be placed',
             )
         return self.engine_answer(intent, reply[1], started_at)
+
+    def refuse_unless_engine_running(self):
+        """Refuses the order before it is written down when no order engine holds its lock.
+
+        A running engine refreshes `unified:orders:engine:lock` every few seconds and the key expires by itself soon after the engine stops. Without this check an order written while no engine runs would wait out the whole timeout and be answered as `unknown`, although nothing was ever going to place it.
+
+        Returns:
+            None: This method returns nothing.
+
+        Raises:
+            RefusedRequestError: With HTTP 503 when no engine holds the lock or Redis cannot be read.
+        """
+        try:
+            engine_running = self.cache.exists(LOCK_KEY)
+        except redis.RedisError as error:
+            raise RefusedRequestError.refusal(
+                f'Redis could not be read: {error}',
+                503,
+            )
+        if not engine_running:
+            raise RefusedRequestError.refusal(
+                'the order engine is not running, so the order was not placed; start unified-orders@order_engine.service',
+                503,
+            )
 
     def engine_answer(self, intent, reply_text, started_at):
         """Reads the engine's answer and corrects the one timing the engine could not measure.
