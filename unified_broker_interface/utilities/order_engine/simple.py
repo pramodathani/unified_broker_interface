@@ -11,6 +11,8 @@ class SimpleOrder(SyntheticOrder):
 
     This is the degenerate path through the parent order state machine, and writing it as a class of its own rather than as a special case inside the engine is what makes a bracket an ordinary member of the same family rather than an exception. It records the same events, in the same order, as a type with five legs would.
 
+    The order goes to whichever broker the selector chooses, unless the body names one in `broker`. Only `POST /api/orders/flatten` does that, because a closing order must reach the broker that holds the position; `POST /api/orders/place` removes the field before handing a caller's body over, so a caller cannot choose.
+
     It reacts to nothing. Once the broker has answered, the parent is `working` if the order was accepted, `rejected` if the broker refused it, or `failed` if the outcome is unknown. A later stage teaches it to follow the order's fills; until then the order update stream is not read for it and `working` is where it stops.
     """
 
@@ -32,17 +34,24 @@ class SimpleOrder(SyntheticOrder):
             RefusedRequestError: For an order answered without calling a broker.
         """
         order = self.concrete_order(self.read_order(self.parent.body))
+        broker_name = self.parent.body.get('broker')
         if order.dry_run:
             prepared = self.placement.prepare(
                 order,
                 self.parent.instrument_id,
+                broker_name,
             )
             return self.placement.dry_run_answer(prepared, started_at)
 
         self.record_received()
         self.save()
 
-        body, status, _ = self.place_leg('entry', order, started_at)
+        body, status, _ = self.place_leg(
+            'entry',
+            order,
+            started_at,
+            broker_name,
+        )
         outcome = body.get('outcome')
         self.record_state(
             OUTCOME_PARENT_STATES.get(outcome, 'failed'),

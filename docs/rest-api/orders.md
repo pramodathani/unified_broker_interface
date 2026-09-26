@@ -1028,6 +1028,6 @@ The order routes were written so that the API's own work adds as little as possi
 | `POST /place` (engine) | 3 or 4 | The first pipeline, an optional lookup by fields, then `XADD` of the intent and `BLPOP` for the answer |
 | `PUT /modify` | 1 to 3 | The first pipeline with every broker's order book; the token candidates; their catalogue data, each skipped when held by this worker |
 | `DELETE /cancel` | 1 | One pipeline with the token, logins, settings and every broker's order book |
-| `POST /flatten` | 1, plus more | One read of everything; one re-read of the order books every 0.25 s while waiting; three per position closed in direct mode |
+| `POST /flatten` | 1, plus more | One read of everything; one re-read of the order books every 0.25 s while waiting for the cancels; three per position closed in direct mode; one re-read of the position books every 0.25 s while waiting for the closed positions to show zero |
 
 When a broker is capped by `ORDER_DAILY_CAPS`, each request sent to it costs one more pipeline afterwards, to increment the count.
