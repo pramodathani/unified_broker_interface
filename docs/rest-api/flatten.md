@@ -13,11 +13,11 @@ The table below lists the one route on this page.
 
 ## Why the cancels go first
 
-The order of the two halves is the whole point of this route. Suppose you hold a long position with a stop-loss order resting below it. If the position were closed first, the stop would still be live at the exchange. When the price later fell to the stop, it would sell again and leave you short, which is a new trade that nobody chose. So the route cancels every open order first, then re-reads the brokers' order books until they agree the orders are gone, and only then sends closing orders.
+The order of the two halves is the whole point of this route. Suppose you hold a long position with a stop-loss order resting below it. If the position were closed first, the stop would still be live at the exchange. When the price later fell to the stop, it would sell again and leave you short, which is a new trade that nobody chose. So the route cancels every open order first, then re-reads the brokers' order books until they agree the orders are gone, and only then sends closing orders. After the closes it waits a second time, re-reading the brokers' positions until each closed one shows zero, and only then answers that the account is flat.
 
 <figure class="diagram">
 --8<-- "docs/assets/diagrams/flatten.svg"
-<figcaption>Orange dots are cancels, which leave first; blue dots are the re-reads of the order books while the route waits; green dots are the closing market orders, which leave only after the wait.</figcaption>
+<figcaption>Orange dots are the request, the cancels, which leave first, and the answer; blue dots are the re-reads of Redis while the route waits, first of the order books for the cancels and then of the positions for the closes; green dots are the closing market orders, which leave only after the first wait.</figcaption>
 </figure>
 
 ## Flatten
