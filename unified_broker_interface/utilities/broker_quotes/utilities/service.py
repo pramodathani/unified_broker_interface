@@ -27,6 +27,7 @@ indistinguishable but for `source`. The fetched quote is stored in `unified:quot
 import json
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from stock_brokers.instruments.ticks.utilities.pipeline import change_percent_from, quote_document
 from stock_brokers.instruments.ticks.utilities.registry import build_normalizers
@@ -58,6 +59,8 @@ BROKER_QUOTE_TTL_SECONDS = 2 * 86400
 
 # How often the resolver re-reads the mapping date, as the tick service does.
 RESOLVER_REFRESH_SECONDS = 30
+
+QUOTE_FETCH_THREADS = 4
 
 # Brokers whose REST quote module is in service: each was checked against live quotes and against
 # Zerodha on the same instruments. Two modules exist but are held back:
@@ -97,13 +100,99 @@ class QuoteService:
         - `identity` is the instrument's identity.
         - `mapping_date` is the mapping date the identity was resolved on.
         """
-        instrument_id = str(identity["instrument_id"])
-        now = time.time()
-        cached = self._cached(instrument_id)
-        if cached is not None and self._usable(cached, identity, now):
-            return {**cached, "source": "cache"}
+        answer = self.quotes([identity], mapping_date)[0]
+        if isinstance(answer, RequestError):
+            raise answer
+        return answer
 
-        handles = self.mapping_cache.order_handles_for_instruments([instrument_id], mapping_date).get(instrument_id, {})
+    def quotes(self, identities, mapping_date):
+        """
+        Several instruments' quote documents, each with `source` saying where it came from.
+
+        Every cached quote is read in one pipeline, and the handles of the instruments whose cached quote is not good enough are read together. Those instruments are then asked of their brokers, on up to QUOTE_FETCH_THREADS threads at once when there is more than one, so a batch with several quiet instruments waits for the slowest broker rather than for all of them in turn.
+
+        Args:
+            identities (list[dict]): The instruments' identities, in order.
+            mapping_date (datetime.date): The mapping date the identities were resolved on.
+
+        Returns:
+            list: One entry per instrument in order: the quote document, or the RequestError saying why no quote could be had.
+        """
+        now = time.time()
+        instrument_ids = []
+        for identity in identities:
+            instrument_ids.append(str(identity["instrument_id"]))
+        cached_documents = self._cached_many(instrument_ids)
+
+        answers = [None] * len(identities)
+        positions_for_brokers = []
+        for position, identity in enumerate(identities):
+            cached = cached_documents[position]
+            if cached is not None and self._usable(cached, identity, now):
+                answers[position] = {**cached, "source": "cache"}
+            else:
+                positions_for_brokers.append(position)
+        if not positions_for_brokers:
+            return answers
+
+        identifiers_for_brokers = []
+        for position in positions_for_brokers:
+            identifiers_for_brokers.append(instrument_ids[position])
+        handles_by_instrument = self.mapping_cache.order_handles_for_instruments(identifiers_for_brokers, mapping_date)
+
+        if len(positions_for_brokers) == 1:
+            position = positions_for_brokers[0]
+            answers[position] = self._answer_from_brokers(identities[position],
+                                                          handles_by_instrument.get(instrument_ids[position], {}),
+                                                          cached_documents[position], now)
+            return answers
+
+        threads = min(QUOTE_FETCH_THREADS, len(positions_for_brokers))
+        with ThreadPoolExecutor(max_workers=threads, thread_name_prefix="quote") as executor:
+            futures = {}
+            for position in positions_for_brokers:
+                futures[position] = executor.submit(self._answer_from_brokers, identities[position],
+                                                    handles_by_instrument.get(instrument_ids[position], {}),
+                                                    cached_documents[position], now)
+            for position, future in futures.items():
+                answers[position] = future.result()
+        return answers
+
+    def _answer_from_brokers(self, identity, handles, cached, now):
+        """
+        Ask the brokers that carry an instrument for its quote, turning a refusal into an answer.
+
+        Args:
+            identity (dict): The instrument's identity.
+            handles (dict): Broker names to that broker's handle on the instrument.
+            cached (dict | None): The cached quote that was not good enough, if there was one.
+            now (float): When the request started, as epoch seconds.
+
+        Returns:
+            dict | RequestError: The quote document, or the RequestError saying why no broker gave one.
+        """
+        try:
+            return self._from_brokers(identity, handles, cached, now)
+        except RequestError as error:
+            return error
+
+    def _from_brokers(self, identity, handles, cached, now):
+        """
+        Ask the brokers that carry an instrument for its quote, in the tick service's priority order.
+
+        Args:
+            identity (dict): The instrument's identity.
+            handles (dict): Broker names to that broker's handle on the instrument.
+            cached (dict | None): The cached quote that was not good enough, if there was one.
+            now (float): When the request started, as epoch seconds.
+
+        Returns:
+            dict: The quote document, with `source` set to "broker".
+
+        Raises:
+            RequestError: With status 503, when no broker that serves quotes carries the instrument or every one failed.
+        """
+        instrument_id = str(identity["instrument_id"])
         brokers = sorted((broker for broker in handles if broker in SOURCES),
                          key=lambda broker: rank(broker, identity["exchange"]))
         if not brokers:
@@ -120,24 +209,36 @@ class QuoteService:
             return {**document, "source": "broker"}
         raise RequestError(f"no recent quote is cached, and every broker failed - {'; '.join(failures)}", 503)
 
-    def _cached(self, instrument_id):
+    def _cached_many(self, instrument_ids):
         """
-        The more recently received of the live quote and a fetched one, or None.
+        The more recently received of the live quote and a fetched one, for each of several instruments.
+
+        Args:
+            instrument_ids (list[str]): The instrument ids, in order.
+
+        Returns:
+            list[dict | None]: One quote document per instrument in order, or None where neither hash holds a readable one.
         """
         pipeline = self.cache.pipeline()
-        pipeline.hget(LIVE_QUOTES_KEY, instrument_id)
-        pipeline.hget(BROKER_QUOTES_KEY, instrument_id)
-        best = None
-        for stored in pipeline.execute():
-            if not stored:
-                continue
-            try:
-                document = json.loads(stored)
-            except ValueError:
-                continue
-            if best is None or (document.get("received_at") or 0) > (best.get("received_at") or 0):
-                best = document
-        return best
+        for instrument_id in instrument_ids:
+            pipeline.hget(LIVE_QUOTES_KEY, instrument_id)
+            pipeline.hget(BROKER_QUOTES_KEY, instrument_id)
+        stored_values = pipeline.execute()
+
+        documents = []
+        for position in range(len(instrument_ids)):
+            best = None
+            for stored in (stored_values[2 * position], stored_values[2 * position + 1]):
+                if not stored:
+                    continue
+                try:
+                    document = json.loads(stored)
+                except ValueError:
+                    continue
+                if best is None or (document.get("received_at") or 0) > (best.get("received_at") or 0):
+                    best = document
+            documents.append(best)
+        return documents
 
     def _usable(self, document, identity, now):
         """
