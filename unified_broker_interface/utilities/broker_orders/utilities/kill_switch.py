@@ -139,6 +139,29 @@ class KillSwitch:
                 })
         return closing
 
+    def still_held(self, position_books, closed):
+        """Which of the positions sent a closing order a broker still reports as held.
+
+        A position is held while its entry is still in the broker's hash with a quantity other than zero. An entry that has disappeared counts as closed, in the same way that `still_open` treats an order whose entry has gone.
+
+        Args:
+            position_books (dict): Each broker's positions entries, decoded, by broker name, read again.
+            closed (list): The entries from `positions_to_close` whose closing order was accepted.
+
+        Returns:
+            list: The `(broker, position_key)` pairs still held.
+        """
+        held = []
+        for position in closed:
+            entries = position_books.get(position['broker']) or {}
+            entry = entries.get(position['position_key'])
+            current = (entry or {}).get('position')
+            if not isinstance(current, dict):
+                continue
+            if self.whole(current.get('quantity')):
+                held.append((position['broker'], position['position_key']))
+        return held
+
     def whole(self, value):
         """A signed quantity as an integer, or zero when it cannot be read.
 

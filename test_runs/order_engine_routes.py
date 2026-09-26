@@ -246,6 +246,11 @@ class OrderEngineScenarios:
                 reply=self.accepted_answer(),
             ),
             self.place(
+                'a_caller_cannot_choose_the_broker',
+                self.bodies.market_order(dry_run=None, broker='fyers'),
+                reply=self.accepted_answer(),
+            ),
+            self.place(
                 'engine_reports_a_broker_refusal',
                 self.bodies.market_order(dry_run=None),
                 reply=self.rejected_answer(),
