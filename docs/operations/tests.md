@@ -1,6 +1,6 @@
 # Offline tests
 
-UBI has no pytest suite. Instead, `test_runs/` holds twelve plain Python scripts, each of which checks one part of the system against scripted inputs. They are called "offline" because they need no network, no broker, no Redis and no database: every outside service is replaced by a stand-in that lives in memory. You run each one as a module from the project root.
+UBI has no pytest suite. Instead, `test_runs/` holds thirteen plain Python scripts, each of which checks one part of the system against scripted inputs. They are called "offline" because they need no network, no broker, no Redis and no database: every outside service is replaced by a stand-in that lives in memory. You run each one as a module from the project root.
 
 ```bash
 .venv/bin/python -m test_runs.order_routes
@@ -10,7 +10,7 @@ Because they are plain scripts, there is no way to run a single case other than 
 
 ## The suites
 
-The table below lists all twelve. "Fixture" is the recording a suite compares against, if it has one, and "Runtime" is what one run took on this machine on 2026-09-26.
+The table below lists all thirteen. "Fixture" is the recording a suite compares against, if it has one, and "Runtime" is what one run took on this machine on 2026-09-26.
 
 | Command | What it pins | Fixture | `--record` | Runtime |
 |---|---|---|---|---:|
@@ -18,6 +18,7 @@ The table below lists all twelve. "Fixture" is the recording a suite compares ag
 | `python -m test_runs.unified_ticks_sessions` | The session gate against the exchanges' 2026 calendars: holidays, half-closed commodity days, NCDEX's shorter evening, Muhurat trading | none | no | 0.1 s |
 | `python -m test_runs.order_routes` | `place`, `modify` and `cancel`: status, body, every outgoing broker request and the number of Redis round trips | `test_runs/fixtures/order_routes.jsonl` (618 scenarios) | rewrites the whole file | 2.5 s |
 | `python -m test_runs.order_engine_routes` | `POST /api/orders/place` in engine mode: status, body, the intents written to the stream, Redis round trips | `test_runs/fixtures/order_engine_routes.jsonl` (20) | rewrites the whole file | 0.9 s |
+| `python -m test_runs.order_change_lists` | The list form of `modify` and `cancel`: each entry's status and body, the broker requests (sorted, since a list sends on several threads) and the Redis round trips | `test_runs/fixtures/order_change_lists.jsonl` (23) | rewrites the whole file | 0.9 s |
 | `python -m test_runs.order_engine` | The order engine daemon against scripted intents and stubbed brokers: replies, broker requests, acknowledgements, counters | `test_runs/fixtures/order_engine.jsonl` (154) | rewrites the whole file | 0.9 s |
 | `python -m test_runs.order_flatten` | The panic button, including that every cancel is sent and confirmed before any close, and that `flat` waits for the positions to show zero | `test_runs/fixtures/order_flatten.jsonl` (13) | rewrites the whole file | 1.9 s |
 | `python -m test_runs.instrument_routes` | `/details`, `/additional_details`, `/ltp`, `/ohlc`, `/quote`, `/prices` and `/ticks`, by `GET` for one instrument and by `POST` for a list: status, body, Redis round trips, the broker quotes asked for and the tick queries run | `test_runs/fixtures/instrument_routes.jsonl` (52) | rewrites the whole file | 1.2 s |
@@ -27,7 +28,7 @@ The table below lists all twelve. "Fixture" is the recording a suite compares ag
 | `python -m test_runs.websocket_feeds` | Every broker's quotes and order sockets against scripted connections: every Redis command, frame sent, log line, login and wait | `test_runs/fixtures/websocket_feeds.jsonl` (160) | rewrites only the named brokers' lines | 0.6 s |
 | `python -m test_runs.connection_warming` | That connection warming and the idle limit never make an order fail, against a local HTTP server that misbehaves | none | no | 36.4 s |
 
-`order_engine_routes` has a fixture of its own on purpose. `--record` rewrites a whole file, so recording its scenarios into `order_routes.jsonl` would silently rewrite the recording that proves the direct path never changed.
+`order_engine_routes` and `order_change_lists` each have a fixture of their own on purpose. `--record` rewrites a whole file, so recording their scenarios into `order_routes.jsonl` would silently rewrite the recording that proves the direct path and the single form never changed.
 
 ## Running them all
 
@@ -42,6 +43,8 @@ The output below is the last lines of each suite from one run on 2026-09-26. `or
 618 of 618 scenarios match the recording, 0 differ
 ===== order_engine_routes
 20 of 20 scenarios match the recording, 0 differ
+===== order_change_lists
+23 of 23 scenarios match the recording, 0 differ
 ===== order_engine
 154 of 154 scenarios match the recording, 0 differ
 ===== order_flatten
@@ -69,7 +72,7 @@ The output below is the last lines of each suite from one run on 2026-09-26. `or
 
 ## How the recording suites work
 
-Six suites (`order_routes`, `order_engine_routes`, `order_engine`, `order_flatten`, `instrument_routes` and `websocket_feeds`) do not state their expected results in code. Instead they record everything the code under test did, and compare it with a recording made earlier from code that was known to be right. It works like a flight recorder: any change in behaviour, however small, shows up as a difference.
+Seven suites (`order_routes`, `order_engine_routes`, `order_change_lists`, `order_engine`, `order_flatten`, `instrument_routes` and `websocket_feeds`) do not state their expected results in code. Instead they record everything the code under test did, and compare it with a recording made earlier from code that was known to be right. It works like a flight recorder: any change in behaviour, however small, shows up as a difference.
 
 The flowchart below shows one run of `order_routes`.
 
@@ -117,11 +120,11 @@ Two lines from the real fixture show what a recorded scenario looks like:
 
 ## Which suites read `.env`
 
-None of the suites connects to anything, but most of them import `utilities.configurations`, which loads the project's `.env` with python-dotenv. The docstrings of `order_routes`, `order_engine_routes`, `order_engine`, `order_flatten` and `instrument_routes` state that `.env` has to exist for that import. Checking which modules the import pulls in shows the split below.
+None of the suites connects to anything, but most of them import `utilities.configurations`, which loads the project's `.env` with python-dotenv. The docstrings of `order_routes`, `order_engine_routes`, `order_change_lists`, `order_engine`, `order_flatten` and `instrument_routes` state that `.env` has to exist for that import. Checking which modules the import pulls in shows the split below.
 
 | Loads `utilities.configurations` on import | Does not |
 |---|---|
-| `candle_parse`, `order_routes`, `order_engine_routes`, `order_engine`, `order_flatten`, `instrument_routes`, `contract_sizes`, `price_cache`, `connection_warming` | `unified_ticks_sessions`, `virtual_queue`, `websocket_feeds` (the package itself) |
+| `candle_parse`, `order_routes`, `order_engine_routes`, `order_change_lists`, `order_engine`, `order_flatten`, `instrument_routes`, `contract_sizes`, `price_cache`, `connection_warming` | `unified_ticks_sessions`, `virtual_queue`, `websocket_feeds` (the package itself) |
 
 Settings in `.env` can change what the API code does, as the `order_routes` warning above shows, so a failing suite is worth checking against `.env` before assuming the code is wrong.
 
