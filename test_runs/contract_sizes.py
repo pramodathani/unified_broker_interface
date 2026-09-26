@@ -1,6 +1,6 @@
 """Offline checks of the rule that decides whether a currency or commodity contract's size is trusted.
 
-The rule in `stock_brokers/instruments/mapping/utilities/contract_sizes.py` is run on made-up source figures, so no database, Redis or network is used.
+The rules in `stock_brokers/instruments/mapping/utilities/contract_sizes.py`, the per-contract decision and the upgrade of an MCX single-source contract by its confirmed siblings, are run on made-up source figures, so no database, Redis or network is used.
 
 Typical usage:
 
@@ -68,6 +68,34 @@ class ContractSizeDecisionSuite:
             self.failed.append(name)
             print(f'FAILED  {name}: expected {expected}, got {actual}')
 
+    def check_siblings(self, name, segment, decided, sibling_sizes, expected):
+        """Runs the sibling rule on one decision and records whether it gave the expected status.
+
+        Args:
+            name (str): The check's name.
+            segment (str): The contract's segment.
+            decided (tuple): The `(units_per_lot, status, tradeable)` the first rule gave.
+            sibling_sizes (set): The confirmed sizes of the same underlying in the segment.
+            expected (tuple): The expected `(status, tradeable)`.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        units_per_lot, status, tradeable = decided
+        actual = self.decision.settle_by_siblings(
+            segment,
+            units_per_lot,
+            status,
+            tradeable,
+            sibling_sizes,
+        )
+        if actual == expected:
+            self.passed = self.passed + 1
+            print(f'ok      {name}: {actual}')
+        else:
+            self.failed.append(name)
+            print(f'FAILED  {name}: expected {expected}, got {actual}')
+
     def run(self):
         """Runs every check.
 
@@ -123,6 +151,60 @@ class ContractSizeDecisionSuite:
             'mcx_commodity_futures',
             {},
             (None, 'no_source', False),
+        )
+        natural_gas = decimal.Decimal('1250')
+        self.check_siblings(
+            'a single MCX source matching every confirmed sibling is sibling confirmed',
+            'mcx_commodity_options',
+            (natural_gas, 'single_source', False),
+            {
+                decimal.Decimal('1250.0'),
+            },
+            ('sibling_confirmed', True),
+        )
+        self.check_siblings(
+            'a single MCX source is not upgraded when the siblings have two sizes',
+            'mcx_commodity_index_options',
+            (decimal.Decimal('15'), 'single_source', False),
+            {
+                decimal.Decimal('15'),
+                decimal.Decimal('30'),
+            },
+            ('single_source', False),
+        )
+        self.check_siblings(
+            'a single MCX source that disagrees with its siblings is not upgraded',
+            'mcx_commodity_options',
+            (natural_gas, 'single_source', False),
+            {
+                decimal.Decimal('250'),
+            },
+            ('single_source', False),
+        )
+        self.check_siblings(
+            'a single MCX source with no confirmed sibling is not upgraded',
+            'mcx_commodity_options',
+            (natural_gas, 'single_source', False),
+            set(),
+            ('single_source', False),
+        )
+        self.check_siblings(
+            'a single NSE commodity source is not upgraded outside MCX',
+            'nse_commodity_futures',
+            (decimal.Decimal('1'), 'single_source', False),
+            {
+                decimal.Decimal('1'),
+            },
+            ('single_source', False),
+        )
+        self.check_siblings(
+            'a conflict is never upgraded',
+            'mcx_commodity_options',
+            (None, 'conflict', False),
+            {
+                None,
+            },
+            ('conflict', False),
         )
         total = self.passed + len(self.failed)
         print(f'{self.passed}/{total} checks passed.')

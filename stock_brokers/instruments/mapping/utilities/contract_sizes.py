@@ -6,7 +6,9 @@ Decide, once per mapping date, how many quotation units one lot of every currenc
 
 The brokers' own `lot_size` figures cannot be compared on these markets, because each broker counts a lot in its own unit: on MCX, GOLD's lot is 1 at Zerodha (one lot), 1 at Kotak (one kilogram) and 100 at Groww (quotation units of 10 grams). Several brokers' instrument files also carry the exchange's contract size fields, and those are read here as independent sources, each in quotation units: Wisdom Capital's `multiplier`, Kotak's lot size times its general numerator over its general denominator (or its multiplier on the currency segment), Groww's commodity lot size, Shoonya's lot size times its multiplier on NSE currencies, and Stoxkart's lot size on the currency and NCDEX segments.
 
-A contract is `confirmed` when at least two sources give a size and every one gives the same size. It is `single_source` when exactly one does, `conflict` when sources disagree, and `no_source` when none does. `tradeable` is true for a confirmed contract, and for a single-source contract only on BSE currencies and NCDEX, where Stoxkart is the only broker that lists them. The decision and every source's figure are written to `unified.contract_sizes` for the date, so an order reads a stored decision rather than making one.
+A contract is `confirmed` when at least two sources give a size and every one gives the same size. It is `single_source` when exactly one does, `conflict` when sources disagree, and `no_source` when none does. `tradeable` is true for a confirmed contract, and for a single-source contract only on BSE currencies and NCDEX, where Stoxkart is the only broker that lists them.
+
+On MCX a newly listed far-month contract often has one source only, because some brokers list new expiries later than others. Such a contract is `sibling_confirmed` and tradeable when every confirmed contract of the same underlying in the same segment on the date has one and the same size, and that size is the single source's figure. An underlying whose confirmed contracts already come in more than one size, as when the exchange has revised a lot size, gives no such answer, and its single-source contracts stay untradeable. The decision and every source's figure are written to `unified.contract_sizes` for the date, so an order reads a stored decision rather than making one.
 """
 
 import argparse
@@ -247,6 +249,7 @@ class ContractSizeDecision:
 
     Attributes:
         SINGLE_SOURCE_MARKETS (list): The `(exchange, asset class)` markets where one source is enough to trade, because only one broker lists them.
+        SIBLING_MARKETS (list): The `(exchange, asset class)` markets where one source is enough to trade when the underlying's confirmed contracts in the segment all have that size.
     """
 
     SINGLE_SOURCE_MARKETS = [
@@ -256,6 +259,12 @@ class ContractSizeDecision:
         ),
         (
             "ncdex",
+            "commodity",
+        ),
+    ]
+    SIBLING_MARKETS = [
+        (
+            "mcx",
             "commodity",
         ),
     ]
@@ -296,6 +305,28 @@ class ContractSizeDecision:
             tradeable = self.market(segment) in self.SINGLE_SOURCE_MARKETS
             return units_per_lot, "single_source", tradeable
         return units_per_lot, "confirmed", True
+
+    def settle_by_siblings(self, segment, units_per_lot, status, tradeable, sibling_sizes):
+        """
+        Upgrades an untradeable single-source decision when the underlying's confirmed contracts all agree with it.
+
+        Args:
+            segment (str): The contract's exchange-prefixed segment.
+            units_per_lot (decimal.Decimal | None): The size `decide` gave.
+            status (str): The status `decide` gave.
+            tradeable (bool): Whether `decide` made the contract tradeable.
+            sibling_sizes (set): The distinct sizes of the confirmed contracts of the same underlying in the same segment on the date.
+
+        Returns:
+            tuple: `(status, tradeable)`, which is `("sibling_confirmed", True)` when the decision is upgraded and the given status and tradeable otherwise.
+        """
+        if status != "single_source" or tradeable:
+            return status, tradeable
+        if self.market(segment) not in self.SIBLING_MARKETS:
+            return status, tradeable
+        if sibling_sizes != {units_per_lot}:
+            return status, tradeable
+        return "sibling_confirmed", True
 
 
 class ContractSizeResolver:
@@ -358,10 +389,10 @@ class ContractSizeResolver:
             segments (list): The exchange-prefixed segments.
 
         Returns:
-            dict: Instrument ids to their segments.
+            dict: Instrument ids to `(segment, underlying symbol)` tuples, where the underlying symbol may be None.
         """
         statement = text(
-            f"SELECT DISTINCT m.instrument_id::text AS instrument_id, i.segment "
+            f"SELECT DISTINCT m.instrument_id::text AS instrument_id, i.segment, i.underlying_symbol "
             f"FROM {tables.BROKER_MAPPINGS} m "
             f"JOIN {tables.MASTER} i ON i.instrument_id = m.instrument_id "
             "WHERE m.mapping_date = :mapping_date "
@@ -377,7 +408,10 @@ class ContractSizeResolver:
             },
         )
         for row in rows:
-            contracts[row.instrument_id] = row.segment
+            contracts[row.instrument_id] = (
+                row.segment,
+                row.underlying_symbol,
+            )
         return contracts
 
     def decisions(self, mapping_date):
@@ -399,13 +433,29 @@ class ContractSizeResolver:
                 sizes = source.read(connection, mapping_date, segments)
                 for instrument_id, units in sizes.items():
                     figures_by_contract[instrument_id][source.NAME] = units
-        rows = []
-        for instrument_id, segment in contracts.items():
+        decided = {}
+        confirmed_sizes = collections.defaultdict(set)
+        for instrument_id, (segment, underlying_symbol) in contracts.items():
             figures = figures_by_contract.get(instrument_id, {})
             units_per_lot, status, tradeable = self.decision.decide(
                 segment,
                 figures,
             )
+            decided[instrument_id] = (units_per_lot, status, tradeable)
+            if status == "confirmed" and underlying_symbol is not None:
+                confirmed_sizes[(segment, underlying_symbol)].add(units_per_lot)
+        rows = []
+        for instrument_id, (segment, underlying_symbol) in contracts.items():
+            figures = figures_by_contract.get(instrument_id, {})
+            units_per_lot, status, tradeable = decided[instrument_id]
+            if underlying_symbol is not None:
+                status, tradeable = self.decision.settle_by_siblings(
+                    segment,
+                    units_per_lot,
+                    status,
+                    tradeable,
+                    confirmed_sizes.get((segment, underlying_symbol), set()),
+                )
             recorded_figures = {}
             for source_name, units in figures.items():
                 recorded_figures[source_name] = format(units, "f")
