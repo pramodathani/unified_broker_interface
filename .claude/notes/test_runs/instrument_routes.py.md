@@ -4,6 +4,15 @@
 
 Nothing drove the instrument routes offline before it. It was written first, against the code as it stood, so that letting the routes accept a list of instruments could be checked against a recording of what the single-instrument routes did. The single `GET` scenarios are that proof: they were recorded before any route code changed, and a refactor of the catalogue, the quote service or the history module must leave them unchanged.
 
+## What the `POST` scenarios pin
+
+The batch scenarios were added after the single ones, and adding them left every single scenario's line unchanged. They pin four things:
+
+- Each entry's `data` is identical to the single `GET` answer for the same instrument.
+- A list costs the same Redis round trips as one instrument. For example, `details_batch_mixed` names four instruments in every way a batch accepts and costs 7 round trips, the same as `details_by_symbol`.
+- Every way a body is refused, and every way a single item fails, gives the documented status and message.
+- A tick query that fails part way through a streamed batch still leaves valid JSON (`ticks_batch_query_fails_part_way`).
+
 ## Why it has its own fixture
 
 `--record` rewrites a whole file, for the same reason given in `order_engine_routes.py.md`. Recording these scenarios into `order_routes.jsonl` would rewrite the evidence for the order routes.
@@ -24,4 +33,4 @@ A fresh blueprint and a fresh mapping cache are built per scenario. The mapping 
 
 ## What is not covered
 
-The Postgres fallbacks (a past `date`, a cold cache, the history of an instrument no longer mapped) are not driven, because they need SQL answers the stand-in engine does not give. `/prices` is driven only from its Redis copy. The `days` form of `/prices` is not driven, because it reads `date.today()`.
+The Postgres fallbacks (a past `date`, a cold cache, the history of an instrument no longer mapped) are not driven, because they need SQL answers the stand-in engine does not give. For the same reason, the batch `/prices` and `/ticks` scenarios name no unknown instrument: with `mapped_only=False` an unknown instrument falls through to Postgres, and the stand-in engine would answer that with a 500. `/prices` is driven only from its Redis copy. The `days` form of `/prices` is not driven, because it reads `date.today()`.

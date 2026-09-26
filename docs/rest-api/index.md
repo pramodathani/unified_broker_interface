@@ -6,7 +6,7 @@ This page is the map. It lists every route, explains the conventions that all of
 
 ## All endpoints
 
-The table below lists all 26 routes. The badge shows the HTTP method, and the lock column shows which routes need the `access-token` header.
+The table below lists all 26 routes in 33 rows, because the seven instrument routes that also take a list of instruments by `POST` appear once for each method. The badge shows the HTTP method, and the lock column shows which routes need the `access-token` header.
 
 | Method | Endpoint | What it does | Token |
 |---|---|---|:---:|
@@ -21,12 +21,19 @@ The table below lists all 26 routes. The badge shows the HTTP method, and the lo
 | <span class="method get">GET</span> | [`/api/instruments/master`](instruments.md#master) | The whole instrument list of a segment, streamed | :material-lock: |
 | <span class="method get">GET</span> | [`/api/instruments/search`](instruments.md#search) | Searches one segment by symbol or name | :material-lock: |
 | <span class="method get">GET</span> | [`/api/instruments/details`](instruments.md#details) | One instrument and how each broker names it | :material-lock: |
+| <span class="method post">POST</span> | [`/api/instruments/details`](instruments.md#details-for-several-instruments) | The same for up to 50 instruments in one request | :material-lock: |
 | <span class="method get">GET</span> | [`/api/instruments/additional_details`](instruments.md#additional-details) | Extra broker-specific attributes of one instrument | :material-lock: |
+| <span class="method post">POST</span> | [`/api/instruments/additional_details`](instruments.md#additional-details-for-several-instruments) | The same for up to 50 instruments in one request | :material-lock: |
 | <span class="method get">GET</span> | [`/api/instruments/ltp`](market-quotes.md#ltp) | Last traded price | :material-lock: |
+| <span class="method post">POST</span> | [`/api/instruments/ltp`](market-quotes.md#ltp-for-several-instruments) | The same for up to 50 instruments in one request | :material-lock: |
 | <span class="method get">GET</span> | [`/api/instruments/ohlc`](market-quotes.md#ohlc) | Last price plus the day's open, high, low and close | :material-lock: |
+| <span class="method post">POST</span> | [`/api/instruments/ohlc`](market-quotes.md#ohlc-for-several-instruments) | The same for up to 50 instruments in one request | :material-lock: |
 | <span class="method get">GET</span> | [`/api/instruments/quote`](market-quotes.md#quote) | The full quote, including market depth | :material-lock: |
+| <span class="method post">POST</span> | [`/api/instruments/quote`](market-quotes.md#quote-for-several-instruments) | The same for up to 50 instruments in one request | :material-lock: |
 | <span class="method get">GET</span> | [`/api/instruments/prices`](historical-data.md#prices) | Historical candles, adjusted for corporate actions if asked | :material-lock: |
+| <span class="method post">POST</span> | [`/api/instruments/prices`](historical-data.md#prices-for-several-instruments) | The same for up to 50 instruments in one request | :material-lock: |
 | <span class="method get">GET</span> | [`/api/instruments/ticks`](historical-data.md#ticks) | Every recorded tick between two times, streamed | :material-lock: |
+| <span class="method post">POST</span> | [`/api/instruments/ticks`](historical-data.md#ticks-for-several-instruments) | The same for up to 50 instruments in one request | :material-lock: |
 | <span class="method get">GET</span> | [`/api/portfolio/funds`](portfolio.md#funds) | Cash and margin, summed across brokers | :material-lock: |
 | <span class="method get">GET</span> | [`/api/portfolio/holdings`](portfolio.md#holdings) | Long-term holdings, combined and priced | :material-lock: |
 | <span class="method get">GET</span> | [`/api/portfolio/positions`](portfolio.md#positions) | Open positions, combined | :material-lock: |

@@ -114,6 +114,28 @@ def _read_candles(engine, instrument_id, interval, basis, from_date, to_date, kn
         series.append(candle)
     return series
 
+def check_candle_range(interval, from_date, to_date):
+    """
+    Refuse a candle request whose interval or date range cannot be answered.
+
+    Args:
+        interval (str): The interval asked for.
+        from_date (datetime.date): The first day asked for.
+        to_date (datetime.date): The last day asked for.
+
+    Returns:
+        None: This function returns nothing.
+
+    Raises:
+        RequestError: When the interval is not one of LOADED_INTERVALS, the range ends before it starts, or an intraday range spans more than MAX_INTRADAY_DAYS days.
+    """
+    if interval not in LOADED_INTERVALS:
+        raise RequestError(f"interval must be one of {', '.join(LOADED_INTERVALS)}")
+    if to_date < from_date:
+        raise RequestError("to must not be before from")
+    if interval != "day" and (to_date - from_date).days > MAX_INTRADAY_DAYS:
+        raise RequestError(f"an intraday range may span at most {MAX_INTRADAY_DAYS} days")
+
 def candles(engine, cache, identity, interval, from_date, to_date, adjusted, known_as_of):
     """
     One instrument's candles between two dates, inclusive, as a JSON-ready answer.
@@ -129,13 +151,8 @@ def candles(engine, cache, identity, interval, from_date, to_date, adjusted, kno
     - `adjusted` asks for adjusted prices, which only an adjustable instrument has.
     - `known_as_of` limits the factors applied to those known by that date, or None for all.
     """
-    if interval not in LOADED_INTERVALS:
-        raise RequestError(f"interval must be one of {', '.join(LOADED_INTERVALS)}")
-    if to_date < from_date:
-        raise RequestError("to must not be before from")
+    check_candle_range(interval, from_date, to_date)
     maximum_days = None if interval == "day" else MAX_INTRADAY_DAYS
-    if maximum_days is not None and (to_date - from_date).days > maximum_days:
-        raise RequestError(f"an intraday range may span at most {maximum_days} days")
 
     adjustable, basis = price_basis(identity["segment"], adjusted)
     columns = list(CANDLE_COLUMNS)

@@ -1,6 +1,6 @@
-"""Offline check of the single-instrument routes of `/api/instruments` against a recording of their behaviour.
+"""Offline check of the instrument routes of `/api/instruments` against a recording of their behaviour.
 
-Runs `/details`, `/additional_details`, `/ltp`, `/ohlc`, `/quote`, `/prices` and `/ticks` in-process through Flask's test client. Redis is replaced by the in-memory stand-in `test_runs/order_routes.py` uses, filled through the mapping cache's own encoders, and the blueprint's mapping cache, catalogue and quote service are built around it. Postgres is replaced by an engine that answers only the tick query and fails on anything else, so a scenario that reached the database unexpectedly shows up as a 500. A broker quote is replaced by a scripted answer per broker, and the clock the quote service reads is fixed.
+Runs `/details`, `/additional_details`, `/ltp`, `/ohlc`, `/quote`, `/prices` and `/ticks` in-process through Flask's test client, each by `GET` for one instrument and by `POST` for a list. Redis is replaced by the in-memory stand-in `test_runs/order_routes.py` uses, filled through the mapping cache's own encoders, and the blueprint's mapping cache, catalogue and quote service are built around it. Postgres is replaced by an engine that answers only the tick query and fails on anything else, so a scenario that reached the database unexpectedly shows up as a 500. A broker quote is replaced by a scripted answer per broker, and the clock the quote service reads is fixed.
 
 For each scenario it keeps the HTTP status, the response body, the Redis round trips and the broker quotes asked for, and compares them with `test_runs/fixtures/instrument_routes.jsonl`.
 
@@ -227,6 +227,8 @@ class TickConnection:
         if not is_tick_query:
             raise RuntimeError(f'the suite does not answer this statement: {sql}')
         self.engine.statements = self.engine.statements + 1
+        if parameters['instrument_id'] == self.engine.failing_instrument:
+            raise RuntimeError('stand-in tick query failure')
         rows = []
         for instrument_id, values in self.engine.rows:
             if instrument_id != parameters['instrument_id']:
@@ -245,19 +247,22 @@ class TickEngine:
     Attributes:
         rows (list): `(instrument_id, column values)` pairs, oldest first.
         statements (int): How many tick queries were run.
+        failing_instrument (str | None): The instrument whose tick query raises, or None when none does.
     """
 
-    def __init__(self, rows):
+    def __init__(self, rows, failing_instrument=None):
         """Builds the engine around its rows.
 
         Args:
             rows (list): `(instrument_id, column values)` pairs, oldest first.
+            failing_instrument (str | None): The instrument whose tick query raises, or None when none does.
 
         Returns:
             None: This method returns nothing.
         """
         self.rows = rows
         self.statements = 0
+        self.failing_instrument = failing_instrument
 
     def connect(self):
         """Opens a connection.
@@ -723,6 +728,9 @@ class InstrumentRoutesScenarios:
         scenarios.extend(self.details_scenarios())
         scenarios.extend(self.quote_scenarios())
         scenarios.extend(self.history_scenarios())
+        scenarios.extend(self.details_batch_scenarios())
+        scenarios.extend(self.quote_batch_scenarios())
+        scenarios.extend(self.history_batch_scenarios())
         return scenarios
 
     def get(self, name, route, query, **settings):
@@ -742,6 +750,27 @@ class InstrumentRoutesScenarios:
             'method': 'GET',
             'route': route,
             'query': query,
+        }
+        scenario.update(settings)
+        return scenario
+
+    def post(self, name, route, body, **settings):
+        """Builds one POST scenario.
+
+        Args:
+            name (str): The scenario's name.
+            route (str): The route under `/api/instruments/`.
+            body (Any): The JSON body, or None to send none.
+            **settings: Other scenario settings, such as `brokers` or `headers`.
+
+        Returns:
+            dict: The scenario.
+        """
+        scenario = {
+            'name': name,
+            'method': 'POST',
+            'route': route,
+            'body': body,
         }
         scenario.update(settings)
         return scenario
@@ -941,6 +970,343 @@ class InstrumentRoutesScenarios:
         ]
 
 
+    def mixed_instruments(self):
+        """Builds a list naming four instruments in every way a batch accepts: by id, by symbol, and by future and option fields, with JSON numbers.
+
+        Returns:
+            list: The list's items.
+        """
+        return [
+            self.by_id('infy'),
+            {
+                'exchange': 'nse',
+                'segment': 'equities',
+                'symbol': 'RELIANCE',
+            },
+            {
+                'exchange': 'nse',
+                'segment': 'equity_index_futures',
+                'underlying_symbol': 'NIFTY',
+                'expiry_date': '2026-10-27',
+            },
+            {
+                'exchange': 'nse',
+                'segment': 'equity_index_options',
+                'underlying_symbol': 'NIFTY',
+                'expiry_date': '2026-10-27',
+                'strike_price': 25000,
+                'option_type': 'ce',
+            },
+        ]
+
+    def failing_instruments(self):
+        """Builds a list in which every item but the last fails in a different way.
+
+        Returns:
+            list: The list's items.
+        """
+        return [
+            self.by_id('unknown'),
+            {
+                'exchange': 'nse',
+                'segment': 'equities',
+                'symbol': 'NOSUCHSTOCK',
+            },
+            {
+                'exchange': 'nse',
+                'segment': 'equity_index_futures',
+                'underlying_symbol': 'NIFTY',
+            },
+            'INFY',
+            {
+                'instrument_id': 'not-a-uuid',
+            },
+            {
+                'exchange': 'nse',
+                'segment': 'equities',
+                'symbol': [
+                    'INFY',
+                ],
+            },
+            self.by_id('infy'),
+        ]
+
+    def details_batch_scenarios(self):
+        """Builds the batch `/details` and `/additional_details` scenarios, including every way a body is refused.
+
+        Returns:
+            list: The scenarios.
+        """
+        too_many = []
+        for _ in range(51):
+            too_many.append(self.by_id('infy'))
+        return [
+            self.post('details_batch_mixed', 'details', {'instruments': self.mixed_instruments()}),
+            self.post(
+                'details_batch_one',
+                'details',
+                {
+                    'instruments': [
+                        self.by_id('infy'),
+                    ],
+                },
+            ),
+            self.post(
+                'details_batch_ids_only',
+                'details',
+                {
+                    'instruments': [
+                        self.by_id('infy'),
+                        self.by_id('reliance'),
+                        self.by_id('nifty_future'),
+                    ],
+                },
+            ),
+            self.post('details_batch_failures', 'details', {'instruments': self.failing_instruments()}),
+            self.post('details_batch_no_body', 'details', None),
+            self.post(
+                'details_batch_body_not_object',
+                'details',
+                [
+                    self.by_id('infy'),
+                ],
+            ),
+            self.post('details_batch_no_list', 'details', {'date': '2026-09-15'}),
+            self.post('details_batch_empty_list', 'details', {'instruments': []}),
+            self.post('details_batch_over_limit', 'details', {'instruments': too_many}),
+            self.post(
+                'details_batch_bad_date',
+                'details',
+                {
+                    'instruments': [
+                        self.by_id('infy'),
+                    ],
+                    'date': 'yesterday',
+                },
+            ),
+            self.post(
+                'details_batch_shared_parameter_not_text',
+                'details',
+                {
+                    'instruments': [
+                        self.by_id('infy'),
+                    ],
+                    'date': {
+                        'day': 15,
+                    },
+                },
+            ),
+            self.post(
+                'details_batch_no_token',
+                'details',
+                {
+                    'instruments': [
+                        self.by_id('infy'),
+                    ],
+                },
+                headers={},
+            ),
+            self.post(
+                'additional_details_batch',
+                'additional_details',
+                {
+                    'instruments': [
+                        self.by_id('infy'),
+                        self.by_id('reliance'),
+                        self.by_id('unknown'),
+                    ],
+                },
+            ),
+        ]
+
+    def quote_batch_scenarios(self):
+        """Builds the batch `/ltp`, `/ohlc` and `/quote` scenarios.
+
+        Returns:
+            list: The scenarios.
+        """
+        brokers = {
+            'zerodha': 2875.5,
+            'dhan': 2875.0,
+        }
+        every_kind = {
+            'instruments': [
+                self.by_id('infy'),
+                self.by_id('reliance'),
+                self.by_id('nifty_option'),
+                self.by_id('unquoted'),
+                self.by_id('unknown'),
+                self.by_id('nifty_future'),
+                'INFY',
+            ],
+        }
+        return [
+            self.post(
+                'ltp_batch_all_cached',
+                'ltp',
+                {
+                    'instruments': [
+                        self.by_id('infy'),
+                        {
+                            'exchange': 'nse',
+                            'segment': 'equities',
+                            'symbol': 'INFY',
+                        },
+                    ],
+                },
+            ),
+            self.post('ltp_batch_every_kind', 'ltp', every_kind, brokers=brokers),
+            self.post(
+                'ltp_batch_first_broker_fails',
+                'ltp',
+                {
+                    'instruments': [
+                        self.by_id('reliance'),
+                        self.by_id('nifty_option'),
+                        self.by_id('nifty_future'),
+                    ],
+                },
+                brokers={
+                    'zerodha': 'Kite returned no quote',
+                    'dhan': 2875.0,
+                },
+            ),
+            self.post(
+                'ohlc_batch',
+                'ohlc',
+                {
+                    'instruments': [
+                        self.by_id('infy'),
+                        self.by_id('reliance'),
+                    ],
+                },
+                brokers=brokers,
+            ),
+            self.post(
+                'quote_batch',
+                'quote',
+                {
+                    'instruments': [
+                        self.by_id('infy'),
+                        self.by_id('reliance'),
+                    ],
+                },
+                brokers=brokers,
+            ),
+        ]
+
+    def history_batch_scenarios(self):
+        """Builds the batch `/prices` and `/ticks` scenarios.
+
+        Returns:
+            list: The scenarios.
+        """
+        infy_twice = [
+            self.by_id('infy'),
+            {
+                'exchange': 'nse',
+                'segment': 'equities',
+                'symbol': 'INFY',
+            },
+            'INFY',
+        ]
+        infy_and_future = [
+            self.by_id('infy'),
+            {
+                'exchange': 'nse',
+                'segment': 'equity_index_futures',
+                'underlying_symbol': 'NIFTY',
+                'expiry_date': '2026-10-27',
+            },
+            'INFY',
+        ]
+        return [
+            self.post(
+                'prices_batch_from_cache',
+                'prices',
+                {
+                    'instruments': infy_twice,
+                    'interval': 'day',
+                    'from': '2026-09-02',
+                    'to': '2026-09-04',
+                },
+            ),
+            self.post(
+                'prices_batch_missing_interval',
+                'prices',
+                {
+                    'instruments': infy_twice,
+                    'from': '2026-09-02',
+                    'to': '2026-09-04',
+                },
+            ),
+            self.post(
+                'prices_batch_unknown_interval',
+                'prices',
+                {
+                    'instruments': infy_twice,
+                    'interval': 'week',
+                    'from': '2026-09-02',
+                    'to': '2026-09-04',
+                },
+            ),
+            self.post(
+                'prices_batch_to_before_from',
+                'prices',
+                {
+                    'instruments': infy_twice,
+                    'interval': 'day',
+                    'from': '2026-09-04',
+                    'to': '2026-09-02',
+                },
+            ),
+            self.post(
+                'ticks_batch',
+                'ticks',
+                {
+                    'instruments': infy_and_future,
+                    'start': '2026-09-15T09:15:00+05:30',
+                    'end': '2026-09-15T09:16:00+05:30',
+                },
+            ),
+            self.post(
+                'ticks_batch_query_fails_part_way',
+                'ticks',
+                {
+                    'instruments': [
+                        self.by_id('infy'),
+                        self.by_id('nifty_future'),
+                        self.by_id('infy'),
+                    ],
+                    'start': '2026-09-15T09:15:00+05:30',
+                    'end': '2026-09-15T09:16:00+05:30',
+                },
+                failing_tick_query='nifty_future',
+            ),
+            self.post(
+                'ticks_batch_unadjusted',
+                'ticks',
+                {
+                    'instruments': [
+                        self.by_id('infy'),
+                    ],
+                    'start': '2026-09-15T09:15:00+05:30',
+                    'end': '2026-09-15T09:16:00+05:30',
+                    'adjusted': False,
+                },
+            ),
+            self.post(
+                'ticks_batch_end_before_start',
+                'ticks',
+                {
+                    'instruments': infy_and_future,
+                    'start': '2026-09-15T09:16:00+05:30',
+                    'end': '2026-09-15T09:15:00+05:30',
+                },
+            ),
+        ]
+
+
 class InstrumentRoutesSuite:
     """Runs the scenarios against a fresh blueprint each time and compares the results with the recording.
 
@@ -1009,7 +1375,10 @@ class InstrumentRoutesSuite:
             dict: The name, status, response body, Redis round trips, broker quotes asked for and tick queries run.
         """
         self.fake_redis = InstrumentRoutesState().build()
-        engine = TickEngine(InstrumentRoutesState().tick_rows())
+        failing_instrument = None
+        if scenario.get('failing_tick_query') is not None:
+            failing_instrument = INSTRUMENT_IDENTIFIERS[scenario['failing_tick_query']]
+        engine = TickEngine(InstrumentRoutesState().tick_rows(), failing_instrument)
         brokers = ScriptedBrokers(scenario.get('brokers', {}))
         client = self.build_client(engine, brokers)
         headers = scenario.get('headers')
