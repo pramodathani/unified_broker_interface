@@ -251,6 +251,7 @@ class OrdersBlueprint(BaseBlueprint):
         Every failure is answered with an HTTP status rather than raised.
 
         All of that describes `direct` placement, which is the default. When `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT` is `engine`, the method checks the token and the body itself and then writes the order to `unified:orders:intents:stream` for `bin/unified/orders/order_engine` to place, waiting on `unified:orders:intents:result:<intent_id>` for the answer.
+        A `broker` field in the body is removed before the handoff, because the caller never chooses the broker; only `flatten` names one, for a position that can only be closed where it is held.
         The answer carries the same keys with one addition, `intent_id`, and an engine that does not answer in time is reported as outcome `unknown` with HTTP 504, because the order may still be placed.
 
         Returns:
@@ -311,8 +312,10 @@ class OrdersBlueprint(BaseBlueprint):
                 warm_identifier,
                 catalogue_key_prefix,
             )
+            engine_body = dict(request.get_json(silent=True))
+            engine_body.pop('broker', None)
             return self.order_handoff.place(
-                request.get_json(silent=True),
+                engine_body,
                 instrument_id,
                 started_at,
             )
@@ -1442,6 +1445,8 @@ class OrdersBlueprint(BaseBlueprint):
     def place_closing_order(self, body, instrument_id, broker_name, started_at):
         """Places one closing order at a named broker, through whichever placement mode is configured.
 
+        In engine mode the body handed to the engine names the broker in `broker`, which the plain `simple` type sends the order to, and marks the order with `closes_position` so that it may use the part of the broker's daily cap kept for exits.
+
         Args:
             body (dict): The order body.
             instrument_id (str): The instrument.
@@ -1456,8 +1461,14 @@ class OrdersBlueprint(BaseBlueprint):
         """
         order = PlaceOrderRequest(body)
         if self.order_handoff is not None:
+            engine_body = dict(body)
+            engine_body['broker'] = broker_name
+            engine_body['synthetic'] = {
+                'type': 'simple',
+                'closes_position': True,
+            }
             return self.order_handoff.place(
-                dict(body, broker=broker_name),
+                engine_body,
                 instrument_id,
                 started_at,
             )

@@ -920,6 +920,13 @@ class OrderEngineScenarios:
                 answer=self.answers.json_answer(200, {}),
             ),
             self.intents(
+                'a_plain_order_naming_a_broker_goes_to_that_broker',
+                [
+                    dict(order, broker='fyers'),
+                ],
+                answer=self.answers.json_answer(200, {}),
+            ),
+            self.intents(
                 'an_unmapped_instrument_is_refused_without_a_broker_call',
                 [
                     order,

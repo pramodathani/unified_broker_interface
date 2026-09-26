@@ -17,9 +17,9 @@ The table below lists all eleven. "Fixture" is the recording a suite compares ag
 | `python -m test_runs.candle_parse` | The seven historical candle parsers, against payloads recorded from the live APIs on 2026-09-12 | none (expected values in the file) | no | 0.3 s |
 | `python -m test_runs.unified_ticks_sessions` | The session gate against the exchanges' 2026 calendars: holidays, half-closed commodity days, NCDEX's shorter evening, Muhurat trading | none | no | 0.1 s |
 | `python -m test_runs.order_routes` | `place`, `modify` and `cancel`: status, body, every outgoing broker request and the number of Redis round trips | `test_runs/fixtures/order_routes.jsonl` (618 scenarios) | rewrites the whole file | 2.5 s |
-| `python -m test_runs.order_engine_routes` | `POST /api/orders/place` in engine mode: status, body, the intents written to the stream, Redis round trips | `test_runs/fixtures/order_engine_routes.jsonl` (17) | rewrites the whole file | 0.9 s |
-| `python -m test_runs.order_engine` | The order engine daemon against scripted intents and stubbed brokers: replies, broker requests, acknowledgements, counters | `test_runs/fixtures/order_engine.jsonl` (152) | rewrites the whole file | 0.9 s |
-| `python -m test_runs.order_flatten` | The panic button, including that every cancel is sent and confirmed before any close | `test_runs/fixtures/order_flatten.jsonl` (11) | rewrites the whole file | 1.9 s |
+| `python -m test_runs.order_engine_routes` | `POST /api/orders/place` in engine mode: status, body, the intents written to the stream, Redis round trips | `test_runs/fixtures/order_engine_routes.jsonl` (20) | rewrites the whole file | 0.9 s |
+| `python -m test_runs.order_engine` | The order engine daemon against scripted intents and stubbed brokers: replies, broker requests, acknowledgements, counters | `test_runs/fixtures/order_engine.jsonl` (154) | rewrites the whole file | 0.9 s |
+| `python -m test_runs.order_flatten` | The panic button, including that every cancel is sent and confirmed before any close | `test_runs/fixtures/order_flatten.jsonl` (12) | rewrites the whole file | 1.9 s |
 | `python -m test_runs.contract_sizes` | The rule that decides whether a currency or commodity contract size is trusted | none | no | 0.3 s |
 | `python -m test_runs.price_cache` | The Redis copy of candles behind `/api/instruments/prices`: slicing, widening, and every reason a copy is thrown away | none | no | 0.4 s |
 | `python -m test_runs.virtual_queue` | The queue estimate behind the synthetic limit order book, and the process that keeps it | none | no | 0.1 s |
@@ -40,11 +40,11 @@ The output below is the last lines of each suite from one run on 2026-09-26. `or
 ===== order_routes
 618 of 618 scenarios match the recording, 0 differ
 ===== order_engine_routes
-17 of 17 scenarios match the recording, 0 differ
+20 of 20 scenarios match the recording, 0 differ
 ===== order_engine
-152 of 152 scenarios match the recording, 0 differ
+154 of 154 scenarios match the recording, 0 differ
 ===== order_flatten
-11 of 11 scenarios match the recording, 0 differ
+12 of 12 scenarios match the recording, 0 differ
 ===== contract_sizes
 8/8 checks passed.
 ===== price_cache

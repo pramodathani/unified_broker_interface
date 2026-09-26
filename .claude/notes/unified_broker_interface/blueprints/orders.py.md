@@ -262,3 +262,19 @@ At the user's request the same evening, `build_place_request` sends `market_prot
 
 At 23:25 IST the same evening, with the user's permission, the branch's routes placed an after-market MARKET buy of one KWIL share at Zerodha with `market_protection=-1`, in-process against the live Redis with every other broker excluded. Kite accepted it as order `2099920159803219968` in 79 ms, and its order book stored it as a LIMIT order at ₹41.65, about 1% above the last price, with `market_protection` 0: Zerodha applies the protection by converting the order to a limit order at the band's edge. The helper had planned a quantity change that expected `market_protection` in the modify request, and skipped it because the stored order was now LIMIT, which is the route behaving correctly. The order was cancelled in 46 ms and ended `CANCELLED` with nothing filled. An SL-M order has not been placed with the field.
 
+
+## Why flatten names the broker in engine mode, and why `place` removes it
+
+On 2026-09-26 a review from the sridhara project found that `POST /api/orders/flatten` sent its closing orders to the wrong brokers when `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT` was `engine`. The route worked out correctly which broker held each position and put that broker in the intent's body as `broker`, but the engine ran each close as a plain `simple` order, and `SimpleOrder` called `place_leg` without a broker, so the round-robin selector chose one. A SELL meant to close a long position at Zerodha could land at Dhan, leave the Zerodha position open and open a new short at Dhan. The merged positions document would then show the two cancelling out, and the route answered `"flat": true` because every close was accepted.
+
+The fix has three parts, made together because each one alone is unsafe:
+
+| Part | Where | Why it is needed |
+| --- | --- | --- |
+| `SimpleOrder` sends to `body['broker']` when it is set | `unified_broker_interface/utilities/order_engine/simple.py` | This is the actual fix. |
+| `place` removes `broker` from the caller's body before the handoff | `place_order` in this module | The engine carries the caller's body verbatim, so without this any caller of `/place` could steer an order to a broker of their choosing. UBI is meant to be the only broker its callers see. |
+| Flatten's engine body adds `"synthetic": {"type": "simple", "closes_position": true}` | `place_closing_order` in this module | Without it a close near a broker's daily order cap was judged as a new entry and could be refused while the exit reserve was still free. |
+
+The same review claimed that OCO, ladder, grid, basket, square-off and two-sided breakout already read a caller's `broker`. They do not: the `body.get('broker')` in those types reads the broker's answer to their first leg, so later legs follow the first. There was no existing side door to close.
+
+The removal is inline in `place_order` rather than in `PlaceOrderRequest`, because the validated request is never what reaches the engine; the raw body is.

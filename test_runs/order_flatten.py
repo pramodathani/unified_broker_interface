@@ -4,6 +4,8 @@ Runs the panic button in-process through Flask's test client, with Redis replace
 
 The one thing this route must get right is the order of its two halves: every open order is cancelled and confirmed gone before any position is closed, because a protective order still live when its position closes will fill afterwards and open a new position the other way. The recording pins that by keeping every broker request in the order it was sent, so a cancel appearing after a close would change the recording.
 
+A scenario can also run in engine placement mode. The engine itself is not run: its answer to each close is put on the reply list before the request is sent, and the result keeps the intents the route wrote, which is where the broker a close must reach is named.
+
 The brokers' order books are made to report the cancelled orders as `CANCELLED` from the second read onward, which is what the pollers do a moment after a cancel reaches a broker. A scenario can leave them open instead, to check what the route says when a cancel is not confirmed.
 
 No Redis, database, credentials or network are used, and no request leaves the process. The project's `.env` still has to exist, because importing the blueprint imports `utilities.configurations`.
@@ -28,6 +30,7 @@ from test_runs import order_engine
 from test_runs import order_routes
 from unified_broker_interface.blueprints import base as blueprint_base
 from unified_broker_interface.blueprints import orders as orders_blueprint
+from unified_broker_interface.utilities.order_engine.utilities import engine_lock
 from utilities.configurations import api_configuration
 
 FIXTURE_PATH = (
@@ -166,6 +169,36 @@ class OrderFlattenScenarios:
             },
         }
 
+    def engine_accepted(self):
+        """The answer the order engine pushes for a close that Flattrade accepted.
+
+        Returns:
+            dict: The reply document.
+        """
+        return {
+            'body': {
+                'broker': 'flattrade',
+                'instrument_id': (
+                    order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS[
+                        'reliance'
+                    ]
+                ),
+                'tag': None,
+                'outcome': 'accepted',
+                'order_id': '26091500000099',
+                'status_message': None,
+                'broker_response': {
+                    'stat': 'Ok',
+                },
+                'skipped': [],
+                'timing_ms': {
+                    'preparation': 0.4,
+                    'broker': 120.5,
+                },
+            },
+            'status': 200,
+        }
+
     def build(self):
         """Builds every scenario, in the order the recording holds them.
 
@@ -255,6 +288,12 @@ class OrderFlattenScenarios:
                 positions={
                     'RELIANCE-MIS': self.position_entry(0),
                 },
+            ),
+            self.flatten(
+                'in_engine_mode_a_close_names_the_broker_holding_it',
+                positions=long_position,
+                placement='engine',
+                engine_reply=self.engine_accepted(),
             ),
         ]
 
@@ -358,6 +397,10 @@ class OrderFlattenSuite:
         """
         self.fake_redis = self.build_state(scenario)
         self.network.reset(scenario.get('answer'))
+        placement = scenario.get('placement', 'direct')
+        api_configuration['order_placement'] = placement
+        if placement == 'engine':
+            self.seed_engine(scenario)
         client = self.build_client()
         self.fake_redis.round_trips = 0
 
@@ -371,7 +414,7 @@ class OrderFlattenSuite:
         body = response.get_json(silent=True)
         if isinstance(body, dict) and isinstance(body.get('timing_ms'), dict):
             body['timing_ms'] = sorted(body['timing_ms'])
-        return {
+        result = {
             'name': scenario['name'],
             'status': response.status_code,
             'body': body,
@@ -384,6 +427,46 @@ class OrderFlattenSuite:
             ],
             'redis_round_trips': self.fake_redis.round_trips,
         }
+        if placement == 'engine':
+            result['intents'] = self.shown_intents()
+        return result
+
+    def seed_engine(self, scenario):
+        """Makes the order engine look like it is running, with its answer to the one close already waiting.
+
+        The reply key names the intent, and `uuid.uuid4` is fixed for the whole run, so the key is known before the request is sent.
+
+        Args:
+            scenario (dict): The scenario.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.fake_redis.strings[engine_lock.LOCK_KEY] = 'engine-process'
+        reply_key = 'unified:orders:intents:result:' + self.fixed_uuid().hex
+        self.fake_redis.lists[reply_key] = [
+            json.dumps(scenario['engine_reply']),
+        ]
+
+    def shown_intents(self):
+        """What each intent the route wrote asked the engine to do.
+
+        Returns:
+            list: One dictionary per intent, with `synthetic_type`, `instrument_id` and `body`.
+        """
+        shown = []
+        entries = self.fake_redis.streams.get(
+            'unified:orders:intents:stream',
+            [],
+        )
+        for _, fields in entries:
+            document = json.loads(fields['intent'])
+            shown.append({
+                'synthetic_type': document['synthetic_type'],
+                'instrument_id': document['instrument_id'],
+                'body': document['body'],
+            })
+        return shown
 
     def run_every_scenario(self):
         """Runs every scenario with Redis, MongoDB, the broker network and `uuid.uuid4` replaced.

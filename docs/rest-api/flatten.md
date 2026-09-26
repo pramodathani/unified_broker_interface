@@ -292,12 +292,29 @@ Each closing order is an ordinary placement with these fields.
 | `product` | `CNC` when the position's product is `delivery`, `MIS` when it is `intraday`, and `NRML` otherwise |
 | `order_type` | `MARKET` |
 | `quantity` | The absolute net quantity |
-| broker | The broker that holds the position, never the selector's choice (in direct mode) |
+| broker | The broker that holds the position, never the selector's choice |
 
 In direct mode the close goes through the same checks as `POST /api/orders/place`, with the broker named: the broker must still be able to take the order, and the quantity must fit the lot size. The broker exclusion list does not stop a close, because a position can only be closed where it is held.
 
-!!! warning "Flatten in engine mode"
-    When `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT` is `engine`, the cancels are still sent straight from the API worker, but each close is written to the order engine as an intent and waits up to `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_TIMEOUT_SECONDS` for its answer, one close after another. The intent's body carries the holding broker as `broker`, but the engine runs a close as a plain `simple` order, and that type does not read `broker`, so the engine's broker selector chooses where the close goes. The close also carries no `closes_position` marker, so near a broker's daily cap it is judged as a new entry. Check `closed[].broker` against the broker you expected.
+### Flatten in engine mode
+
+When `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT` is `engine`, the cancels are still sent straight from the API worker, but each close is written to the order engine as an intent and waits up to `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_TIMEOUT_SECONDS` for its answer, one close after another. The intent's body carries two additions, shown below as the offline suite recorded them.
+
+```json
+{
+  "instrument_id": "11111111-1111-5111-8111-000000000001",
+  "transaction_type": "SELL",
+  "product": "MIS",
+  "order_type": "MARKET",
+  "quantity": 10,
+  "broker": "flattrade",
+  "synthetic": {"type": "simple", "closes_position": true}
+}
+```
+
+The engine runs the close as a plain `simple` order, which sends it to the broker named in `broker` rather than the one the broker selector would choose. `closes_position` lets the close use the part of the broker's daily order cap kept for exits, as described in [Daily order caps](orders.md#daily-order-caps).
+
+Only this route can name the broker. `POST /api/orders/place` removes a `broker` field from the caller's body before handing it to the engine, so a caller of that route never chooses where an order goes.
 
 ??? note "Under the hood"
     - **Redis keys read:** `last_login`, `settings`, every `<broker>:orders:orders` and `<broker>:portfolio:positions`, then `unified:broker_tokens` and today's catalogue for each close.
