@@ -31,7 +31,9 @@ for the date, stale duplicate instruments are merged away afterwards, even if on
 already in `unified.broker_mappings` is refused: mapping an older date on top of newer data leaves seen dates and index
 names resolved in the wrong order, and a backfill has to start from empty tables instead.
 
-**3. Contract sizes.** `stock_brokers/instruments/mapping/utilities/contract_sizes.py` decides how many quotation units
+**3. Contract sizes.** PostgreSQL's planner statistics are first refreshed with `ANALYZE` on the two unified tables and every
+broker's `instruments` table, because the planner otherwise takes the new date for an almost empty one and the joins below
+run for hours. Then `stock_brokers/instruments/mapping/utilities/contract_sizes.py` decides how many quotation units
 one lot of every live currency and commodity derivative is, from the contract size fields several brokers' snapshots
 carry, and writes each decision, its status and every source's figure to `unified.contract_sizes` for the date. An
 order on such a contract reads only that decision. A failure is logged and does not fail the run; orders on those
@@ -229,6 +231,43 @@ def write_cache(cache, connect, mapping_date, logger):
     logger.info(f"Cached {mapping_date}: " + ", ".join(f"{count:,} in {key}" for key, count in counts.items()) + ".")
     return counts
 
+def refresh_statistics(connect, brokers, logger):
+    """Refresh PostgreSQL's planner statistics for the tables the contract sizes and the cache read.
+
+    The day's rows have only just been written, and autovacuum samples a table only after a tenth of it has changed since its last sample. Until then the planner believes the new mapping date holds about one row, and it joins the date's mappings to a broker's snapshot with a nested loop that re-reads the whole snapshot once per mapping. On 2026-09-26 that turned the contract size step from seconds into ninety minutes.
+
+    Args:
+        connect (Callable): Opens a psycopg2 database connection.
+        brokers (list): The brokers whose `<broker>.instruments` tables are refreshed.
+        logger (logging.Logger): Where progress and any failure are reported.
+
+    Returns:
+        bool: True when every table was refreshed, False when one could not be.
+    """
+    tables = [
+        "unified.broker_mappings",
+        "unified.instruments",
+    ]
+    for broker in brokers:
+        tables.append(f"{broker}.instruments")
+    try:
+        connection = connect()
+    except Exception as exception:
+        logger.error(f"Could not refresh the planner statistics: {type(exception).__name__}: {exception}")
+        return False
+    connection.autocommit = True
+    try:
+        with connection.cursor() as cursor:
+            for table in tables:
+                cursor.execute(f"ANALYZE {table}")
+    except Exception as exception:
+        logger.error(f"Could not refresh the planner statistics: {type(exception).__name__}: {exception}")
+        return False
+    finally:
+        connection.close()
+    logger.info(f"Refreshed the planner statistics of {len(tables)} table(s).")
+    return True
+
 def decide_contract_sizes(mapping_date, logger):
     """
     Decide the date's currency and commodity contract sizes, and say whether it worked.
@@ -305,6 +344,7 @@ def main():
         if cached is None:
             logger.error(f"Nothing is mapped on {mapping_date}, so the cache was left as it was.")
             return 1
+        refresh_statistics(get_postgres, MAPPED_BROKERS, logger)
         decide_contract_sizes(mapping_date, logger)
         warm_catalogue(mapping_date, logger)
         return 0
@@ -328,6 +368,7 @@ def main():
         logger.error(f"No broker has instrument rows stored for {mapping_date}; nothing was mapped. "
                      f"Download the instruments first, with bin/<broker>/instruments/daily_feed.")
     if results:
+        refresh_statistics(get_postgres, MAPPED_BROKERS, logger)
         decide_contract_sizes(mapping_date, logger)
 
     try:
