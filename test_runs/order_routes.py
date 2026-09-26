@@ -116,6 +116,27 @@ class FakeRedis:
         self.start_round_trip()
         return self.run_get(key)
 
+    def exists(self, key):
+        """Counts whether a key is held, in its own round trip.
+
+        Args:
+            key (str): The key.
+
+        Returns:
+            int: 1 when the key is held as a string, hash or sorted set, and 0 when it is not.
+
+        Raises:
+            redis.RedisError: When this round trip is set to fail.
+        """
+        self.start_round_trip()
+        if key in self.strings:
+            return 1
+        if self.hashes.get(key):
+            return 1
+        if self.sorted_sets.get(key):
+            return 1
+        return 0
+
     def hget(self, key, field):
         """Reads one hash field in its own round trip.
 
@@ -2536,6 +2557,16 @@ class OrderRoutesScenarios:
                 ],
             ),
             self.place(
+                'catalogue_expired',
+                self.market_order(),
+                changes=[
+                    self.string_change(
+                        'unified:catalogue:current_date',
+                        '2026-09-14',
+                    ),
+                ],
+            ),
+            self.place(
                 'every_broker_excluded',
                 self.market_order(),
                 excluded=list(BROKER_NAMES),
@@ -3951,6 +3982,7 @@ class OrderRoutesSuite:
             dict: The scenario's recorded result.
         """
         self.fake_redis = OrderRoutesState().build()
+        api_configuration['order_placement'] = 'direct'
         api_configuration['order_broker_selector'] = scenario.get(
             'selector',
             'round_robin',
@@ -4041,6 +4073,7 @@ class OrderRoutesSuite:
         original_excluded = api_configuration['order_excluded_brokers']
         original_selector = api_configuration['order_broker_selector']
         original_priority = api_configuration['order_broker_priority']
+        original_placement = api_configuration['order_placement']
         blueprint_base.get_cache = self.fake_cache
         blueprint_base.get_mongo_db = self.fake_mongo_database
         requests.Session.request = self.network.request
@@ -4057,6 +4090,7 @@ class OrderRoutesSuite:
             api_configuration['order_excluded_brokers'] = original_excluded
             api_configuration['order_broker_selector'] = original_selector
             api_configuration['order_broker_priority'] = original_priority
+            api_configuration['order_placement'] = original_placement
         return results
 
     def encode(self, result):

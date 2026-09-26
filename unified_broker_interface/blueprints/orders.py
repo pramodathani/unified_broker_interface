@@ -24,6 +24,9 @@ from flask import jsonify, request
 
 from unified_broker_interface.blueprints.base import BaseBlueprint
 from unified_broker_interface.blueprints.base import authenticated
+from unified_broker_interface.utilities.broker_orders.utilities.catalogue_availability import (
+    CatalogueAvailability,
+)
 from unified_broker_interface.utilities.broker_orders.utilities.cancel_order_request import (
     CancelOrderRequest,
 )
@@ -89,6 +92,7 @@ class OrdersBlueprint(BaseBlueprint):
         placement_mode (str): `direct` when this worker sends orders to brokers itself, or `engine` when it hands them to the order engine, named by `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT`.
         order_handoff (IntentHandoff | None): The handoff to the order engine in `engine` mode, and None in `direct` mode, which is what `place_order` branches on.
         instrument_cache (InstrumentCache): This worker's copy of the catalogue data placements and modifications have read under the current warm.
+        catalogue_availability (CatalogueAvailability): What turns a "not mapped" refusal into a 503 when the day's catalogue has expired and the next one is not published yet.
         kill_switch (KillSwitch): What decides, from decoded order books and positions, what `POST /flatten` cancels and closes.
         logger (logging.Logger): The logger for failures that do not change an answer.
     """
@@ -126,6 +130,7 @@ class OrdersBlueprint(BaseBlueprint):
                 f'unknown order placement {self.placement_mode!r}; known modes are {known_modes}'
             )
         self.instrument_cache = InstrumentCache()
+        self.catalogue_availability = CatalogueAvailability(self.cache)
         self.order_placement.attach_daily_count(
             DailyOrderCount.from_configuration(self.cache, self.logger),
         )
@@ -249,12 +254,13 @@ class OrdersBlueprint(BaseBlueprint):
         The answer carries the same keys with one addition, `intent_id`, and an engine that does not answer in time is reported as outcome `unknown` with HTTP 504, because the order may still be placed.
 
         Returns:
-            tuple: The Flask JSON response (flask.Response) and its HTTP status (int), which is 200 when the broker accepted the order or for a dry run, 422 when the broker refused it, 504 when the outcome is unknown, 400 for an order that is not valid, 401 for a missing, wrong or expired access token, 404 for an instrument that is not mapped, and 503 when Redis cannot be read or no broker can take the order.
+            tuple: The Flask JSON response (flask.Response) and its HTTP status (int), which is 200 when the broker accepted the order or for a dry run, 422 when the broker refused it, 504 when the outcome is unknown, 400 for an order that is not valid, 401 for a missing, wrong or expired access token, 404 for an instrument that is not mapped, and 503 when Redis cannot be read, today's instrument catalogue is not published yet, the order engine is not running, or no broker can take the order.
         """
         started_at = time.perf_counter()
         try:
             body, status = self.place_order(started_at)
         except RefusedRequestError as refusal:
+            refusal = self.catalogue_availability.explained(refusal)
             body, status = refusal.body, refusal.status
         return jsonify(body), status
 

@@ -27,6 +27,7 @@ import requests
 from test_runs import order_routes
 from unified_broker_interface.blueprints import base as blueprint_base
 from unified_broker_interface.blueprints import orders as orders_blueprint
+from unified_broker_interface.utilities.order_engine.utilities import engine_lock
 from utilities.configurations import api_configuration
 
 FIXTURE_PATH = (
@@ -219,7 +220,7 @@ class OrderEngineScenarios:
         Args:
             name (str): The scenario name.
             body (dict | None): The request body.
-            **settings: Any other scenario keys, such as `reply`, `headers` or `failing_round_trip`.
+            **settings: Any other scenario keys, such as `reply`, `headers`, `failing_round_trip` or `engine_running` (False to leave the engine's lock unset).
 
         Returns:
             dict: The scenario.
@@ -262,6 +263,11 @@ class OrderEngineScenarios:
             self.place(
                 'engine_never_answers',
                 self.bodies.market_order(dry_run=None, tag='lostTag'),
+            ),
+            self.place(
+                'engine_not_running_is_refused_before_the_intent_is_written',
+                self.bodies.market_order(dry_run=None),
+                engine_running=False,
             ),
             self.place(
                 'engine_answer_is_not_json',
@@ -316,14 +322,19 @@ class OrderEngineScenarios:
                 },
             ),
             self.place(
-                'the_intent_cannot_be_written',
+                'the_engine_lock_cannot_be_read',
                 self.bodies.market_order(dry_run=None),
                 failing_round_trip=2,
             ),
             self.place(
-                'the_answer_cannot_be_read',
+                'the_intent_cannot_be_written',
                 self.bodies.market_order(dry_run=None),
                 failing_round_trip=3,
+            ),
+            self.place(
+                'the_answer_cannot_be_read',
+                self.bodies.market_order(dry_run=None),
+                failing_round_trip=4,
             ),
             self.place(
                 'a_synthetic_type_reaches_the_engine',
@@ -499,6 +510,8 @@ class OrderEngineRoutesSuite:
             dict: The scenario's recorded result.
         """
         self.fake_redis = self.build_state()
+        if scenario.get('engine_running', True):
+            self.fake_redis.strings[engine_lock.LOCK_KEY] = 'engine-process'
         api_configuration['order_placement'] = scenario.get(
             'placement',
             'engine',

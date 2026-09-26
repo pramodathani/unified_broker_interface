@@ -330,7 +330,7 @@ The true-or-false fields `after_market` and `dry_run` accept a JSON boolean, or 
 
 The API then runs these checks against the instrument and the chosen broker. Each failure is answered without calling a broker.
 
-1. The instrument must be mapped today, or the answer is <span class="status s4">404</span> `the instrument is not mapped`.
+1. The instrument must be mapped today, or the answer is <span class="status s4">404</span> `the instrument is not mapped`. When the whole catalogue is missing rather than the one instrument, which happens every night between midnight, when the day's catalogue keys expire, and the morning mapping that publishes the next one, the answer is <span class="status s5">503</span> `today's instrument catalogue is not published yet: the catalogue for <date> has expired, and the daily mapping has not published a new one` instead. That check runs only after an order has already been refused as not mapped, so an order that is placed pays nothing for it.
 2. The instrument's segment must be tradeable, or the answer is <span class="status s4">400</span> `orders are not sent for <segment> instruments`.
 3. For a currency or commodity instrument, today's contract size decision must be trusted, and both quantities must be whole lots of it (see [contract sizes](#contract-sizes-lots-and-ticks)).
 4. A broker must be able to take the order (see [How the broker is chosen](#how-the-broker-is-chosen)).
@@ -507,7 +507,7 @@ Every failure below is answered without calling a broker, except the three outco
 | <span class="status s4">401</span> | `Access token is required`, `Invalid access token` or `Access token has expired`. |
 | <span class="status s4">404</span> | `the instrument is not mapped`: no instrument matches the id or the identity fields today. |
 | <span class="status s4">422</span> | `outcome` is `rejected`: the broker refused the order, or the connection to it could not be opened, so nothing was sent. |
-| <span class="status s5">503</span> | `Redis could not be read: <error>`, `no instruments have been mapped yet`, `every broker is excluded from order placement`, `no broker can take this order` (with `skipped`), or `the contract size of this <segment> instrument is not trusted today (<status>), so no order is sent` (with `contract_size_status`). |
+| <span class="status s5">503</span> | `Redis could not be read: <error>`, `no instruments have been mapped yet`, `today's instrument catalogue is not published yet: the catalogue for <date> has expired, and the daily mapping has not published a new one`, `every broker is excluded from order placement`, `no broker can take this order` (with `skipped`), or `the contract size of this <segment> instrument is not trusted today (<status>), so no order is sent` (with `contract_size_status`). |
 | <span class="status s5">504</span> | `outcome` is `unknown`: the broker answered with a server error, answered success without an order id, or the network failed after the request left. **The order may exist.** |
 
 Engine mode adds <span class="status s2">202</span>, <span class="status s4">403</span>, <span class="status s4">409</span>, <span class="status s4">429</span> and more <span class="status s5">503</span> and <span class="status s5">504</span> cases; they are listed on the [Order engine](order-engine.md) page.

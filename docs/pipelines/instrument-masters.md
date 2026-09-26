@@ -196,6 +196,8 @@ The brokers' own lot sizes cannot be compared on currency and commodity markets,
 
 A failure in this step is logged and does not fail the run, but orders on those contracts are then refused, because the catalogue warm finds no decision for them.
 
+Before this step, the job runs `ANALYZE` on `unified.broker_mappings`, `unified.instruments` and every broker's `instruments` table, which takes about half a minute. The day's rows have only just been written, and autovacuum samples a table only once a tenth of it has changed since its last sample, so until then PostgreSQL's planner takes the new date for one that holds almost no rows. With that estimate it joins the day's mappings to a broker's snapshot with a nested loop that re-reads the whole snapshot once per mapping. On 2026-09-26, after a crash had reset the database's change counters, that made this step take about ninety minutes instead of under two seconds.
+
 ## Step 3: the Redis cache
 
 The mapped date's rows are written to Redis so that the live scripts can resolve instruments without a database round trip. All four hashes are built under `:staging` keys and renamed into place together with the meta key, so a reader sees yesterday's complete cache or today's, never a mix. For one day that is about half a million instruments and two million mappings.

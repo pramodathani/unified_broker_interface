@@ -346,6 +346,7 @@ The messages below point at a store or a script that has stopped.
 | `{Subject} are not available: nothing is keeping {key}` | portfolio routes, order and trade books | Start the `bin/unified/` script that writes that key |
 | `{Subject} are out of date: {key} was last written at {as_of}` | portfolio routes, order and trade books | The script has stopped; restart it. The body carries `as_of` and `brokers`. |
 | `no instruments have been mapped yet` | instrument routes, `place` | Run the daily instrument download and mapping |
+| `today's instrument catalogue is not published yet: the catalogue for {date} has expired, and the daily mapping has not published a new one` | `place` | Wait for `unified-mapping.service` to finish, or run `bin/unified/instruments/map` |
 | `the instrument cache is unreachable` | `search` | Check Redis |
 | `no recent quote is cached, and no broker that serves quotes carries this instrument` | `ltp`, `ohlc`, `quote` | Start the websocket quote feeds |
 | `no recent quote is cached, and every broker failed - {failures}` | `ltp`, `ohlc`, `quote` | The failures list each broker's error |
@@ -421,6 +422,7 @@ In engine mode, `place` has a few more `503` messages. The table below lists the
 
 | Message | Cause |
 |---|---|
+| `the order engine is not running, so the order was not placed; start unified-orders@order_engine.service` | No engine holds its lock; nothing was queued. Start the engine, and enable it so it comes back after a reboot. |
 | `the order could not be written for the order engine: {error}` | Redis refused the intent; nothing was queued |
 | `the order rate budget is full, so this order was not sent; try again in a moment` | The per-broker rate budget had no room; this one is worth retrying |
 | `a price reference needs a tick size the brokers agree on and there is none for this instrument` | A `price_reference` cannot be rounded to a tick |

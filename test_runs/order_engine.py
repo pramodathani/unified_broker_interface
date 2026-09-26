@@ -771,7 +771,7 @@ class OrderEngineScenarios:
         Args:
             name (str): The scenario name.
             bodies (list): One request body per intent.
-            **settings: Any other scenario keys, such as `answer`, `deadline_ago` or `passes`.
+            **settings: Any other scenario keys, such as `answer`, `deadline_ago`, `passes` or `mapping_date` (the date `unified:catalogue:current_date` names instead of the one the catalogue was written under).
 
         Returns:
             dict: The scenario.
@@ -925,6 +925,13 @@ class OrderEngineScenarios:
                     order,
                 ],
                 instrument_id='99999999-9999-5999-8999-999999999999',
+            ),
+            self.intents(
+                'an_expired_catalogue_is_refused_as_not_published',
+                [
+                    order,
+                ],
+                mapping_date='2026-09-14',
             ),
             self.intents(
                 'an_intent_past_its_deadline_is_not_placed',
@@ -1634,6 +1641,10 @@ class OrderEngineSuite:
             dict: The scenario's recorded result.
         """
         self.fake_redis = self.build_state()
+        if scenario.get('mapping_date') is not None:
+            self.fake_redis.strings['unified:catalogue:current_date'] = (
+                scenario['mapping_date']
+            )
         if scenario.get('quote') is not None:
             self.fake_redis.hashes['unified:quotes:live'] = {
                 order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS[
