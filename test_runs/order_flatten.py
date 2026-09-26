@@ -6,7 +6,7 @@ The one thing this route must get right is the order of its two halves: every op
 
 A scenario can also run in engine placement mode. The engine itself is not run: its answer to each close is put on the reply list before the request is sent, and the result keeps the intents the route wrote, which is where the broker a close must reach is named.
 
-The brokers' order books are made to report the cancelled orders as `CANCELLED` from the second read onward, which is what the pollers do a moment after a cancel reaches a broker. A scenario can leave them open instead, to check what the route says when a cancel is not confirmed.
+The brokers' order books are made to report the cancelled orders as `CANCELLED` from the second read onward, which is what the pollers do a moment after a cancel reaches a broker. A scenario can leave them open instead, to check what the route says when a cancel is not confirmed. Positions work the same way: a scenario that expects to end flat serves a zero quantity from the second read of the positions onward, and one that leaves the position unchanged checks what the route says when a close is accepted but the position is still held.
 
 No Redis, database, credentials or network are used, and no request leaves the process. The project's `.env` still has to exist, because importing the blueprint imports `utilities.configurations`.
 
@@ -217,6 +217,9 @@ class OrderFlattenScenarios:
         long_position = {
             'RELIANCE-MIS': self.position_entry(10),
         }
+        closed_position = {
+            'RELIANCE-MIS': self.position_entry(0),
+        }
         return [
             self.flatten(
                 'without_the_confirmation_nothing_happens',
@@ -246,6 +249,7 @@ class OrderFlattenScenarios:
                 orders=open_order,
                 orders_after=cancelled_order,
                 positions=long_position,
+                positions_after=closed_position,
             ),
             self.flatten(
                 'a_short_position_is_closed_by_buying',
@@ -253,11 +257,18 @@ class OrderFlattenScenarios:
                 positions={
                     'RELIANCE-MIS': self.position_entry(-10),
                 },
+                positions_after=closed_position,
             ),
             self.flatten(
                 'a_cancel_that_is_never_confirmed_is_reported',
                 answer=self.accepted(),
                 orders=open_order,
+                positions=long_position,
+                positions_after=closed_position,
+            ),
+            self.flatten(
+                'an_accepted_close_whose_position_stays_is_not_flat',
+                answer=self.accepted(),
                 positions=long_position,
             ),
             self.flatten(
@@ -270,6 +281,7 @@ class OrderFlattenScenarios:
                     ),
                 },
                 positions=long_position,
+                positions_after=closed_position,
             ),
             self.flatten(
                 'a_day_position_is_left_to_its_net_row',
@@ -292,6 +304,7 @@ class OrderFlattenScenarios:
             self.flatten(
                 'in_engine_mode_a_close_names_the_broker_holding_it',
                 positions=long_position,
+                positions_after=closed_position,
                 placement='engine',
                 engine_reply=self.engine_accepted(),
             ),
@@ -362,6 +375,10 @@ class OrderFlattenSuite:
         if scenario.get('orders_after') is not None:
             fake_redis.later_hashes['flattrade:orders:orders'] = dict(
                 scenario['orders_after'],
+            )
+        if scenario.get('positions_after') is not None:
+            fake_redis.later_hashes['flattrade:portfolio:positions'] = dict(
+                scenario['positions_after'],
             )
         fake_redis.hashes['unified:broker_tokens'] = {
             'flattrade:1': json.dumps([

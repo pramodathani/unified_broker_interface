@@ -278,3 +278,11 @@ The fix has three parts, made together because each one alone is unsafe:
 The same review claimed that OCO, ladder, grid, basket, square-off and two-sided breakout already read a caller's `broker`. They do not: the `body.get('broker')` in those types reads the broker's answer to their first leg, so later legs follow the first. There was no existing side door to close.
 
 The removal is inline in `place_order` rather than in `PlaceOrderRequest`, because the validated request is never what reaches the engine; the raw body is.
+
+## Why flatten re-reads the positions before saying `flat`
+
+The same review found that flatten's `flat` meant only that every close had been accepted. A broker can accept an order that the exchange then rejects, and in the routing bug above every close was accepted while the position stayed open, so `flat` was true in exactly the case it most needed to be false. Since 2026-09-26 the route re-reads every broker's `<broker>:portfolio:positions` after the closes, in the same way it re-reads the order books after the cancels, and `flat` is true only once every accepted close shows its position at zero.
+
+The second wait reuses `UNIFIED_BROKER_INTERFACE_API_ORDER_FLATTEN_WAIT_SECONDS` rather than adding a setting, because both waits are for the same thing: a poller writing what the broker now reports. Nine positions pollers refresh every 0.5 or 1 second; Fyers's refreshes every 5 seconds, so a Fyers position closed late in the wait can be reported as still held. That is a false alarm on the safe side, and the answer says so rather than claiming a flat account it has not seen.
+
+Only closes the broker accepted are waited for. A close that was not sent or was refused is already a failure, and waiting for its position would hold the answer for the whole wait without changing it.

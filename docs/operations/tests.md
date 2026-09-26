@@ -19,7 +19,7 @@ The table below lists all eleven. "Fixture" is the recording a suite compares ag
 | `python -m test_runs.order_routes` | `place`, `modify` and `cancel`: status, body, every outgoing broker request and the number of Redis round trips | `test_runs/fixtures/order_routes.jsonl` (618 scenarios) | rewrites the whole file | 2.5 s |
 | `python -m test_runs.order_engine_routes` | `POST /api/orders/place` in engine mode: status, body, the intents written to the stream, Redis round trips | `test_runs/fixtures/order_engine_routes.jsonl` (20) | rewrites the whole file | 0.9 s |
 | `python -m test_runs.order_engine` | The order engine daemon against scripted intents and stubbed brokers: replies, broker requests, acknowledgements, counters | `test_runs/fixtures/order_engine.jsonl` (154) | rewrites the whole file | 0.9 s |
-| `python -m test_runs.order_flatten` | The panic button, including that every cancel is sent and confirmed before any close | `test_runs/fixtures/order_flatten.jsonl` (12) | rewrites the whole file | 1.9 s |
+| `python -m test_runs.order_flatten` | The panic button, including that every cancel is sent and confirmed before any close, and that `flat` waits for the positions to show zero | `test_runs/fixtures/order_flatten.jsonl` (13) | rewrites the whole file | 1.9 s |
 | `python -m test_runs.contract_sizes` | The rule that decides whether a currency or commodity contract size is trusted | none | no | 0.3 s |
 | `python -m test_runs.price_cache` | The Redis copy of candles behind `/api/instruments/prices`: slicing, widening, and every reason a copy is thrown away | none | no | 0.4 s |
 | `python -m test_runs.virtual_queue` | The queue estimate behind the synthetic limit order book, and the process that keeps it | none | no | 0.1 s |
@@ -44,7 +44,7 @@ The output below is the last lines of each suite from one run on 2026-09-26. `or
 ===== order_engine
 154 of 154 scenarios match the recording, 0 differ
 ===== order_flatten
-12 of 12 scenarios match the recording, 0 differ
+13 of 13 scenarios match the recording, 0 differ
 ===== contract_sizes
 8/8 checks passed.
 ===== price_cache

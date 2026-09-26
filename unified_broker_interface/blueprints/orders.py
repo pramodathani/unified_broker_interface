@@ -1089,8 +1089,10 @@ class OrdersBlueprint(BaseBlueprint):
 
         A failure to cancel does not stop the closing half, but it is reported and the answer says the account may not be flat. Nothing is retried: a panic button that retries is a panic button that takes longer to finish.
 
+        An accepted closing order is not taken as proof that the position is gone, because a broker can accept an order that the exchange then rejects. After the closes, the brokers' positions are re-read until every closed position shows zero or the same wait runs out, and `flat` is true only when they all do.
+
         Returns:
-            tuple: The Flask JSON response (flask.Response) and its HTTP status (int), which is 200 when everything asked for was done or for a dry run, 207 when some part failed, 400 without the confirmation, 401 for a missing, wrong or expired access token, and 503 when Redis cannot be read.
+            tuple: The Flask JSON response (flask.Response) and its HTTP status (int), which is 200 when everything asked for was done or for a dry run, 207 when some part failed or a closed position was still held after the wait, 400 without the confirmation, 401 for a missing, wrong or expired access token, and 503 when Redis cannot be read.
         """
         started_at = time.perf_counter()
         try:
@@ -1166,6 +1168,7 @@ class OrdersBlueprint(BaseBlueprint):
         )
         still_open = self.wait_for_cancels(cancelling)
         closed = self.close_every_position(closing, started_at)
+        still_held = self.wait_for_positions(closed)
 
         # A close that was sent and refused leaves the position exactly where it was, so it counts
         # as a failure although the request itself went out. A cancel is judged only on whether the
@@ -1174,14 +1177,19 @@ class OrdersBlueprint(BaseBlueprint):
         for answer in closed:
             if not answer['sent'] or answer.get('outcome') != 'accepted':
                 failures.append(answer)
-        status = 200 if not failures and not still_open else 207
+        flat = not failures and not still_open and not still_held
+        status = 200 if flat else 207
         return {
             'cancelled': cancelled,
             'still_open_after_waiting': [
                 f'{broker}:{order_id}' for broker, order_id in still_open
             ],
             'closed': closed,
-            'flat': not failures and not still_open,
+            'positions_still_open_after_waiting': [
+                f'{broker}:{position_key}'
+                for broker, position_key in still_held
+            ],
+            'flat': flat,
             'timing_ms': {
                 'preparation': round(
                     (time.perf_counter() - started_at) * 1000,
@@ -1330,6 +1338,41 @@ class OrdersBlueprint(BaseBlueprint):
                 continue
             still_open = self.kill_switch.still_open(order_books, cancelling)
         return still_open
+
+    def wait_for_positions(self, closed):
+        """Re-reads the brokers' positions until every accepted close shows the position gone, or time runs out.
+
+        Only closes the broker accepted are waited for. A close that was not sent or was refused is already a failure in the answer, and waiting for its position would only delay the answer by the whole wait.
+
+        Args:
+            closed (list): What `close_every_position` returned.
+
+        Returns:
+            list: The `(broker, position_key)` pairs still held when the wait ended.
+        """
+        accepted = []
+        for answer in closed:
+            if answer['sent'] and answer.get('outcome') == 'accepted':
+                accepted.append(answer)
+        if not accepted:
+            return []
+        deadline = time.perf_counter() + api_configuration[
+            'order_flatten_wait_seconds'
+        ]
+        still_held = [
+            (answer['broker'], answer['position_key']) for answer in accepted
+        ]
+        while still_held and time.perf_counter() < deadline:
+            time.sleep(0.25)
+            try:
+                pipeline = self.cache.pipeline(transaction=False)
+                for broker_name in self.broker_names:
+                    pipeline.hgetall(f'{broker_name}:portfolio:positions')
+                position_books = self.decode_books(pipeline.execute())
+            except redis.RedisError:
+                continue
+            still_held = self.kill_switch.still_held(position_books, accepted)
+        return still_held
 
     def close_every_position(self, closing, started_at):
         """Sends a closing order for every position that is not flat, at the broker holding it.
