@@ -104,6 +104,7 @@ The table below lists every engine-mode answer that direct mode never gives.
 | <span class="status s4">400</span> | a type's own field message | The `synthetic` object is missing or has a wrong field for its type. |
 | <span class="status s4">403</span> | `the day is down <loss>, which is past the <limit> limit, so no new order is being placed` | The daily loss lockout is on. |
 | <span class="status s4">409</span> | `the order engine read this order after the caller had stopped waiting for it, so it was not placed` | The intent went stale. |
+| <span class="status s4">409</span> | `the order engine had already started this order before it read it again, so it was not placed a second time; read the parent for its outcome` | The intent was read again after a restart, and had already started a parent. |
 | <span class="status s4">409</span> | a quantity reference message | A `quantity_reference` asked to reduce or close a position that is not there. |
 | <span class="status s4">429</span> | `<broker> has been sent <n> order messages today, ...` | The broker's daily order cap has no room for this kind of order. |
 | <span class="status s5">503</span> | `the order engine is not running, so the order was not placed; start unified-orders@order_engine.service` | No engine holds `unified:orders:engine:lock`, which a running engine refreshes every ten seconds and which expires thirty seconds after it stops. The API reads the key before it writes the intent, so nothing was queued. |
@@ -126,7 +127,7 @@ The table below lists every engine-mode answer that direct mode never gives.
 4. **It recovers.** It replays today's events (and up to 30 days of events for the types that carry a parent overnight) through the same state machine the live path uses, rebuilds every parent that had not finished, and brings each leg up to date from the broker's own order book. A failure here exits 1, because placing new orders without knowing what is already at a broker is worse than not starting.
 5. **It loops.** It reads both `unified:orders:intents:stream` and `unified:order-updates:stream` in one `XREADGROUP` call as the group `engine`, up to 10 entries at a time, blocking for one second. After each read it gives a clock tick and a price tick to the types that asked for them, and rebuilds its caches when the day rolls over at 06:00 IST.
 
-The consumer group starts at the beginning of the intent stream, because an intent written while the engine was down is an order somebody is still owed an answer for. It starts at the end of the order-update stream, because older updates are about orders the engine never placed. An intent is acknowledged only after its answer has been pushed, so an engine that dies in between redelivers the intent at its next start, where the stale-intent check almost always refuses it. An intent that cannot be read at all is acknowledged unplaced, so that one bad entry cannot block every order behind it.
+The consumer group starts at the beginning of the intent stream, because an intent written while the engine was down is an order somebody is still owed an answer for. It starts at the end of the order-update stream, because older updates are about orders the engine never placed. An intent is acknowledged only after its answer has been pushed, so an engine that dies in between reads the intent again at its next start. Every parent is saved with its intent id before its first leg is sent, so the engine finds that the intent already started a parent and answers <span class="status s4">409</span> `the order engine had already started this order before it read it again, so it was not placed a second time; read the parent for its outcome`, with `intent_id` and `parent_id`, instead of placing it twice. This check comes before the stale-intent check, so an intent that was placed and then went stale is reported as already started rather than as not placed. An intent that cannot be read at all is acknowledged unplaced, so that one bad entry cannot block every order behind it.
 
 ### Recovery and orphans
 
@@ -180,8 +181,9 @@ The engine keeps the same state in two places, and they have different jobs.
 | Redis | `unified:orders:parents` | A cache of every parent, by parent id |
 | Redis | `unified:orders:parents:open` | The set of parents that are not finished |
 | Redis | `unified:orders:children` | Each leg's `<broker>:<broker order id>` to its parent id, which is how an order update is matched to a leg |
+| Redis | `unified:orders:parents:intents` | Each intent id to the parent it started, which is how an intent read a second time is recognised |
 
-The three Redis keys expire at the next 06:00 IST, and every write moves that expiry forward. A flushed Redis costs a slower start, not a lost position, because recovery rebuilds all three from the table.
+The four Redis keys expire at the next 06:00 IST, and every write moves that expiry forward. A flushed Redis costs a slower start, not a lost position, because recovery rebuilds all four from the table.
 
 The `unified.synthetic_order_events` table is a TimescaleDB hypertable with one-day chunks, compressed after seven days. Its columns are listed below.
 

@@ -21,3 +21,9 @@ The reason is that one bad order must not stop every order behind it. An instrum
 ## Why the counters are on the object rather than logged per order
 
 `placed`, `refused` and `expired` are read at shutdown and by the offline recording. Logging a line per order would be the obvious alternative, and was avoided because the log is already the place a person looks for something that went wrong; a healthy engine placing a few hundred orders a day should be quiet, so that the lines that do appear are all worth reading.
+
+## Why a repeated intent is checked before the deadline
+
+`answer` looks for a parent the intent already started before it asks whether the intent is past its deadline. The order matters. An intent that was placed, and then read again after a restart long enough for it to go stale, would otherwise be answered "not placed", which is false and would invite the caller to place it again. Answering 409 with the parent's id tells the truth either way: the order exists, and the parent says what became of it.
+
+The check costs one `HGET` per intent, about a tenth of a millisecond, which shows in the recordings as one extra Redis round trip for every intent a scenario writes.

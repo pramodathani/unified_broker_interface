@@ -948,6 +948,29 @@ class OrderEngineScenarios:
                 deadline_ago=120.0,
             ),
             self.intents(
+                'an_intent_that_already_started_a_parent_is_not_placed_again',
+                [
+                    order,
+                ],
+                started_intents={
+                    f'{0:032x}': '44444444-3333-4222-8111-000000000000',
+                },
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
+                'a_repeated_intent_past_its_deadline_is_answered_as_repeated',
+                [
+                    order,
+                ],
+                deadline_ago=120.0,
+                started_intents={
+                    f'{0:032x}': '44444444-3333-4222-8111-000000000000',
+                },
+            ),
+            self.intents(
                 'an_intent_just_inside_its_grace_is_still_placed',
                 [
                     order,
@@ -1671,6 +1694,10 @@ class OrderEngineSuite:
             self.fake_redis.strings['unified:portfolio:positions'] = json.dumps(
                 scenario['positions'],
             )
+        if scenario.get('started_intents') is not None:
+            self.fake_redis.hashes['unified:orders:parents:intents'] = dict(
+                scenario['started_intents'],
+            )
         self.network.reset(scenario.get('answer'))
         self.counting_uuid.reset()
         reply_keys = self.write_intents(scenario)
@@ -1721,6 +1748,8 @@ class OrderEngineSuite:
         }
         if scenario.get('daily_caps') is not None:
             result['daily_counts'] = self.shown_daily_counts()
+        if engine.repeated:
+            result['repeated'] = engine.repeated
         return result
 
     def run_lock_checks(self):

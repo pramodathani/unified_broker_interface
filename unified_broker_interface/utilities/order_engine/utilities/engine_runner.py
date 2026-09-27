@@ -49,6 +49,7 @@ class OrderEngine:
         placed (int): How many intents have been placed.
         refused (int): How many intents have been answered without calling a broker.
         expired (int): How many intents were too old to place.
+        repeated (int): How many intents had already started a parent before they were read again.
     """
 
     def __init__(
@@ -104,6 +105,7 @@ class OrderEngine:
         self.placed = 0
         self.refused = 0
         self.expired = 0
+        self.repeated = 0
 
     def streams(self):
         """The streams this engine reads, in the order a batch is handled.
@@ -204,7 +206,8 @@ class OrderEngine:
         followed = self.follower.followed if self.follower else 0
         self.logger.info(
             f'Stopped. Placed {self.placed}, refused {self.refused}, '
-            f'expired {self.expired}, order updates followed {followed}.'
+            f'expired {self.expired}, repeated {self.repeated}, '
+            f'order updates followed {followed}.'
         )
         if self.ticker is not None:
             self.logger.info(
@@ -311,7 +314,7 @@ class OrderEngine:
         return intent
 
     def answer(self, intent):
-        """Places the intent's order, unless it is too old to be worth placing.
+        """Places the intent's order, unless it was already started or is too old to be worth placing.
 
         Args:
             intent (dict): The intent document.
@@ -322,6 +325,23 @@ class OrderEngine:
         Raises:
             RefusedRequestError: For an order answered without calling a broker.
         """
+        repeated_parent_id = self.started_parent_id(intent)
+        if repeated_parent_id is not None:
+            self.repeated = self.repeated + 1
+            self.logger.warning(
+                f'Intent {intent.get("intent_id")} was read again after it '
+                f'had already started parent {repeated_parent_id}, so it is '
+                'not placed a second time.'
+            )
+            return {
+                'error': (
+                    'the order engine had already started this order before '
+                    'it read it again, so it was not placed a second time; '
+                    'read the parent for its outcome'
+                ),
+                'intent_id': intent.get('intent_id'),
+                'parent_id': repeated_parent_id,
+            }, 409
         expired_for = time.time() - self.expiry_moment(intent)
         if expired_for > 0:
             self.expired = self.expired + 1
@@ -349,6 +369,22 @@ class OrderEngine:
             raise
         self.placed = self.placed + 1
         return body, status
+
+    def started_parent_id(self, intent):
+        """The parent this intent already started, or None when it has started nothing.
+
+        An intent is acknowledged only after its answer is pushed, so an engine that stops between sending an order and acknowledging its intent reads that intent again at its next start. Every parent is saved with its intent id before its first leg is sent, and recovery rebuilds that record from the event log, so a repeated intent is found here rather than placed twice.
+
+        Args:
+            intent (dict): The intent document.
+
+        Returns:
+            str | None: The parent order id.
+        """
+        intent_id = intent.get('intent_id')
+        if self.parent_store is None or not intent_id:
+            return None
+        return self.parent_store.parent_for_intent(intent_id)
 
     def synthetic_order(self, intent):
         """The runner for the kind of order an intent asks for.

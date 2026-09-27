@@ -7,6 +7,7 @@ import zoneinfo
 PARENTS_KEY = 'unified:orders:parents'
 OPEN_KEY = 'unified:orders:parents:open'
 CHILDREN_KEY = 'unified:orders:children'
+INTENTS_KEY = 'unified:orders:parents:intents'
 INDIA = zoneinfo.ZoneInfo('Asia/Kolkata')
 RESET_HOUR = 6
 
@@ -14,7 +15,7 @@ RESET_HOUR = 6
 class ParentStore:
     """Keeps every parent order in Redis, so the engine and anything else can read its state without a database.
 
-    These three keys are a cache. `unified.synthetic_order_events` is the record, and recovery rebuilds all of this from there, so a Redis that was flushed costs speed rather than correctness.
+    These four keys are a cache. `unified.synthetic_order_events` is the record, and recovery rebuilds all of this from there, so a Redis that was flushed costs speed rather than correctness.
 
     They expire at the next 06:00 IST, moved forward by every write, exactly as `unified:order-updates` does. That is the boundary no order lives across: a parent still open at 06:00 belonged to a session that ended, and the recovery scan uses the same boundary.
 
@@ -54,7 +55,7 @@ class ParentStore:
         return latest.timestamp(), int(next_reset.timestamp())
 
     def save(self, parent):
-        """Writes one parent, its open-set membership and its legs' broker order ids, in one round trip.
+        """Writes one parent, its open-set membership, its intent id and its legs' broker order ids, in one round trip.
 
         Args:
             parent (ParentOrder): The parent to write.
@@ -80,9 +81,16 @@ class ParentStore:
                     f'{leg.broker}:{leg.broker_order_id}',
                     parent.parent_order_id,
                 )
+        if parent.intent_id:
+            pipeline.hset(
+                INTENTS_KEY,
+                parent.intent_id,
+                parent.parent_order_id,
+            )
         pipeline.expireat(PARENTS_KEY, next_reset)
         pipeline.expireat(OPEN_KEY, next_reset)
         pipeline.expireat(CHILDREN_KEY, next_reset)
+        pipeline.expireat(INTENTS_KEY, next_reset)
         pipeline.execute()
 
     def open_parent_ids(self):
@@ -104,6 +112,17 @@ class ParentStore:
             str | None: The parent order id.
         """
         return self.cache.hget(CHILDREN_KEY, f'{broker}:{broker_order_id}')
+
+    def parent_for_intent(self, intent_id):
+        """Which parent an intent already started, or None.
+
+        Args:
+            intent_id (str): The intent's id.
+
+        Returns:
+            str | None: The parent order id.
+        """
+        return self.cache.hget(INTENTS_KEY, intent_id)
 
     def parent(self, parent_order_id):
         """One parent as Redis holds it, or None.
@@ -128,7 +147,7 @@ class ParentStore:
     def rebuild(self, parents):
         """Replaces the whole cache with the parents recovery rebuilt from the event log.
 
-        The three keys are removed first rather than written over, because a parent the event log no longer knows about — one written by an engine whose rows were deleted, say — must not survive as a ghost in the open set, where it would be recovered for ever.
+        The four keys are removed first rather than written over, because a parent the event log no longer knows about — one written by an engine whose rows were deleted, say — must not survive as a ghost in the open set, where it would be recovered for ever.
 
         Args:
             parents (list): The `ParentOrder` objects to write.
@@ -141,6 +160,7 @@ class ParentStore:
         pipeline.delete(PARENTS_KEY)
         pipeline.delete(OPEN_KEY)
         pipeline.delete(CHILDREN_KEY)
+        pipeline.delete(INTENTS_KEY)
         for parent in parents:
             pipeline.hset(
                 PARENTS_KEY,
@@ -156,7 +176,14 @@ class ParentStore:
                         f'{leg.broker}:{leg.broker_order_id}',
                         parent.parent_order_id,
                     )
+            if parent.intent_id:
+                pipeline.hset(
+                    INTENTS_KEY,
+                    parent.intent_id,
+                    parent.parent_order_id,
+                )
         pipeline.expireat(PARENTS_KEY, next_reset)
         pipeline.expireat(OPEN_KEY, next_reset)
         pipeline.expireat(CHILDREN_KEY, next_reset)
+        pipeline.expireat(INTENTS_KEY, next_reset)
         pipeline.execute()
