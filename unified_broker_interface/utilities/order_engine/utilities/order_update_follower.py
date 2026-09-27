@@ -3,6 +3,9 @@
 import datetime
 import json
 
+from unified_broker_interface.utilities.order_engine.utilities.early_updates import (
+    EarlyUpdates,
+)
 from unified_broker_interface.utilities.order_engine.utilities.parent_order import (
     ParentOrder,
 )
@@ -27,14 +30,17 @@ class OrderUpdateFollower:
 
     `bin/unified/orders/websocket_order_details` already collects every broker's order updates into one stream in one contract. The engine reads that stream rather than any broker's, so it learns about a fill the same way and at the same moment as everything else in the system, and adding a broker teaches the engine nothing new.
 
-    Most updates on that stream are not the engine's business: they are orders placed from a broker's own app or website, or before the engine existed. An update is the engine's only when `unified:orders:children` names a parent for its broker and order id, and anything else is acknowledged and dropped.
+    Most updates on that stream are not the engine's business: they are orders placed from a broker's own app or website, or before the engine existed. An update is the engine's only when `unified:orders:children` names a parent for its broker and order id. An update that names no parent yet is held for a short while in `early_updates`, because it may be a fill that beat the engine's own record of the order it belongs to, and is dropped only if its order never becomes known.
 
     Attributes:
         parent_store (ParentStore): The Redis copy of the parents.
         event_log (SyntheticOrderEventLog): The record.
         logger (logging.Logger): The logger.
+        early_updates (EarlyUpdates): The updates held until their order is known.
         followed (int): How many updates changed a leg.
-        ignored (int): How many updates belonged to nobody.
+        ignored (int): How many updates could not be read or changed nothing.
+        held (int): How many updates were held because their order was not known when they arrived.
+        replayed (int): How many held updates were applied once their order became known.
     """
 
     def __init__(
@@ -62,9 +68,12 @@ class OrderUpdateFollower:
         self.logger = logger
         self.gates = gates
         self.placement = placement
+        self.early_updates = EarlyUpdates()
         self.reacted = 0
         self.followed = 0
         self.ignored = 0
+        self.held = 0
+        self.replayed = 0
 
     def follow(self, fields):
         """Applies one update from the stream to the leg it belongs to, if any.
@@ -73,7 +82,7 @@ class OrderUpdateFollower:
             fields (dict): The stream entry's fields.
 
         Returns:
-            ParentOrder | None: The parent that changed, or None when the update was not the engine's.
+            ParentOrder | None: The parent that changed, or None when the update changed nothing the engine owns.
         """
         update = self.decode(fields)
         if update is None:
@@ -90,7 +99,8 @@ class OrderUpdateFollower:
             str(broker_order_id),
         )
         if not parent_order_id:
-            self.ignored = self.ignored + 1
+            self.early_updates.hold(f'{broker}:{broker_order_id}', fields)
+            self.held = self.held + 1
             return None
 
         parent = self.read_parent(parent_order_id)
@@ -113,6 +123,31 @@ class OrderUpdateFollower:
         self.react(parent, leg, changes)
         self.followed = self.followed + 1
         return parent
+
+    def replay_early_updates(self):
+        """Applies every held update whose order the engine now knows, and drops the ones held too long.
+
+        The held orders are looked up in one round trip, and nothing is read when nothing is held. Updates are applied in the order they arrived, so a partial fill held before a full one is applied first.
+
+        Returns:
+            list: The parents (ParentOrder) that changed, one entry per applied update, for the caller to save.
+        """
+        self.early_updates.drop_expired()
+        keys = self.early_updates.keys()
+        if not keys:
+            return []
+        parent_order_ids = self.parent_store.parents_for_broker_orders(keys)
+        known_keys = set()
+        for key, parent_order_id in zip(keys, parent_order_ids):
+            if parent_order_id:
+                known_keys.add(key)
+        changed_parents = []
+        for fields in self.early_updates.take(known_keys):
+            parent = self.follow(fields)
+            if parent is not None:
+                self.replayed = self.replayed + 1
+                changed_parents.append(parent)
+        return changed_parents
 
     def read_parent(self, parent_order_id):
         """The parent with an id, rebuilt from its Redis record.

@@ -183,6 +183,8 @@ class OrderEngine:
                         self.handle(entry_id, fields)
                     else:
                         self.handle_update(entry_id, fields)
+                if self.follower is not None:
+                    self.replay_early_updates()
                 # The read above blocks for about a second when nothing arrives, which is the tick
                 # the time-based types need. Doing it here rather than on a thread keeps one thing
                 # touching a parent at a time, so there is nothing to lock.
@@ -209,6 +211,12 @@ class OrderEngine:
             f'expired {self.expired}, repeated {self.repeated}, '
             f'order updates followed {followed}.'
         )
+        if self.follower is not None:
+            self.logger.info(
+                f'Early order updates: {self.follower.held} held, '
+                f'{self.follower.replayed} applied once their order was known, '
+                f'{self.follower.early_updates.dropped} dropped unmatched.'
+            )
         if self.ticker is not None:
             self.logger.info(
                 f'Clock: {self.ticker.ticks} ticks, {self.ticker.acted} '
@@ -474,6 +482,24 @@ class OrderEngine:
                 'applied; the broker book is read again at the next start.'
             )
         self.acknowledge(entry_id, ORDER_UPDATES_STREAM_KEY)
+
+    def replay_early_updates(self):
+        """Applies the order updates that arrived before their order was known, now that it may be.
+
+        A failure is logged rather than raised, for the same reason `handle_update` logs one: the broker's own book is read again at the next start, so a lost update costs accuracy until then rather than correctness.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        try:
+            for parent in self.follower.replay_early_updates():
+                self.parent_store.save(parent)
+        except Exception:
+            self.logger.exception(
+                'Order updates held for an order the engine did not know yet '
+                'could not be applied; the broker book is read again at the '
+                'next start.'
+            )
 
     def acknowledge(self, entry_id, stream_key=INTENT_STREAM_KEY):
         """Acknowledges one stream entry, so it is not redelivered.

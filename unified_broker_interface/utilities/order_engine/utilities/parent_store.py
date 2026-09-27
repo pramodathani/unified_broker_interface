@@ -113,6 +113,17 @@ class ParentStore:
         """
         return self.cache.hget(CHILDREN_KEY, f'{broker}:{broker_order_id}')
 
+    def parents_for_broker_orders(self, keys):
+        """Which parent each of several broker orders belongs to, in one round trip.
+
+        Args:
+            keys (list): The orders' `broker:order_id` keys.
+
+        Returns:
+            list: One parent order id (str) or None per key, in the same order.
+        """
+        return self.cache.hmget(CHILDREN_KEY, keys)
+
     def parent_for_intent(self, intent_id):
         """Which parent an intent already started, or None.
 

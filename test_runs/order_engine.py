@@ -2165,6 +2165,7 @@ class OrderEngineSuite:
             'name': name,
             'followed': follower.followed,
             'ignored': follower.ignored,
+            'held': follower.held,
             'leg_state': stored.legs[0].state,
             'leg_filled': stored.legs[0].filled_quantity,
             'leg_average_price': stored.legs[0].average_price,
@@ -2174,6 +2175,79 @@ class OrderEngineSuite:
                     'leg_state': event.get('leg_state'),
                     'filled_quantity': event.get('filled_quantity'),
                     'average_price': event.get('average_price'),
+                }
+                for event in event_log.events
+            ],
+        }
+
+    def early_update_result(self, name, registered_before_replay, hold_seconds):
+        """Delivers a fill before its order is registered, then replays the held updates.
+
+        Args:
+            name (str): The check's name.
+            registered_before_replay (bool): Whether the parent is saved, registering its order, between the fill and the replay.
+            hold_seconds (float): How long the follower holds an unknown update.
+
+        Returns:
+            dict: The recorded result.
+        """
+        self.fake_redis = self.build_state()
+        parent_store = ParentStore(self.fake_redis)
+        parent = self.followed_parent()
+        event_log = RecordingEventLog()
+        follower = OrderUpdateFollower(
+            parent_store,
+            event_log,
+            logging.getLogger('test_runs.order_engine'),
+        )
+        follower.early_updates.hold_seconds = hold_seconds
+        first = follower.follow({
+            'update': json.dumps({
+                'broker': 'flattrade',
+                'order_id': '26091500000021',
+                'status': 'OPEN',
+                'filled_quantity': 4,
+                'average_price': 999.0,
+            }),
+        })
+        second = follower.follow({
+            'update': json.dumps({
+                'broker': 'flattrade',
+                'order_id': '26091500000021',
+                'status': 'COMPLETE',
+                'filled_quantity': 10,
+                'average_price': 999.25,
+            }),
+        })
+        if registered_before_replay:
+            parent_store.save(parent)
+        replayed_parents = follower.replay_early_updates()
+        for replayed_parent in replayed_parents:
+            parent_store.save(replayed_parent)
+        stored_document = parent_store.parent(parent.parent_order_id)
+        leg_state = None
+        leg_filled = None
+        if stored_document is not None:
+            stored = ParentOrder.from_document(stored_document)
+            leg_state = stored.legs[0].state
+            leg_filled = stored.legs[0].filled_quantity
+        return {
+            'name': name,
+            'applied_on_arrival': [
+                first is not None,
+                second is not None,
+            ],
+            'held': follower.held,
+            'replayed': follower.replayed,
+            'dropped': follower.early_updates.dropped,
+            'still_held': len(follower.early_updates.held),
+            'leg_state': leg_state,
+            'leg_filled': leg_filled,
+            'events': [
+                {
+                    'event': event['event'],
+                    'leg_state': event.get('leg_state'),
+                    'filled_quantity': event.get('filled_quantity'),
                 }
                 for event in event_log.events
             ],
@@ -2199,12 +2273,22 @@ class OrderEngineSuite:
                 dict(ours, status='OPEN', filled_quantity=4, average_price=999.0),
             ),
             self.follower_result(
-                'an_update_for_another_order_is_ignored',
+                'an_update_for_another_order_is_held_and_not_applied',
                 dict(ours, order_id='99999999999999'),
             ),
             self.follower_result(
-                'an_update_from_another_broker_is_ignored',
+                'an_update_from_another_broker_is_held_and_not_applied',
                 dict(ours, broker='zerodha'),
+            ),
+            self.early_update_result(
+                'fills_that_arrive_before_their_order_is_known_are_applied_in_order_once_it_is',
+                True,
+                30.0,
+            ),
+            self.early_update_result(
+                'an_early_update_whose_order_never_becomes_known_is_dropped',
+                False,
+                0.0,
             ),
             self.follower_result(
                 'an_update_that_changes_nothing_is_not_recorded',
