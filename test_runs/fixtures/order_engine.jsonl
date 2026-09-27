@@ -233,3 +233,6 @@
 {"error": "the rate limit 'zerodha=fast' is not a number", "name": "the_rate_setting_'10,zerodha=fast'_is_refused"}
 {"error": "the rate limit 'zerodha=-1' is below zero", "name": "the_rate_setting_'10,zerodha=-1'_is_refused"}
 {"name": "a_broker_with_its_own_limit_is_held_to_it_within_one_window", "taken_of_12": {"dhan": 10, "zerodha": 5}}
+{"body": "99999", "header": "99999", "name": "stoxkart_sends_99999_when_its_settings_name_no_algo_id"}
+{"body": "123456", "header": "123456", "name": "stoxkart_sends_the_algo_id_its_settings_name"}
+{"body": "99999", "header": "99999", "name": "stoxkart_treats_a_blank_algo_id_as_none"}

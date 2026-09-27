@@ -87,8 +87,24 @@ class StoxkartOrders(BrokerOrders):
             'X-Platform': 'api',
             'X-Api-Key': str(settings['api_key']),
             'X-Access-Token': str(login.get('access_token')),
-            'X-Algo-Id': self.ALGO_IDENTIFIER,
+            'X-Algo-Id': self.algo_identifier(settings),
         }
+
+    def algo_identifier(self, settings):
+        """The Algo-ID Stoxkart's order requests carry: `algo_id` from Stoxkart's settings, or `ALGO_IDENTIFIER` when the settings have none.
+
+        Stoxkart accepted `99999` on 2026-09-15 and refused it with `invalid algo_id` on 2026-09-27, so the id is read from the settings, where it can be changed without a release.
+
+        Args:
+            settings (dict): Stoxkart's decoded settings.
+
+        Returns:
+            str: The Algo-ID.
+        """
+        configured = settings.get('algo_id')
+        if configured is None or str(configured).strip() == '':
+            return self.ALGO_IDENTIFIER
+        return str(configured).strip()
 
     def build_place_request(self, order, instrument, handle, login, settings):
         """Builds `POST /orders/{variety}`, where the variety is `amo` for an after-market order and `normal` otherwise.
@@ -119,7 +135,7 @@ class StoxkartOrders(BrokerOrders):
             'stop_loss_price': order.trigger_price_text,
             'trailing_stop_loss': '0',
             'validity': order.validity,
-            'algo_id': self.ALGO_IDENTIFIER,
+            'algo_id': self.algo_identifier(settings),
         }
         if order.tag:
             json_body['tag'] = order.tag

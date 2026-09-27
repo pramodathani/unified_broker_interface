@@ -65,6 +65,7 @@ from unified_broker_interface.utilities.order_engine.utilities.order_to_trade_ra
 from unified_broker_interface.utilities.order_engine.utilities.order_update_follower import (
     OrderUpdateFollower,
 )
+from unified_broker_interface.utilities.broker_orders.stoxkart import StoxkartOrders
 from unified_broker_interface.utilities.broker_orders.utilities.place_order_request import (
     PlaceOrderRequest,
 )
@@ -5034,6 +5035,51 @@ class OrderEngineSuite:
             ),
         ]
 
+    def run_stoxkart_algo_checks(self):
+        """Checks that Stoxkart's placement carries the Algo-ID from its settings, and `99999` when they have none.
+
+        Stoxkart refused every order with `invalid algo_id` on 2026-09-27 although it had accepted `99999` on 2026-09-15, so the id is now read from the broker's settings.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        self.fake_redis = self.build_state()
+        logger = logging.getLogger('test_runs.order_engine')
+        placement = EnginePlacement(self.fake_redis, logger)
+        instrument_id = order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['reliance']
+        instrument, _, _ = placement.market_context(instrument_id, False, False)
+        order = PlaceOrderRequest(self.scenarios.bodies.market_order(
+            dry_run=None,
+            order_type='LIMIT',
+            price=1000,
+        ))
+        stoxkart = StoxkartOrders()
+        base_settings = {
+            'ucc_code': 'SX000001',
+            'api_key': 'stoxkart-api-key',
+        }
+        results = []
+        for name, settings in (
+            ('stoxkart_sends_99999_when_its_settings_name_no_algo_id', base_settings),
+            ('stoxkart_sends_the_algo_id_its_settings_name', dict(base_settings, algo_id='123456')),
+            ('stoxkart_treats_a_blank_algo_id_as_none', dict(base_settings, algo_id=' ')),
+        ):
+            request = stoxkart.build_place_request(
+                order,
+                instrument,
+                instrument.handles.get('stoxkart') or {},
+                {
+                    'access_token': 'token',
+                },
+                settings,
+            )
+            results.append({
+                'name': name,
+                'header': request.headers.get('X-Algo-Id'),
+                'body': request.json_body.get('algo_id'),
+            })
+        return results
+
     def run_rate_limit_checks(self):
         """Checks the per-broker rate limit setting and that a broker with its own limit is held to it.
 
@@ -5294,6 +5340,7 @@ class OrderEngineSuite:
             results.extend(self.run_wiring_checks())
             results.extend(self.run_assignment_checks())
             results.extend(self.run_rate_limit_checks())
+            results.extend(self.run_stoxkart_algo_checks())
         finally:
             requests.Session.request = original_request
             uuid.uuid4 = original_uuid4
