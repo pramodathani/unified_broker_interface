@@ -80,6 +80,17 @@ from unified_broker_interface.utilities.instrument_cache import InstrumentCache
 from unified_broker_interface.utilities.order_engine.utilities.daily_order_count import (
     DailyOrderCount,
 )
+from unified_broker_interface.utilities.order_engine.utilities.parent_commands import (
+    CANCEL_LEG,
+    CANCEL_PARENT,
+    HALT_EVERY_PARENT,
+    MODIFY_LEG,
+)
+from unified_broker_interface.utilities.order_engine.utilities.parent_store import (
+    CHILDREN_KEY,
+    OPEN_KEY,
+    PARENTS_KEY,
+)
 from unified_broker_interface.utilities.order_engine.utilities.intent_handoff import (
     IntentHandoff,
 )
@@ -116,6 +127,8 @@ class OrdersBlueprint(BaseBlueprint):
         ('/trades', 'trades', ['GET']),
         ('/place', 'place', ['POST']),
         ('/intents/<intent_id>', 'intent', ['GET']),
+        ('/parents', 'parents', ['GET']),
+        ('/parents', 'cancel_parents', ['DELETE']),
         ('/modify', 'modify', ['PUT']),
         ('/cancel', 'cancel', ['DELETE']),
         ('/flatten', 'flatten', ['POST']),
@@ -271,7 +284,9 @@ class OrdersBlueprint(BaseBlueprint):
             )
 
     def send_change(self, prepared, started_at):
-        """Sends one prepared modification or cancellation, after taking room for it in the rate budget.
+        """Sends one prepared modification or cancellation, after taking room for it in the rate budget, or hands it to the order engine when the engine owns the order.
+
+        An order the engine placed is changed through its order type, on the worker that owns it, so the type records the change and carries on from it. The engine takes its own room in the rate budget.
 
         Args:
             prepared (PreparedCancel | PreparedModification): The change to send.
@@ -283,6 +298,12 @@ class OrdersBlueprint(BaseBlueprint):
         Raises:
             RefusedRequestError: With HTTP 503 when the rate budget had no room, or Redis could not be read.
         """
+        if prepared.engine_command is not None:
+            return self.order_handoff.command(
+                prepared.engine_command,
+                prepared.engine_arguments,
+                started_at,
+            )
         self.take_rate_room(prepared.broker_name)
         return prepared.send(started_at)
 
@@ -485,6 +506,125 @@ class OrdersBlueprint(BaseBlueprint):
             'status': status,
             'response': answer_body,
         }), 200
+
+    @authenticated
+    def parents(self):
+        """Answers with the order engine's parents: one, named by `parent_id` in the query string, or every one still open.
+
+        A parent is one order the engine was asked for, such as a bracket, and its legs are the broker orders it placed. This is how a parent that has placed nothing yet, such as an armed trigger, can be seen at all.
+
+        Returns:
+            tuple: The Flask JSON response (flask.Response) and its HTTP status (int): 200 with the parent, or with `parents` listing every open one; 404 when the named parent is not held; 503 when Redis cannot be read.
+        """
+        parent_order_id = request.args.get('parent_id')
+        try:
+            if parent_order_id:
+                document = self.cache.hget(PARENTS_KEY, parent_order_id)
+                if not document:
+                    return jsonify({
+                        'error': 'the order engine holds no parent with this id',
+                        'parent_id': parent_order_id,
+                    }), 404
+                return jsonify(json.loads(document)), 200
+            open_ids = sorted(self.cache.smembers(OPEN_KEY) or [])
+            documents = []
+            if open_ids:
+                documents = self.cache.hmget(PARENTS_KEY, open_ids)
+        except redis.RedisError as error:
+            refusal = self.redis_unreadable(error)
+            return jsonify(refusal.body), refusal.status
+        open_parents = []
+        for document in documents:
+            if document:
+                open_parents.append(json.loads(document))
+        return jsonify({
+            'parents': open_parents,
+        }), 200
+
+    @authenticated
+    def cancel_parents(self):
+        """Cancels one of the order engine's parents, or each of a list: every leg still resting at a broker, and the parent itself.
+
+        The body names one parent with `parent_id`, or several with `parents`, a list of objects each holding `parent_id`. The engine does the cancelling on the worker that owns each parent, so it cannot race the parent's own reaction to a fill or a tick.
+
+        Returns:
+            tuple: The Flask JSON response (flask.Response) and its HTTP status (int): the engine's answer for one parent, or 200 with `results` for a list; 400 for a body that names no parent; 503 when the engine is not running.
+        """
+        started_at = time.perf_counter()
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            body = {}
+        try:
+            if 'parents' in body:
+                answer_body, status = self.cancel_parent_list(body, started_at)
+            else:
+                parent_order_id = body.get('parent_id')
+                if not isinstance(parent_order_id, str) or not parent_order_id:
+                    raise self.refuse('parent_id must name a parent', 400)
+                answer_body, status = self.order_handoff.command(
+                    CANCEL_PARENT,
+                    {
+                        'parent_id': parent_order_id,
+                    },
+                    started_at,
+                )
+        except RefusedRequestError as refusal:
+            answer_body, status = refusal.body, refusal.status
+        return jsonify(answer_body), status
+
+    def cancel_parent_list(self, body, started_at):
+        """Cancels every parent of a list, answering each on its own.
+
+        Args:
+            body (dict): The decoded JSON body, which holds `parents`.
+            started_at (float): `time.perf_counter()` when the request arrived.
+
+        Returns:
+            tuple: The answer's body `{"results": [...]}` (dict) and the HTTP status 200.
+
+        Raises:
+            RefusedRequestError: With 400 when `parents` is not a non-empty list, and 503 when the order engine is not running.
+        """
+        items = body.get('parents')
+        if not isinstance(items, list) or not items:
+            raise self.refuse('parents must be a non-empty list', 400)
+        answers = []
+        entries = []
+        for request_index, item in enumerate(items):
+            parent_order_id = None
+            if isinstance(item, dict):
+                parent_order_id = item.get('parent_id')
+            if not isinstance(parent_order_id, str) or not parent_order_id:
+                refusal = self.refuse('each entry of parents must name a parent_id', 400)
+                answers.append((refusal.body, refusal.status))
+                continue
+            answers.append(None)
+            entries.append((
+                request_index,
+                CANCEL_PARENT,
+                {
+                    'parent_id': parent_order_id,
+                },
+            ))
+        if entries:
+            done = self.order_handoff.command_many(
+                entries,
+                self.list_wait_seconds(len(entries)),
+                started_at,
+            )
+            for request_index, answer in done.items():
+                answers[request_index] = answer
+        results = []
+        for request_index, answer in enumerate(answers):
+            answer_body, status = answer
+            results.append({
+                'request_index': request_index,
+                'status': status,
+                'response': answer_body,
+            })
+        return {
+            'results': results,
+        }, 200
 
     def catalogue_key_prefix(self, mapping_date_text):
         """The prefix of today's catalogue keys, refusing the order when nothing has been mapped.
@@ -993,7 +1133,83 @@ class OrdersBlueprint(BaseBlueprint):
                 broker=broker_name,
                 order_id=order_id,
             )
-        return PreparedModification(broker_orders, order_id, stored_order, instrument_id, broker_request)
+        prepared = PreparedModification(
+            broker_orders,
+            order_id,
+            stored_order,
+            instrument_id,
+            broker_request,
+        )
+        owner = self.owning_parent(state, order_id, broker_name)
+        if owner is not None:
+            self.refuse_engine_unsupported_change(
+                modification,
+                broker_name,
+                order_id,
+            )
+            prepared.engine_command = MODIFY_LEG
+            prepared.engine_arguments = self.engine_modification(
+                owner,
+                broker_name,
+                order_id,
+                modify_request,
+                modification,
+            )
+        return prepared
+
+    def refuse_engine_unsupported_change(self, modification, broker_name, order_id):
+        """Refuses a change to an order the engine placed that its order type could not carry on from.
+
+        An order type works from its leg's price, trigger price and quantity. Changing the order type, the validity or the disclosed quantity underneath it would leave it managing an order that is not the one it placed.
+
+        Args:
+            modification (OrderModification): The change, laid over the stored order.
+            broker_name (str): The broker holding the order.
+            order_id (str): The broker's order id.
+
+        Returns:
+            None: This method returns nothing.
+
+        Raises:
+            RefusedRequestError: With HTTP 409 when the change touches any field but the price, the trigger price and the quantity.
+        """
+        for field_name in ('order_type', 'validity', 'disclosed_quantity'):
+            if modification.changes(field_name):
+                raise self.refuse(
+                    f'this order belongs to an order the engine manages, which can only have its price, trigger_price or quantity changed, not {field_name}',
+                    409,
+                    broker=broker_name,
+                    order_id=order_id,
+                )
+
+    def engine_modification(self, parent_order_id, broker_name, order_id, modify_request, modification):
+        """What the order engine is handed to change a leg it owns.
+
+        Args:
+            parent_order_id (str): The engine's parent that owns the order.
+            broker_name (str): The broker holding the order.
+            order_id (str): The broker's order id.
+            modify_request (ModifyOrderRequest): The validated request.
+            modification (OrderModification): The change, with the quantity already in the broker's own terms.
+
+        Returns:
+            dict: `parent_id`, `broker`, `order_id`, and `quantity`, `price` and `trigger_price`, each None when unchanged.
+        """
+        arguments = {
+            'parent_id': parent_order_id,
+            'broker': broker_name,
+            'order_id': order_id,
+            'quantity': None,
+            'price': None,
+            'trigger_price': None,
+        }
+        if modification.changes('quantity'):
+            arguments['quantity'] = modification.quantity
+        if modification.changes('price'):
+            arguments['price'] = str(modify_request.price)
+        if modification.changes('trigger_price'):
+            arguments['trigger_price'] = str(modify_request.trigger_price)
+        return arguments
 
     def read_order_state(self, order_ids, with_catalogue):
         """Reads, in one Redis round trip, everything a modify or cancel of some orders checks before calling a broker.
@@ -1003,7 +1219,7 @@ class OrdersBlueprint(BaseBlueprint):
             with_catalogue (bool): Whether to read the catalogue's mapping date and warm identifier as well, which a modify needs to find the order's instrument.
 
         Returns:
-            dict: `token_document_text`, `mapping_date_text` and `warm_identifier` (str or None, the last two None unless read), `login_texts` and `settings_texts` (one entry per broker, in `broker_names` order), and `order_texts`, mapping each order id to its entry in each broker's order book, in `broker_names` order.
+            dict: `token_document_text`, `mapping_date_text` and `warm_identifier` (str or None, the last two None unless read), `login_texts` and `settings_texts` (one entry per broker, in `broker_names` order), `order_texts`, mapping each order id to its entry in each broker's order book, in `broker_names` order, and `owning_parents`, mapping each order id to the order engine's parent that owns it at each broker, in the same order, None where none does.
 
         Raises:
             RefusedRequestError: With HTTP 503 when Redis cannot be read.
@@ -1019,6 +1235,10 @@ class OrdersBlueprint(BaseBlueprint):
             for order_id in order_ids:
                 for broker_name in self.broker_names:
                     pipeline.hget(f'{broker_name}:orders:orders', order_id)
+                owner_keys = []
+                for broker_name in self.broker_names:
+                    owner_keys.append(f'{broker_name}:{order_id}')
+                pipeline.hmget(CHILDREN_KEY, owner_keys)
             replies = pipeline.execute()
         except redis.RedisError as error:
             raise self.redis_unreadable(error)
@@ -1038,10 +1258,14 @@ class OrdersBlueprint(BaseBlueprint):
         position = position + 2
         broker_count = len(self.broker_names)
         order_texts = {}
+        owning_parents = {}
         for order_id in order_ids:
             order_texts[order_id] = replies[position:position + broker_count]
             position = position + broker_count
+            owning_parents[order_id] = replies[position] or []
+            position = position + 1
         state['order_texts'] = order_texts
+        state['owning_parents'] = owning_parents
         return state
 
     def resolve_order_instrument(
@@ -1451,7 +1675,33 @@ class OrdersBlueprint(BaseBlueprint):
                 broker=broker_name,
                 order_id=order_id,
             )
-        return PreparedCancel(broker_orders, order_id, stored_order, broker_request)
+        prepared = PreparedCancel(broker_orders, order_id, stored_order, broker_request)
+        owner = self.owning_parent(state, order_id, broker_name)
+        if owner is not None:
+            prepared.engine_command = CANCEL_LEG
+            prepared.engine_arguments = {
+                'parent_id': owner,
+                'broker': broker_name,
+                'order_id': order_id,
+            }
+        return prepared
+
+    def owning_parent(self, state, order_id, broker_name):
+        """The order engine's parent that owns one broker order, or None for an order placed elsewhere.
+
+        Args:
+            state (dict): What `read_order_state` read.
+            order_id (str): The broker's order id.
+            broker_name (str): The broker holding the order.
+
+        Returns:
+            str | None: The parent's id.
+        """
+        owners = state.get('owning_parents', {}).get(order_id) or []
+        position = self.broker_names.index(broker_name)
+        if position >= len(owners):
+            return None
+        return owners[position]
 
     def flatten(self):
         """Cancels every open order at every broker, waits for the cancels, then closes every position.
@@ -1536,6 +1786,7 @@ class OrdersBlueprint(BaseBlueprint):
                 },
             }, 200
 
+        halted = self.halt_every_parent(started_at)
         cancelled = self.cancel_every_order(
             cancelling,
             login_texts,
@@ -1555,6 +1806,7 @@ class OrdersBlueprint(BaseBlueprint):
         flat = not failures and not still_open and not still_held
         status = 200 if flat else 207
         return {
+            'halted': halted,
             'cancelled': cancelled,
             'still_open_after_waiting': [
                 f'{broker}:{order_id}' for broker, order_id in still_open
@@ -1572,6 +1824,35 @@ class OrdersBlueprint(BaseBlueprint):
                 ),
             },
         }, status
+
+    def halt_every_parent(self, started_at):
+        """Asks the order engine to stop every open parent from acting again, before anything is cancelled or closed.
+
+        Without this, an armed trigger could place a new order after flatten, a bracket could place its exits when a cancelled entry turns out to have filled, and a schedule could fire later in the day. The engine answers once every halt is handed to the worker that owns the parent; each worker runs it before any fill or tick that arrives afterwards. Flatten carries on whatever the answer, because cancelling and closing matter more than the engine being reachable.
+
+        Args:
+            started_at (float): `time.perf_counter()` when the request arrived.
+
+        Returns:
+            dict: `halted_parents` with how many open parents were halted, or `error` saying why none could be.
+        """
+        try:
+            answer_body, _ = self.order_handoff.command(
+                HALT_EVERY_PARENT,
+                {},
+                started_at,
+            )
+        except RefusedRequestError as refusal:
+            return {
+                'error': refusal.body.get('error'),
+            }
+        if 'halted_parents' in answer_body:
+            return {
+                'halted_parents': answer_body['halted_parents'],
+            }
+        return {
+            'error': answer_body.get('error') or answer_body.get('status_message'),
+        }
 
     def decode_books(self, replies):
         """Each broker's hash of JSON entries, decoded, by broker name.

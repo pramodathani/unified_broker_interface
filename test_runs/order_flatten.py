@@ -413,7 +413,7 @@ class OrderFlattenSuite:
         """What each intent the route wrote asked the engine to do.
 
         Returns:
-            list: One dictionary per intent, with `synthetic_type`, `instrument_id` and `body`.
+            list: One dictionary per intent, with `synthetic_type`, `instrument_id` and `body`, and `command` for a change rather than an order.
         """
         shown = []
         entries = self.fake_redis.streams.get(
@@ -422,11 +422,14 @@ class OrderFlattenSuite:
         )
         for _, fields in entries:
             document = json.loads(fields['intent'])
-            shown.append({
+            intent = {
                 'synthetic_type': document['synthetic_type'],
                 'instrument_id': document['instrument_id'],
                 'body': document['body'],
-            })
+            }
+            if document.get('command'):
+                intent['command'] = document['command']
+            shown.append(intent)
         return shown
 
     def run_every_scenario(self):

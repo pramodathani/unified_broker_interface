@@ -61,7 +61,7 @@ The API registers no error handlers of its own. A path that matches no route the
 
 ## Which route returns which status
 
-The matrix below has one row for each of the 27 routes, plus a `POST` row for each of the seven instrument routes that also take a list, and one column for each status code the API returns. A :material-check: means the route can return that status.
+The matrix below has one row for each of the 29 routes, plus a `POST` row for each of the seven instrument routes that also take a list, and one column for each status code the API returns. A :material-check: means the route can return that status.
 
 | Route | 200 | 202 | 207 | 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500 | 501 | 502 | 503 | 504 |
 |---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
@@ -96,6 +96,8 @@ The matrix below has one row for each of the 27 routes, plus a `POST` row for ea
 | `GET /api/orders/trades` | :material-check: | | | | :material-check: | | | | | | | | :material-check: | :material-check: | |
 | `POST /api/orders/place` | :material-check: | :material-check: | | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | | | | :material-check: | :material-check: |
 | `GET /api/orders/intents/<intent_id>` | :material-check: | | | | :material-check: | | :material-check: | | | | | | | :material-check: | |
+| `GET /api/orders/parents` | :material-check: | | | | :material-check: | | :material-check: | | | | | | | :material-check: | |
+| `DELETE /api/orders/parents` | :material-check: | | | :material-check: | :material-check: | | :material-check: | :material-check: | | | | | | :material-check: | :material-check: |
 | `PUT /api/orders/modify` | :material-check: | | | :material-check: | :material-check: | | :material-check: | :material-check: | :material-check: | | | :material-check: | | :material-check: | :material-check: |
 | `DELETE /api/orders/cancel` | :material-check: | | | :material-check: | :material-check: | | :material-check: | :material-check: | :material-check: | | | | | :material-check: | :material-check: |
 | `POST /api/orders/flatten` | :material-check: | | :material-check: | :material-check: | :material-check: | | | | | | | | | :material-check: | |

@@ -19,10 +19,11 @@ class OrderIntent:
         deadline_at (float): The Unix time after which the waiting API worker has given up.
         reply_key (str): The Redis list the engine pushes the answer onto.
         api_worker (str): The host and process that wrote the intent, for diagnosis.
-        synthetic_type (str): The kind of order the engine is being asked to run, `simple` unless the body named another.
+        synthetic_type (str | None): The kind of order the engine is being asked to run, `simple` unless the body named another, or None for a command.
         instrument_id (str): The instrument the order is for, already resolved by the API worker.
         body (dict): The caller's decoded JSON body, exactly as it arrived.
         request_index (int | None): The order's place in the list it came in, or None for an order sent on its own.
+        command (str | None): A change to a parent the engine owns, such as `cancel_leg`, with its arguments in `body`, or None for an order to place.
     """
 
     def __init__(
@@ -32,6 +33,7 @@ class OrderIntent:
         timeout_seconds,
         request_index=None,
         reply_key=None,
+        command=None,
     ):
         """Builds the intent for one accepted order.
 
@@ -41,6 +43,7 @@ class OrderIntent:
             timeout_seconds (float): How long the API worker will wait for the answer, which sets the deadline.
             request_index (int | None): The order's place in the list it came in, or None for an order sent on its own.
             reply_key (str | None): The list every order of one request is answered on, or None for a list of this order's own.
+            command (str | None): A change to a parent the engine owns, with its arguments in `body`, or None for an order to place.
 
         Returns:
             None: This method returns nothing.
@@ -50,10 +53,13 @@ class OrderIntent:
         self.created_at = time.time()
         self.deadline_at = self.created_at + timeout_seconds
         self.request_index = request_index
+        self.command = command
         self.reply_key = reply_key or (REPLY_KEY_PREFIX + self.intent_id)
         self.api_worker = f'{socket.gethostname()}:{os.getpid()}'
         self.body = body if isinstance(body, dict) else {}
-        self.synthetic_type = self.read_synthetic_type(self.body)
+        self.synthetic_type = None
+        if command is None:
+            self.synthetic_type = self.read_synthetic_type(self.body)
 
     def read_synthetic_type(self, body):
         """Reads which kind of order the body asks for.
@@ -91,4 +97,6 @@ class OrderIntent:
         }
         if self.request_index is not None:
             document['request_index'] = self.request_index
+        if self.command is not None:
+            document['command'] = self.command
         return document

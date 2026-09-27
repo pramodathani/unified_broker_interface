@@ -22,6 +22,7 @@ There is no `pyproject.toml`, no build step and no pytest suite. The project roo
 | Offline order route tests | `python -m test_runs.order_routes` (`--record` rewrites `test_runs/fixtures/order_routes.jsonl` after an intended change) |
 | Offline order engine route tests | `python -m test_runs.order_engine_routes` (engine placement mode; its own fixture, because `--record` rewrites a whole file) |
 | Offline order list tests | `python -m test_runs.order_change_lists` (the `orders` list form of `modify` and `cancel`; its own fixture) |
+| Offline engine change tests | `python -m test_runs.order_engine_changes` (modify, cancel and parent routes on orders the engine placed, through the real engine; its own fixture) |
 | Offline place list tests | `python -m test_runs.order_place_lists` (the `orders` list form of `place` through the real engine, and reading an answer back by `intent_id`; its own fixture) |
 | Offline order engine tests | `python -m test_runs.order_engine` (the daemon itself, against scripted intents and stubbed brokers) |
 | Offline order engine load test | `python -m test_runs.order_engine_throughput` (broker lanes against ten stub brokers that take 200 ms; about 11 seconds) |

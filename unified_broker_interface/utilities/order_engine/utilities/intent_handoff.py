@@ -110,16 +110,81 @@ class IntentHandoff:
         self.refuse_unless_engine_running()
         reply_key = LIST_REPLY_KEY_PREFIX + uuid.uuid4().hex
         intents = {}
-        pipeline = self.cache.pipeline(transaction=False)
         for request_index, body, instrument_id in entries:
-            intent = OrderIntent(
+            intents[request_index] = OrderIntent(
                 body,
                 instrument_id,
                 wait_seconds,
                 request_index,
                 reply_key,
             )
-            intents[request_index] = intent
+        return self.hand_over_many(intents, reply_key, wait_seconds, started_at)
+
+    def command(self, command, arguments, started_at):
+        """Hands one change to a parent the engine owns to the worker that owns it, and answers with what it did.
+
+        Args:
+            command (str): The command, such as `cancel_leg` or `modify_leg`.
+            arguments (dict): The command's arguments, such as `parent_id`, `broker` and `order_id`.
+            started_at (float): `time.perf_counter()` when the request arrived.
+
+        Returns:
+            tuple: The answer's body (dict) and its HTTP status (int).
+
+        Raises:
+            RefusedRequestError: With HTTP 503 when the order engine is not running or the command cannot be written for it.
+        """
+        answers = self.command_many(
+            [
+                (0, command, arguments),
+            ],
+            self.timeout_seconds,
+            started_at,
+        )
+        return answers[0]
+
+    def command_many(self, entries, wait_seconds, started_at):
+        """Hands several changes to parents the engine owns over in one round trip, and collects each one's answer.
+
+        Args:
+            entries (list): One `(request_index, command, arguments)` triple per change.
+            wait_seconds (float): The longest to wait for the answers.
+            started_at (float): `time.perf_counter()` when the request arrived.
+
+        Returns:
+            dict: Each request index (int) to a tuple of the change's answer body (dict) and its HTTP status (int).
+
+        Raises:
+            RefusedRequestError: With HTTP 503 when the order engine is not running or Redis cannot be read before anything is written.
+        """
+        self.refuse_unless_engine_running()
+        reply_key = LIST_REPLY_KEY_PREFIX + uuid.uuid4().hex
+        intents = {}
+        for request_index, command, arguments in entries:
+            intents[request_index] = OrderIntent(
+                arguments,
+                None,
+                wait_seconds,
+                request_index,
+                reply_key,
+                command,
+            )
+        return self.hand_over_many(intents, reply_key, wait_seconds, started_at)
+
+    def hand_over_many(self, intents, reply_key, wait_seconds, started_at):
+        """Writes several intents in one pipeline and collects each one's answer from their shared reply list.
+
+        Args:
+            intents (dict): Each request index (int) to its `OrderIntent`, all naming `reply_key`.
+            reply_key (str): The list the engine answers every intent on.
+            wait_seconds (float): The longest to wait for the answers.
+            started_at (float): `time.perf_counter()` when the request arrived.
+
+        Returns:
+            dict: Each request index (int) to a tuple of the answer's body (dict) and its HTTP status (int).
+        """
+        pipeline = self.cache.pipeline(transaction=False)
+        for intent in intents.values():
             pipeline.xadd(
                 INTENT_STREAM_KEY,
                 {
@@ -136,7 +201,7 @@ class IntentHandoff:
                 answers[request_index] = self.unknown_answer(
                     intent,
                     started_at,
-                    f'the orders could not all be written for the order engine ({error}), so this order may or may not be placed',
+                    f'the requests could not all be written for the order engine ({error}), so this one may or may not have been made',
                 )
             return answers
         reply_texts = self.collect_replies(reply_key, len(intents), wait_seconds)
@@ -146,7 +211,7 @@ class IntentHandoff:
                 answers[request_index] = self.unknown_answer(
                     intent,
                     started_at,
-                    f'the order engine did not answer within {wait_seconds} seconds, so this order may still be placed; read its answer later by its intent_id',
+                    f'the order engine did not answer within {wait_seconds} seconds, so this may still happen; read its answer later by its intent_id',
                 )
                 continue
             try:

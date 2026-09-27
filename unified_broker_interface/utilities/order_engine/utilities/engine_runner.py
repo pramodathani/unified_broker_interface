@@ -21,6 +21,10 @@ from unified_broker_interface.utilities.order_engine.utilities.intent_handoff im
 from unified_broker_interface.utilities.order_engine.utilities.order_update_follower import (
     ORDER_UPDATES_STREAM_KEY,
 )
+from unified_broker_interface.utilities.order_engine.utilities.parent_commands import (
+    HALT_EVERY_PARENT,
+    ParentCommands,
+)
 from unified_broker_interface.utilities.order_engine.utilities.registry import (
     SYNTHETIC_ORDER_CLASSES,
 )
@@ -57,6 +61,7 @@ class OrderEngine:
         router (ParentRouter | None): The lanes of worker threads that place orders and own their parents, or None to do everything on the main thread.
         entries_per_read (int): How many stream entries one read takes.
         counts_lock (threading.Lock): Guards the four counts, which worker threads update.
+        commands (ParentCommands): What runs a caller's change to a parent the engine owns.
     """
 
     def __init__(
@@ -120,6 +125,13 @@ class OrderEngine:
         self.router = router
         self.entries_per_read = entries_per_read
         self.counts_lock = threading.Lock()
+        self.commands = ParentCommands(
+            placement,
+            event_log,
+            parent_store,
+            logger,
+            gates,
+        )
 
     def streams(self):
         """The streams this engine reads, in the order a batch is handled.
@@ -307,6 +319,9 @@ class OrderEngine:
             )
             self.acknowledge(entry_id)
             return
+        if intent.get('command'):
+            self.take_command(entry_id, intent)
+            return
         if self.router is None:
             self.finish_intent(entry_id, intent, None)
             return
@@ -328,6 +343,102 @@ class OrderEngine:
                 worker,
             ),
         )
+
+    def take_command(self, entry_id, intent):
+        """Runs a caller's change to a parent on the worker that owns the parent, or here without lanes.
+
+        Halting every parent is handed to each open parent's owner and answered at once, with how many were halted. Each worker runs its halts before any work handed to it later, so a fill or a tick that arrives after the halt finds the parent already cancelled.
+
+        Args:
+            entry_id (str): The stream entry's id.
+            intent (dict): The intent document, with `command`.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        early_answer = self.answer_without_placing(intent)
+        if early_answer is not None:
+            body, status = early_answer
+            self.reply(intent, body, status)
+            self.acknowledge(entry_id)
+            return
+        if intent.get('command') == HALT_EVERY_PARENT:
+            self.halt_every_parent(entry_id, intent)
+            return
+        arguments = intent.get('body') or {}
+        if self.router is None:
+            self.finish_command(entry_id, intent)
+            return
+        self.router.route(
+            arguments.get('parent_id'),
+            arguments.get('broker'),
+            self.finish_command,
+            (
+                entry_id,
+                intent,
+            ),
+        )
+
+    def finish_command(self, entry_id, intent):
+        """Runs one command, pushes its answer and acknowledges it.
+
+        Args:
+            entry_id (str): The stream entry's id.
+            intent (dict): The intent document, with `command`.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        try:
+            body, status = self.commands.run(intent)
+        except RefusedRequestError as refusal:
+            body, status = refusal.body, refusal.status
+        except Exception as exception:
+            self.logger.exception(
+                f'Command {intent.get("command")} in intent '
+                f'{intent.get("intent_id")} failed.'
+            )
+            body = {
+                'error': (
+                    'the order engine failed while making this change '
+                    f'({type(exception).__name__}), so its outcome is unknown'
+                ),
+            }
+            status = 504
+        self.reply(intent, body, status)
+        self.acknowledge(entry_id)
+
+    def halt_every_parent(self, entry_id, intent):
+        """Stops every open parent from acting again, on the worker that owns each, and answers with how many there were.
+
+        Args:
+            entry_id (str): The stream entry's id.
+            intent (dict): The intent document.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        parent_order_ids = []
+        try:
+            parent_order_ids = self.parent_store.open_parent_ids()
+        except Exception:
+            self.logger.exception(
+                'The open parents could not be read, so none was halted.'
+            )
+        for parent_order_id in parent_order_ids:
+            if self.router is None:
+                self.commands.halt(parent_order_id)
+            else:
+                self.router.route(
+                    parent_order_id,
+                    None,
+                    self.commands.halt,
+                    (parent_order_id,),
+                )
+        self.reply(intent, {
+            'halted_parents': len(parent_order_ids),
+        }, 200)
+        self.acknowledge(entry_id)
 
     def place_on_worker(self, entry_id, intent, broker_name, skipped, worker):
         """Places one intent on the worker that will own its parent, sending its first legs to the broker intake chose.

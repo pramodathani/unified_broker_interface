@@ -41,3 +41,15 @@ The offline recording covers this with a bracket run behind a budget of three re
 ## Why `cancel_outside_order` records against the parent without a leg
 
 A cancel of an order that is not one of this parent's legs still needs to be in the record, because it is something the parent did, and it still costs a request an exchange counts. The events carry the broker and broker order id and no leg id. `ParentOrder.apply_event` ignores both names, exactly as it ignores `leg_cancel_requested` and `leg_cancelled`, so replaying them after a restart changes nothing. A refusal by the rate budget is recorded as outcome `rejected` rather than raised, for the same reason `take_rate_token` does not raise: the caller has other orders to cancel and a position to close.
+
+## Why `cancel_leg_answered` exists beside `cancel_leg`
+
+The order types need only to know whether a cancel was accepted, so `cancel_leg` still answers True or False. A caller's cancel through `DELETE /api/orders/cancel` needs the broker's outcome, message and response to answer with, so the recording and sending moved into `cancel_leg_answered`, which `cancel_leg` calls. The comment that used to sit on its `leg_state` line explains a rule that still holds: the broker's own order update decides when a leg is really cancelled, because an accepted cancel is a promise, not a fact, and treating it as one is how an order that went on to fill anyway gets forgotten about.
+
+## Why a caller's modify is recorded as a `leg_update`
+
+`apply_outside_modification` records the caller's change as a `leg_update` carrying the new price, trigger price or quantity, the same event a type's own `reprice_leg` and `reduce_leg` write, with `changed_by: caller` in its detail. `ParentOrder.apply_event` already replays that event, so a restart keeps the caller's values without a new event name. The change passes the re-pricing throttle, the daily cap and the rate budget exactly as a type's own change does.
+
+## Why `stop_acting` leaves the legs alone
+
+Flatten halts every parent before it cancels every order itself. If a halt cancelled the parent's legs too, each leg would be cancelled twice, once by the parent and once by flatten, spending two order messages on one order. A parent cancelled through `DELETE /api/orders/parents` does cancel its legs, through `cancel_by_caller`, because nothing else will.

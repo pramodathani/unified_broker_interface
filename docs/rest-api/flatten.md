@@ -13,7 +13,7 @@ The table below lists the one route on this page.
 
 ## Why the cancels go first
 
-The order of the two halves is the whole point of this route. Suppose you hold a long position with a stop-loss order resting below it. If the position were closed first, the stop would still be live at the exchange. When the price later fell to the stop, it would sell again and leave you short, which is a new trade that nobody chose. So the route cancels every open order first, then re-reads the brokers' order books until they agree the orders are gone, and only then sends closing orders. After the closes it waits a second time, re-reading the brokers' positions until each closed one shows zero, and only then answers that the account is flat.
+The order of the two halves is the whole point of this route. Suppose you hold a long position with a stop-loss order resting below it. If the position were closed first, the stop would still be live at the exchange. When the price later fell to the stop, it would sell again and leave you short, which is a new trade that nobody chose. So the route first asks the [order engine](order-engine.md) to halt every parent it is still running, so that no armed trigger, bracket or schedule places a new order while the account is being unwound, then cancels every open order, then re-reads the brokers' order books until they agree the orders are gone, and only then sends closing orders. After the closes it waits a second time, re-reading the brokers' positions until each closed one shows zero, and only then answers that the account is flat.
 
 <figure class="diagram">
 --8<-- "docs/assets/diagrams/flatten.svg"
@@ -223,13 +223,15 @@ The "cancel never confirmed" and "position still held" examples are shortened: t
 
 ### Response attributes
 
-A dry run answers with `would_cancel` and `would_close`. A real run answers with `cancelled`, `still_open_after_waiting`, `closed`, `positions_still_open_after_waiting` and `flat`.
+A dry run answers with `would_cancel` and `would_close`. A real run answers with `halted`, `cancelled`, `still_open_after_waiting`, `closed`, `positions_still_open_after_waiting` and `flat`.
 
 | Attribute | Type | Description |
 |---|---|---|
 | `dry_run` | boolean | `true`, on a dry run only. |
 | `would_cancel[]` | array | Each order that would be cancelled, with `broker`, `order_id` and `status`. |
 | `would_close[]` | array | Each position that would be closed, in the same shape as a `closed` entry before sending. |
+| `halted.halted_parents` | number | How many of the order engine's open parents were halted before anything was cancelled. |
+| `halted.error` | string | Why no parent could be halted, such as the engine not running; flatten carries on regardless. |
 | `cancelled[]` | array | One entry per cancel attempted, with `broker`, `order_id`, `sent`, `outcome` and `status_message`. |
 | `cancelled[].sent` | boolean | Whether the cancel request left the machine. `false` means it could not be built or sent, and `status_message` says why. |
 | `still_open_after_waiting[]` | array of strings | The orders a broker still reported as live when the wait ended, written as `broker:order_id`. |
@@ -269,7 +271,8 @@ A failure after the first read never changes the status to anything but 207; it 
 | cancel | `the cancel could not be sent: <error>` | The request raised before an answer came back. |
 | close | `the broker's token does not name exactly one mapped instrument, so this position was not closed` | `unified:broker_tokens` has no entry, or more than one instrument, for the position's token. |
 | close | any refusal message from `POST /api/orders/place` | For example a lot-size problem, or `<broker> cannot take this order: <reason>`. |
-| close | `the close could not be sent: <error>` | Anything else that went wrong while sending. |
+| close | `the order engine is not running, so the order was not placed; start unified-orders@order_engine.service` | No close could be handed to the engine, so none was sent. |
+| close | `the order engine did not answer within <n> seconds, so this may still happen; read its answer later by its intent_id` | The engine had not answered this close when the wait ran out; it may still be sent. |
 
 ## What it does, step by step
 

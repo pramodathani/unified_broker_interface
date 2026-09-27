@@ -366,6 +366,19 @@ class SyntheticOrder:
         Returns:
             bool: True when the broker accepted the cancel.
         """
+        outcome, _, _ = self.cancel_leg_answered(leg, reason)
+        return outcome == 'accepted'
+
+    def cancel_leg_answered(self, leg, reason):
+        """Cancels one leg at its broker, records both the asking and the answer, and says what the broker answered.
+
+        Args:
+            leg (OrderLeg): The leg to cancel.
+            reason (str): Why, for a person reading the parent later.
+
+        Returns:
+            tuple: The outcome (str: `accepted`, `rejected` or `unknown`), the status message (str or None) and the broker's response (object or None).
+        """
         self.record({
             'event': 'leg_cancel_requested',
             'parent_state': self.parent.state,
@@ -377,10 +390,11 @@ class SyntheticOrder:
             'status_message': reason,
         })
         if not self.take_rate_token(leg, reason):
-            return False
+            return 'rejected', 'the order rate budget is full, so the cancel was not sent', None
         try:
             answer = self.placement.cancel(leg.broker, leg.broker_order_id)
         except Exception as error:
+            status_message = f'the cancel could not be sent: {error}'
             self.record({
                 'event': 'leg_cancelled',
                 'parent_state': self.parent.state,
@@ -390,17 +404,14 @@ class SyntheticOrder:
                 'broker': leg.broker,
                 'broker_order_id': leg.broker_order_id,
                 'outcome': 'unknown',
-                'status_message': f'the cancel could not be sent: {error}',
+                'status_message': status_message,
             })
-            return False
+            return 'unknown', status_message, None
         self.record({
             'event': 'leg_cancelled',
             'parent_state': self.parent.state,
             'leg_id': leg.leg_id,
             'leg_role': leg.role,
-            # The broker's own order update decides when the leg is really cancelled. An accepted
-            # cancel is a promise, not a fact, and treating it as one is how an order that went on
-            # to fill anyway gets forgotten about.
             'leg_state': leg.state,
             'broker': leg.broker,
             'broker_order_id': leg.broker_order_id,
@@ -410,7 +421,140 @@ class SyntheticOrder:
                 'broker_response': answer.response_body,
             },
         })
-        return answer.outcome == 'accepted'
+        return answer.outcome, answer.status_message, answer.response_body
+
+    def apply_outside_modification(self, leg, quantity, price, trigger_price):
+        """Sends a change the caller asked for through `PUT /api/orders/modify` to one of this parent's legs, records it, and lets the type carry on from the new values.
+
+        The change is recorded as a `leg_update`, the event a type's own repricing and reducing already write, so recovery replays it and the leg keeps the caller's price and quantity after a restart. The re-pricing throttle, the day's order cap and the rate budget apply to it as they do to the type's own changes. When the broker accepts it, `on_leg_modified` is called with what the leg held before.
+
+        Args:
+            leg (OrderLeg): The leg to change.
+            quantity (int | None): The new quantity, in the broker's own terms, or None to leave it.
+            price (decimal.Decimal | None): The new limit price, or None to leave it.
+            trigger_price (decimal.Decimal | None): The new trigger price, or None to leave it.
+
+        Returns:
+            tuple: The outcome (str: `accepted`, `rejected` or `unknown`), the status message (str or None) and the broker's response (object or None).
+        """
+        reason = 'changed through PUT /api/orders/modify'
+        before = {
+            'quantity': leg.quantity,
+            'price': leg.price,
+            'trigger_price': leg.trigger_price,
+        }
+        moves_price = price is not None or trigger_price is not None
+        if moves_price and not self.allowed_to_reprice(leg, reason):
+            return 'rejected', 'this order was moved too recently to move again yet', None
+        if not self.has_room_today(leg, reason):
+            return 'rejected', "the broker's daily order cap has no room for this change", None
+        if not self.take_rate_token(leg, reason):
+            return 'rejected', 'the order rate budget is full, so the change was not sent', None
+        try:
+            answer = self.placement.modify_leg(
+                leg.broker,
+                leg.broker_order_id,
+                quantity=quantity,
+                price=price,
+                trigger_price=trigger_price,
+            )
+        except Exception as error:
+            status_message = f'{reason}; the change could not be sent: {error}'
+            self.record({
+                'event': 'leg_update',
+                'parent_state': self.parent.state,
+                'leg_id': leg.leg_id,
+                'leg_role': leg.role,
+                'broker': leg.broker,
+                'broker_order_id': leg.broker_order_id,
+                'outcome': 'unknown',
+                'status_message': status_message,
+            })
+            return 'unknown', status_message, None
+        accepted = answer.outcome == 'accepted'
+        if accepted and moves_price and self.gates is not None:
+            self.gates.record_reprice(leg.leg_id)
+        event = {
+            'event': 'leg_update',
+            'parent_state': self.parent.state,
+            'leg_id': leg.leg_id,
+            'leg_role': leg.role,
+            'broker': leg.broker,
+            'broker_order_id': leg.broker_order_id,
+            'outcome': answer.outcome,
+            'status_message': f'{reason}; {answer.status_message or answer.outcome}',
+            'detail': {
+                'broker_response': answer.response_body,
+                'changed_by': 'caller',
+            },
+        }
+        if accepted and quantity is not None:
+            event['quantity'] = quantity
+        if accepted and price is not None:
+            event['price'] = self.json_number(price)
+        if accepted and trigger_price is not None:
+            event['trigger_price'] = self.json_number(trigger_price)
+        self.record(event)
+        if accepted:
+            self.on_leg_modified(leg, before)
+        return answer.outcome, answer.status_message, answer.response_body
+
+    def on_leg_modified(self, leg, before):
+        """Lets the order type carry on from a change the caller made to one of its legs.
+
+        The leg already holds the new quantity and prices. A type that keeps its own copy of a price or a quantity, such as a trailing stop's level or a chaser's step, overrides this to bring that copy in line, so its next tick works from the caller's values instead of moving the order back. Most types keep no copy and need nothing here.
+
+        Args:
+            leg (OrderLeg): The leg that was changed, holding its new values.
+            before (dict): What the leg held before, with `quantity`, `price` and `trigger_price`.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        del leg, before
+
+    def cancel_by_caller(self, reason):
+        """Cancels this parent because a caller asked: every leg still resting at a broker is cancelled, and the parent ends as `cancelled`.
+
+        Args:
+            reason (str): Why, for a person reading the parent later.
+
+        Returns:
+            list: One dictionary per leg a cancel was sent for, with `leg_id`, `broker`, `order_id`, `outcome` and `status_message`.
+        """
+        cancelled = []
+        for leg in list(self.parent.legs):
+            if leg.is_finished() or not leg.broker_order_id:
+                continue
+            outcome, status_message, _ = self.cancel_leg_answered(leg, reason)
+            cancelled.append({
+                'leg_id': leg.leg_id,
+                'broker': leg.broker,
+                'order_id': leg.broker_order_id,
+                'outcome': outcome,
+                'status_message': status_message,
+            })
+        self.stop_acting(reason)
+        return cancelled
+
+    def stop_acting(self, reason):
+        """Ends this parent as `cancelled` without touching its legs, so it places, moves and cancels nothing more.
+
+        Flatten does this to every open parent before it cancels every order itself, so no trigger, bracket or schedule re-opens a position flatten is closing.
+
+        Args:
+            reason (str): Why, for a person reading the parent later.
+
+        Returns:
+            bool: True when the parent was open and is now cancelled.
+        """
+        if self.parent.is_terminal():
+            return False
+        if not self.parent.can_change_to('cancelled'):
+            return False
+        self.record_state('cancelled', reason)
+        self.save()
+        return True
 
     def cancel_outside_order(self, broker_name, broker_order_id, reason):
         """Cancels an order that is not one of this parent's legs, and records both the asking and the answer.

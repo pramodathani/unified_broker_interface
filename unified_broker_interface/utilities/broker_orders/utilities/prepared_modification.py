@@ -15,6 +15,8 @@ class PreparedModification:
         stored_order (StoredOrder): The order as the broker's order book in Redis holds it.
         instrument_id (str | None): The instrument found for the order in today's catalogue, or None when none was found.
         broker_request (BrokerRequest): The modify request built for the broker, not yet sent.
+        engine_command (str | None): The command that hands this modification to the order engine, when the engine's parent owns the order, or None for an order placed elsewhere.
+        engine_arguments (dict | None): What the engine is handed to make the modification, or None when the engine does not own the order.
     """
 
     def __init__(self, broker_orders, order_id, stored_order, instrument_id, broker_request):
@@ -36,6 +38,8 @@ class PreparedModification:
         self.stored_order = stored_order
         self.instrument_id = instrument_id
         self.broker_request = broker_request
+        self.engine_command = None
+        self.engine_arguments = None
 
     def dry_run_answer(self, started_at):
         """The answer for a dry run: the request that would have been sent.

@@ -13,6 +13,8 @@ The table below lists the five routes on this page. The emergency route that can
 | <span class="method get">GET</span> | [`/api/orders/trades`](#trade-book) | Today's trades at every broker, from a document kept in Redis |
 | <span class="method post">POST</span> | [`/api/orders/place`](#place-an-order) | Places one order at a broker the API chooses, or [each order of a list](#several-orders-in-one-request) |
 | <span class="method get">GET</span> | [`/api/orders/intents/<intent_id>`](#read-an-answer-later) | The order engine's answer for one order, after the place request stopped waiting |
+| <span class="method get">GET</span> | [`/api/orders/parents`](#the-engines-parents) | One of the order engine's parents, or every one still open |
+| <span class="method delete">DELETE</span> | [`/api/orders/parents`](#cancel-a-parent) | Cancels one of the engine's parents with its resting legs, or each of a list |
 | <span class="method put">PUT</span> | [`/api/orders/modify`](#modify-an-order) | Changes one open order at the broker that holds it, or [each order of a list](#several-orders-in-one-request) |
 | <span class="method delete">DELETE</span> | [`/api/orders/cancel`](#cancel-an-order) | Cancels one open order at the broker that holds it, or [each order of a list](#several-orders-in-one-request) |
 
@@ -602,6 +604,12 @@ This route changes one open order at the broker that holds it. You name the orde
 !!! danger "A modification changes a live order"
     A changed price or quantity takes effect at the exchange as soon as the broker accepts it. Send it with `dry_run` first to see the exact request.
 
+### An order the engine placed
+
+When the order is a leg of one of the [order engine's](order-engine.md) parents, which the route finds in `unified:orders:children`, the route still checks the change as above, and then hands it to the worker that owns the parent instead of sending it itself. The order type records the change and carries on from the new price or quantity: a trailing stop ratchets from the trigger you set, a chaser steps on from the price you set, and a linked pair of exits stays sized to the open position. The change cannot race the type's own repricing, because only that worker touches the parent. The answer carries `parent_id` and `synthetic_type`, and the change passes the engine's re-pricing throttle, daily cap and rate budget.
+
+Only `price`, `trigger_price` and `quantity` can be changed on such an order. Changing `order_type`, `validity` or `disclosed_quantity` is refused with <span class="status s4">409</span> `this order belongs to an order the engine manages, which can only have its price, trigger_price or quantity changed, not <field>`, because the type would then be managing an order that is not the one it placed. A dry run is answered by the route as for any other order.
+
 ### Request parameters
 
 `order_id`, `broker` and `dry_run` may come from the body or the query string; the body wins when both are given. The fields to change come from the body only, and a field that is absent or empty is not changed.
@@ -804,6 +812,8 @@ This route cancels one open order at the broker that holds it. It reads Redis on
 !!! danger "A cancel cannot be taken back"
     `outcome: accepted` means the broker took the cancel request. The order may still fill in the moment before the exchange acts on it, so read the [order book](#order-book) to see the final status.
 
+When the order is a leg of one of the [order engine's](order-engine.md) parents, the cancel is handed to the worker that owns the parent, which records it and lets the order type react to a cancel it knows about. The answer then carries `parent_id` and `synthetic_type`. Cancelling one leg does not cancel the parent; [cancel the parent](#cancel-a-parent) to stop it placing anything more. The engine also reads the order from the broker's order book, so an order it has only just placed can be cancelled once the broker's poller or websocket has recorded it, as for any other order.
+
 ### Request parameters
 
 All three parameters may come from the JSON body or the query string, and the body wins when both are given.
@@ -994,6 +1004,52 @@ A body with an `orders` list cancels each order in it. Each item carries `order_
     - **Why the stored order matters:** several brokers' cancel requests need values only their own order book carries, such as Zerodha's variety (the `amo` in the URL above comes from the stored order), Kotak's after-market flag or Wisdom Capital's identifier.
     - **Class:** [`CancelOrderRequest`][unified_broker_interface.utilities.broker_orders.utilities.cancel_order_request.CancelOrderRequest].
     - **A list:** `cancel_order_list` reads every order's entries in the same single pipeline, however many orders it has, and prepares each with `prepare_cancel` into a [`PreparedCancel`][unified_broker_interface.utilities.broker_orders.utilities.prepared_cancel.PreparedCancel].
+
+## The engine's parents
+
+<div class="endpoint" markdown><span class="method get">GET</span> `/api/orders/parents`<span class="auth">access-token</span></div>
+
+A parent is one order you asked the [order engine](order-engine.md) for, such as a bracket, and its legs are the broker orders it placed for it. This route shows one parent, named by `parent_id` in the query string, or every parent that has not finished. It is the only way to see a parent that has placed nothing yet, such as an armed trigger or a scheduled order.
+
+| Name | In | Type | Required | Description |
+|---|---|---|---|---|
+| `access-token` | header | string | Yes | The token from [`connect`](session.md#connect) |
+| `parent_id` | query | string | No | The parent to show; without it, every open parent is listed under `parents` |
+
+The answer is the parent as the engine holds it in `unified:orders:parents`: `parent_order_id`, `synthetic_type`, `state`, `instrument_id`, the caller's `body`, the type's `parameters` and one entry per leg with its broker, order id, state, quantities and prices. A named parent the engine does not hold is answered <span class="status s4">404</span> `the order engine holds no parent with this id`.
+
+### Cancel a parent
+
+<div class="endpoint" markdown><span class="method delete">DELETE</span> `/api/orders/parents`<span class="auth">access-token</span></div>
+
+This route cancels one parent, named by `parent_id` in the body, or each of a list given as `parents`, an array of objects each holding `parent_id`. The worker that owns the parent cancels every leg still resting at a broker and ends the parent as `cancelled`, so it places, moves and cancels nothing more.
+
+!!! danger "Cancelling a parent cancels live orders"
+    Every leg the parent still has resting at a broker is cancelled. A position the parent already opened is not closed; close it yourself or use [flatten](flatten.md).
+
+```json
+{
+  "parent_id": "0c2d4e6f-8a1b-4c3d-9e5f-7a8b9c0d1e2f",
+  "synthetic_type": "bracket",
+  "state": "cancelled",
+  "cancelled_legs": [
+    {"leg_id": "0c2d4e6f-8a1b-4c3d-9e5f-7a8b9c0d1e2f:2", "broker": "flattrade", "order_id": "26091500000031", "outcome": "accepted", "status_message": null}
+  ],
+  "intent_id": "5e0c4f0c8f3a4f7e9a1d2b3c4d5e6f70"
+}
+```
+
+| Status | Meaning |
+|---|---|
+| <span class="status s2">200</span> | The parent is cancelled; `cancelled_legs` says what each leg's cancel came back as. A list is answered with `results`, one entry per parent. |
+| <span class="status s4">400</span> | `parent_id must name a parent`, `parents must be a non-empty list`, or, for one entry of a list, `each entry of parents must name a parent_id` |
+| <span class="status s4">404</span> | `the order engine holds no parent with this id` |
+| <span class="status s4">409</span> | `the parent is already <state>` |
+| <span class="status s5">503</span> | The order engine is not running. |
+
+??? note "Under the hood"
+    - **Redis keys read:** `unified:orders:parents` and `unified:orders:parents:open` for the read; the cancel is handed to the engine as a `cancel_parent` command on `unified:orders:intents:stream`.
+    - **Classes:** [`ParentCommands`][unified_broker_interface.utilities.order_engine.utilities.parent_commands.ParentCommands] runs the cancel through the parent's own order type, with [`SyntheticOrder.cancel_by_caller`][unified_broker_interface.utilities.order_engine.base.SyntheticOrder.cancel_by_caller].
 
 ## Several orders in one request
 

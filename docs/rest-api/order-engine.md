@@ -145,6 +145,19 @@ The consumer group starts at the beginning of the intent stream, because an inte
 
 The engine writes each transition to the database and commits it before acting on it. A leg is recorded in the state `sending` before its request leaves, so a crash between the two leaves evidence that an order may exist at the broker. On restart the orphan matcher looks for that order in the broker's book. It attributes the order only when exactly one unclaimed order matches every field that was sent, within 2 seconds of when it was sent. With zero matches or several, the parent is parked in `failed` for a person to look at, because hanging a stop and a target on the wrong position is worse than admitting the engine does not know.
 
+## Changing an order the engine owns
+
+An order the engine placed is a leg of one of its parents, and the parent's order type may be about to move it, reduce it or cancel it in reaction to a fill or a tick. So the order routes never change one behind the engine's back. `PUT /api/orders/modify` and `DELETE /api/orders/cancel` look each order up in `unified:orders:children`, in the Redis read they already make, and hand an order the engine owns to the worker that owns its parent as a command intent: `cancel_leg` or `modify_leg`. The worker runs it through the order type, which records it and carries on from it; see [Modify an order](orders.md#an-order-the-engine-placed).
+
+`DELETE /api/orders/parents` sends `cancel_parent`, which cancels every leg still resting and ends the parent as `cancelled`. `POST /api/orders/flatten` sends `halt` before it cancels anything: the main thread hands every open parent's owner a halt, which ends the parent as `cancelled` without touching its legs, and answers at once with how many there were. Each worker runs its halts before any fill or tick handed to it afterwards.
+
+| Command | Sent by | What the worker does |
+|---|---|---|
+| `cancel_leg` | `DELETE /api/orders/cancel` | Cancels the leg through `cancel_leg`, recording `leg_cancel_requested` and `leg_cancelled` |
+| `modify_leg` | `PUT /api/orders/modify` | Sends the change through `apply_outside_modification`, records it as a `leg_update`, and calls the type's `on_leg_modified` |
+| `cancel_parent` | `DELETE /api/orders/parents` | Cancels every resting leg and ends the parent as `cancelled` |
+| `halt` | `POST /api/orders/flatten` | Ends every open parent as `cancelled`, leaving its legs to flatten |
+
 ## Risk gates
 
 Every order the engine sends passes the same set of limits, held together in one object. They are real limits only because exactly one engine runs; the same limits inside each gunicorn worker would each be enforced once per worker.
