@@ -52,9 +52,11 @@ A few details of the compose file matter when you set it up:
 
 - Redis starts with `--requirepass` set from `UNIFIED_BROKER_INTERFACE_REDIS_PASSWORD` and with `--appendonly yes`, so its data survives a restart.
 - MongoDB's root user and password come from `UNIFIED_BROKER_INTERFACE_MONGODB_USERNAME` (default `unified_broker_interface`) and `UNIFIED_BROKER_INTERFACE_MONGODB_PASSWORD`.
-- TimescaleDB's database and user come from `UNIFIED_BROKER_INTERFACE_POSTGRES_DB` and `UNIFIED_BROKER_INTERFACE_POSTGRES_USERNAME` (both default to `unified_broker_interface`), and the container gets 1 GB of shared memory.
+- TimescaleDB's database and user come from `UNIFIED_BROKER_INTERFACE_POSTGRES_DB` and `UNIFIED_BROKER_INTERFACE_POSTGRES_USERNAME` (both default to `unified_broker_interface`), and the container gets 4 GB of shared memory (see below).
 - Every port is published on `0.0.0.0`, so the stores are reachable from other machines unless a firewall stops them.
 - Every container has `restart: unless-stopped`.
+
+TimescaleDB needs the larger shared memory because PostgreSQL gives the workers of a parallel query a shared working area in `/dev/shm`, and Docker's default is only 64 MB. The tuning in the image lets one query use up to 16 parallel workers, and the price history job's `verify` step alone was measured at 527 MB there. The job failed on 26 September 2026 with `could not resize shared memory segment ... No space left on device` when the limit was 1 GB, because the broker candle services' own parallel queries were running at the same moment. `/dev/shm` is memory only while something uses it, so a 4 GB limit costs nothing when the database is quiet. Changing `shm_size` recreates the container, which restarts PostgreSQL for a few seconds.
 
 The three data folders are bind mounts with `create_host_path: false`. Docker does not create them for you, so create them first.
 
