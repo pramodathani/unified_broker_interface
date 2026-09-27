@@ -426,6 +426,27 @@ class SyntheticOrder:
         })
         return answer.outcome, answer.status_message, answer.response_body
 
+    def modify_held(self, price, quantity, dry_run):
+        """Changes an order the engine is still holding, which only a type that holds orders can do.
+
+        Args:
+            price (decimal.Decimal | None): The new limit price, or None to keep it.
+            quantity (int | None): The new quantity in units, or None to keep it.
+            dry_run (bool): Whether to check the change without making it.
+
+        Returns:
+            tuple: Never returns in this class.
+
+        Raises:
+            RefusedRequestError: With HTTP 409, always, because this type holds no order of its own; its legs are changed by broker and order_id.
+        """
+        raise RefusedRequestError.refusal(
+            f'a {self.parent.synthetic_type} order holds no order of its own '
+            'to change; change its legs with broker and order_id',
+            409,
+            parent_id=self.parent.parent_order_id,
+        )
+
     def apply_outside_modification(
         self,
         leg,

@@ -27,3 +27,9 @@ A paper order never calls `place_leg`, so it takes no rate token and is not coun
 ## `missed_quantity` is kept in Redis only
 
 It is written into the parameters and saved with the parent, like `triggered_at`, but not into the event log. The status message of the state change that follows firing does not carry it either. A restart after firing loses it from the parent document, while the estimate itself remains in `unified:orders:virtual_queue` until the parent closes.
+
+## How a held order is changed
+
+`modify_held` stores the new terms as `held_price` and `held_quantity` in the parameters, recorded with `record_parameters`, so the body stays exactly as the caller sent it and a restart replays the change. Everything that reads the order's terms (`read_level`, `child_order` and `fill_on_paper`) goes through `held_order`, which applies them.
+
+A change is refused once the order has fired, because from then on it is a real order at a broker and the ordinary modify route, by broker and order id, is the one that can change it; the refusal names that broker and order id. The quantity is checked against every broker's lot size, and refused only when no broker would take it, because the broker is chosen when the order fires. Currency and commodity contract sizes are not checked here; the placement checks them when the order is sent.

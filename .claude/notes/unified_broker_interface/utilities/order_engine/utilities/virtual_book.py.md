@@ -15,3 +15,7 @@ The quote is JSON in one field, and the instrument id is inside it, so filtering
 ## Why a fired order's estimate is kept
 
 When the engine sends the real order it reads the estimate to record the missed fill. The book stops updating an estimate once its parent has a leg or a `triggered_at`, but leaves it in the hash until the parent is no longer open, so the engine never reads an estimate that has vanished between the tick that fired and the write that records it.
+
+## Why a changed held order starts a new estimate
+
+A held order changed through `PUT /api/orders/modify` keeps its body and gains `held_price` and `held_quantity`. `held_terms` reads those first. When they differ from the estimate being kept, `refresh` starts a fresh one, as a changed price at the exchange loses its place in the queue. A reduced quantity at an exchange keeps its place, but restarting on any change is the cautious reading, and keeps one rule.

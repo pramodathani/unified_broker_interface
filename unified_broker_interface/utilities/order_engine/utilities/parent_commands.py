@@ -18,6 +18,7 @@ from unified_broker_interface.utilities.order_engine.utilities.registry import (
 CANCEL_LEG = 'cancel_leg'
 MODIFY_LEG = 'modify_leg'
 CANCEL_PARENT = 'cancel_parent'
+MODIFY_HELD = 'modify_held'
 HALT_EVERY_PARENT = 'halt'
 
 
@@ -73,6 +74,8 @@ class ParentCommands:
             return self.modify_leg(arguments)
         if command == CANCEL_PARENT:
             return self.cancel_parent(arguments)
+        if command == MODIFY_HELD:
+            return self.modify_held(arguments)
         raise RefusedRequestError.refusal(
             f'the order engine does not run the command {command!r}',
             400,
@@ -250,6 +253,26 @@ class ParentCommands:
             'state': runner.parent.state,
             'cancelled_legs': cancelled_legs,
         }, 200
+
+    def modify_held(self, arguments):
+        """Changes the price or quantity of an order the engine is still holding, such as a virtual limit order.
+
+        Args:
+            arguments (dict): `parent_id`, and any of `price` and `quantity` (in units), with `dry_run`.
+
+        Returns:
+            tuple: The answer's body (dict) and its HTTP status (int).
+
+        Raises:
+            RefusedRequestError: With HTTP 404 when the parent is not known, and 409 when it holds nothing that can be changed.
+        """
+        runner = self.runner_for(arguments.get('parent_id'))
+        quantity = arguments.get('quantity')
+        return runner.modify_held(
+            self.decimal_or_none(arguments.get('price')),
+            int(quantity) if quantity is not None else None,
+            arguments.get('dry_run') is True,
+        )
 
     def halt(self, parent_order_id):
         """Stops one open parent from acting again, leaving its legs to flatten.

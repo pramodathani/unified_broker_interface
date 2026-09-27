@@ -19,9 +19,9 @@ The table below lists all seventeen. "Fixture" is the recording a suite compares
 | `python -m test_runs.order_routes` | `place`, `modify` and `cancel`: status, body, every outgoing broker request and the number of Redis round trips | `test_runs/fixtures/order_routes.jsonl` (619 scenarios) | rewrites the whole file | 3.5 s |
 | `python -m test_runs.order_engine_routes` | How `POST /api/orders/place` hands orders to a stubbed engine, including timeouts and an engine that is down: status, body, the intents written to the stream, Redis round trips | `test_runs/fixtures/order_engine_routes.jsonl` (18) | rewrites the whole file | 1.0 s |
 | `python -m test_runs.order_place_lists` | The list form of `place`, through the real engine, and `GET /api/orders/intents/<intent_id>`: each entry's status and body, the broker requests (sorted) and the Redis round trips | `test_runs/fixtures/order_place_lists.jsonl` (11) | rewrites the whole file | 1.0 s |
-| `python -m test_runs.order_engine_changes` | Changes to orders the engine placed: a cancel and a modify through the ordinary routes, a refused change of validity, cancelling a parent, listing parents, refusals, and flatten halting an open parent | `test_runs/fixtures/order_engine_changes.jsonl` (8) | rewrites the whole file | 1.5 s |
+| `python -m test_runs.order_engine_changes` | Changes to orders the engine placed: a cancel and a modify through the ordinary routes, a refused change of validity, cancelling a parent, listing parents, refusals, and flatten halting an open parent | `test_runs/fixtures/order_engine_changes.jsonl` (11) | rewrites the whole file | 1.5 s |
 | `python -m test_runs.order_change_lists` | The list form of `modify` and `cancel`: each entry's status and body, the broker requests (sorted, since a list sends on several threads) and the Redis round trips | `test_runs/fixtures/order_change_lists.jsonl` (24) | rewrites the whole file | 1.0 s |
-| `python -m test_runs.order_engine` | The order engine daemon against scripted intents and stubbed brokers: replies, broker requests, acknowledgements, counters | `test_runs/fixtures/order_engine.jsonl` (218) | rewrites the whole file | 1.0 s |
+| `python -m test_runs.order_engine` | The order engine daemon against scripted intents and stubbed brokers: replies, broker requests, acknowledgements, counters | `test_runs/fixtures/order_engine.jsonl` (219) | rewrites the whole file | 1.0 s |
 | `python -m test_runs.order_engine_throughput` | The order engine's broker lanes against ten stub brokers that take 200 ms each: every order accepted, no broker sent more than 10 messages in any one second, and ten workers per broker at least 80 orders a second in total | none | no | 9.0 s |
 | `python -m test_runs.order_flatten` | The panic button, including that every cancel is sent and confirmed before any close, and that `flat` waits for the positions to show zero | `test_runs/fixtures/order_flatten.jsonl` (12) | rewrites the whole file | 3.5 s |
 | `python -m test_runs.instrument_routes` | `/details`, `/additional_details`, `/ltp`, `/ohlc`, `/quote`, `/prices` and `/ticks`, by `GET` for one instrument and by `POST` for a list: status, body, Redis round trips, the broker quotes asked for and the tick queries run | `test_runs/fixtures/instrument_routes.jsonl` (52) | rewrites the whole file | 1.3 s |
@@ -50,11 +50,11 @@ The output below is the last lines of each suite from one run on 2026-09-27.
 ===== order_place_lists
 11 of 11 scenarios match the recording, 0 differ
 ===== order_engine_changes
-8 of 8 scenarios match the recording, 0 differ
+11 of 11 scenarios match the recording, 0 differ
 ===== order_change_lists
 24 of 24 scenarios match the recording, 0 differ
 ===== order_engine
-218 of 218 scenarios match the recording, 0 differ
+219 of 219 scenarios match the recording, 0 differ
 ===== order_engine_throughput
 6/6 checks passed.
 ===== order_flatten
@@ -68,7 +68,7 @@ The output below is the last lines of each suite from one run on 2026-09-27.
 ===== price_cache
 46/46 checks passed.
 ===== virtual_queue
-48/48 checks passed.
+54/54 checks passed.
 ===== websocket_feeds
 160 of 160 scenarios match the recording, 0 differ
 ===== connection_warming

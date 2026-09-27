@@ -367,6 +367,156 @@ class OrderEngineChangesSuite(order_routes.OrderRoutesSuite):
             'bad_limit': bad_limit,
         }
 
+    def limit_body(self, **overrides):
+        """A LIMIT buy of ten RELIANCE shares at 1000, with fields replaced or added.
+
+        Args:
+            **overrides: Body fields to replace or add.
+
+        Returns:
+            dict: The request body.
+        """
+        body = order_routes.OrderRoutesScenarios().market_order(dry_run=None)
+        body['order_type'] = 'LIMIT'
+        body['price'] = 1000
+        body.update(overrides)
+        return body
+
+    def held_terms(self, parent_order_id):
+        """The type and held terms of a parent, as the engine keeps them.
+
+        Args:
+            parent_order_id (str): The parent's id.
+
+        Returns:
+            dict: `synthetic_type`, `state`, `held_price` and `held_quantity`.
+        """
+        read = self.call('GET', '/parents', query={
+            'parent_id': parent_order_id,
+        })
+        document = read['body'] or {}
+        parameters = document.get('parameters') or {}
+        return {
+            'synthetic_type': document.get('synthetic_type'),
+            'state': document.get('state'),
+            'held_price': parameters.get('held_price'),
+            'held_quantity': parameters.get('held_quantity'),
+        }
+
+    def limits_held_by_default(self):
+        """Places four orders with limits held by default: only the plain DAY limit is held.
+
+        Returns:
+            dict: The recorded result.
+        """
+        self.start_scenario(hold_limits=True)
+        plain = self.call('POST', '/place', self.limit_body())
+        named_simple = self.call('POST', '/place', self.limit_body(synthetic={
+            'type': 'simple',
+        }))
+        immediate = self.call('POST', '/place', self.limit_body(validity='IOC'))
+        market = self.call('POST', '/place', order_routes.OrderRoutesScenarios().market_order(dry_run=None))
+        placed = []
+        for answer in (plain, named_simple, immediate, market):
+            parent_order_id = (answer['body'] or {}).get('parent_id')
+            placed.append({
+                'status': answer['status'],
+                'outcome': (answer['body'] or {}).get('outcome'),
+                'parent': self.held_terms(parent_order_id) if parent_order_id else None,
+            })
+        return {
+            'name': 'a_plain_limit_order_is_held_by_default_and_nothing_else_is',
+            'placed': placed,
+            'sent': self.sent(),
+        }
+
+    def modify_a_held_order(self):
+        """Changes a held order through `PUT /api/orders/modify` with `parent_id`, and shows what is refused.
+
+        Returns:
+            dict: The recorded result.
+        """
+        self.start_scenario(hold_limits=True)
+        held = self.call('POST', '/place', self.limit_body())
+        parent_order_id = held['body']['parent_id']
+        sent_now = self.call('POST', '/place', self.limit_body(synthetic={
+            'type': 'simple',
+        }))
+        dry_run = self.call('PUT', '/modify', {
+            'parent_id': parent_order_id,
+            'price': 999.5,
+            'dry_run': True,
+        })
+        after_dry_run = self.held_terms(parent_order_id)
+        changed = self.call('PUT', '/modify', {
+            'parent_id': parent_order_id,
+            'price': 999.5,
+            'quantity': 20,
+        })
+        return {
+            'name': 'a_held_order_is_changed_by_parent_id_without_a_broker_message',
+            'dry_run': dry_run,
+            'after_dry_run': after_dry_run,
+            'changed': changed,
+            'after_change': self.held_terms(parent_order_id),
+            'refused': {
+                'trigger_price': self.call('PUT', '/modify', {
+                    'parent_id': parent_order_id,
+                    'trigger_price': 990,
+                }),
+                'nothing_to_change': self.call('PUT', '/modify', {
+                    'parent_id': parent_order_id,
+                }),
+                'off_tick': self.call('PUT', '/modify', {
+                    'parent_id': parent_order_id,
+                    'price': 999.53,
+                }),
+                'unknown_parent': self.call('PUT', '/modify', {
+                    'parent_id': 'no-such-parent',
+                    'price': 999,
+                }),
+                'sent_order': self.call('PUT', '/modify', {
+                    'parent_id': sent_now['body']['parent_id'],
+                    'price': 999,
+                }),
+            },
+            'sent': self.sent(),
+        }
+
+    def modify_a_mixed_list(self):
+        """Changes a held order and a sent order in one `orders` list.
+
+        Returns:
+            dict: The recorded result.
+        """
+        self.start_scenario(hold_limits=True)
+        held = self.call('POST', '/place', self.limit_body())
+        self.call('POST', '/place', self.limit_body(synthetic={
+            'type': 'simple',
+        }))
+        changed = self.call('PUT', '/modify', {
+            'orders': [
+                {
+                    'order_id': FLATTRADE_ORDER,
+                    'price': 1001.5,
+                },
+                {
+                    'parent_id': held['body']['parent_id'],
+                    'price': 998,
+                },
+                {
+                    'parent_id': held['body']['parent_id'],
+                    'validity': 'IOC',
+                },
+            ],
+        })
+        return {
+            'name': 'a_modify_list_changes_held_and_sent_orders_in_the_callers_order',
+            'changed': changed,
+            'held_after': self.held_terms(held['body']['parent_id']),
+            'sent': self.sent(),
+        }
+
     def orders_combiner(self):
         """The orders combiner script, loaded as a module so its document builder can run against the stand-in.
 
@@ -405,6 +555,9 @@ class OrderEngineChangesSuite(order_routes.OrderRoutesSuite):
                 self.refusals(),
                 self.flatten_halts_open_parents(),
                 self.order_book_filtered_by_parent(),
+                self.limits_held_by_default(),
+                self.modify_a_held_order(),
+                self.modify_a_mixed_list(),
             ]
         finally:
             blueprint_base.get_cache = original_get_cache

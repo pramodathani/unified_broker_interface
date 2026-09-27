@@ -65,6 +65,12 @@ from unified_broker_interface.utilities.order_engine.utilities.order_to_trade_ra
 from unified_broker_interface.utilities.order_engine.utilities.order_update_follower import (
     OrderUpdateFollower,
 )
+from unified_broker_interface.utilities.broker_orders.utilities.refused_request import (
+    RefusedRequestError,
+)
+from unified_broker_interface.utilities.order_engine.utilities.parent_commands import (
+    ParentCommands,
+)
 from unified_broker_interface.utilities.order_engine.utilities.parent_order import (
     ParentOrder,
 )
@@ -2815,6 +2821,7 @@ class OrderEngineSuite:
                 parent_store.save(changed)
 
         moves = []
+        held_changes = []
         for step in steps:
             step_at = started + step.get('at', 0)
             time.time = lambda: step_at
@@ -2831,6 +2838,27 @@ class OrderEngineSuite:
                         parent_store.save(changed)
                 if step.get('estimate') is not None:
                     self.seed_estimate(step['estimate'])
+                if step.get('held_change') is not None:
+                    commands = ParentCommands(
+                        placement,
+                        event_log,
+                        parent_store,
+                        logger,
+                        gates,
+                    )
+                    arguments = dict(step['held_change'])
+                    for parent_order_id in self.fake_redis.hashes.get('unified:orders:parents', {}):
+                        arguments['parent_id'] = parent_order_id
+                    try:
+                        answer_body, status = commands.modify_held(arguments)
+                    except RefusedRequestError as refusal:
+                        answer_body, status = refusal.body, refusal.status
+                    held_changes.append({
+                        'status': status,
+                        'error': answer_body.get('error'),
+                        'price': answer_body.get('price'),
+                        'quantity': answer_body.get('quantity'),
+                    })
                 before = len(self.network.sent_requests)
                 self.tick_at(ticker, step_at)
                 moves.append(len(self.network.sent_requests) - before)
@@ -2883,6 +2911,8 @@ class OrderEngineSuite:
                 for event in event_log.events
                 if event.get('event') == 'paper_filled'
             ]
+        if held_changes:
+            result['held_changes'] = held_changes
         return result
 
     def seed_estimate(self, estimate):
@@ -4076,6 +4106,31 @@ class OrderEngineSuite:
                 }),
                 [
                     {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_held_limit_changed_while_held_fires_at_its_new_price_and_quantity',
+                dict(entry, synthetic={
+                    'type': 'virtual_limit',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {
+                        'quote': steady,
+                        'at': 1,
+                        'held_change': {
+                            'price': '1000.05',
+                            'quantity': 20,
+                        },
+                    },
+                    {
+                        'quote': steady,
+                        'at': 2,
+                        'held_change': {
+                            'price': '999',
+                        },
+                    },
                 ],
                 accepted,
             ),

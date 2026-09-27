@@ -304,3 +304,7 @@ Broker requests of one list go out on up to `ORDER_SEND_THREADS` (4) threads, ma
 ## Why flatten's closes go out as one list
 
 Flatten used to close positions one after another, each close handed to the engine and waited for before the next was written. With the list form of the place route and the engine's lanes, writing every close in one pipeline lets the closes at different brokers go out at the same time, which is what a panic button should do. The answers come back on one reply list and are matched to their positions by `request_index`. The recorded flatten scenarios kept every status, body and broker request; only the route's Redis round trips changed. `place_closing_order` and `close_one_position` were folded into `close_every_position` and `closing_body`.
+
+## How the modify route takes held orders
+
+A single body with `parent_id` goes to `modify_held_order`, which checks the token with `self.tokens.check` (there is no order state to read it with) and hands a `modify_held` command to the engine. A list is split: entries with `parent_id` become commands, the rest go through `broker_order_results`, the former body of `modify_order_list`, and the answers are put back in the list's order.

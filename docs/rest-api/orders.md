@@ -317,6 +317,24 @@ This route places one order at one broker. You name the instrument, the side, th
 !!! danger "One request, one real order"
     Without `dry_run`, a `200` means a real order now rests at a real broker. A `504` means the order may exist. Check the [order book](#order-book) before you send the same order again.
 
+### Limit orders are held until they can fill
+
+A plain `LIMIT` order is not sent to a broker straight away. The order engine holds it in its own virtual order book, as a [`virtual_limit`](synthetic-orders.md) order, and sends it only once the other side of the book reaches its price: for a buy, when the best offer is at or below it. A limit that never fills therefore costs no order messages at all, where a resting one costs a place and a cancel.
+
+A held order answers <span class="status s2">202</span> with `outcome: armed` and a `parent_id`, and no broker order id, because none exists yet. You can change its price or quantity while it is held, through [`PUT /api/orders/modify` with `parent_id`](#a-held-order), and cancel it through [`DELETE /api/orders/parents`](#cancel-a-parent).
+
+The table below shows which orders are held.
+
+| Order | Held? |
+|---|---|
+| `LIMIT` with a `price`, `DAY` validity, no `synthetic` object | Yes |
+| `LIMIT` with `"synthetic": {"type": "simple"}` | No, sent at once |
+| `LIMIT` with `IOC` validity, which means trade now or never | No, sent at once |
+| `MARKET`, `SL`, `SL-M`, or a `LIMIT` priced only by `price_reference` | No, sent at once |
+| Any order naming another `synthetic` type | Run as that type |
+
+The setting `UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS`, on by default, turns this off for every order.
+
 ### Request parameters
 
 The body is a JSON object. You name the instrument in one of two ways: by `instrument_id`, or by `exchange`, `segment` and that segment's identity fields. When `instrument_id` is given, the identity fields are ignored.
@@ -631,6 +649,16 @@ When the order is a leg of one of the [order engine's](order-engine.md) parents,
 
 Only `price`, `trigger_price` and `quantity` can be changed on such an order. Changing `order_type`, `validity` or `disclosed_quantity` is refused with <span class="status s4">409</span> `this order belongs to an order the engine manages, which can only have its price, trigger_price or quantity changed, not <field>`, because the type would then be managing an order that is not the one it placed. A dry run is answered by the route as for any other order.
 
+### A held order
+
+An order the engine is still holding, such as a [held limit order](#limit-orders-are-held-until-they-can-fill), has no broker order id yet, so you name it by the `parent_id` the place route answered with. Only its `price` and `quantity` can change, and nothing is sent to a broker: the engine's worker that owns the order changes the terms it is held by, and it is sent at the new price and quantity when the other side reaches it. The queue estimate starts again, as a changed price at the exchange goes to the back of the queue. `dry_run` checks the change without making it.
+
+```json
+{"parent_id": "00000000-0000-4000-8000-000000000002", "price": 999.5, "quantity": 20}
+```
+
+The answer is <span class="status s2">200</span> with `parent_id`, `synthetic_type`, `held: true`, the new `price` and `quantity`, and `outcome: accepted`. A change is refused with <span class="status s4">400</span> when it names any other field or neither, when the price is not a whole number of ticks, or when the quantity is not a whole number of lots at any broker; with <span class="status s4">404</span> when the engine holds no such parent; and with <span class="status s4">409</span> when the order has already been sent (the answer then names its `broker` and `order_id`, which the ordinary form takes), has finished, is a type that holds no order of its own, or is a paper order that has already filled the new quantity.
+
 ### Request parameters
 
 `order_id`, `broker` and `dry_run` may come from the body or the query string; the body wins when both are given. The fields to change come from the body only, and a field that is absent or empty is not changed.
@@ -800,7 +828,7 @@ A price-only change never needs the instrument, so it goes ahead even when the i
 
 <div class="endpoint" markdown><span class="method put">PUT</span> `/api/orders/modify`<span class="auth">access-token</span></div>
 
-A body with an `orders` list changes each order in it. Each item carries what the single body carries, `order_id`, an optional `broker` and the fields to change, and each order is checked exactly as a single modification is. [Several orders in one request](#several-orders-in-one-request) describes the list, its answer and its statuses.
+A body with an `orders` list changes each order in it. Each item carries what the single body carries, `order_id`, an optional `broker` and the fields to change, or `parent_id` with `price` and `quantity` for [a held order](#a-held-order), and each order is checked exactly as a single modification is. Held and sent orders can be mixed in one list, and the results come back in the list's own order. [Several orders in one request](#several-orders-in-one-request) describes the list, its answer and its statuses.
 
 === "curl"
 
@@ -1081,7 +1109,7 @@ This route cancels one parent, named by `parent_id` in the body, or each of a li
 | Name | In | Type | Required | Description |
 |---|---|---|---|---|
 | `access-token` | header | string | Yes | The token from [`connect`](session.md#connect) |
-| `orders` | body | array of objects | Yes | One item per order. For `place`, an item is one order exactly as the single body gives it, including a `synthetic` object for any order type, and a list holds at most `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACE_LIST_MAXIMUM` items, 500 by default. For `modify` and `cancel`, an item carries `order_id`, an optional `broker` and, for `modify`, the fields to change, with no limit on the number. |
+| `orders` | body | array of objects | Yes | One item per order. For `place`, an item is one order exactly as the single body gives it, including a `synthetic` object for any order type, and a list holds at most `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACE_LIST_MAXIMUM` items, 500 by default. For `modify` and `cancel`, an item carries `order_id`, an optional `broker` and, for `modify`, the fields to change, with no limit on the number. A `modify` item may instead carry `parent_id` with `price` and `quantity`, for a held order. |
 | `dry_run` | body, or query for `modify` and `cancel` | boolean | No | `true` shows every order's broker request instead of sending it. It applies to the whole list. |
 
 The list takes no other key, in the body or the query string, so a field such as `price` or `broker` has to go inside each order. That rule is there so that nobody can put `price` beside the list expecting it to apply to every order, and it is why `dry_run` is refused inside an order: one order must never go live while its neighbours are only shown.
