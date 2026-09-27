@@ -88,13 +88,10 @@ class Basket(SyntheticOrder):
         )
         self.save()
 
-        outcome = 'accepted'
-        if 'unknown' in outcomes:
-            outcome = 'unknown'
-        elif 'accepted' not in outcomes:
-            outcome = 'rejected'
-        elif 'rejected' in outcomes:
-            outcome = 'partial'
+        outcome, status = self.combined_answer(
+            outcomes,
+            [status for _, _, status in answers],
+        )
         return {
             'broker': None,
             'instrument_id': self.parent.instrument_id,
@@ -113,4 +110,4 @@ class Basket(SyntheticOrder):
             ],
             'skipped': answers[0][1].get('skipped') if answers else [],
             'timing_ms': answers[0][1].get('timing_ms') if answers else {},
-        }, max(status for _, _, status in answers) if answers else 200
+        }, status

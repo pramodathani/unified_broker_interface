@@ -201,11 +201,10 @@ class OneCancelsOther(SyntheticOrder):
         """
         bodies = [body for _, body, _ in answers]
         outcomes = [body.get('outcome') for body in bodies]
-        outcome = 'accepted'
-        if 'unknown' in outcomes:
-            outcome = 'unknown'
-        elif 'rejected' in outcomes:
-            outcome = 'rejected'
+        outcome, status = self.combined_answer(
+            outcomes,
+            [status for _, _, status in answers],
+        )
         return {
             'broker': broker_name,
             'instrument_id': self.parent.instrument_id,
@@ -223,4 +222,4 @@ class OneCancelsOther(SyntheticOrder):
             ],
             'skipped': bodies[0].get('skipped') if bodies else [],
             'timing_ms': bodies[0].get('timing_ms') if bodies else {},
-        }, max(status for _, _, status in answers) if answers else 200
+        }, status

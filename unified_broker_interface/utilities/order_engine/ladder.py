@@ -211,11 +211,7 @@ class Ladder(SyntheticOrder):
         bodies = [body for body, _ in answers]
         statuses = [status for _, status in answers]
         outcomes = [body.get('outcome') for body in bodies]
-        outcome = 'accepted'
-        if 'unknown' in outcomes:
-            outcome = 'unknown'
-        elif 'rejected' in outcomes:
-            outcome = 'rejected'
+        outcome, status = self.combined_answer(outcomes, statuses)
         return {
             'broker': broker_name,
             'instrument_id': self.parent.instrument_id,
@@ -232,4 +228,4 @@ class Ladder(SyntheticOrder):
             ],
             'skipped': bodies[0].get('skipped') if bodies else [],
             'timing_ms': bodies[0].get('timing_ms') if bodies else {},
-        }, max(statuses) if statuses else 200
+        }, status

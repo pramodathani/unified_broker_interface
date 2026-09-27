@@ -637,6 +637,32 @@ class SyntheticOrder:
             self.save()
         return cancelled
 
+    def combined_answer(self, outcomes, statuses):
+        """The outcome and HTTP status of an answer that combines several orders' answers.
+
+        All accepted is `accepted` with 200. None accepted is `unknown` when any outcome is unknown and `rejected` otherwise, with the highest status. A mix is `partial` with 207, the status the list routes use for mixed results, so the caller knows to read each order's own outcome.
+
+        Args:
+            outcomes (list): Each order's outcome.
+            statuses (list): Each order's HTTP status.
+
+        Returns:
+            tuple: The outcome (str) and the HTTP status (int).
+        """
+        if not outcomes:
+            return 'accepted', 200
+        accepted = 0
+        for outcome in outcomes:
+            if outcome == 'accepted':
+                accepted = accepted + 1
+        if accepted == len(outcomes):
+            return 'accepted', max(statuses)
+        if accepted > 0:
+            return 'partial', 207
+        if 'unknown' in outcomes:
+            return 'unknown', max(statuses)
+        return 'rejected', max(statuses)
+
     def finish_with_legs(self):
         """Ends the parent once every leg has finished, for a type that does nothing after placing its legs.
 

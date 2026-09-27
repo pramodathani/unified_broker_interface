@@ -118,7 +118,7 @@ FROZEN_NOW = datetime.datetime(2026, 9, 23, 10, 0, 0, tzinfo=moments.INDIA)
 class NumberingBrokerNetwork(order_routes.FakeBrokerNetwork):
     """The stubbed broker network, able to give each placed order its own Flattrade order id.
 
-    An answer carrying `number_orders: true` has its `norenordno` replaced on every `PlaceOrder` by `26091500000101`, `26091500000102` and so on, so a type with several legs can be sent an update for one of them. Every other answer is exactly the stubbed one.
+    An answer carrying `number_orders: true` has its `norenordno` replaced on every `PlaceOrder` by `26091500000101`, `26091500000102` and so on, so a type with several legs can be sent an update for one of them. An answer carrying `sequence`, a list of answers, answers each `PlaceOrder` with the next one in turn, the last repeating, so a type whose legs get different answers can be tested. Every other answer is exactly the stubbed one.
 
     Attributes:
         placed (int): How many orders have been numbered since the last reset.
@@ -147,6 +147,16 @@ class NumberingBrokerNetwork(order_routes.FakeBrokerNetwork):
         Returns:
             FakeResponse: The stubbed answer.
         """
+        sequence = self.answer.get('sequence')
+        if sequence and url.endswith('/PlaceOrder'):
+            position = min(self.placed, len(sequence) - 1)
+            self.placed = self.placed + 1
+            stubbed = self.answer
+            self.answer = sequence[position]
+            try:
+                return super().request(method, url, **keyword_arguments)
+            finally:
+                self.answer = stubbed
         if not self.answer.get('number_orders') or not url.endswith('/PlaceOrder'):
             return super().request(method, url, **keyword_arguments)
         self.placed = self.placed + 1
@@ -4854,6 +4864,37 @@ class OrderEngineSuite:
                     {'quote': steady, 'at': 0},
                 ],
                 accepted,
+            ),
+            self.price_result(
+                'a_grid_with_one_rung_refused_answers_partial_with_207',
+                dict(entry, synthetic={
+                    'type': 'grid',
+                    'levels': 1,
+                    'step_points': 5,
+                    'most_inventory': 30,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                {
+                    'sequence': [
+                        accepted,
+                        self.scenarios.answers.json_answer(200, self.scenarios.answers.place_refusal('flattrade')),
+                    ],
+                },
+            ),
+            self.price_result(
+                'a_grid_with_every_rung_refused_answers_rejected',
+                dict(entry, synthetic={
+                    'type': 'grid',
+                    'levels': 1,
+                    'step_points': 5,
+                    'most_inventory': 30,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                self.scenarios.answers.json_answer(200, self.scenarios.answers.place_refusal('flattrade')),
             ),
             self.price_result(
                 'a_fired_trigger_does_not_fire_again_after_a_restart',

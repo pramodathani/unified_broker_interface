@@ -61,7 +61,15 @@ The engine also writes its own working values into the parent's copy of the `syn
 
 ## What the first answer looks like
 
-Types that act at once answer with the broker's answer plus a `parent_id`; types that send several orders at once, such as `freeze_slicer` and `ladder`, combine them into one answer with a list of `order_ids`. Types that wait for a price or a time send nothing at first, and answer <span class="status s2">202</span> with an `outcome` of `armed` or `scheduled`. The answer below was recorded by the offline suite `test_runs/order_engine.py` against stubbed brokers, for a `market_if_touched` buy waiting for 995.
+Types that act at once answer with the broker's answer plus a `parent_id`; types that send several orders at once, such as `freeze_slicer` and `ladder`, combine them into one answer with a list of `order_ids`. The combined answer follows one rule for `freeze_slicer`, `ladder`, `grid`, `two_sided_quote`, `basket`, `oco`, `bracket` and `two_sided_breakout`, and each order's own outcome is listed in it:
+
+| The orders' outcomes | `outcome` | HTTP status |
+|---|---|---|
+| All accepted | `accepted` | <span class="status s2">200</span> |
+| Some accepted, some not | `partial` | <span class="status s2">207</span> |
+| None accepted | `unknown` if any is unknown, otherwise `rejected` | The highest of their statuses |
+
+Types that wait for a price or a time send nothing at first, and answer <span class="status s2">202</span> with an `outcome` of `armed` or `scheduled`. The answer below was recorded by the offline suite `test_runs/order_engine.py` against stubbed brokers, for a `market_if_touched` buy waiting for 995.
 
 ```json
 {

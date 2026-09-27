@@ -289,11 +289,10 @@ class Grid(SyntheticOrder):
             state = 'rejected'
         self.record_state(state, f'the grid is set around {middle}')
         self.save()
-        outcome = 'accepted'
-        if 'unknown' in outcomes:
-            outcome = 'unknown'
-        elif 'accepted' not in outcomes:
-            outcome = 'rejected'
+        outcome, status = self.combined_answer(
+            outcomes,
+            [status for _, _, _, status in answers],
+        )
         return {
             'broker': broker_name,
             'instrument_id': self.parent.instrument_id,
@@ -312,7 +311,7 @@ class Grid(SyntheticOrder):
             ],
             'skipped': answers[0][2].get('skipped') if answers else [],
             'timing_ms': answers[0][2].get('timing_ms') if answers else {},
-        }, max(status for _, _, _, status in answers) if answers else 200
+        }, status
 
     def on_leg_update(self, leg, changes):
         """Replaces a filled rung with its opposite, one step away.
