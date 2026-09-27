@@ -7,6 +7,9 @@ The answer bodies built here are the REST API's own. That is a deliberate compro
 
 import time
 
+from unified_broker_interface.utilities.broker_orders.utilities.connection_pool import (
+    DEFAULT_POOL_SIZE,
+)
 from unified_broker_interface.utilities.broker_orders.utilities.connection_warmer import (
     ConnectionWarmer,
 )
@@ -38,11 +41,12 @@ class OrderPlacement:
         logger (logging.Logger): The logger for failures that do not change an answer.
     """
 
-    def __init__(self, logger):
+    def __init__(self, logger, pool_size=DEFAULT_POOL_SIZE):
         """Builds one order class per broker with no broker connection open yet, and the configured broker selector.
 
         Args:
             logger (logging.Logger): The logger for failures that do not change an answer.
+            pool_size (int): How many connections to each broker to keep, which is how many requests to one broker can be sent at once over a warm connection.
 
         Returns:
             None: This method returns nothing.
@@ -53,8 +57,10 @@ class OrderPlacement:
         self.logger = logger
         self.broker_names = []
         self.broker_orders = {}
+        warmed_names = self.warm_broker_names()
         for broker_order_class in BROKER_ORDER_CLASSES:
-            broker_orders = broker_order_class()
+            oldest_first = broker_order_class.BROKER_NAME in warmed_names
+            broker_orders = broker_order_class(pool_size, oldest_first)
             self.broker_names.append(broker_orders.BROKER_NAME)
             self.broker_orders[broker_orders.BROKER_NAME] = broker_orders
         selector_name = api_configuration['order_broker_selector']
@@ -67,7 +73,7 @@ class OrderPlacement:
         self.connection_warmers = []
 
     def start_connection_warmers(self):
-        """Starts a connection warmer for each broker named in `UNIFIED_BROKER_INTERFACE_API_ORDER_WARM_BROKERS`.
+        """Starts a connection warmer for each broker named in `UNIFIED_BROKER_INTERFACE_API_ORDER_WARM_BROKERS`, or for every broker when it says `all`.
 
         Warming only saves time, so nothing about it may stop the caller: an unknown broker name is logged and ignored, and any other failure is logged and leaves warming off. A broker without a `WARM_URL`, such as Kotak, is pinged only once a request has named its host.
 
@@ -75,7 +81,7 @@ class OrderPlacement:
             None: This method returns nothing.
         """
         try:
-            for broker_name in api_configuration['order_warm_brokers']:
+            for broker_name in self.warm_broker_names():
                 if not broker_name:
                     continue
                 broker_orders = self.broker_orders.get(broker_name)
@@ -90,6 +96,22 @@ class OrderPlacement:
                 self.connection_warmers.append(warmer)
         except Exception:
             self.logger.exception('order connection warming could not start')
+
+    def warm_broker_names(self):
+        """The brokers whose connections are kept warm, as `UNIFIED_BROKER_INTERFACE_API_ORDER_WARM_BROKERS` names them.
+
+        Returns:
+            list: Broker names, which is every broker when the setting is `all` and none when it is empty.
+        """
+        configured = api_configuration['order_warm_brokers']
+        if configured == [
+            'all',
+        ]:
+            every_name = []
+            for broker_order_class in BROKER_ORDER_CLASSES:
+                every_name.append(broker_order_class.BROKER_NAME)
+            return every_name
+        return configured
 
     def attach_daily_count(self, daily_count):
         """Makes every broker's order class count the requests it sends against the daily caps.

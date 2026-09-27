@@ -133,7 +133,10 @@ class OrdersBlueprint(BaseBlueprint):
         """
         super().__init__()
         self.logger = get_logger('rest_api.orders')
-        self.order_placement = OrderPlacement(self.logger)
+        self.order_placement = OrderPlacement(
+            self.logger,
+            ORDER_SEND_THREADS + 1,
+        )
         self.broker_names = self.order_placement.broker_names
         self.broker_orders = self.order_placement.broker_orders
         self.broker_selector = self.order_placement.broker_selector

@@ -16,6 +16,7 @@ from unified_broker_interface.utilities.broker_orders.utilities.broker_answer im
     BrokerAnswer,
 )
 from unified_broker_interface.utilities.broker_orders.utilities.connection_pool import (
+    DEFAULT_POOL_SIZE,
     IdleLimitedAdapter,
 )
 from unified_broker_interface.utilities.broker_orders.utilities.order_request import (
@@ -108,17 +109,25 @@ class BrokerOrders:
     )
     WARM_SETTLE_SECONDS = 1.0
 
-    def __init__(self):
+    def __init__(self, pool_size=DEFAULT_POOL_SIZE, oldest_first=False):
         """Builds the broker's order class with a session that has no connection open yet.
 
-        The session's adapter is requests' default adapter except that its pools close a connection idle longer than `MAXIMUM_IDLE_SECONDS` instead of reusing it.
+        The session's adapter is requests' default adapter except that its pools keep `pool_size` connections, hand out the one that has waited longest when `oldest_first` is set, and close a connection idle longer than `MAXIMUM_IDLE_SECONDS` instead of reusing it.
         For a broker whose certificate is deliberately not checked, urllib3's warning about that host is silenced, because a warmer would otherwise log it on every ping.
+
+        Args:
+            pool_size (int): How many connections to the broker the session keeps open, which is how many requests can be sent at once without opening a new one.
+            oldest_first (bool): Whether the pool hands out the connection returned longest ago, so a warmer rotates through all of them; set for a warmed broker.
 
         Returns:
             None: This method returns nothing.
         """
         self.session = requests.Session()
-        self.adapter = IdleLimitedAdapter(self.MAXIMUM_IDLE_SECONDS)
+        self.adapter = IdleLimitedAdapter(
+            self.MAXIMUM_IDLE_SECONDS,
+            pool_size,
+            oldest_first,
+        )
         self.session.mount('https://', self.adapter)
         self.session.mount('http://', self.adapter)
         self.origin_lock = threading.Lock()

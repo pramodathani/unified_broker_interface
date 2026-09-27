@@ -3952,6 +3952,9 @@ class OrderRoutesSuite:
             flask.testing.FlaskClient: The client.
         """
         application = flask.Flask('order_routes_suite')
+        api_configuration['order_warm_brokers'] = [
+            '',
+        ]
         blueprint = orders_blueprint.OrdersBlueprint()
         application.register_blueprint(
             blueprint.blueprint,

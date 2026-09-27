@@ -29,3 +29,13 @@ The alternative is to return the prepared placement and the broker's answer and 
 `prepare`, `dry_run_answer` and `send` exist separately because the engine needs to interleave its own work between them, not because `place` was too long. `place` itself is three lines and is what the REST API calls.
 
 The file is larger than the code that left the blueprint — 382 lines against 322 removed. All of the difference is the module docstring, the class docstring, and the `Args`, `Returns` and `Raises` sections on four method signatures where there was previously one long method tail. No logic was added, which the unchanged recording is the evidence for.
+
+## Why warming is on for every broker by default
+
+`UNIFIED_BROKER_INTERFACE_API_ORDER_WARM_BROKERS` used to default to empty, and `.env` never set it, so no warmer ran at all. The user asked for connections to be kept warm, and a cold connection costs 50 to 130 ms more than a warm one at every broker measured on 2026-09-15. The default is now `all`, and an empty value still turns warming off.
+
+`warm_broker_names` is read before the brokers' order classes are built, because whether a broker is warmed decides which order its pool hands out connections in. It names the brokers from `BROKER_ORDER_CLASSES` rather than from the objects it is about to build for that reason.
+
+## Why the pool size is a constructor argument
+
+The API worker and the engine need different pool sizes from the same classes. An API worker sends at most four changes at once, so it keeps five connections per broker, four plus one for the warmer's ping. The engine keeps one more than the most workers a broker's lane can grow to. The offline order suites turn warming off explicitly when they build the blueprint, because a warmer's ping goes through the adapter rather than `requests.Session.request`, which the suites replace, and would otherwise reach the real brokers.

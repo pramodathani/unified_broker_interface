@@ -25,6 +25,9 @@ from unified_broker_interface.utilities.broker_orders.base import BrokerOrders
 from unified_broker_interface.utilities.broker_orders.utilities.broker_request import (
     BrokerRequest,
 )
+from unified_broker_interface.utilities.broker_orders.utilities.connection_pool import (
+    DEFAULT_POOL_SIZE,
+)
 from unified_broker_interface.utilities.broker_orders.utilities.connection_warmer import (
     ConnectionWarmer,
 )
@@ -39,10 +42,11 @@ class LocalBrokerState:
         ping_mode (str): How pings are answered: `normal`, `reset`, `silent_close`, `late_close`, `connection_close`, `error`, `cookie` or `slow`.
         late_close_seconds (float): How long after answering a `late_close` ping the server closes the connection.
         slow_ping_seconds (float): How long a `slow` ping waits before answering.
+        slow_order_seconds (float): How long an order waits before it is answered, so orders sent at once hold their connections at the same time.
         idle_abort_seconds (float | None): A request arriving on a connection idle longer than this is dropped without an answer, or None to answer everything.
         connections_opened (int): How many connections the server has accepted.
         pings (int): How many pings arrived.
-        orders (list): For each order, a dictionary with `connection_age_seconds` and `had_cookie`.
+        orders (list): For each order, a dictionary with `connection_age_seconds`, `had_cookie` and `connection_number`, which counts from 1 in the order connections were accepted.
         aborted_requests (int): How many requests were dropped for arriving on an idle connection.
     """
 
@@ -55,6 +59,7 @@ class LocalBrokerState:
         self.lock = threading.Lock()
         self.ping_mode = 'normal'
         self.slow_ping_seconds = 0.5
+        self.slow_order_seconds = 0.0
         self.late_close_seconds = 0.03
         self.idle_abort_seconds = None
         self.connections_opened = 0
@@ -85,6 +90,7 @@ class LocalBrokerHandler(http.server.BaseHTTPRequestHandler):
         self.last_answer_at = None
         with self.server.state.lock:
             self.server.state.connections_opened += 1
+            self.connection_number = self.server.state.connections_opened
 
     def log_message(self, format, *args):
         """Keeps the server quiet.
@@ -178,10 +184,13 @@ class LocalBrokerHandler(http.server.BaseHTTPRequestHandler):
         length = int(self.headers.get('Content-Length') or 0)
         self.rfile.read(length)
         state = self.server.state
+        if state.slow_order_seconds > 0:
+            time.sleep(state.slow_order_seconds)
         with state.lock:
             state.orders.append({
                 'connection_age_seconds': time.monotonic() - self.opened_at,
                 'had_cookie': self.headers.get('Cookie') is not None,
+                'connection_number': self.connection_number,
             })
             order_number = len(state.orders)
         body = json.dumps({
@@ -247,13 +256,22 @@ class LocalBrokerOrders(BrokerOrders):
     )
     WARM_SETTLE_SECONDS = 0.05
 
-    def __init__(self, server, maximum_idle_seconds, warm_interval_seconds):
+    def __init__(
+        self,
+        server,
+        maximum_idle_seconds,
+        warm_interval_seconds,
+        pool_size=DEFAULT_POOL_SIZE,
+        oldest_first=False,
+    ):
         """Builds the broker against a server.
 
         Args:
             server (LocalBrokerServer): The server.
             maximum_idle_seconds (float | None): How long a pooled connection may sit idle and still carry a request, or None for no limit.
-            warm_interval_seconds (float): How often a warmer pings.
+            warm_interval_seconds (float): How long a warmer takes to ping every connection in the pool once.
+            pool_size (int): How many connections the pool keeps.
+            oldest_first (bool): Whether the pool hands out the connection returned longest ago, as a warmed broker's does.
 
         Returns:
             None: This method returns nothing.
@@ -262,7 +280,7 @@ class LocalBrokerOrders(BrokerOrders):
         self.WARM_INTERVAL_SECONDS = warm_interval_seconds
         self.WARM_URL = server.url()
         self.server = server
-        super().__init__()
+        super().__init__(pool_size, oldest_first)
 
     def build_place_request(self, order, instrument, handle, login, settings):
         """Builds a `POST /order` to the local server.
@@ -320,6 +338,22 @@ class FailingBrokerOrders(LocalBrokerOrders):
             RuntimeError: Always.
         """
         raise RuntimeError('a bug in warming')
+
+
+class ScriptOnlyCache:
+    """A stand-in Redis client for building a blueprint, which registers the rate budget's script and reads nothing."""
+
+    def register_script(self, script_text):
+        """Accepts a script without running it.
+
+        Args:
+            script_text (str): The script's source.
+
+        Returns:
+            object: A placeholder for the registered script, never called here.
+        """
+        del script_text
+        return object()
 
 
 class ConnectionWarmingSuite:
@@ -460,7 +494,7 @@ class ConnectionWarmingSuite:
         """
         server = LocalBrokerServer()
         server.state.idle_abort_seconds = 0.6
-        broker = LocalBrokerOrders(server, 0.4, 0.1)
+        broker = LocalBrokerOrders(server, 0.4, 0.1, 1, True)
         first = broker.place().outcome
         warmer = ConnectionWarmer(broker, self.logger)
         warmer.start()
@@ -484,6 +518,70 @@ class ConnectionWarmingSuite:
             f'first {first}, second {second}, second order connection age {second_age:.2f} s, pings {server.state.pings}, connections opened {server.state.connections_opened}',
         )
 
+    def check_warmer_rotates_through_the_whole_pool(self):
+        """A warmer fills a pool of five and keeps all five warm, so five orders sent at once after a pause open no new connection.
+
+        With the pool handing out the connection returned last, the warmer's single pings would keep reusing one connection, and the other four would pass the idle limit and be reopened by the orders.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        server = LocalBrokerServer()
+        server.state.idle_abort_seconds = 0.8
+        broker = LocalBrokerOrders(server, 0.6, 0.2, 5, True)
+        warmer = ConnectionWarmer(broker, self.logger)
+        warmer.start()
+        time.sleep(0.5)
+        with server.state.lock:
+            opened_after_fill = server.state.connections_opened
+        time.sleep(1.5)
+        warmer.stop()
+        outcomes = self.send_orders_in_threads(broker, 5, 1)
+        server.stop()
+        self.check(
+            'a warmer fills the pool, then keeps every connection in it warm',
+            (
+                opened_after_fill == 5
+                and outcomes.count('accepted') == 5
+                and server.state.connections_opened == 5
+                and server.state.aborted_requests == 0
+            ),
+            f'connections opened after the fill {opened_after_fill}, after five orders at once {server.state.connections_opened}, outcomes {outcomes}, aborted {server.state.aborted_requests}, pings {server.state.pings}',
+        )
+
+    def check_pool_hands_out_the_longest_waiting_connection(self):
+        """Single requests on a pool of four with four open connections use each connection in turn, the one waiting longest first.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        server = LocalBrokerServer()
+        server.state.slow_order_seconds = 0.2
+        broker = LocalBrokerOrders(server, None, 1.0, 4, True)
+        self.send_orders_in_threads(broker, 4, 1)
+        server.state.slow_order_seconds = 0.0
+        for attempt in range(8):
+            broker.place()
+        server.stop()
+        used = []
+        for order in server.state.orders[4:]:
+            used.append(order['connection_number'])
+        first_round = sorted(used[:4])
+        self.check(
+            'the pool hands out the connection that has waited longest',
+            (
+                first_round == [
+                    1,
+                    2,
+                    3,
+                    4,
+                ]
+                and used[4:] == used[:4]
+                and server.state.connections_opened == 4
+            ),
+            f'connections used in turn {used}, connections opened {server.state.connections_opened}',
+        )
+
     def check_warm_connection_outcomes(self):
         """A ping keeps a healthy connection and discards one the server closes, and the next order is accepted either way.
 
@@ -497,7 +595,7 @@ class ConnectionWarmingSuite:
         ):
             server = LocalBrokerServer()
             server.state.ping_mode = ping_mode
-            broker = LocalBrokerOrders(server, 30.0, 1.0)
+            broker = LocalBrokerOrders(server, 30.0, 1.0, DEFAULT_POOL_SIZE, True)
             warm_result = broker.warm_connection()
             order = broker.place().outcome
             server.stop()
@@ -519,7 +617,7 @@ class ConnectionWarmingSuite:
         for attempt in range(20):
             server = LocalBrokerServer()
             server.state.ping_mode = 'late_close'
-            broker = LocalBrokerOrders(server, 30.0, 1.0)
+            broker = LocalBrokerOrders(server, 30.0, 1.0, DEFAULT_POOL_SIZE, True)
             warm_result = broker.warm_connection()
             order = broker.place().outcome
             server.stop()
@@ -539,7 +637,7 @@ class ConnectionWarmingSuite:
         """
         server = LocalBrokerServer()
         server.state.ping_mode = 'cookie'
-        broker = LocalBrokerOrders(server, 30.0, 1.0)
+        broker = LocalBrokerOrders(server, 30.0, 1.0, DEFAULT_POOL_SIZE, True)
         broker.warm_connection()
         order = broker.place().outcome
         server.stop()
@@ -599,7 +697,7 @@ class ConnectionWarmingSuite:
             server = LocalBrokerServer()
             server.state.ping_mode = ping_mode
             server.state.slow_ping_seconds = 0.3
-            broker = LocalBrokerOrders(server, 5.0, 0.005)
+            broker = LocalBrokerOrders(server, 5.0, 0.005, DEFAULT_POOL_SIZE, True)
             warmer = ConnectionWarmer(broker, self.logger)
             warmer.start()
             outcomes = self.send_orders_in_threads(broker, 4, 50)
@@ -649,12 +747,12 @@ class ConnectionWarmingSuite:
         )
 
     def fake_cache(self):
-        """Hands the blueprint no Redis client, since building it reads none.
+        """Hands the blueprint a stand-in that only registers scripts, since building it reads nothing from Redis.
 
         Returns:
-            None: Always None.
+            ScriptOnlyCache: The stand-in.
         """
-        return None
+        return ScriptOnlyCache()
 
     def check_blueprint_warming_configuration(self):
         """Blueprints start no warmer without configuration, and ignore names that are not brokers instead of failing to start.
@@ -678,10 +776,19 @@ class ConnectionWarmingSuite:
                 'not-a-broker',
             ]
             misconfigured = orders_blueprint.OrdersBlueprint()
+            api_configuration['order_warm_brokers'] = [
+                'all',
+            ]
+            every_broker = unconfigured.order_placement.warm_broker_names()
         finally:
             blueprint_base.get_cache = original_get_cache
             blueprint_base.get_mongo_db = original_get_mongo_database
             api_configuration['order_warm_brokers'] = original_warm_brokers
+        self.check(
+            'the setting all names every broker to warm',
+            every_broker == unconfigured.broker_names,
+            f'warm brokers for all: {every_broker}',
+        )
         self.check(
             'no warmer starts without configuration or for unknown names',
             (
@@ -702,6 +809,8 @@ class ConnectionWarmingSuite:
         self.check_idle_connection_is_the_risk()
         self.check_idle_limit_prevents_it()
         self.check_warmer_keeps_the_connection_warm()
+        self.check_warmer_rotates_through_the_whole_pool()
+        self.check_pool_hands_out_the_longest_waiting_connection()
         self.check_warm_connection_outcomes()
         self.check_late_close_is_caught_by_the_settle_check()
         self.check_ping_cookie_never_reaches_an_order()

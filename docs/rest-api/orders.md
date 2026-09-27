@@ -1132,7 +1132,9 @@ When the engine refuses an order, the message says which limit was hit. For a ne
 
 ## Connection warming
 
-Opening a new TLS connection to a broker costs a noticeable share of an order's time, so the API can keep one connection per broker freshly used. `UNIFIED_BROKER_INTERFACE_API_ORDER_WARM_BROKERS` names the brokers to warm, comma-separated. For each one, a background thread sends a `HEAD` request with no credentials every `WARM_INTERVAL_SECONDS` through the same connection pool the orders use. After the answer, it watches the connection for one second and returns it to the pool only if the server has not closed it.
+Opening a new TLS connection to a broker costs 50 to 130 ms more than using an open one, so every connection in each broker's pool is kept freshly used. `UNIFIED_BROKER_INTERFACE_API_ORDER_WARM_BROKERS` names the brokers to warm, comma-separated, and is `all` unless set; set it empty to turn warming off. For each warmed broker, a background thread sends a `HEAD` request with no credentials through the same connection pool the orders use. After the answer, it watches the connection for one second and returns it to the pool only if the server has not closed it.
+
+A warmed broker's pool hands out the connection that has waited longest, rather than urllib3's usual most recent one, so single pings rotate through the whole pool. The warmer first sends one ping per place in the pool back to back, which opens every connection, and then pings one connection at a time, spaced so that each is used about once every `WARM_INTERVAL_SECONDS`. A ping that fails is followed by a pause of the whole interval. The order engine's pool for each broker holds `UNIFIED_BROKER_INTERFACE_API_ORDER_MAXIMUM_WORKERS_PER_BROKER` plus one connections (31 by default), one for every worker a broker's lane can grow to and one for the ping; an API worker's holds five, one for each of its four send threads and one for the ping. A broker that is not warmed keeps urllib3's usual order, which keeps its one busy connection hot.
 
 Each broker's pool also refuses to reuse a connection that has been idle longer than `MAXIMUM_IDLE_SECONDS`, well before the broker's server would drop it. The table below lists both values for each broker.
 
@@ -1148,6 +1150,8 @@ Each broker's pool also refuses to reuse a connection that has been idle longer 
 | Stoxkart | 60 | 300 | `https://openapi.stoxkart.com/` |
 | Wisdom Capital | 15 | 45 | `https://trade.wisdomcapital.in/` |
 | Zerodha | 60 | 300 | `https://api.kite.trade/` |
+
+One round of a pool takes `WARM_INTERVAL_SECONDS` or the pool size times the one-second settle check, whichever is longer: about 31 seconds for a pool of 31, which is below the shortest idle limit, Shoonya's and Wisdom Capital's 45 seconds.
 
 Warming only saves time, so nothing about it can stop an order. An unknown broker name is logged and ignored, every exception in the warming thread is caught and logged, and a ping never touches the session's cookies or headers. Once a real request has gone to a broker, later pings go to that request's host instead of the default one.
 

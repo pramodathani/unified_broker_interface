@@ -60,7 +60,7 @@ The output below is the last lines of each suite from one run on 2026-09-26. `or
 ===== websocket_feeds
 160 of 160 scenarios match the recording, 0 differ
 ===== connection_warming
-19/19 checks passed.
+22/22 checks passed.
 ```
 
 !!! warning "`order_routes` needs direct placement mode"

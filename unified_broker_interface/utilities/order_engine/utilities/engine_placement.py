@@ -29,6 +29,7 @@ from unified_broker_interface.utilities.broker_orders.utilities.stored_order imp
     StoredOrder,
 )
 from unified_broker_interface.utilities.instrument_cache import InstrumentCache
+from utilities.configurations import api_configuration
 
 QUOTES_KEY = 'unified:quotes:live'
 POSITIONS_KEY = 'unified:portfolio:positions'
@@ -50,7 +51,7 @@ class EnginePlacement:
     """
 
     def __init__(self, cache, logger):
-        """Builds the placement, with one order class and one connection pool per broker.
+        """Builds the placement, with one order class and one connection pool per broker, each pool keeping one connection for every worker a broker's lane can grow to, plus one for the warmer's ping.
 
         Args:
             cache (redis.Redis): The Redis client.
@@ -64,7 +65,10 @@ class EnginePlacement:
         """
         self.cache = cache
         self.logger = logger
-        self.order_placement = OrderPlacement(logger)
+        self.order_placement = OrderPlacement(
+            logger,
+            api_configuration['order_maximum_workers_per_broker'] + 1,
+        )
         self.instrument_cache = InstrumentCache()
 
     def start_connection_warmers(self):
