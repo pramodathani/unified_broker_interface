@@ -179,20 +179,31 @@ def main():
         return 2
     placement.order_placement.attach_daily_count(daily_count)
 
+    try:
+        per_broker_limit, per_broker_overrides = RateBudget.limits_from_text(
+            api_configuration["order_rate_per_broker_per_second"],
+            placement.order_placement.broker_names,
+        )
+    except ValueError as error:
+        logger.error(f"The per-broker order rate is not configured correctly: {error}")
+        lock.release()
+        return 2
     gates = RiskGates(
         RateBudget(
             cache,
             api_configuration["order_rate_per_second"],
-            api_configuration["order_rate_per_broker_per_second"],
+            per_broker_limit,
             api_configuration["order_rate_wait_seconds"],
             logger,
             api_configuration["order_rate_window_seconds"],
+            per_broker_overrides,
         ),
         LossLockout(cache, api_configuration["order_daily_loss_limit"], logger),
         OrderToTradeRatio(),
         RepricingThrottle(api_configuration["order_reprice_minimum_seconds"]),
         daily_count,
     )
+    logger.info(f"Limiting each broker to {per_broker_limit:g} order messages a second, with {per_broker_overrides or 'no'} per-broker overrides.")
     if daily_count is not None:
         logger.info(f"Capping each day's order messages at {daily_count.caps}, keeping {daily_count.exit_reserve:.0%} of each cap for exits.")
     if gates.loss_lockout.is_configured():

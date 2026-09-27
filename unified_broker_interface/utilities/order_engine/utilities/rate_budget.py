@@ -67,6 +67,7 @@ class RateBudget:
         wait_seconds,
         logger,
         window_seconds=1.0,
+        per_broker_overrides=None,
     ):
         """Builds the budget.
 
@@ -77,6 +78,7 @@ class RateBudget:
             wait_seconds (float): The longest a message waits for room.
             logger (logging.Logger): The logger.
             window_seconds (float): The length of the window the limits are counted over.
+            per_broker_overrides (dict | None): A broker's name to its own limit, for a broker stricter than the default.
 
         Returns:
             None: This method returns nothing.
@@ -84,6 +86,7 @@ class RateBudget:
         self.cache = cache
         self.per_second = per_second
         self.per_broker_per_second = per_broker_per_second
+        self.per_broker_overrides = dict(per_broker_overrides or {})
         self.wait_seconds = wait_seconds
         self.window_seconds = window_seconds
         self.logger = logger
@@ -130,6 +133,58 @@ class RateBudget:
                 self.count_refused()
                 return False
 
+    def limit_for(self, broker_name):
+        """How many messages one broker may be sent in a window.
+
+        Args:
+            broker_name (str): The broker.
+
+        Returns:
+            float: The limit, 0 for none.
+        """
+        return self.per_broker_overrides.get(broker_name, self.per_broker_per_second)
+
+    @staticmethod
+    def limits_from_text(text, broker_names):
+        """Reads the per-broker limit setting: a default, optionally followed by `broker=number` overrides, separated by commas.
+
+        `10` gives every broker 10 a window; `10,zerodha=5,indmoney=5` gives those two 5 and the rest 10.
+
+        Args:
+            text (object): The configured value, as text or a number.
+            broker_names (list): Every broker's name.
+
+        Returns:
+            tuple: The default limit (float) and the overrides (dict of broker name to float).
+
+        Raises:
+            ValueError: When a part is not a number at or above zero, or an override names no broker, so a misspelt setting stops the process rather than running a broker at the wrong rate.
+        """
+        default_limit = 0.0
+        overrides = {}
+        for part in str(text).replace(' ', '').split(','):
+            if not part:
+                continue
+            number_text = part
+            broker_name = None
+            if '=' in part:
+                broker_name, number_text = part.split('=', 1)
+                if broker_name not in broker_names:
+                    raise ValueError(
+                        f'the rate limit {part!r} names no broker; brokers are {", ".join(broker_names)}'
+                    )
+            try:
+                limit = float(number_text)
+            except ValueError:
+                raise ValueError(f'the rate limit {part!r} is not a number')
+            if limit < 0:
+                raise ValueError(f'the rate limit {part!r} is below zero')
+            if broker_name is None:
+                default_limit = limit
+            else:
+                overrides[broker_name] = limit
+        return default_limit, overrides
+
     def try_take(self, broker_name):
         """Adds one message to the broker's window if there is room, in one Redis step.
 
@@ -141,9 +196,10 @@ class RateBudget:
         """
         keys = []
         limits = []
-        if self.per_broker_per_second > 0:
+        broker_limit = self.limit_for(broker_name)
+        if broker_limit > 0:
             keys.append(RATE_KEY_PREFIX + broker_name)
-            limits.append(self.per_broker_per_second)
+            limits.append(broker_limit)
         if self.per_second > 0:
             keys.append(GLOBAL_RATE_KEY)
             limits.append(self.per_second)

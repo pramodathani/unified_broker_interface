@@ -25,3 +25,7 @@ Two messages can arrive in the same microsecond, and a sorted set keeps one memb
 ## Why a Redis failure refuses rather than sends
 
 When the script cannot run, `RiskGates.take_rate_token` turns the Redis error into a 503 refusal, which the order type records against the leg as rejected, and the REST API answers 503 for a modification or cancellation. Sending without the budget would be sending past a compliance limit without knowing it, which is worse than a refused order that can be sent again a moment later. The error is turned into a refusal rather than left to rise because the leg has already been recorded as `sending` by then; an exception would leave it there, and recovery would later find no order at the broker and park the whole parent as failed.
+
+## Why some brokers have their own limit
+
+In the live burst of 2026-09-27 the sliding window held every broker to 10 messages in any second, and still Zerodha refused 10 of its 20 orders (`Maximum allowed order requests per second exceeded`) and INDmoney 4 of 20 (`Rate limit exceeded`). Either their limits are lower than 10 as this engine counts, or they count every API call, including the order-book polls the pollers make twice a second. The limit is therefore set per broker, in the same `default,broker=number` form as the worker counts, and defaults to 5 for these two. The 5 is a cautious guess, not a measured limit; a weekday burst after this change is what should settle it.

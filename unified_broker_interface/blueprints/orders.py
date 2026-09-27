@@ -167,13 +167,18 @@ class OrdersBlueprint(BaseBlueprint):
             DailyOrderCount.from_configuration(self.cache, self.logger),
         )
         self.kill_switch = KillSwitch(self.broker_names)
+        per_broker_limit, per_broker_overrides = RateBudget.limits_from_text(
+            api_configuration['order_rate_per_broker_per_second'],
+            self.broker_names,
+        )
         self.rate_budget = RateBudget(
             self.cache,
             api_configuration['order_rate_per_second'],
-            api_configuration['order_rate_per_broker_per_second'],
+            per_broker_limit,
             api_configuration['order_rate_wait_seconds'],
             self.logger,
             api_configuration['order_rate_window_seconds'],
+            per_broker_overrides,
         )
         self.order_handoff = IntentHandoff(
             self.cache,

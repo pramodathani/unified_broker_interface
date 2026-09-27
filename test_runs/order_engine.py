@@ -5034,6 +5034,59 @@ class OrderEngineSuite:
             ),
         ]
 
+    def run_rate_limit_checks(self):
+        """Checks the per-broker rate limit setting and that a broker with its own limit is held to it.
+
+        On 2026-09-27 Zerodha and INDmoney refused orders sent at 10 a second, so each broker can now be given its own limit.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        logger = logging.getLogger('test_runs.order_engine')
+        broker_names = [
+            'dhan',
+            'indmoney',
+            'zerodha',
+        ]
+        results = []
+        for text in (
+            '10',
+            10,
+            '10,zerodha=5,indmoney=5',
+            '10, zerodha = 4',
+            '10,kite=5',
+            '10,zerodha=fast',
+            '10,zerodha=-1',
+        ):
+            try:
+                default_limit, overrides = RateBudget.limits_from_text(text, broker_names)
+                results.append({
+                    'name': f'the_rate_setting_{text!r}_is_read',
+                    'default': default_limit,
+                    'overrides': overrides,
+                })
+            except ValueError as error:
+                results.append({
+                    'name': f'the_rate_setting_{text!r}_is_refused',
+                    'error': str(error),
+                })
+        self.fake_redis = self.build_state()
+        budget = RateBudget(self.fake_redis, 0, 10, 0, logger, 1.0, {
+            'zerodha': 5,
+        })
+        taken = {}
+        for broker_name in ('zerodha', 'dhan'):
+            count = 0
+            for _ in range(12):
+                if budget.try_take(broker_name) == 0:
+                    count = count + 1
+            taken[broker_name] = count
+        results.append({
+            'name': 'a_broker_with_its_own_limit_is_held_to_it_within_one_window',
+            'taken_of_12': taken,
+        })
+        return results
+
     def run_assignment_checks(self):
         """Checks that a leg the broker intake chose cannot take goes to one that can.
 
@@ -5240,6 +5293,7 @@ class OrderEngineSuite:
             results.extend(self.run_price_checks())
             results.extend(self.run_wiring_checks())
             results.extend(self.run_assignment_checks())
+            results.extend(self.run_rate_limit_checks())
         finally:
             requests.Session.request = original_request
             uuid.uuid4 = original_uuid4

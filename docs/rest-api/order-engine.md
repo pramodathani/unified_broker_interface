@@ -166,7 +166,7 @@ Every order the engine sends passes the same set of limits, held together in one
 |---|---|---|---|
 | Daily loss lockout | Before the order is even understood | Adds `pnl.realized` and `pnl.unrealized` from `unified:portfolio:funds`. When the sum is at or below minus the limit, the order is refused. Off unless `ORDER_DAILY_LOSS_LIMIT` is above zero. An unreadable funds document does not lock trading out. | <span class="status s4">403</span> |
 | Daily order cap | After the broker is chosen, before anything is recorded | Refuses new entries once the broker's count reaches the entry limit, and every message at the cap itself. See [Daily order caps](orders.md#daily-order-caps). | <span class="status s4">429</span> |
-| Rate budget | After the leg is recorded, before it is sent | At most `ORDER_RATE_PER_BROKER_PER_SECOND` messages to one broker in any one-second span, counted in Redis in `unified:orders:rate:<broker>` and shared with the REST API's modifications and cancellations. A message waits up to `ORDER_RATE_WAIT_SECONDS` for room, and is refused only if none comes. An optional limit across every broker is counted the same way. | <span class="status s5">503</span> |
+| Rate budget | After the leg is recorded, before it is sent | At most `ORDER_RATE_PER_BROKER_PER_SECOND` messages to one broker in any one-second span (10 by default, 5 for Zerodha and INDmoney), counted in Redis in `unified:orders:rate:<broker>` and shared with the REST API's modifications and cancellations. A message waits up to `ORDER_RATE_WAIT_SECONDS` for room, and is refused only if none comes. An optional limit across every broker is counted the same way. | <span class="status s5">503</span> |
 | Re-pricing throttle | Before a resting leg is moved | Refuses to move one leg again sooner than `ORDER_REPRICE_MINIMUM_SECONDS` after its last move. The move is dropped and the next tick works out a fresh price. | recorded against the leg |
 | Order-to-trade ratio | After each send and fill | Counts orders sent and orders filled per broker, and reports them when the engine stops. It refuses nothing. | none |
 
@@ -260,7 +260,7 @@ The table below lists every environment variable the engine reads, with its defa
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_DATABASE_CONNECTIONS` | `8` | PostgreSQL connections the workers share for the event table |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_STALE_INTENT_SECONDS` | `30` | How far past its deadline an intent may be and still be placed |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_PER_SECOND` | `0` (off) | Messages in any one-second span across every broker |
-| `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_PER_BROKER_PER_SECOND` | `10` | Messages in any one-second span to any one broker |
+| `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_PER_BROKER_PER_SECOND` | `10,zerodha=5,indmoney=5` | Messages in any one-second span to one broker: a default and `broker=number` overrides |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_WAIT_SECONDS` | `1` | The longest a message waits for room in the budget |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_WINDOW_SECONDS` | `1` | The span the rate limits are counted over; a little more than 1 leaves a margin for uneven arrival |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_LOSS_LIMIT` | `0` (off) | The most the day may lose, as a positive number |

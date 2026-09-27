@@ -225,3 +225,11 @@
 {"assigned": "indmoney", "error": null, "name": "a_stop_leg_assigned_to_a_broker_without_stops_goes_elsewhere", "order_type": "SL", "placed_at": "flattrade"}
 {"assigned": "flattrade", "error": null, "name": "a_stop_leg_assigned_to_a_broker_with_stops_stays", "order_type": "SL", "placed_at": "flattrade"}
 {"assigned": "indmoney", "error": null, "name": "a_limit_leg_assigned_to_a_broker_without_stops_stays", "order_type": "LIMIT", "placed_at": "indmoney"}
+{"default": 10.0, "name": "the_rate_setting_'10'_is_read", "overrides": {}}
+{"default": 10.0, "name": "the_rate_setting_10_is_read", "overrides": {}}
+{"default": 10.0, "name": "the_rate_setting_'10,zerodha=5,indmoney=5'_is_read", "overrides": {"indmoney": 5.0, "zerodha": 5.0}}
+{"default": 10.0, "name": "the_rate_setting_'10, zerodha = 4'_is_read", "overrides": {"zerodha": 4.0}}
+{"error": "the rate limit 'kite=5' names no broker; brokers are dhan, indmoney, zerodha", "name": "the_rate_setting_'10,kite=5'_is_refused"}
+{"error": "the rate limit 'zerodha=fast' is not a number", "name": "the_rate_setting_'10,zerodha=fast'_is_refused"}
+{"error": "the rate limit 'zerodha=-1' is below zero", "name": "the_rate_setting_'10,zerodha=-1'_is_refused"}
+{"name": "a_broker_with_its_own_limit_is_held_to_it_within_one_window", "taken_of_12": {"dhan": 10, "zerodha": 5}}
