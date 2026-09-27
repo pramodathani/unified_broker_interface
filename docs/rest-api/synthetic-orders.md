@@ -651,6 +651,8 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     A hidden stop lives in the engine and answers `202 armed`. It watches the **bid** when protecting a long and the **offer** when protecting a short, rather than the last trade, and falls back to the last trade when that side of the book is empty. When it fires, it cancels the backstop first and sends an exit priced `buffer_ticks` past the touch. By default a long's stop fires when the price falls to the level. It takes `trigger_price` and `trigger_direction` as the price triggers do.
 
+    With a backstop, the backstop is a real stop-limit order placed at once, and the armed answer says so: it carries a `backstop` object with the `broker`, `order_id`, `outcome`, `trigger_price` and `price` of that order, and its `status_message` names the broker. `candle_close_stop` answers the same way.
+
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
     | `trigger_price` | number | Yes | The hidden level. |

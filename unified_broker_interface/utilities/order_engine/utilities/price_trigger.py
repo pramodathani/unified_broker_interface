@@ -73,8 +73,8 @@ class PriceTrigger(SyntheticOrder):
         self.remember_tick_size(order)
         self.record_received()
         self.save()
-        self.arm(order, started_at)
-        return {
+        backstop = self.arm(order, started_at)
+        answer = {
             'broker': None,
             'instrument_id': self.parent.instrument_id,
             'parent_id': self.parent.parent_order_id,
@@ -88,7 +88,14 @@ class PriceTrigger(SyntheticOrder):
                 f'{self.ARMED_MESSAGE}'
             ),
             'skipped': [],
-        }, 202
+        }
+        if backstop is not None:
+            answer['backstop'] = backstop
+            answer['status_message'] = (
+                f"{answer['status_message']}; a backstop stop was sent to "
+                f"{backstop['broker']} and was {backstop['outcome']}"
+            )
+        return answer, 202
 
     def arm(self, order, started_at):
         """Places whatever has to rest at a broker while the trigger waits.
@@ -100,8 +107,9 @@ class PriceTrigger(SyntheticOrder):
             started_at (float): `time.perf_counter()` when the engine took the intent.
 
         Returns:
-            None: This method returns nothing.
+            dict | None: The order placed, with `broker`, `order_id`, `outcome` and `status_message`, or None when nothing was placed.
         """
+        return None
 
     def read_level(self):
         """The price this trigger is waiting for.
