@@ -1,5 +1,6 @@
 """Order updates that arrived before the engine knew which parent their order belongs to."""
 
+import threading
 import time
 
 EARLY_UPDATE_SECONDS = 30.0
@@ -16,6 +17,7 @@ class EarlyUpdates:
         hold_seconds (float): How long an update is held before it is dropped.
         maximum_held (int): The most updates held at once; the oldest are dropped beyond it.
         dropped (int): How many held updates were dropped without ever matching a parent.
+        lock (threading.Lock): Guards `held` and `dropped`, since the main thread and the worker threads both hold updates.
     """
 
     def __init__(
@@ -36,6 +38,7 @@ class EarlyUpdates:
         self.hold_seconds = hold_seconds
         self.maximum_held = maximum_held
         self.dropped = 0
+        self.lock = threading.Lock()
 
     def hold(self, key, fields):
         """Holds one update until its order is known or it is too old.
@@ -47,14 +50,15 @@ class EarlyUpdates:
         Returns:
             None: This method returns nothing.
         """
-        self.held.append({
-            'held_at': time.monotonic(),
-            'key': key,
-            'fields': fields,
-        })
-        while len(self.held) > self.maximum_held:
-            self.held.pop(0)
-            self.dropped = self.dropped + 1
+        with self.lock:
+            self.held.append({
+                'held_at': time.monotonic(),
+                'key': key,
+                'fields': fields,
+            })
+            while len(self.held) > self.maximum_held:
+                self.held.pop(0)
+                self.dropped = self.dropped + 1
 
     def drop_expired(self):
         """Drops every held update older than the holding time.
@@ -63,13 +67,14 @@ class EarlyUpdates:
             None: This method returns nothing.
         """
         oldest_kept = time.monotonic() - self.hold_seconds
-        kept = []
-        for entry in self.held:
-            if entry['held_at'] >= oldest_kept:
-                kept.append(entry)
-            else:
-                self.dropped = self.dropped + 1
-        self.held = kept
+        with self.lock:
+            kept = []
+            for entry in self.held:
+                if entry['held_at'] >= oldest_kept:
+                    kept.append(entry)
+                else:
+                    self.dropped = self.dropped + 1
+            self.held = kept
 
     def keys(self):
         """The distinct order keys being held, in the order they first arrived.
@@ -79,10 +84,11 @@ class EarlyUpdates:
         """
         keys = []
         seen = set()
-        for entry in self.held:
-            if entry['key'] not in seen:
-                seen.add(entry['key'])
-                keys.append(entry['key'])
+        with self.lock:
+            for entry in self.held:
+                if entry['key'] not in seen:
+                    seen.add(entry['key'])
+                    keys.append(entry['key'])
         return keys
 
     def take(self, known_keys):
@@ -96,10 +102,11 @@ class EarlyUpdates:
         """
         taken = []
         kept = []
-        for entry in self.held:
-            if entry['key'] in known_keys:
-                taken.append(entry['fields'])
-            else:
-                kept.append(entry)
-        self.held = kept
+        with self.lock:
+            for entry in self.held:
+                if entry['key'] in known_keys:
+                    taken.append(entry['fields'])
+                else:
+                    kept.append(entry)
+            self.held = kept
         return taken

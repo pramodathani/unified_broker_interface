@@ -93,6 +93,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from utilities.bootstrap import run_under_venv
 
 PROJECT_ROOT = run_under_venv(__file__)
+ENTRIES_PER_READ_WITH_LANES = 100
 
 def main():
     """Place orders from unified:orders:intents:stream until stopped."""
@@ -111,6 +112,7 @@ def main():
     from unified_broker_interface.utilities.order_engine.utilities.order_update_follower import OrderUpdateFollower
     from unified_broker_interface.utilities.order_engine.utilities.loss_lockout import LossLockout
     from unified_broker_interface.utilities.order_engine.utilities.order_to_trade_ratio import OrderToTradeRatio
+    from unified_broker_interface.utilities.order_engine.utilities.parent_router import ParentRouter
     from unified_broker_interface.utilities.order_engine.utilities.parent_store import ParentStore
     from unified_broker_interface.utilities.order_engine.utilities.price_ticker import PriceTicker
     from unified_broker_interface.utilities.order_engine.utilities.rate_budget import RateBudget
@@ -125,7 +127,12 @@ def main():
     if not lock.take():
         return 1
 
-    event_log = SyntheticOrderEventLog(get_postgres, logger, f"{socket.gethostname()}:{os.getpid()}")
+    event_log = SyntheticOrderEventLog(
+        get_postgres,
+        logger,
+        f"{socket.gethostname()}:{os.getpid()}",
+        api_configuration["order_database_connections"],
+    )
     try:
         event_log.apply_table()
     except Exception as exception:
@@ -192,6 +199,28 @@ def main():
     else:
         logger.warning("No daily loss limit is set, so nothing stops this engine placing orders on a losing day.")
 
+    broker_names = placement.order_placement.broker_names
+    try:
+        starting_workers = ParentRouter.starting_workers_from_text(
+            api_configuration["order_workers_per_broker"],
+            broker_names,
+        )
+    except ValueError as error:
+        logger.error(f"The workers per broker are not configured correctly: {error}")
+        lock.release()
+        return 2
+    router = ParentRouter(
+        broker_names,
+        starting_workers,
+        api_configuration["order_maximum_workers_per_broker"],
+        logger,
+    )
+    router.start()
+    logger.info(
+        f"Starting worker lanes {starting_workers}, each growing to at most "
+        f"{api_configuration['order_maximum_workers_per_broker']} workers."
+    )
+
     logger.info("Placing orders from unified:orders:intents:stream.")
     engine = OrderEngine(
         cache,
@@ -204,9 +233,11 @@ def main():
         parent_store,
         OrderUpdateFollower(parent_store, event_log, logger, gates, placement),
         gates,
-        ClockTicker(parent_store, event_log, placement, logger, gates),
-        PriceTicker(cache, parent_store, event_log, placement, logger, gates),
+        ClockTicker(parent_store, event_log, placement, logger, gates, router),
+        PriceTicker(cache, parent_store, event_log, placement, logger, gates, router),
         DayRoll(recovery, parent_store, logger),
+        router,
+        ENTRIES_PER_READ_WITH_LANES,
     )
     exit_code = engine.run(stop)
     lock.release()

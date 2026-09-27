@@ -1,6 +1,7 @@
 """Placing one intent's order: the Redis reads the engine makes, and the answer it sends back."""
 
 import json
+import threading
 
 import redis
 
@@ -36,6 +37,24 @@ POSITIONS_KEY = 'unified:portfolio:positions'
 ATTRIBUTES_SUFFIX = 'additional_attributes'
 
 
+class BrokerAssignment(threading.local):
+    """The broker the engine's intake chose for the parent a worker thread is running, held separately for each thread.
+
+    Attributes:
+        broker_name (str | None): The broker, or None when the thread is running nothing that was assigned one.
+        skipped (list): The brokers intake passed over on the way, each a dictionary with `broker` and `reason`.
+    """
+
+    def __init__(self):
+        """Builds an empty assignment for one thread.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.broker_name = None
+        self.skipped = []
+
+
 class EnginePlacement:
     """Turns one intent into one placed order, reading what it needs from Redis itself.
 
@@ -47,6 +66,7 @@ class EnginePlacement:
         cache (redis.Redis): The Redis client.
         order_placement (OrderPlacement): The half of placement that reads no store.
         instrument_cache (InstrumentCache): The engine's copy of the catalogue entries it has read under the current warm.
+        assignment (BrokerAssignment): The broker intake chose for the parent each worker thread is running now.
         logger (logging.Logger): The logger for failures that do not change an answer.
     """
 
@@ -70,6 +90,7 @@ class EnginePlacement:
             api_configuration['order_maximum_workers_per_broker'] + 1,
         )
         self.instrument_cache = InstrumentCache()
+        self.assignment = BrokerAssignment()
 
     def start_connection_warmers(self):
         """Starts the connection warmers configuration names, so an order does not pay for a new handshake.
@@ -430,6 +451,13 @@ class EnginePlacement:
                 503,
             )
 
+        uses_assignment = (
+            broker_name is None
+            and self.assignment.broker_name is not None
+        )
+        if uses_assignment:
+            broker_name = self.assignment.broker_name
+
         rotation = self.order_placement.rotation()
         mapping_date_text, warm_identifier, login_texts, settings_texts = (
             self.read_credentials()
@@ -445,8 +473,9 @@ class EnginePlacement:
             instrument_id,
             mapping_date_text,
             warm_identifier,
+            not uses_assignment,
         )
-        return self.order_placement.prepare(
+        prepared = self.order_placement.prepare(
             order,
             instrument,
             rotation,
@@ -455,6 +484,61 @@ class EnginePlacement:
             settings_texts,
             broker_name,
         )
+        if uses_assignment:
+            prepared.skipped = list(self.assignment.skipped)
+        return prepared
+
+    def assign_broker(self, intent):
+        """Chooses the broker for a new intent, the way its first leg would, so intake can hand it to that broker's lane.
+
+        The body is read as the route validated it, and the configured selector ranks the brokers and passes over any that cannot take the order, exactly as for a placement. Nothing is sent. A body that names its broker, as flatten's closing orders do, keeps that broker.
+
+        When no broker can be chosen here, because the body carries a reference this cannot work out or no broker can take it, the answer is None and the order type makes the choice itself when it runs, giving the same answer it always has.
+
+        Args:
+            intent (dict): The intent document.
+
+        Returns:
+            tuple: The broker's name (str or None) and the brokers passed over on the way (list).
+        """
+        body = intent.get('body') or {}
+        named_broker = body.get('broker')
+        if named_broker:
+            return named_broker, []
+        try:
+            order = PlaceOrderRequest(body)
+            prepared = self.prepare(order, intent.get('instrument_id'))
+        except (InvalidOrderError, RefusedRequestError):
+            return None, []
+        except Exception:
+            self.logger.exception(
+                f'No broker could be chosen for intent {intent.get("intent_id")} '
+                'at intake, so its order type will choose one.'
+            )
+            return None, []
+        return prepared.broker_name, list(prepared.skipped)
+
+    def use_assignment(self, broker_name, skipped):
+        """Makes this thread's order legs go to the broker intake chose, until `clear_assignment`.
+
+        Args:
+            broker_name (str | None): The broker, or None to let the selector choose.
+            skipped (list): The brokers intake passed over, reported in the first leg's answer.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.assignment.broker_name = broker_name
+        self.assignment.skipped = list(skipped)
+
+    def clear_assignment(self):
+        """Forgets this thread's assignment, so a later leg lets the selector choose again.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.assignment.broker_name = None
+        self.assignment.skipped = []
 
     def send(self, prepared_placement, started_at):
         """Sends a prepared order to its broker and reads the answer.
@@ -530,6 +614,7 @@ class EnginePlacement:
         instrument_id,
         mapping_date_text,
         warm_identifier,
+        with_selector=True,
     ):
         """Reads the instrument's catalogue entry and the broker selector's own commands in one round trip.
 
@@ -540,6 +625,7 @@ class EnginePlacement:
             instrument_id (str): The instrument the intent named.
             mapping_date_text (str): The mapping date as Redis holds it.
             warm_identifier (str | None): The current warm's identifier.
+            with_selector (bool): Whether to queue the selector's commands; False when intake already chose the broker, so a round-robin turn is not taken twice for one order.
 
         Returns:
             tuple: The instrument (Instrument) and the selector's replies (list).
@@ -564,13 +650,15 @@ class EnginePlacement:
                 catalogue_key_prefix + 'contract_sizes',
                 instrument_id,
             )
-        selector_command_count = (
-            self.order_placement.broker_selector.queue_redis_commands(
-                pipeline,
-                order,
-                instrument_id,
+        selector_command_count = 0
+        if with_selector:
+            selector_command_count = (
+                self.order_placement.broker_selector.queue_redis_commands(
+                    pipeline,
+                    order,
+                    instrument_id,
+                )
             )
-        )
         replies = []
         if kept_texts is None or selector_command_count > 0:
             try:

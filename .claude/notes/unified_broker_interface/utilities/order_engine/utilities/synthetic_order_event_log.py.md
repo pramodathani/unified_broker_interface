@@ -19,3 +19,9 @@ Converting to `str` in `row()` is local, explicit and reads the same way at ever
 Opening a connection per event would put a TCP handshake and an authentication round trip on the order path, which is exactly what the measurement above would then be dominated by. So the connection is opened on first use and kept.
 
 A held connection that has failed is worse than none, though, because psycopg2 leaves it in an aborted transaction state where every later statement raises. So any failure closes it and clears it, and the next write opens a fresh one. That turns a transient database restart into one failed order rather than every order until the engine is restarted.
+
+## Why the log keeps a small pool of connections
+
+The log used to hold one connection. psycopg2 does not allow two threads to use one connection at the same time, and with broker lanes many workers write at once, so each write now borrows a connection and gives it back. The pool is limited to `UNIFIED_BROKER_INTERFACE_API_ORDER_DATABASE_CONNECTIONS`, 8 by default, rather than one per worker: the engine can have 300 workers, PostgreSQL's usual connection limit is 100 and is shared with every other script, and each write holds its connection for about half a millisecond, so eight carry thousands of writes a second.
+
+A write that fails closes its connection rather than returning it, which is what forgetting the held connection used to do, and the next write opens a fresh one.

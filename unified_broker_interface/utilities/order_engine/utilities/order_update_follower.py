@@ -2,6 +2,7 @@
 
 import datetime
 import json
+import threading
 
 from unified_broker_interface.utilities.order_engine.utilities.early_updates import (
     EarlyUpdates,
@@ -41,6 +42,7 @@ class OrderUpdateFollower:
         ignored (int): How many updates could not be read or changed nothing.
         held (int): How many updates were held because their order was not known when they arrived.
         replayed (int): How many held updates were applied once their order became known.
+        counts_lock (threading.Lock): Guards the counters, which several worker threads update.
     """
 
     def __init__(
@@ -69,6 +71,7 @@ class OrderUpdateFollower:
         self.gates = gates
         self.placement = placement
         self.early_updates = EarlyUpdates()
+        self.counts_lock = threading.Lock()
         self.reacted = 0
         self.followed = 0
         self.ignored = 0
@@ -86,12 +89,14 @@ class OrderUpdateFollower:
         """
         update = self.decode(fields)
         if update is None:
-            self.ignored = self.ignored + 1
+            with self.counts_lock:
+                self.ignored = self.ignored + 1
             return None
         broker = update.get('broker')
         broker_order_id = update.get('order_id')
         if not broker or not broker_order_id:
-            self.ignored = self.ignored + 1
+            with self.counts_lock:
+                self.ignored = self.ignored + 1
             return None
 
         parent_order_id = self.parent_store.parent_for_broker_order(
@@ -100,29 +105,94 @@ class OrderUpdateFollower:
         )
         if not parent_order_id:
             self.early_updates.hold(f'{broker}:{broker_order_id}', fields)
-            self.held = self.held + 1
+            with self.counts_lock:
+                self.held = self.held + 1
             return None
 
         parent = self.read_parent(parent_order_id)
         if parent is None:
-            self.ignored = self.ignored + 1
+            with self.counts_lock:
+                self.ignored = self.ignored + 1
             return None
         leg = parent.leg_by_broker_order(broker, str(broker_order_id))
         if leg is None:
-            self.ignored = self.ignored + 1
+            with self.counts_lock:
+                self.ignored = self.ignored + 1
             return None
 
         changes = self.changes(leg, update)
         if not changes:
-            self.ignored = self.ignored + 1
+            with self.counts_lock:
+                self.ignored = self.ignored + 1
             return None
 
         self.record(parent, leg, update, changes)
         if self.gates is not None and changes.get('leg_state') == 'filled':
             self.gates.count_traded(leg.broker)
         self.react(parent, leg, changes)
-        self.followed = self.followed + 1
+        with self.counts_lock:
+            self.followed = self.followed + 1
         return parent
+
+    def owning_parent(self, fields):
+        """Which parent an update is about, without applying it, so the engine can hand it to that parent's worker.
+
+        An update whose order no parent owns yet is held, exactly as `follow` holds one, and None is answered.
+
+        Args:
+            fields (dict): The stream entry's fields.
+
+        Returns:
+            tuple: The parent order id (str or None) and the update's broker (str or None).
+        """
+        update = self.decode(fields)
+        if update is None:
+            return None, None
+        broker = update.get('broker')
+        broker_order_id = update.get('order_id')
+        if not broker or not broker_order_id:
+            return None, broker
+        parent_order_id = self.parent_store.parent_for_broker_order(
+            broker,
+            str(broker_order_id),
+        )
+        if not parent_order_id:
+            self.early_updates.hold(f'{broker}:{broker_order_id}', fields)
+            with self.counts_lock:
+                self.held = self.held + 1
+            return None, broker
+        return parent_order_id, broker
+
+    def take_known_early_updates(self):
+        """Removes the held updates whose order the engine now knows, and drops the ones held too long, without applying any.
+
+        Returns:
+            list: One `(parent_order_id, broker, fields)` triple per update, in the order they arrived.
+        """
+        self.early_updates.drop_expired()
+        keys = self.early_updates.keys()
+        if not keys:
+            return []
+        parent_order_ids = self.parent_store.parents_for_broker_orders(keys)
+        owners = {}
+        for key, parent_order_id in zip(keys, parent_order_ids):
+            if parent_order_id:
+                owners[key] = parent_order_id
+        taken = []
+        for fields in self.early_updates.take(set(owners)):
+            update = self.decode(fields) or {}
+            key = f'{update.get("broker")}:{update.get("order_id")}'
+            taken.append((owners.get(key), update.get('broker'), fields))
+        return taken
+
+    def count_replayed(self):
+        """Counts one held update applied once its order became known, by a worker thread.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        with self.counts_lock:
+            self.replayed = self.replayed + 1
 
     def replay_early_updates(self):
         """Applies every held update whose order the engine now knows, and drops the ones held too long.
@@ -145,7 +215,8 @@ class OrderUpdateFollower:
         for fields in self.early_updates.take(known_keys):
             parent = self.follow(fields)
             if parent is not None:
-                self.replayed = self.replayed + 1
+                with self.counts_lock:
+                    self.replayed = self.replayed + 1
                 changed_parents.append(parent)
         return changed_parents
 
@@ -242,7 +313,8 @@ class OrderUpdateFollower:
         )
         try:
             runner.on_leg_update(leg, changes)
-            self.reacted = self.reacted + 1
+            with self.counts_lock:
+                self.reacted = self.reacted + 1
         except Exception:
             self.logger.exception(
                 f'Parent {parent.parent_order_id} could not react to its leg '

@@ -123,9 +123,29 @@ The table below lists every engine-mode answer that direct mode never gives.
 
 1. **It takes a lock.** `unified:orders:engine:lock` holds the engine's process id for 30 seconds and is refreshed every 10. A second engine cannot take it and exits with code 1, and an engine that finds the lock taken over by another process stops placing and exits 1.
 2. **It prepares the event table.** It applies the DDL for `unified.synthetic_order_events`, and exits 1 if it cannot.
-3. **It builds its placement code.** A misspelt broker selector or unreadable daily caps exit with code 2, which systemd does not restart.
+3. **It builds its placement code and its worker lanes.** A misspelt broker selector, unreadable daily caps or a misspelt `UNIFIED_BROKER_INTERFACE_API_ORDER_WORKERS_PER_BROKER` exit with code 2, which systemd does not restart.
 4. **It recovers.** It replays today's events (and up to 30 days of events for the types that carry a parent overnight) through the same state machine the live path uses, rebuilds every parent that had not finished, and brings each leg up to date from the broker's own order book. A failure here exits 1, because placing new orders without knowing what is already at a broker is worse than not starting.
-5. **It loops.** It reads both `unified:orders:intents:stream` and `unified:order-updates:stream` in one `XREADGROUP` call as the group `engine`, up to 10 entries at a time, blocking for one second. After each read it gives a clock tick and a price tick to the types that asked for them, and rebuilds its caches when the day rolls over at 06:00 IST.
+5. **It loops.** Its main thread reads both `unified:orders:intents:stream` and `unified:order-updates:stream` in one `XREADGROUP` call as the group `engine`, up to 100 entries at a time, blocking for one second, and hands the work to the worker lanes described below. After each read it hands a clock tick and a price tick to the parents of the types that asked for them, and rebuilds its caches when the day rolls over at 06:00 IST, once every worker is idle.
+
+### Broker lanes
+
+The main thread places nothing itself. Each broker has a lane of worker threads, and one more lane, `unassigned`, takes orders whose broker could not be chosen at intake. The engine keeps one piece of work about one parent on one worker, so no two threads ever touch the same parent and every order type's code still runs top to bottom with a broker call that waits for its answer.
+
+<figure class="diagram">
+--8<-- "docs/assets/diagrams/order-engine-lanes.svg"
+<figcaption>Orange dots are intents: the main thread chooses each one's broker and hands it to a worker in that broker's lane, which sends it. Blue dots are a broker's order update, which the main thread hands to the worker that owns the order's parent.</figcaption>
+</figure>
+
+| Work | Where it goes |
+|---|---|
+| A new intent | The main thread checks it was not already started or too old, chooses its broker with the configured selector exactly as a placement would, and hands it to the least busy worker in that broker's lane. The worker records itself as the parent's owner before anything is sent, and the parent's first legs go to that broker. |
+| A broker's order update | The main thread finds the parent through `unified:orders:children` and hands the update to the parent's owner. An update for an order no parent owns yet is held, as above. |
+| A clock or price tick | The main thread finds the parents that want one and hands each tick to its owner, skipping a parent whose previous tick has not run yet. |
+| A parent recovered at start | It is given an owner the first time work for it arrives, in the lane of the broker its legs went to. |
+
+A lane starts with `UNIFIED_BROKER_INTERFACE_API_ORDER_WORKERS_PER_BROKER` workers, and starts one more whenever a new intent arrives while every worker in the lane has work, up to `UNIFIED_BROKER_INTERFACE_API_ORDER_MAXIMUM_WORKERS_PER_BROKER`. Workers are not stopped during the day, because a worker usually owns parents that are still live; the lanes go back to their starting size when the engine restarts. When the engine stops, each worker finishes the work already handed to it, and an intent it had not acknowledged is read again at the next start.
+
+A broker chosen at intake binds only the legs a parent places when its intent arrives. A parent that waits for a price or a time before placing anything lets the selector choose again when it fires, as it always has, so a broker that has logged out since is passed over.
 
 The consumer group starts at the beginning of the intent stream, because an intent written while the engine was down is an order somebody is still owed an answer for. It starts at the end of the order-update stream, because older updates are about orders the engine never placed. An order update that names no known leg is held for up to 30 seconds rather than dropped, because a broker can report a fill before the engine has saved the order's id; after every batch the engine looks the held orders up again in one round trip and applies, in arrival order, the updates whose order has become known. An intent is acknowledged only after its answer has been pushed, so an engine that dies in between reads the intent again at its next start. Every parent is saved with its intent id before its first leg is sent, so the engine finds that the intent already started a parent and answers <span class="status s4">409</span> `the order engine had already started this order before it read it again, so it was not placed a second time; read the parent for its outcome`, with `intent_id` and `parent_id`, instead of placing it twice. This check comes before the stale-intent check, so an intent that was placed and then went stale is reported as already started rather than as not placed. An intent that cannot be read at all is acknowledged unplaced, so that one bad entry cannot block every order behind it.
 
@@ -226,6 +246,9 @@ The table below lists every environment variable the engine reads, with its defa
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT` | `direct` | `engine` turns engine mode on in the API workers |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_TIMEOUT_SECONDS` | `5` | How long a worker waits for the engine's answer |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_RESULT_TTL_SECONDS` | `300` | How long an answer list is kept |
+| `UNIFIED_BROKER_INTERFACE_API_ORDER_WORKERS_PER_BROKER` | `1` | Worker threads each broker's lane starts with, such as `10,zerodha=6` |
+| `UNIFIED_BROKER_INTERFACE_API_ORDER_MAXIMUM_WORKERS_PER_BROKER` | `30` | The most workers one lane grows to |
+| `UNIFIED_BROKER_INTERFACE_API_ORDER_DATABASE_CONNECTIONS` | `8` | PostgreSQL connections the workers share for the event table |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_STALE_INTENT_SECONDS` | `30` | How far past its deadline an intent may be and still be placed |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_PER_SECOND` | `0` (off) | Messages in any one-second span across every broker |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_PER_BROKER_PER_SECOND` | `10` | Messages in any one-second span to any one broker |

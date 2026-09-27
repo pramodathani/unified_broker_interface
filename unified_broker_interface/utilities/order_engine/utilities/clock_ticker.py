@@ -1,6 +1,11 @@
 """Waking the order types that are waiting for a time rather than for a fill."""
 
+import threading
 import time
+
+from unified_broker_interface.utilities.order_engine.utilities.parent_router import (
+    ParentRouter,
+)
 
 from unified_broker_interface.utilities.order_engine.utilities.parent_order import (
     ParentOrder,
@@ -30,9 +35,20 @@ class ClockTicker:
         ticked_at (float): When the last tick ran, on the monotonic clock.
         ticks (int): How many ticks have run.
         acted (int): How many times a parent did something on a tick.
+        router (ParentRouter | None): What hands each parent's tick to the worker that owns it, or None to run every tick on this thread.
+        pending (set): The parents whose tick has been handed to a worker and has not run yet.
+        counts_lock (threading.Lock): Guards `acted` and `pending`, which worker threads update.
     """
 
-    def __init__(self, parent_store, event_log, placement, logger, gates=None):
+    def __init__(
+        self,
+        parent_store,
+        event_log,
+        placement,
+        logger,
+        gates=None,
+        router=None,
+    ):
         """Builds the ticker.
 
         Args:
@@ -41,6 +57,7 @@ class ClockTicker:
             placement (EnginePlacement): What a type uses to act.
             logger (logging.Logger): The logger.
             gates (RiskGates | None): The limits.
+            router (ParentRouter | None): What hands each parent's tick to the worker that owns it, or None to run every tick on this thread.
 
         Returns:
             None: This method returns nothing.
@@ -53,6 +70,9 @@ class ClockTicker:
         self.ticked_at = time.monotonic()
         self.ticks = 0
         self.acted = 0
+        self.router = router
+        self.pending = set()
+        self.counts_lock = threading.Lock()
 
     def timed_types(self):
         """The names of the order types that want a tick.
@@ -98,10 +118,54 @@ class ClockTicker:
                 continue
             if document.get('synthetic_type') not in wanted:
                 continue
-            if self.run_one(document):
+            if self.router is not None:
+                self.hand_over(parent_order_id, document)
+            elif self.run_one(document):
                 acted = acted + 1
-        self.acted = self.acted + acted
+        with self.counts_lock:
+            self.acted = self.acted + acted
         return acted
+
+    def hand_over(self, parent_order_id, document):
+        """Hands one parent's tick to the worker that owns it, unless its last tick has not run yet.
+
+        A worker busy with a slow broker call could otherwise collect a tick a second for the same parent, and act on all of them one after another when it came free.
+
+        Args:
+            parent_order_id (str): The parent's id.
+            document (dict): The parent's Redis record, used only to choose a lane.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        with self.counts_lock:
+            if parent_order_id in self.pending:
+                return
+            self.pending.add(parent_order_id)
+        self.router.route(
+            parent_order_id,
+            ParentRouter.broker_of_document(document),
+            self.run_handed_over,
+            (parent_order_id,),
+        )
+
+    def run_handed_over(self, parent_order_id):
+        """Gives one parent its tick on the worker that owns it, reading the parent afresh first.
+
+        Args:
+            parent_order_id (str): The parent's id.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        try:
+            document = self.parent_store.parent(parent_order_id)
+            if document is not None and self.run_one(document):
+                with self.counts_lock:
+                    self.acted = self.acted + 1
+        finally:
+            with self.counts_lock:
+                self.pending.discard(parent_order_id)
 
     def run_one(self, document):
         """Gives one parent its tick.

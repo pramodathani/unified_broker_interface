@@ -1,6 +1,7 @@
 """Waking the order types that are watching a price rather than waiting for a fill."""
 
 import json
+import threading
 import time
 
 import redis
@@ -10,6 +11,9 @@ from unified_broker_interface.utilities.order_engine.utilities.engine_placement 
 )
 from unified_broker_interface.utilities.order_engine.utilities.parent_order import (
     ParentOrder,
+)
+from unified_broker_interface.utilities.order_engine.utilities.parent_router import (
+    ParentRouter,
 )
 from unified_broker_interface.utilities.order_engine.utilities.registry import (
     SYNTHETIC_ORDER_CLASSES,
@@ -44,9 +48,21 @@ class PriceTicker:
         ticks (int): How many ticks have run.
         acted (int): How many times a parent did something on a tick.
         quotes_read (int): How many instrument quotes have been read in total.
+        router (ParentRouter | None): What hands each parent's quotes to the worker that owns it, or None to run every tick on this thread.
+        pending (set): The parents whose tick has been handed to a worker and has not run yet.
+        counts_lock (threading.Lock): Guards `acted` and `pending`, which worker threads update.
     """
 
-    def __init__(self, cache, parent_store, event_log, placement, logger, gates=None):
+    def __init__(
+        self,
+        cache,
+        parent_store,
+        event_log,
+        placement,
+        logger,
+        gates=None,
+        router=None,
+    ):
         """Builds the ticker.
 
         Args:
@@ -56,6 +72,7 @@ class PriceTicker:
             placement (EnginePlacement): What a type uses to act.
             logger (logging.Logger): The logger.
             gates (RiskGates | None): The limits.
+            router (ParentRouter | None): What hands each parent's quotes to the worker that owns it, or None to run every tick on this thread.
 
         Returns:
             None: This method returns nothing.
@@ -70,6 +87,9 @@ class PriceTicker:
         self.ticks = 0
         self.acted = 0
         self.quotes_read = 0
+        self.router = router
+        self.pending = set()
+        self.counts_lock = threading.Lock()
 
     def priced_types(self):
         """The names of the order types that want a quote.
@@ -192,10 +212,56 @@ class PriceTicker:
             quotes = {}
             for instrument_id in self.instruments_of(document):
                 quotes[instrument_id] = found.get(instrument_id)
-            if self.run_one(document, quotes):
+            if self.router is not None:
+                self.hand_over(document, quotes)
+            elif self.run_one(document, quotes):
                 acted = acted + 1
-        self.acted = self.acted + acted
+        with self.counts_lock:
+            self.acted = self.acted + acted
         return acted
+
+    def hand_over(self, document, quotes):
+        """Hands one parent's quotes to the worker that owns it, unless its last price tick has not run yet.
+
+        A worker busy with a slow broker call could otherwise collect a tick a second for the same parent, and act on stale quotes one after another when it came free.
+
+        Args:
+            document (dict): The parent's Redis record.
+            quotes (dict): The live quote for each instrument the parent watches.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        parent_order_id = document.get('parent_order_id')
+        with self.counts_lock:
+            if parent_order_id in self.pending:
+                return
+            self.pending.add(parent_order_id)
+        self.router.route(
+            parent_order_id,
+            ParentRouter.broker_of_document(document),
+            self.run_handed_over,
+            (parent_order_id, quotes),
+        )
+
+    def run_handed_over(self, parent_order_id, quotes):
+        """Gives one parent its quotes on the worker that owns it, reading the parent afresh first.
+
+        Args:
+            parent_order_id (str): The parent's id.
+            quotes (dict): The live quote for each instrument the parent watches.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        try:
+            document = self.parent_store.parent(parent_order_id)
+            if document is not None and self.run_one(document, quotes):
+                with self.counts_lock:
+                    self.acted = self.acted + 1
+        finally:
+            with self.counts_lock:
+                self.pending.discard(parent_order_id)
 
     def run_one(self, document, quotes):
         """Gives one parent its quotes.

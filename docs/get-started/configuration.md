@@ -76,6 +76,8 @@ These variables decide which broker receives an order placed through `POST /api/
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_PRIORITY` | empty | list | The preference order for `fixed_priority`. Brokers it does not name follow the named ones, in turn order. | `unified_broker_interface/utilities/broker_selection/fixed_priority.py` |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_EXCLUDED_BROKERS` | empty | list | Brokers that never receive an order. When every broker is excluded, placing answers `503` with `every broker is excluded from order placement`. | `unified_broker_interface/utilities/broker_orders/utilities/placement.py` |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_WARM_BROKERS` | `all` | list | Brokers whose order connections are kept warm by a background thread that rotates through every connection in the pool; `all` means every broker and an empty value turns warming off. An unknown name is logged and ignored. | `unified_broker_interface/utilities/broker_orders/utilities/placement.py` |
+| `UNIFIED_BROKER_INTERFACE_API_ORDER_WORKERS_PER_BROKER` | `1` | text | How many worker threads each broker's lane in the order engine starts with: a number, optionally followed by per-broker overrides, such as `10,zerodha=6` | `bin/unified/orders/order_engine` |
+| `UNIFIED_BROKER_INTERFACE_API_ORDER_DATABASE_CONNECTIONS` | `8` | integer | The most PostgreSQL connections the order engine's workers share for writing `unified.synthetic_order_events` | `bin/unified/orders/order_engine` |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_MAXIMUM_WORKERS_PER_BROKER` | `30` | integer | The most worker threads one broker's lane in the order engine may grow to; the engine keeps one more connection than this to each broker | `bin/unified/orders/order_engine` |
 
 ### The order engine

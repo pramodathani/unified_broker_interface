@@ -73,6 +73,9 @@ from unified_broker_interface.utilities.order_engine.utilities.parent_store impo
 from unified_broker_interface.utilities.order_engine.utilities.price_ticker import (
     PriceTicker,
 )
+from unified_broker_interface.utilities.order_engine.utilities.parent_router import (
+    ParentRouter,
+)
 from unified_broker_interface.utilities.order_engine.utilities.rate_budget import (
     RateBudget,
 )
@@ -1662,11 +1665,12 @@ class OrderEngineSuite:
                 shown[key] = self.fake_redis.strings[key]
         return shown
 
-    def run_scenario(self, scenario):
+    def run_scenario(self, scenario, with_lanes=False):
         """Runs one scenario against a fresh stand-in and a fresh engine.
 
         Args:
             scenario (dict): The scenario.
+            with_lanes (bool): Whether the engine hands every intent to a worker thread through a router with one worker, instead of placing it on the main thread.
 
         Returns:
             dict: The scenario's recorded result.
@@ -1711,6 +1715,15 @@ class OrderEngineSuite:
         gates = self.build_gates(scenario, logger)
         if gates is not None:
             placement.order_placement.attach_daily_count(gates.daily_count)
+        router = None
+        if with_lanes:
+            router = ParentRouter(
+                [],
+                {},
+                1,
+                logger,
+            )
+            router.start()
         engine = OrderEngine(
             self.fake_redis,
             placement,
@@ -1722,6 +1735,7 @@ class OrderEngineSuite:
             ParentStore(self.fake_redis),
             None,
             gates,
+            router=router,
         )
         self.fake_redis.round_trips = 0
         exit_code = engine.run(OnePassStop(scenario.get('passes', 3)))
@@ -1752,6 +1766,46 @@ class OrderEngineSuite:
         if engine.repeated:
             result['repeated'] = engine.repeated
         return result
+
+    def run_lane_equivalence_check(self):
+        """Runs every intent scenario again with one worker thread behind a router, and compares it with the main-thread run.
+
+        Everything must match except the Redis round trips, since intake reads the credentials and the instrument to choose the broker before handing the intent to its worker.
+
+        Returns:
+            dict: The recorded result: the scenarios compared, those that differed and in which fields, and how the round trips changed.
+        """
+        compared = 0
+        differing = []
+        round_trip_changes = {}
+        for scenario in OrderEngineScenarios().build():
+            on_main_thread = self.run_scenario(scenario)
+            with_lanes = self.run_scenario(scenario, True)
+            compared = compared + 1
+            fields = []
+            for field in sorted(set(on_main_thread) | set(with_lanes)):
+                if field == 'redis_round_trips':
+                    continue
+                if on_main_thread.get(field) != with_lanes.get(field):
+                    fields.append(field)
+            if fields:
+                differing.append({
+                    'name': scenario['name'],
+                    'fields': fields,
+                })
+            change = (
+                with_lanes['redis_round_trips']
+                - on_main_thread['redis_round_trips']
+            )
+            round_trip_changes[str(change)] = (
+                round_trip_changes.get(str(change), 0) + 1
+            )
+        return {
+            'name': 'lanes_give_the_same_answers_as_the_main_thread',
+            'compared': compared,
+            'differing': differing,
+            'round_trip_changes': round_trip_changes,
+        }
 
     def run_lock_checks(self):
         """Checks the single-engine lock directly, since losing it depends on a clock the loop owns.
@@ -4535,6 +4589,7 @@ class OrderEngineSuite:
             results = []
             for scenario in OrderEngineScenarios().build():
                 results.append(self.run_scenario(scenario))
+            results.append(self.run_lane_equivalence_check())
             results.extend(self.run_lock_checks())
             results.extend(self.run_parent_checks())
             results.extend(self.run_recovery_checks())

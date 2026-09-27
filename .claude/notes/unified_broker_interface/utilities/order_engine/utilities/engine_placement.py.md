@@ -19,3 +19,13 @@ It is not cached because a broker's token can be replaced at any moment by any o
 `InstrumentCache` exists so a gunicorn worker does not re-read the same catalogue entry for every order. In a worker its value is modest, because there are two workers and each starts cold.
 
 In the engine there is one process for the whole day, so after the first order on an instrument the entry is held for as long as the warm lasts. Most orders therefore skip the three catalogue reads entirely. They still cost a round trip when the configured selector queues a command of its own, which `round_robin` does and `fixed_priority` does not.
+
+## Why intake's broker choice is held per thread
+
+`assign_broker` runs on the engine's main thread and chooses a broker for a new intent with the selector and every skip check, so the intent can go to that broker's lane. The worker that places it then has to send the parent's first legs to that same broker, or the lane would not match the broker and round robin would advance twice for one order.
+
+The order types choose brokers through `prepare` in 25 files, including every dry run, and changing each of them would be a large edit for one rule. Instead the worker sets a `threading.local` assignment around `run`, and `prepare` uses it when a leg names no broker. The instrument read then queues no selector command, so round robin advances once per order, as it did before lanes. The answer's `skipped` list is intake's, so a caller sees the same brokers passed over as without lanes. The lane comparison in `test_runs/order_engine.py` runs every intent scenario both ways and found every reply, request and event identical.
+
+The assignment lasts only for the `run` of the intent. A parent that places nothing until a price or a time arrives chooses its broker when it fires, with the selector, as before, so a broker that logged out in the meantime is still passed over.
+
+`assign_broker` answers None rather than raising when it cannot choose, including for a body that fails validation or carries a reference it cannot work out. The intent then goes to the `unassigned` lane and the order type makes the choice itself, giving the same answer, 400 included, that it always has.

@@ -4,6 +4,7 @@ import datetime
 import decimal
 import json
 import pathlib
+import threading
 import uuid
 
 DDL_FILE = '340_unified_synthetic_order_events.sql'
@@ -62,16 +63,20 @@ class SyntheticOrderEventLog:
         connect (callable): Opens a new database connection.
         logger (logging.Logger): The logger.
         engine_instance (str): Which engine wrote the row, for reading a day that spanned a restart.
-        connection (object | None): The connection held open between writes, or None before the first.
+        maximum_connections (int): The most connections open at once, shared by every worker thread.
+        idle_connections (list): The open connections not in use, most recently returned last.
+        connections_lock (threading.Lock): Guards `idle_connections`.
+        connection_slots (threading.BoundedSemaphore): One slot per connection that may be open, taken while a connection is in use.
     """
 
-    def __init__(self, connect, logger, engine_instance):
+    def __init__(self, connect, logger, engine_instance, maximum_connections=8):
         """Builds the log.
 
         Args:
             connect (callable): Opens a new database connection.
             logger (logging.Logger): The logger.
             engine_instance (str): Which engine is writing, such as the host and pid.
+            maximum_connections (int): The most connections open at once; a write beyond that waits for one to come back.
 
         Returns:
             None: This method returns nothing.
@@ -79,7 +84,10 @@ class SyntheticOrderEventLog:
         self.connect = connect
         self.logger = logger
         self.engine_instance = engine_instance
-        self.connection = None
+        self.maximum_connections = maximum_connections
+        self.idle_connections = []
+        self.connections_lock = threading.Lock()
+        self.connection_slots = threading.BoundedSemaphore(maximum_connections)
 
     def apply_table(self):
         """Applies the table's own DDL file, which creates it the first time and changes nothing after.
@@ -105,28 +113,54 @@ class SyntheticOrderEventLog:
             connection.close()
         self.logger.info(f'Applied {path.name}.')
 
-    def held_connection(self):
-        """The connection this log writes on, opened on first use.
+    def borrow_connection(self):
+        """Takes a connection for one write or read, opening one when none is idle, and waiting while every allowed connection is in use.
+
+        psycopg2 does not allow two threads to use one connection at once, and the engine's worker threads write at the same time, so each write borrows a connection of its own. The pool is small, because each write holds its connection for well under a millisecond, and the database's own connection limit is shared with every other script.
 
         Returns:
             object: The psycopg2 connection.
-        """
-        if self.connection is None:
-            self.connection = self.connect()
-        return self.connection
 
-    def forget_connection(self):
-        """Drops the held connection, so the next write opens a new one.
+        Raises:
+            Exception: Anything opening a connection raises, after giving its slot back.
+        """
+        self.connection_slots.acquire()
+        with self.connections_lock:
+            if self.idle_connections:
+                return self.idle_connections.pop()
+        try:
+            return self.connect()
+        except Exception:
+            self.connection_slots.release()
+            raise
+
+    def give_back(self, connection):
+        """Returns a borrowed connection that is still good.
+
+        Args:
+            connection (object): The connection.
 
         Returns:
             None: This method returns nothing.
         """
-        if self.connection is not None:
-            try:
-                self.connection.close()
-            except Exception:
-                pass
-        self.connection = None
+        with self.connections_lock:
+            self.idle_connections.append(connection)
+        self.connection_slots.release()
+
+    def discard(self, connection):
+        """Closes a borrowed connection after a failure, so the next write opens a new one.
+
+        Args:
+            connection (object): The connection.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        try:
+            connection.close()
+        except Exception:
+            pass
+        self.connection_slots.release()
 
     def record(self, event):
         """Writes one transition and commits it.
@@ -138,7 +172,7 @@ class SyntheticOrderEventLog:
             None: This method returns nothing.
 
         Raises:
-            Exception: Anything the database raises, after dropping the connection so the next write reconnects.
+            Exception: Anything the database raises, after closing the connection so the next write opens a new one.
         """
         self.record_many([
             event,
@@ -154,7 +188,7 @@ class SyntheticOrderEventLog:
             None: This method returns nothing.
 
         Raises:
-            Exception: Anything the database raises, after dropping the connection so the next write reconnects.
+            Exception: Anything the database raises, after closing the connection so the next write opens a new one.
         """
         if not events:
             return
@@ -170,14 +204,15 @@ class SyntheticOrderEventLog:
         flattened = []
         for row in rows:
             flattened.extend(row)
+        connection = self.borrow_connection()
         try:
-            connection = self.held_connection()
             with connection.cursor() as cursor:
                 cursor.execute(statement, flattened)
             connection.commit()
         except Exception:
-            self.forget_connection()
+            self.discard(connection)
             raise
+        self.give_back(connection)
 
     def row(self, event):
         """One event as the values of `COLUMNS`, in order.
@@ -214,15 +249,15 @@ class SyntheticOrderEventLog:
             list: One dictionary per row, by column name.
 
         Raises:
-            Exception: Anything the database raises, after dropping the connection so the next read reconnects.
+            Exception: Anything the database raises, after closing the connection so the next read opens a new one.
         """
         columns = ', '.join(f'"{column}"' for column in COLUMNS)
         statement = (
             f'select {columns} from unified.synthetic_order_events '
             'where "time" >= %s order by parent_order_id, sequence, "time"'
         )
+        connection = self.borrow_connection()
         try:
-            connection = self.held_connection()
             with connection.cursor() as cursor:
                 cursor.execute(statement, [
                     moment,
@@ -230,8 +265,9 @@ class SyntheticOrderEventLog:
                 fetched = cursor.fetchall()
             connection.commit()
         except Exception:
-            self.forget_connection()
+            self.discard(connection)
             raise
+        self.give_back(connection)
         events = []
         for values in fetched:
             event = {}
@@ -255,7 +291,7 @@ class SyntheticOrderEventLog:
             list: One dictionary per row, by column name.
 
         Raises:
-            Exception: Anything the database raises, after dropping the connection so the next read reconnects.
+            Exception: Anything the database raises, after closing the connection so the next read opens a new one.
         """
         if not types:
             return []
@@ -265,8 +301,8 @@ class SyntheticOrderEventLog:
             'where "time" >= %s and synthetic_type = any(%s) '
             'order by parent_order_id, sequence, "time"'
         )
+        connection = self.borrow_connection()
         try:
-            connection = self.held_connection()
             with connection.cursor() as cursor:
                 cursor.execute(statement, [
                     moment,
@@ -275,8 +311,9 @@ class SyntheticOrderEventLog:
                 fetched = cursor.fetchall()
             connection.commit()
         except Exception:
-            self.forget_connection()
+            self.discard(connection)
             raise
+        self.give_back(connection)
         events = []
         for values in fetched:
             event = {}
