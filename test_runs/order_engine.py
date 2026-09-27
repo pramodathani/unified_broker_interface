@@ -72,6 +72,10 @@ from unified_broker_interface.utilities.broker_orders.utilities.place_order_requ
 from unified_broker_interface.utilities.broker_orders.utilities.refused_request import (
     RefusedRequestError,
 )
+from unified_broker_interface.utilities.order_engine.utilities.order_leg import OrderLeg
+from unified_broker_interface.utilities.order_engine.utilities.registry import (
+    SYNTHETIC_ORDER_CLASSES,
+)
 from unified_broker_interface.utilities.order_engine.utilities.parent_commands import (
     ParentCommands,
 )
@@ -113,6 +117,60 @@ RESULT_TTL_SECONDS = 300
 # the same thing on every run and whatever timezone the machine keeps.
 FROZEN_NOW = datetime.datetime(2026, 9, 23, 10, 0, 0, tzinfo=moments.INDIA)
 
+
+
+class AcceptedModifyAnswer:
+    """A broker's answer accepting a modification, for a check that intercepts `modify_leg`.
+
+    Attributes:
+        outcome (str): Always `accepted`.
+        status_message (None): No message.
+        response_body (dict): An empty body.
+    """
+
+    def __init__(self):
+        """Builds the answer.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.outcome = 'accepted'
+        self.status_message = None
+        self.response_body = {}
+
+
+class ModifyRecorder:
+    """Stands in for `EnginePlacement.modify_leg`, remembering each change instead of sending it.
+
+    Attributes:
+        sent (list): One `(broker, order id, quantity)` per change.
+    """
+
+    def __init__(self):
+        """Builds the recorder.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.sent = []
+
+    def modify_leg(self, broker_name, broker_order_id, quantity=None, price=None, trigger_price=None):
+        """Remembers one change and accepts it.
+
+        Args:
+            broker_name (str): The broker.
+            broker_order_id (str): The order.
+            quantity (int | None): The new quantity, in the broker's terms.
+            price (decimal.Decimal | None): The new price, unused.
+            trigger_price (decimal.Decimal | None): The new trigger, unused.
+
+        Returns:
+            AcceptedModifyAnswer: The answer.
+        """
+        del price
+        del trigger_price
+        self.sent.append((broker_name, broker_order_id, quantity))
+        return AcceptedModifyAnswer()
 
 
 class NumberingBrokerNetwork(order_routes.FakeBrokerNetwork):
@@ -5244,6 +5302,62 @@ class OrderEngineSuite:
             ),
         ]
 
+    def run_quantity_conversion_checks(self):
+        """Checks that a leg reduced in units is sent in each broker's own terms.
+
+        `reduce_leg` sent units to `modify_leg`, which sends them unchanged, so a crude oil exit reduced to 300 units reached a broker that counts lots as 300 lots.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        self.fake_redis = self.build_state()
+        logger = logging.getLogger('test_runs.order_engine')
+        placement = EnginePlacement(self.fake_redis, logger)
+        crude = order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['crudeoil_future']
+        results = []
+        conversions = {}
+        for broker_name in ('dhan', 'flattrade', 'kotak', 'zerodha'):
+            conversions[broker_name] = placement.broker_quantity(broker_name, crude, 300)
+        results.append({
+            'name': 'three_hundred_units_of_crude_in_each_brokers_terms',
+            'converted': conversions,
+        })
+        try:
+            placement.broker_quantity('zerodha', crude, 150)
+            refusal = None
+        except RefusedRequestError as error:
+            refusal = error.body.get('error')
+        results.append({
+            'name': 'a_quantity_that_is_not_whole_lots_is_refused',
+            'refusal': refusal,
+        })
+        recorder = ModifyRecorder()
+        placement.modify_leg = recorder.modify_leg
+        parent = ParentOrder('crude-parent')
+        parent.synthetic_type = 'oco'
+        parent.instrument_id = crude
+        parent.body = {}
+        leg = OrderLeg('crude-parent:1', 'stop')
+        leg.broker = 'zerodha'
+        leg.broker_order_id = '2104110000000001'
+        leg.quantity = 300
+        parent.legs.append(leg)
+        runner = SYNTHETIC_ORDER_CLASSES['oco'](
+            parent,
+            placement,
+            engine_stand_ins.RecordingEventLog(),
+            ParentStore(self.fake_redis),
+            logger,
+            None,
+        )
+        accepted = runner.reduce_leg(leg, 200, 'the target filled 100')
+        results.append({
+            'name': 'a_crude_exit_reduced_to_200_units_is_sent_as_2_lots_to_zerodha',
+            'accepted': accepted,
+            'sent': recorder.sent,
+        })
+        return results
+
     def run_rotation_checks(self):
         """Checks that the round robin spreads a run of orders some brokers cannot take evenly over the brokers that can.
 
@@ -5587,6 +5701,7 @@ class OrderEngineSuite:
             results.extend(self.run_rate_limit_checks())
             results.extend(self.run_stoxkart_algo_checks())
             results.extend(self.run_rotation_checks())
+            results.extend(self.run_quantity_conversion_checks())
         finally:
             requests.Session.request = original_request
             uuid.uuid4 = original_uuid4

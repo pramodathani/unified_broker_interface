@@ -801,9 +801,11 @@ class SyntheticOrder:
 
         This is the Atlas's rule for every linked pair: when one leg fills, reduce the other by what filled instead of cancelling it. Cancelling leaves a window with nothing protecting the position, and replacing loses the order's place in the queue.
 
+        The quantity is in units, as every leg's quantity and fill are recorded, and is converted into the broker's own terms before it is sent, as a placement's is. Sending units unconverted asked a broker that counts commodities in lots for a quantity many times too large.
+
         Args:
             leg (OrderLeg): The leg to reduce.
-            quantity (int): The new quantity, in the broker's own terms.
+            quantity (int): The new quantity, in units.
             reason (str): Why, for a person reading the parent later.
 
         Returns:
@@ -814,10 +816,15 @@ class SyntheticOrder:
         if not self.take_rate_token(leg, reason):
             return False
         try:
+            broker_quantity = self.placement.broker_quantity(
+                leg.broker,
+                leg.instrument_id or self.parent.instrument_id,
+                quantity,
+            )
             answer = self.placement.modify_leg(
                 leg.broker,
                 leg.broker_order_id,
-                quantity=quantity,
+                quantity=broker_quantity,
             )
         except Exception as error:
             self.record({

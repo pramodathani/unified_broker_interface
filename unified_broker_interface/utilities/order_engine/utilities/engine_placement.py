@@ -1,5 +1,6 @@
 """Placing one intent's order: the Redis reads the engine makes, and the answer it sends back."""
 
+import decimal
 import json
 import threading
 import time
@@ -391,6 +392,44 @@ class EnginePlacement:
             settings,
         )
         return broker_orders.send_modify(broker_request)
+
+    def broker_quantity(self, broker_name, instrument_id, units):
+        """A quantity in units, converted into one broker's own terms for an instrument.
+
+        A securities quantity is unchanged. A currency or commodity quantity is converted as a placement converts it, by the instrument's trusted contract size and the broker's `QUANTITY_UNITS` entry for the market.
+
+        Args:
+            broker_name (str): The broker.
+            instrument_id (str): The instrument.
+            units (int): The quantity in units.
+
+        Returns:
+            int: The quantity the broker's request carries.
+
+        Raises:
+            RefusedRequestError: With HTTP 503 when the instrument cannot be read or its contract size is not trusted today, and 400 when the quantity is not a whole number of lots.
+        """
+        instrument, _, _ = self.market_context(instrument_id, False, False)
+        broker_orders = self.order_placement.broker_orders[broker_name]
+        handle = instrument.handles.get(broker_name)
+        if instrument.is_securities_market():
+            return broker_orders.broker_quantity(units, instrument, handle)
+        units_per_lot = instrument.trusted_units_per_lot()
+        if units_per_lot is None:
+            raise RefusedRequestError.refusal(
+                f'the contract size of this {instrument.segment} instrument is '
+                'not trusted today, so its quantity cannot be converted',
+                503,
+                instrument_id=instrument_id,
+            )
+        if decimal.Decimal(units) % units_per_lot != 0:
+            raise RefusedRequestError.refusal(
+                f'{units} is not a whole number of lots of '
+                f'{format(units_per_lot.normalize(), "f")}',
+                400,
+                instrument_id=instrument_id,
+            )
+        return broker_orders.broker_quantity(units, instrument, handle)
 
     def broker_attributes(self, instrument_id):
         """Every broker's extra fields for one instrument, such as the exchange freeze quantity.

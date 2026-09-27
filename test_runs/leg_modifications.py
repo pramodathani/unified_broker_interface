@@ -83,6 +83,21 @@ class StubPlacement:
         self.changes.append((broker_order_id, quantity, price, trigger_price))
         return AcceptedAnswer()
 
+    def broker_quantity(self, broker_name, instrument_id, units):
+        """Converts units into the broker's terms, which for this equity stand-in are the units themselves.
+
+        Args:
+            broker_name (str): The broker, unused.
+            instrument_id (str): The instrument, unused.
+            units (int): The quantity in units.
+
+        Returns:
+            int: The same quantity.
+        """
+        del broker_name
+        del instrument_id
+        return units
+
     def market_context(self, instrument_id, needs_quote, needs_positions):
         """Serves the one quote.
 
