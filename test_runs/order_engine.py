@@ -2424,6 +2424,7 @@ class OrderEngineSuite:
         quote=None,
         positions=None,
         resting=None,
+        taken_at=None,
     ):
         """Places one timed order, optionally fills it, then gives it a clock tick.
 
@@ -2438,11 +2439,18 @@ class OrderEngineSuite:
             quote (dict | None): A live quote to seed, for a type that reads the book when it is placed.
             positions (float | None): A net position in RELIANCE to seed, for a type that reads the account's holdings.
             resting (list | None): Flattrade order ids of open RELIANCE orders placed outside the engine, for a type that cancels what is resting.
+            taken_at (datetime.datetime | None): The moment the engine takes the order, or None for `FROZEN_NOW`.
 
         Returns:
             dict: The recorded result.
         """
-        scenario = self.scenarios.intents(name, [request_body], answer=answer)
+        taken_at = taken_at or FROZEN_NOW
+        settings = {
+            'answer': answer,
+        }
+        if request_body.get('instrument_id'):
+            settings['instrument_id'] = request_body['instrument_id']
+        scenario = self.scenarios.intents(name, [request_body], **settings)
         self.fake_redis = self.build_state()
         if quote is not None:
             self.seed_quote(quote)
@@ -2484,11 +2492,14 @@ class OrderEngineSuite:
         # The whole check runs on one frozen clock, so a slice due five minutes in is due five
         # minutes after the order was recorded rather than five minutes after the real time of day.
         original_time = time.time
-        time.time = lambda: FROZEN_NOW.timestamp()
+        original_now = moments.Moments.now
+        time.time = lambda: taken_at.timestamp()
+        moments.Moments.now = lambda self: taken_at
         try:
             engine.run(engine_stand_ins.OnePassStop(3))
         finally:
             time.time = original_time
+            moments.Moments.now = original_now
         reply = self.shown_replies(reply_keys)[0]
 
         follower = OrderUpdateFollower(
@@ -2864,6 +2875,95 @@ class OrderEngineSuite:
                 frozen + 1900,
                 accepted,
                 quote=self.scenarios.quote(),
+            ),
+            self.clock_result(
+                'an_opening_auction_order_waits_for_the_pre_open',
+                dict(entry, synthetic={
+                    'type': 'opening_auction',
+                }),
+                [],
+                FROZEN_NOW.replace(hour=9, minute=0, second=30).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(hour=8, minute=45),
+            ),
+            self.clock_result(
+                'an_opening_auction_order_during_collection_is_placed_at_once',
+                self.scenarios.bodies.market_order(
+                    dry_run=None,
+                    synthetic={
+                        'type': 'opening_auction',
+                    },
+                ),
+                [],
+                FROZEN_NOW.replace(hour=9, minute=3, second=1).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(hour=9, minute=3),
+            ),
+            self.clock_result(
+                'a_market_opening_auction_order_after_nine_oh_five_is_refused',
+                self.scenarios.bodies.market_order(
+                    dry_run=None,
+                    synthetic={
+                        'type': 'opening_auction',
+                    },
+                ),
+                [],
+                FROZEN_NOW.replace(hour=9, minute=6, second=1).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(hour=9, minute=6),
+            ),
+            self.clock_result(
+                'an_opening_auction_order_after_collection_is_refused',
+                dict(entry, synthetic={
+                    'type': 'opening_auction',
+                }),
+                [],
+                frozen + 60,
+                accepted,
+            ),
+            self.clock_result(
+                'an_opening_auction_order_for_an_option_is_refused',
+                dict(
+                    entry,
+                    instrument_id=order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['nifty_option'],
+                    synthetic={
+                        'type': 'opening_auction',
+                    },
+                ),
+                [],
+                FROZEN_NOW.replace(hour=9, minute=0, second=30).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(hour=8, minute=45),
+            ),
+            self.clock_result(
+                'a_stop_order_cannot_join_the_opening_auction',
+                dict(
+                    entry,
+                    order_type='SL',
+                    trigger_price=990,
+                    price=988,
+                    synthetic={
+                        'type': 'opening_auction',
+                    },
+                ),
+                [],
+                FROZEN_NOW.replace(hour=9, minute=0, second=30).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(hour=8, minute=45),
+            ),
+            self.clock_result(
+                'a_futures_opening_auction_order_after_nine_oh_seven_is_refused',
+                dict(
+                    entry,
+                    instrument_id=order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['reliance_future'],
+                    synthetic={
+                        'type': 'opening_auction',
+                    },
+                ),
+                [],
+                FROZEN_NOW.replace(hour=9, minute=8, second=1).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(hour=9, minute=8),
             ),
             self.clock_result(
                 'a_time_stop_closes_what_it_filled',

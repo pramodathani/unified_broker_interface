@@ -33,10 +33,7 @@ class Scheduled(SyntheticOrder):
             RefusedRequestError: With HTTP 400 when `at_time` is missing or has passed.
         """
         order = self.read_order(self.parent.body)
-        at_time = Moments().time_today(
-            self.parent.parameters.get('at_time'),
-            'at_time',
-        )
+        place_at, place_at_text = self.read_place_at(order)
         if order.dry_run:
             prepared = self.placement.prepare(
                 order,
@@ -45,7 +42,7 @@ class Scheduled(SyntheticOrder):
             return self.placement.dry_run_answer(prepared, started_at)
 
         self.parent.parameters = dict(self.parent.parameters)
-        self.parent.parameters['place_at'] = at_time
+        self.parent.parameters['place_at'] = place_at
         self.record_received()
         self.save()
         return {
@@ -55,13 +52,27 @@ class Scheduled(SyntheticOrder):
             'tag': self.parent.tag,
             'outcome': 'scheduled',
             'order_id': None,
-            'place_at': self.parent.parameters['at_time'],
+            'place_at': place_at_text,
             'status_message': (
-                'the order is recorded and will be placed at '
-                f'{self.parent.parameters["at_time"]}'
+                f'the order is recorded and will be placed at {place_at_text}'
             ),
             'skipped': [],
         }, 202
+
+    def read_place_at(self, order):
+        """When the order is placed.
+
+        Args:
+            order (PlaceOrderRequest): The order the caller asked for.
+
+        Returns:
+            tuple: The moment as an epoch (float) and as the caller wrote it (str).
+
+        Raises:
+            RefusedRequestError: With HTTP 400 when `at_time` is missing or has passed.
+        """
+        text = self.parent.parameters.get('at_time')
+        return Moments().time_today(text, 'at_time'), text
 
     def on_clock_tick(self, now):
         """Places the order once its time has come.

@@ -2,7 +2,7 @@
 
 A synthetic order is an order that no Indian exchange offers, built by the order engine out of ordinary broker orders. You ask for one by adding a `synthetic` object to the body of [`POST /api/orders/place`](orders.md#place-an-order), and the engine places, watches, moves and cancels the real orders it is made of.
 
-This page is the glossary of all 42 types the engine runs. It lists every field each type reads from the `synthetic` object, with the defaults and limits taken from the code.
+This page is the glossary of all 43 types the engine runs. It lists every field each type reads from the `synthetic` object, with the defaults and limits taken from the code.
 
 !!! danger "Synthetic orders place real orders, sometimes long after you asked"
     A synthetic order can place, modify or cancel orders at a broker minutes, hours or even days after your request, with nobody watching. Triggers, trailing stops, grids and schedules all act on their own. Send `"dry_run": true` first, which builds the first broker request without recording or sending anything.
@@ -54,7 +54,7 @@ Two fields can appear in any `synthetic` object. The table below lists them.
 
 | Field | Type | Required | Meaning |
 |---|---|:---:|---|
-| `type` | string | Yes | One of the 42 names in the table below. A body with no `synthetic` object, or no `type`, runs as `simple`. An unknown name is refused with `400` and the message `the order engine does not run '<name>' orders; it runs <list>`. |
+| `type` | string | Yes | One of the 43 names in the table below. A body with no `synthetic` object, or no `type`, runs as `simple`. An unknown name is refused with `400` and the message `the order engine does not run '<name>' orders; it runs <list>`. |
 | `closes_position` | boolean | No | `true` says every leg of this order closes a position, so it may use the part of a broker's daily order cap kept for exits. Only the literal `true` counts. |
 
 The engine also writes its own working values into the parent's copy of the `synthetic` object, such as `tick_size`, `triggered_at`, `watermark`, `placed_quantity`, `started_at` and `expires_at`. These are internal, so do not send them.
@@ -80,7 +80,7 @@ Types that act at once answer with the broker's answer plus a `parent_id`; types
 
 Keep the `parent_id`. It is the only handle on an order that has not reached a broker yet.
 
-## All 42 types
+## All 43 types
 
 The master table below lists every type registered in `SYNTHETIC_ORDER_CLASSES`, in the order the registry holds them. The "First answer" column says whether a broker order goes out when you ask (`200`, the broker's own answer) or whether the engine waits (`202`).
 
@@ -128,8 +128,9 @@ The master table below lists every type registered in `SYNTHETIC_ORDER_CLASSES`,
 | `gtt` | Price triggers | A limit-if-touched order that keeps waiting across days until it expires. | `trigger_price`, `limit_price`, `valid_days` | 202 |
 | `daily_stop` | Stops and trailing | Places a fresh native stop every morning for a position held overnight. | `stop_price`, `stop_limit_price`, `arm_at`, `valid_days` | 202 |
 | `virtual_limit` | Book-following limits | Holds a limit order in the engine and sends it only when the other side reaches its price. | `paper` | 202 |
+| `opening_auction` | Time-based | Places the order during the pre-open, so it fills at the opening auction's price. | `at_time` | 202 |
 
-The chart below counts how many of the 42 types fall into each family. The families are this page's own grouping, chosen to make the list easier to scan; the code does not group them.
+The chart below counts how many of the 43 types fall into each family. The families are this page's own grouping, chosen to make the list easier to scan; the code does not group them.
 
 ```vegalite
 {
@@ -145,7 +146,7 @@ The chart below counts how many of the 42 types fall into each family. The famil
       {"family": "Book-following limits", "types": 5},
       {"family": "Price triggers", "types": 5},
       {"family": "Plain and laddered", "types": 4},
-      {"family": "Time-based", "types": 4},
+      {"family": "Time-based", "types": 5},
       {"family": "Multi-instrument", "types": 4}
     ]
   },
@@ -742,7 +743,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
 === "Time-based"
 
-    These four types act at a time of day. Every time is read as `HH:MM` or `HH:MM:SS` in India time (`Asia/Kolkata`), and a time that has already passed today is refused with `400` rather than taken to mean tomorrow.
+    These five types act at a time of day. Every time is read as `HH:MM` or `HH:MM:SS` in India time (`Asia/Kolkata`), and a time that has already passed today is refused with `400` rather than taken to mean tomorrow.
 
     #### `scheduled`
 
@@ -800,6 +801,28 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     ```json
     {"type": "square_off", "at_time": "15:10", "product": "intraday"}
+    ```
+
+    #### `opening_auction`
+
+    An opening-auction order (the Atlas's G1, market-on-open or limit-on-open) is placed while the pre-open session collects orders, so it takes part in the opening call auction and fills at the single price the auction discovers. It answers `202 scheduled` and is placed at `at_time`, or on the next clock tick when collection is already open.
+
+    The pre-open takes only some orders, and this type refuses the rest with `400` rather than sending them into continuous trading:
+
+    | Instrument | Limit orders until | Market orders until |
+    |---|---|---|
+    | NSE and BSE equities and exchange-traded funds | 09:10 | 09:05 |
+    | NSE stock and index futures | 09:07 | 09:05 |
+    | Options, commodities, currencies and everything else | No pre-open | No pre-open |
+
+    NSE collects futures orders until a random moment between 09:07 and 09:08, so this type stops at 09:07. Only current-month futures have a pre-open, and this type does not check the month, so a later-month future is sent and the broker or exchange decides. Stop orders and `IOC` are refused, because the pre-open does not take them.
+
+    | Field | Type | Required | Rules |
+    |---|---|:---:|---|
+    | `at_time` | string | No | From 09:00 and before the collection closes for the order, as in the table above. Defaults to `09:00:30`. |
+
+    ```json
+    {"type": "opening_auction"}
     ```
 
 === "Multi-instrument"

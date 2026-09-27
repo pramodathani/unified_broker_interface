@@ -58,6 +58,9 @@ from unified_broker_interface.utilities.order_engine.oco import OneCancelsOther
 from unified_broker_interface.utilities.order_engine.one_cancels_all import (
     OneCancelsAll,
 )
+from unified_broker_interface.utilities.order_engine.opening_auction import (
+    OpeningAuction,
+)
 from unified_broker_interface.utilities.order_engine.oto import OneTriggersOther
 from unified_broker_interface.utilities.order_engine.peg import Peg
 from unified_broker_interface.utilities.order_engine.participation import (
@@ -130,4 +133,5 @@ SYNTHETIC_ORDER_CLASSES = {
     GoodTillTriggered.SYNTHETIC_TYPE: GoodTillTriggered,
     DailyStop.SYNTHETIC_TYPE: DailyStop,
     VirtualLimit.SYNTHETIC_TYPE: VirtualLimit,
+    OpeningAuction.SYNTHETIC_TYPE: OpeningAuction,
 }
