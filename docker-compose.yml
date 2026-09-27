@@ -47,7 +47,7 @@ services:
 
   timescaledb:
     image: timescale/timescaledb:latest-pg18
-    shm_size: 1g
+    shm_size: 4g
     environment:
       PGDATA: /pgdata
       POSTGRES_DB: "${UNIFIED_BROKER_INTERFACE_POSTGRES_DB:-unified_broker_interface}"
