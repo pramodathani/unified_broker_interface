@@ -19,3 +19,7 @@ Five minutes is enough for the last traded price to mean something and is early 
 A daily stop is a statement about tomorrow morning and every morning after it. Placing one immediately would be doing something different from what was asked, and somebody who wants a stop resting this afternoon is asking for an ordinary stop-loss limit order, which they can simply send.
 
 `armed_on` holds the date in the exchange's own timezone rather than a timestamp, because the question being asked is "have I already done this today", and a date answers it without any arithmetic about where the boundary falls.
+
+## Why a daily stop does not arm on its creation day after `arm_at`
+
+The class docstring always said a daily stop is a statement about tomorrow, but `due` compared only the time of day, so a stop created after 09:20 was placed at once; in the live test that happened on a Sunday and Dhan rejected it. `run` now works out `first_arm_on` with `first_arming_day` and, when that is not today, marks today as already armed. `due` also refuses any day the instrument's segment does not trade, reading the segment `run` stores in the parameters so a clock tick needs no Redis read. `valid_days` stays in calendar days, since it is a safety horizon rather than a count of sessions.

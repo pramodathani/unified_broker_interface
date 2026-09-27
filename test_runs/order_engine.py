@@ -2593,7 +2593,12 @@ class OrderEngineSuite:
         self.seed_resting(resting)
         self.network.reset(answer)
         self.counting_uuid.reset()
-        reply_keys = self.write_intents(scenario)
+        original_time = time.time
+        time.time = lambda: taken_at.timestamp()
+        try:
+            reply_keys = self.write_intents(scenario)
+        finally:
+            time.time = original_time
 
         logger = logging.getLogger('test_runs.order_engine')
         placement = EnginePlacement(self.fake_redis, logger)
@@ -3219,6 +3224,88 @@ class OrderEngineSuite:
                 accepted,
             ),
             self.clock_result(
+                'a_scheduled_order_taken_on_a_sunday_waits_through_sunday_afternoon',
+                dict(entry, synthetic={'type': 'scheduled', 'at_time': '15:00'}),
+                [],
+                FROZEN_NOW.replace(day=27).replace(hour=15).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(day=27),
+            ),
+            self.clock_result(
+                'a_scheduled_order_taken_on_a_sunday_is_placed_on_monday',
+                dict(entry, synthetic={'type': 'scheduled', 'at_time': '15:00'}),
+                [],
+                FROZEN_NOW.replace(day=28, hour=15).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(day=27),
+            ),
+            self.clock_result(
+                'a_scheduled_order_taken_on_a_holiday_friday_is_placed_the_next_monday',
+                dict(entry, synthetic={'type': 'scheduled', 'at_time': '15:00'}),
+                [],
+                FROZEN_NOW.replace(month=10, day=5, hour=15).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(month=10, day=2),
+            ),
+            self.clock_result(
+                'a_daily_stop_taken_on_a_sunday_places_nothing_that_day',
+                dict(entry, synthetic={'type': 'daily_stop', 'stop_price': 990, 'stop_limit_price': 988, 'arm_at': '09:20'}),
+                [],
+                FROZEN_NOW.replace(day=27).replace(hour=9, minute=21).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(day=27).replace(hour=8, minute=45),
+                quote=self.scenarios.quote(),
+            ),
+            self.clock_result(
+                'a_daily_stop_taken_after_its_time_waits_for_the_next_trading_morning',
+                dict(entry, synthetic={'type': 'daily_stop', 'stop_price': 990, 'stop_limit_price': 988, 'arm_at': '09:20'}),
+                [],
+                frozen + 60,
+                accepted,
+                taken_at=FROZEN_NOW,
+                quote=self.scenarios.quote(),
+            ),
+            self.clock_result(
+                'a_closing_price_order_taken_on_a_sunday_is_scheduled_for_monday',
+                dict(entry, synthetic={'type': 'closing_price'}),
+                [],
+                FROZEN_NOW.replace(day=27).replace(hour=15, minute=1).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(day=27),
+            ),
+            self.clock_result(
+                'an_opening_auction_order_taken_on_a_sunday_joins_mondays_pre_open',
+                dict(entry, synthetic={'type': 'opening_auction'}),
+                [],
+                FROZEN_NOW.replace(day=28, hour=9, minute=0, second=30).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(day=27),
+            ),
+            self.clock_result(
+                'a_square_off_taken_on_a_sunday_is_scheduled_for_monday',
+                dict(entry, synthetic={'type': 'square_off', 'at_time': '15:10', 'product': 'intraday'}),
+                [],
+                FROZEN_NOW.replace(day=27).replace(hour=15, minute=11).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(day=27),
+            ),
+            self.clock_result(
+                'a_good_till_time_order_taken_on_a_sunday_cancels_on_monday',
+                dict(entry, synthetic={'type': 'good_till_time', 'until_time': '14:30'}),
+                [],
+                FROZEN_NOW.replace(day=27).replace(hour=14, minute=31).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(day=27),
+            ),
+            self.clock_result(
+                'a_time_stop_in_minutes_on_a_sunday_is_refused',
+                dict(entry, synthetic={'type': 'time_stop', 'minutes': 20}),
+                [],
+                FROZEN_NOW.replace(day=27).replace(hour=11).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(day=27),
+            ),
+            self.clock_result(
                 'a_time_stop_closes_what_it_filled',
                 dict(entry, synthetic={
                     'type': 'time_stop',
@@ -3273,6 +3360,7 @@ class OrderEngineSuite:
                 [],
                 frozen + 60,
                 accepted,
+                taken_at=FROZEN_NOW.replace(hour=8, minute=45),
                 quote=self.scenarios.quote(),
             ),
             self.clock_result(
@@ -3286,6 +3374,7 @@ class OrderEngineSuite:
                 [],
                 frozen + 60,
                 accepted,
+                taken_at=FROZEN_NOW.replace(hour=8, minute=45),
                 quote=self.scenarios.quote(
                     last_price=960.00,
                     depth={

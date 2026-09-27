@@ -69,10 +69,16 @@ class Scheduled(SyntheticOrder):
             tuple: The moment as an epoch (float) and as the caller wrote it (str).
 
         Raises:
-            RefusedRequestError: With HTTP 400 when `at_time` is missing or has passed.
+            RefusedRequestError: With HTTP 400 when `at_time` is missing or has passed on a trading day.
         """
         text = self.parent.parameters.get('at_time')
-        return Moments().time_today(text, 'at_time'), text
+        moments = Moments()
+        place_at, day = moments.time_on_trading_day(
+            text,
+            'at_time',
+            self.trading_segment(),
+        )
+        return place_at, moments.described(text, day)
 
     def on_clock_tick(self, now):
         """Places the order once its time has come.

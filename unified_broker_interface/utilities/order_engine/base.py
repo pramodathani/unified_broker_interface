@@ -426,6 +426,19 @@ class SyntheticOrder:
         })
         return answer.outcome, answer.status_message, answer.response_body
 
+    def trading_segment(self):
+        """The exchange-prefixed segment of this parent's instrument, which decides the calendar its times follow.
+
+        Returns:
+            str: The segment, such as `nse_equities`, or an empty string when the instrument has none.
+        """
+        instrument, _, _ = self.placement.market_context(
+            self.parent.instrument_id,
+            False,
+            False,
+        )
+        return instrument.segment
+
     def modify_held(self, price, quantity, dry_run):
         """Changes an order the engine is still holding, which only a type that holds orders can do.
 

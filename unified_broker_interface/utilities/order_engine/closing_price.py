@@ -8,6 +8,9 @@ from unified_broker_interface.utilities.broker_orders.utilities.refused_request 
 from unified_broker_interface.utilities.order_engine.utilities.moments import (
     Moments,
 )
+from unified_broker_interface.utilities.order_engine.utilities.trading_days import (
+    TradingDays,
+)
 from unified_broker_interface.utilities.order_engine.vwap import Vwap
 
 DEFAULT_WINDOW_START = '15:00'
@@ -55,6 +58,22 @@ class ClosingPrice(Vwap):
             )
         return self.moment_today(wanted, now)
 
+    def trading_day_reference(self, now):
+        """The moment the window is worked out from: now on a trading day, or the start of the next trading day when today does not trade.
+
+        Args:
+            now (datetime.datetime): Now, in India.
+
+        Returns:
+            datetime.datetime: The moment.
+        """
+        segment = self.trading_segment()
+        trading_days = TradingDays()
+        if trading_days.is_trading_day(segment, now.date()):
+            return now
+        day = trading_days.next_trading_day(segment, now.date())
+        return datetime.datetime.combine(day, datetime.time(0, 0), now.tzinfo)
+
     def moment_today(self, wanted, now):
         """A time of day today, as a moment in India.
 
@@ -92,8 +111,9 @@ class ClosingPrice(Vwap):
                 400,
             )
         now = Moments().now()
-        window_start = self.read_window_start(now)
-        window_end = self.moment_today(WINDOW_ENDS_AT, now)
+        reference = self.trading_day_reference(now)
+        window_start = self.read_window_start(reference)
+        window_end = self.moment_today(WINDOW_ENDS_AT, reference)
         if now >= window_end:
             raise RefusedRequestError.refusal(
                 f'the closing price window ended at {WINDOW_ENDS_AT} today',
@@ -123,6 +143,8 @@ class ClosingPrice(Vwap):
         self.record_received()
         self.save()
         place_at = window_start.strftime('%H:%M:%S')
+        if window_start.date() != now.date():
+            place_at = f'{place_at} on {window_start.date().isoformat()}'
         return {
             'broker': None,
             'instrument_id': self.parent.instrument_id,

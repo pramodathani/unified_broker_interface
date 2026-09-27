@@ -42,9 +42,11 @@ class GoodTillTime(SyntheticOrder):
             RefusedRequestError: With HTTP 400 when `until_time` is missing or has passed, or `at_expiry` is not `cancel` or `market`.
         """
         order = self.concrete_order(self.read_order(self.parent.body))
-        until_time = Moments().time_today(
+        moments = Moments()
+        until_time, until_day = moments.time_on_trading_day(
             self.parent.parameters.get('until_time'),
             'until_time',
+            self.trading_segment(),
         )
         self.read_expiry_action()
         if order.dry_run:
@@ -71,7 +73,10 @@ class GoodTillTime(SyntheticOrder):
         self.save()
 
         body['parent_id'] = self.parent.parent_order_id
-        body['cancel_at'] = self.parent.parameters.get('until_time')
+        body['cancel_at'] = moments.described(
+            self.parent.parameters.get('until_time'),
+            until_day,
+        )
         return body, status
 
     def read_expiry_action(self):

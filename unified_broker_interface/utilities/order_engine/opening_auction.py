@@ -9,6 +9,9 @@ from unified_broker_interface.utilities.order_engine.scheduled import Scheduled
 from unified_broker_interface.utilities.order_engine.utilities.moments import (
     Moments,
 )
+from unified_broker_interface.utilities.order_engine.utilities.trading_days import (
+    TradingDays,
+)
 
 CASH_SEGMENTS = (
     'equities',
@@ -124,16 +127,29 @@ class OpeningAuction(Scheduled):
             tuple: The moment as an epoch (float) and as text (str).
 
         Raises:
-            RefusedRequestError: With HTTP 400 when the instrument has no pre-open, the order is not one it takes, `at_time` is outside collection, or collection has closed for today.
+            RefusedRequestError: With HTTP 400 when the instrument has no pre-open, the order is not one it takes, `at_time` is outside collection, or collection has closed on a trading day. On a day the instrument does not trade, the order is placed in the next trading day's pre-open instead.
         """
         closes = self.collection_closes(order)
         now = Moments().now()
-        closes_at = self.moment_today(closes, now)
-        if now >= closes_at:
-            raise RefusedRequestError.refusal(
-                f'the pre-open stopped taking this order at {closes}, so it '
-                'can no longer join today\'s opening auction',
-                400,
+        segment = self.trading_segment()
+        trading_days = TradingDays()
+        if trading_days.is_trading_day(segment, now.date()):
+            reference = now
+            closes_at = self.moment_today(closes, now)
+            if now >= closes_at:
+                next_day = trading_days.next_trading_day(segment, now.date())
+                raise RefusedRequestError.refusal(
+                    f'the pre-open stopped taking this order at {closes}, so it '
+                    'can no longer join today\'s opening auction; the next is on '
+                    f'{next_day.isoformat()}',
+                    400,
+                )
+        else:
+            next_day = trading_days.next_trading_day(segment, now.date())
+            reference = datetime.datetime.combine(
+                next_day,
+                datetime.time(0, 0),
+                now.tzinfo,
             )
         text = self.parent.parameters.get('at_time')
         if text is None:
@@ -154,7 +170,10 @@ class OpeningAuction(Scheduled):
                     f'not {text}',
                     400,
                 )
-        place_at = self.moment_today(wanted, now)
+        place_at = self.moment_today(wanted, reference)
         if place_at <= now:
             return now.timestamp(), now.strftime('%H:%M:%S')
-        return place_at.timestamp(), place_at.strftime('%H:%M:%S')
+        place_at_text = place_at.strftime('%H:%M:%S')
+        if place_at.date() != now.date():
+            place_at_text = f'{place_at_text} on {place_at.date().isoformat()}'
+        return place_at.timestamp(), place_at_text

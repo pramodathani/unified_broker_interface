@@ -45,9 +45,15 @@ class SquareOff(SyntheticOrder):
             RefusedRequestError: With HTTP 400 when `at_time` is missing or has already passed.
         """
         order = self.read_order(self.parent.body)
-        at_time = Moments().time_today(
+        moments = Moments()
+        at_time, at_day = moments.time_on_trading_day(
             self.parent.parameters.get('at_time'),
             'at_time',
+            self.trading_segment(),
+        )
+        close_at_text = moments.described(
+            self.parent.parameters.get('at_time'),
+            at_day,
         )
         if order.dry_run:
             prepared = self.placement.prepare(
@@ -68,10 +74,10 @@ class SquareOff(SyntheticOrder):
             'tag': self.parent.tag,
             'outcome': 'scheduled',
             'order_id': None,
-            'close_at': self.parent.parameters['at_time'],
+            'close_at': close_at_text,
             'status_message': (
                 f'{self.product()} positions will be closed at '
-                f'{self.parent.parameters["at_time"]}'
+                f'{close_at_text}'
             ),
             'skipped': [],
         }, 202

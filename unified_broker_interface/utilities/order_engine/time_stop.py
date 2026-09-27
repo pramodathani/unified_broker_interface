@@ -10,6 +10,9 @@ from unified_broker_interface.utilities.order_engine.utilities.exit_legs import 
 from unified_broker_interface.utilities.order_engine.utilities.moments import (
     Moments,
 )
+from unified_broker_interface.utilities.order_engine.utilities.trading_days import (
+    TradingDays,
+)
 
 
 class TimeStop(SyntheticOrder):
@@ -71,13 +74,26 @@ class TimeStop(SyntheticOrder):
             float: The moment.
 
         Raises:
-            RefusedRequestError: With HTTP 400 when neither setting is given, or the time has passed.
+            RefusedRequestError: With HTTP 400 when neither setting is given, the time has passed on a trading day, or minutes are given on a day the instrument does not trade.
         """
         moments = Moments()
         parameters = self.parent.parameters
+        segment = self.trading_segment()
         if parameters.get('until_time') is not None:
-            return moments.time_today(parameters['until_time'], 'until_time')
+            close_at, _ = moments.time_on_trading_day(
+                parameters['until_time'],
+                'until_time',
+                segment,
+            )
+            return close_at
         if parameters.get('minutes') is not None:
+            today = moments.now().date()
+            if not TradingDays().is_trading_day(segment, today):
+                raise RefusedRequestError.refusal(
+                    'minutes are counted from now and today is not a trading '
+                    'day for this instrument; give until_time instead',
+                    400,
+                )
             return moments.minutes_from_now(parameters['minutes'], 'minutes')
         raise RefusedRequestError.refusal(
             'a time_stop needs until_time, a time of day, or minutes, a '

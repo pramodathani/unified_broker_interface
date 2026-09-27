@@ -739,7 +739,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `daily_stop`
 
-    A daily stop places a fresh native stop every morning at `arm_at` for a position held overnight, and answers `202 scheduled`. If the market has already gapped through the stop, no stop is placed; the position is exited with a limit priced past the touch instead. It stops re-arming after `valid_days`.
+    A daily stop places a fresh native stop every trading morning at `arm_at` for a position held overnight, and answers `202 scheduled` with `first_arm_on`, the first date it will place one. It never arms on a weekend or an exchange holiday, and an order sent after that day's `arm_at` first arms on the next trading day. If the market has already gapped through the stop, no stop is placed; the position is exited with a limit priced past the touch instead. It stops re-arming after `valid_days`, counted in calendar days.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
@@ -986,7 +986,15 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
 === "Time-based"
 
-    These five types act at a time of day. Every time is read as `HH:MM` or `HH:MM:SS` in India time (`Asia/Kolkata`), and a time that has already passed today is refused with `400` rather than taken to mean tomorrow.
+    These five types act at a time of day. Every time is read as `HH:MM` or `HH:MM:SS` in India time (`Asia/Kolkata`), on the instrument's own trading calendar:
+
+    | When you send the order | A time such as `15:00` means |
+    |---|---|
+    | On a trading day, before that time | That time today |
+    | On a trading day, after that time | Nothing: the order is refused with `400`, rather than taken to mean tomorrow |
+    | On a weekend or an exchange holiday | That time on the next trading day |
+
+    The trading calendar is the one the tick pipeline uses, read from the exchanges' published holiday lists for the instrument's calendar (equity, currency or commodity), including special sessions such as Muhurat trading. When the time falls on a later day, the answer names the date, as in `"place_at": "15:00 on 2026-09-28"`. The same rule applies to `closing_price`'s window, `opening_auction`'s pre-open and `daily_stop`'s arming time. A `time_stop` given in `minutes` is refused on a closed day, because minutes from now mean nothing until the market opens; give `until_time` instead.
 
     #### `scheduled`
 
