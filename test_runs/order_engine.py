@@ -3904,6 +3904,102 @@ class OrderEngineSuite:
                 accepted,
             ),
             self.price_result(
+                'a_stepped_stop_moves_at_each_milestone_and_then_trails',
+                dict(entry, synthetic={
+                    'type': 'stepped_stop',
+                    'entry_price': 1000,
+                    'stop_price': 990,
+                    'stop_limit_offset': 2,
+                    'rules': [
+                        {
+                            'gain': 20,
+                            'stop_at_gain': 0,
+                        },
+                        {
+                            'gain': 40,
+                            'stop_at_gain': 15,
+                        },
+                        {
+                            'gain': 60,
+                            'trail_points': 25,
+                        },
+                    ],
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1024.95, 1025.00), 'at': 1},
+                    {'quote': self.book_at(1044.95, 1045.00), 'at': 2},
+                    {'quote': self.book_at(1029.95, 1030.00), 'at': 3},
+                    {'quote': self.book_at(1069.95, 1070.00), 'at': 4},
+                    {'quote': self.book_at(1079.95, 1080.00), 'at': 5},
+                ],
+                accepted,
+                book_overrides={
+                    'order_type': 'SL',
+                    'trigger_price': 990.0,
+                },
+            ),
+            self.price_result(
+                'a_stepped_stop_that_jumps_past_every_milestone_starts_trailing',
+                dict(entry, synthetic={
+                    'type': 'stepped_stop',
+                    'entry_price': 1000,
+                    'stop_price': 990,
+                    'stop_limit_offset': 2,
+                    'rules': [
+                        {
+                            'gain': 20,
+                            'stop_at_gain': 0,
+                        },
+                        {
+                            'gain': 40,
+                            'stop_at_gain': 15,
+                        },
+                        {
+                            'gain': 60,
+                            'trail_points': 25,
+                        },
+                    ],
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1064.95, 1065.00), 'at': 1},
+                ],
+                accepted,
+                book_overrides={
+                    'order_type': 'SL',
+                    'trigger_price': 990.0,
+                },
+            ),
+            self.price_result(
+                'a_stepped_stop_with_a_trail_before_its_last_rule_is_refused',
+                dict(entry, synthetic={
+                    'type': 'stepped_stop',
+                    'entry_price': 1000,
+                    'stop_price': 990,
+                    'stop_limit_offset': 2,
+                    'rules': [{'gain': 20, 'trail_points': 10}, {'gain': 40, 'stop_at_gain': 15}],
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_stepped_stop_rule_that_would_fire_at_once_is_refused',
+                dict(entry, synthetic={
+                    'type': 'stepped_stop',
+                    'entry_price': 1000,
+                    'stop_price': 990,
+                    'stop_limit_offset': 2,
+                    'rules': [{'gain': 20, 'stop_at_gain': 20}],
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
                 'a_market_if_touched_order_waits_and_then_takes_the_offer',
                 dict(entry, synthetic={
                     'type': 'market_if_touched',

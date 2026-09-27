@@ -74,6 +74,9 @@ from unified_broker_interface.utilities.order_engine.scale_out import ScaleOut
 from unified_broker_interface.utilities.order_engine.scheduled import Scheduled
 from unified_broker_interface.utilities.order_engine.simple import SimpleOrder
 from unified_broker_interface.utilities.order_engine.square_off import SquareOff
+from unified_broker_interface.utilities.order_engine.stepped_stop import (
+    SteppedStop,
+)
 from unified_broker_interface.utilities.order_engine.strategy_stop import (
     StrategyStop,
 )
@@ -146,4 +149,5 @@ SYNTHETIC_ORDER_CLASSES = {
     ClosingPrice.SYNTHETIC_TYPE: ClosingPrice,
     UnderlyingPeg.SYNTHETIC_TYPE: UnderlyingPeg,
     VolatilityOrder.SYNTHETIC_TYPE: VolatilityOrder,
+    SteppedStop.SYNTHETIC_TYPE: SteppedStop,
 }

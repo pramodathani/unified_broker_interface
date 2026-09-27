@@ -2,7 +2,7 @@
 
 A synthetic order is an order that no Indian exchange offers, built by the order engine out of ordinary broker orders. You ask for one by adding a `synthetic` object to the body of [`POST /api/orders/place`](orders.md#place-an-order), and the engine places, watches, moves and cancels the real orders it is made of.
 
-This page is the glossary of all 46 types the engine runs. It lists every field each type reads from the `synthetic` object, with the defaults and limits taken from the code.
+This page is the glossary of all 47 types the engine runs. It lists every field each type reads from the `synthetic` object, with the defaults and limits taken from the code.
 
 !!! danger "Synthetic orders place real orders, sometimes long after you asked"
     A synthetic order can place, modify or cancel orders at a broker minutes, hours or even days after your request, with nobody watching. Triggers, trailing stops, grids and schedules all act on their own. Send `"dry_run": true` first, which builds the first broker request without recording or sending anything.
@@ -54,7 +54,7 @@ Two fields can appear in any `synthetic` object. The table below lists them.
 
 | Field | Type | Required | Meaning |
 |---|---|:---:|---|
-| `type` | string | Yes | One of the 46 names in the table below. A body with no `synthetic` object, or no `type`, runs as `simple`. An unknown name is refused with `400` and the message `the order engine does not run '<name>' orders; it runs <list>`. |
+| `type` | string | Yes | One of the 47 names in the table below. A body with no `synthetic` object, or no `type`, runs as `simple`. An unknown name is refused with `400` and the message `the order engine does not run '<name>' orders; it runs <list>`. |
 | `closes_position` | boolean | No | `true` says every leg of this order closes a position, so it may use the part of a broker's daily order cap kept for exits. Only the literal `true` counts. |
 
 The engine also writes its own working values into the parent's copy of the `synthetic` object, such as `tick_size`, `triggered_at`, `watermark`, `placed_quantity`, `started_at` and `expires_at`. These are internal, so do not send them.
@@ -80,7 +80,7 @@ Types that act at once answer with the broker's answer plus a `parent_id`; types
 
 Keep the `parent_id`. It is the only handle on an order that has not reached a broker yet.
 
-## All 46 types
+## All 47 types
 
 The master table below lists every type registered in `SYNTHETIC_ORDER_CLASSES`, in the order the registry holds them. The "First answer" column says whether a broker order goes out when you ask (`200`, the broker's own answer) or whether the engine waits (`202`).
 
@@ -132,8 +132,9 @@ The master table below lists every type registered in `SYNTHETIC_ORDER_CLASSES`,
 | `closing_price` | Execution algorithms | Slices the order by volume through the half hour the closing price is computed from. | `slices`, `window_start` | 202, or 200 inside the window |
 | `underlying_peg` | Book-following limits | Moves a resting limit by delta times another instrument's move, such as an option bid following the index. | `watch_instrument_id`, `delta`, `lowest_price`, `highest_price`, `step_ticks` | 200 |
 | `volatility` | Book-following limits | Prices an option from an implied volatility with Black-76, and re-prices it as the underlying and time move. | `watch_instrument_id`, `volatility`, `interest_rate` | 200 |
+| `stepped_stop` | Stops and trailing | A native stop moved to set levels at set profits, and switched to trailing at the last. | `entry_price`, `stop_price`, `stop_limit_offset`, `rules` | 200 |
 
-The chart below counts how many of the 46 types fall into each family. The families are this page's own grouping, chosen to make the list easier to scan; the code does not group them.
+The chart below counts how many of the 47 types fall into each family. The families are this page's own grouping, chosen to make the list easier to scan; the code does not group them.
 
 ```vegalite
 {
@@ -145,7 +146,7 @@ The chart below counts how many of the 46 types fall into each family. The famil
     "values": [
       {"family": "Linked orders", "types": 7},
       {"family": "Execution algorithms", "types": 8},
-      {"family": "Stops and trailing", "types": 6},
+      {"family": "Stops and trailing", "types": 7},
       {"family": "Book-following limits", "types": 7},
       {"family": "Price triggers", "types": 5},
       {"family": "Plain and laddered", "types": 4},
@@ -488,7 +489,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
 === "Stops and trailing"
 
-    These six types protect a position or enter on a move. For the ones that protect a position, set `transaction_type` to the side that **opened** it, so a long is protected by asking for a `BUY`.
+    These seven types protect a position or enter on a move. For the ones that protect a position, set `transaction_type` to the side that **opened** it, so a long is protected by asking for a `BUY`.
 
     #### `hidden_stop`
 
@@ -537,6 +538,32 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     ```json
     {"type": "trailing_stop", "trail_points": 10, "stop_limit_offset": 2, "activate_at": 1030}
+    ```
+
+    #### `stepped_stop`
+
+    A stepped stop (the Atlas's G8, an adjustable stop or stop strategy) is a native stop-limit that is moved by a table of profit milestones. It is placed at `stop_price`. Each rule has a `gain`, the profit in points from `entry_price` that sets it off, and says either where to put the stop or that the stop should start trailing. The table below shows the example rules and what each does to a long bought at 1000.
+
+    | Rule | Reached at | What happens to the stop |
+    |---|---|---|
+    | `{"gain": 20, "stop_at_gain": 0}` | 1020 | Moves to 1000, breakeven |
+    | `{"gain": 40, "stop_at_gain": 15}` | 1040 | Moves to 1015, locking in 15 points |
+    | `{"gain": 60, "trail_points": 25}` | 1060 | Trails 25 points behind the best price, as a `trailing_stop` |
+
+    A market that jumps past several milestones at once applies them all on one tick, as one modify. A stop is only ever moved in the position's favour. A trailing rule must be the last, and a `stop_at_gain` at or past its own `gain` is refused, because that stop would fire at once. Changing the stop's trigger yourself before the trail starts leaves it there until the next milestone moves it further.
+
+    | Field | Type | Required | Rules |
+    |---|---|:---:|---|
+    | `entry_price` | number | Yes | The price the position was opened at, which gains are measured from. Above zero. |
+    | `stop_price` | number | Yes | Where the stop starts. Above zero. |
+    | `stop_limit_offset` | number | Yes | As for `trailing_stop`. |
+    | `rules` | list | Yes | From 1 to 20 rules, each with a `gain` above zero and larger than the one before, and exactly one of `stop_at_gain` (a number, negative to keep some risk) or `trail_points` (above zero). |
+    | `step_ticks` | integer | No | As for `trailing_stop`, once trailing. |
+
+    `trail_points`, `trail_percent` and `activate_at` are refused outside a rule.
+
+    ```json
+    {"type": "stepped_stop", "entry_price": 1000, "stop_price": 990, "stop_limit_offset": 2, "rules": [{"gain": 20, "stop_at_gain": 0}, {"gain": 40, "stop_at_gain": 15}, {"gain": 60, "trail_points": 25}]}
     ```
 
     #### `trailing_entry`
