@@ -72,6 +72,10 @@ api_configuration = {
     'order_flatten_wait_seconds': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_FLATTEN_WAIT_SECONDS', '5'))
 }
 
+book_configuration = {
+    'poll_seconds': float(os.getenv('UNIFIED_BROKER_INTERFACE_BOOK_POLL_SECONDS', '0'))
+}
+
 logging.basicConfig(format='%(asctime)s %(levelname)-8s %(name)s %(message)s', level=logging.INFO, datefmt="%Y-%m-%d %H:%M:%S")
 
 def get_cache():

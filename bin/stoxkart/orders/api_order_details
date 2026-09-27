@@ -50,13 +50,13 @@ from utilities.bootstrap import run_under_venv
 PROJECT_ROOT = run_under_venv(__file__)
 
 from stock_brokers.api.stoxkart import StoxkartAPI
-from utilities.configurations import get_cache, get_logger
+from utilities.configurations import book_configuration, get_cache, get_logger
 from utilities.poll_reporter import PollReporter
 
 ORDERS_URL = "https://openapi.stoxkart.com/reports/order-book"
 REDIS_KEY = "stoxkart:orders:orders"
 POLLED_KEY = "stoxkart:orders:orders:polled_at"
-DELAY_SECONDS = 1.0
+DELAY_SECONDS = max(1.0, book_configuration["poll_seconds"])
 TIMEOUT_SECONDS = 10
 INDIA = ZoneInfo("Asia/Kolkata")
 RESET_HOUR = 6

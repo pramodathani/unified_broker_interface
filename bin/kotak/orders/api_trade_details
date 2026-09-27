@@ -87,7 +87,8 @@ def is_authentication_error(exception):
 def main():
     """Fetch the trade book and write it to kotak:orders:trades every half second, until interrupted."""
     from stock_brokers.api.kotak import KotakAPI
-    from utilities.configurations import get_cache, get_logger
+    from utilities.configurations import book_configuration, get_cache, get_logger
+    delay_seconds = max(DELAY_SECONDS, book_configuration["poll_seconds"])
     from utilities.poll_reporter import PollReporter
 
     logger = get_logger("kotak.api_trade_details")
@@ -116,7 +117,7 @@ def main():
                     kotak = KotakAPI()
                 else:
                     report.error(f"Trades poll failed: {type(exception).__name__}: {exception}")
-            time.sleep(DELAY_SECONDS)
+            time.sleep(delay_seconds)
     except KeyboardInterrupt:
         logger.info("Stopped")
     return 0
