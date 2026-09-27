@@ -21,6 +21,7 @@ class Ladder(SyntheticOrder):
     """
 
     SYNTHETIC_TYPE = 'ladder'
+    FINISHES_WITH_LEGS = True
     MOST_STEPS = 20
 
     def run(self, intent, started_at):

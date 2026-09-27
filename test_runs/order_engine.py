@@ -1758,6 +1758,49 @@ class OrderEngineSuite:
             ],
         }
 
+    def finishing_result(self, name, synthetic_type, updates):
+        """Delivers updates to a one-leg parent of a given type and records whether the parent ends.
+
+        A `simple` parent whose order was cancelled through `DELETE /api/orders/cancel` stayed `working` in the live retest of 2026-09-27, because nothing finished it.
+
+        Args:
+            name (str): The check's name.
+            synthetic_type (str): The parent's type.
+            updates (list): The updates, on the order contract, in order.
+
+        Returns:
+            dict: The recorded result.
+        """
+        self.fake_redis = self.build_state()
+        parent_store = ParentStore(self.fake_redis)
+        parent = self.followed_parent()
+        parent.synthetic_type = synthetic_type
+        parent_store.save(parent)
+        logger = logging.getLogger('test_runs.order_engine')
+        follower = OrderUpdateFollower(
+            parent_store,
+            engine_stand_ins.RecordingEventLog(),
+            logger,
+            None,
+            EnginePlacement(self.fake_redis, logger),
+        )
+        for update in updates:
+            changed = follower.follow({
+                'update': json.dumps(update),
+            })
+            if changed is not None:
+                parent_store.save(changed)
+        stored = ParentOrder.from_document(
+            parent_store.parent(parent.parent_order_id),
+        )
+        return {
+            'name': name,
+            'synthetic_type': synthetic_type,
+            'leg_state': stored.legs[0].state,
+            'leg_filled': stored.legs[0].filled_quantity,
+            'parent_state': stored.state,
+        }
+
     def cancelling_parent_result(self, name, update):
         """Delivers an update for the last live leg of a parent that is `cancelling`, and records whether the parent ends.
 
@@ -1905,6 +1948,42 @@ class OrderEngineSuite:
                 'an_early_update_whose_order_never_becomes_known_is_dropped',
                 False,
                 0.0,
+            ),
+            self.finishing_result(
+                'a_simple_parent_completes_when_its_order_fills',
+                'simple',
+                [
+                    dict(ours, status='COMPLETE', filled_quantity=10),
+                ],
+            ),
+            self.finishing_result(
+                'a_simple_parent_is_cancelled_when_its_order_is_cancelled',
+                'simple',
+                [
+                    dict(ours, status='CANCELLED', filled_quantity=0),
+                ],
+            ),
+            self.finishing_result(
+                'a_simple_parent_that_traded_before_its_cancel_completes',
+                'simple',
+                [
+                    dict(ours, status='OPEN', filled_quantity=4, average_price=999.0),
+                    dict(ours, status='CANCELLED', filled_quantity=4, average_price=999.0),
+                ],
+            ),
+            self.finishing_result(
+                'a_simple_parent_stays_open_while_its_order_rests',
+                'simple',
+                [
+                    dict(ours, status='OPEN', filled_quantity=4, average_price=999.0),
+                ],
+            ),
+            self.finishing_result(
+                'a_strategy_stop_keeps_watching_after_its_orders_fill',
+                'strategy_stop',
+                [
+                    dict(ours, status='COMPLETE', filled_quantity=10),
+                ],
             ),
             self.cancelling_parent_result(
                 'a_cancelling_parent_ends_when_its_last_leg_is_cancelled',

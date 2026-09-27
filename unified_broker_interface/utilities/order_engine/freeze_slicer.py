@@ -24,6 +24,7 @@ class FreezeSlicer(SyntheticOrder):
     """
 
     SYNTHETIC_TYPE = 'freeze_slicer'
+    FINISHES_WITH_LEGS = True
     MOST_SLICES = 20
 
     def run(self, intent, started_at):

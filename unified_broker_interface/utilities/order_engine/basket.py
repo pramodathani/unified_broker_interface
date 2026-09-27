@@ -21,6 +21,7 @@ class Basket(SyntheticOrder):
     """
 
     SYNTHETIC_TYPE = 'basket'
+    FINISHES_WITH_LEGS = True
 
     def run(self, intent, started_at):
         """Places every candidate and answers with what each one did.

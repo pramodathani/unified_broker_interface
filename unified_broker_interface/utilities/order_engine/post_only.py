@@ -19,6 +19,7 @@ class PostOnly(SyntheticOrder):
     """
 
     SYNTHETIC_TYPE = 'post_only'
+    FINISHES_WITH_LEGS = True
 
     def read_on_crossing(self):
         """What to do with a price that would take liquidity.

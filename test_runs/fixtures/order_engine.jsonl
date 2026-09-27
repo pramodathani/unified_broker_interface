@@ -75,6 +75,11 @@
 {"events": [], "followed": 0, "held": 1, "ignored": 0, "leg_average_price": null, "leg_filled": 0, "leg_state": "acknowledged", "name": "an_update_from_another_broker_is_held_and_not_applied"}
 {"applied_on_arrival": [false, false], "dropped": 0, "events": [{"event": "leg_update", "filled_quantity": 4, "leg_state": null}, {"event": "leg_update", "filled_quantity": 10, "leg_state": "filled"}], "held": 2, "leg_filled": 10, "leg_state": "filled", "name": "fills_that_arrive_before_their_order_is_known_are_applied_in_order_once_it_is", "replayed": 2, "still_held": 0}
 {"applied_on_arrival": [false, false], "dropped": 2, "events": [], "held": 2, "leg_filled": null, "leg_state": null, "name": "an_early_update_whose_order_never_becomes_known_is_dropped", "replayed": 0, "still_held": 0}
+{"leg_filled": 10, "leg_state": "filled", "name": "a_simple_parent_completes_when_its_order_fills", "parent_state": "completed", "synthetic_type": "simple"}
+{"leg_filled": 0, "leg_state": "cancelled", "name": "a_simple_parent_is_cancelled_when_its_order_is_cancelled", "parent_state": "cancelled", "synthetic_type": "simple"}
+{"leg_filled": 4, "leg_state": "cancelled", "name": "a_simple_parent_that_traded_before_its_cancel_completes", "parent_state": "completed", "synthetic_type": "simple"}
+{"leg_filled": 4, "leg_state": "acknowledged", "name": "a_simple_parent_stays_open_while_its_order_rests", "parent_state": "working", "synthetic_type": "simple"}
+{"leg_filled": 10, "leg_state": "filled", "name": "a_strategy_stop_keeps_watching_after_its_orders_fill", "parent_state": "working", "synthetic_type": "strategy_stop"}
 {"leg_state": "cancelled", "name": "a_cancelling_parent_ends_when_its_last_leg_is_cancelled", "parent_state": "cancelled", "sent": 0}
 {"leg_state": "acknowledged", "name": "a_cancelling_parent_waits_while_its_leg_is_still_open", "parent_state": "cancelling", "sent": 0}
 {"events": [], "followed": 0, "held": 0, "ignored": 1, "leg_average_price": null, "leg_filled": 0, "leg_state": "acknowledged", "name": "an_update_that_changes_nothing_is_not_recorded"}

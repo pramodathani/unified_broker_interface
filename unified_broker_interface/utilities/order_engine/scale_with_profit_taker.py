@@ -24,6 +24,7 @@ class ScaleWithProfitTaker(Ladder):
     """
 
     SYNTHETIC_TYPE = 'scale_with_profit_taker'
+    FINISHES_WITH_LEGS = False
 
     def read_profit_points(self):
         """How far past a filled rung its profit-taker sits.

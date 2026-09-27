@@ -23,6 +23,7 @@ class StrategyStop(Basket):
     """
 
     SYNTHETIC_TYPE = 'strategy_stop'
+    FINISHES_WITH_LEGS = False
     WANTS_PRICES = True
 
     def read_limits(self):

@@ -316,6 +316,7 @@ class OrderUpdateFollower:
                 runner.finish_cancelling()
                 return
             runner.on_leg_update(leg, changes)
+            runner.finish_with_legs()
             with self.counts_lock:
                 self.reacted = self.reacted + 1
         except Exception:

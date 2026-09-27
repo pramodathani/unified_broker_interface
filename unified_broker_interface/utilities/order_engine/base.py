@@ -59,6 +59,7 @@ class SyntheticOrder:
         SYNTHETIC_TYPE (str): The name the caller's `synthetic.type` names this class by.
         WANTS_CLOCK (bool): Whether this type is waiting for a time as well as for a fill, and so wants a tick about once a second.
         WANTS_PRICES (bool): Whether this type is watching the market, and so wants the live quote about once a second.
+        FINISHES_WITH_LEGS (bool): Whether the parent is done once every leg has finished, for a type that places everything at once and does nothing afterwards.
         CARRIES_OVERNIGHT (bool): Whether a parent of this type outlives the trading day, so that recovery reads its events from further back than this morning.
         CLOSES_POSITIONS (bool): Whether every leg this type places closes a position, whatever the leg's role is called, so that it may use the part of a broker's daily cap kept for exits.
         parent (ParentOrder): The parent being run.
@@ -71,6 +72,7 @@ class SyntheticOrder:
     SYNTHETIC_TYPE = None
     WANTS_CLOCK = False
     WANTS_PRICES = False
+    FINISHES_WITH_LEGS = False
     CARRIES_OVERNIGHT = False
     CLOSES_POSITIONS = False
 
@@ -634,6 +636,35 @@ class SyntheticOrder:
             )
             self.save()
         return cancelled
+
+    def finish_with_legs(self):
+        """Ends the parent once every leg has finished, for a type that does nothing after placing its legs.
+
+        The parent is `completed` when any leg traded and `cancelled` when none did. A leg still resting keeps it open.
+
+        Returns:
+            bool: True when the parent was ended on this call.
+        """
+        if not self.FINISHES_WITH_LEGS or self.parent.is_terminal():
+            return False
+        if not self.parent.legs:
+            return False
+        traded = 0
+        for leg in self.parent.legs:
+            if not leg.is_finished():
+                return False
+            traded = traded + (leg.filled_quantity or 0)
+        if traded > 0:
+            state = 'completed'
+            reason = f'every order has finished, with {traded} traded'
+        else:
+            state = 'cancelled'
+            reason = 'every order has finished without trading'
+        if not self.parent.can_change_to(state):
+            return False
+        self.record_state(state, reason)
+        self.save()
+        return True
 
     def finish_cancelling(self):
         """Ends a `cancelling` parent as `cancelled` once none of its legs is still resting.
