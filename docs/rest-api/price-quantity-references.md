@@ -7,8 +7,8 @@ Both references are optional fields in the body of [`POST /api/orders/place`](or
 !!! danger "A reference is still a real order"
     A reference only decides the number. The order that results is sent to a live broker account like any other, and `liquidate_position` also decides the side for you. Try it with `"dry_run": true` first, which resolves the reference and returns the broker request without sending it.
 
-!!! warning "Engine mode only"
-    Only the order engine resolves references, so they work only when `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT=engine`. The route checks a reference's shape in either mode, but nothing in the direct placement path reads `price_reference` or `quantity_reference`. See [Order engine](order-engine.md).
+!!! note "The order engine resolves references"
+    The route checks a reference's shape, and the [order engine](order-engine.md) works out the number from the live quote or the positions just before it builds the order. The engine has to be running for any order to be placed.
 
 ## Glossary of constants
 

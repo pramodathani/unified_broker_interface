@@ -213,11 +213,11 @@ The three `unified_details` scripts take `--once` to copy once and exit, and the
 | `api_trade_details` | Combines every broker's trade book, every half second | Redis `<broker>:orders:trades` | Redis `unified:orders:trades` |
 | `websocket_order_details` | Reads all ten order update streams and the four position update streams as the consumer group `unified`, and normalizes each entry | `<broker>:order-updates:stream`, `<broker>:positions_updates:stream` | streams `unified:order-updates:stream` and `unified:positions_updates:stream`; hashes `unified:order-updates` and `unified:positions_updates` |
 | `store_orders_to_db` | Drains the unified order update stream | `unified:order-updates:stream` | TimescaleDB `unified.order_updates` |
-| `order_engine` | Places every order the REST API accepts in engine mode, and runs the synthetic order types | stream `unified:orders:intents:stream`, `unified:order-updates:stream` | the broker, and a reply on `unified:orders:intents:result:<intent_id>` |
+| `order_engine` | Places every order the REST API accepts, and runs the synthetic order types | stream `unified:orders:intents:stream`, `unified:order-updates:stream` | the broker, and a reply on `unified:orders:intents:result:<intent_id>` |
 | `virtual_book` | Keeps a queue estimate for every held `virtual_limit` order | stream `unified:quotes:stream`, the engine's parent cache | Redis hash `unified:orders:virtual_queue` |
 
 !!! danger "`bin/unified/orders/order_engine` places live orders"
-    The order engine sends real orders to real broker accounts. It runs only when `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT=engine`, and only one may run: it holds the lock in `unified:orders:engine:lock`, and a second engine exits 1. It exits 2 for a bad argument or configuration.
+    The order engine sends real orders to real broker accounts. It places every order the REST API accepts, and only one may run: it holds the lock in `unified:orders:engine:lock`, and a second engine exits 1. It exits 2 for a bad argument or configuration.
 
 `virtual_book` never calls a broker or places an order. It only estimates, from the quote stream, how an order resting at the exchange would have fared.
 

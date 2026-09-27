@@ -8,6 +8,7 @@ from unified_broker_interface.utilities.broker_orders.utilities.refused_request 
 from unified_broker_interface.utilities.order_engine.base import SyntheticOrder
 
 HUNDRED = decimal.Decimal('100')
+ONE = decimal.Decimal('1')
 OPPOSITE_SIDES = {
     'BUY': 'SELL',
     'SELL': 'BUY',
@@ -153,6 +154,53 @@ class TrailingOrder(SyntheticOrder):
             )
         return number
 
+    def on_leg_modified(self, leg, before):
+        """Moves the watermark so the trail carries on from the trigger the caller set.
+
+        The stop is worked out as the watermark less the trail, and it only ever moves in the favourable direction. A trigger the caller loosened would therefore be pulled straight back on the next tick unless the watermark moves with it, and a trigger the caller tightened would be left alone only until the market rose far enough. Setting the watermark to the price whose trail lands exactly on the caller's trigger makes the stop continue from there, whichever way it was moved.
+
+        Args:
+            leg (OrderLeg): The stop, holding its new trigger.
+            before (dict): What the leg held before, with `trigger_price`.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        if leg.trigger_price is None or leg.trigger_price == before.get('trigger_price'):
+            return
+        trigger = decimal.Decimal(str(leg.trigger_price))
+        watermark = self.watermark_for_trigger(trigger, leg.transaction_type)
+        self.parent.parameters = dict(self.parent.parameters)
+        self.parent.parameters['watermark'] = format(watermark, 'f')
+        self.record_parameters(
+            f'the caller moved the trigger to {trigger}, so the trail continues from a watermark of {watermark}'
+        )
+        self.save()
+
+    def watermark_for_trigger(self, trigger, leg_side):
+        """The watermark whose trail lands exactly on a trigger.
+
+        Args:
+            trigger (decimal.Decimal): The trigger price.
+            leg_side (str): BUY or SELL, the side the stop is on.
+
+        Returns:
+            decimal.Decimal: The watermark.
+        """
+        points = self.parent.parameters.get('trail_points')
+        if points is not None:
+            distance = self.positive(points, 'trail_points')
+            if leg_side == 'SELL':
+                return trigger + distance
+            return trigger - distance
+        share = self.positive(
+            self.parent.parameters.get('trail_percent'),
+            'trail_percent',
+        ) / HUNDRED
+        if leg_side == 'SELL':
+            return trigger / (1 - share)
+        return trigger / (1 + share)
+
     def watermark(self):
         """The best price seen since this order was armed.
 
@@ -273,9 +321,10 @@ class TrailingOrder(SyntheticOrder):
             RefusedRequestError: With HTTP 400 for a bad trail, offset or step, and 503 when there is no tick size or no quote to start from.
         """
         order = self.concrete_order(self.read_order(self.parent.body))
-        leg_side = self.leg_side(order.transaction_type)
+        self.read_trail(ONE)
         self.read_limit_offset()
         self.read_step_ticks()
+        self.read_activation()
 
         if order.dry_run:
             prepared = self.placement.prepare(
@@ -285,6 +334,24 @@ class TrailingOrder(SyntheticOrder):
             return self.placement.dry_run_answer(prepared, started_at)
 
         self.remember_tick_size(order)
+        activate_at = self.read_activation()
+        if activate_at is not None:
+            self.record_received()
+            self.save()
+            return {
+                'broker': None,
+                'instrument_id': self.parent.instrument_id,
+                'parent_id': self.parent.parent_order_id,
+                'tag': self.parent.tag,
+                'outcome': 'armed',
+                'order_id': None,
+                'activate_at': str(activate_at),
+                'status_message': (
+                    'the order is recorded, and its trailing stop is placed '
+                    f'when the price reaches {activate_at}'
+                ),
+                'skipped': [],
+            }, 202
         _, quote, _ = self.placement.market_context(
             self.parent.instrument_id,
             True,
@@ -299,17 +366,33 @@ class TrailingOrder(SyntheticOrder):
                 503,
                 instrument_id=self.parent.instrument_id,
             )
+        self.record_received()
+        body, status = self.place_trailing_stop(order, view, start, started_at)
+        body['parent_id'] = self.parent.parent_order_id
+        body['watermark'] = str(start)
+        return body, status
 
+    def place_trailing_stop(self, order, view, start, started_at):
+        """Places the stop a trail away from a starting price, and makes that price the watermark.
+
+        Args:
+            order (PlaceOrderRequest): The order the caller asked for.
+            view (MarketView): The live quote, for rounding onto the tick.
+            start (decimal.Decimal): The price the trail starts from.
+            started_at (float | None): `time.perf_counter()` when the engine took the intent, or None when the stop is placed later.
+
+        Returns:
+            tuple: The broker's answer body (dict) and its HTTP status (int).
+        """
+        leg_side = self.leg_side(order.transaction_type)
         trigger = view.rounded(
             self.trigger_from(start, leg_side),
             leg_side,
         )
         limit = view.rounded(self.limit_from(trigger, leg_side), leg_side)
-        self.record_received()
         self.parent.parameters = dict(self.parent.parameters)
         self.parent.parameters['watermark'] = str(start)
         self.save()
-
         body, status, _ = self.place_leg(
             'stop',
             self.stop_order(order, trigger, limit, leg_side),
@@ -322,9 +405,60 @@ class TrailingOrder(SyntheticOrder):
         }.get(outcome, 'failed')
         self.record_state(state, body.get('status_message'))
         self.save()
-        body['parent_id'] = self.parent.parent_order_id
-        body['watermark'] = str(start)
         return body, status
+
+    def read_activation(self):
+        """The price the trail waits for before its stop is placed, or None to place it at once.
+
+        With `activate_at`, the order is a trailing take-profit (the Atlas's G9): nothing rests until the market reaches the level, usually the target, and from there the stop follows the market and exits on the first pullback.
+
+        Returns:
+            decimal.Decimal | None: The level.
+
+        Raises:
+            RefusedRequestError: With HTTP 400 when it is not a price above zero.
+        """
+        value = self.parent.parameters.get('activate_at')
+        if value is None:
+            return None
+        return self.positive(value, 'activate_at')
+
+    def activation_reached(self, price, leg_side):
+        """Whether the market has reached the activation level.
+
+        A sell stop trails a rising market, so it activates once the price is at or above the level; a buy stop trails a falling one, so at or below.
+
+        Args:
+            price (decimal.Decimal): The last traded price.
+            leg_side (str): BUY or SELL, the side the stop is on.
+
+        Returns:
+            bool: True when the stop should be placed now.
+        """
+        level = self.read_activation()
+        if leg_side == 'SELL':
+            return price >= level
+        return price <= level
+
+    def activate(self, quotes):
+        """Places the trailing stop once the market reaches `activate_at`.
+
+        Args:
+            quotes (dict): The quotes the tick carried.
+
+        Returns:
+            bool: True when the stop was placed on this tick.
+        """
+        view = self.view(quotes)
+        price = view.last()
+        if price is None:
+            return False
+        order = self.concrete_order(self.read_order(self.parent.body))
+        leg_side = self.leg_side(order.transaction_type)
+        if not self.activation_reached(price, leg_side):
+            return False
+        self.place_trailing_stop(order, view, price, None)
+        return True
 
     def on_price_tick(self, quotes, now):
         """Moves the watermark, and the stop with it, when the market has gone further.
@@ -336,6 +470,12 @@ class TrailingOrder(SyntheticOrder):
         Returns:
             bool: True when the stop was moved.
         """
+        if (
+            self.parent.parameters.get('activate_at') is not None
+            and not self.parent.legs
+            and not self.parent.is_terminal()
+        ):
+            return self.activate(quotes)
         leg = self.resting_stop()
         if leg is None:
             return False

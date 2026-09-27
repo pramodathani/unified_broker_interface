@@ -1,10 +1,13 @@
 """A background thread that keeps one broker's pooled connection freshly used, so an order does not pay for a new TLS handshake."""
 
 import threading
+import time
+
+MINIMUM_PAUSE_SECONDS = 0.05
 
 
 class ConnectionWarmer:
-    """Pings one broker's host every `WARM_INTERVAL_SECONDS` through that broker's order session, on a daemon thread of its own.
+    """Keeps every connection in one broker's order pool freshly used, pinging them one at a time so each is pinged once every `WARM_INTERVAL_SECONDS`, on a daemon thread of its own.
 
     Nothing the thread does can reach an order: every exception is caught and logged inside its loop, the ping never touches the session's cookies or headers, and a connection goes back to the pool only after `BrokerOrders.warm_connection` has watched it stay open. A failure is logged when a broker starts failing and when it recovers, not on every ping.
 
@@ -74,14 +77,33 @@ class ConnectionWarmer:
         return self.thread is not None and self.thread.is_alive()
 
     def run(self):
-        """Pings until stopped, waiting `WARM_INTERVAL_SECONDS` between pings.
+        """Fills the pool with one ping per connection, then pings one connection at a time so each is used about once every `WARM_INTERVAL_SECONDS`.
+
+        The pool of a warmed broker hands out the connection that has waited longest, so single pings rotate through every connection in it. A new pool holds only empty places, each of which opens a connection when it is first used, so the first round is sent back to back: without it, orders in the first interval after a start would open those connections themselves.
+
+        Pings are spaced `WARM_INTERVAL_SECONDS` divided by the pool size apart, counted from the start of one ping to the start of the next, because a ping already holds its connection for `WARM_SETTLE_SECONDS`. One round of the pool then takes `WARM_INTERVAL_SECONDS` or the pool size times the settle time, whichever is longer, and each broker's `MAXIMUM_IDLE_SECONDS` has to stay above both. A ping that fails is followed by a pause of the whole interval, as before rotation existed, so a broker that cannot be reached is not pinged in a tight loop.
 
         Returns:
             None: This method returns nothing.
         """
+        pool_size = self.broker_orders.adapter.pool_size
+        for _ in range(pool_size):
+            if self.stop_event.is_set():
+                return
+            if not self.ping():
+                break
+        spacing_seconds = self.broker_orders.WARM_INTERVAL_SECONDS / pool_size
         while not self.stop_event.is_set():
-            self.ping()
-            self.stop_event.wait(self.broker_orders.WARM_INTERVAL_SECONDS)
+            started_at = time.monotonic()
+            if self.ping():
+                elapsed_seconds = time.monotonic() - started_at
+                pause_seconds = max(
+                    MINIMUM_PAUSE_SECONDS,
+                    spacing_seconds - elapsed_seconds,
+                )
+            else:
+                pause_seconds = self.broker_orders.WARM_INTERVAL_SECONDS
+            self.stop_event.wait(pause_seconds)
 
     def ping(self):
         """Sends one ping, catching anything it raises.
@@ -89,7 +111,7 @@ class ConnectionWarmer:
         This is the isolation point that keeps the warmer apart from orders, so it catches every `Exception`.
 
         Returns:
-            None: This method returns nothing.
+            bool: True when the ping was sent and answered, False when it raised.
         """
         broker_name = self.broker_orders.BROKER_NAME
         self.pings = self.pings + 1
@@ -104,10 +126,11 @@ class ConnectionWarmer:
                     error,
                 )
             self.failing = True
-            return
+            return False
         if self.failing:
             self.logger.info(
                 'warming the order connection to %s works again',
                 broker_name,
             )
         self.failing = False
+        return True

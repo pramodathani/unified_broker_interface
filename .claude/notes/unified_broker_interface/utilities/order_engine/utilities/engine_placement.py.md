@@ -19,3 +19,25 @@ It is not cached because a broker's token can be replaced at any moment by any o
 `InstrumentCache` exists so a gunicorn worker does not re-read the same catalogue entry for every order. In a worker its value is modest, because there are two workers and each starts cold.
 
 In the engine there is one process for the whole day, so after the first order on an instrument the entry is held for as long as the warm lasts. Most orders therefore skip the three catalogue reads entirely. They still cost a round trip when the configured selector queues a command of its own, which `round_robin` does and `fixed_priority` does not.
+
+## Why intake's broker choice is held per thread
+
+`assign_broker` runs on the engine's main thread and chooses a broker for a new intent with the selector and every skip check, so the intent can go to that broker's lane. The worker that places it then has to send the parent's first legs to that same broker, or the lane would not match the broker and round robin would advance twice for one order.
+
+The order types choose brokers through `prepare` in 25 files, including every dry run, and changing each of them would be a large edit for one rule. Instead the worker sets a `threading.local` assignment around `run`, and `prepare` uses it when a leg names no broker. The instrument read then queues no selector command, so round robin advances once per order, as it did before lanes. The answer's `skipped` list is intake's, so a caller sees the same brokers passed over as without lanes. The lane comparison in `test_runs/order_engine.py` runs every intent scenario both ways and found every reply, request and event identical.
+
+The assignment lasts only for the `run` of the intent. A parent that places nothing until a price or a time arrives chooses its broker when it fires, with the selector, as before, so a broker that logged out in the meantime is still passed over.
+
+`assign_broker` answers None rather than raising when it cannot choose, including for a body that fails validation or carries a reference it cannot work out. The intent then goes to the `unassigned` lane and the order type makes the choice itself, giving the same answer, 400 included, that it always has.
+
+## Why an assigned broker that cannot take a leg is dropped
+
+Intake chooses a broker with `assign_broker` from the caller's body, so the order can go to that broker's lane. For most types the body is the first leg, but for an OCO, a trailing stop or a trailing entry the body is a plain limit while the first leg sent is a stop-limit. In the live test on 2026-09-27 the round robin gave those orders to INDmoney, which takes no stop-limit orders, and the leg was refused with `indmoney cannot take this order: takes no SL orders`. On `main`, before the lanes, the broker was chosen from the first leg itself, so this was a regression.
+
+`prepare` now asks `OrderPlacement.named_broker_skip_reason` whether the assigned broker can take the leg in hand. When it cannot, the assignment is dropped for that leg and the selector chooses again, which costs one more Redis round trip only in that case. Later legs name the broker the first leg went to, as they always have, so a bracket's stop follows its entry. The parent stays on the worker in the lane intake chose; the lanes are for spreading work, and the rate budget is kept per broker in Redis, so a leg at another broker is still limited correctly.
+
+`run_assignment_checks` in `test_runs/order_engine.py` reproduces the live failure; without this fix its first check fails with the live error.
+
+## Why `stored_order` waits for a just-placed order
+
+A cancel or change is built from the broker's own order book in Redis, because several brokers need fields only it carries. An order reaches that book with the next order-socket message or poll, up to about half a second after the placement. In the live retest of 2026-09-27 a cancel sent within a second of the placement found nothing; `stored_order` refused, `cancel_leg_answered` caught that as an unknown failure, and the parent was left `cancelling` until the cancel was sent again. `stored_order` now looks again every tenth of a second for up to three seconds, and `cancel_leg_answered` reports a refusal before sending as `rejected`, since the cancel certainly did not go out and the order is certainly still live. The wait blocks the owning worker, which is acceptable because it happens only for an order the caller cancels or changes immediately.

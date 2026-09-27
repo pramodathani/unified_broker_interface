@@ -1,6 +1,6 @@
 # Offline tests
 
-UBI has no pytest suite. Instead, `test_runs/` holds thirteen plain Python scripts, each of which checks one part of the system against scripted inputs. They are called "offline" because they need no network, no broker, no Redis and no database: every outside service is replaced by a stand-in that lives in memory. You run each one as a module from the project root.
+UBI has no pytest suite. Instead, `test_runs/` holds seventeen plain Python scripts, each of which checks one part of the system against scripted inputs. They are called "offline" because they need no network, no broker, no Redis and no database: every outside service is replaced by a stand-in that lives in memory. You run each one as a module from the project root.
 
 ```bash
 .venv/bin/python -m test_runs.order_routes
@@ -10,29 +10,33 @@ Because they are plain scripts, there is no way to run a single case other than 
 
 ## The suites
 
-The table below lists all thirteen. "Fixture" is the recording a suite compares against, if it has one, and "Runtime" is what one run took on this machine on 2026-09-26.
+The table below lists all seventeen. "Fixture" is the recording a suite compares against, if it has one, and "Runtime" is what one run took on this machine on 2026-09-27.
 
 | Command | What it pins | Fixture | `--record` | Runtime |
 |---|---|---|---|---:|
 | `python -m test_runs.candle_parse` | The seven historical candle parsers, against payloads recorded from the live APIs on 2026-09-12 | none (expected values in the file) | no | 0.3 s |
 | `python -m test_runs.unified_ticks_sessions` | The session gate against the exchanges' 2026 calendars: holidays, half-closed commodity days, NCDEX's shorter evening, Muhurat trading | none | no | 0.1 s |
-| `python -m test_runs.order_routes` | `place`, `modify` and `cancel`: status, body, every outgoing broker request and the number of Redis round trips | `test_runs/fixtures/order_routes.jsonl` (618 scenarios) | rewrites the whole file | 2.5 s |
-| `python -m test_runs.order_engine_routes` | `POST /api/orders/place` in engine mode: status, body, the intents written to the stream, Redis round trips | `test_runs/fixtures/order_engine_routes.jsonl` (20) | rewrites the whole file | 0.9 s |
-| `python -m test_runs.order_change_lists` | The list form of `modify` and `cancel`: each entry's status and body, the broker requests (sorted, since a list sends on several threads) and the Redis round trips | `test_runs/fixtures/order_change_lists.jsonl` (23) | rewrites the whole file | 0.9 s |
-| `python -m test_runs.order_engine` | The order engine daemon against scripted intents and stubbed brokers: replies, broker requests, acknowledgements, counters | `test_runs/fixtures/order_engine.jsonl` (154) | rewrites the whole file | 0.9 s |
-| `python -m test_runs.order_flatten` | The panic button, including that every cancel is sent and confirmed before any close, and that `flat` waits for the positions to show zero | `test_runs/fixtures/order_flatten.jsonl` (13) | rewrites the whole file | 1.9 s |
-| `python -m test_runs.instrument_routes` | `/details`, `/additional_details`, `/ltp`, `/ohlc`, `/quote`, `/prices` and `/ticks`, by `GET` for one instrument and by `POST` for a list: status, body, Redis round trips, the broker quotes asked for and the tick queries run | `test_runs/fixtures/instrument_routes.jsonl` (52) | rewrites the whole file | 1.2 s |
+| `python -m test_runs.order_routes` | `place`, `modify` and `cancel`: status, body, every outgoing broker request and the number of Redis round trips | `test_runs/fixtures/order_routes.jsonl` (619 scenarios) | rewrites the whole file | 3.5 s |
+| `python -m test_runs.order_engine_routes` | How `POST /api/orders/place` hands orders to a stubbed engine, including timeouts and an engine that is down: status, body, the intents written to the stream, Redis round trips | `test_runs/fixtures/order_engine_routes.jsonl` (18) | rewrites the whole file | 1.0 s |
+| `python -m test_runs.order_place_lists` | The list form of `place`, through the real engine, and `GET /api/orders/intents/<intent_id>`: each entry's status and body, the broker requests (sorted) and the Redis round trips | `test_runs/fixtures/order_place_lists.jsonl` (11) | rewrites the whole file | 1.0 s |
+| `python -m test_runs.order_engine_changes` | Changes to orders the engine placed: a cancel and a modify through the ordinary routes, a refused change of validity, cancelling a parent, listing parents, refusals, and flatten halting an open parent | `test_runs/fixtures/order_engine_changes.jsonl` (14) | rewrites the whole file | 1.5 s |
+| `python -m test_runs.order_change_lists` | The list form of `modify` and `cancel`: each entry's status and body, the broker requests (sorted, since a list sends on several threads) and the Redis round trips | `test_runs/fixtures/order_change_lists.jsonl` (24) | rewrites the whole file | 1.0 s |
+| `python -m test_runs.order_engine` | The order engine daemon against scripted intents and stubbed brokers: replies, broker requests, acknowledgements, counters | `test_runs/fixtures/order_engine.jsonl` (273) | rewrites the whole file | 1.0 s |
+| `python -m test_runs.order_engine_throughput` | The order engine's broker lanes against ten stub brokers that take 200 ms each: every order accepted, no broker sent more than 10 messages in any one second, and ten workers per broker at least 80 orders a second in total | none | no | 9.0 s |
+| `python -m test_runs.order_flatten` | The panic button, including that every cancel is sent and confirmed before any close, and that `flat` waits for the positions to show zero | `test_runs/fixtures/order_flatten.jsonl` (12) | rewrites the whole file | 3.5 s |
+| `python -m test_runs.instrument_routes` | `/details`, `/additional_details`, `/ltp`, `/ohlc`, `/quote`, `/prices` and `/ticks`, by `GET` for one instrument and by `POST` for a list: status, body, Redis round trips, the broker quotes asked for and the tick queries run | `test_runs/fixtures/instrument_routes.jsonl` (52) | rewrites the whole file | 1.3 s |
+| `python -m test_runs.leg_modifications` | That each order type carries on from a caller's change to one of its legs: a trailing stop's watermark, a peg's offset, a chaser's wait, a linked pair's other exit, and a slicer's remaining quantity, including after a replay | none | no | 0.4 s |
 | `python -m test_runs.contract_sizes` | The rule that decides whether a currency or commodity contract size is trusted | none | no | 0.3 s |
 | `python -m test_runs.price_cache` | The Redis copy of candles behind `/api/instruments/prices`: slicing, widening, and every reason a copy is thrown away | none | no | 0.4 s |
 | `python -m test_runs.virtual_queue` | The queue estimate behind the synthetic limit order book, and the process that keeps it | none | no | 0.1 s |
-| `python -m test_runs.websocket_feeds` | Every broker's quotes and order sockets against scripted connections: every Redis command, frame sent, log line, login and wait | `test_runs/fixtures/websocket_feeds.jsonl` (160) | rewrites only the named brokers' lines | 0.6 s |
-| `python -m test_runs.connection_warming` | That connection warming and the idle limit never make an order fail, against a local HTTP server that misbehaves | none | no | 36.4 s |
+| `python -m test_runs.websocket_feeds` | Every broker's quotes and order sockets against scripted connections: every Redis command, frame sent, log line, login and wait | `test_runs/fixtures/websocket_feeds.jsonl` (160) | rewrites only the named brokers' lines | 0.5 s |
+| `python -m test_runs.connection_warming` | That connection warming and the idle limit never make an order fail, against a local HTTP server that misbehaves | none | no | 34 s |
 
-`order_engine_routes` and `order_change_lists` each have a fixture of their own on purpose. `--record` rewrites a whole file, so recording their scenarios into `order_routes.jsonl` would silently rewrite the recording that proves the direct path and the single form never changed.
+`order_engine_routes` and `order_change_lists` each have a fixture of their own on purpose. `--record` rewrites a whole file, so recording their scenarios into `order_routes.jsonl` would silently rewrite the recording that proves the single form and every broker's placement never changed.
 
 ## Running them all
 
-The output below is the last lines of each suite from one run on 2026-09-26. `order_routes` was run with `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT=direct`, for the reason explained in the warning after it.
+The output below is the last lines of each suite from one run on 2026-09-27.
 
 ```text
 ===== candle_parse
@@ -40,35 +44,36 @@ The output below is the last lines of each suite from one run on 2026-09-26. `or
 ===== unified_ticks_sessions
 41/41 checks passed
 ===== order_routes
-618 of 618 scenarios match the recording, 0 differ
+619 of 619 scenarios match the recording, 0 differ
 ===== order_engine_routes
-20 of 20 scenarios match the recording, 0 differ
+18 of 18 scenarios match the recording, 0 differ
+===== order_place_lists
+11 of 11 scenarios match the recording, 0 differ
+===== order_engine_changes
+14 of 14 scenarios match the recording, 0 differ
 ===== order_change_lists
-23 of 23 scenarios match the recording, 0 differ
+24 of 24 scenarios match the recording, 0 differ
 ===== order_engine
-154 of 154 scenarios match the recording, 0 differ
+273 of 273 scenarios match the recording, 0 differ
+===== order_engine_throughput
+6/6 checks passed.
 ===== order_flatten
-13 of 13 scenarios match the recording, 0 differ
+12 of 12 scenarios match the recording, 0 differ
 ===== instrument_routes
 52 of 52 scenarios match the recording, 0 differ
+===== leg_modifications
+9/9 checks passed.
 ===== contract_sizes
-8/8 checks passed.
+14/14 checks passed.
 ===== price_cache
 46/46 checks passed.
 ===== virtual_queue
-48/48 checks passed.
+54/54 checks passed.
 ===== websocket_feeds
 160 of 160 scenarios match the recording, 0 differ
 ===== connection_warming
-19/19 checks passed.
+22/22 checks passed.
 ```
-
-!!! warning "`order_routes` needs direct placement mode"
-    `order_routes` records the direct path, in which the API worker calls the broker itself. It reads its configuration from `.env`, so when `.env` sets `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT=engine`, the place route tries to write to a Redis stream that the suite's stand-in does not have. On this machine that made 288 of 618 scenarios fail with status `500` and `AttributeError: 'FakeRedis' object has no attribute 'xadd'` in the log. Setting the variable for the one command fixes it, because an environment variable that is already set wins over `.env`:
-
-    ```bash
-    UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT=direct .venv/bin/python -m test_runs.order_routes
-    ```
 
 ## How the recording suites work
 

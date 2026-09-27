@@ -52,19 +52,30 @@ api_configuration = {
     'order_excluded_brokers': os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_EXCLUDED_BROKERS', '').replace(' ', '').lower().split(','),
     'order_broker_selector': os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_SELECTOR', 'round_robin').strip().lower(),
     'order_broker_priority': os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_PRIORITY', '').replace(' ', '').lower().split(','),
-    'order_warm_brokers': os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_WARM_BROKERS', '').replace(' ', '').lower().split(','),
-    'order_placement': os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT', 'direct').strip().lower(),
+    'order_warm_brokers': os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_WARM_BROKERS', 'all').replace(' ', '').lower().split(','),
+    'order_workers_per_broker': os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_WORKERS_PER_BROKER', '10'),
+    'order_maximum_workers_per_broker': int(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_MAXIMUM_WORKERS_PER_BROKER', '30')),
+    'order_database_connections': int(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_DATABASE_CONNECTIONS', '8')),
     'order_engine_timeout_seconds': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_TIMEOUT_SECONDS', '5')),
+    'order_place_list_maximum': int(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_PLACE_LIST_MAXIMUM', '500')),
+    'order_hold_limits': os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS', 'true').strip().lower() in ('true', '1', 'yes'),
+    'order_place_list_wait_seconds': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_PLACE_LIST_WAIT_SECONDS', '25')),
     'order_engine_result_ttl_seconds': int(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_RESULT_TTL_SECONDS', '300')),
+    'order_engine_reconcile_seconds': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_RECONCILE_SECONDS', '5')),
     'order_engine_stale_intent_seconds': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_STALE_INTENT_SECONDS', '30')),
-    'order_rate_per_second': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_PER_SECOND', '8')),
-    'order_rate_per_broker_per_second': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_PER_BROKER_PER_SECOND', '5')),
+    'order_rate_per_second': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_PER_SECOND', '0')),
+    'order_rate_per_broker_per_second': os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_PER_BROKER_PER_SECOND', '10,zerodha=5,indmoney=5'),
     'order_rate_wait_seconds': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_WAIT_SECONDS', '1')),
+    'order_rate_window_seconds': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_WINDOW_SECONDS', '1')),
     'order_daily_loss_limit': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_LOSS_LIMIT', '0')),
     'order_reprice_minimum_seconds': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_REPRICE_MINIMUM_SECONDS', '1')),
     'order_daily_caps': os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_CAPS', ''),
     'order_daily_cap_exit_reserve': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_CAP_EXIT_RESERVE', '0.05')),
     'order_flatten_wait_seconds': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_FLATTEN_WAIT_SECONDS', '5'))
+}
+
+book_configuration = {
+    'poll_seconds': float(os.getenv('UNIFIED_BROKER_INTERFACE_BOOK_POLL_SECONDS', '0'))
 }
 
 logging.basicConfig(format='%(asctime)s %(levelname)-8s %(name)s %(message)s', level=logging.INFO, datefmt="%Y-%m-%d %H:%M:%S")

@@ -24,6 +24,7 @@ class FreezeSlicer(SyntheticOrder):
     """
 
     SYNTHETIC_TYPE = 'freeze_slicer'
+    FINISHES_WITH_LEGS = True
     MOST_SLICES = 20
 
     def run(self, intent, started_at):
@@ -196,36 +197,24 @@ class FreezeSlicer(SyntheticOrder):
             sent (int): How many slices were sent.
 
         Returns:
-            tuple: The answer's body (dict) and its HTTP status (int), which is the worst any slice returned.
+            tuple: The answer's body (dict) and its HTTP status (int), 207 when some slices were accepted and some were not.
         """
         bodies = [body for body, _ in answers]
         statuses = [status for _, status in answers]
+        outcome, status = self.combined_answer(
+            [body.get('outcome') for body in bodies],
+            statuses,
+        )
         return {
             'broker': broker_name,
             'instrument_id': self.parent.instrument_id,
             'parent_id': self.parent.parent_order_id,
             'tag': self.parent.tag,
-            'outcome': self.worst_outcome(bodies),
+            'outcome': outcome,
             'order_ids': [body.get('order_id') for body in bodies],
             'slices': sent,
             'freeze_quantity': freeze_quantity,
             'status_message': self.first_message(answers),
             'skipped': bodies[0].get('skipped') if bodies else [],
             'timing_ms': bodies[0].get('timing_ms') if bodies else {},
-        }, max(statuses) if statuses else 200
-
-    def worst_outcome(self, bodies):
-        """The outcome a caller should act on when several orders had several outcomes.
-
-        Args:
-            bodies (list): Each slice's answer body.
-
-        Returns:
-            str: `unknown` if any slice is unknown, then `rejected` if any was refused, else `accepted`.
-        """
-        outcomes = [body.get('outcome') for body in bodies]
-        if 'unknown' in outcomes:
-            return 'unknown'
-        if 'rejected' in outcomes:
-            return 'rejected'
-        return 'accepted'
+        }, status

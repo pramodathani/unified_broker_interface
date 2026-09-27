@@ -29,3 +29,11 @@ A stop at one broker cannot protect a position at another. The two accounts know
 `triggered_at` is written into the parent's parameters and saved to Redis, but never to the event log. The log's `parent_received` row carries the parameters as the caller sent them, so a parent rebuilt by `EngineRecovery` after a restart has no `triggered_at`. Until 2026-09-24 that meant a trigger whose level was still crossed fired a second time on the first tick after a restart, sending a duplicate order; the offline scenario `a_fired_trigger_does_not_fire_again_after_a_restart` reproduced it as two `PlaceOrder` requests.
 
 The legs are in the event log, so `has_fired` also treats any leg as proof of firing. The one exception is the `backstop` a hidden stop leaves resting when it is armed, which exists before the trigger fires. `GoodTillTriggered` asks the same question before expiring a parent, so a fired order that is still working is not marked cancelled after a restart.
+
+## How `trigger_on` confirms a level
+
+`trigger_on` (the Atlas's G10) chooses the price compared with the level: the last trade, the bid, the offer or the mid. It can also ask for confirmation. `double_last` counts ticks in a row that reach the level, in `reached_ticks`, and `held` records the time the level was first reached, in `reached_since`. A tick that does not reach the level removes both, so the count starts again. Both are kept in the parameters and saved to Redis only when they change, so a trigger far from its level writes nothing on each tick.
+
+The count is kept per price tick, and a price tick is whatever the price ticker delivers, so two ticks carrying the same quote count as two. That is the nearest the engine can come to "two consecutive trades" without reading the trade stream itself.
+
+Four subclasses override `watched_price` for reasons of their own, and set `TAKES_TRIGGER_ON` to False so that `read_trigger_on` refuses the parameter instead of ignoring it. `CandleCloseStop` inherits the flag from `HiddenStop`. The flag is a plain class attribute rather than a check of whether `watched_price` was overridden, which would need reflection.

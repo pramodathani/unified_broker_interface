@@ -37,3 +37,43 @@ The offline recording covers this with a bracket run behind a budget of three re
 ## The daily cap check in `place_leg`, and `CLOSES_POSITIONS`
 
 `place_leg` asks `RiskGates.refuse_if_capped` whether the chosen broker has room left today before it records `leg_requested`, so a leg refused for the cap never appears in the event log. The check needs to know whether the leg closes a position, because the last share of a broker's cap is kept for exits (see the note on `utilities/daily_order_count.py`). `closes_position` answers that from the leg's role, from the class attribute `CLOSES_POSITIONS` for types whose every leg is an exit whatever it is called, and from the caller's own `closes_position` parameter for a plain order. `HiddenStop` is the only type that sets the attribute today, because it fires through `PriceTrigger.fire`, which names every leg `entry`.
+
+## Why `cancel_outside_order` records against the parent without a leg
+
+A cancel of an order that is not one of this parent's legs still needs to be in the record, because it is something the parent did, and it still costs a request an exchange counts. The events carry the broker and broker order id and no leg id. `ParentOrder.apply_event` ignores both names, exactly as it ignores `leg_cancel_requested` and `leg_cancelled`, so replaying them after a restart changes nothing. A refusal by the rate budget is recorded as outcome `rejected` rather than raised, for the same reason `take_rate_token` does not raise: the caller has other orders to cancel and a position to close.
+
+## Why `cancel_leg_answered` exists beside `cancel_leg`
+
+The order types need only to know whether a cancel was accepted, so `cancel_leg` still answers True or False. A caller's cancel through `DELETE /api/orders/cancel` needs the broker's outcome, message and response to answer with, so the recording and sending moved into `cancel_leg_answered`, which `cancel_leg` calls. The comment that used to sit on its `leg_state` line explains a rule that still holds: the broker's own order update decides when a leg is really cancelled, because an accepted cancel is a promise, not a fact, and treating it as one is how an order that went on to fill anyway gets forgotten about.
+
+## Why a caller's modify is recorded as a `leg_update`
+
+`apply_outside_modification` records the caller's change as a `leg_update` carrying the new price, trigger price or quantity, the same event a type's own `reprice_leg` and `reduce_leg` write, with `changed_by: caller` in its detail. `ParentOrder.apply_event` already replays that event, so a restart keeps the caller's values without a new event name. The change passes the re-pricing throttle, the daily cap and the rate budget exactly as a type's own change does.
+
+## Why `stop_acting` leaves the legs alone
+
+Flatten halts every parent before it cancels every order itself. If a halt cancelled the parent's legs too, each leg would be cancelled twice, once by the parent and once by flatten, spending two order messages on one order. A parent cancelled through `DELETE /api/orders/parents` does cancel its legs, through `cancel_by_caller`, because nothing else will.
+
+## Why `place_leg` checks reduce-only before `prepare`
+
+See the note on `utilities/reduce_only.py`. The check is the first thing `place_leg` does, so a leg it refuses is never recorded, never takes a rate token and never counts against the daily cap.
+
+## Why a refused cancel leaves the parent `cancelling`
+
+`cancel_by_caller` used to end the parent as `cancelled` whatever each leg's cancel came back as. In the live test of 2026-09-27, INDmoney refused one cancel for its rate limit; `DELETE /api/orders/parents` answered 200 with the parent cancelled, and the order stayed pending at the broker until the order book showed it. A cancelled parent is terminal and no longer followed, so nothing would ever have noticed.
+
+The parent now becomes `cancelling`, a state that is not terminal, so it stays in the open set, the follower keeps applying its legs' updates, and a second cancel can retry. The price and clock tickers skip it and the follower calls `finish_cancelling` instead of the type's `on_leg_update`, so the type never places, moves or re-arms anything for a parent the caller has cancelled. `finish_cancelling` ends it as `cancelled` once no leg is still resting. Flatten's halt still uses `stop_acting`, because flatten cancels every order itself afterwards and checks the result.
+
+## Why some types finish with their legs
+
+Nothing ended a parent whose type does nothing after placing its legs. A `simple` order that filled, or was cancelled through `DELETE /api/orders/cancel`, stayed `working` for ever; the live retest of 2026-09-27 found seven such parents still open from the morning, and every one kept its place in the open set the tickers and the day roll read. `FINISHES_WITH_LEGS` marks the types that place everything at once and have no fill, clock or price reaction (`simple`, `freeze_slicer`, `ladder`, `basket`, `post_only`, and `oca` through `basket`), and the follower calls `finish_with_legs` after each reaction. A parent ends `completed` when anything traded and `cancelled` when nothing did.
+
+`strategy_stop` and `scale_with_profit_taker` inherit from `basket` and `ladder` but keep acting after their orders fill, so they set the flag back to False. A type added later inherits False unless it sets it.
+
+## Why combined answers share one rule
+
+Six types combined their orders' answers with `max(status)` and each worked its outcome out its own way. In the live test a grid whose sell rung was refused answered `outcome: accepted` with HTTP 422, and a ladder in the same position would have said `rejected` with 422. `combined_answer` gives all of them the rule `basket` already half had: all accepted is `accepted` with 200, a mix is `partial` with 207 (the status the list routes use for mixed results), and none accepted is `unknown` or `rejected` with the highest status. `freeze_slicer`'s own `worst_outcome` became unused and was removed.
+
+## Why `reduce_leg` converts its quantity
+
+`reduce_leg`'s docstring said its quantity was in the broker's own terms, but every caller (OCO, OTO, bracket, scale-out, discretionary) computes it from leg quantities and fills, which are recorded in units. `modify_leg` sends its quantity unchanged, because the other path into it, a caller's change handed over by the modify route, has already been converted. For a securities instrument units are the broker's terms, so nothing showed. For an MCX future the brokers that count lots (Dhan, Zerodha and four others use `broker_lot_size`) would have been sent a hundred times too many: a crude oil exit reduced to 300 units went out as 300 lots. `reduce_leg` now converts through `EnginePlacement.broker_quantity`, which applies the trusted contract size and the broker's `QUANTITY_UNITS`, as a placement does, and refuses a quantity that is not whole lots. The bug was found while building the broker lanes and fixed after the live test of 2026-09-27.

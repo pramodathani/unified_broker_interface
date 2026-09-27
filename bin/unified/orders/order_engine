@@ -28,22 +28,26 @@ that ask for a tick are read at all, so an engine running nothing but plain orde
 `bin/unified/orders/websocket_order_details` already fills with every broker's order updates - as a consumer group of
 its own, and applies an update to the leg it belongs to. An update naming no leg of this engine's is acknowledged and
 dropped, which is most of them. Both streams are read in one call, so a fill and a new order reach the same loop and
-neither starves the other.
+neither starves the other. Every `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_RECONCILE_SECONDS` (5 by default) it also
+compares its open legs with each broker's polled book in `<broker>:orders:orders`, and applies a fill or a cancel the
+book shows and no socket delivered, so a broker with no order socket still finishes its parents.
 
 **Every order passes the same gates.** The daily loss lockout is checked before the order is even understood, so a
 day that is past its limit costs nothing; it is off unless `UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_LOSS_LIMIT` is
-set, and the engine says so at startup when it is not. The rate budget is a token bucket, global and per broker, taken
-after the leg has been written down and before its request is sent, defaulting well under SEBI's ten orders a second;
-a burst waits for a token rather than being refused, and only a burst outlasting the whole wait is refused. The
+set, and the engine says so at startup when it is not. The rate budget allows at most
+`UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_PER_BROKER_PER_SECOND` (10 by default) messages to one broker in any one-second
+span, counted in Redis in `unified:orders:rate:<broker>` so the REST API's modifications and cancellations share it; it
+is taken after the leg has been written down and before its request is sent. A burst waits for room rather than being
+refused, and only a burst outlasting the whole wait is refused. The
 order-to-trade ratio is counted per broker and reported, and is what Stage 8's re-pricing types will consult. The daily
 order count keeps every placement, modification and cancellation sent to a capped broker in
 `unified:orders:daily_count:<broker>`, expiring at 06:00 IST, against the caps in
 `UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_CAPS` (`zerodha=5000,dhan=7000,fyers=10000`), counted as each request is sent
 by this engine or by a REST API worker. Once a broker is within `UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_CAP_EXIT_RESERVE`
 (a share, 0.05 by default) of its cap, new entries to it and re-pricing of its entries are refused, and only messages
-about closing a position are sent, up to the cap itself; cancels and reductions are never refused. The rate budget and
-loss lockout are limits on placements: `PUT /api/orders/modify` and `DELETE /api/orders/cancel` still go straight from an API worker to
-a broker and are not held by them, though they are counted against a daily cap.
+about closing a position are sent, up to the cap itself; cancels and reductions are never refused. The loss lockout
+is a limit on placements: `PUT /api/orders/modify` and `DELETE /api/orders/cancel` still go straight from an API worker to
+a broker and are not held by it, though they take room in the rate budget and are counted against a daily cap.
 
 **What it does per order.** One or two Redis round trips and one broker call. The first reads the mapping marker and
 every broker's login and settings; the second reads the instrument's catalogue entry and whatever the broker selector
@@ -65,8 +69,9 @@ deadline by then and is refused rather than placed.
 
 **It rebuilds itself before it places anything.** Every transition is written to `unified.synthetic_order_events` and
 committed before it is acted on, so on start the engine replays the day's rows through the same state machine the live
-path uses and rebuilds every parent that had not finished. Legs are then brought up to date from each broker's own order
-book. A leg still in `sending` means a crash between recording an order and hearing the answer, so the order may be live
+path uses and rebuilds every parent that had not finished. A leg its broker's order book does not hold parks its parent in
+`failed`; what the broker did with the others while the engine was down is applied by the first order book pass, which
+runs before anything else and records each change like a socket's. A leg still in `sending` means a crash between recording an order and hearing the answer, so the order may be live
 at the broker under the caller's own tag: the orphan matcher attributes it only when exactly one unclaimed order matches
 every field that was sent, within seconds of when it was sent, and otherwise parks the parent in `failed` for a person
 to look at rather than guessing. Recovery reads Redis only for the brokers' order books, and rewrites its own keys from
@@ -91,6 +96,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from utilities.bootstrap import run_under_venv
 
 PROJECT_ROOT = run_under_venv(__file__)
+ENTRIES_PER_READ_WITH_LANES = 100
 
 def main():
     """Place orders from unified:orders:intents:stream until stopped."""
@@ -99,6 +105,7 @@ def main():
     parser.parse_args()
 
     from utilities.configurations import api_configuration, get_cache, get_logger, get_postgres
+    from unified_broker_interface.utilities.order_engine.utilities.book_reconciler import BookReconciler
     from unified_broker_interface.utilities.order_engine.utilities.day_roll import DayRoll
     from unified_broker_interface.utilities.order_engine.utilities.engine_lock import EngineLock
     from unified_broker_interface.utilities.order_engine.utilities.engine_placement import EnginePlacement
@@ -109,6 +116,7 @@ def main():
     from unified_broker_interface.utilities.order_engine.utilities.order_update_follower import OrderUpdateFollower
     from unified_broker_interface.utilities.order_engine.utilities.loss_lockout import LossLockout
     from unified_broker_interface.utilities.order_engine.utilities.order_to_trade_ratio import OrderToTradeRatio
+    from unified_broker_interface.utilities.order_engine.utilities.parent_router import ParentRouter
     from unified_broker_interface.utilities.order_engine.utilities.parent_store import ParentStore
     from unified_broker_interface.utilities.order_engine.utilities.price_ticker import PriceTicker
     from unified_broker_interface.utilities.order_engine.utilities.rate_budget import RateBudget
@@ -123,7 +131,12 @@ def main():
     if not lock.take():
         return 1
 
-    event_log = SyntheticOrderEventLog(get_postgres, logger, f"{socket.gethostname()}:{os.getpid()}")
+    event_log = SyntheticOrderEventLog(
+        get_postgres,
+        logger,
+        f"{socket.gethostname()}:{os.getpid()}",
+        api_configuration["order_database_connections"],
+    )
     try:
         event_log.apply_table()
     except Exception as exception:
@@ -170,24 +183,59 @@ def main():
         return 2
     placement.order_placement.attach_daily_count(daily_count)
 
+    try:
+        per_broker_limit, per_broker_overrides = RateBudget.limits_from_text(
+            api_configuration["order_rate_per_broker_per_second"],
+            placement.order_placement.broker_names,
+        )
+    except ValueError as error:
+        logger.error(f"The per-broker order rate is not configured correctly: {error}")
+        lock.release()
+        return 2
     gates = RiskGates(
         RateBudget(
+            cache,
             api_configuration["order_rate_per_second"],
-            api_configuration["order_rate_per_broker_per_second"],
+            per_broker_limit,
             api_configuration["order_rate_wait_seconds"],
             logger,
+            api_configuration["order_rate_window_seconds"],
+            per_broker_overrides,
         ),
         LossLockout(cache, api_configuration["order_daily_loss_limit"], logger),
         OrderToTradeRatio(),
         RepricingThrottle(api_configuration["order_reprice_minimum_seconds"]),
         daily_count,
     )
+    logger.info(f"Limiting each broker to {per_broker_limit:g} order messages a second, with {per_broker_overrides or 'no'} per-broker overrides.")
     if daily_count is not None:
         logger.info(f"Capping each day's order messages at {daily_count.caps}, keeping {daily_count.exit_reserve:.0%} of each cap for exits.")
     if gates.loss_lockout.is_configured():
         logger.info(f"Refusing new orders once the day is down {api_configuration['order_daily_loss_limit']}.")
     else:
         logger.warning("No daily loss limit is set, so nothing stops this engine placing orders on a losing day.")
+
+    broker_names = placement.order_placement.broker_names
+    try:
+        starting_workers = ParentRouter.starting_workers_from_text(
+            api_configuration["order_workers_per_broker"],
+            broker_names,
+        )
+    except ValueError as error:
+        logger.error(f"The workers per broker are not configured correctly: {error}")
+        lock.release()
+        return 2
+    router = ParentRouter(
+        broker_names,
+        starting_workers,
+        api_configuration["order_maximum_workers_per_broker"],
+        logger,
+    )
+    router.start()
+    logger.info(
+        f"Starting worker lanes {starting_workers}, each growing to at most "
+        f"{api_configuration['order_maximum_workers_per_broker']} workers."
+    )
 
     logger.info("Placing orders from unified:orders:intents:stream.")
     engine = OrderEngine(
@@ -201,9 +249,12 @@ def main():
         parent_store,
         OrderUpdateFollower(parent_store, event_log, logger, gates, placement),
         gates,
-        ClockTicker(parent_store, event_log, placement, logger, gates),
-        PriceTicker(cache, parent_store, event_log, placement, logger, gates),
+        ClockTicker(parent_store, event_log, placement, logger, gates, router),
+        PriceTicker(cache, parent_store, event_log, placement, logger, gates, router),
         DayRoll(recovery, parent_store, logger),
+        router,
+        ENTRIES_PER_READ_WITH_LANES,
+        BookReconciler(cache, parent_store, api_configuration["order_engine_reconcile_seconds"]),
     )
     exit_code = engine.run(stop)
     lock.release()

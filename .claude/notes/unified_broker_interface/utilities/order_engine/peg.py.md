@@ -17,3 +17,7 @@ The minimum move became the unconditional refusal to send a change that changes 
 The Atlas calls them peg-to-primary, peg-to-midpoint and peg-to-market, which are the names the American venues use and which are close to meaningless without that background. "Peg to market" in particular means the *opposite* side's touch, which reads backwards to anybody who has not met the term before.
 
 `own_touch`, `mid` and `opposite_touch` say the same three things in words that can be worked out from the words. The trade-off is that somebody arriving from an Interactive Brokers manual has to translate once, which is the smaller cost.
+
+## Why a caller's price becomes a new offset
+
+The peg's price is its reference moved by `offset_ticks`, worked out afresh on every tick, so a price the caller sets would be undone at once. `on_leg_modified` reads the live quote, finds the reference there, and stores the whole number of ticks between it and the caller's price as the new offset, so the peg follows the market from where the caller put it. When the quote cannot be read the offset is left as it was, and the next tick moves the order back; that is logged.

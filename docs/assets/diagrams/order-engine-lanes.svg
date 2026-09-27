@@ -1,0 +1,56 @@
+<svg class="ubi-svg" viewBox="0 0 900 400" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="order-engine-lanes-title order-engine-lanes-description">
+  <title id="order-engine-lanes-title">Broker lanes in the order engine</title>
+  <desc id="order-engine-lanes-description">The engine's main thread reads intents and order updates. It hands each intent to a worker in the lane of the broker chosen for it, and that worker sends the order to the broker. It hands each order update to the worker that owns the order's parent.</desc>
+  <path id="order-engine-lanes-to-zerodha" class="wire" d="M150,110 L300,110 L330,110 C380,110 400,70 460,70 L760,70"/>
+  <path id="order-engine-lanes-to-dhan" class="wire" d="M150,110 L300,110 L330,110 C380,110 400,190 460,190 L760,190"/>
+  <path id="order-engine-lanes-to-fyers" class="wire" d="M150,110 L300,110 L330,110 C380,110 400,310 460,310 L760,310"/>
+  <path id="order-engine-lanes-update" class="wire" d="M150,290 L300,290 L330,250 C360,210 400,200 540,200"/>
+  <circle class="dot" r="6">
+    <animateMotion dur="6s" repeatCount="indefinite" begin="0s"><mpath href="#order-engine-lanes-to-zerodha"/></animateMotion>
+  </circle>
+  <circle class="dot" r="6">
+    <animateMotion dur="6s" repeatCount="indefinite" begin="-2s"><mpath href="#order-engine-lanes-to-dhan"/></animateMotion>
+  </circle>
+  <circle class="dot" r="6">
+    <animateMotion dur="6s" repeatCount="indefinite" begin="-4s"><mpath href="#order-engine-lanes-to-fyers"/></animateMotion>
+  </circle>
+  <circle class="dot alt" r="6">
+    <animateMotion dur="6s" repeatCount="indefinite" begin="-1s" keyPoints="0;1;1" keyTimes="0;0.6;1" calcMode="linear"><mpath href="#order-engine-lanes-update"/></animateMotion>
+  </circle>
+  <rect class="store" x="20" y="86" width="130" height="48" rx="6"/>
+  <text x="85" y="108" text-anchor="middle">intents</text>
+  <text class="mono" x="85" y="124" text-anchor="middle">intents:stream</text>
+  <rect class="store" x="20" y="266" width="130" height="48" rx="6"/>
+  <text x="85" y="288" text-anchor="middle">order updates</text>
+  <text class="mono" x="85" y="304" text-anchor="middle">order-updates:stream</text>
+  <rect class="accent-box" x="200" y="80" width="130" height="240" rx="8"/>
+  <text class="title" x="265" y="180" text-anchor="middle">Main thread</text>
+  <text class="small" x="265" y="198" text-anchor="middle">chooses a broker,</text>
+  <text class="small" x="265" y="213" text-anchor="middle">finds the owner,</text>
+  <text class="small" x="265" y="228" text-anchor="middle">hands work over</text>
+  <rect class="box" x="460" y="36" width="220" height="68" rx="8"/>
+  <text class="title" x="474" y="58">Zerodha lane</text>
+  <rect class="box" x="474" y="68" width="30" height="24" rx="3"/>
+  <rect class="box" x="512" y="68" width="30" height="24" rx="3"/>
+  <rect class="box" x="550" y="68" width="30" height="24" rx="3"/>
+  <text class="small" x="592" y="85">up to 30</text>
+  <rect class="box" x="460" y="156" width="220" height="68" rx="8"/>
+  <text class="title" x="474" y="178">Dhan lane</text>
+  <rect class="box" x="474" y="188" width="30" height="24" rx="3"/>
+  <rect class="accent-box" x="512" y="186" width="34" height="28" rx="3"/>
+  <rect class="box" x="554" y="188" width="30" height="24" rx="3"/>
+  <text class="small" x="596" y="205">owner</text>
+  <rect class="box" x="460" y="276" width="220" height="68" rx="8"/>
+  <text class="title" x="474" y="298">Fyers lane</text>
+  <rect class="box" x="474" y="308" width="30" height="24" rx="3"/>
+  <rect class="box" x="512" y="308" width="30" height="24" rx="3"/>
+  <rect class="box" x="550" y="308" width="30" height="24" rx="3"/>
+  <rect class="box" x="760" y="46" width="120" height="48" rx="6"/>
+  <text x="820" y="75" text-anchor="middle">Zerodha</text>
+  <rect class="box" x="760" y="166" width="120" height="48" rx="6"/>
+  <text x="820" y="195" text-anchor="middle">Dhan</text>
+  <rect class="box" x="760" y="286" width="120" height="48" rx="6"/>
+  <text x="820" y="315" text-anchor="middle">Fyers</text>
+  <text class="small" x="690" y="130">10 a second each</text>
+  <text class="small" x="160" y="380">The three lanes stand for all ten brokers, and an unassigned lane takes intents whose broker could not be chosen.</text>
+</svg>

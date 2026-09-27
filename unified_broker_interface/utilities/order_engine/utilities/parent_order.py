@@ -6,6 +6,7 @@ PARENT_STATES = (
     'received',
     'working',
     'protecting',
+    'cancelling',
     'completed',
     'cancelled',
     'rejected',
@@ -22,16 +23,23 @@ ALLOWED_CHANGES = {
         'working',
         'rejected',
         'failed',
+        'cancelling',
         'cancelled',
     ),
     'working': (
         'protecting',
         'completed',
+        'cancelling',
         'cancelled',
         'failed',
     ),
     'protecting': (
         'completed',
+        'cancelling',
+        'cancelled',
+        'failed',
+    ),
+    'cancelling': (
         'cancelled',
         'failed',
     ),
@@ -234,6 +242,22 @@ class ParentOrder:
             self.apply_orphan(name, event)
         elif name == 'paper_filled':
             self.apply_paper_fill(event)
+        elif name == 'parameters_changed':
+            self.apply_parameters(event)
+
+    def apply_parameters(self, event):
+        """Applies a recorded change to the order type's own parameters, such as a trailing stop's watermark moved to follow a caller's trigger.
+
+        Args:
+            event (dict): The event, whose detail holds the whole of `parameters` as they became.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        detail = event.get('detail') or {}
+        parameters = detail.get('parameters')
+        if isinstance(parameters, dict):
+            self.parameters = dict(parameters)
 
     def apply_paper_fill(self, event):
         """Applies a fill recorded for an order that was never sent, keeping the total filled in the parameters.

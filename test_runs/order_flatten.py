@@ -4,7 +4,7 @@ Runs the panic button in-process through Flask's test client, with Redis replace
 
 The one thing this route must get right is the order of its two halves: every open order is cancelled and confirmed gone before any position is closed, because a protective order still live when its position closes will fill afterwards and open a new position the other way. The recording pins that by keeping every broker request in the order it was sent, so a cancel appearing after a close would change the recording.
 
-A scenario can also run in engine placement mode. The engine itself is not run: its answer to each close is put on the reply list before the request is sent, and the result keeps the intents the route wrote, which is where the broker a close must reach is named.
+Every close goes through the real order engine, run on the route's own thread whenever the route waits for its answer, so the stubbed broker requests are the engine's. The result keeps the intents the route wrote, which is where the broker a close must reach is named.
 
 The brokers' order books are made to report the cancelled orders as `CANCELLED` from the second read onward, which is what the pollers do a moment after a cancel reaches a broker. A scenario can leave them open instead, to check what the route says when a cancel is not confirmed. Positions work the same way: a scenario that expects to end flat serves a zero quantity from the second read of the positions onward, and one that leaves the position unchanged checks what the route says when a close is accepted but the position is still held.
 
@@ -26,8 +26,9 @@ import uuid
 import flask
 import requests
 
-from test_runs import order_engine
+from test_runs import engine_stand_ins
 from test_runs import order_routes
+from test_runs import redis_stand_ins
 from unified_broker_interface.blueprints import base as blueprint_base
 from unified_broker_interface.blueprints import orders as orders_blueprint
 from unified_broker_interface.utilities.order_engine.utilities import engine_lock
@@ -38,8 +39,8 @@ FIXTURE_PATH = (
 )
 
 
-class FakeFlattenRedis(order_engine.FakeEngineStoreRedis):
-    """The engine suite's stand-in, with order books that change after they are first read.
+class FakeFlattenRedis(redis_stand_ins.InlineEngineRedis):
+    """The engine stand-in that runs the order engine when the route waits for it, with order books that change after they are first read.
 
     A real cancel is not reflected in `<broker>:orders:orders` instantly; the broker's poller or its order websocket writes the new status a moment later, and the route re-reads until it sees it. Serving one set of entries on the first read and another afterwards is how that is modelled without any waiting.
 
@@ -169,36 +170,6 @@ class OrderFlattenScenarios:
             },
         }
 
-    def engine_accepted(self):
-        """The answer the order engine pushes for a close that Flattrade accepted.
-
-        Returns:
-            dict: The reply document.
-        """
-        return {
-            'body': {
-                'broker': 'flattrade',
-                'instrument_id': (
-                    order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS[
-                        'reliance'
-                    ]
-                ),
-                'tag': None,
-                'outcome': 'accepted',
-                'order_id': '26091500000099',
-                'status_message': None,
-                'broker_response': {
-                    'stat': 'Ok',
-                },
-                'skipped': [],
-                'timing_ms': {
-                    'preparation': 0.4,
-                    'broker': 120.5,
-                },
-            },
-            'status': 200,
-        }
-
     def build(self):
         """Builds every scenario, in the order the recording holds them.
 
@@ -301,13 +272,6 @@ class OrderFlattenScenarios:
                     'RELIANCE-MIS': self.position_entry(0),
                 },
             ),
-            self.flatten(
-                'in_engine_mode_a_close_names_the_broker_holding_it',
-                positions=long_position,
-                positions_after=closed_position,
-                placement='engine',
-                engine_reply=self.engine_accepted(),
-            ),
         ]
 
 
@@ -315,8 +279,9 @@ class OrderFlattenSuite:
     """Runs every flatten scenario against the order blueprint, then records or compares the results.
 
     Attributes:
-        fake_redis (FakeFlattenRedis): The stand-in the blueprint reads.
+        fake_redis (FakeFlattenRedis): The stand-in the blueprint and the order engine behind it read.
         network (FakeBrokerNetwork): The stubbed broker network.
+        counting_uuid (engine_stand_ins.CountingUuid): The stand-in for `uuid.uuid4`, reset before each scenario, so each closing order's intent has an id of its own.
     """
 
     def __init__(self):
@@ -327,6 +292,7 @@ class OrderFlattenSuite:
         """
         self.fake_redis = FakeFlattenRedis()
         self.network = order_routes.FakeBrokerNetwork()
+        self.counting_uuid = engine_stand_ins.CountingUuid()
 
     def fake_cache(self):
         """Hands the blueprint the stand-in instead of a Redis client.
@@ -344,14 +310,6 @@ class OrderFlattenSuite:
         """
         return None
 
-    def fixed_uuid(self):
-        """Replaces `uuid.uuid4` so generated identifiers are the same on every run.
-
-        Returns:
-            uuid.UUID: A constant identifier.
-        """
-        return uuid.UUID('00000000-0000-4000-8000-00000000abcd')
-
     def build_state(self, scenario):
         """A stand-in holding the order routes' starting contents plus this scenario's books.
 
@@ -361,6 +319,7 @@ class OrderFlattenSuite:
         starting_state = order_routes.OrderRoutesState().build()
         fake_redis = FakeFlattenRedis()
         fake_redis.strings = starting_state.strings
+        fake_redis.strings[engine_lock.LOCK_KEY] = 'engine-process'
         fake_redis.hashes = starting_state.hashes
         fake_redis.sorted_sets = starting_state.sorted_sets
         for broker_name in order_routes.BROKER_NAMES:
@@ -396,6 +355,9 @@ class OrderFlattenSuite:
             flask.testing.FlaskClient: The client.
         """
         application = flask.Flask('order_flatten_suite')
+        api_configuration['order_warm_brokers'] = [
+            '',
+        ]
         blueprint = orders_blueprint.OrdersBlueprint()
         application.register_blueprint(
             blueprint.blueprint,
@@ -414,11 +376,11 @@ class OrderFlattenSuite:
         """
         self.fake_redis = self.build_state(scenario)
         self.network.reset(scenario.get('answer'))
-        placement = scenario.get('placement', 'direct')
-        api_configuration['order_placement'] = placement
-        if placement == 'engine':
-            self.seed_engine(scenario)
+        self.counting_uuid.reset()
         client = self.build_client()
+        self.fake_redis.inline_engine = engine_stand_ins.InlineEngine(
+            self.fake_redis,
+        )
         self.fake_redis.round_trips = 0
 
         response = client.post(
@@ -443,33 +405,15 @@ class OrderFlattenSuite:
                 for sent in copy.deepcopy(self.network.sent_requests)
             ],
             'redis_round_trips': self.fake_redis.round_trips,
+            'intents': self.shown_intents(),
         }
-        if placement == 'engine':
-            result['intents'] = self.shown_intents()
         return result
-
-    def seed_engine(self, scenario):
-        """Makes the order engine look like it is running, with its answer to the one close already waiting.
-
-        The reply key names the intent, and `uuid.uuid4` is fixed for the whole run, so the key is known before the request is sent.
-
-        Args:
-            scenario (dict): The scenario.
-
-        Returns:
-            None: This method returns nothing.
-        """
-        self.fake_redis.strings[engine_lock.LOCK_KEY] = 'engine-process'
-        reply_key = 'unified:orders:intents:result:' + self.fixed_uuid().hex
-        self.fake_redis.lists[reply_key] = [
-            json.dumps(scenario['engine_reply']),
-        ]
 
     def shown_intents(self):
         """What each intent the route wrote asked the engine to do.
 
         Returns:
-            list: One dictionary per intent, with `synthetic_type`, `instrument_id` and `body`.
+            list: One dictionary per intent, with `synthetic_type`, `instrument_id` and `body`, and `command` for a change rather than an order.
         """
         shown = []
         entries = self.fake_redis.streams.get(
@@ -478,11 +422,14 @@ class OrderFlattenSuite:
         )
         for _, fields in entries:
             document = json.loads(fields['intent'])
-            shown.append({
+            intent = {
                 'synthetic_type': document['synthetic_type'],
                 'instrument_id': document['instrument_id'],
                 'body': document['body'],
-            })
+            }
+            if document.get('command'):
+                intent['command'] = document['command']
+            shown.append(intent)
         return shown
 
     def run_every_scenario(self):
@@ -496,15 +443,13 @@ class OrderFlattenSuite:
         original_request = requests.Session.request
         original_uuid4 = uuid.uuid4
         original_wait = api_configuration['order_flatten_wait_seconds']
-        original_placement = api_configuration['order_placement']
         blueprint_base.get_cache = self.fake_cache
         blueprint_base.get_mongo_db = self.fake_mongo_database
         requests.Session.request = self.network.request
-        uuid.uuid4 = self.fixed_uuid
+        uuid.uuid4 = self.counting_uuid
         # Long enough for one more read of the books, short enough that a cancel nobody confirms
         # does not hold the suite up.
         api_configuration['order_flatten_wait_seconds'] = 0.6
-        api_configuration['order_placement'] = 'direct'
         try:
             results = []
             for scenario in OrderFlattenScenarios().build():
@@ -515,7 +460,6 @@ class OrderFlattenSuite:
             requests.Session.request = original_request
             uuid.uuid4 = original_uuid4
             api_configuration['order_flatten_wait_seconds'] = original_wait
-            api_configuration['order_placement'] = original_placement
         return results
 
     def encode(self, result):

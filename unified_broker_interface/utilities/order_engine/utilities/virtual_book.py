@@ -1,5 +1,6 @@
 """Keeping every held virtual limit order's queue estimate up to date from the unified quote stream."""
 
+import decimal
 import json
 import time
 
@@ -84,6 +85,43 @@ class VirtualBook:
                 return False
         return True
 
+    def held_terms(self, document):
+        """The price and quantity a held parent is held at: the caller's body, with any change made since through `PUT /api/orders/modify`.
+
+        Args:
+            document (dict): The parent's Redis record.
+
+        Returns:
+            tuple: The price (object, as stored) and the quantity (object, as stored).
+        """
+        body = document.get('body') or {}
+        parameters = document.get('parameters') or {}
+        price = parameters.get('held_price')
+        if price is None:
+            price = body.get('price')
+        quantity = parameters.get('held_quantity')
+        if quantity is None:
+            quantity = body.get('quantity')
+        return price, quantity
+
+    def has_new_terms(self, estimate, document):
+        """Whether a held parent's price or quantity has changed since its estimate was started.
+
+        Args:
+            estimate (VirtualQueue): The estimate being kept.
+            document (dict): The parent's Redis record.
+
+        Returns:
+            bool: True when the estimate should start again.
+        """
+        price, quantity = self.held_terms(document)
+        try:
+            same_price = decimal.Decimal(str(price)) == estimate.price
+            same_quantity = int(quantity) == estimate.quantity
+        except (decimal.InvalidOperation, TypeError, ValueError):
+            return False
+        return not (same_price and same_quantity)
+
     def new_estimate(self, document):
         """A fresh estimate for a held parent, or None when its order cannot be read.
 
@@ -94,13 +132,14 @@ class VirtualBook:
             VirtualQueue | None: The estimate.
         """
         body = document.get('body') or {}
+        price, quantity = self.held_terms(document)
         try:
             return VirtualQueue(
                 document['parent_order_id'],
                 document['instrument_id'],
                 body.get('transaction_type'),
-                body.get('price'),
-                int(body.get('quantity')),
+                price,
+                int(quantity),
             )
         except (KeyError, TypeError, ValueError) as error:
             self.logger.warning(
@@ -148,6 +187,8 @@ class VirtualBook:
             estimate = self.estimates.get(parent_order_id)
             if estimate is None:
                 estimate = self.stored_estimate(parent_order_id)
+            if estimate is not None and self.has_new_terms(estimate, document):
+                estimate = None
             if estimate is None:
                 estimate = self.new_estimate(document)
                 if estimate is not None:

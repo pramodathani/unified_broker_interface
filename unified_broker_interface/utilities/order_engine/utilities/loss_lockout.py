@@ -1,6 +1,7 @@
 """Refusing new orders once the day has lost more than it was allowed to."""
 
 import json
+import threading
 
 FUNDS_KEY = 'unified:portfolio:funds'
 
@@ -21,6 +22,7 @@ class LossLockout:
         limit (float): The most the day may lose before new orders are refused; zero or less turns the gate off.
         logger (logging.Logger): The logger.
         locked_out (int): How many orders have been refused.
+        lock (threading.Lock): Guards the refusal count, which several worker threads update.
     """
 
     def __init__(self, cache, limit, logger):
@@ -38,6 +40,7 @@ class LossLockout:
         self.limit = limit
         self.logger = logger
         self.locked_out = 0
+        self.lock = threading.Lock()
 
     def is_configured(self):
         """Whether a limit was set at all.
@@ -90,7 +93,8 @@ class LossLockout:
             return None
         if profit > -self.limit:
             return None
-        self.locked_out = self.locked_out + 1
+        with self.lock:
+            self.locked_out = self.locked_out + 1
         return (
             f'the day is down {abs(profit):.2f}, which is past the '
             f'{self.limit:.2f} limit, so no new order is being placed'

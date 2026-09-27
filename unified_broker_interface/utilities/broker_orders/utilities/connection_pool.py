@@ -1,6 +1,7 @@
 """Connection pools that never hand an order a connection that has been idle long enough for the broker to have closed it."""
 
 import functools
+import queue
 import threading
 import time
 import weakref
@@ -9,11 +10,15 @@ from requests.adapters import HTTPAdapter
 from urllib3.connectionpool import HTTPConnectionPool
 from urllib3.connectionpool import HTTPSConnectionPool
 
+DEFAULT_POOL_SIZE = 10
+
 
 class IdleLimitedHTTPSConnectionPool(HTTPSConnectionPool):
-    """An HTTPS pool that closes a pooled connection instead of reusing it once it has been idle longer than a limit.
+    """An HTTPS pool that closes a pooled connection instead of reusing it once it has been idle longer than a limit, and can hand out the connection that has waited longest.
 
     A closed connection object is still handed out, and opens a new connection when a request is sent on it, exactly as urllib3 does with a connection it finds dropped.
+
+    urllib3 hands out the connection returned most recently, which keeps one connection hot when nothing else touches the pool. A pool built with `oldest_first` hands out the one returned longest ago instead, so a warmer that pings one connection at a time cycles through every connection in the pool rather than reusing the same one. Its empty places are reached in turn as well, so the warmer's first round opens every connection and a place freed by a failed request is filled again within one round.
 
     Attributes:
         maximum_idle_seconds (float): How long a connection may sit in the pool and still be reused.
@@ -26,6 +31,7 @@ class IdleLimitedHTTPSConnectionPool(HTTPSConnectionPool):
         host,
         port=None,
         maximum_idle_seconds=None,
+        oldest_first=False,
         **keyword_arguments,
     ):
         """Builds the pool.
@@ -34,11 +40,14 @@ class IdleLimitedHTTPSConnectionPool(HTTPSConnectionPool):
             host (str): The host.
             port (int | None): The port.
             maximum_idle_seconds (float | None): How long a connection may sit idle and still be reused; None never refuses one.
+            oldest_first (bool): Whether to hand out the connection returned longest ago rather than most recently.
             **keyword_arguments (object): The remaining urllib3 pool arguments.
 
         Returns:
             None: This method returns nothing.
         """
+        if oldest_first:
+            self.QueueCls = queue.Queue
         super().__init__(host, port, **keyword_arguments)
         self.maximum_idle_seconds = maximum_idle_seconds
         self.idle_lock = threading.Lock()
@@ -91,6 +100,7 @@ class IdleLimitedHTTPConnectionPool(HTTPConnectionPool):
         host,
         port=None,
         maximum_idle_seconds=None,
+        oldest_first=False,
         **keyword_arguments,
     ):
         """Builds the pool.
@@ -99,11 +109,14 @@ class IdleLimitedHTTPConnectionPool(HTTPConnectionPool):
             host (str): The host.
             port (int | None): The port.
             maximum_idle_seconds (float | None): How long a connection may sit idle and still be reused; None never refuses one.
+            oldest_first (bool): Whether to hand out the connection returned longest ago rather than most recently.
             **keyword_arguments (object): The remaining urllib3 pool arguments.
 
         Returns:
             None: This method returns nothing.
         """
+        if oldest_first:
+            self.QueueCls = queue.Queue
         super().__init__(host, port, **keyword_arguments)
         self.maximum_idle_seconds = maximum_idle_seconds
         self.idle_lock = threading.Lock()
@@ -147,19 +160,30 @@ class IdleLimitedAdapter(HTTPAdapter):
 
     Attributes:
         maximum_idle_seconds (float | None): How long a pooled connection may sit idle and still be reused.
+        pool_size (int): How many connections the pool for each host keeps.
+        oldest_first (bool): Whether the pools hand out the connection returned longest ago, which a warmed broker needs.
     """
 
-    def __init__(self, maximum_idle_seconds):
-        """Builds the adapter with requests' default pool sizes and no retries.
+    def __init__(
+        self,
+        maximum_idle_seconds,
+        pool_size=DEFAULT_POOL_SIZE,
+        oldest_first=False,
+    ):
+        """Builds the adapter with a chosen number of connections per host and no retries.
 
         Args:
             maximum_idle_seconds (float | None): How long a pooled connection may sit idle and still be reused.
+            pool_size (int): How many connections the pool for each host keeps.
+            oldest_first (bool): Whether the pools hand out the connection returned longest ago rather than most recently.
 
         Returns:
             None: This method returns nothing.
         """
         self.maximum_idle_seconds = maximum_idle_seconds
-        super().__init__()
+        self.pool_size = pool_size
+        self.oldest_first = oldest_first
+        super().__init__(pool_maxsize=pool_size)
 
     def init_poolmanager(
         self,
@@ -189,9 +213,11 @@ class IdleLimitedAdapter(HTTPAdapter):
             'http': functools.partial(
                 IdleLimitedHTTPConnectionPool,
                 maximum_idle_seconds=self.maximum_idle_seconds,
+                oldest_first=self.oldest_first,
             ),
             'https': functools.partial(
                 IdleLimitedHTTPSConnectionPool,
                 maximum_idle_seconds=self.maximum_idle_seconds,
+                oldest_first=self.oldest_first,
             ),
         }

@@ -27,3 +27,7 @@ That is not what this class does, and the reason is the one the Atlas itself giv
 The Atlas's third rule is to check the position after every update. This class instead closes the parent when none of its own legs can still fill.
 
 They are not the same thing, and the difference is deliberate. The parent is a record of what this order did, and it is finished when it has nothing left at a broker. Whether the account is flat is a question about the account, which may hold positions from a dozen other sources, and answering it here would make one order's lifetime depend on another's. The position check belongs in the reconciliation the engine does at startup and in `POST /api/orders/flatten`, both of which look at the account as a whole.
+
+## Why a caller's change to one exit reduces the other, and never raises
+
+A linked pair's two exits cover the same position. When the caller reduces one, `on_leg_modified` reduces the other to match, which the user chose on 2026-09-27 over refusing a change that leaves them unequal. An exit is never raised: `outside_change_problem` refuses an increase with 409 before anything is sent, because an exit larger than the position opens a new one when it fills, which is the double fill a linked pair exists to prevent. Bracket and cover inherit both.

@@ -47,6 +47,19 @@ class BrokerSelector:
         """
         raise NotImplementedError
 
+    def record_passed_over(self, cache, passed_over):
+        """Learns that the chosen broker came after some that could not take the order.
+
+        Args:
+            cache (redis.Redis): The Redis client.
+            passed_over (int): How many brokers were passed over before the chosen one.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        del cache
+        del passed_over
+
     def record_outcome(self, broker_name, answer):
         """Learns from a sent order's answer, in this worker's memory only.
 

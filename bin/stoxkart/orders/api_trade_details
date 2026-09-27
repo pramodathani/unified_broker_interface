@@ -24,12 +24,12 @@ from utilities.bootstrap import run_under_venv
 PROJECT_ROOT = run_under_venv(__file__)
 
 from stock_brokers.api.stoxkart import StoxkartAPI
-from utilities.configurations import get_cache, get_logger
+from utilities.configurations import book_configuration, get_cache, get_logger
 from utilities.poll_reporter import PollReporter
 
 TRADES_URL = "https://openapi.stoxkart.com/reports/trade-book"
 REDIS_KEY = "stoxkart:orders:trades"
-DELAY_SECONDS = 1.0
+DELAY_SECONDS = max(1.0, book_configuration["poll_seconds"])
 TIMEOUT_SECONDS = 10
 AUTHENTICATION_CODES = (
     "AuthorizationError",

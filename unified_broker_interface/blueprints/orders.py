@@ -37,6 +37,9 @@ from unified_broker_interface.utilities.broker_orders.utilities.instrument impor
 from unified_broker_interface.utilities.broker_orders.utilities.kill_switch import (
     KillSwitch,
 )
+from unified_broker_interface.utilities.broker_orders.utilities.held_order_change import (
+    HeldOrderChange,
+)
 from unified_broker_interface.utilities.broker_orders.utilities.modify_order_request import (
     ModifyOrderRequest,
 )
@@ -51,6 +54,9 @@ from unified_broker_interface.utilities.broker_orders.utilities.order_modificati
 )
 from unified_broker_interface.utilities.broker_orders.utilities.order_request import (
     InvalidOrderError,
+)
+from unified_broker_interface.utilities.broker_orders.utilities.place_order_list import (
+    PlaceOrderList,
 )
 from unified_broker_interface.utilities.broker_orders.utilities.place_order_request import (
     PlaceOrderRequest,
@@ -77,19 +83,34 @@ from unified_broker_interface.utilities.instrument_cache import InstrumentCache
 from unified_broker_interface.utilities.order_engine.utilities.daily_order_count import (
     DailyOrderCount,
 )
+from unified_broker_interface.utilities.order_engine.utilities.parent_commands import (
+    CANCEL_LEG,
+    CANCEL_PARENT,
+    HALT_EVERY_PARENT,
+    MODIFY_HELD,
+    MODIFY_LEG,
+)
+from unified_broker_interface.utilities.order_engine.utilities.parent_store import (
+    CHILDREN_KEY,
+    OPEN_KEY,
+    PARENTS_KEY,
+)
 from unified_broker_interface.utilities.order_engine.utilities.intent_handoff import (
     IntentHandoff,
+)
+from unified_broker_interface.utilities.order_engine.utilities.rate_budget import (
+    RateBudget,
+)
+from unified_broker_interface.utilities.order_book_filter import (
+    OrderBookFilter,
+    OrderBookFilterError,
 )
 from unified_broker_interface.utilities.unified_documents import read_document
 from utilities.configurations import api_configuration
 from utilities.configurations import get_logger
 
 ORDER_SEND_THREADS = 4
-
-ORDER_PLACEMENT_MODES = (
-    'direct',
-    'engine',
-)
+LIST_SECONDS_PER_ORDER = 0.1
 
 
 class OrdersBlueprint(BaseBlueprint):
@@ -101,8 +122,7 @@ class OrdersBlueprint(BaseBlueprint):
         broker_orders (dict): Each broker's name to its order class instance; the same dictionary `order_placement` holds.
         broker_selector (BrokerSelector): The algorithm that orders the brokers an order is offered to, named by `UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_SELECTOR`; the same object `order_placement` holds.
         connection_warmers (list): One `ConnectionWarmer` per broker named in `UNIFIED_BROKER_INTERFACE_API_ORDER_WARM_BROKERS`, each running on its own daemon thread; the same list `order_placement` holds.
-        placement_mode (str): `direct` when this worker sends orders to brokers itself, or `engine` when it hands them to the order engine, named by `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT`.
-        order_handoff (IntentHandoff | None): The handoff to the order engine in `engine` mode, and None in `direct` mode, which is what `place_order` branches on.
+        order_handoff (IntentHandoff): The handoff that writes each order for the order engine to place and waits for its answer.
         instrument_cache (InstrumentCache): This worker's copy of the catalogue data placements and modifications have read under the current warm.
         catalogue_availability (CatalogueAvailability): What turns a "not mapped" refusal into a 503 when the day's catalogue has expired and the next one is not published yet.
         kill_switch (KillSwitch): What decides, from decoded order books and positions, what `POST /flatten` cancels and closes.
@@ -114,6 +134,9 @@ class OrdersBlueprint(BaseBlueprint):
         ('/details', 'details', ['GET']),
         ('/trades', 'trades', ['GET']),
         ('/place', 'place', ['POST']),
+        ('/intents/<intent_id>', 'intent', ['GET']),
+        ('/parents', 'parents', ['GET']),
+        ('/parents', 'cancel_parents', ['DELETE']),
         ('/modify', 'modify', ['PUT']),
         ('/cancel', 'cancel', ['DELETE']),
         ('/flatten', 'flatten', ['POST']),
@@ -126,40 +149,49 @@ class OrdersBlueprint(BaseBlueprint):
             None: This method returns nothing.
 
         Raises:
-            ValueError: When the configured broker selector or the configured order placement mode is not a known one, or the daily order caps cannot be read, so a misspelt name stops the worker from starting rather than routing orders some other way.
+            ValueError: When the configured broker selector is not a known one, or the daily order caps cannot be read, so a misspelt name stops the worker from starting rather than routing orders some other way.
         """
         super().__init__()
         self.logger = get_logger('rest_api.orders')
-        self.order_placement = OrderPlacement(self.logger)
+        self.order_placement = OrderPlacement(
+            self.logger,
+            ORDER_SEND_THREADS + 1,
+        )
         self.broker_names = self.order_placement.broker_names
         self.broker_orders = self.order_placement.broker_orders
         self.broker_selector = self.order_placement.broker_selector
         self.connection_warmers = self.order_placement.connection_warmers
-        self.placement_mode = api_configuration['order_placement']
-        if self.placement_mode not in ORDER_PLACEMENT_MODES:
-            known_modes = ', '.join(ORDER_PLACEMENT_MODES)
-            raise ValueError(
-                f'unknown order placement {self.placement_mode!r}; known modes are {known_modes}'
-            )
         self.instrument_cache = InstrumentCache()
         self.catalogue_availability = CatalogueAvailability(self.cache)
         self.order_placement.attach_daily_count(
             DailyOrderCount.from_configuration(self.cache, self.logger),
         )
         self.kill_switch = KillSwitch(self.broker_names)
-        self.order_handoff = None
-        if self.placement_mode == 'engine':
-            self.order_handoff = IntentHandoff(
-                self.cache,
-                api_configuration['order_engine_timeout_seconds'],
-            )
+        per_broker_limit, per_broker_overrides = RateBudget.limits_from_text(
+            api_configuration['order_rate_per_broker_per_second'],
+            self.broker_names,
+        )
+        self.rate_budget = RateBudget(
+            self.cache,
+            api_configuration['order_rate_per_second'],
+            per_broker_limit,
+            api_configuration['order_rate_wait_seconds'],
+            self.logger,
+            api_configuration['order_rate_window_seconds'],
+            per_broker_overrides,
+        )
+        self.order_handoff = IntentHandoff(
+            self.cache,
+            api_configuration['order_engine_timeout_seconds'],
+            api_configuration['order_hold_limits'],
+        )
         self.order_placement.start_connection_warmers()
 
     @authenticated
     def details(self):
-        """Answers today's orders at every broker, with how each broker's data was read.
+        """Answers today's orders at every broker, with how each broker's data was read, narrowed by any filters in the query string.
 
-        See `utilities/unified_documents.py` for when the document is not served.
+        See `utilities/unified_documents.py` for when the document is not served, and `utilities/order_book_filter.py` for the filters: `order_id`, `parent_id`, `intent_id`, `broker`, `status`, `limit` and `cursor`.
 
         Returns:
             tuple: The Flask JSON response (flask.Response) and its HTTP status (int).
@@ -170,13 +202,13 @@ class OrdersBlueprint(BaseBlueprint):
             30,
             'orders',
         )
-        return jsonify(body), status
+        return self.filtered(body, status, 'orders')
 
     @authenticated
     def trades(self):
-        """Answers today's trades at every broker, with how each broker's data was read.
+        """Answers today's trades at every broker, with how each broker's data was read, narrowed by any filters in the query string.
 
-        See `utilities/unified_documents.py` for when the document is not served.
+        See `utilities/unified_documents.py` for when the document is not served, and `utilities/order_book_filter.py` for the filters: `order_id`, `parent_id`, `intent_id`, `broker`, `status`, `limit` and `cursor`.
 
         Returns:
             tuple: The Flask JSON response (flask.Response) and its HTTP status (int).
@@ -187,7 +219,28 @@ class OrdersBlueprint(BaseBlueprint):
             30,
             'trades',
         )
-        return jsonify(body), status
+        return self.filtered(body, status, 'trades')
+
+    def filtered(self, body, status, list_name):
+        """Narrows a served order or trade document to the filters and page in the query string, when any are given.
+
+        Args:
+            body (dict): The document, or the refusal `read_document` answered with.
+            status (int): Its HTTP status.
+            list_name (str): The list the filters apply to, `orders` or `trades`.
+
+        Returns:
+            tuple: The Flask JSON response (flask.Response) and its HTTP status (int), which is 400 for a filter that cannot be read.
+        """
+        try:
+            order_book_filter = OrderBookFilter(request.args)
+        except OrderBookFilterError as error:
+            return jsonify({
+                'error': str(error),
+            }), 400
+        if status != 200 or not order_book_filter.is_active():
+            return jsonify(body), status
+        return jsonify(order_book_filter.apply(body, list_name)), status
 
     def refuse(self, message, status, **fields):
         """Builds the refusal for a request answered without calling a broker.
@@ -239,6 +292,56 @@ class OrdersBlueprint(BaseBlueprint):
         if expires_at is None or expires_at <= datetime.datetime.now():
             raise self.refuse('Access token has expired', 401)
 
+    def take_rate_room(self, broker_name):
+        """Takes room in the shared per-broker rate budget for one modification or cancellation, waiting briefly if the last second is full.
+
+        The order engine takes room from the same Redis window before every request it sends, so a busy second of engine orders and API changes together still stays within the limit at each broker.
+
+        Args:
+            broker_name (str): The broker the change is going to.
+
+        Returns:
+            None: This method returns nothing.
+
+        Raises:
+            RefusedRequestError: With HTTP 503 when no room came within the wait, or when Redis could not be read.
+        """
+        try:
+            allowed = self.rate_budget.take(broker_name)
+        except redis.RedisError as error:
+            raise self.redis_unreadable(error)
+        if not allowed:
+            raise self.refuse(
+                'the order rate budget is full, so this change was not sent; '
+                'try again in a moment',
+                503,
+                broker=broker_name,
+            )
+
+    def send_change(self, prepared, started_at):
+        """Sends one prepared modification or cancellation, after taking room for it in the rate budget, or hands it to the order engine when the engine owns the order.
+
+        An order the engine placed is changed through its order type, on the worker that owns it, so the type records the change and carries on from it. The engine takes its own room in the rate budget.
+
+        Args:
+            prepared (PreparedCancel | PreparedModification): The change to send.
+            started_at (float): `time.perf_counter()` when the request arrived.
+
+        Returns:
+            tuple: The answer's body (dict) and its HTTP status (int).
+
+        Raises:
+            RefusedRequestError: With HTTP 503 when the rate budget had no room, or Redis could not be read.
+        """
+        if prepared.engine_command is not None:
+            return self.order_handoff.command(
+                prepared.engine_command,
+                prepared.engine_arguments,
+                started_at,
+            )
+        self.take_rate_room(prepared.broker_name)
+        return prepared.send(started_at)
+
     def redis_unreadable(self, error):
         """Builds the refusal for a Redis read that failed.
 
@@ -251,23 +354,19 @@ class OrdersBlueprint(BaseBlueprint):
         return self.refuse(f'Redis could not be read: {error}', 503)
 
     def place(self):
-        """Places one order at the first broker the configured broker selector ranks that can take it.
+        """Hands one order to the order engine, which places it at the first broker the configured broker selector ranks that can take it.
 
         The JSON body names the instrument by `instrument_id`, or by `exchange`, `segment` and the segment's identity fields (`symbol`, or `underlying_symbol` and `expiry_date`, and for an option `strike_price` and `option_type`).
-        It gives `transaction_type` (BUY or SELL), `product` (CNC, MIS or NRML), `order_type` (MARKET, LIMIT, SL or SL-M) and `quantity` in units.
-        It may give `validity` (DAY or IOC, default DAY), `price`, `trigger_price`, `disclosed_quantity`, `after_market`, `tag` and `dry_run`.
+        It gives `transaction_type` (BUY or SELL), `product` (CNC, MIS or NRML), `order_type` (MARKET, LIMIT, SL or SL-M) and `quantity` in units, or a `price_reference` or `quantity_reference` in their place.
+        It may give `validity` (DAY or IOC, default DAY), `price`, `trigger_price`, `disclosed_quantity`, `after_market`, `tag`, `synthetic` and `dry_run`.
 
-        The method reads Redis in one to three round trips and then sends one request to one broker: one for the token, logins, settings and mapping marker, one for the instrument's catalogue data unless this worker already holds it under the current warm, and one more to find an instrument named by its fields unless that lookup is held too.
-        It never reads MongoDB or PostgreSQL, never calls a broker for anything but the order itself, and never retries a sent order at another broker.
-        With `dry_run` it answers with the request it would have sent instead of sending it.
+        The method checks the token and the body itself, finds the instrument, writes the order to `unified:orders:intents:stream` for `bin/unified/orders/order_engine` to place, and waits on `unified:orders:intents:result:<intent_id>` for the answer.
+        A `broker` field in the body is removed before the handoff, because the caller never chooses the broker; only `flatten` names one, for a position that can only be closed where it is held.
+        The answer carries the engine's keys plus `intent_id`, and an engine that does not answer in time is reported as outcome `unknown` with HTTP 504, because the order may still be placed.
         Every failure is answered with an HTTP status rather than raised.
 
-        All of that describes `direct` placement, which is the default. When `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT` is `engine`, the method checks the token and the body itself and then writes the order to `unified:orders:intents:stream` for `bin/unified/orders/order_engine` to place, waiting on `unified:orders:intents:result:<intent_id>` for the answer.
-        A `broker` field in the body is removed before the handoff, because the caller never chooses the broker; only `flatten` names one, for a position that can only be closed where it is held.
-        The answer carries the same keys with one addition, `intent_id`, and an engine that does not answer in time is reported as outcome `unknown` with HTTP 504, because the order may still be placed.
-
         Returns:
-            tuple: The Flask JSON response (flask.Response) and its HTTP status (int), which is 200 when the broker accepted the order or for a dry run, 422 when the broker refused it, 504 when the outcome is unknown, 400 for an order that is not valid, 401 for a missing, wrong or expired access token, 404 for an instrument that is not mapped, and 503 when Redis cannot be read, today's instrument catalogue is not published yet, the order engine is not running, or no broker can take the order.
+            tuple: The Flask JSON response (flask.Response) and its HTTP status (int), which is 200 when the broker accepted the order or for a dry run, 202 for a synthetic order waiting for a price, a time or a fill, 422 when the broker refused it, 504 when the outcome is unknown, 400 for an order that is not valid, 401 for a missing, wrong or expired access token, 404 for an instrument that is not mapped, 409 or 429 for an order the engine refused, and 503 when Redis cannot be read, today's instrument catalogue is not published yet, the order engine is not running, or no broker can take the order.
         """
         started_at = time.perf_counter()
         try:
@@ -297,42 +396,30 @@ class OrdersBlueprint(BaseBlueprint):
             pipeline = self.cache.pipeline(transaction=False)
             pipeline.hget('last_login', 'unified_broker_interface')
             pipeline.get('unified:catalogue:current_date')
-            pipeline.hmget('last_login', self.broker_names)
-            pipeline.hmget('settings', self.broker_names)
             pipeline.get('unified:catalogue:warm_identifier')
             first_replies = pipeline.execute()
         except redis.RedisError as error:
             raise self.redis_unreadable(error)
         token_document_text = first_replies[0]
         mapping_date_text = first_replies[1]
-        login_texts = first_replies[2]
-        settings_texts = first_replies[3]
-        warm_identifier = first_replies[4]
+        warm_identifier = first_replies[2]
 
         self.check_access_token(access_token, token_document_text)
 
-        try:
-            order = PlaceOrderRequest(request.get_json(silent=True))
-        except InvalidOrderError as error:
-            raise self.refuse(str(error), 400)
-
-        if self.order_handoff is not None:
-            catalogue_key_prefix = self.catalogue_key_prefix(mapping_date_text)
-            instrument_id = self.resolve_instrument_id(
-                order,
+        body = request.get_json(silent=True)
+        if isinstance(body, dict) and 'orders' in body:
+            return self.place_order_list(
+                body,
                 mapping_date_text,
                 warm_identifier,
-                catalogue_key_prefix,
-            )
-            engine_body = dict(request.get_json(silent=True))
-            engine_body.pop('broker', None)
-            return self.order_handoff.place(
-                engine_body,
-                instrument_id,
                 started_at,
             )
 
-        rotation = self.order_placement.rotation()
+        try:
+            order = PlaceOrderRequest(body)
+        except InvalidOrderError as error:
+            raise self.refuse(str(error), 400)
+
         catalogue_key_prefix = self.catalogue_key_prefix(mapping_date_text)
         instrument_id = self.resolve_instrument_id(
             order,
@@ -340,63 +427,239 @@ class OrdersBlueprint(BaseBlueprint):
             warm_identifier,
             catalogue_key_prefix,
         )
-
-        kept_texts = self.instrument_cache.instrument(
-            mapping_date_text,
-            warm_identifier,
+        engine_body = dict(request.get_json(silent=True))
+        engine_body.pop('broker', None)
+        return self.order_handoff.place(
+            engine_body,
             instrument_id,
-        )
-        pipeline = self.cache.pipeline(transaction=False)
-        if kept_texts is None:
-            pipeline.hget(catalogue_key_prefix + 'identity', instrument_id)
-            pipeline.hget(catalogue_key_prefix + 'order_handles', instrument_id)
-            pipeline.hget(catalogue_key_prefix + 'contract_sizes', instrument_id)
-        selector_command_count = self.broker_selector.queue_redis_commands(
-            pipeline,
-            order,
-            instrument_id,
-        )
-        second_replies = []
-        if kept_texts is None or selector_command_count > 0:
-            try:
-                second_replies = pipeline.execute()
-            except redis.RedisError as error:
-                raise self.redis_unreadable(error)
-        if kept_texts is None:
-            identity_text = second_replies[0]
-            handles_text = second_replies[1]
-            contract_size_text = second_replies[2]
-            selector_replies = second_replies[3:]
-        else:
-            identity_text = kept_texts[0]
-            handles_text = kept_texts[1]
-            contract_size_text = kept_texts[2]
-            selector_replies = second_replies
-
-        instrument = Instrument.decoded(
-            instrument_id,
-            identity_text,
-            handles_text,
-            contract_size_text,
-        )
-        if kept_texts is None:
-            self.instrument_cache.keep_instrument(
-                mapping_date_text,
-                warm_identifier,
-                instrument_id,
-                identity_text,
-                handles_text,
-                contract_size_text,
-            )
-        return self.order_placement.place(
-            order,
-            instrument,
-            rotation,
-            selector_replies,
-            login_texts,
-            settings_texts,
             started_at,
         )
+
+    def place_order_list(self, body, mapping_date_text, warm_identifier, started_at):
+        """Places every order of a list, answering each on its own.
+
+        Each item is validated and its instrument found as the single form does it, and every order that passes is written for the order engine in one round trip. The engine's workers place them in parallel, one lane per broker, and the answers come back on one list. An item refused before it reaches the engine, and an order still unanswered when the wait runs out, get entries of their own without holding up the rest.
+
+        Args:
+            body (dict): The decoded JSON body, which holds `orders`.
+            mapping_date_text (str | None): The mapping date as Redis holds it.
+            warm_identifier (str | None): The current warm's identifier.
+            started_at (float): `time.perf_counter()` when the request arrived.
+
+        Returns:
+            tuple: The answer's body `{"results": [...]}` (dict) and the HTTP status 200.
+
+        Raises:
+            RefusedRequestError: With 400 for an invalid list, and 503 when nothing is mapped yet, Redis cannot be read or the order engine is not running.
+        """
+        try:
+            order_list = PlaceOrderList(
+                body,
+                api_configuration['order_place_list_maximum'],
+            )
+        except InvalidOrderError as error:
+            raise self.refuse(str(error), 400)
+        catalogue_key_prefix = self.catalogue_key_prefix(mapping_date_text)
+
+        answers = []
+        to_place = []
+        for request_index, entry in enumerate(order_list.entries):
+            if isinstance(entry, RefusedRequestError):
+                answers.append((entry.body, entry.status))
+                continue
+            try:
+                instrument_id = self.resolve_instrument_id(
+                    entry,
+                    mapping_date_text,
+                    warm_identifier,
+                    catalogue_key_prefix,
+                )
+            except RefusedRequestError as refusal:
+                refusal = self.catalogue_availability.explained(refusal)
+                answers.append((refusal.body, refusal.status))
+                continue
+            answers.append(None)
+            to_place.append((
+                request_index,
+                order_list.bodies[request_index],
+                instrument_id,
+            ))
+
+        if to_place:
+            placed = self.order_handoff.place_many(
+                to_place,
+                self.list_wait_seconds(len(to_place)),
+                started_at,
+            )
+            for request_index, answer in placed.items():
+                answers[request_index] = answer
+        return {
+            'results': order_list.results(answers),
+        }, 200
+
+    def list_wait_seconds(self, order_count):
+        """How long a list request waits for the engine's answers.
+
+        Each order is given a tenth of a second beyond the single form's wait, which is what one broker's ten-a-second limit costs when every order of the list goes to the same broker. The wait is capped below gunicorn's thirty-second worker timeout, and any order still unanswered is reported as unknown with its `intent_id`.
+
+        Args:
+            order_count (int): How many orders are being handed to the engine.
+
+        Returns:
+            float: The wait in seconds.
+        """
+        wait_seconds = (
+            api_configuration['order_engine_timeout_seconds']
+            + order_count * LIST_SECONDS_PER_ORDER
+        )
+        return min(wait_seconds, api_configuration['order_place_list_wait_seconds'])
+
+    @authenticated
+    def intent(self, intent_id):
+        """Answers with what the order engine did with one order, for a caller who stopped waiting before the answer came.
+
+        The engine keeps each answer for `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_RESULT_TTL_SECONDS` after it gives it.
+
+        Args:
+            intent_id (str): The order's `intent_id`, from the place route's answer.
+
+        Returns:
+            tuple: The Flask JSON response (flask.Response) and its HTTP status (int): 200 with `intent_id`, `status` and `response` once the engine has answered, 404 when no answer is stored, and 503 when Redis cannot be read.
+        """
+        try:
+            stored = self.order_handoff.stored_answer(intent_id)
+        except RefusedRequestError as refusal:
+            return jsonify(refusal.body), refusal.status
+        if stored is None:
+            return jsonify({
+                'error': 'no answer is stored for this intent: the order engine has not answered it yet, the id is not one, or its answer has expired',
+                'intent_id': intent_id,
+            }), 404
+        answer_body, status = stored
+        return jsonify({
+            'intent_id': intent_id,
+            'status': status,
+            'response': answer_body,
+        }), 200
+
+    @authenticated
+    def parents(self):
+        """Answers with the order engine's parents: one, named by `parent_id` in the query string, or every one still open.
+
+        A parent is one order the engine was asked for, such as a bracket, and its legs are the broker orders it placed. This is how a parent that has placed nothing yet, such as an armed trigger, can be seen at all.
+
+        Returns:
+            tuple: The Flask JSON response (flask.Response) and its HTTP status (int): 200 with the parent, or with `parents` listing every open one; 404 when the named parent is not held; 503 when Redis cannot be read.
+        """
+        parent_order_id = request.args.get('parent_id')
+        try:
+            if parent_order_id:
+                document = self.cache.hget(PARENTS_KEY, parent_order_id)
+                if not document:
+                    return jsonify({
+                        'error': 'the order engine holds no parent with this id',
+                        'parent_id': parent_order_id,
+                    }), 404
+                return jsonify(json.loads(document)), 200
+            open_ids = sorted(self.cache.smembers(OPEN_KEY) or [])
+            documents = []
+            if open_ids:
+                documents = self.cache.hmget(PARENTS_KEY, open_ids)
+        except redis.RedisError as error:
+            refusal = self.redis_unreadable(error)
+            return jsonify(refusal.body), refusal.status
+        open_parents = []
+        for document in documents:
+            if document:
+                open_parents.append(json.loads(document))
+        return jsonify({
+            'parents': open_parents,
+        }), 200
+
+    @authenticated
+    def cancel_parents(self):
+        """Cancels one of the order engine's parents, or each of a list: every leg still resting at a broker, and the parent itself.
+
+        The body names one parent with `parent_id`, or several with `parents`, a list of objects each holding `parent_id`. The engine does the cancelling on the worker that owns each parent, so it cannot race the parent's own reaction to a fill or a tick.
+
+        Returns:
+            tuple: The Flask JSON response (flask.Response) and its HTTP status (int): the engine's answer for one parent, or 200 with `results` for a list; 400 for a body that names no parent; 503 when the engine is not running.
+        """
+        started_at = time.perf_counter()
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            body = {}
+        try:
+            if 'parents' in body:
+                answer_body, status = self.cancel_parent_list(body, started_at)
+            else:
+                parent_order_id = body.get('parent_id')
+                if not isinstance(parent_order_id, str) or not parent_order_id:
+                    raise self.refuse('parent_id must name a parent', 400)
+                answer_body, status = self.order_handoff.command(
+                    CANCEL_PARENT,
+                    {
+                        'parent_id': parent_order_id,
+                    },
+                    started_at,
+                )
+        except RefusedRequestError as refusal:
+            answer_body, status = refusal.body, refusal.status
+        return jsonify(answer_body), status
+
+    def cancel_parent_list(self, body, started_at):
+        """Cancels every parent of a list, answering each on its own.
+
+        Args:
+            body (dict): The decoded JSON body, which holds `parents`.
+            started_at (float): `time.perf_counter()` when the request arrived.
+
+        Returns:
+            tuple: The answer's body `{"results": [...]}` (dict) and the HTTP status 200.
+
+        Raises:
+            RefusedRequestError: With 400 when `parents` is not a non-empty list, and 503 when the order engine is not running.
+        """
+        items = body.get('parents')
+        if not isinstance(items, list) or not items:
+            raise self.refuse('parents must be a non-empty list', 400)
+        answers = []
+        entries = []
+        for request_index, item in enumerate(items):
+            parent_order_id = None
+            if isinstance(item, dict):
+                parent_order_id = item.get('parent_id')
+            if not isinstance(parent_order_id, str) or not parent_order_id:
+                refusal = self.refuse('each entry of parents must name a parent_id', 400)
+                answers.append((refusal.body, refusal.status))
+                continue
+            answers.append(None)
+            entries.append((
+                request_index,
+                CANCEL_PARENT,
+                {
+                    'parent_id': parent_order_id,
+                },
+            ))
+        if entries:
+            done = self.order_handoff.command_many(
+                entries,
+                self.list_wait_seconds(len(entries)),
+                started_at,
+            )
+            for request_index, answer in done.items():
+                answers[request_index] = answer
+        results = []
+        for request_index, answer in enumerate(answers):
+            answer_body, status = answer
+            results.append({
+                'request_index': request_index,
+                'status': status,
+                'response': answer_body,
+            })
+        return {
+            'results': results,
+        }, 200
 
     def catalogue_key_prefix(self, mapping_date_text):
         """The prefix of today's catalogue keys, refusing the order when nothing has been mapped.
@@ -536,6 +799,8 @@ class OrdersBlueprint(BaseBlueprint):
         body = request.get_json(silent=True)
         if isinstance(body, dict) and 'orders' in body:
             return self.modify_order_list(access_token, body, started_at)
+        if isinstance(body, dict) and 'parent_id' in body:
+            return self.modify_held_order(access_token, body, started_at)
 
         try:
             modify_request = ModifyOrderRequest(
@@ -557,11 +822,131 @@ class OrdersBlueprint(BaseBlueprint):
         if modify_request.dry_run:
             answer_body, status = prepared.dry_run_answer(started_at)
         else:
-            answer_body, status = prepared.send(started_at)
+            answer_body, status = self.send_change(prepared, started_at)
+        return jsonify(answer_body), status
+
+    def check_token(self, access_token):
+        """Refuses a request whose access token is not the one in force, for a path that reads no order state to check it with.
+
+        Args:
+            access_token (str): The `access-token` header.
+
+        Returns:
+            None: This method returns nothing.
+
+        Raises:
+            RefusedRequestError: With HTTP 401 for a wrong or expired token.
+        """
+        _, error = self.tokens.check(access_token)
+        if error:
+            raise self.refuse(error, 401)
+
+    def modify_held_order(self, access_token, body, started_at):
+        """Changes the price or quantity of an order the engine is still holding, named by `parent_id`, on the worker that owns it.
+
+        Nothing is sent to a broker: a held order, such as a virtual limit order, is only in the engine's virtual order book.
+
+        Args:
+            access_token (str): The `access-token` header.
+            body (dict): The decoded JSON body, which holds `parent_id`.
+            started_at (float): `time.perf_counter()` when the request arrived.
+
+        Returns:
+            tuple: The Flask JSON response (flask.Response) and its HTTP status (int): 200 once changed, or for a dry run; 404 when the engine holds no such parent; 409 when it is no longer held or holds nothing to change.
+
+        Raises:
+            RefusedRequestError: With 400 for an invalid change, 401 for a wrong or expired access token, and 503 when the engine is not running.
+        """
+        self.check_token(access_token)
+        try:
+            change = HeldOrderChange(body, request.args)
+        except InvalidOrderError as error:
+            raise self.refuse(str(error), 400)
+        answer_body, status = self.order_handoff.command(
+            MODIFY_HELD,
+            change.command_arguments(),
+            started_at,
+        )
         return jsonify(answer_body), status
 
     def modify_order_list(self, access_token, body, started_at):
         """Modifies every order of a list, answering each on its own.
+
+        An entry that names `parent_id` is a held order and is changed by the engine; the rest are found in the brokers' order books. When the list holds both, each kind is answered as its own list would be and the results are put back in the caller's order.
+
+        Args:
+            access_token (str): The `access-token` header.
+            body (dict): The decoded JSON body, which holds `orders`.
+            started_at (float): `time.perf_counter()` when the request arrived.
+
+        Returns:
+            tuple: The Flask JSON response `{"results": [...]}` (flask.Response) and the HTTP status 200.
+
+        Raises:
+            RefusedRequestError: With 400 for an invalid list, 401 for a wrong or expired access token, and 503 when Redis cannot be read or the engine is not running.
+        """
+        items = body.get('orders')
+        held_indexes = []
+        if isinstance(items, list):
+            for request_index, item in enumerate(items):
+                if isinstance(item, dict) and 'parent_id' in item:
+                    held_indexes.append(request_index)
+        if not held_indexes:
+            return jsonify({
+                'results': self.broker_order_results(access_token, body, started_at),
+            }), 200
+
+        self.check_token(access_token)
+        answers = {}
+        entries = []
+        for request_index in held_indexes:
+            try:
+                change = HeldOrderChange(items[request_index], request.args)
+            except InvalidOrderError as error:
+                refusal = self.refuse(str(error), 400)
+                answers[request_index] = (refusal.body, refusal.status)
+                continue
+            entries.append((
+                request_index,
+                MODIFY_HELD,
+                change.command_arguments(),
+            ))
+        if entries:
+            done = self.order_handoff.command_many(
+                entries,
+                self.list_wait_seconds(len(entries)),
+                started_at,
+            )
+            for request_index, answer in done.items():
+                answers[request_index] = answer
+
+        other_indexes = []
+        for request_index in range(len(items)):
+            if request_index not in held_indexes:
+                other_indexes.append(request_index)
+        if other_indexes:
+            other_body = dict(body)
+            other_body['orders'] = []
+            for request_index in other_indexes:
+                other_body['orders'].append(items[request_index])
+            other_results = self.broker_order_results(access_token, other_body, started_at)
+            for position, result in enumerate(other_results):
+                answers[other_indexes[position]] = (result['response'], result['status'])
+
+        results = []
+        for request_index in range(len(items)):
+            answer_body, status = answers[request_index]
+            results.append({
+                'request_index': request_index,
+                'status': status,
+                'response': answer_body,
+            })
+        return jsonify({
+            'results': results,
+        }), 200
+
+    def broker_order_results(self, access_token, body, started_at):
+        """Modifies every order of a list that names orders by broker order id, answering each on its own.
 
         Every order's entries and the catalogue markers are read from Redis in one round trip, each order is checked as a single modification is, and the modifications that pass are sent to their brokers, up to ORDER_SEND_THREADS at once.
 
@@ -571,7 +956,7 @@ class OrdersBlueprint(BaseBlueprint):
             started_at (float): `time.perf_counter()` when the request arrived.
 
         Returns:
-            tuple: The Flask JSON response `{"results": [...]}` (flask.Response) and the HTTP status 200.
+            list: One result per entry, with `request_index`, `status` and `response`.
 
         Raises:
             RefusedRequestError: With 400 for an invalid list, 401 for a wrong or expired access token, and 503 when Redis cannot be read.
@@ -599,9 +984,7 @@ class OrdersBlueprint(BaseBlueprint):
             except RefusedRequestError as refusal:
                 prepared_entries.append(refusal)
         answers = self.answer_prepared_list(prepared_entries, order_list.dry_run, started_at)
-        return jsonify({
-            'results': order_list.results(answers),
-        }), 200
+        return order_list.results(answers)
 
     def warm_order_instruments(self, order_list, state):
         """Reads the catalogue entries of every order in a modify list into this worker's instrument cache, in at most two round trips.
@@ -759,7 +1142,9 @@ class OrdersBlueprint(BaseBlueprint):
             tuple: The answer's body (dict) and its HTTP status (int): the broker's answer, or 504 when sending failed unexpectedly and whether the broker received the change is unknown.
         """
         try:
-            return prepared.send(started_at)
+            return self.send_change(prepared, started_at)
+        except RefusedRequestError as refusal:
+            return refusal.body, refusal.status
         except Exception as error:
             self.logger.exception(
                 'sending a change to %s order %s failed unexpectedly',
@@ -903,7 +1288,85 @@ class OrdersBlueprint(BaseBlueprint):
                 broker=broker_name,
                 order_id=order_id,
             )
-        return PreparedModification(broker_orders, order_id, stored_order, instrument_id, broker_request)
+        prepared = PreparedModification(
+            broker_orders,
+            order_id,
+            stored_order,
+            instrument_id,
+            broker_request,
+        )
+        owner = self.owning_parent(state, order_id, broker_name)
+        if owner is not None:
+            self.refuse_engine_unsupported_change(
+                modification,
+                broker_name,
+                order_id,
+            )
+            prepared.engine_command = MODIFY_LEG
+            prepared.engine_arguments = self.engine_modification(
+                owner,
+                broker_name,
+                order_id,
+                modify_request,
+                modification,
+            )
+        return prepared
+
+    def refuse_engine_unsupported_change(self, modification, broker_name, order_id):
+        """Refuses a change to an order the engine placed that its order type could not carry on from.
+
+        An order type works from its leg's price, trigger price and quantity. Changing the order type, the validity or the disclosed quantity underneath it would leave it managing an order that is not the one it placed.
+
+        Args:
+            modification (OrderModification): The change, laid over the stored order.
+            broker_name (str): The broker holding the order.
+            order_id (str): The broker's order id.
+
+        Returns:
+            None: This method returns nothing.
+
+        Raises:
+            RefusedRequestError: With HTTP 409 when the change touches any field but the price, the trigger price and the quantity.
+        """
+        for field_name in ('order_type', 'validity', 'disclosed_quantity'):
+            if modification.changes(field_name):
+                raise self.refuse(
+                    f'this order belongs to an order the engine manages, which can only have its price, trigger_price or quantity changed, not {field_name}',
+                    409,
+                    broker=broker_name,
+                    order_id=order_id,
+                )
+
+    def engine_modification(self, parent_order_id, broker_name, order_id, modify_request, modification):
+        """What the order engine is handed to change a leg it owns.
+
+        Args:
+            parent_order_id (str): The engine's parent that owns the order.
+            broker_name (str): The broker holding the order.
+            order_id (str): The broker's order id.
+            modify_request (ModifyOrderRequest): The validated request.
+            modification (OrderModification): The change, with the quantity already in the broker's own terms.
+
+        Returns:
+            dict: `parent_id`, `broker`, `order_id`, and `quantity` (in the broker's own terms, to send), `quantity_units` (as the caller gave it, which is how a leg records its quantity), `price` and `trigger_price`, each None when unchanged.
+        """
+        arguments = {
+            'parent_id': parent_order_id,
+            'broker': broker_name,
+            'order_id': order_id,
+            'quantity': None,
+            'quantity_units': None,
+            'price': None,
+            'trigger_price': None,
+        }
+        if modification.changes('quantity'):
+            arguments['quantity'] = modification.quantity
+            arguments['quantity_units'] = modify_request.quantity
+        if modification.changes('price'):
+            arguments['price'] = str(modify_request.price)
+        if modification.changes('trigger_price'):
+            arguments['trigger_price'] = str(modify_request.trigger_price)
+        return arguments
 
     def read_order_state(self, order_ids, with_catalogue):
         """Reads, in one Redis round trip, everything a modify or cancel of some orders checks before calling a broker.
@@ -913,7 +1376,7 @@ class OrdersBlueprint(BaseBlueprint):
             with_catalogue (bool): Whether to read the catalogue's mapping date and warm identifier as well, which a modify needs to find the order's instrument.
 
         Returns:
-            dict: `token_document_text`, `mapping_date_text` and `warm_identifier` (str or None, the last two None unless read), `login_texts` and `settings_texts` (one entry per broker, in `broker_names` order), and `order_texts`, mapping each order id to its entry in each broker's order book, in `broker_names` order.
+            dict: `token_document_text`, `mapping_date_text` and `warm_identifier` (str or None, the last two None unless read), `login_texts` and `settings_texts` (one entry per broker, in `broker_names` order), `order_texts`, mapping each order id to its entry in each broker's order book, in `broker_names` order, and `owning_parents`, mapping each order id to the order engine's parent that owns it at each broker, in the same order, None where none does.
 
         Raises:
             RefusedRequestError: With HTTP 503 when Redis cannot be read.
@@ -929,6 +1392,10 @@ class OrdersBlueprint(BaseBlueprint):
             for order_id in order_ids:
                 for broker_name in self.broker_names:
                     pipeline.hget(f'{broker_name}:orders:orders', order_id)
+                owner_keys = []
+                for broker_name in self.broker_names:
+                    owner_keys.append(f'{broker_name}:{order_id}')
+                pipeline.hmget(CHILDREN_KEY, owner_keys)
             replies = pipeline.execute()
         except redis.RedisError as error:
             raise self.redis_unreadable(error)
@@ -948,10 +1415,14 @@ class OrdersBlueprint(BaseBlueprint):
         position = position + 2
         broker_count = len(self.broker_names)
         order_texts = {}
+        owning_parents = {}
         for order_id in order_ids:
             order_texts[order_id] = replies[position:position + broker_count]
             position = position + broker_count
+            owning_parents[order_id] = replies[position] or []
+            position = position + 1
         state['order_texts'] = order_texts
+        state['owning_parents'] = owning_parents
         return state
 
     def resolve_order_instrument(
@@ -1264,7 +1735,7 @@ class OrdersBlueprint(BaseBlueprint):
         if cancel_request.dry_run:
             answer_body, status = prepared.dry_run_answer(started_at)
         else:
-            answer_body, status = prepared.send(started_at)
+            answer_body, status = self.send_change(prepared, started_at)
         return jsonify(answer_body), status
 
     def cancel_order_list(self, access_token, body, started_at):
@@ -1361,7 +1832,33 @@ class OrdersBlueprint(BaseBlueprint):
                 broker=broker_name,
                 order_id=order_id,
             )
-        return PreparedCancel(broker_orders, order_id, stored_order, broker_request)
+        prepared = PreparedCancel(broker_orders, order_id, stored_order, broker_request)
+        owner = self.owning_parent(state, order_id, broker_name)
+        if owner is not None:
+            prepared.engine_command = CANCEL_LEG
+            prepared.engine_arguments = {
+                'parent_id': owner,
+                'broker': broker_name,
+                'order_id': order_id,
+            }
+        return prepared
+
+    def owning_parent(self, state, order_id, broker_name):
+        """The order engine's parent that owns one broker order, or None for an order placed elsewhere.
+
+        Args:
+            state (dict): What `read_order_state` read.
+            order_id (str): The broker's order id.
+            broker_name (str): The broker holding the order.
+
+        Returns:
+            str | None: The parent's id.
+        """
+        owners = state.get('owning_parents', {}).get(order_id) or []
+        position = self.broker_names.index(broker_name)
+        if position >= len(owners):
+            return None
+        return owners[position]
 
     def flatten(self):
         """Cancels every open order at every broker, waits for the cancels, then closes every position.
@@ -1446,6 +1943,7 @@ class OrdersBlueprint(BaseBlueprint):
                 },
             }, 200
 
+        halted = self.halt_every_parent(started_at)
         cancelled = self.cancel_every_order(
             cancelling,
             login_texts,
@@ -1465,6 +1963,7 @@ class OrdersBlueprint(BaseBlueprint):
         flat = not failures and not still_open and not still_held
         status = 200 if flat else 207
         return {
+            'halted': halted,
             'cancelled': cancelled,
             'still_open_after_waiting': [
                 f'{broker}:{order_id}' for broker, order_id in still_open
@@ -1482,6 +1981,35 @@ class OrdersBlueprint(BaseBlueprint):
                 ),
             },
         }, status
+
+    def halt_every_parent(self, started_at):
+        """Asks the order engine to stop every open parent from acting again, before anything is cancelled or closed.
+
+        Without this, an armed trigger could place a new order after flatten, a bracket could place its exits when a cancelled entry turns out to have filled, and a schedule could fire later in the day. The engine answers once every halt is handed to the worker that owns the parent; each worker runs it before any fill or tick that arrives afterwards. Flatten carries on whatever the answer, because cancelling and closing matter more than the engine being reachable.
+
+        Args:
+            started_at (float): `time.perf_counter()` when the request arrived.
+
+        Returns:
+            dict: `halted_parents` with how many open parents were halted, or `error` saying why none could be.
+        """
+        try:
+            answer_body, _ = self.order_handoff.command(
+                HALT_EVERY_PARENT,
+                {},
+                started_at,
+            )
+        except RefusedRequestError as refusal:
+            return {
+                'error': refusal.body.get('error'),
+            }
+        if 'halted_parents' in answer_body:
+            return {
+                'halted_parents': answer_body['halted_parents'],
+            }
+        return {
+            'error': answer_body.get('error') or answer_body.get('status_message'),
+        }
 
     def decode_books(self, replies):
         """Each broker's hash of JSON entries, decoded, by broker name.
@@ -1584,6 +2112,11 @@ class OrdersBlueprint(BaseBlueprint):
             answer['status_message'] = f'the cancel could not be built: {error}'
             return answer
         try:
+            self.take_rate_room(order['broker'])
+        except RefusedRequestError as refusal:
+            answer['status_message'] = refusal.body.get('error')
+            return answer
+        try:
             sent = broker_orders.send_cancel(broker_request)
         except Exception as error:
             answer['status_message'] = f'the cancel could not be sent: {error}'
@@ -1660,7 +2193,9 @@ class OrdersBlueprint(BaseBlueprint):
         return still_held
 
     def close_every_position(self, closing, started_at):
-        """Sends a closing order for every position that is not flat, at the broker holding it.
+        """Sends a closing order for every position that is not flat, at the broker holding it, all in one hand-over to the order engine.
+
+        Every closing order is written for the engine in one step, so the engine's lanes send the closes at different brokers at the same time rather than one after another. A position whose instrument cannot be found is reported without being sent, and does not hold up the rest.
 
         Args:
             closing (list): What `KillSwitch.positions_to_close` returned.
@@ -1670,60 +2205,74 @@ class OrdersBlueprint(BaseBlueprint):
             list: One dictionary per position, with what was sent and what happened.
         """
         answers = []
+        to_place = []
         for position in closing:
-            answers.append(self.close_one_position(position, started_at))
+            answer = dict(position)
+            answer['sent'] = False
+            answer['outcome'] = None
+            answer['status_message'] = None
+            answers.append(answer)
+            instrument_id = self.instrument_for_broker_token(
+                position['broker'],
+                position['instrument_token'],
+            )
+            if instrument_id is None:
+                answer['status_message'] = (
+                    "the broker's token does not name exactly one mapped "
+                    'instrument, so this position was not closed'
+                )
+                continue
+            to_place.append((
+                len(answers) - 1,
+                self.closing_body(position, instrument_id),
+                instrument_id,
+            ))
+        if not to_place:
+            return answers
+        try:
+            placed = self.order_handoff.place_many(
+                to_place,
+                self.list_wait_seconds(len(to_place)),
+                started_at,
+            )
+        except RefusedRequestError as refusal:
+            for request_index, _, _ in to_place:
+                answers[request_index]['status_message'] = refusal.body.get('error')
+            return answers
+        for request_index, placed_answer in placed.items():
+            sent, status = placed_answer
+            answer = answers[request_index]
+            answer['sent'] = True
+            answer['outcome'] = sent.get('outcome')
+            answer['order_id'] = sent.get('order_id')
+            answer['status_message'] = sent.get('status_message') or sent.get('error')
+            answer['http_status'] = status
         return answers
 
-    def close_one_position(self, position, started_at):
-        """Closes one position at the broker holding it, without raising.
+    def closing_body(self, position, instrument_id):
+        """The body of the order that closes one position, as handed to the order engine.
+
+        The body names the broker holding the position in `broker`, which the plain `simple` type sends the order to, and marks the order with `closes_position` so that it may use the part of the broker's daily cap kept for exits.
 
         Args:
             position (dict): One entry from `KillSwitch.positions_to_close`.
-            started_at (float): `time.perf_counter()` when the request arrived.
+            instrument_id (str): The instrument the position is in.
 
         Returns:
-            dict: What happened, with the position, `sent`, `outcome` and `status_message`.
+            dict: The order body.
         """
-        answer = dict(position)
-        answer['sent'] = False
-        answer['outcome'] = None
-        answer['status_message'] = None
-        instrument_id = self.instrument_for_broker_token(
-            position['broker'],
-            position['instrument_token'],
-        )
-        if instrument_id is None:
-            answer['status_message'] = (
-                "the broker's token does not name exactly one mapped "
-                'instrument, so this position was not closed'
-            )
-            return answer
-        body = {
+        return {
             'instrument_id': instrument_id,
             'transaction_type': position['transaction_type'],
             'product': self.closing_product(position['product']),
             'order_type': 'MARKET',
             'quantity': position['close_quantity'],
+            'broker': position['broker'],
+            'synthetic': {
+                'type': 'simple',
+                'closes_position': True,
+            },
         }
-        try:
-            sent, status = self.place_closing_order(
-                body,
-                instrument_id,
-                position['broker'],
-                started_at,
-            )
-        except RefusedRequestError as refusal:
-            answer['status_message'] = refusal.body.get('error')
-            return answer
-        except Exception as error:
-            answer['status_message'] = f'the close could not be sent: {error}'
-            return answer
-        answer['sent'] = True
-        answer['outcome'] = sent.get('outcome')
-        answer['order_id'] = sent.get('order_id')
-        answer['status_message'] = sent.get('status_message')
-        answer['http_status'] = status
-        return answer
 
     def closing_product(self, product):
         """The product a closing order carries, on the vocabulary `POST /place` takes.
@@ -1769,64 +2318,6 @@ class OrdersBlueprint(BaseBlueprint):
         if not isinstance(instrument_ids, list) or len(instrument_ids) != 1:
             return None
         return str(instrument_ids[0])
-
-    def place_closing_order(self, body, instrument_id, broker_name, started_at):
-        """Places one closing order at a named broker, through whichever placement mode is configured.
-
-        In engine mode the body handed to the engine names the broker in `broker`, which the plain `simple` type sends the order to, and marks the order with `closes_position` so that it may use the part of the broker's daily cap kept for exits.
-
-        Args:
-            body (dict): The order body.
-            instrument_id (str): The instrument.
-            broker_name (str): The broker holding the position.
-            started_at (float): `time.perf_counter()` when the request arrived.
-
-        Returns:
-            tuple: The answer's body (dict) and its HTTP status (int).
-
-        Raises:
-            RefusedRequestError: For an order answered without calling a broker.
-        """
-        order = PlaceOrderRequest(body)
-        if self.order_handoff is not None:
-            engine_body = dict(body)
-            engine_body['broker'] = broker_name
-            engine_body['synthetic'] = {
-                'type': 'simple',
-                'closes_position': True,
-            }
-            return self.order_handoff.place(
-                engine_body,
-                instrument_id,
-                started_at,
-            )
-        rotation = self.order_placement.rotation()
-        catalogue_key_prefix = self.catalogue_key_prefix(
-            self.cache.get('unified:catalogue:current_date'),
-        )
-        pipeline = self.cache.pipeline(transaction=False)
-        pipeline.hget(catalogue_key_prefix + 'identity', instrument_id)
-        pipeline.hget(catalogue_key_prefix + 'order_handles', instrument_id)
-        pipeline.hget(catalogue_key_prefix + 'contract_sizes', instrument_id)
-        pipeline.hmget('last_login', self.broker_names)
-        pipeline.hmget('settings', self.broker_names)
-        replies = pipeline.execute()
-        instrument = Instrument.decoded(
-            instrument_id,
-            replies[0],
-            replies[1],
-            replies[2],
-        )
-        prepared = self.order_placement.prepare(
-            order,
-            instrument,
-            rotation,
-            [],
-            replies[3],
-            replies[4],
-            broker_name,
-        )
-        return self.order_placement.send(prepared, started_at)
 
     def find_stored_order(self, order_request, order_texts):
         """Finds the one broker whose order book holds the order.

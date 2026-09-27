@@ -29,6 +29,7 @@ class VirtualLimit(PriceTrigger):
 
     SYNTHETIC_TYPE = 'virtual_limit'
     ARMED_MESSAGE = 'the other side of the book reaches the limit price'
+    TAKES_TRIGGER_ON = False
 
     def is_paper(self):
         """Whether this order is filled from the queue estimate instead of being sent.
@@ -37,6 +38,21 @@ class VirtualLimit(PriceTrigger):
             bool: True for a paper order.
         """
         return self.parent.parameters.get('paper') is True
+
+    def held_order(self):
+        """The order as it is held now: the caller's body, with any price and quantity changed since through `PUT /api/orders/modify`.
+
+        Returns:
+            PlaceOrderRequest: The held order.
+        """
+        body = dict(self.parent.body)
+        held_price = self.parent.parameters.get('held_price')
+        if held_price is not None:
+            body['price'] = held_price
+        held_quantity = self.parent.parameters.get('held_quantity')
+        if held_quantity is not None:
+            body['quantity'] = held_quantity
+        return self.read_order(body)
 
     def read_level(self):
         """The order's limit price, which is also the price the other side has to reach.
@@ -47,7 +63,7 @@ class VirtualLimit(PriceTrigger):
         Raises:
             RefusedRequestError: With HTTP 400 when the order is not a limit order with a price.
         """
-        order = self.read_order(self.parent.body)
+        order = self.held_order()
         if order.order_type != 'LIMIT' or order.price is None:
             raise RefusedRequestError.refusal(
                 'a virtual limit order is held at its own limit price, so it '
@@ -78,9 +94,9 @@ class VirtualLimit(PriceTrigger):
             view (MarketView): The instrument's quote at the moment it fired.
 
         Returns:
-            PlaceOrderRequest: The order to place.
+            PlaceOrderRequest: The order to place, at the held price and quantity.
         """
-        return self.priced(order, self.read_level())
+        return self.priced(self.held_order(), self.read_level())
 
     def run(self, intent, started_at):
         """Records the order and holds it, refusing early if it is not a limit order.
@@ -175,7 +191,7 @@ class VirtualLimit(PriceTrigger):
         filled = estimate.get('filled')
         if not isinstance(filled, int):
             return False
-        order = self.read_order(self.parent.body)
+        order = self.held_order()
         filled = min(filled, order.quantity)
         already = self.parent.parameters.get('paper_filled') or 0
         if filled <= already:
@@ -203,3 +219,100 @@ class VirtualLimit(PriceTrigger):
             )
         self.save()
         return True
+
+    def modify_held(self, price, quantity, dry_run):
+        """Changes the price or quantity of the order while it is still held, without sending anything to a broker.
+
+        The change is recorded with the parameters, so a restart keeps it, and `virtual_book` starts a fresh queue estimate for the new terms, as a changed price at the exchange goes to the back of the queue.
+
+        Args:
+            price (decimal.Decimal | None): The new limit price, or None to keep it.
+            quantity (int | None): The new quantity in units, or None to keep it.
+            dry_run (bool): Whether to check the change without making it.
+
+        Returns:
+            tuple: The answer's body (dict) and its HTTP status (int).
+
+        Raises:
+            RefusedRequestError: With HTTP 409 when the order has already been sent or has finished, or a paper order would be cut below what it has filled; 400 when the price is not a whole number of ticks or the quantity is not a whole number of lots at any broker.
+        """
+        if self.parent.is_terminal():
+            raise RefusedRequestError.refusal(
+                f'the order is already {self.parent.state}',
+                409,
+                parent_id=self.parent.parent_order_id,
+            )
+        if self.has_fired():
+            sent = None
+            for leg in self.parent.legs:
+                if leg.role != 'backstop':
+                    sent = leg
+            detail = {
+                'parent_id': self.parent.parent_order_id,
+            }
+            if sent is not None:
+                detail['broker'] = sent.broker
+                detail['order_id'] = sent.broker_order_id
+            raise RefusedRequestError.refusal(
+                'the order has already been sent to a broker, so change it '
+                'with broker and order_id instead of parent_id',
+                409,
+                **detail,
+            )
+        current = self.held_order()
+        new_price = price if price is not None else current.price
+        new_quantity = quantity if quantity is not None else current.quantity
+        body = dict(self.parent.body)
+        body['price'] = str(new_price)
+        body['quantity'] = new_quantity
+        changed = self.read_order(body)
+        tick_size = self.tick_size()
+        if tick_size and changed.price % tick_size != 0:
+            raise RefusedRequestError.refusal(
+                f'price must be a whole number of ticks of '
+                f'{format(tick_size.normalize(), "f")}',
+                400,
+            )
+        instrument, _, _ = self.placement.market_context(
+            self.parent.instrument_id,
+            False,
+            False,
+        )
+        problems = []
+        for handle in (instrument.handles or {}).values():
+            problems.append(changed.lot_size_problem(handle))
+        if problems and all(problems):
+            raise RefusedRequestError.refusal(problems[0], 400)
+        filled = self.parent.parameters.get('paper_filled') or 0
+        if new_quantity <= filled:
+            raise RefusedRequestError.refusal(
+                f'the paper order has already filled {filled}, so its '
+                f'quantity cannot become {new_quantity}',
+                409,
+                parent_id=self.parent.parent_order_id,
+            )
+        answer = {
+            'parent_id': self.parent.parent_order_id,
+            'synthetic_type': self.parent.synthetic_type,
+            'held': True,
+            'price': str(changed.price),
+            'quantity': changed.quantity,
+        }
+        if dry_run:
+            answer['dry_run'] = True
+            answer['status_message'] = 'the change is valid; nothing was changed'
+            return answer, 200
+        self.parent.parameters = dict(self.parent.parameters)
+        self.parent.parameters['held_price'] = str(changed.price)
+        self.parent.parameters['held_quantity'] = changed.quantity
+        self.record_parameters(
+            f'the caller changed the held order to {changed.quantity} at '
+            f'{changed.price}'
+        )
+        self.save()
+        answer['outcome'] = 'accepted'
+        answer['status_message'] = (
+            'changed while held in the virtual order book; nothing was sent '
+            'to a broker'
+        )
+        return answer, 200

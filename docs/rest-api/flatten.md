@@ -13,7 +13,7 @@ The table below lists the one route on this page.
 
 ## Why the cancels go first
 
-The order of the two halves is the whole point of this route. Suppose you hold a long position with a stop-loss order resting below it. If the position were closed first, the stop would still be live at the exchange. When the price later fell to the stop, it would sell again and leave you short, which is a new trade that nobody chose. So the route cancels every open order first, then re-reads the brokers' order books until they agree the orders are gone, and only then sends closing orders. After the closes it waits a second time, re-reading the brokers' positions until each closed one shows zero, and only then answers that the account is flat.
+The order of the two halves is the whole point of this route. Suppose you hold a long position with a stop-loss order resting below it. If the position were closed first, the stop would still be live at the exchange. When the price later fell to the stop, it would sell again and leave you short, which is a new trade that nobody chose. So the route first asks the [order engine](order-engine.md) to halt every parent it is still running, so that no armed trigger, bracket or schedule places a new order while the account is being unwound, then cancels every open order, then re-reads the brokers' order books until they agree the orders are gone, and only then sends closing orders. After the closes it waits a second time, re-reading the brokers' positions until each closed one shows zero, and only then answers that the account is flat.
 
 <figure class="diagram">
 --8<-- "docs/assets/diagrams/flatten.svg"
@@ -25,6 +25,8 @@ The order of the two halves is the whole point of this route. Suppose you hold a
 <div class="endpoint" markdown><span class="method post">POST</span> `/api/orders/flatten`<span class="auth">access-token</span></div>
 
 This route decides what to cancel and what to close from Redis alone. Open orders come from each broker's `<broker>:orders:orders` hash, and positions come from each broker's own `<broker>:portfolio:positions` hash rather than from the merged portfolio document, because a closing order has to go to the broker that actually holds the position.
+
+Each cancel takes room in the per-broker rate budget before it is sent, waiting up to `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_WAIT_SECONDS` when the broker has already been sent ten messages in the last second. A cancel that finds no room in time is reported as not sent, with the budget's message, and the route goes on to the rest.
 
 ### Request parameters
 
@@ -221,13 +223,15 @@ The "cancel never confirmed" and "position still held" examples are shortened: t
 
 ### Response attributes
 
-A dry run answers with `would_cancel` and `would_close`. A real run answers with `cancelled`, `still_open_after_waiting`, `closed`, `positions_still_open_after_waiting` and `flat`.
+A dry run answers with `would_cancel` and `would_close`. A real run answers with `halted`, `cancelled`, `still_open_after_waiting`, `closed`, `positions_still_open_after_waiting` and `flat`.
 
 | Attribute | Type | Description |
 |---|---|---|
 | `dry_run` | boolean | `true`, on a dry run only. |
 | `would_cancel[]` | array | Each order that would be cancelled, with `broker`, `order_id` and `status`. |
 | `would_close[]` | array | Each position that would be closed, in the same shape as a `closed` entry before sending. |
+| `halted.halted_parents` | number | How many of the order engine's open parents were halted before anything was cancelled. |
+| `halted.error` | string | Why no parent could be halted, such as the engine not running; flatten carries on regardless. |
 | `cancelled[]` | array | One entry per cancel attempted, with `broker`, `order_id`, `sent`, `outcome` and `status_message`. |
 | `cancelled[].sent` | boolean | Whether the cancel request left the machine. `false` means it could not be built or sent, and `status_message` says why. |
 | `still_open_after_waiting[]` | array of strings | The orders a broker still reported as live when the wait ended, written as `broker:order_id`. |
@@ -267,11 +271,12 @@ A failure after the first read never changes the status to anything but 207; it 
 | cancel | `the cancel could not be sent: <error>` | The request raised before an answer came back. |
 | close | `the broker's token does not name exactly one mapped instrument, so this position was not closed` | `unified:broker_tokens` has no entry, or more than one instrument, for the position's token. |
 | close | any refusal message from `POST /api/orders/place` | For example a lot-size problem, or `<broker> cannot take this order: <reason>`. |
-| close | `the close could not be sent: <error>` | Anything else that went wrong while sending. |
+| close | `the order engine is not running, so the order was not placed; start unified-orders@order_engine.service` | No close could be handed to the engine, so none was sent. |
+| close | `the order engine did not answer within <n> seconds, so this may still happen; read its answer later by its intent_id` | The engine had not answered this close when the wait ran out; it may still be sent. |
 
 ## What it does, step by step
 
-The sequence below follows a real run with one open order and one position, in direct placement mode.
+The sequence below follows a run with one open order and one position.
 
 ```mermaid
 sequenceDiagram
@@ -279,6 +284,7 @@ sequenceDiagram
     participant C as Your program
     participant A as API worker
     participant R as Redis
+    participant E as Order engine
     participant B as Broker
     C->>A: POST /api/orders/flatten {"confirm": "FLATTEN"}
     A->>A: header present? confirm is FLATTEN?
@@ -293,11 +299,14 @@ sequenceDiagram
         A->>R: HGETALL every order book
         R-->>A: statuses
     end
-    loop every open position
-        A->>R: HGET unified:broker_tokens, catalogue data
-        A->>B: MARKET order, opposite side, same broker
-        B-->>A: answer
+    A->>R: HGET unified:broker_tokens for each position
+    A->>R: XADD every closing order in one pipeline
+    par each broker's lane at the same time
+        E->>B: MARKET order, opposite side, same broker
+        B-->>E: answer
     end
+    E->>R: RPUSH each answer onto the request's reply list
+    R-->>A: the answers, through BLPOP
     loop every 0.25 s until every closed position shows zero or the wait runs out
         A->>R: HGETALL every position book
         R-->>A: quantities
@@ -326,11 +335,11 @@ Each closing order is an ordinary placement with these fields.
 | `quantity` | The absolute net quantity |
 | broker | The broker that holds the position, never the selector's choice |
 
-In direct mode the close goes through the same checks as `POST /api/orders/place`, with the broker named: the broker must still be able to take the order, and the quantity must fit the lot size. The broker exclusion list does not stop a close, because a position can only be closed where it is held.
+The close goes through the same checks as `POST /api/orders/place`, with the broker named: the broker must still be able to take the order, and the quantity must fit the lot size. The broker exclusion list does not stop a close, because a position can only be closed where it is held.
 
-### Flatten in engine mode
+### How a close reaches the broker
 
-When `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT` is `engine`, the cancels are still sent straight from the API worker, but each close is written to the order engine as an intent and waits up to `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_TIMEOUT_SECONDS` for its answer, one close after another. The intent's body carries two additions, shown below as the offline suite recorded them.
+The cancels are sent straight from the API worker. The closes are written to the order engine together, in one pipeline, the way a [list of orders](orders.md#several-orders-in-one-request) is placed, so the engine's lanes send the closes at different brokers at the same time. The route waits for their answers for the single form's wait plus a tenth of a second per close, capped at `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACE_LIST_WAIT_SECONDS`. The intent's body carries two additions, shown below as the offline suite recorded them.
 
 ```json
 {

@@ -160,7 +160,7 @@ class Twap(SyntheticOrder):
         return quantities
 
     def slice_order(self, order, slices, index):
-        """The order for one slice.
+        """The order for one slice, with any quantity a caller's change carried forward added to it.
 
         Args:
             order (PlaceOrderRequest): The validated order.
@@ -170,10 +170,42 @@ class Twap(SyntheticOrder):
         Returns:
             PlaceOrderRequest: The slice.
         """
+        quantity = self.slice_quantities(order, slices)[index]
+        carried = self.parent.parameters.get('carried_quantity') or 0
+        if carried:
+            quantity = max(1, quantity + carried)
+            self.parent.parameters = dict(self.parent.parameters)
+            self.parent.parameters['carried_quantity'] = 0
+            self.record_parameters(
+                f'{carried} carried from a slice the caller changed goes into slice {index + 1}'
+            )
         return order.with_quantities(
-            self.slice_quantities(order, slices)[index],
+            quantity,
             0,
         )
+
+    def on_leg_modified(self, leg, before):
+        """Carries a caller's change to a slice's quantity into the next slice, so the parent's total stays what the caller asked for.
+
+        Each slice's size is worked out from the total, so a slice the caller cut from 500 to 300 leaves 200 that no slice would otherwise place. They are carried into the next slice. A change to the last slice has no later slice to carry into, so the total ends short or long by that much.
+
+        Args:
+            leg (OrderLeg): The slice the caller changed, holding its new quantity.
+            before (dict): What the leg held before, with `quantity`.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        old_quantity = before.get('quantity')
+        if leg.quantity is None or old_quantity is None or leg.quantity == old_quantity:
+            return
+        carried = self.parent.parameters.get('carried_quantity') or 0
+        self.parent.parameters = dict(self.parent.parameters)
+        self.parent.parameters['carried_quantity'] = carried + old_quantity - leg.quantity
+        self.record_parameters(
+            f'the caller changed a slice from {old_quantity} to {leg.quantity}, so the difference is carried into the next slice'
+        )
+        self.save()
 
     def on_clock_tick(self, now):
         """Sends any slice whose time has come.

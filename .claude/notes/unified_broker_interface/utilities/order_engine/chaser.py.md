@@ -19,3 +19,7 @@ Crossing is a separate decision with a separate parameter. `cross_after_seconds`
 A chaser waits for a time and watches a price, so it could plausibly have set both `WANTS_CLOCK` and `WANTS_PRICES`. It sets only the second, and reads the time from the price tick's own `now`.
 
 Two beats would mean two places that can decide to move the same order, arriving a few hundred milliseconds apart and each spending a request. More importantly it would mean a step computed from a quote read on a different beat than the one that decided the step was due, which is the same class of mistake as reading a schedule from one clock and checking it against another.
+
+## Why a caller's price restarts the step wait
+
+The chaser already steps from the leg's own price, which holds the caller's after a modify, so it carries on from there without help. What it needs is a fresh wait: without one, the next tick could step straight away, a moment after the caller set the price.

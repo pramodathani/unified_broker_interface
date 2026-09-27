@@ -28,6 +28,7 @@ class HiddenStop(PriceTrigger):
 
     SYNTHETIC_TYPE = 'hidden_stop'
     ARMED_MESSAGE = 'the book reaches the level'
+    TAKES_TRIGGER_ON = False
     CLOSES_POSITIONS = True
 
     def default_direction(self, transaction_type):
@@ -139,11 +140,11 @@ class HiddenStop(PriceTrigger):
             started_at (float): `time.perf_counter()` when the engine took the intent.
 
         Returns:
-            None: This method returns nothing.
+            dict | None: The backstop placed, with `broker`, `order_id`, `outcome` and `status_message`, or None when no backstop was asked for.
         """
         trigger, limit = self.backstop_prices()
         if trigger is None:
-            return
+            return None
         body = dict(self.parent.body)
         body.pop('price_reference', None)
         body.pop('quantity_reference', None)
@@ -160,6 +161,14 @@ class HiddenStop(PriceTrigger):
         if answer.get('outcome') == 'accepted':
             self.record_state('protecting', 'the backstop is resting')
         self.save()
+        return {
+            'broker': answer.get('broker'),
+            'order_id': answer.get('order_id'),
+            'outcome': answer.get('outcome'),
+            'status_message': answer.get('status_message'),
+            'trigger_price': str(trigger),
+            'price': str(limit),
+        }
 
     def child_order(self, order, view):
         """A limit priced past the touch, which closes the position against what is resting.

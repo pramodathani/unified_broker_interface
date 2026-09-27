@@ -1,8 +1,14 @@
 """The synthetic order types, by the name a caller's `synthetic.type` selects them with."""
 
 from unified_broker_interface.utilities.order_engine.bracket import Bracket
+from unified_broker_interface.utilities.order_engine.account_conditional import (
+    AccountConditional,
+)
 from unified_broker_interface.utilities.order_engine.accumulation import (
     Accumulation,
+)
+from unified_broker_interface.utilities.order_engine.attached_hedge import (
+    AttachedHedge,
 )
 from unified_broker_interface.utilities.order_engine.atr_trail import AtrTrail
 from unified_broker_interface.utilities.order_engine.basket import Basket
@@ -10,6 +16,12 @@ from unified_broker_interface.utilities.order_engine.candle_close_stop import (
     CandleCloseStop,
 )
 from unified_broker_interface.utilities.order_engine.chaser import Chaser
+from unified_broker_interface.utilities.order_engine.close_on_trigger import (
+    CloseOnTrigger,
+)
+from unified_broker_interface.utilities.order_engine.closing_price import (
+    ClosingPrice,
+)
 from unified_broker_interface.utilities.order_engine.cover import Cover
 from unified_broker_interface.utilities.order_engine.cross_instrument import (
     CrossInstrument,
@@ -58,6 +70,9 @@ from unified_broker_interface.utilities.order_engine.oco import OneCancelsOther
 from unified_broker_interface.utilities.order_engine.one_cancels_all import (
     OneCancelsAll,
 )
+from unified_broker_interface.utilities.order_engine.opening_auction import (
+    OpeningAuction,
+)
 from unified_broker_interface.utilities.order_engine.oto import OneTriggersOther
 from unified_broker_interface.utilities.order_engine.peg import Peg
 from unified_broker_interface.utilities.order_engine.participation import (
@@ -65,9 +80,18 @@ from unified_broker_interface.utilities.order_engine.participation import (
 )
 from unified_broker_interface.utilities.order_engine.post_only import PostOnly
 from unified_broker_interface.utilities.order_engine.scale_out import ScaleOut
+from unified_broker_interface.utilities.order_engine.scale_with_profit_taker import (
+    ScaleWithProfitTaker,
+)
 from unified_broker_interface.utilities.order_engine.scheduled import Scheduled
 from unified_broker_interface.utilities.order_engine.simple import SimpleOrder
 from unified_broker_interface.utilities.order_engine.square_off import SquareOff
+from unified_broker_interface.utilities.order_engine.stepped_stop import (
+    SteppedStop,
+)
+from unified_broker_interface.utilities.order_engine.stop_and_reverse import (
+    StopAndReverse,
+)
 from unified_broker_interface.utilities.order_engine.strategy_stop import (
     StrategyStop,
 )
@@ -81,6 +105,15 @@ from unified_broker_interface.utilities.order_engine.trailing_stop import (
 from unified_broker_interface.utilities.order_engine.twap import Twap
 from unified_broker_interface.utilities.order_engine.virtual_limit import (
     VirtualLimit,
+)
+from unified_broker_interface.utilities.order_engine.two_sided_quote import (
+    TwoSidedQuote,
+)
+from unified_broker_interface.utilities.order_engine.underlying_peg import (
+    UnderlyingPeg,
+)
+from unified_broker_interface.utilities.order_engine.volatility_order import (
+    VolatilityOrder,
 )
 from unified_broker_interface.utilities.order_engine.vwap import Vwap
 from unified_broker_interface.utilities.order_engine.two_sided_breakout import (
@@ -130,4 +163,15 @@ SYNTHETIC_ORDER_CLASSES = {
     GoodTillTriggered.SYNTHETIC_TYPE: GoodTillTriggered,
     DailyStop.SYNTHETIC_TYPE: DailyStop,
     VirtualLimit.SYNTHETIC_TYPE: VirtualLimit,
+    OpeningAuction.SYNTHETIC_TYPE: OpeningAuction,
+    ClosingPrice.SYNTHETIC_TYPE: ClosingPrice,
+    UnderlyingPeg.SYNTHETIC_TYPE: UnderlyingPeg,
+    VolatilityOrder.SYNTHETIC_TYPE: VolatilityOrder,
+    SteppedStop.SYNTHETIC_TYPE: SteppedStop,
+    CloseOnTrigger.SYNTHETIC_TYPE: CloseOnTrigger,
+    StopAndReverse.SYNTHETIC_TYPE: StopAndReverse,
+    AttachedHedge.SYNTHETIC_TYPE: AttachedHedge,
+    ScaleWithProfitTaker.SYNTHETIC_TYPE: ScaleWithProfitTaker,
+    TwoSidedQuote.SYNTHETIC_TYPE: TwoSidedQuote,
+    AccountConditional.SYNTHETIC_TYPE: AccountConditional,
 }

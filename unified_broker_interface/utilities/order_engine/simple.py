@@ -17,6 +17,7 @@ class SimpleOrder(SyntheticOrder):
     """
 
     SYNTHETIC_TYPE = 'simple'
+    FINISHES_WITH_LEGS = True
 
     def run(self, intent, started_at):
         """Places the caller's order and answers the waiting API worker.

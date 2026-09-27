@@ -2,6 +2,7 @@
 
 import json
 import time
+import uuid
 
 import redis
 
@@ -14,6 +15,8 @@ from unified_broker_interface.utilities.order_engine.utilities.order_intent impo
 INTENT_STREAM_KEY = 'unified:orders:intents:stream'
 INTENT_STREAM_FIELD = 'intent'
 STREAM_MAX_LENGTH = 10000
+LIST_REPLY_KEY_PREFIX = 'unified:orders:intents:reply:'
+ANSWER_KEY_PREFIX = 'unified:orders:intents:answer:'
 
 
 class IntentHandoff:
@@ -24,20 +27,23 @@ class IntentHandoff:
     Attributes:
         cache (redis.Redis): The Redis client.
         timeout_seconds (float): How long to wait for the engine before answering that the outcome is unknown.
+        hold_limits (bool): Whether a plain limit order is held in the engine's virtual order book rather than sent at once.
     """
 
-    def __init__(self, cache, timeout_seconds):
+    def __init__(self, cache, timeout_seconds, hold_limits=False):
         """Builds the handoff.
 
         Args:
             cache (redis.Redis): The Redis client.
             timeout_seconds (float): How long to wait for the engine's answer.
+            hold_limits (bool): Whether a plain limit order is held in the virtual order book.
 
         Returns:
             None: This method returns nothing.
         """
         self.cache = cache
         self.timeout_seconds = timeout_seconds
+        self.hold_limits = hold_limits
 
     def place(self, body, instrument_id, started_at):
         """Writes the order down for the engine and answers with what the engine did.
@@ -56,7 +62,12 @@ class IntentHandoff:
             RefusedRequestError: With HTTP 503 when the order engine is not running or the order cannot be written for it.
         """
         self.refuse_unless_engine_running()
-        intent = OrderIntent(body, instrument_id, self.timeout_seconds)
+        intent = OrderIntent(
+            body,
+            instrument_id,
+            self.timeout_seconds,
+            hold_limits=self.hold_limits,
+        )
         try:
             self.cache.xadd(
                 INTENT_STREAM_KEY,
@@ -87,6 +98,205 @@ class IntentHandoff:
                 f'the order engine did not answer within {self.timeout_seconds} seconds, so this order may still be placed',
             )
         return self.engine_answer(intent, reply[1], started_at)
+
+    def place_many(self, entries, wait_seconds, started_at):
+        """Writes several orders for the engine in one round trip and collects each one's answer.
+
+        Every intent names the same reply list and its own place in the request, so one list carries every answer back, in whatever order the engine's workers finish. The wait stops when every order has an answer or `wait_seconds` has passed. An order without an answer by then is answered as outcome `unknown` with its `intent_id`, because the engine may still place it, and its answer can be read later from `GET /api/orders/intents/<intent_id>`.
+
+        Args:
+            entries (list): One `(request_index, body, instrument_id)` triple per order, each body already validated and each instrument already resolved.
+            wait_seconds (float): The longest to wait for the answers.
+            started_at (float): `time.perf_counter()` when the request arrived.
+
+        Returns:
+            dict: Each request index (int) to a tuple of the order's answer body (dict) and its HTTP status (int).
+
+        Raises:
+            RefusedRequestError: With HTTP 503 when the order engine is not running or Redis cannot be read before anything is written.
+        """
+        self.refuse_unless_engine_running()
+        reply_key = LIST_REPLY_KEY_PREFIX + uuid.uuid4().hex
+        intents = {}
+        for request_index, body, instrument_id in entries:
+            intents[request_index] = OrderIntent(
+                body,
+                instrument_id,
+                wait_seconds,
+                request_index,
+                reply_key,
+                hold_limits=self.hold_limits,
+            )
+        return self.hand_over_many(intents, reply_key, wait_seconds, started_at)
+
+    def command(self, command, arguments, started_at):
+        """Hands one change to a parent the engine owns to the worker that owns it, and answers with what it did.
+
+        Args:
+            command (str): The command, such as `cancel_leg` or `modify_leg`.
+            arguments (dict): The command's arguments, such as `parent_id`, `broker` and `order_id`.
+            started_at (float): `time.perf_counter()` when the request arrived.
+
+        Returns:
+            tuple: The answer's body (dict) and its HTTP status (int).
+
+        Raises:
+            RefusedRequestError: With HTTP 503 when the order engine is not running or the command cannot be written for it.
+        """
+        answers = self.command_many(
+            [
+                (0, command, arguments),
+            ],
+            self.timeout_seconds,
+            started_at,
+        )
+        return answers[0]
+
+    def command_many(self, entries, wait_seconds, started_at):
+        """Hands several changes to parents the engine owns over in one round trip, and collects each one's answer.
+
+        Args:
+            entries (list): One `(request_index, command, arguments)` triple per change.
+            wait_seconds (float): The longest to wait for the answers.
+            started_at (float): `time.perf_counter()` when the request arrived.
+
+        Returns:
+            dict: Each request index (int) to a tuple of the change's answer body (dict) and its HTTP status (int).
+
+        Raises:
+            RefusedRequestError: With HTTP 503 when the order engine is not running or Redis cannot be read before anything is written.
+        """
+        self.refuse_unless_engine_running()
+        reply_key = LIST_REPLY_KEY_PREFIX + uuid.uuid4().hex
+        intents = {}
+        for request_index, command, arguments in entries:
+            intents[request_index] = OrderIntent(
+                arguments,
+                None,
+                wait_seconds,
+                request_index,
+                reply_key,
+                command,
+            )
+        return self.hand_over_many(intents, reply_key, wait_seconds, started_at)
+
+    def hand_over_many(self, intents, reply_key, wait_seconds, started_at):
+        """Writes several intents in one pipeline and collects each one's answer from their shared reply list.
+
+        Args:
+            intents (dict): Each request index (int) to its `OrderIntent`, all naming `reply_key`.
+            reply_key (str): The list the engine answers every intent on.
+            wait_seconds (float): The longest to wait for the answers.
+            started_at (float): `time.perf_counter()` when the request arrived.
+
+        Returns:
+            dict: Each request index (int) to a tuple of the answer's body (dict) and its HTTP status (int).
+        """
+        pipeline = self.cache.pipeline(transaction=False)
+        for intent in intents.values():
+            pipeline.xadd(
+                INTENT_STREAM_KEY,
+                {
+                    INTENT_STREAM_FIELD: json.dumps(intent.document()),
+                },
+                maxlen=STREAM_MAX_LENGTH,
+                approximate=True,
+            )
+        answers = {}
+        try:
+            pipeline.execute()
+        except redis.RedisError as error:
+            for request_index, intent in intents.items():
+                answers[request_index] = self.unknown_answer(
+                    intent,
+                    started_at,
+                    f'the requests could not all be written for the order engine ({error}), so this one may or may not have been made',
+                )
+            return answers
+        reply_texts = self.collect_replies(reply_key, len(intents), wait_seconds)
+        for request_index, intent in intents.items():
+            reply_text = reply_texts.get(request_index)
+            if reply_text is None:
+                answers[request_index] = self.unknown_answer(
+                    intent,
+                    started_at,
+                    f'the order engine did not answer within {wait_seconds} seconds, so this may still happen; read its answer later by its intent_id',
+                )
+                continue
+            try:
+                answers[request_index] = self.engine_answer(
+                    intent,
+                    reply_text,
+                    started_at,
+                )
+            except RefusedRequestError as refusal:
+                answers[request_index] = (refusal.body, refusal.status)
+        return answers
+
+    def collect_replies(self, reply_key, expected_count, wait_seconds):
+        """Takes answers off one request's reply list until every order has one or the wait runs out.
+
+        Args:
+            reply_key (str): The request's reply list.
+            expected_count (int): How many answers are owed.
+            wait_seconds (float): The longest to wait in all.
+
+        Returns:
+            dict: Each request index (int) to the answer document the engine pushed (str); an order not answered in time is left out.
+        """
+        deadline = time.monotonic() + wait_seconds
+        reply_texts = {}
+        while len(reply_texts) < expected_count:
+            remaining_seconds = deadline - time.monotonic()
+            if remaining_seconds <= 0:
+                break
+            try:
+                reply = self.cache.blpop(reply_key, timeout=remaining_seconds)
+            except redis.RedisError:
+                break
+            if reply is None:
+                break
+            try:
+                request_index = json.loads(reply[1]).get('request_index')
+            except (AttributeError, ValueError):
+                continue
+            if isinstance(request_index, int):
+                reply_texts[request_index] = reply[1]
+        return reply_texts
+
+    def stored_answer(self, intent_id):
+        """The answer the engine stored for one intent, for a caller who stopped waiting before it came.
+
+        Args:
+            intent_id (str): The intent's id.
+
+        Returns:
+            tuple | None: The answer's body (dict) and its HTTP status (int), or None when no answer is stored, because the engine has not answered yet, the intent is unknown, or the answer has expired.
+
+        Raises:
+            RefusedRequestError: With HTTP 503 when Redis cannot be read.
+        """
+        try:
+            stored = self.cache.get(ANSWER_KEY_PREFIX + intent_id)
+        except redis.RedisError as error:
+            raise RefusedRequestError.refusal(
+                f'Redis could not be read: {error}',
+                503,
+            )
+        if not stored:
+            return None
+        try:
+            document = json.loads(stored)
+        except ValueError:
+            return None
+        if not isinstance(document, dict) or not isinstance(document.get('body'), dict):
+            return None
+        status = document.get('status')
+        if not isinstance(status, int):
+            status = 504
+        body = document['body']
+        body['intent_id'] = intent_id
+        return body, status
 
     def refuse_unless_engine_running(self):
         """Refuses the order before it is written down when no order engine holds its lock.

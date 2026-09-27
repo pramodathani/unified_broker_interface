@@ -15,3 +15,7 @@ Rolling forward is the friendlier-looking choice and the wrong one. An order tol
 ## Why durations and times of day are both allowed
 
 `time_stop` takes either `until_time` or `minutes`, because the two things it is for are said differently. A square-off is a time of day: be out by ten past three. A momentum stop is a duration: if this has gone nowhere in twenty minutes, the idea has failed. Forcing either into the other's shape would mean the caller doing arithmetic that this can do instead.
+
+## Why times on a closed day move to the next trading day
+
+`time_on_trading_day` keeps `time_today`'s rule on a trading day, a time already passed is refused rather than taken to mean tomorrow, because that rule guards against a mistake in the caller's time. On a weekend or holiday there is no "today" to mean, and the caller can only mean the next session, so the time is placed on the next trading day and the answer names the date through `described`.

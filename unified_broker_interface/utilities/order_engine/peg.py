@@ -244,6 +244,69 @@ class Peg(SyntheticOrder):
             self.save()
         return moved
 
+    def on_leg_modified(self, leg, before):
+        """Takes the offset from the reference that puts the peg at the price the caller set, so it follows the market from there.
+
+        The peg's price is its reference, such as the best bid, moved by `offset_ticks`. Without a new offset the next tick would move the order straight back to where the old offset puts it. The reference is read from the live quote now, and the offset is the whole number of ticks between it and the caller's price. When the quote cannot be read, the offset is left as it was and the next tick moves the order back.
+
+        Args:
+            leg (OrderLeg): The pegged leg, holding its new price.
+            before (dict): What the leg held before, with `price`.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        if leg.role != 'entry' or leg.price is None or leg.price == before.get('price'):
+            return
+        try:
+            _, quote, _ = self.placement.market_context(
+                self.parent.instrument_id,
+                True,
+                False,
+            )
+        except RefusedRequestError as refusal:
+            self.logger.warning(
+                f'Parent {self.parent.parent_order_id} could not read the quote '
+                f'to re-anchor its peg: {refusal.body.get("error")}'
+            )
+            return
+        view = self.view({
+            self.parent.instrument_id: quote,
+        })
+        reference_price = self.reference_price(view, leg.transaction_type)
+        tick_size = self.tick_size()
+        if reference_price is None or not tick_size:
+            return
+        new_price = decimal.Decimal(str(leg.price))
+        if leg.transaction_type == 'BUY':
+            distance = reference_price - new_price
+        else:
+            distance = new_price - reference_price
+        offset = int((distance / tick_size).to_integral_value())
+        self.parent.parameters = dict(self.parent.parameters)
+        self.parent.parameters['offset_ticks'] = offset
+        self.record_parameters(
+            f'the caller moved the price to {new_price}, so the peg follows the market {offset} ticks from its reference'
+        )
+        self.save()
+
+    def reference_price(self, view, transaction_type):
+        """The price this peg's reference stands at now, before any offset.
+
+        Args:
+            view (MarketView): The live quote.
+            transaction_type (str): BUY or SELL.
+
+        Returns:
+            decimal.Decimal | None: The price, or None when the book does not carry it.
+        """
+        reference = self.parent.parameters.get('reference', 'own_touch')
+        if reference == 'mid':
+            return view.mid()
+        if reference == 'opposite_touch':
+            return view.opposite_touch(transaction_type)
+        return view.own_touch(transaction_type)
+
     def working_leg(self):
         """The one leg this peg is following the market with, while it can still fill.
 

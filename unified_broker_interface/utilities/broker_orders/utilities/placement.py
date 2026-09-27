@@ -1,12 +1,15 @@
 """Choosing the broker for one order, building its request, sending it and reading the answer.
 
-This is the half of order placement that reads no store. The caller reads Redis and hands the decoded texts in, which is what lets both the REST API worker and the order engine place an order the same way, through the same code, and answer with the same body.
+This is the half of order placement that reads no store. The caller reads Redis and hands the decoded texts in. The order engine places every order through it, and the REST API uses the same broker objects and connection warmers for its modifications and cancellations.
 
-The answer bodies built here are the REST API's own. That is a deliberate compromise: the alternative is for the order engine to carry its own copy of the same fifteen lines, and the whole point of the engine is that a caller cannot tell which process placed the order.
+The answer bodies built here are the ones the REST API returns for a placement, so a caller sees the same keys whichever order type the engine ran.
 """
 
 import time
 
+from unified_broker_interface.utilities.broker_orders.utilities.connection_pool import (
+    DEFAULT_POOL_SIZE,
+)
 from unified_broker_interface.utilities.broker_orders.utilities.connection_warmer import (
     ConnectionWarmer,
 )
@@ -38,11 +41,12 @@ class OrderPlacement:
         logger (logging.Logger): The logger for failures that do not change an answer.
     """
 
-    def __init__(self, logger):
+    def __init__(self, logger, pool_size=DEFAULT_POOL_SIZE):
         """Builds one order class per broker with no broker connection open yet, and the configured broker selector.
 
         Args:
             logger (logging.Logger): The logger for failures that do not change an answer.
+            pool_size (int): How many connections to each broker to keep, which is how many requests to one broker can be sent at once over a warm connection.
 
         Returns:
             None: This method returns nothing.
@@ -53,8 +57,10 @@ class OrderPlacement:
         self.logger = logger
         self.broker_names = []
         self.broker_orders = {}
+        warmed_names = self.warm_broker_names()
         for broker_order_class in BROKER_ORDER_CLASSES:
-            broker_orders = broker_order_class()
+            oldest_first = broker_order_class.BROKER_NAME in warmed_names
+            broker_orders = broker_order_class(pool_size, oldest_first)
             self.broker_names.append(broker_orders.BROKER_NAME)
             self.broker_orders[broker_orders.BROKER_NAME] = broker_orders
         selector_name = api_configuration['order_broker_selector']
@@ -67,7 +73,7 @@ class OrderPlacement:
         self.connection_warmers = []
 
     def start_connection_warmers(self):
-        """Starts a connection warmer for each broker named in `UNIFIED_BROKER_INTERFACE_API_ORDER_WARM_BROKERS`.
+        """Starts a connection warmer for each broker named in `UNIFIED_BROKER_INTERFACE_API_ORDER_WARM_BROKERS`, or for every broker when it says `all`.
 
         Warming only saves time, so nothing about it may stop the caller: an unknown broker name is logged and ignored, and any other failure is logged and leaves warming off. A broker without a `WARM_URL`, such as Kotak, is pinged only once a request has named its host.
 
@@ -75,7 +81,7 @@ class OrderPlacement:
             None: This method returns nothing.
         """
         try:
-            for broker_name in api_configuration['order_warm_brokers']:
+            for broker_name in self.warm_broker_names():
                 if not broker_name:
                     continue
                 broker_orders = self.broker_orders.get(broker_name)
@@ -90,6 +96,22 @@ class OrderPlacement:
                 self.connection_warmers.append(warmer)
         except Exception:
             self.logger.exception('order connection warming could not start')
+
+    def warm_broker_names(self):
+        """The brokers whose connections are kept warm, as `UNIFIED_BROKER_INTERFACE_API_ORDER_WARM_BROKERS` names them.
+
+        Returns:
+            list: Broker names, which is every broker when the setting is `all` and none when it is empty.
+        """
+        configured = api_configuration['order_warm_brokers']
+        if configured == [
+            'all',
+        ]:
+            every_name = []
+            for broker_order_class in BROKER_ORDER_CLASSES:
+                every_name.append(broker_order_class.BROKER_NAME)
+            return every_name
+        return configured
 
     def attach_daily_count(self, daily_count):
         """Makes every broker's order class count the requests it sends against the daily caps.
@@ -224,6 +246,38 @@ class OrderPlacement:
             skipped=skipped,
         )
 
+    def named_broker_skip_reason(
+        self,
+        order,
+        instrument,
+        broker_name,
+        login_texts,
+        settings_texts,
+    ):
+        """Why a named broker cannot take an order, or None when it can.
+
+        Args:
+            order (PlaceOrderRequest): The validated order.
+            instrument (Instrument): The tradeable instrument.
+            broker_name (str): The broker.
+            login_texts (list): Every broker's login as Redis holds it, in `broker_names` order.
+            settings_texts (list): Every broker's settings as Redis holds them, in `broker_names` order.
+
+        Returns:
+            str | None: The reason, such as `takes no SL orders`, or None; also None for a broker this API does not know, which `choose_named_broker` refuses on its own.
+        """
+        broker_orders = self.broker_orders.get(broker_name)
+        if broker_orders is None:
+            return None
+        position = self.broker_names.index(broker_name)
+        return broker_orders.place_skip_reason(
+            order,
+            instrument,
+            instrument.handles.get(broker_name),
+            broker_orders.decode_login(login_texts[position]),
+            broker_orders.decode_settings(settings_texts[position]),
+        )
+
     def choose_named_broker(
         self,
         order,
@@ -258,13 +312,12 @@ class OrderPlacement:
                 503,
                 broker=broker_name,
             )
-        position = self.broker_names.index(broker_name)
-        reason = broker_orders.place_skip_reason(
+        reason = self.named_broker_skip_reason(
             order,
             instrument,
-            instrument.handles.get(broker_name),
-            broker_orders.decode_login(login_texts[position]),
-            broker_orders.decode_settings(settings_texts[position]),
+            broker_name,
+            login_texts,
+            settings_texts,
         )
         if reason is not None:
             raise RefusedRequestError.refusal(
@@ -421,41 +474,3 @@ class OrderPlacement:
             },
         }, answer.http_status()
 
-    def place(
-        self,
-        order,
-        instrument,
-        rotation,
-        selector_replies,
-        login_texts,
-        settings_texts,
-        started_at,
-    ):
-        """Chooses the broker, builds the request and either sends it or answers a dry run.
-
-        Args:
-            order (PlaceOrderRequest): The validated order.
-            instrument (Instrument): The instrument the order is for.
-            rotation (list): The broker names not excluded by configuration.
-            selector_replies (list): The replies to the commands the broker selector queued.
-            login_texts (list): Every broker's login as Redis holds it, in `broker_names` order.
-            settings_texts (list): Every broker's settings as Redis holds them, in `broker_names` order.
-            started_at (float): `time.perf_counter()` when the request arrived.
-
-        Returns:
-            tuple: The answer's body (dict) and its HTTP status (int).
-
-        Raises:
-            RefusedRequestError: For an order answered without calling a broker.
-        """
-        prepared_placement = self.prepare(
-            order,
-            instrument,
-            rotation,
-            selector_replies,
-            login_texts,
-            settings_texts,
-        )
-        if order.dry_run:
-            return self.dry_run_answer(prepared_placement, started_at)
-        return self.send(prepared_placement, started_at)

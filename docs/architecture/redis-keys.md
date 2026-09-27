@@ -54,7 +54,7 @@ Every stream is trimmed approximately (`MAXLEN ~`) as entries are added, so it h
 | `unified:quotes:stream` | `quote` | `bin/unified/instruments/websocket_quotes` | 1,000,000 | `persist`: `bin/unified/instruments/store_quotes_to_db`; also read without a group by `bin/unified/orders/virtual_book` |
 | `unified:order-updates:stream` | `update` | `bin/unified/orders/websocket_order_details` | 50,000 | `persist`: `bin/unified/orders/store_orders_to_db`; `engine`: `bin/unified/orders/order_engine` |
 | `unified:positions_updates:stream` | `position` | `bin/unified/orders/websocket_order_details` | 50,000 | `persist`: `bin/unified/portfolio/store_positions_to_db` |
-| `unified:orders:intents:stream` | `intent` | REST API workers, when `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT=engine` | 10,000 | `engine`: `bin/unified/orders/order_engine` |
+| `unified:orders:intents:stream` | `intent` | REST API workers, for every order placed | 10,000 | `engine`: `bin/unified/orders/order_engine` |
 
 The caps come from `STREAM_MAX_LENGTH` in each writer, and `QUOTES_STREAM_MAX_LENGTH` in `bin/unified/instruments/websocket_quotes`. Where each group starts reading the first time differs:
 
@@ -189,12 +189,17 @@ The order engine and the REST API's order routes share the keys below. The engin
 | Key | Type | Written by | Read by | Lifetime |
 |---|---|---|---|---|
 | `unified:orders:round_robin` | string (counter) | The round-robin broker selector, with `INCR` on each order | The same selector | Kept |
+| `unified:orders:rate:<broker>` | sorted set | The rate budget, in the order engine and the REST API, before each order message | The same budget | One member per message sent in the last second, scored by Redis server time in microseconds; expires two seconds after the last message |
+| `unified:orders:rate:all` | sorted set | The rate budget, only when `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_PER_SECOND` is above zero | The same budget | The same, across every broker |
 | `unified:orders:daily_count:<broker>` | string (counter) | Every placement, modification and cancellation sent to a broker with a daily cap, from an API worker or the engine | The same code, before sending | Expires at the next 06:00 IST |
 | `unified:orders:engine:lock` | string | `bin/unified/orders/order_engine` | A second engine, which then exits | The engine's pid; 30 seconds, refreshed every 10 |
+| `unified:orders:intents:reply:<request_id>` | list | The order engine, with `RPUSH`, one answer per order of a listed placement, each naming its `request_index` | The waiting API worker, with `BLPOP` until every order is answered | `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_RESULT_TTL_SECONDS` |
+| `unified:orders:intents:answer:<intent_id>` | string | The order engine, with `SET NX` as it answers each intent | `GET /api/orders/intents/<intent_id>` | `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_RESULT_TTL_SECONDS` |
 | `unified:orders:intents:result:<intent_id>` | list | The order engine, with `RPUSH` | The waiting API worker, with `BLPOP` | `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_RESULT_TTL_SECONDS`, 300 by default |
 | `unified:orders:parents` | hash | The order engine | The engine and `bin/unified/orders/virtual_book` | Every parent order, by id; expires at the next 06:00 IST |
 | `unified:orders:parents:open` | set | The order engine | The engine and `virtual_book` | The ids of parents not yet finished; expires at the next 06:00 IST |
 | `unified:orders:children` | hash | The order engine | The engine | `broker:broker_order_id` to its parent; expires at the next 06:00 IST |
+| `unified:orders:parents:intents` | hash | The order engine | The engine, before placing an intent | Intent id to the parent it started; expires at the next 06:00 IST |
 | `unified:orders:virtual_queue` | hash | `bin/unified/orders/virtual_book` | The engine's `virtual_limit` orders | One queue estimate per held order, by parent id; removed when the parent is no longer open |
 
 !!! danger "Do not delete the engine lock by hand while an engine runs"

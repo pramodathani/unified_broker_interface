@@ -20,15 +20,20 @@ import logging
 import pathlib
 import re
 import sys
+import threading
 import time
 import uuid
 
 import requests
 
-from test_runs import order_engine_routes
+from test_runs import engine_stand_ins
 from test_runs import order_routes
+from test_runs import redis_stand_ins
 from unified_broker_interface.utilities.order_engine.utilities import engine_lock
 from unified_broker_interface.utilities.order_engine.utilities import moments
+from unified_broker_interface.utilities.order_engine.utilities.book_reconciler import (
+    BookReconciler,
+)
 from unified_broker_interface.utilities.order_engine.utilities.clock_ticker import (
     ClockTicker,
 )
@@ -64,6 +69,20 @@ from unified_broker_interface.utilities.order_engine.utilities.order_to_trade_ra
 from unified_broker_interface.utilities.order_engine.utilities.order_update_follower import (
     OrderUpdateFollower,
 )
+from unified_broker_interface.utilities.broker_orders.stoxkart import StoxkartOrders
+from unified_broker_interface.utilities.broker_orders.utilities.place_order_request import (
+    PlaceOrderRequest,
+)
+from unified_broker_interface.utilities.broker_orders.utilities.refused_request import (
+    RefusedRequestError,
+)
+from unified_broker_interface.utilities.order_engine.utilities.order_leg import OrderLeg
+from unified_broker_interface.utilities.order_engine.utilities.registry import (
+    SYNTHETIC_ORDER_CLASSES,
+)
+from unified_broker_interface.utilities.order_engine.utilities.parent_commands import (
+    ParentCommands,
+)
 from unified_broker_interface.utilities.order_engine.utilities.parent_order import (
     ParentOrder,
 )
@@ -72,6 +91,9 @@ from unified_broker_interface.utilities.order_engine.utilities.parent_store impo
 )
 from unified_broker_interface.utilities.order_engine.utilities.price_ticker import (
     PriceTicker,
+)
+from unified_broker_interface.utilities.order_engine.utilities.parent_router import (
+    ParentRouter,
 )
 from unified_broker_interface.utilities.order_engine.utilities.rate_budget import (
     RateBudget,
@@ -100,653 +122,115 @@ RESULT_TTL_SECONDS = 300
 FROZEN_NOW = datetime.datetime(2026, 9, 23, 10, 0, 0, tzinfo=moments.INDIA)
 
 
-class FakeEngineStoreRedis(order_engine_routes.FakeEngineRedis):
-    """The handoff's stand-in, widened with the consumer group, list and lock commands the engine uses.
+
+class AcceptedModifyAnswer:
+    """A broker's answer accepting a modification, for a check that intercepts `modify_leg`.
 
     Attributes:
-        groups (dict): Stream keys to the set of group names created on them.
-        delivered (dict): Stream keys to every entry id ever handed out, which is what `>` reads past.
-        pending (dict): Stream keys to the entry ids handed out but not yet acknowledged.
-        expiries (dict): Keys to the expiry in seconds last set on them.
+        outcome (str): Always `accepted`.
+        status_message (None): No message.
+        response_body (dict): An empty body.
     """
 
     def __init__(self):
-        """Builds an empty stand-in.
+        """Builds the answer.
 
         Returns:
             None: This method returns nothing.
         """
-        super().__init__()
-        self.groups = {}
-        self.delivered = {}
-        self.pending = {}
-        self.expiries = {}
-        self.sets = {}
+        self.outcome = 'accepted'
+        self.status_message = None
+        self.response_body = {}
 
-    def xgroup_create(self, key, group, id=None, mkstream=False):
-        """Creates a consumer group, raising when it is already there, as Redis does.
 
-        Args:
-            key (str): The stream key.
-            group (str): The group name.
-            id (str | None): Accepted for compatibility with redis-py and ignored.
-            mkstream (bool): Creates the stream when it does not exist.
-
-        Returns:
-            bool: True.
-
-        Raises:
-            Exception: With BUSYGROUP in its message when the group already exists.
-        """
-        if not mkstream and key not in self.streams:
-            raise Exception(
-                'ERR The XGROUP subcommand requires the key to exist',
-            )
-        del id
-        self.streams.setdefault(key, [])
-        created = self.groups.setdefault(key, set())
-        if group in created:
-            raise Exception('BUSYGROUP Consumer Group name already exists')
-        created.add(group)
-        return True
-
-    def xreadgroup(self, group, consumer, streams, count=None, block=None):
-        """Reads new or pending entries for one consumer group, never blocking.
-
-        Args:
-            group (str): The group name.
-            consumer (str): The consumer name.
-            streams (dict): Stream keys to `0` for pending entries or `>` for new ones.
-            count (int | None): The most entries to read.
-            block (int | None): Accepted for compatibility with redis-py and ignored, since the stand-in never waits.
-
-        Returns:
-            list: `(stream_key, entries)` pairs, with entries as `(entry_id, fields)`.
-
-        Raises:
-            redis.RedisError: When this round trip is the failing one.
-        """
-        del group, consumer, block
-        self.start_round_trip()
-        response = []
-        for key, position in streams.items():
-            delivered = self.delivered.setdefault(key, [])
-            pending = self.pending.setdefault(key, [])
-            entries = []
-            for entry_id, fields in self.streams.get(key, []):
-                if position == '0':
-                    if entry_id in pending:
-                        entries.append((entry_id, fields))
-                elif entry_id not in delivered:
-                    delivered.append(entry_id)
-                    pending.append(entry_id)
-                    entries.append((entry_id, fields))
-            if count is not None:
-                entries = entries[:count]
-            if entries:
-                response.append((key, entries))
-        return response
-
-    def xack(self, key, group, entry_id):
-        """Acknowledges one delivered entry.
-
-        Args:
-            key (str): The stream key.
-            group (str): The group name.
-            entry_id (str): The entry's id.
-
-        Returns:
-            int: 1 when the entry was delivered and is now acknowledged, and 0 otherwise.
-        """
-        del group
-        self.start_round_trip()
-        pending = self.pending.setdefault(key, [])
-        if entry_id in pending:
-            pending.remove(entry_id)
-            return 1
-        return 0
-
-    def set(self, key, value, nx=False, ex=None):
-        """Sets a string key, optionally only when it does not exist.
-
-        Args:
-            key (str): The key.
-            value (str): The value.
-            nx (bool): Only set the key when it does not already exist.
-            ex (int | None): The expiry in seconds.
-
-        Returns:
-            bool | None: True when the key was set, and None when `nx` was given and it already existed.
-        """
-        self.start_round_trip()
-        if nx and key in self.strings:
-            return None
-        self.strings[key] = value
-        if ex is not None:
-            self.expiries[key] = ex
-        return True
-
-    def expire(self, key, seconds):
-        """Records an expiry on a key.
-
-        Args:
-            key (str): The key.
-            seconds (int): The expiry in seconds.
-
-        Returns:
-            bool: True when the key exists.
-        """
-        self.start_round_trip()
-        self.expiries[key] = seconds
-        return key in self.strings or key in self.lists
-
-    def delete(self, key):
-        """Removes a key.
-
-        Args:
-            key (str): The key.
-
-        Returns:
-            int: 1 when the key existed, and 0 otherwise.
-        """
-        self.start_round_trip()
-        self.expiries.pop(key, None)
-        if self.strings.pop(key, None) is not None:
-            return 1
-        return 0
-
-    def smembers(self, key):
-        """Every member of a set.
-
-        Args:
-            key (str): The set key.
-
-        Returns:
-            set: The members.
-        """
-        self.start_round_trip()
-        return set(self.sets.get(key, set()))
-
-    def run_hgetall(self, key):
-        """Every field in a hash, without counting a round trip of its own.
-
-        Args:
-            key (str): The hash key.
-
-        Returns:
-            dict: The fields and values, or an empty dictionary.
-        """
-        return dict(self.hashes.get(key, {}))
-
-    def run_hset(self, key, field, value):
-        """Sets a hash field, without counting a round trip of its own.
-
-        Args:
-            key (str): The hash key.
-            field (str): The field.
-            value (str): The value.
-
-        Returns:
-            int: 1 when the field is new, and 0 when it was replaced.
-        """
-        fields = self.hashes.setdefault(key, {})
-        new_field = field not in fields
-        fields[field] = value
-        return 1 if new_field else 0
-
-    def run_sadd(self, key, member):
-        """Adds a set member, without counting a round trip of its own.
-
-        Args:
-            key (str): The set key.
-            member (str): The member.
-
-        Returns:
-            int: 1 when the member is new, and 0 when it was already there.
-        """
-        members = self.sets.setdefault(key, set())
-        new_member = member not in members
-        members.add(member)
-        return 1 if new_member else 0
-
-    def run_srem(self, key, member):
-        """Removes a set member, without counting a round trip of its own.
-
-        Args:
-            key (str): The set key.
-            member (str): The member.
-
-        Returns:
-            int: 1 when the member was there, and 0 otherwise.
-        """
-        members = self.sets.setdefault(key, set())
-        if member in members:
-            members.discard(member)
-            return 1
-        return 0
-
-    def run_expireat(self, key, moment):
-        """Records an absolute expiry on a key, without counting a round trip of its own.
-
-        Args:
-            key (str): The key.
-            moment (int): The epoch the key expires at.
-
-        Returns:
-            bool: True.
-        """
-        self.expiries[key] = moment
-        return True
-
-    def run_delete(self, key):
-        """Removes a key of any type, without counting a round trip of its own.
-
-        Args:
-            key (str): The key.
-
-        Returns:
-            int: 1 when the key existed, and 0 otherwise.
-        """
-        self.expiries.pop(key, None)
-        existed = (
-            self.strings.pop(key, None) is not None
-            or self.hashes.pop(key, None) is not None
-            or self.sets.pop(key, None) is not None
-            or self.lists.pop(key, None) is not None
-        )
-        return 1 if existed else 0
-
-    def run_rpush(self, key, value):
-        """Appends to a list, without counting a round trip of its own.
-
-        Args:
-            key (str): The list key.
-            value (str): The value.
-
-        Returns:
-            int: The list's new length.
-        """
-        entries = self.lists.setdefault(key, [])
-        entries.append(value)
-        return len(entries)
-
-    def run_expire(self, key, seconds):
-        """Records an expiry on a key, without counting a round trip of its own.
-
-        Args:
-            key (str): The key.
-            seconds (int): The expiry in seconds.
-
-        Returns:
-            bool: True.
-        """
-        self.expiries[key] = seconds
-        return True
-
-    def pipeline(self, transaction=True):
-        """Starts a pipeline that also understands the list commands the engine queues.
-
-        Args:
-            transaction (bool): Accepted for compatibility with redis-py and ignored.
-
-        Returns:
-            FakeEnginePipeline: The pipeline.
-        """
-        del transaction
-        return FakeEnginePipeline(self)
-
-
-class FakeEnginePipeline(order_routes.FakePipeline):
-    """The order routes' pipeline, widened with the list commands the engine queues."""
-
-    def rpush(self, key, value):
-        """Queues an append to a list.
-
-        Args:
-            key (str): The list key.
-            value (str): The value.
-
-        Returns:
-            FakeEnginePipeline: This pipeline.
-        """
-        self.commands.append(('rpush', (key, value)))
-        return self
-
-    def expire(self, key, seconds):
-        """Queues an expiry on a key.
-
-        Args:
-            key (str): The key.
-            seconds (int): The expiry in seconds.
-
-        Returns:
-            FakeEnginePipeline: This pipeline.
-        """
-        self.commands.append(('expire', (key, seconds)))
-        return self
-
-    def hset(self, key, field, value):
-        """Queues a hash write.
-
-        Args:
-            key (str): The hash key.
-            field (str): The field.
-            value (str): The value.
-
-        Returns:
-            FakeEnginePipeline: This pipeline.
-        """
-        self.commands.append(('hset', (key, field, value)))
-        return self
-
-    def sadd(self, key, member):
-        """Queues a set addition.
-
-        Args:
-            key (str): The set key.
-            member (str): The member.
-
-        Returns:
-            FakeEnginePipeline: This pipeline.
-        """
-        self.commands.append(('sadd', (key, member)))
-        return self
-
-    def srem(self, key, member):
-        """Queues a set removal.
-
-        Args:
-            key (str): The set key.
-            member (str): The member.
-
-        Returns:
-            FakeEnginePipeline: This pipeline.
-        """
-        self.commands.append(('srem', (key, member)))
-        return self
-
-    def expireat(self, key, moment):
-        """Queues an absolute expiry.
-
-        Args:
-            key (str): The key.
-            moment (int): The epoch the key expires at.
-
-        Returns:
-            FakeEnginePipeline: This pipeline.
-        """
-        self.commands.append(('expireat', (key, moment)))
-        return self
-
-    def delete(self, key):
-        """Queues a key removal.
-
-        Args:
-            key (str): The key.
-
-        Returns:
-            FakeEnginePipeline: This pipeline.
-        """
-        self.commands.append(('delete', (key,)))
-        return self
-
-    def hgetall(self, key):
-        """Queues a read of every field in a hash.
-
-        Args:
-            key (str): The hash key.
-
-        Returns:
-            FakeEnginePipeline: This pipeline.
-        """
-        self.commands.append(('hgetall', (key,)))
-        return self
-
-    def execute(self):
-        """Runs every queued command in one round trip.
-
-        Returns:
-            list: One reply per queued command, in order.
-
-        Raises:
-            redis.RedisError: When this round trip is set to fail.
-            ValueError: When a queued command is not one the stand-in knows.
-        """
-        self.fake_redis.start_round_trip()
-        replies = []
-        for command_name, arguments in self.commands:
-            if command_name == 'get':
-                replies.append(self.fake_redis.run_get(*arguments))
-            elif command_name == 'hget':
-                replies.append(self.fake_redis.run_hget(*arguments))
-            elif command_name == 'hmget':
-                replies.append(self.fake_redis.run_hmget(*arguments))
-            elif command_name == 'incr':
-                replies.append(self.fake_redis.run_incr(*arguments))
-            elif command_name == 'rpush':
-                replies.append(self.fake_redis.run_rpush(*arguments))
-            elif command_name == 'expire':
-                replies.append(self.fake_redis.run_expire(*arguments))
-            elif command_name == 'hset':
-                replies.append(self.fake_redis.run_hset(*arguments))
-            elif command_name == 'sadd':
-                replies.append(self.fake_redis.run_sadd(*arguments))
-            elif command_name == 'srem':
-                replies.append(self.fake_redis.run_srem(*arguments))
-            elif command_name == 'expireat':
-                replies.append(self.fake_redis.run_expireat(*arguments))
-            elif command_name == 'delete':
-                replies.append(self.fake_redis.run_delete(*arguments))
-            elif command_name == 'hgetall':
-                replies.append(self.fake_redis.run_hgetall(*arguments))
-            else:
-                raise ValueError(
-                    f'unsupported stand-in command: {command_name!r}'
-                )
-        self.commands = []
-        return replies
-
-
-class RecordingEventLog:
-    """Stands in for the event log, keeping every transition in a list instead of a database.
-
-    The engine's recovery reads this back, so the stand-in has to behave like the table in the one way that matters: `read_since` returns rows oldest first within each parent.
+class ModifyRecorder:
+    """Stands in for `EnginePlacement.modify_leg`, remembering each change instead of sending it.
 
     Attributes:
-        events (list): Every event recorded, in the order it was written.
-        failing_event (int | None): The 1-based write that raises, or None when none does.
-        writes (int): How many events have been written.
+        sent (list): One `(broker, order id, quantity)` per change.
     """
 
     def __init__(self):
-        """Builds an empty log.
+        """Builds the recorder.
 
         Returns:
             None: This method returns nothing.
         """
-        self.events = []
-        self.failing_event = None
-        self.writes = 0
+        self.sent = []
 
-    def apply_table(self):
-        """Does nothing, since there is no table.
-
-        Returns:
-            None: This method returns nothing.
-        """
-
-    def record(self, event):
-        """Keeps one transition.
+    def modify_leg(self, broker_name, broker_order_id, quantity=None, price=None, trigger_price=None):
+        """Remembers one change and accepts it.
 
         Args:
-            event (dict): The event.
+            broker_name (str): The broker.
+            broker_order_id (str): The order.
+            quantity (int | None): The new quantity, in the broker's terms.
+            price (decimal.Decimal | None): The new price, unused.
+            trigger_price (decimal.Decimal | None): The new trigger, unused.
 
         Returns:
-            None: This method returns nothing.
-
-        Raises:
-            RuntimeError: When this write is the one set to fail.
+            AcceptedModifyAnswer: The answer.
         """
-        self.writes = self.writes + 1
-        if self.writes == self.failing_event:
-            raise RuntimeError('stand-in event log failure')
-        self.events.append(dict(event))
-
-    def record_many(self, events):
-        """Keeps several transitions.
-
-        Args:
-            events (list): The events.
-
-        Returns:
-            None: This method returns nothing.
-        """
-        for event in events:
-            self.record(event)
-
-    def read_since_for_types(self, moment, types):
-        """Every transition kept whose order type is one of `types`.
-
-        The real one reads a longer window for the types that outlive a trading day. The stand-in keeps one run's events, so the window means nothing here and only the type filter does.
-
-        Args:
-            moment (datetime.datetime): Ignored, since the stand-in keeps only one run's events.
-            types (list): The `synthetic_type` values to read.
-
-        Returns:
-            list: The matching events, by parent and then sequence.
-        """
-        wanted = set(types or [])
-        return [
-            event
-            for event in self.read_since(moment)
-            if event.get('synthetic_type') in wanted
-        ]
-
-    def read_since(self, moment):
-        """Every transition kept, ordered as the table orders them.
-
-        Args:
-            moment (datetime.datetime): Ignored, since the stand-in keeps only one run's events.
-
-        Returns:
-            list: The events, by parent and then sequence.
-        """
-        del moment
-        return sorted(
-            self.events,
-            key=lambda event: (
-                str(event.get('parent_order_id')),
-                event.get('sequence') or 0,
-            ),
-        )
-
-    def shown(self):
-        """The events with the values that differ between runs left out.
-
-        Returns:
-            list: One dictionary per event, carrying only what a recording can compare.
-        """
-        shown = []
-        for event in self.events:
-            kept = {}
-            for name, value in event.items():
-                if name in ('time', 'engine_instance', 'parent_order_id', 'intent_id'):
-                    continue
-                if name == 'leg_id' and value:
-                    kept[name] = 'leg:' + str(value).rsplit(':', 1)[1]
-                    continue
-                kept[name] = value
-            shown.append(kept)
-        return shown
+        del price
+        del trigger_price
+        self.sent.append((broker_name, broker_order_id, quantity))
+        return AcceptedModifyAnswer()
 
 
-class CountingUuid:
-    """A stand-in for `uuid.uuid4` that counts rather than being random.
+class NumberingBrokerNetwork(order_routes.FakeBrokerNetwork):
+    """The stubbed broker network, able to give each placed order its own Flattrade order id.
 
-    Two things in one scenario need different identifiers — two parents, and the tag Groww generates for itself — so replacing `uuid.uuid4` with one constant the way the route suites do is not open here. Counting gives values that are distinct within a scenario and the same on every run, and the count is reset before each scenario so one scenario's numbering does not depend on what ran before it.
+    An answer carrying `number_orders: true` has its `norenordno` replaced on every `PlaceOrder` by `26091500000101`, `26091500000102` and so on, so a type with several legs can be sent an update for one of them. An answer carrying `sequence`, a list of answers, answers each `PlaceOrder` with the next one in turn, the last repeating, so a type whose legs get different answers can be tested. Every other answer is exactly the stubbed one.
 
     Attributes:
-        count (int): How many identifiers have been handed out since the last reset.
+        placed (int): How many orders have been numbered since the last reset.
     """
 
-    def __init__(self):
-        """Builds the counter.
-
-        Returns:
-            None: This method returns nothing.
-        """
-        self.count = 0
-
-    def reset(self):
-        """Starts the numbering again, before a scenario.
-
-        Returns:
-            None: This method returns nothing.
-        """
-        self.count = 0
-
-    def __call__(self):
-        """The next identifier.
-
-        Returns:
-            uuid.UUID: A version 4 identifier whose value is the count.
-        """
-        self.count = self.count + 1
-        return uuid.UUID(int=self.count, version=4)
-
-
-class OnePassStop:
-    """A stop event that lets the engine's loop run a fixed number of passes and then stop.
-
-    The engine blocks on Redis for new entries and runs until it is asked to stop, neither of which suits a recording. This reports "not stopping" for the first few checks and "stopping" afterwards, so `run` makes exactly the passes a scenario needs and returns.
-
-    Attributes:
-        remaining (int): How many more checks report that the engine should keep going.
-    """
-
-    def __init__(self, passes):
-        """Builds the stop event.
+    def reset(self, answer):
+        """Clears the captured requests and the numbering, and sets the answer for the next calls.
 
         Args:
-            passes (int): How many passes of the loop to allow.
+            answer (dict | None): The answer, or None for an empty JSON object with HTTP 200.
 
         Returns:
             None: This method returns nothing.
         """
-        self.remaining = passes
+        super().reset(answer)
+        self.placed = 0
 
-    def is_set(self):
-        """Whether the engine should stop, counting down one pass each time it is asked.
-
-        Returns:
-            bool: False while passes remain, and True afterwards.
-        """
-        if self.remaining > 0:
-            self.remaining = self.remaining - 1
-            return False
-        return True
-
-    def set(self):
-        """Stops the engine at its next check.
-
-        Returns:
-            None: This method returns nothing.
-        """
-        self.remaining = 0
-
-    def wait(self, seconds):
-        """Returns at once instead of waiting, so a backoff costs no time.
+    def request(self, method, url, **keyword_arguments):
+        """Captures one outgoing request and answers it, numbering a placed order when the answer asks for it.
 
         Args:
-            seconds (float): Ignored.
+            method (str): The HTTP method.
+            url (str): The URL.
+            **keyword_arguments: The remaining `requests` arguments.
 
         Returns:
-            bool: True.
+            FakeResponse: The stubbed answer.
         """
-        del seconds
-        return True
-
+        sequence = self.answer.get('sequence')
+        if sequence and url.endswith('/PlaceOrder'):
+            position = min(self.placed, len(sequence) - 1)
+            self.placed = self.placed + 1
+            stubbed = self.answer
+            self.answer = sequence[position]
+            try:
+                return super().request(method, url, **keyword_arguments)
+            finally:
+                self.answer = stubbed
+        if not self.answer.get('number_orders') or not url.endswith('/PlaceOrder'):
+            return super().request(method, url, **keyword_arguments)
+        self.placed = self.placed + 1
+        stubbed = self.answer
+        numbered = dict(stubbed)
+        numbered['json'] = dict(stubbed.get('json') or {})
+        numbered['json']['norenordno'] = str(26091500000100 + self.placed)
+        self.answer = numbered
+        try:
+            return super().request(method, url, **keyword_arguments)
+        finally:
+            self.answer = stubbed
 
 class OrderEngineScenarios:
     """Every scenario the engine's recording covers.
@@ -946,6 +430,29 @@ class OrderEngineScenarios:
                     order,
                 ],
                 deadline_ago=120.0,
+            ),
+            self.intents(
+                'an_intent_that_already_started_a_parent_is_not_placed_again',
+                [
+                    order,
+                ],
+                started_intents={
+                    f'{0:032x}': '44444444-3333-4222-8111-000000000000',
+                },
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
+                'a_repeated_intent_past_its_deadline_is_answered_as_repeated',
+                [
+                    order,
+                ],
+                deadline_ago=120.0,
+                started_intents={
+                    f'{0:032x}': '44444444-3333-4222-8111-000000000000',
+                },
             ),
             self.intents(
                 'an_intent_just_inside_its_grace_is_still_placed',
@@ -1262,6 +769,120 @@ class OrderEngineScenarios:
                 ),
             ),
             self.intents(
+                'a_reduce_only_sell_smaller_than_the_long_is_sent',
+                [
+                    self.bodies.market_order(
+                        dry_run=None,
+                        transaction_type='SELL',
+                        quantity=50,
+                        synthetic={
+                            'type': 'simple',
+                            'reduce_only': True,
+                        },
+                    ),
+                ],
+                positions=self.positions(75),
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
+                'a_reduce_only_buy_that_would_add_to_a_long_is_refused',
+                [
+                    self.bodies.market_order(
+                        dry_run=None,
+                        transaction_type='BUY',
+                        quantity=10,
+                        synthetic={
+                            'type': 'simple',
+                            'reduce_only': True,
+                        },
+                    ),
+                ],
+                positions=self.positions(75),
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
+                'a_reduce_only_sell_larger_than_the_long_is_refused',
+                [
+                    self.bodies.market_order(
+                        dry_run=None,
+                        transaction_type='SELL',
+                        quantity=100,
+                        synthetic={
+                            'type': 'simple',
+                            'reduce_only': True,
+                        },
+                    ),
+                ],
+                positions=self.positions(75),
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
+                'a_reduce_only_order_with_nothing_held_is_refused',
+                [
+                    self.bodies.market_order(
+                        dry_run=None,
+                        transaction_type='SELL',
+                        quantity=10,
+                        synthetic={
+                            'type': 'simple',
+                            'reduce_only': True,
+                        },
+                    ),
+                ],
+                positions=self.positions(0),
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
+                'a_reduce_only_buy_back_of_a_short_is_sent',
+                [
+                    self.bodies.market_order(
+                        dry_run=None,
+                        transaction_type='BUY',
+                        quantity=40,
+                        synthetic={
+                            'type': 'simple',
+                            'reduce_only': True,
+                        },
+                    ),
+                ],
+                positions=self.positions(-40),
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
+                'a_reduce_only_flag_that_is_not_true_or_false_is_refused',
+                [
+                    self.bodies.market_order(
+                        dry_run=None,
+                        transaction_type='SELL',
+                        quantity=10,
+                        synthetic={
+                            'type': 'simple',
+                            'reduce_only': 'yes',
+                        },
+                    ),
+                ],
+                positions=self.positions(75),
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
                 'reducing_a_position_cannot_close_more_than_is_held',
                 [
                     self.referenced(
@@ -1465,8 +1086,8 @@ class OrderEngineSuite:
     """Runs every engine scenario, then records or compares the results.
 
     Attributes:
-        fake_redis (FakeEngineStoreRedis): The stand-in the engine reads and writes.
-        network (FakeBrokerNetwork): The stubbed broker network.
+        fake_redis (redis_stand_ins.FakeEngineStoreRedis): The stand-in the engine reads and writes.
+        network (NumberingBrokerNetwork): The stubbed broker network.
     """
 
     def __init__(self):
@@ -1475,19 +1096,19 @@ class OrderEngineSuite:
         Returns:
             None: This method returns nothing.
         """
-        self.fake_redis = FakeEngineStoreRedis()
-        self.network = order_routes.FakeBrokerNetwork()
-        self.counting_uuid = CountingUuid()
+        self.fake_redis = redis_stand_ins.FakeEngineStoreRedis()
+        self.network = NumberingBrokerNetwork()
+        self.counting_uuid = engine_stand_ins.CountingUuid()
         self.scenarios = OrderEngineScenarios()
 
     def build_state(self):
         """Builds a stand-in holding the order routes' starting contents.
 
         Returns:
-            FakeEngineStoreRedis: The stand-in.
+            redis_stand_ins.FakeEngineStoreRedis: The stand-in.
         """
         starting_state = order_routes.OrderRoutesState().build()
-        fake_redis = FakeEngineStoreRedis()
+        fake_redis = redis_stand_ins.FakeEngineStoreRedis()
         fake_redis.strings = starting_state.strings
         fake_redis.hashes = starting_state.hashes
         fake_redis.sorted_sets = starting_state.sorted_sets
@@ -1592,8 +1213,9 @@ class OrderEngineSuite:
             )
         return RiskGates(
             RateBudget(
-                scenario.get('rate_per_second', 8),
-                scenario.get('rate_per_broker_per_second', 5),
+                self.fake_redis,
+                scenario.get('rate_per_second', 0),
+                scenario.get('rate_per_broker_per_second', 10),
                 scenario.get('rate_wait_seconds', 0),
                 logger,
             ),
@@ -1638,11 +1260,12 @@ class OrderEngineSuite:
                 shown[key] = self.fake_redis.strings[key]
         return shown
 
-    def run_scenario(self, scenario):
+    def run_scenario(self, scenario, with_lanes=False):
         """Runs one scenario against a fresh stand-in and a fresh engine.
 
         Args:
             scenario (dict): The scenario.
+            with_lanes (bool): Whether the engine hands every intent to a worker thread through a router with one worker, instead of placing it on the main thread.
 
         Returns:
             dict: The scenario's recorded result.
@@ -1671,6 +1294,10 @@ class OrderEngineSuite:
             self.fake_redis.strings['unified:portfolio:positions'] = json.dumps(
                 scenario['positions'],
             )
+        if scenario.get('started_intents') is not None:
+            self.fake_redis.hashes['unified:orders:parents:intents'] = dict(
+                scenario['started_intents'],
+            )
         self.network.reset(scenario.get('answer'))
         self.counting_uuid.reset()
         reply_keys = self.write_intents(scenario)
@@ -1678,11 +1305,20 @@ class OrderEngineSuite:
         logger = logging.getLogger('test_runs.order_engine')
         placement = EnginePlacement(self.fake_redis, logger)
         lock = EngineLock(self.fake_redis, logger)
-        event_log = RecordingEventLog()
+        event_log = engine_stand_ins.RecordingEventLog()
         event_log.failing_event = scenario.get('failing_event')
         gates = self.build_gates(scenario, logger)
         if gates is not None:
             placement.order_placement.attach_daily_count(gates.daily_count)
+        router = None
+        if with_lanes:
+            router = ParentRouter(
+                [],
+                {},
+                1,
+                logger,
+            )
+            router.start()
         engine = OrderEngine(
             self.fake_redis,
             placement,
@@ -1694,9 +1330,10 @@ class OrderEngineSuite:
             ParentStore(self.fake_redis),
             None,
             gates,
+            router=router,
         )
         self.fake_redis.round_trips = 0
-        exit_code = engine.run(OnePassStop(scenario.get('passes', 3)))
+        exit_code = engine.run(engine_stand_ins.OnePassStop(scenario.get('passes', 3)))
 
         delivered = self.fake_redis.pending.get(INTENT_STREAM_KEY, [])
         result = {
@@ -1721,7 +1358,49 @@ class OrderEngineSuite:
         }
         if scenario.get('daily_caps') is not None:
             result['daily_counts'] = self.shown_daily_counts()
+        if engine.repeated:
+            result['repeated'] = engine.repeated
         return result
+
+    def run_lane_equivalence_check(self):
+        """Runs every intent scenario again with one worker thread behind a router, and compares it with the main-thread run.
+
+        Everything must match except the Redis round trips, since intake reads the credentials and the instrument to choose the broker before handing the intent to its worker.
+
+        Returns:
+            dict: The recorded result: the scenarios compared, those that differed and in which fields, and how the round trips changed.
+        """
+        compared = 0
+        differing = []
+        round_trip_changes = {}
+        for scenario in OrderEngineScenarios().build():
+            on_main_thread = self.run_scenario(scenario)
+            with_lanes = self.run_scenario(scenario, True)
+            compared = compared + 1
+            fields = []
+            for field in sorted(set(on_main_thread) | set(with_lanes)):
+                if field == 'redis_round_trips':
+                    continue
+                if on_main_thread.get(field) != with_lanes.get(field):
+                    fields.append(field)
+            if fields:
+                differing.append({
+                    'name': scenario['name'],
+                    'fields': fields,
+                })
+            change = (
+                with_lanes['redis_round_trips']
+                - on_main_thread['redis_round_trips']
+            )
+            round_trip_changes[str(change)] = (
+                round_trip_changes.get(str(change), 0) + 1
+            )
+        return {
+            'name': 'lanes_give_the_same_answers_as_the_main_thread',
+            'compared': compared,
+            'differing': differing,
+            'round_trip_changes': round_trip_changes,
+        }
 
     def run_lock_checks(self):
         """Checks the single-engine lock directly, since losing it depends on a clock the loop owns.
@@ -2000,7 +1679,7 @@ class OrderEngineSuite:
             'data': {},
         })
 
-    def recovery_result(self, name, events, book, polled_ago=5.0):
+    def recovery_result(self, name, events, book, polled_ago=5.0, first_pass=False):
         """Runs recovery once against a fresh stand-in and records what it decided.
 
         Args:
@@ -2008,6 +1687,7 @@ class OrderEngineSuite:
             events (list): The transitions already recorded.
             book (dict): Flattrade's order book entries, by the broker's order id.
             polled_ago (float): How long ago that book was last read, in seconds.
+            first_pass (bool): Whether the engine's first order book pass runs after recovery, as it does at start.
 
         Returns:
             dict: The recorded result.
@@ -2017,7 +1697,7 @@ class OrderEngineSuite:
         self.fake_redis.strings['flattrade:orders:orders:polled_at'] = str(
             time.time() - polled_ago,
         )
-        event_log = RecordingEventLog()
+        event_log = engine_stand_ins.RecordingEventLog()
         event_log.events = [dict(event) for event in events]
         logger = logging.getLogger('test_runs.order_engine')
         parent_store = ParentStore(self.fake_redis)
@@ -2029,6 +1709,27 @@ class OrderEngineSuite:
             logger,
         )
         counts = recovery.recover()
+        if first_pass:
+            placement = EnginePlacement(self.fake_redis, logger)
+            engine = OrderEngine(
+                self.fake_redis,
+                placement,
+                EngineLock(self.fake_redis, logger),
+                logger,
+                STALE_INTENT_SECONDS,
+                RESULT_TTL_SECONDS,
+                event_log,
+                parent_store,
+                OrderUpdateFollower(
+                    parent_store,
+                    event_log,
+                    logger,
+                    None,
+                    placement,
+                ),
+                reconciler=BookReconciler(self.fake_redis, parent_store, 0.0),
+            )
+            engine.reconcile_books()
         # What recovery wrote to Redis, not a fresh replay of the events: the replay would discard
         # every reconciliation recovery just made, which is the thing being checked.
         stored = self.fake_redis.hashes.get('unified:orders:parents', {})
@@ -2118,7 +1819,7 @@ class OrderEngineSuite:
         parent_store = ParentStore(self.fake_redis)
         parent = self.followed_parent()
         parent_store.save(parent)
-        event_log = RecordingEventLog()
+        event_log = engine_stand_ins.RecordingEventLog()
         follower = OrderUpdateFollower(
             parent_store,
             event_log,
@@ -2136,6 +1837,7 @@ class OrderEngineSuite:
             'name': name,
             'followed': follower.followed,
             'ignored': follower.ignored,
+            'held': follower.held,
             'leg_state': stored.legs[0].state,
             'leg_filled': stored.legs[0].filled_quantity,
             'leg_average_price': stored.legs[0].average_price,
@@ -2145,6 +1847,245 @@ class OrderEngineSuite:
                     'leg_state': event.get('leg_state'),
                     'filled_quantity': event.get('filled_quantity'),
                     'average_price': event.get('average_price'),
+                }
+                for event in event_log.events
+            ],
+        }
+
+    def finishing_result(self, name, synthetic_type, updates):
+        """Delivers updates to a one-leg parent of a given type and records whether the parent ends.
+
+        A `simple` parent whose order was cancelled through `DELETE /api/orders/cancel` stayed `working` in the live retest of 2026-09-27, because nothing finished it.
+
+        Args:
+            name (str): The check's name.
+            synthetic_type (str): The parent's type.
+            updates (list): The updates, on the order contract, in order.
+
+        Returns:
+            dict: The recorded result.
+        """
+        self.fake_redis = self.build_state()
+        parent_store = ParentStore(self.fake_redis)
+        parent = self.followed_parent()
+        parent.synthetic_type = synthetic_type
+        parent_store.save(parent)
+        logger = logging.getLogger('test_runs.order_engine')
+        follower = OrderUpdateFollower(
+            parent_store,
+            engine_stand_ins.RecordingEventLog(),
+            logger,
+            None,
+            EnginePlacement(self.fake_redis, logger),
+        )
+        for update in updates:
+            changed = follower.follow({
+                'update': json.dumps(update),
+            })
+            if changed is not None:
+                parent_store.save(changed)
+        stored = ParentOrder.from_document(
+            parent_store.parent(parent.parent_order_id),
+        )
+        return {
+            'name': name,
+            'synthetic_type': synthetic_type,
+            'leg_state': stored.legs[0].state,
+            'leg_filled': stored.legs[0].filled_quantity,
+            'parent_state': stored.state,
+        }
+
+    def cancelling_parent_result(self, name, update):
+        """Delivers an update for the last live leg of a parent that is `cancelling`, and records whether the parent ends.
+
+        Args:
+            name (str): The check's name.
+            update (dict): The update, on the order contract.
+
+        Returns:
+            dict: The recorded result.
+        """
+        self.fake_redis = self.build_state()
+        parent_store = ParentStore(self.fake_redis)
+        parent = self.followed_parent()
+        parent.state = 'cancelling'
+        parent_store.save(parent)
+        logger = logging.getLogger('test_runs.order_engine')
+        follower = OrderUpdateFollower(
+            parent_store,
+            engine_stand_ins.RecordingEventLog(),
+            logger,
+            None,
+            EnginePlacement(self.fake_redis, logger),
+        )
+        changed = follower.follow({
+            'update': json.dumps(update),
+        })
+        if changed is not None:
+            parent_store.save(changed)
+        stored = ParentOrder.from_document(
+            parent_store.parent(parent.parent_order_id),
+        )
+        return {
+            'name': name,
+            'leg_state': stored.legs[0].state,
+            'parent_state': stored.state,
+            'sent': len(self.network.sent_requests),
+        }
+
+    def reconciled_result(self, name, parent_state, book_order, leg_filled=0):
+        """Runs one reconciliation pass against a stored parent and a broker book, with no socket update at all.
+
+        Args:
+            name (str): The check's name.
+            parent_state (str): The parent's state before the pass, such as `working` or `cancelling`.
+            book_order (dict | None): Fields to set on the leg's book entry, or None for no entry.
+            leg_filled (int): How much the leg already records as filled.
+
+        Returns:
+            dict: The recorded result.
+        """
+        self.fake_redis = self.build_state()
+        parent_store = ParentStore(self.fake_redis)
+        parent = self.followed_parent()
+        parent.state = parent_state
+        parent.legs[0].filled_quantity = leg_filled
+        if leg_filled:
+            parent.legs[0].state = 'partially_filled'
+        parent_store.save(parent)
+        if book_order is not None:
+            book = self.fake_redis.hashes.setdefault(
+                'flattrade:orders:orders',
+                {},
+            )
+            book['26091500000021'] = self.broker_book_entry(
+                '26091500000021',
+                **book_order,
+            )
+        logger = logging.getLogger('test_runs.order_engine')
+        event_log = engine_stand_ins.RecordingEventLog()
+        placement = EnginePlacement(self.fake_redis, logger)
+        reconciler = BookReconciler(self.fake_redis, parent_store, 5.0)
+        engine = OrderEngine(
+            self.fake_redis,
+            placement,
+            EngineLock(self.fake_redis, logger),
+            logger,
+            STALE_INTENT_SECONDS,
+            RESULT_TTL_SECONDS,
+            event_log,
+            parent_store,
+            OrderUpdateFollower(
+                parent_store,
+                event_log,
+                logger,
+                None,
+                placement,
+            ),
+            reconciler=reconciler,
+        )
+        engine.reconcile_books()
+        engine.reconcile_books()
+        stored = ParentOrder.from_document(
+            parent_store.parent(parent.parent_order_id),
+        )
+        return {
+            'name': name,
+            'found': reconciler.found,
+            'leg_state': stored.legs[0].state,
+            'leg_filled': stored.legs[0].filled_quantity,
+            'parent_state': stored.state,
+            'still_open': parent.parent_order_id in self.fake_redis.sets.get(
+                'unified:orders:parents:open',
+                set(),
+            ),
+        }
+
+    def reconciler_due_result(self, name, interval_seconds, elapsed_seconds):
+        """Records whether a reconciliation pass is due.
+
+        Args:
+            name (str): The check's name.
+            interval_seconds (float): The configured interval.
+            elapsed_seconds (float): How long ago the last pass ran.
+
+        Returns:
+            dict: The recorded result.
+        """
+        reconciler = BookReconciler(None, None, interval_seconds)
+        return {
+            'name': name,
+            'due': reconciler.due(reconciler.checked_at + elapsed_seconds),
+        }
+
+    def early_update_result(self, name, registered_before_replay, hold_seconds):
+        """Delivers a fill before its order is registered, then replays the held updates.
+
+        Args:
+            name (str): The check's name.
+            registered_before_replay (bool): Whether the parent is saved, registering its order, between the fill and the replay.
+            hold_seconds (float): How long the follower holds an unknown update.
+
+        Returns:
+            dict: The recorded result.
+        """
+        self.fake_redis = self.build_state()
+        parent_store = ParentStore(self.fake_redis)
+        parent = self.followed_parent()
+        event_log = engine_stand_ins.RecordingEventLog()
+        follower = OrderUpdateFollower(
+            parent_store,
+            event_log,
+            logging.getLogger('test_runs.order_engine'),
+        )
+        follower.early_updates.hold_seconds = hold_seconds
+        first = follower.follow({
+            'update': json.dumps({
+                'broker': 'flattrade',
+                'order_id': '26091500000021',
+                'status': 'OPEN',
+                'filled_quantity': 4,
+                'average_price': 999.0,
+            }),
+        })
+        second = follower.follow({
+            'update': json.dumps({
+                'broker': 'flattrade',
+                'order_id': '26091500000021',
+                'status': 'COMPLETE',
+                'filled_quantity': 10,
+                'average_price': 999.25,
+            }),
+        })
+        if registered_before_replay:
+            parent_store.save(parent)
+        replayed_parents = follower.replay_early_updates()
+        for replayed_parent in replayed_parents:
+            parent_store.save(replayed_parent)
+        stored_document = parent_store.parent(parent.parent_order_id)
+        leg_state = None
+        leg_filled = None
+        if stored_document is not None:
+            stored = ParentOrder.from_document(stored_document)
+            leg_state = stored.legs[0].state
+            leg_filled = stored.legs[0].filled_quantity
+        return {
+            'name': name,
+            'applied_on_arrival': [
+                first is not None,
+                second is not None,
+            ],
+            'held': follower.held,
+            'replayed': follower.replayed,
+            'dropped': follower.early_updates.dropped,
+            'still_held': len(follower.early_updates.held),
+            'leg_state': leg_state,
+            'leg_filled': leg_filled,
+            'events': [
+                {
+                    'event': event['event'],
+                    'leg_state': event.get('leg_state'),
+                    'filled_quantity': event.get('filled_quantity'),
                 }
                 for event in event_log.events
             ],
@@ -2170,12 +2111,134 @@ class OrderEngineSuite:
                 dict(ours, status='OPEN', filled_quantity=4, average_price=999.0),
             ),
             self.follower_result(
-                'an_update_for_another_order_is_ignored',
+                'an_update_for_another_order_is_held_and_not_applied',
                 dict(ours, order_id='99999999999999'),
             ),
             self.follower_result(
-                'an_update_from_another_broker_is_ignored',
+                'an_update_from_another_broker_is_held_and_not_applied',
                 dict(ours, broker='zerodha'),
+            ),
+            self.early_update_result(
+                'fills_that_arrive_before_their_order_is_known_are_applied_in_order_once_it_is',
+                True,
+                30.0,
+            ),
+            self.early_update_result(
+                'an_early_update_whose_order_never_becomes_known_is_dropped',
+                False,
+                0.0,
+            ),
+            self.finishing_result(
+                'a_simple_parent_completes_when_its_order_fills',
+                'simple',
+                [
+                    dict(ours, status='COMPLETE', filled_quantity=10),
+                ],
+            ),
+            self.finishing_result(
+                'a_simple_parent_is_cancelled_when_its_order_is_cancelled',
+                'simple',
+                [
+                    dict(ours, status='CANCELLED', filled_quantity=0),
+                ],
+            ),
+            self.finishing_result(
+                'a_simple_parent_that_traded_before_its_cancel_completes',
+                'simple',
+                [
+                    dict(ours, status='OPEN', filled_quantity=4, average_price=999.0),
+                    dict(ours, status='CANCELLED', filled_quantity=4, average_price=999.0),
+                ],
+            ),
+            self.finishing_result(
+                'a_simple_parent_stays_open_while_its_order_rests',
+                'simple',
+                [
+                    dict(ours, status='OPEN', filled_quantity=4, average_price=999.0),
+                ],
+            ),
+            self.finishing_result(
+                'a_strategy_stop_keeps_watching_after_its_orders_fill',
+                'strategy_stop',
+                [
+                    dict(ours, status='COMPLETE', filled_quantity=10),
+                ],
+            ),
+            self.cancelling_parent_result(
+                'a_cancelling_parent_ends_when_its_last_leg_is_cancelled',
+                dict(ours, status='CANCELLED', filled_quantity=0),
+            ),
+            self.cancelling_parent_result(
+                'a_cancelling_parent_waits_while_its_leg_is_still_open',
+                dict(ours, status='OPEN', filled_quantity=0),
+            ),
+            self.reconciled_result(
+                'a_cancel_only_the_polled_book_shows_finishes_the_parent',
+                'working',
+                {
+                    'status': 'CANCELLED',
+                },
+            ),
+            self.reconciled_result(
+                'a_fill_only_the_polled_book_shows_completes_the_parent',
+                'working',
+                {
+                    'status': 'COMPLETE',
+                    'quantity': 10,
+                    'filled_quantity': 10,
+                    'average_price': 1009.5,
+                },
+            ),
+            self.reconciled_result(
+                'a_cancelling_parent_ends_when_the_polled_book_shows_its_cancel',
+                'cancelling',
+                {
+                    'status': 'CANCELLED',
+                },
+            ),
+            self.reconciled_result(
+                'a_partial_fill_only_the_polled_book_shows_is_recorded',
+                'working',
+                {
+                    'status': 'OPEN',
+                    'filled_quantity': 4,
+                },
+            ),
+            self.reconciled_result(
+                'a_polled_book_behind_the_socket_changes_nothing',
+                'working',
+                {
+                    'status': 'OPEN',
+                    'filled_quantity': 2,
+                },
+                4,
+            ),
+            self.reconciled_result(
+                'a_resting_order_in_the_polled_book_changes_nothing',
+                'working',
+                {
+                    'status': 'OPEN',
+                },
+            ),
+            self.reconciled_result(
+                'an_order_missing_from_the_polled_book_changes_nothing',
+                'working',
+                None,
+            ),
+            self.reconciler_due_result(
+                'reconciliation_waits_for_its_interval',
+                5.0,
+                4.0,
+            ),
+            self.reconciler_due_result(
+                'reconciliation_runs_once_its_interval_has_passed',
+                5.0,
+                5.0,
+            ),
+            self.reconciler_due_result(
+                'reconciliation_is_off_when_its_interval_is_zero',
+                0.0,
+                100.0,
             ),
             self.follower_result(
                 'an_update_that_changes_nothing_is_not_recorded',
@@ -2261,12 +2324,12 @@ class OrderEngineSuite:
 
         logger = logging.getLogger('test_runs.order_engine')
         placement = EnginePlacement(self.fake_redis, logger)
-        event_log = RecordingEventLog()
+        event_log = engine_stand_ins.RecordingEventLog()
         parent_store = ParentStore(self.fake_redis)
         gates = None
         if gated:
             gates = RiskGates(
-                RateBudget(gated, gated, 0, logger),
+                RateBudget(self.fake_redis, gated, gated, 0, logger),
                 LossLockout(self.fake_redis, 0, logger),
                 OrderToTradeRatio(),
             )
@@ -2282,7 +2345,7 @@ class OrderEngineSuite:
             None,
             gates,
         )
-        engine.run(OnePassStop(3))
+        engine.run(engine_stand_ins.OnePassStop(3))
 
         follower = OrderUpdateFollower(
             parent_store,
@@ -2779,6 +2842,36 @@ class OrderEngineSuite:
             ),
         ]
 
+    def priced_clock_result(self, name, request_body, quote):
+        """Places one timed order against a quote and records the price of every leg it placed.
+
+        Args:
+            name (str): The check's name.
+            request_body (dict): The request body.
+            quote (dict): The live quote to seed.
+
+        Returns:
+            dict: The recorded result, with `leg_prices`.
+        """
+        accepted = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        result = self.clock_result(
+            name,
+            request_body,
+            [],
+            FROZEN_NOW.timestamp() + 60,
+            accepted,
+            quote=quote,
+        )
+        prices = []
+        for document in self.fake_redis.hashes.get('unified:orders:parents', {}).values():
+            for leg in ParentOrder.from_document(json.loads(document)).legs:
+                prices.append(leg.price)
+        result['leg_prices'] = prices
+        return result
+
     def clock_result(
         self,
         name,
@@ -2788,6 +2881,8 @@ class OrderEngineSuite:
         answer=None,
         quote=None,
         positions=None,
+        resting=None,
+        taken_at=None,
     ):
         """Places one timed order, optionally fills it, then gives it a clock tick.
 
@@ -2801,11 +2896,19 @@ class OrderEngineSuite:
             answer (dict | None): The stubbed broker answer.
             quote (dict | None): A live quote to seed, for a type that reads the book when it is placed.
             positions (float | None): A net position in RELIANCE to seed, for a type that reads the account's holdings.
+            resting (list | None): Flattrade order ids of open RELIANCE orders placed outside the engine, for a type that cancels what is resting.
+            taken_at (datetime.datetime | None): The moment the engine takes the order, or None for `FROZEN_NOW`.
 
         Returns:
             dict: The recorded result.
         """
-        scenario = self.scenarios.intents(name, [request_body], answer=answer)
+        taken_at = taken_at or FROZEN_NOW
+        settings = {
+            'answer': answer,
+        }
+        if request_body.get('instrument_id'):
+            settings['instrument_id'] = request_body['instrument_id']
+        scenario = self.scenarios.intents(name, [request_body], **settings)
         self.fake_redis = self.build_state()
         if quote is not None:
             self.seed_quote(quote)
@@ -2813,13 +2916,19 @@ class OrderEngineSuite:
             self.fake_redis.strings['unified:portfolio:positions'] = json.dumps(
                 self.scenarios.positions(positions),
             )
+        self.seed_resting(resting)
         self.network.reset(answer)
         self.counting_uuid.reset()
-        reply_keys = self.write_intents(scenario)
+        original_time = time.time
+        time.time = lambda: taken_at.timestamp()
+        try:
+            reply_keys = self.write_intents(scenario)
+        finally:
+            time.time = original_time
 
         logger = logging.getLogger('test_runs.order_engine')
         placement = EnginePlacement(self.fake_redis, logger)
-        event_log = RecordingEventLog()
+        event_log = engine_stand_ins.RecordingEventLog()
         parent_store = ParentStore(self.fake_redis)
         ticker = ClockTicker(parent_store, event_log, placement, logger, None)
         engine = OrderEngine(
@@ -2835,11 +2944,14 @@ class OrderEngineSuite:
         # The whole check runs on one frozen clock, so a slice due five minutes in is due five
         # minutes after the order was recorded rather than five minutes after the real time of day.
         original_time = time.time
-        time.time = lambda: FROZEN_NOW.timestamp()
+        original_now = moments.Moments.now
+        time.time = lambda: taken_at.timestamp()
+        moments.Moments.now = lambda self: taken_at
         try:
-            engine.run(OnePassStop(3))
+            engine.run(engine_stand_ins.OnePassStop(3))
         finally:
             time.time = original_time
+            moments.Moments.now = original_now
         reply = self.shown_replies(reply_keys)[0]
 
         follower = OrderUpdateFollower(
@@ -2876,7 +2988,7 @@ class OrderEngineSuite:
                 {},
             ).values()
         ]
-        return {
+        result = {
             'name': name,
             'reply': reply,
             'sent_before_tick': before,
@@ -2898,12 +3010,24 @@ class OrderEngineSuite:
             ],
             'parent_states': [parent.state for parent in parents],
         }
+        if resting is not None:
+            result['outside_cancels'] = [
+                {
+                    'event': event['event'],
+                    'broker': event.get('broker'),
+                    'broker_order_id': event.get('broker_order_id'),
+                    'outcome': event.get('outcome'),
+                }
+                for event in event_log.events
+                if event['event'].startswith('outside_cancel')
+            ]
+        return result
 
     def restart_parents(self, event_log, parent_store):
         """Rebuilds every parent from its recorded events alone, which is all an engine restart has.
 
         Args:
-            event_log (RecordingEventLog): The recorded events.
+            event_log (engine_stand_ins.RecordingEventLog): The recorded events.
             parent_store (ParentStore): The Redis copy to replace.
 
         Returns:
@@ -2938,6 +3062,42 @@ class OrderEngineSuite:
             return
         quotes[instrument_id] = json.dumps(quote)
 
+    def seed_resting(self, resting):
+        """Puts open RELIANCE orders placed outside the engine where the order updates and the broker's book hold them.
+
+        Args:
+            resting (list | None): Flattrade order ids.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        for order_id in resting or []:
+            self.fake_redis.hashes.setdefault('unified:order-updates', {})[
+                f'flattrade:{order_id}'
+            ] = json.dumps({
+                'broker': 'flattrade',
+                'order_id': order_id,
+                'instrument_id': order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['reliance'],
+                'status': 'OPEN',
+            })
+            self.fake_redis.hashes.setdefault('flattrade:orders:orders', {})[
+                order_id
+            ] = self.broker_book_entry(order_id)
+
+    def seed_other_quotes(self, step):
+        """Puts the quotes a step carries for instruments other than RELIANCE, such as an underlying.
+
+        Args:
+            step (dict): The step, whose `other_quotes` maps an instrument's name in `INSTRUMENT_IDENTIFIERS` to its quote.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        quotes = self.fake_redis.hashes.setdefault('unified:quotes:live', {})
+        for name, quote in (step.get('other_quotes') or {}).items():
+            instrument_id = order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS[name]
+            quotes[instrument_id] = json.dumps(quote)
+
     def price_result(
         self,
         name,
@@ -2951,6 +3111,7 @@ class OrderEngineSuite:
         restart_between_ticks=False,
         daily_caps=None,
         daily_sent=None,
+        resting=None,
     ):
         """Places one watching order, then walks it through a sequence of quotes.
 
@@ -2959,7 +3120,7 @@ class OrderEngineSuite:
         Args:
             name (str): The check's name.
             request_body (dict): The request body.
-            steps (list): One `{"quote": dict | None, "at": float}` per tick, where `at` is seconds after the order was placed.
+            steps (list): One `{"quote": dict | None, "at": float}` per tick, where `at` is seconds after the order was placed, and optionally `other_quotes` for other instruments, `updates`, order updates applied before the tick, and `funds`, the combined funds document.
             answer (dict | None): The stubbed broker answer.
             throttle_seconds (float): The shortest gap the re-pricing throttle allows between two moves of one order.
             book_overrides (dict | None): Fields to replace on the broker's order book entry, for a type whose order is not a plain limit.
@@ -2968,16 +3129,25 @@ class OrderEngineSuite:
             restart_between_ticks (bool): Whether to rebuild every parent from its recorded events after every tick, as an engine restart does.
             daily_caps (dict | None): Each capped broker's daily cap, or None for no daily order count.
             daily_sent (dict | None): Each broker's order messages already sent today, written before the order is placed.
+            resting (list | None): Flattrade order ids of open RELIANCE orders placed outside the engine, for a type that cancels what is resting.
 
         Returns:
             dict: The recorded result.
         """
-        scenario = self.scenarios.intents(name, [request_body], answer=answer)
+        settings = {
+            'answer': answer,
+        }
+        if request_body.get('instrument_id'):
+            settings['instrument_id'] = request_body['instrument_id']
+        scenario = self.scenarios.intents(name, [request_body], **settings)
         self.fake_redis = self.build_state()
         self.network.reset(answer)
         self.counting_uuid.reset()
         starting = steps[0]['quote'] if steps else None
         self.seed_quote(starting)
+        if steps:
+            self.seed_other_quotes(steps[0])
+        self.seed_resting(resting)
         if positions is not None:
             self.fake_redis.strings['unified:portfolio:positions'] = json.dumps(
                 self.scenarios.positions(positions),
@@ -2986,10 +3156,10 @@ class OrderEngineSuite:
 
         logger = logging.getLogger('test_runs.order_engine')
         placement = EnginePlacement(self.fake_redis, logger)
-        event_log = RecordingEventLog()
+        event_log = engine_stand_ins.RecordingEventLog()
         parent_store = ParentStore(self.fake_redis)
         gates = RiskGates(
-            RateBudget(100, 100, 0, logger),
+            RateBudget(self.fake_redis, 100, 100, 0, logger),
             LossLockout(self.fake_redis, 0, logger),
             OrderToTradeRatio(),
             RepricingThrottle(throttle_seconds),
@@ -3026,7 +3196,7 @@ class OrderEngineSuite:
         original_time = time.time
         time.time = lambda: started
         try:
-            engine.run(OnePassStop(3))
+            engine.run(engine_stand_ins.OnePassStop(3))
         finally:
             time.time = original_time
         reply = self.shown_replies(reply_keys)[0]
@@ -3039,6 +3209,13 @@ class OrderEngineSuite:
             status='OPEN',
             **(book_overrides or {}),
         )
+        for number in range(1, self.network.placed + 1):
+            numbered = str(26091500000100 + number)
+            book[numbered] = self.broker_book_entry(
+                numbered,
+                status='OPEN',
+                **(book_overrides or {}),
+            )
 
         follower = OrderUpdateFollower(
             parent_store,
@@ -3055,15 +3232,51 @@ class OrderEngineSuite:
                 parent_store.save(changed)
 
         moves = []
+        held_changes = []
         for step in steps:
-            self.seed_quote(step.get('quote'))
-            if step.get('estimate') is not None:
-                self.seed_estimate(step['estimate'])
-            before = len(self.network.sent_requests)
-            self.tick_at(ticker, started + step.get('at', 0))
-            moves.append(len(self.network.sent_requests) - before)
-            if restart_between_ticks:
-                self.restart_parents(event_log, parent_store)
+            step_at = started + step.get('at', 0)
+            time.time = lambda: step_at
+            try:
+                self.seed_quote(step.get('quote'))
+                self.seed_other_quotes(step)
+                if step.get('funds') is not None:
+                    self.fake_redis.strings['unified:portfolio:funds'] = json.dumps(step['funds'])
+                for update in step.get('updates') or []:
+                    changed = follower.follow({
+                        'update': json.dumps(update),
+                    })
+                    if changed is not None:
+                        parent_store.save(changed)
+                if step.get('estimate') is not None:
+                    self.seed_estimate(step['estimate'])
+                if step.get('held_change') is not None:
+                    commands = ParentCommands(
+                        placement,
+                        event_log,
+                        parent_store,
+                        logger,
+                        gates,
+                    )
+                    arguments = dict(step['held_change'])
+                    for parent_order_id in self.fake_redis.hashes.get('unified:orders:parents', {}):
+                        arguments['parent_id'] = parent_order_id
+                    try:
+                        answer_body, status = commands.modify_held(arguments)
+                    except RefusedRequestError as refusal:
+                        answer_body, status = refusal.body, refusal.status
+                    held_changes.append({
+                        'status': status,
+                        'error': answer_body.get('error'),
+                        'price': answer_body.get('price'),
+                        'quantity': answer_body.get('quantity'),
+                    })
+                before = len(self.network.sent_requests)
+                self.tick_at(ticker, step_at)
+                moves.append(len(self.network.sent_requests) - before)
+                if restart_between_ticks:
+                    self.restart_parents(event_log, parent_store)
+            finally:
+                time.time = original_time
 
         parents = [
             ParentOrder.from_document(json.loads(one))
@@ -3109,6 +3322,8 @@ class OrderEngineSuite:
                 for event in event_log.events
                 if event.get('event') == 'paper_filled'
             ]
+        if held_changes:
+            result['held_changes'] = held_changes
         return result
 
     def seed_estimate(self, estimate):
@@ -3193,6 +3408,230 @@ class OrderEngineSuite:
                 accepted,
             ),
             self.clock_result(
+                'a_limit_then_market_order_is_made_marketable_when_its_time_comes',
+                dict(entry, synthetic={
+                    'type': 'good_till_time',
+                    'until_time': '10:30',
+                    'at_expiry': 'market',
+                }),
+                [],
+                frozen + 1900,
+                accepted,
+                quote=self.scenarios.quote(),
+            ),
+            self.clock_result(
+                'an_opening_auction_order_waits_for_the_pre_open',
+                dict(entry, synthetic={
+                    'type': 'opening_auction',
+                }),
+                [],
+                FROZEN_NOW.replace(hour=9, minute=0, second=30).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(hour=8, minute=45),
+            ),
+            self.clock_result(
+                'an_opening_auction_order_during_collection_is_placed_at_once',
+                self.scenarios.bodies.market_order(
+                    dry_run=None,
+                    synthetic={
+                        'type': 'opening_auction',
+                    },
+                ),
+                [],
+                FROZEN_NOW.replace(hour=9, minute=3, second=1).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(hour=9, minute=3),
+            ),
+            self.clock_result(
+                'a_market_opening_auction_order_after_nine_oh_five_is_refused',
+                self.scenarios.bodies.market_order(
+                    dry_run=None,
+                    synthetic={
+                        'type': 'opening_auction',
+                    },
+                ),
+                [],
+                FROZEN_NOW.replace(hour=9, minute=6, second=1).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(hour=9, minute=6),
+            ),
+            self.clock_result(
+                'an_opening_auction_order_after_collection_is_refused',
+                dict(entry, synthetic={
+                    'type': 'opening_auction',
+                }),
+                [],
+                frozen + 60,
+                accepted,
+            ),
+            self.clock_result(
+                'an_opening_auction_order_for_an_option_is_refused',
+                dict(
+                    entry,
+                    instrument_id=order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['nifty_option'],
+                    synthetic={
+                        'type': 'opening_auction',
+                    },
+                ),
+                [],
+                FROZEN_NOW.replace(hour=9, minute=0, second=30).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(hour=8, minute=45),
+            ),
+            self.clock_result(
+                'a_stop_order_cannot_join_the_opening_auction',
+                dict(
+                    entry,
+                    order_type='SL',
+                    trigger_price=990,
+                    price=988,
+                    synthetic={
+                        'type': 'opening_auction',
+                    },
+                ),
+                [],
+                FROZEN_NOW.replace(hour=9, minute=0, second=30).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(hour=8, minute=45),
+            ),
+            self.clock_result(
+                'a_futures_opening_auction_order_after_nine_oh_seven_is_refused',
+                dict(
+                    entry,
+                    instrument_id=order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['reliance_future'],
+                    synthetic={
+                        'type': 'opening_auction',
+                    },
+                ),
+                [],
+                FROZEN_NOW.replace(hour=9, minute=8, second=1).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(hour=9, minute=8),
+            ),
+            self.clock_result(
+                'a_closing_price_order_waits_for_the_window_and_then_slices',
+                dict(entry, quantity=60, synthetic={
+                    'type': 'closing_price',
+                }),
+                [],
+                FROZEN_NOW.replace(hour=15, minute=0).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(hour=14, minute=30),
+            ),
+            self.clock_result(
+                'a_closing_price_order_inside_the_window_starts_at_once',
+                dict(entry, quantity=40, synthetic={
+                    'type': 'closing_price',
+                    'slices': 4,
+                }),
+                [],
+                FROZEN_NOW.replace(hour=15, minute=15).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(hour=15, minute=10),
+            ),
+            self.clock_result(
+                'a_closing_price_order_after_the_close_is_refused',
+                dict(entry, synthetic={
+                    'type': 'closing_price',
+                }),
+                [],
+                FROZEN_NOW.replace(hour=15, minute=32).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(hour=15, minute=31),
+            ),
+            self.clock_result(
+                'a_closing_price_window_starting_after_the_close_is_refused',
+                dict(entry, synthetic={
+                    'type': 'closing_price',
+                    'window_start': '15:40',
+                }),
+                [],
+                frozen + 60,
+                accepted,
+            ),
+            self.clock_result(
+                'a_scheduled_order_taken_on_a_sunday_waits_through_sunday_afternoon',
+                dict(entry, synthetic={'type': 'scheduled', 'at_time': '15:00'}),
+                [],
+                FROZEN_NOW.replace(day=27).replace(hour=15).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(day=27),
+            ),
+            self.clock_result(
+                'a_scheduled_order_taken_on_a_sunday_is_placed_on_monday',
+                dict(entry, synthetic={'type': 'scheduled', 'at_time': '15:00'}),
+                [],
+                FROZEN_NOW.replace(day=28, hour=15).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(day=27),
+            ),
+            self.clock_result(
+                'a_scheduled_order_taken_on_a_holiday_friday_is_placed_the_next_monday',
+                dict(entry, synthetic={'type': 'scheduled', 'at_time': '15:00'}),
+                [],
+                FROZEN_NOW.replace(month=10, day=5, hour=15).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(month=10, day=2),
+            ),
+            self.clock_result(
+                'a_daily_stop_taken_on_a_sunday_places_nothing_that_day',
+                dict(entry, synthetic={'type': 'daily_stop', 'stop_price': 990, 'stop_limit_price': 988, 'arm_at': '09:20'}),
+                [],
+                FROZEN_NOW.replace(day=27).replace(hour=9, minute=21).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(day=27).replace(hour=8, minute=45),
+                quote=self.scenarios.quote(),
+            ),
+            self.clock_result(
+                'a_daily_stop_taken_after_its_time_waits_for_the_next_trading_morning',
+                dict(entry, synthetic={'type': 'daily_stop', 'stop_price': 990, 'stop_limit_price': 988, 'arm_at': '09:20'}),
+                [],
+                frozen + 60,
+                accepted,
+                taken_at=FROZEN_NOW,
+                quote=self.scenarios.quote(),
+            ),
+            self.clock_result(
+                'a_closing_price_order_taken_on_a_sunday_is_scheduled_for_monday',
+                dict(entry, synthetic={'type': 'closing_price'}),
+                [],
+                FROZEN_NOW.replace(day=27).replace(hour=15, minute=1).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(day=27),
+            ),
+            self.clock_result(
+                'an_opening_auction_order_taken_on_a_sunday_joins_mondays_pre_open',
+                dict(entry, synthetic={'type': 'opening_auction'}),
+                [],
+                FROZEN_NOW.replace(day=28, hour=9, minute=0, second=30).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(day=27),
+            ),
+            self.clock_result(
+                'a_square_off_taken_on_a_sunday_is_scheduled_for_monday',
+                dict(entry, synthetic={'type': 'square_off', 'at_time': '15:10', 'product': 'intraday'}),
+                [],
+                FROZEN_NOW.replace(day=27).replace(hour=15, minute=11).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(day=27),
+            ),
+            self.clock_result(
+                'a_good_till_time_order_taken_on_a_sunday_cancels_on_monday',
+                dict(entry, synthetic={'type': 'good_till_time', 'until_time': '14:30'}),
+                [],
+                FROZEN_NOW.replace(day=27).replace(hour=14, minute=31).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(day=27),
+            ),
+            self.clock_result(
+                'a_time_stop_in_minutes_on_a_sunday_is_refused',
+                dict(entry, synthetic={'type': 'time_stop', 'minutes': 20}),
+                [],
+                FROZEN_NOW.replace(day=27).replace(hour=11).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(day=27),
+            ),
+            self.clock_result(
                 'a_time_stop_closes_what_it_filled',
                 dict(entry, synthetic={
                     'type': 'time_stop',
@@ -3247,6 +3686,7 @@ class OrderEngineSuite:
                 [],
                 frozen + 60,
                 accepted,
+                taken_at=FROZEN_NOW.replace(hour=8, minute=45),
                 quote=self.scenarios.quote(),
             ),
             self.clock_result(
@@ -3260,6 +3700,7 @@ class OrderEngineSuite:
                 [],
                 frozen + 60,
                 accepted,
+                taken_at=FROZEN_NOW.replace(hour=8, minute=45),
                 quote=self.scenarios.quote(
                     last_price=960.00,
                     depth={
@@ -3285,6 +3726,21 @@ class OrderEngineSuite:
                 positions=8,
             ),
             self.clock_result(
+                'a_square_off_records_the_cancel_of_an_order_placed_outside_the_engine',
+                dict(entry, synthetic={
+                    'type': 'square_off',
+                    'at_time': '15:10',
+                }),
+                [],
+                frozen + 20000,
+                accepted,
+                quote=self.scenarios.quote(),
+                positions=8,
+                resting=[
+                    '26091500000077',
+                ],
+            ),
+            self.clock_result(
                 'a_square_off_with_nothing_held_closes_nothing',
                 dict(entry, synthetic={
                     'type': 'square_off',
@@ -3306,6 +3762,36 @@ class OrderEngineSuite:
                 frozen + 2000,
                 accepted,
                 quote=self.scenarios.quote(),
+            ),
+            self.priced_clock_result(
+                'an_accumulation_never_bids_above_the_callers_limit',
+                dict(entry, quantity=5, price=995, synthetic={
+                    'type': 'accumulation',
+                    'every_minutes': 30,
+                    'purchases': 4,
+                }),
+                self.scenarios.quote(),
+            ),
+            self.priced_clock_result(
+                'an_accumulation_rests_on_the_bid_when_it_is_better_than_the_limit',
+                dict(entry, quantity=5, price=1005, synthetic={
+                    'type': 'accumulation',
+                    'every_minutes': 30,
+                    'purchases': 4,
+                }),
+                self.scenarios.quote(),
+            ),
+            self.priced_clock_result(
+                'an_accumulation_with_no_bid_rests_at_the_callers_limit',
+                dict(entry, quantity=5, price=995, synthetic={
+                    'type': 'accumulation',
+                    'every_minutes': 30,
+                    'purchases': 4,
+                }),
+                self.scenarios.quote(depth={
+                    'buy': [],
+                    'sell': [],
+                }),
             ),
             self.clock_result(
                 'an_accumulation_waits_out_the_gap_between_purchases',
@@ -4005,6 +4491,175 @@ class OrderEngineSuite:
                 },
             ),
             self.price_result(
+                'a_trailing_take_profit_waits_for_its_level_and_then_trails',
+                dict(entry, synthetic={
+                    'type': 'trailing_stop',
+                    'trail_points': 10,
+                    'stop_limit_offset': 2,
+                    'activate_at': 1030,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1020.00, 1020.05), 'at': 1},
+                    {'quote': self.book_at(1035.00, 1035.05), 'at': 2},
+                    {'quote': self.book_at(1050.00, 1050.05), 'at': 3},
+                ],
+                accepted,
+                book_overrides={
+                    'order_type': 'SL',
+                    'trigger_price': 1025.05,
+                },
+            ),
+            self.price_result(
+                'a_trailing_take_profit_places_nothing_below_its_level',
+                dict(entry, synthetic={
+                    'type': 'trailing_stop',
+                    'trail_points': 10,
+                    'stop_limit_offset': 2,
+                    'activate_at': 1030,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1020.00, 1020.05), 'at': 1},
+                    {'quote': self.book_at(990.00, 990.05), 'at': 2},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_trailing_take_profit_with_a_level_below_zero_is_refused',
+                dict(entry, synthetic={
+                    'type': 'trailing_stop',
+                    'trail_points': 10,
+                    'stop_limit_offset': 2,
+                    'activate_at': -5,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_stepped_stop_moves_at_each_milestone_and_then_trails',
+                dict(entry, synthetic={
+                    'type': 'stepped_stop',
+                    'entry_price': 1000,
+                    'stop_price': 990,
+                    'stop_limit_offset': 2,
+                    'rules': [
+                        {
+                            'gain': 20,
+                            'stop_at_gain': 0,
+                        },
+                        {
+                            'gain': 40,
+                            'stop_at_gain': 15,
+                        },
+                        {
+                            'gain': 60,
+                            'trail_points': 25,
+                        },
+                    ],
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1024.95, 1025.00), 'at': 1},
+                    {'quote': self.book_at(1044.95, 1045.00), 'at': 2},
+                    {'quote': self.book_at(1029.95, 1030.00), 'at': 3},
+                    {'quote': self.book_at(1069.95, 1070.00), 'at': 4},
+                    {'quote': self.book_at(1079.95, 1080.00), 'at': 5},
+                ],
+                accepted,
+                book_overrides={
+                    'order_type': 'SL',
+                    'trigger_price': 990.0,
+                },
+            ),
+            self.price_result(
+                'a_stepped_stop_that_jumps_past_every_milestone_starts_trailing',
+                dict(entry, synthetic={
+                    'type': 'stepped_stop',
+                    'entry_price': 1000,
+                    'stop_price': 990,
+                    'stop_limit_offset': 2,
+                    'rules': [
+                        {
+                            'gain': 20,
+                            'stop_at_gain': 0,
+                        },
+                        {
+                            'gain': 40,
+                            'stop_at_gain': 15,
+                        },
+                        {
+                            'gain': 60,
+                            'trail_points': 25,
+                        },
+                    ],
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1064.95, 1065.00), 'at': 1},
+                ],
+                accepted,
+                book_overrides={
+                    'order_type': 'SL',
+                    'trigger_price': 990.0,
+                },
+            ),
+            self.price_result(
+                'a_stepped_stop_with_a_trail_before_its_last_rule_is_refused',
+                dict(entry, synthetic={
+                    'type': 'stepped_stop',
+                    'entry_price': 1000,
+                    'stop_price': 990,
+                    'stop_limit_offset': 2,
+                    'rules': [{'gain': 20, 'trail_points': 10}, {'gain': 40, 'stop_at_gain': 15}],
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_stepped_stop_rule_that_would_fire_at_once_is_refused',
+                dict(entry, synthetic={
+                    'type': 'stepped_stop',
+                    'entry_price': 1000,
+                    'stop_price': 990,
+                    'stop_limit_offset': 2,
+                    'rules': [{'gain': 20, 'stop_at_gain': 20}],
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_held_limit_changed_while_held_fires_at_its_new_price_and_quantity',
+                dict(entry, synthetic={
+                    'type': 'virtual_limit',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {
+                        'quote': steady,
+                        'at': 1,
+                        'held_change': {
+                            'price': '1000.05',
+                            'quantity': 20,
+                        },
+                    },
+                    {
+                        'quote': steady,
+                        'at': 2,
+                        'held_change': {
+                            'price': '999',
+                        },
+                    },
+                ],
+                accepted,
+            ),
+            self.price_result(
                 'a_market_if_touched_order_waits_and_then_takes_the_offer',
                 dict(entry, synthetic={
                     'type': 'market_if_touched',
@@ -4016,6 +4671,467 @@ class OrderEngineSuite:
                     {'quote': self.book_at(994.90, 994.95), 'at': 2},
                 ],
                 accepted,
+            ),
+            self.price_result(
+                'a_trigger_on_the_bid_fires_before_the_last_trade_gets_there',
+                dict(entry, synthetic={
+                    'type': 'market_if_touched',
+                    'trigger_price': 995,
+                    'trigger_on': 'bid',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 995.20), 'at': 1},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_double_last_trigger_starts_again_when_a_tick_falls_back',
+                dict(entry, synthetic={
+                    'type': 'market_if_touched',
+                    'trigger_price': 995,
+                    'trigger_on': 'double_last',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                    {'quote': self.book_at(995.50, 995.55), 'at': 2},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 3},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 4},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_held_trigger_waits_until_the_level_has_held_long_enough',
+                dict(entry, synthetic={
+                    'type': 'market_if_touched',
+                    'trigger_price': 995,
+                    'trigger_on': 'held',
+                    'hold_seconds': 5,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 3},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 7},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_held_trigger_without_a_hold_time_is_refused',
+                dict(entry, synthetic={
+                    'type': 'market_if_touched',
+                    'trigger_price': 995,
+                    'trigger_on': 'held',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_type_that_chooses_its_own_price_refuses_trigger_on',
+                dict(entry, synthetic={
+                    'type': 'hidden_stop',
+                    'trigger_price': 995,
+                    'backstop_price': 990,
+                    'backstop_limit_price': 988,
+                    'trigger_on': 'last',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_close_on_trigger_cancels_resting_orders_then_closes_the_long',
+                dict(entry, synthetic={
+                    'type': 'close_on_trigger',
+                    'trigger_price': 995,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                    {'quote': self.book_at(994.00, 994.05), 'at': 2},
+                ],
+                accepted,
+                positions=75,
+                resting=[
+                    '26091500000077',
+                ],
+            ),
+            self.price_result(
+                'a_close_on_trigger_with_nothing_held_completes_without_an_order',
+                dict(entry, synthetic={
+                    'type': 'close_on_trigger',
+                    'trigger_price': 995,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                ],
+                accepted,
+                positions=0,
+            ),
+            self.price_result(
+                'a_close_on_trigger_buys_back_a_short_when_the_price_rises',
+                dict(entry, transaction_type='SELL', synthetic={
+                    'type': 'close_on_trigger',
+                    'trigger_price': 1005,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1005.00, 1005.05), 'at': 1},
+                ],
+                accepted,
+                positions=-40,
+            ),
+            self.price_result(
+                'a_stop_and_reverse_closes_then_reverses_once_the_close_fills',
+                dict(entry, synthetic={
+                    'type': 'stop_and_reverse',
+                    'trigger_price': 995,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                    {'quote': self.book_at(994.00, 994.05), 'at': 2},
+                    {
+                        'quote': self.book_at(994.00, 994.05),
+                        'at': 3,
+                        'updates': [
+                            self.update('26091500000021', 'COMPLETE', 75),
+                        ],
+                    },
+                ],
+                accepted,
+                positions=75,
+            ),
+            self.price_result(
+                'a_doubled_stop_and_reverse_sends_one_order_for_twice_the_position',
+                dict(entry, synthetic={
+                    'type': 'stop_and_reverse',
+                    'trigger_price': 995,
+                    'method': 'double',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                ],
+                accepted,
+                positions=75,
+            ),
+            self.price_result(
+                'a_stop_and_reverse_with_an_unknown_method_is_refused',
+                dict(entry, synthetic={
+                    'type': 'stop_and_reverse',
+                    'trigger_price': 995,
+                    'method': 'sideways',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'an_attached_hedge_sells_the_future_in_whole_lots_as_the_entry_fills',
+                dict(entry, quantity=1000, synthetic={
+                    'type': 'attached_hedge',
+                    'hedge_instrument_id': order_routes.OrderRoutesState.
+                    INSTRUMENT_IDENTIFIERS['reliance_future'],
+                    'ratio': 1,
+                }),
+                [
+                    {
+                        'quote': steady,
+                        'at': 0,
+                        'other_quotes': {
+                            'reliance_future': self.scenarios.quote(),
+                        },
+                    },
+                    {
+                        'quote': steady,
+                        'at': 1,
+                        'updates': [
+                            self.update('26091500000021', 'OPEN', 600),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 2,
+                        'updates': [
+                            self.update('26091500000021', 'COMPLETE', 1000),
+                        ],
+                    },
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'an_attached_hedge_sized_by_delta_sells_about_half_a_bought_call',
+                dict(
+                    entry,
+                    instrument_id=order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['nifty_option'],
+                    quantity=1500,
+                    price=160,
+                    synthetic={
+                        'type': 'attached_hedge',
+                        'hedge_instrument_id': order_routes.OrderRoutesState.
+                        INSTRUMENT_IDENTIFIERS['reliance_future'],
+                        'delta_volatility': 12.5,
+                    },
+                ),
+                [
+                    {
+                        'quote': steady,
+                        'at': 0,
+                        'other_quotes': {
+                            'reliance_future': self.scenarios.quote(last_price=25000),
+                        },
+                    },
+                    {
+                        'quote': steady,
+                        'at': 1,
+                        'updates': [
+                            self.update('26091500000021', 'COMPLETE', 1500),
+                        ],
+                    },
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'an_attached_hedge_with_both_a_ratio_and_a_delta_is_refused',
+                dict(entry, synthetic={
+                    'type': 'attached_hedge',
+                    'hedge_instrument_id': order_routes.OrderRoutesState.
+                    INSTRUMENT_IDENTIFIERS['reliance_future'],
+                    'ratio': 1,
+                    'delta_volatility': 12.5,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'an_attached_hedge_sized_by_delta_on_a_stock_is_refused',
+                dict(entry, synthetic={
+                    'type': 'attached_hedge',
+                    'hedge_instrument_id': order_routes.OrderRoutesState.
+                    INSTRUMENT_IDENTIFIERS['reliance_future'],
+                    'delta_volatility': 12.5,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_scale_with_profit_taker_takes_each_rungs_profit_and_places_it_again',
+                dict(entry, quantity=30, synthetic={
+                    'type': 'scale_with_profit_taker',
+                    'from_price': 1000,
+                    'to_price': 990,
+                    'steps': 3,
+                    'profit_points': 4,
+                    'most_cycles': 1,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {
+                        'quote': steady,
+                        'at': 1,
+                        'updates': [
+                            self.update('26091500000102', 'COMPLETE', 10),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 2,
+                        'updates': [
+                            self.update('26091500000104', 'COMPLETE', 10),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 3,
+                        'updates': [
+                            self.update('26091500000105', 'COMPLETE', 10),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 4,
+                        'updates': [
+                            self.update('26091500000106', 'COMPLETE', 10),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 5,
+                        'updates': [
+                            self.update('26091500000107', 'COMPLETE', 10),
+                        ],
+                    },
+                ],
+                dict(accepted, number_orders=True),
+            ),
+            self.price_result(
+                'a_scale_with_profit_taker_without_a_profit_distance_is_refused',
+                dict(entry, quantity=30, synthetic={
+                    'type': 'scale_with_profit_taker',
+                    'from_price': 1000,
+                    'to_price': 990,
+                    'steps': 3,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_two_sided_quote_follows_the_mid',
+                dict(entry, synthetic={
+                    'type': 'two_sided_quote',
+                    'half_spread_points': 1,
+                    'most_inventory': 30,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1010.00, 1010.05), 'at': 1},
+                ],
+                dict(accepted, number_orders=True),
+            ),
+            self.price_result(
+                'a_filled_bid_skews_the_ask_and_stops_buying_at_the_cap',
+                dict(entry, synthetic={
+                    'type': 'two_sided_quote',
+                    'half_spread_points': 1,
+                    'skew_ticks': 2,
+                    'most_inventory': 10,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {
+                        'quote': steady,
+                        'at': 1,
+                        'updates': [
+                            self.update('26091500000101', 'COMPLETE', 10),
+                        ],
+                    },
+                ],
+                dict(accepted, number_orders=True),
+            ),
+            self.price_result(
+                'a_two_sided_quote_without_a_spread_is_refused',
+                dict(entry, synthetic={
+                    'type': 'two_sided_quote',
+                    'most_inventory': 10,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'an_account_conditional_order_waits_for_margin_to_free_up',
+                dict(entry, synthetic={
+                    'type': 'account_conditional',
+                    'account_field': 'available_balance',
+                    'account_level': 50000,
+                    'trigger_direction': 'at_or_above',
+                }),
+                [
+                    {'quote': steady, 'at': 0, 'funds': {'summary': {'available_balance': 40000.0}, 'pnl': {'realized': 0.0, 'unrealized': 0.0}}},
+                    {'quote': steady, 'at': 1, 'funds': {'summary': {'available_balance': 60000.0}, 'pnl': {'realized': 0.0, 'unrealized': 0.0}}},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'an_account_conditional_order_is_cancelled_when_the_day_loss_is_reached',
+                dict(entry, synthetic={
+                    'type': 'account_conditional',
+                    'account_field': 'day_pnl',
+                    'account_level': -5000,
+                    'trigger_direction': 'at_or_below',
+                    'action': 'cancel',
+                }),
+                [
+                    {'quote': steady, 'at': 0, 'funds': {'summary': {'available_balance': 60000.0}, 'pnl': {'realized': -1000.0, 'unrealized': 0.0}}},
+                    {'quote': steady, 'at': 1, 'funds': {'summary': {'available_balance': 60000.0}, 'pnl': {'realized': -6000.0, 'unrealized': 0.0}}},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'an_account_conditional_order_waits_while_a_position_is_open',
+                dict(entry, synthetic={
+                    'type': 'account_conditional',
+                    'account_field': 'open_positions',
+                    'account_level': 0,
+                    'trigger_direction': 'at_or_below',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1},
+                ],
+                accepted,
+                positions=75,
+            ),
+            self.price_result(
+                'an_account_conditional_order_is_placed_once_the_book_is_flat',
+                dict(entry, synthetic={
+                    'type': 'account_conditional',
+                    'account_field': 'open_positions',
+                    'account_level': 0,
+                    'trigger_direction': 'at_or_below',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+                positions=0,
+            ),
+            self.price_result(
+                'an_account_conditional_order_without_a_direction_is_refused',
+                dict(entry, synthetic={
+                    'type': 'account_conditional',
+                    'account_field': 'day_pnl',
+                    'account_level': -5000,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_grid_with_one_rung_refused_answers_partial_with_207',
+                dict(entry, synthetic={
+                    'type': 'grid',
+                    'levels': 1,
+                    'step_points': 5,
+                    'most_inventory': 30,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                {
+                    'sequence': [
+                        accepted,
+                        self.scenarios.answers.json_answer(200, self.scenarios.answers.place_refusal('flattrade')),
+                    ],
+                },
+            ),
+            self.price_result(
+                'a_grid_with_every_rung_refused_answers_rejected',
+                dict(entry, synthetic={
+                    'type': 'grid',
+                    'levels': 1,
+                    'step_points': 5,
+                    'most_inventory': 30,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                self.scenarios.answers.json_answer(200, self.scenarios.answers.place_refusal('flattrade')),
             ),
             self.price_result(
                 'a_fired_trigger_does_not_fire_again_after_a_restart',
@@ -4202,6 +5318,135 @@ class OrderEngineSuite:
                 accepted,
             ),
             self.price_result(
+                'an_underlying_peg_moves_with_the_index_by_its_delta',
+                dict(entry, synthetic={
+                    'type': 'underlying_peg',
+                    'watch_instrument_id': order_routes.OrderRoutesState.
+                    INSTRUMENT_IDENTIFIERS['nifty_index'],
+                    'delta': 0.5,
+                    'step_ticks': 20,
+                }),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=25000)}},
+                    {'quote': steady, 'at': 1, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=25040)}},
+                    {'quote': steady, 'at': 2, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=25041)}},
+                    {'quote': steady, 'at': 3, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=24960)}},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'an_underlying_peg_stays_inside_its_range',
+                dict(entry, synthetic={
+                    'type': 'underlying_peg',
+                    'watch_instrument_id': order_routes.OrderRoutesState.
+                    INSTRUMENT_IDENTIFIERS['nifty_index'],
+                    'delta': 0.5,
+                    'highest_price': 1010,
+                }),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=25000)}},
+                    {'quote': steady, 'at': 1, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=25100)}},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'an_underlying_peg_without_a_delta_is_refused',
+                dict(entry, synthetic={
+                    'type': 'underlying_peg',
+                    'watch_instrument_id': order_routes.OrderRoutesState.
+                    INSTRUMENT_IDENTIFIERS['nifty_index'],
+                }),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=25000)}},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'an_underlying_peg_on_its_own_instrument_is_refused',
+                dict(entry, synthetic={
+                    'type': 'underlying_peg',
+                    'watch_instrument_id': order_routes.OrderRoutesState.
+                    INSTRUMENT_IDENTIFIERS['reliance'],
+                    'delta': 0.5,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_volatility_order_is_priced_by_the_model_and_follows_the_index',
+                dict(
+                    entry,
+                    instrument_id=order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['nifty_option'],
+                    quantity=75,
+                    price=500,
+                    synthetic={
+                        'type': 'volatility',
+                        'watch_instrument_id': order_routes.OrderRoutesState.
+                        INSTRUMENT_IDENTIFIERS['nifty_index'],
+                        'volatility': 12.5,
+                    },
+                ),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=25000)}},
+                    {'quote': steady, 'at': 1, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=25000)}},
+                    {'quote': steady, 'at': 2, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=25100)}},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_volatility_order_never_pays_more_than_its_own_price',
+                dict(
+                    entry,
+                    instrument_id=order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['nifty_option'],
+                    quantity=75,
+                    price=150,
+                    synthetic={
+                        'type': 'volatility',
+                        'watch_instrument_id': order_routes.OrderRoutesState.
+                        INSTRUMENT_IDENTIFIERS['nifty_index'],
+                        'volatility': 12.5,
+                    },
+                ),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=25000)}},
+                    {'quote': steady, 'at': 1, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=24900)}},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_volatility_order_without_a_volatility_is_refused',
+                dict(
+                    entry,
+                    instrument_id=order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['nifty_option'],
+                    quantity=75,
+                    price=500,
+                    synthetic={
+                        'type': 'volatility',
+                        'watch_instrument_id': order_routes.OrderRoutesState.
+                        INSTRUMENT_IDENTIFIERS['nifty_index'],
+                    },
+                ),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=25000)}},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_volatility_order_on_something_that_is_not_an_option_is_refused',
+                dict(entry, synthetic={
+                    'type': 'volatility',
+                    'watch_instrument_id': order_routes.OrderRoutesState.
+                    INSTRUMENT_IDENTIFIERS['nifty_index'],
+                    'volatility': 12.5,
+                }),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=25000)}},
+                ],
+                accepted,
+            ),
+            self.price_result(
                 'an_indicator_triggered_order_watches_the_day_average',
                 dict(entry, synthetic={
                     'type': 'indicator_triggered',
@@ -4235,6 +5480,335 @@ class OrderEngineSuite:
                 accepted,
             ),
         ]
+
+    def run_daily_cap_race_checks(self):
+        """Checks that threads sending at once to a broker near its daily cap cannot overshoot it, and that a place not used is given back.
+
+        The count used to be read before a send and added to after it, so every thread sending in between passed on the same count.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        self.fake_redis = self.build_state()
+        logger = logging.getLogger('test_runs.order_engine')
+        daily_count = DailyOrderCount(
+            self.fake_redis,
+            {
+                'flattrade': 10,
+            },
+            0.0,
+            logger,
+        )
+        outcomes = []
+        outcomes_lock = threading.Lock()
+        start = threading.Barrier(20)
+        threads = []
+        for _ in range(20):
+            thread = threading.Thread(
+                target=self.race_for_a_place,
+                args=(
+                    daily_count,
+                    start,
+                    outcomes,
+                    outcomes_lock,
+                ),
+            )
+            threads.append(thread)
+            thread.start()
+        for thread in threads:
+            thread.join()
+        counted = outcomes.count('sent')
+        results = [
+            {
+                'name': 'twenty_threads_racing_for_ten_places_send_exactly_ten',
+                'sent': counted,
+                'refused': outcomes.count('refused'),
+                'count_in_redis': self.fake_redis.strings.get(daily_count.key('flattrade')),
+            },
+        ]
+        self.fake_redis = self.build_state()
+        daily_count = DailyOrderCount(
+            self.fake_redis,
+            {
+                'flattrade': 10,
+            },
+            0.0,
+            logger,
+        )
+        daily_count.refuse_if_capped('flattrade', False)
+        after_reserving = self.fake_redis.strings.get(daily_count.key('flattrade'))
+        daily_count.release_if_reserved()
+        results.append({
+            'name': 'a_place_counted_for_a_message_not_sent_is_given_back',
+            'after_reserving': after_reserving,
+            'after_releasing': self.fake_redis.strings.get(daily_count.key('flattrade')),
+        })
+        return results
+
+    def race_for_a_place(self, daily_count, start, outcomes, outcomes_lock):
+        """One thread's attempt to send a message to a capped broker: reserve a place, then count the send.
+
+        Args:
+            daily_count (DailyOrderCount): The count.
+            start (threading.Barrier): Holds every thread until all are ready, so they race.
+            outcomes (list): Where each thread writes `sent` or `refused`.
+            outcomes_lock (threading.Lock): Guards `outcomes`.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        start.wait()
+        try:
+            daily_count.refuse_if_capped('flattrade', False)
+        except RefusedRequestError:
+            with outcomes_lock:
+                outcomes.append('refused')
+            return
+        daily_count.count_sent('flattrade')
+        with outcomes_lock:
+            outcomes.append('sent')
+
+    def run_quantity_conversion_checks(self):
+        """Checks that a leg reduced in units is sent in each broker's own terms.
+
+        `reduce_leg` sent units to `modify_leg`, which sends them unchanged, so a crude oil exit reduced to 300 units reached a broker that counts lots as 300 lots.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        self.fake_redis = self.build_state()
+        logger = logging.getLogger('test_runs.order_engine')
+        placement = EnginePlacement(self.fake_redis, logger)
+        crude = order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['crudeoil_future']
+        results = []
+        conversions = {}
+        for broker_name in ('dhan', 'flattrade', 'kotak', 'zerodha'):
+            conversions[broker_name] = placement.broker_quantity(broker_name, crude, 300)
+        results.append({
+            'name': 'three_hundred_units_of_crude_in_each_brokers_terms',
+            'converted': conversions,
+        })
+        try:
+            placement.broker_quantity('zerodha', crude, 150)
+            refusal = None
+        except RefusedRequestError as error:
+            refusal = error.body.get('error')
+        results.append({
+            'name': 'a_quantity_that_is_not_whole_lots_is_refused',
+            'refusal': refusal,
+        })
+        recorder = ModifyRecorder()
+        placement.modify_leg = recorder.modify_leg
+        parent = ParentOrder('crude-parent')
+        parent.synthetic_type = 'oco'
+        parent.instrument_id = crude
+        parent.body = {}
+        leg = OrderLeg('crude-parent:1', 'stop')
+        leg.broker = 'zerodha'
+        leg.broker_order_id = '2104110000000001'
+        leg.quantity = 300
+        parent.legs.append(leg)
+        runner = SYNTHETIC_ORDER_CLASSES['oco'](
+            parent,
+            placement,
+            engine_stand_ins.RecordingEventLog(),
+            ParentStore(self.fake_redis),
+            logger,
+            None,
+        )
+        accepted = runner.reduce_leg(leg, 200, 'the target filled 100')
+        results.append({
+            'name': 'a_crude_exit_reduced_to_200_units_is_sent_as_2_lots_to_zerodha',
+            'accepted': accepted,
+            'sent': recorder.sent,
+        })
+        return results
+
+    def run_rotation_checks(self):
+        """Checks that the round robin spreads a run of orders some brokers cannot take evenly over the brokers that can.
+
+        In the live test of 2026-09-27, a burst of after-market orders gave INDmoney 30 of 100, because the broker after one that cannot take the order took two turns.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        self.fake_redis = self.build_state()
+        logger = logging.getLogger('test_runs.order_engine')
+        placement = EnginePlacement(self.fake_redis, logger)
+        instrument_id = order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['reliance']
+        order = PlaceOrderRequest(self.scenarios.bodies.market_order(
+            dry_run=None,
+            order_type='LIMIT',
+            price=1000,
+            after_market=True,
+        ))
+        counts = {}
+        refused = 0
+        for _ in range(28):
+            try:
+                prepared = placement.prepare(order, instrument_id)
+            except RefusedRequestError:
+                refused = refused + 1
+                continue
+            counts[prepared.broker_name] = counts.get(prepared.broker_name, 0) + 1
+        return [
+            {
+                'name': 'after_market_orders_are_spread_evenly_over_the_brokers_that_take_them',
+                'orders': 28,
+                'refused': refused,
+                'per_broker': dict(sorted(counts.items())),
+            },
+        ]
+
+    def run_stoxkart_algo_checks(self):
+        """Checks that Stoxkart's placement carries the Algo-ID from its settings, and `99999` when they have none.
+
+        Stoxkart refused every order with `invalid algo_id` on 2026-09-27 although it had accepted `99999` on 2026-09-15, so the id is now read from the broker's settings.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        self.fake_redis = self.build_state()
+        logger = logging.getLogger('test_runs.order_engine')
+        placement = EnginePlacement(self.fake_redis, logger)
+        instrument_id = order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['reliance']
+        instrument, _, _ = placement.market_context(instrument_id, False, False)
+        order = PlaceOrderRequest(self.scenarios.bodies.market_order(
+            dry_run=None,
+            order_type='LIMIT',
+            price=1000,
+        ))
+        stoxkart = StoxkartOrders()
+        base_settings = {
+            'ucc_code': 'SX000001',
+            'api_key': 'stoxkart-api-key',
+        }
+        results = []
+        for name, settings in (
+            ('stoxkart_sends_99999_when_its_settings_name_no_algo_id', base_settings),
+            ('stoxkart_sends_the_algo_id_its_settings_name', dict(base_settings, algo_id='123456')),
+            ('stoxkart_treats_a_blank_algo_id_as_none', dict(base_settings, algo_id=' ')),
+        ):
+            request = stoxkart.build_place_request(
+                order,
+                instrument,
+                instrument.handles.get('stoxkart') or {},
+                {
+                    'access_token': 'token',
+                },
+                settings,
+            )
+            results.append({
+                'name': name,
+                'header': request.headers.get('X-Algo-Id'),
+                'body': request.json_body.get('algo_id'),
+            })
+        return results
+
+    def run_rate_limit_checks(self):
+        """Checks the per-broker rate limit setting and that a broker with its own limit is held to it.
+
+        On 2026-09-27 Zerodha and INDmoney refused orders sent at 10 a second, so each broker can now be given its own limit.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        logger = logging.getLogger('test_runs.order_engine')
+        broker_names = [
+            'dhan',
+            'indmoney',
+            'zerodha',
+        ]
+        results = []
+        for text in (
+            '10',
+            10,
+            '10,zerodha=5,indmoney=5',
+            '10, zerodha = 4',
+            '10,kite=5',
+            '10,zerodha=fast',
+            '10,zerodha=-1',
+        ):
+            try:
+                default_limit, overrides = RateBudget.limits_from_text(text, broker_names)
+                results.append({
+                    'name': f'the_rate_setting_{text!r}_is_read',
+                    'default': default_limit,
+                    'overrides': overrides,
+                })
+            except ValueError as error:
+                results.append({
+                    'name': f'the_rate_setting_{text!r}_is_refused',
+                    'error': str(error),
+                })
+        self.fake_redis = self.build_state()
+        budget = RateBudget(self.fake_redis, 0, 10, 0, logger, 1.0, {
+            'zerodha': 5,
+        })
+        taken = {}
+        for broker_name in ('zerodha', 'dhan'):
+            count = 0
+            for _ in range(12):
+                if budget.try_take(broker_name) == 0:
+                    count = count + 1
+            taken[broker_name] = count
+        results.append({
+            'name': 'a_broker_with_its_own_limit_is_held_to_it_within_one_window',
+            'taken_of_12': taken,
+        })
+        return results
+
+    def run_assignment_checks(self):
+        """Checks that a leg the broker intake chose cannot take goes to one that can.
+
+        Intake chooses a broker from the caller's body, which for an OCO or a trailing stop is a plain limit, while the type's first real leg is a stop-limit. On 2026-09-27 such legs were sent to INDmoney, which takes no stop-limit orders, and refused.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        self.fake_redis = self.build_state()
+        logger = logging.getLogger('test_runs.order_engine')
+        placement = EnginePlacement(self.fake_redis, logger)
+        instrument_id = order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['reliance']
+        stop = self.scenarios.bodies.market_order(
+            dry_run=None,
+            order_type='SL',
+            price=990,
+            trigger_price=991,
+            transaction_type='SELL',
+        )
+        limit = self.scenarios.bodies.market_order(
+            dry_run=None,
+            order_type='LIMIT',
+            price=1000,
+        )
+        results = []
+        for name, assigned, body in (
+            ('a_stop_leg_assigned_to_a_broker_without_stops_goes_elsewhere', 'indmoney', stop),
+            ('a_stop_leg_assigned_to_a_broker_with_stops_stays', 'flattrade', stop),
+            ('a_limit_leg_assigned_to_a_broker_without_stops_stays', 'indmoney', limit),
+        ):
+            placement.use_assignment(assigned, [])
+            try:
+                prepared = placement.prepare(
+                    PlaceOrderRequest(body),
+                    instrument_id,
+                )
+                placed_at = prepared.broker_name
+                error = None
+            except RefusedRequestError as refusal:
+                placed_at = None
+                error = refusal.body.get('error')
+            finally:
+                placement.clear_assignment()
+            results.append({
+                'name': name,
+                'assigned': assigned,
+                'order_type': body['order_type'],
+                'placed_at': placed_at,
+                'error': error,
+            })
+        return results
 
     def run_wiring_checks(self):
         """Checks the things a file move can quietly break without any test noticing.
@@ -4314,7 +5888,7 @@ class OrderEngineSuite:
             polled_ago=600.0,
         ))
         results.append(self.recovery_result(
-            'a_live_leg_is_brought_up_to_date_from_the_book',
+            'recovery_leaves_a_live_leg_as_recorded_for_the_first_book_pass',
             crashed[:1] + [
                 dict(
                     crashed[1],
@@ -4329,6 +5903,48 @@ class OrderEngineSuite:
                     average_price=999.5,
                 ),
             },
+        ))
+        results.append(self.recovery_result(
+            'the_first_book_pass_records_a_fill_made_while_the_engine_was_down',
+            crashed[:1] + [
+                dict(
+                    crashed[1],
+                    leg_state='acknowledged',
+                    broker_order_id='26091500000021',
+                ),
+            ],
+            {
+                '26091500000021': self.book_order(
+                    status='COMPLETE',
+                    filled_quantity=10,
+                    average_price=999.5,
+                ),
+            },
+            first_pass=True,
+        ))
+        results.append(self.recovery_result(
+            'the_first_book_pass_ends_a_cancelling_parent_whose_order_was_cancelled_while_the_engine_was_down',
+            crashed[:1] + [
+                dict(
+                    crashed[1],
+                    leg_state='acknowledged',
+                    broker_order_id='26091500000021',
+                ),
+                {
+                    'time': '2026-09-23T10:00:03+00:00',
+                    'parent_order_id': crashed[0]['parent_order_id'],
+                    'sequence': 3,
+                    'event': 'parent_state_changed',
+                    'synthetic_type': 'simple',
+                    'parent_state': 'cancelling',
+                },
+            ],
+            {
+                '26091500000021': self.book_order(
+                    status='CANCELLED',
+                ),
+            },
+            first_pass=True,
         ))
         results.append(self.recovery_result(
             'a_leg_the_book_has_lost_becomes_unknown',
@@ -4380,6 +5996,7 @@ class OrderEngineSuite:
             results = []
             for scenario in OrderEngineScenarios().build():
                 results.append(self.run_scenario(scenario))
+            results.append(self.run_lane_equivalence_check())
             results.extend(self.run_lock_checks())
             results.extend(self.run_parent_checks())
             results.extend(self.run_recovery_checks())
@@ -4388,6 +6005,12 @@ class OrderEngineSuite:
             results.extend(self.run_clock_checks())
             results.extend(self.run_price_checks())
             results.extend(self.run_wiring_checks())
+            results.extend(self.run_assignment_checks())
+            results.extend(self.run_rate_limit_checks())
+            results.extend(self.run_stoxkart_algo_checks())
+            results.extend(self.run_rotation_checks())
+            results.extend(self.run_quantity_conversion_checks())
+            results.extend(self.run_daily_cap_race_checks())
         finally:
             requests.Session.request = original_request
             uuid.uuid4 = original_uuid4

@@ -91,6 +91,27 @@ class Chaser(SyntheticOrder):
         body['parent_id'] = self.parent.parent_order_id
         return body, status
 
+    def on_leg_modified(self, leg, before):
+        """Restarts the wait before the next step, so the chase carries on from the price the caller set.
+
+        The chaser already steps from the leg's own price, which now holds the caller's. Without a fresh wait the next tick could step straight away, moving the caller's price a moment after it was set.
+
+        Args:
+            leg (OrderLeg): The chasing leg, holding its new price.
+            before (dict): What the leg held before, with `price`.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        if leg.price == before.get('price'):
+            return
+        self.parent.parameters = dict(self.parent.parameters)
+        self.parent.parameters['stepped_at'] = self.unix_now()
+        self.record_parameters(
+            f'the caller moved the price to {leg.price}, so the next step waits a full interval from now'
+        )
+        self.save()
+
     def unix_now(self):
         """The Unix time, read from the same clock a price tick reads.
 

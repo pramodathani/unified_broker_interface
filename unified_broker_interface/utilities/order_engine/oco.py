@@ -86,6 +86,52 @@ class OneCancelsOther(SyntheticOrder):
         self.rebalance(leg)
         self.finish_if_done()
 
+    def outside_change_problem(self, leg, quantity_units):
+        """Refuses a caller's change that would raise an exit's quantity.
+
+        An exit only ever closes what is held. Raising one could leave it larger than the position, and a stop that fills for more than is held opens a new position in the other direction, which is the double fill a linked pair exists to prevent.
+
+        Args:
+            leg (OrderLeg): The leg to be changed.
+            quantity_units (int | None): The new quantity as the caller gave it, or None when the quantity is not changing.
+
+        Returns:
+            str | None: The reason, or None.
+        """
+        if leg.role not in ('stop', 'target') or quantity_units is None:
+            return None
+        if leg.quantity is not None and quantity_units > leg.quantity:
+            return (
+                f'an exit of a linked pair can only be reduced, and {quantity_units} '
+                f'is more than its {leg.quantity}'
+            )
+        return None
+
+    def on_leg_modified(self, leg, before):
+        """Brings the other exit down to the quantity the caller set on this one, so both still cover the same position.
+
+        Args:
+            leg (OrderLeg): The exit the caller changed, holding its new quantity.
+            before (dict): What the leg held before, with `quantity`.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        if leg.role not in ('stop', 'target') or leg.quantity == before.get('quantity'):
+            return
+        for other in self.parent.legs:
+            if other.leg_id == leg.leg_id or other.role not in ('stop', 'target'):
+                continue
+            if other.is_finished() or other.quantity is None:
+                continue
+            if leg.quantity < other.quantity:
+                self.reduce_leg(
+                    other,
+                    leg.quantity,
+                    f'the caller reduced the {leg.role} to {leg.quantity}, so the {other.role} follows',
+                )
+        self.save()
+
     def rebalance(self, filled_leg):
         """Brings the other exit down to what is still open, after this one filled some of it.
 
@@ -155,11 +201,10 @@ class OneCancelsOther(SyntheticOrder):
         """
         bodies = [body for _, body, _ in answers]
         outcomes = [body.get('outcome') for body in bodies]
-        outcome = 'accepted'
-        if 'unknown' in outcomes:
-            outcome = 'unknown'
-        elif 'rejected' in outcomes:
-            outcome = 'rejected'
+        outcome, status = self.combined_answer(
+            outcomes,
+            [status for _, _, status in answers],
+        )
         return {
             'broker': broker_name,
             'instrument_id': self.parent.instrument_id,
@@ -177,4 +222,4 @@ class OneCancelsOther(SyntheticOrder):
             ],
             'skipped': bodies[0].get('skipped') if bodies else [],
             'timing_ms': bodies[0].get('timing_ms') if bodies else {},
-        }, max(status for _, _, status in answers) if answers else 200
+        }, status

@@ -62,7 +62,7 @@ Two more packages follow the same layout, but their "cases" are not brokers. The
 | Package | Base class | One module per | A module implements |
 |---|---|---|---|
 | `unified_broker_interface/utilities/broker_selection/` | `BrokerSelector` | selection algorithm (`round_robin.py`, `fixed_priority.py`) | `NAME` and `ranked_brokers`; overrides `queue_redis_commands` when it needs Redis and `record_outcome` when it learns from answers |
-| `unified_broker_interface/utilities/order_engine/` | `SyntheticOrder` | synthetic order type (42 of them, from `simple.py` to `virtual_limit.py`) | `SYNTHETIC_TYPE` and `run`; may implement `on_leg_update`, `on_clock_tick` or `on_price_tick` |
+| `unified_broker_interface/utilities/order_engine/` | `SyntheticOrder` | synthetic order type (53 of them, from `simple.py` to `virtual_limit.py`) | `SYNTHETIC_TYPE` and `run`; may implement `on_leg_update`, `on_clock_tick` or `on_price_tick` |
 
 The selectors are registered in `BROKER_SELECTOR_CLASSES` in `broker_selection/utilities/registry.py`, and the order types in `SYNTHETIC_ORDER_CLASSES` in `order_engine/utilities/registry.py`.
 

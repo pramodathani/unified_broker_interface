@@ -11,7 +11,10 @@ The table below lists the five routes on this page. The emergency route that can
 |---|---|---|
 | <span class="method get">GET</span> | [`/api/orders/details`](#order-book) | Today's orders at every broker, from a document kept in Redis |
 | <span class="method get">GET</span> | [`/api/orders/trades`](#trade-book) | Today's trades at every broker, from a document kept in Redis |
-| <span class="method post">POST</span> | [`/api/orders/place`](#place-an-order) | Places one order at a broker the API chooses |
+| <span class="method post">POST</span> | [`/api/orders/place`](#place-an-order) | Places one order at a broker the API chooses, or [each order of a list](#several-orders-in-one-request) |
+| <span class="method get">GET</span> | [`/api/orders/intents/<intent_id>`](#read-an-answer-later) | The order engine's answer for one order, after the place request stopped waiting |
+| <span class="method get">GET</span> | [`/api/orders/parents`](#the-engines-parents) | One of the order engine's parents, or every one still open |
+| <span class="method delete">DELETE</span> | [`/api/orders/parents`](#cancel-a-parent) | Cancels one of the engine's parents with its resting legs, or each of a list |
 | <span class="method put">PUT</span> | [`/api/orders/modify`](#modify-an-order) | Changes one open order at the broker that holds it, or [each order of a list](#several-orders-in-one-request) |
 | <span class="method delete">DELETE</span> | [`/api/orders/cancel`](#cancel-an-order) | Cancels one open order at the broker that holds it, or [each order of a list](#several-orders-in-one-request) |
 
@@ -58,11 +61,18 @@ This route answers with today's orders at every broker. It never asks a broker. 
 
 ### Request parameters
 
-This route takes only the token header.
+With only the token header, the route answers with the whole day. The query parameters below narrow it; several together must all match. A filtered answer keeps the day's `summary` and `brokers` and adds `page`.
 
 | Name | In | Type | Required | Description |
 |---|---|---|:---:|---|
 | `access-token` | header | string | yes | The token from [`POST /api/session/connect`](session.md#connect) |
+| `order_id` | query | string | no | Keep only these orders: give it more than once, or as a comma-separated list |
+| `parent_id` | query | string | no | Keep only the orders of this order engine parent |
+| `intent_id` | query | string | no | Keep only the orders placed for this intent, as a place answer names it |
+| `broker` | query | string | no | Keep only this broker's |
+| `status` | query | string | no | `open` for everything not yet `COMPLETE`, `CANCELLED`, `REJECTED` or `EXPIRED`, or one status such as `COMPLETE` |
+| `limit` | query | number | no | The most entries to return, from 1 to 10000 |
+| `cursor` | query | number | no | How many matching entries to skip; pass the previous page's `page.next_cursor` |
 
 === "curl"
 
@@ -150,12 +160,19 @@ The document has four top-level keys. Each order in `orders` follows the order c
 | `orders[].price`, `trigger_price`, `average_price` | number | Prices, as the broker reports them |
 | `orders[].order_timestamp`, `exchange_timestamp` | string | ISO timestamps with the IST offset |
 | `orders[].instrument_id` | string or null | The unified instrument id, or null when the order could not be resolved to one |
-| `summary.count` | number | How many orders there are |
+| `orders[].engine_parent_id` | string or null | The order engine parent that placed this order, or null for an order placed elsewhere |
+| `orders[].leg_role` | string or null | The order's role in that parent, such as `entry`, `stop`, `target` or `slice` |
+| `orders[].synthetic_type` | string or null | The parent's order type, such as `bracket` |
+| `orders[].intent_id` | string or null | The intent the parent was placed for, as the place answer named it |
+| `summary.count` | number | How many orders there are in the day, whatever the filters |
 | `summary.by_status` | object | How many orders there are in each status |
 | `summary.filled_value` | number | The sum of filled quantity times average price, rounded to two places |
 | `brokers[]` | array | One entry per broker, with `broker`, `status` and `as_of` |
 | `brokers[].status` | string | `ok` (seen within a minute), `stale` (older than a minute, still included), `missing` (no data today) or `unreadable` |
 | `as_of` | string | When the document was written, in local time |
+| `page.matched` | number | With filters: how many entries matched |
+| `page.returned` | number | With filters: how many entries this answer carries |
+| `page.cursor`, `page.next_cursor` | number or null | With filters: where this page started, and where the next one starts, which is null on the last page |
 
 ### Status codes
 
@@ -183,11 +200,17 @@ This route answers with today's fills at every broker. Like the order book, it n
 
 ### Request parameters
 
-This route takes only the token header.
+The trade book takes the same filters as the [order book](#order-book), each applied to the trade's own order.
 
 | Name | In | Type | Required | Description |
 |---|---|---|:---:|---|
 | `access-token` | header | string | yes | The token from [`POST /api/session/connect`](session.md#connect) |
+| `order_id` | query | string | no | Keep only the fills of these orders: give it more than once, or as a comma-separated list |
+| `parent_id` | query | string | no | Keep only the fills of this order engine parent |
+| `intent_id` | query | string | no | Keep only the fills of orders placed for this intent, as a place answer names it |
+| `broker` | query | string | no | Keep only this broker's |
+| `limit` | query | number | no | The most entries to return, from 1 to 10000 |
+| `cursor` | query | number | no | How many matching entries to skip; pass the previous page's `page.next_cursor` |
 
 === "curl"
 
@@ -258,6 +281,7 @@ Each trade is one fill, in the same shape for every broker.
 |---|---|---|
 | `trades` | array | Every fill, sorted by broker, then trade time, then trade id |
 | `trades[].trade_id`, `order_id` | string | The broker's own ids for the fill and its order |
+| `trades[].engine_parent_id`, `leg_role`, `synthetic_type`, `intent_id` | string or null | The order engine parent the fill's order belongs to, as for an order; null for an order placed elsewhere |
 | `trades[].exchange_order_id`, `exchange_trade_id` | string or null | The exchange's ids, when the broker reports them |
 | `trades[].transaction_type`, `product` | string | On the shared vocabulary |
 | `trades[].quantity`, `price` | number | The fill's size and price |
@@ -293,6 +317,24 @@ This route places one order at one broker. You name the instrument, the side, th
 !!! danger "One request, one real order"
     Without `dry_run`, a `200` means a real order now rests at a real broker. A `504` means the order may exist. Check the [order book](#order-book) before you send the same order again.
 
+### Limit orders are held until they can fill
+
+A plain `LIMIT` order is not sent to a broker straight away. The order engine holds it in its own virtual order book, as a [`virtual_limit`](synthetic-orders.md) order, and sends it only once the other side of the book reaches its price: for a buy, when the best offer is at or below it. A limit that never fills therefore costs no order messages at all, where a resting one costs a place and a cancel.
+
+A held order answers <span class="status s2">202</span> with `outcome: armed` and a `parent_id`, and no broker order id, because none exists yet. You can change its price or quantity while it is held, through [`PUT /api/orders/modify` with `parent_id`](#a-held-order), and cancel it through [`DELETE /api/orders/parents`](#cancel-a-parent).
+
+The table below shows which orders are held.
+
+| Order | Held? |
+|---|---|
+| `LIMIT` with a `price`, `DAY` validity, no `synthetic` object | Yes |
+| `LIMIT` with `"synthetic": {"type": "simple"}` | No, sent at once |
+| `LIMIT` with `IOC` validity, which means trade now or never | No, sent at once |
+| `MARKET`, `SL`, `SL-M`, or a `LIMIT` priced only by `price_reference` | No, sent at once |
+| Any order naming another `synthetic` type | Run as that type |
+
+The setting `UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS`, on by default, turns this off for every order.
+
 ### Request parameters
 
 The body is a JSON object. You name the instrument in one of two ways: by `instrument_id`, or by `exchange`, `segment` and that segment's identity fields. When `instrument_id` is given, the identity fields are ignored.
@@ -325,10 +367,7 @@ The body is a JSON object. You name the instrument in one of two ways: by `instr
 
 The true-or-false fields `after_market` and `dry_run` accept a JSON boolean, or the text `true`, `1`, `yes`, `false`, `0`, `no` or an empty string, in any case. Anything else is refused with <span class="status s4">400</span>.
 
-!!! warning "In direct mode the engine-only fields do nothing useful"
-    When `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT` is `direct` (the default), the route does not read `synthetic` at all, so the order is placed as a plain order and the synthetic behavior you asked for silently does not happen. `price_reference` and `quantity_reference` are checked for shape but never resolved. A `LIMIT` or `SL` order that carries only a `price_reference` passes validation and its request is built with a price of `0`, and an order that carries only a `quantity_reference` is built with a quantity of `0`. Only send these fields when the API runs in [engine mode](order-engine.md).
-
-The API then runs these checks against the instrument and the chosen broker. Each failure is answered without calling a broker.
+The order engine then runs these checks against the instrument and the chosen broker. Each failure is answered without calling a broker.
 
 1. The instrument must be mapped today, or the answer is <span class="status s4">404</span> `the instrument is not mapped`. When the whole catalogue is missing rather than the one instrument, which happens every night between midnight, when the day's catalogue keys expire, and the morning mapping that publishes the next one, the answer is <span class="status s5">503</span> `today's instrument catalogue is not published yet: the catalogue for <date> has expired, and the daily mapping has not published a new one` instead. That check runs only after an order has already been refused as not mapped, so an order that is placed pays nothing for it.
 2. The instrument's segment must be tradeable, or the answer is <span class="status s4">400</span> `orders are not sent for <segment> instruments`.
@@ -476,7 +515,7 @@ The last example is shortened: the recording lists all ten brokers in `skipped`,
 
 ### Response attributes
 
-A sent order and a dry run share most keys. In engine mode every answer also carries `intent_id`, and a synthetic order carries `parent_id`; see [Order engine](order-engine.md).
+A sent order and a dry run share most keys. Every answer also carries `intent_id`, and an order the engine recorded carries `parent_id`; see [Order engine](order-engine.md).
 
 | Attribute | Type | Description |
 |---|---|---|
@@ -510,11 +549,11 @@ Every failure below is answered without calling a broker, except the three outco
 | <span class="status s5">503</span> | `Redis could not be read: <error>`, `no instruments have been mapped yet`, `today's instrument catalogue is not published yet: the catalogue for <date> has expired, and the daily mapping has not published a new one`, `every broker is excluded from order placement`, `no broker can take this order` (with `skipped`), or `the contract size of this <segment> instrument is not trusted today (<status>), so no order is sent` (with `contract_size_status`). |
 | <span class="status s5">504</span> | `outcome` is `unknown`: the broker answered with a server error, answered success without an order id, or the network failed after the request left. **The order may exist.** |
 
-Engine mode adds <span class="status s2">202</span>, <span class="status s4">403</span>, <span class="status s4">409</span>, <span class="status s4">429</span> and more <span class="status s5">503</span> and <span class="status s5">504</span> cases; they are listed on the [Order engine](order-engine.md) page.
+The engine adds <span class="status s2">202</span>, <span class="status s4">403</span>, <span class="status s4">409</span>, <span class="status s4">429</span> and more <span class="status s5">503</span> and <span class="status s5">504</span> cases; they are listed on the [Order engine](order-engine.md) page.
 
 ### What happens, step by step
 
-The sequence below shows a direct-mode placement by `instrument_id` with the default round-robin selector. It is the path taken when `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT` is `direct`.
+The sequence below shows a placement by `instrument_id` with the default round-robin selector.
 
 ```mermaid
 sequenceDiagram
@@ -522,33 +561,78 @@ sequenceDiagram
     participant C as Your program
     participant A as API worker
     participant R as Redis
+    participant E as Order engine
     participant B as Chosen broker
     C->>A: POST /api/orders/place
     A->>A: header present?
-    A->>R: pipeline 1: token, mapping date,<br/>logins, settings, warm id
+    A->>R: pipeline: token, mapping date, warm id
     R-->>A: replies
     A->>A: check token, validate body
-    A->>R: pipeline 2: identity, order handles,<br/>contract size, INCR round_robin
-    R-->>A: replies
-    A->>A: tradeable? contract size?<br/>rank brokers, skip unfit ones
-    A->>A: lot size and tick size checks
+    A->>R: EXISTS engine lock, XADD intent
+    A->>R: BLPOP the intent's reply list
+    E->>R: read the intent, choose the broker<br/>(INCR round_robin, skip unfit brokers)
+    E->>E: tradeable? contract size?<br/>lot size and tick size checks
     alt dry_run
-        A-->>C: 200 with the request it would send
+        E->>R: RPUSH 200 with the request it would send
     else send
-        A->>B: one HTTP request
-        B-->>A: answer
-        A-->>C: 200 accepted / 422 rejected / 504 unknown
+        E->>B: one HTTP request
+        B-->>E: answer
+        E->>R: RPUSH 200 accepted / 422 rejected / 504 unknown
     end
+    R-->>A: the answer
+    A-->>C: the answer, plus intent_id
 ```
 
-Pipeline 2 is skipped entirely when this worker already holds the instrument's catalogue data for the current warm and the selector queues nothing, which is only possible with `fixed_priority`. An instrument named by its identity fields costs one more round trip, a `ZRANGEBYLEX` on the segment's catalogue, unless the worker has already looked that name up under the current warm.
+An instrument named by its identity fields costs the API one more round trip, a `ZRANGEBYLEX` on the segment's catalogue, unless the worker has already looked that name up under the current warm.
 
 ??? note "Under the hood"
-    - **Redis keys read:** `last_login` (the API's token and every broker's login), `settings`, `unified:catalogue:current_date`, `unified:catalogue:warm_identifier`, `unified:catalogue:<date>:identity`, `:order_handles`, `:contract_sizes`, `:catalogue:<segment>` (only for a lookup by fields), and `unified:orders:round_robin` (incremented by the round-robin selector).
-    - **Redis keys written:** `unified:orders:round_robin`, and `unified:orders:daily_count:<broker>` when that broker is capped.
+    - **Redis keys the route reads:** `last_login` (the API's token), `unified:catalogue:current_date`, `unified:catalogue:warm_identifier`, `:catalogue:<segment>` (only for a lookup by fields), `unified:orders:engine:lock`, and the intent's reply list.
+    - **Redis keys the route writes:** `unified:orders:intents:stream`.
+    - **What the engine reads and writes:** every broker's login and settings, the instrument's catalogue data, `unified:orders:round_robin`, the rate budget's windows, and `unified:orders:daily_count:<broker>` when that broker is capped; see [Order engine](order-engine.md).
     - **Stores never read:** MongoDB and PostgreSQL.
-    - **Classes:** [`PlaceOrderRequest`][unified_broker_interface.utilities.broker_orders.utilities.place_order_request.PlaceOrderRequest] validates the body, [`OrderPlacement`][unified_broker_interface.utilities.broker_orders.utilities.placement.OrderPlacement] chooses the broker and builds the request, and each broker's [`BrokerOrders`][unified_broker_interface.utilities.broker_orders.base.BrokerOrders] subclass builds its own request and reads its own answer.
+    - **Classes:** [`PlaceOrderRequest`][unified_broker_interface.utilities.broker_orders.utilities.place_order_request.PlaceOrderRequest] validates the body, [`IntentHandoff`][unified_broker_interface.utilities.order_engine.utilities.intent_handoff.IntentHandoff] writes the intent and waits, [`OrderPlacement`][unified_broker_interface.utilities.broker_orders.utilities.placement.OrderPlacement] chooses the broker and builds the request inside the engine, and each broker's [`BrokerOrders`][unified_broker_interface.utilities.broker_orders.base.BrokerOrders] subclass builds its own request and reads its own answer.
     - **Answer rules:** [`BrokerAnswer`][unified_broker_interface.utilities.broker_orders.utilities.broker_answer.BrokerAnswer] maps `accepted`, `rejected` and `unknown` to 200, 422 and 504.
+
+## Read an answer later
+
+<div class="endpoint" markdown><span class="method get">GET</span> `/api/orders/intents/<intent_id>`<span class="auth">access-token</span></div>
+
+This route returns what the order engine did with one order, for a caller whose place request stopped waiting before the answer came. Every place answer, single or listed, carries the order's `intent_id`. The engine keeps each answer for `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_RESULT_TTL_SECONDS`, 300 by default, after it gives it.
+
+### Request parameters
+
+| Name | In | Type | Required | Description |
+|---|---|---|---|---|
+| `access-token` | header | string | Yes | The token from [`connect`](session.md#connect) |
+| `intent_id` | path | string | Yes | The `intent_id` from the place answer |
+
+### Response
+
+```json
+{
+  "intent_id": "5e0c4f0c8f3a4f7e9a1d2b3c4d5e6f70",
+  "status": 200,
+  "response": {"broker": "flattrade", "outcome": "accepted", "order_id": "26091500000021", "parent_id": "…", "intent_id": "5e0c4f0c8f3a4f7e9a1d2b3c4d5e6f70", "…": "…"}
+}
+```
+
+| Attribute | Type | Description |
+|---|---|---|
+| `intent_id` | string | The id asked for |
+| `status` | integer | The HTTP status the place route would have answered this order with |
+| `response` | object | The body the place route would have answered this order with |
+
+### Errors
+
+| Status | Meaning |
+|---|---|
+| <span class="status s4">401</span> | The token is missing, wrong or expired. |
+| <span class="status s4">404</span> | `no answer is stored for this intent: the order engine has not answered it yet, the id is not one, or its answer has expired` |
+| <span class="status s5">503</span> | `Redis could not be read: <error>` |
+
+??? note "Under the hood"
+    - **Redis key read:** `unified:orders:intents:answer:<intent_id>`, which the engine writes, only if absent, as it answers each intent.
+    - **Classes:** [`IntentHandoff.stored_answer`][unified_broker_interface.utilities.order_engine.utilities.intent_handoff.IntentHandoff.stored_answer].
 
 ## Modify an order
 
@@ -558,6 +642,22 @@ This route changes one open order at the broker that holds it. You name the orde
 
 !!! danger "A modification changes a live order"
     A changed price or quantity takes effect at the exchange as soon as the broker accepts it. Send it with `dry_run` first to see the exact request.
+
+### An order the engine placed
+
+When the order is a leg of one of the [order engine's](order-engine.md) parents, which the route finds in `unified:orders:children`, the route still checks the change as above, and then hands it to the worker that owns the parent instead of sending it itself. The order type records the change and carries on from the new price or quantity: a trailing stop ratchets from the trigger you set, a chaser steps on from the price you set, and a linked pair of exits stays sized to the open position. The change cannot race the type's own repricing, because only that worker touches the parent. The answer carries `parent_id` and `synthetic_type`, and the change passes the engine's re-pricing throttle, daily cap and rate budget.
+
+Only `price`, `trigger_price` and `quantity` can be changed on such an order. Changing `order_type`, `validity` or `disclosed_quantity` is refused with <span class="status s4">409</span> `this order belongs to an order the engine manages, which can only have its price, trigger_price or quantity changed, not <field>`, because the type would then be managing an order that is not the one it placed. A dry run is answered by the route as for any other order.
+
+### A held order
+
+An order the engine is still holding, such as a [held limit order](#limit-orders-are-held-until-they-can-fill), has no broker order id yet, so you name it by the `parent_id` the place route answered with. Only its `price` and `quantity` can change, and nothing is sent to a broker: the engine's worker that owns the order changes the terms it is held by, and it is sent at the new price and quantity when the other side reaches it. The queue estimate starts again, as a changed price at the exchange goes to the back of the queue. `dry_run` checks the change without making it.
+
+```json
+{"parent_id": "00000000-0000-4000-8000-000000000002", "price": 999.5, "quantity": 20}
+```
+
+The answer is <span class="status s2">200</span> with `parent_id`, `synthetic_type`, `held: true`, the new `price` and `quantity`, and `outcome: accepted`. A change is refused with <span class="status s4">400</span> when it names any other field or neither, when the price is not a whole number of ticks, or when the quantity is not a whole number of lots at any broker; with <span class="status s4">404</span> when the engine holds no such parent; and with <span class="status s4">409</span> when the order has already been sent (the answer then names its `broker` and `order_id`, which the ordinary form takes), has finished, is a type that holds no order of its own, or is a paper order that has already filled the new quantity.
 
 ### Request parameters
 
@@ -728,7 +828,7 @@ A price-only change never needs the instrument, so it goes ahead even when the i
 
 <div class="endpoint" markdown><span class="method put">PUT</span> `/api/orders/modify`<span class="auth">access-token</span></div>
 
-A body with an `orders` list changes each order in it. Each item carries what the single body carries, `order_id`, an optional `broker` and the fields to change, and each order is checked exactly as a single modification is. [Several orders in one request](#several-orders-in-one-request) describes the list, its answer and its statuses.
+A body with an `orders` list changes each order in it. Each item carries what the single body carries, `order_id`, an optional `broker` and the fields to change, or `parent_id` with `price` and `quantity` for [a held order](#a-held-order), and each order is checked exactly as a single modification is. Held and sent orders can be mixed in one list, and the results come back in the list's own order. [Several orders in one request](#several-orders-in-one-request) describes the list, its answer and its statuses.
 
 === "curl"
 
@@ -750,7 +850,7 @@ A body with an `orders` list changes each order in it. Each item carries what th
     - **A list:** `modify_order_list` reads every order's entries in the first pipeline, then `warm_order_instruments` reads every order's token candidates in one pipeline and their catalogue data in another, each skipped when this worker holds it. Each order is then prepared as a single one is, by `prepare_modification`, into a [`PreparedModification`][unified_broker_interface.utilities.broker_orders.utilities.prepared_modification.PreparedModification].
     - **How the instrument is found:** the stored order's broker token is looked up in `tokens:<broker>`. A candidate is kept only when it is tradeable, its market is one the broker takes, the broker's handle carries the same token, and its market matches the stored exchange code. Exactly one candidate must remain, because several brokers number tokens per exchange.
     - **Classes:** [`ModifyOrderRequest`][unified_broker_interface.utilities.broker_orders.utilities.modify_order_request.ModifyOrderRequest] validates the parameters and [`OrderModification`][unified_broker_interface.utilities.broker_orders.utilities.order_modification.OrderModification] lays the change over the stored order.
-    - **Engine mode:** this route still goes straight from the API worker to the broker. The order engine's rate budget and loss lockout do not hold it, though the daily order count does count it.
+    - **Rate budget:** before sending, the route takes room in the per-broker rate budget the order engine also uses, waiting up to `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_WAIT_SECONDS`. With no room it answers <span class="status s5">503</span> `the order rate budget is full, so this change was not sent; try again in a moment`; in a list, only that item. The order engine's loss lockout does not hold it, and the daily order count does count it.
 
 ## Cancel an order
 
@@ -760,6 +860,8 @@ This route cancels one open order at the broker that holds it. It reads Redis on
 
 !!! danger "A cancel cannot be taken back"
     `outcome: accepted` means the broker took the cancel request. The order may still fill in the moment before the exchange acts on it, so read the [order book](#order-book) to see the final status.
+
+When the order is a leg of one of the [order engine's](order-engine.md) parents, the cancel is handed to the worker that owns the parent, which records it and lets the order type react to a cancel it knows about. The answer then carries `parent_id` and `synthetic_type`. Cancelling one leg does not cancel the parent; [cancel the parent](#cancel-a-parent) to stop it placing anything more. The engine also reads the order from the broker's order book, so an order it has only just placed can be cancelled once the broker's poller or websocket has recorded it, as for any other order.
 
 ### Request parameters
 
@@ -952,19 +1054,85 @@ A body with an `orders` list cancels each order in it. Each item carries `order_
     - **Class:** [`CancelOrderRequest`][unified_broker_interface.utilities.broker_orders.utilities.cancel_order_request.CancelOrderRequest].
     - **A list:** `cancel_order_list` reads every order's entries in the same single pipeline, however many orders it has, and prepares each with `prepare_cancel` into a [`PreparedCancel`][unified_broker_interface.utilities.broker_orders.utilities.prepared_cancel.PreparedCancel].
 
+## The engine's parents
+
+<div class="endpoint" markdown><span class="method get">GET</span> `/api/orders/parents`<span class="auth">access-token</span></div>
+
+A parent is one order you asked the [order engine](order-engine.md) for, such as a bracket, and its legs are the broker orders it placed for it. This route shows one parent, named by `parent_id` in the query string, or every parent that has not finished. It is the only way to see a parent that has placed nothing yet, such as an armed trigger or a scheduled order.
+
+| Name | In | Type | Required | Description |
+|---|---|---|---|---|
+| `access-token` | header | string | Yes | The token from [`connect`](session.md#connect) |
+| `parent_id` | query | string | No | The parent to show; without it, every open parent is listed under `parents` |
+
+The answer is the parent as the engine holds it in `unified:orders:parents`: `parent_order_id`, `synthetic_type`, `state`, `instrument_id`, the caller's `body`, the type's `parameters` and one entry per leg with its broker, order id, state, quantities and prices. A named parent the engine does not hold is answered <span class="status s4">404</span> `the order engine holds no parent with this id`.
+
+### Cancel a parent
+
+<div class="endpoint" markdown><span class="method delete">DELETE</span> `/api/orders/parents`<span class="auth">access-token</span></div>
+
+This route cancels one parent, named by `parent_id` in the body, or each of a list given as `parents`, an array of objects each holding `parent_id`. The worker that owns the parent cancels every leg still resting at a broker and ends the parent as `cancelled`, so it places, moves and cancels nothing more.
+
+An order placed a moment earlier may not have reached its broker's order book in Redis yet, and a cancel is built from that book, so the engine waits up to 3 seconds for it to appear before giving up. When it still has not appeared, that leg's cancel is `rejected` with the reason, because nothing was sent. When a broker refuses a leg's cancel, or its outcome is unknown, the answer is <span class="status s2">207</span> and the parent's `state` is `cancelling`, not `cancelled`, because that leg may still be live. Each entry of `cancelled_legs` gives its own `outcome` and `status_message`, so you can see which leg is still resting. The parent no longer acts, becomes `cancelled` on its own once the broker reports the leg finished, and sending the same cancel again retries the legs still resting. In the live test of 2026-09-27, INDmoney refused one cancel for its rate limit, and before this rule the parent was reported cancelled while the order stayed pending at the broker.
+
+!!! danger "Cancelling a parent cancels live orders"
+    Every leg the parent still has resting at a broker is cancelled. A position the parent already opened is not closed; close it yourself or use [flatten](flatten.md).
+
+```json
+{
+  "parent_id": "0c2d4e6f-8a1b-4c3d-9e5f-7a8b9c0d1e2f",
+  "synthetic_type": "bracket",
+  "state": "cancelled",
+  "cancelled_legs": [
+    {"leg_id": "0c2d4e6f-8a1b-4c3d-9e5f-7a8b9c0d1e2f:2", "broker": "flattrade", "order_id": "26091500000031", "outcome": "accepted", "status_message": null}
+  ],
+  "intent_id": "5e0c4f0c8f3a4f7e9a1d2b3c4d5e6f70"
+}
+```
+
+| Status | Meaning |
+|---|---|
+| <span class="status s2">200</span> | The parent is cancelled; `cancelled_legs` says what each leg's cancel came back as. A list is answered with `results`, one entry per parent. |
+| <span class="status s4">400</span> | `parent_id must name a parent`, `parents must be a non-empty list`, or, for one entry of a list, `each entry of parents must name a parent_id` |
+| <span class="status s4">404</span> | `the order engine holds no parent with this id` |
+| <span class="status s4">409</span> | `the parent is already <state>` |
+| <span class="status s5">503</span> | The order engine is not running. |
+
+??? note "Under the hood"
+    - **Redis keys read:** `unified:orders:parents` and `unified:orders:parents:open` for the read; the cancel is handed to the engine as a `cancel_parent` command on `unified:orders:intents:stream`.
+    - **Classes:** [`ParentCommands`][unified_broker_interface.utilities.order_engine.utilities.parent_commands.ParentCommands] runs the cancel through the parent's own order type, with [`SyntheticOrder.cancel_by_caller`][unified_broker_interface.utilities.order_engine.base.SyntheticOrder.cancel_by_caller].
+
 ## Several orders in one request
 
-`PUT /api/orders/modify` and `DELETE /api/orders/cancel` take a list of orders on the same paths. The list form is chosen by the body: a body with an `orders` key is a list and is answered with `{"results": [...]}`, even when it holds one order, and a body without one is the single form, answered exactly as described above. The shape of the answer follows the form of the request, never the number of orders.
+`POST /api/orders/place`, `PUT /api/orders/modify` and `DELETE /api/orders/cancel` take a list of orders on the same paths. The list form is chosen by the body: a body with an `orders` key is a list and is answered with `{"results": [...]}`, even when it holds one order, and a body without one is the single form, answered exactly as described above. The shape of the answer follows the form of the request, never the number of orders.
 
 #### Request body
 
 | Name | In | Type | Required | Description |
 |---|---|---|---|---|
 | `access-token` | header | string | Yes | The token from [`connect`](session.md#connect) |
-| `orders` | body | array of objects | Yes | One item per order, with no limit on the number. An item carries `order_id`, an optional `broker` and, for `modify`, the fields to change, exactly as the single body does. |
-| `dry_run` | body or query | boolean | No | `true` shows every order's broker request instead of sending it. It applies to the whole list. |
+| `orders` | body | array of objects | Yes | One item per order. For `place`, an item is one order exactly as the single body gives it, including a `synthetic` object for any order type, and a list holds at most `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACE_LIST_MAXIMUM` items, 500 by default. For `modify` and `cancel`, an item carries `order_id`, an optional `broker` and, for `modify`, the fields to change, with no limit on the number. A `modify` item may instead carry `parent_id` with `price` and `quantity`, for a held order. |
+| `dry_run` | body, or query for `modify` and `cancel` | boolean | No | `true` shows every order's broker request instead of sending it. It applies to the whole list. |
 
 The list takes no other key, in the body or the query string, so a field such as `price` or `broker` has to go inside each order. That rule is there so that nobody can put `price` beside the list expecting it to apply to every order, and it is why `dry_run` is refused inside an order: one order must never go live while its neighbours are only shown.
+
+#### Placing a list
+
+A placed list goes to the [order engine](order-engine.md) in one step, and the engine's worker lanes place the orders in parallel, each at the broker its selector chooses, so a list spread over ten brokers goes out about ten times as fast as one order after another. A `broker` given in an item is ignored, as it is in the single form. An item that is not a valid order, or whose instrument cannot be found, gets its own entry and does not hold up the rest.
+
+The request waits for the engine's answers for the single form's wait plus a tenth of a second per order, and never longer than `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACE_LIST_WAIT_SECONDS`, 25 by default, which is below gunicorn's 30-second worker timeout. An order still unanswered then gets <span class="status s5">504</span> with outcome `unknown` and its `intent_id`, because the engine may still place it; [read its answer later](#read-an-answer-later) by that id. A place entry carries `intent_id` beside `request_index`, and it is `null` for an item refused before it reached the engine.
+
+```json
+{
+  "results": [
+    {"request_index": 0, "intent_id": "5e0c4f0c8f3a4f7e9a1d2b3c4d5e6f70", "status": 200, "response": {"broker": "flattrade", "outcome": "accepted", "order_id": "26091500000021", "parent_id": "…", "…": "…"}},
+    {"request_index": 1, "intent_id": null, "status": 400, "response": {"error": "quantity must be a whole number of at least 1"}},
+    {"request_index": 2, "intent_id": "8b1f2e3d4c5b6a79881726354a3b2c1d", "status": 200, "response": {"broker": "fyers", "outcome": "accepted", "order_id": "26091500000013", "…": "…"}}
+  ]
+}
+```
+
+The whole list is refused, with nothing placed, when `orders` is missing, empty or longer than the maximum, when the body has a key other than `orders` and `dry_run`, and with <span class="status s5">503</span> when the order engine is not running.
 
 #### Response
 
@@ -1050,7 +1218,7 @@ flowchart TD
 | `round_robin` (default) | Starts at `INCR unified:orders:round_robin` modulo the rotation's length and walks the rotation from there. Every gunicorn worker shares the counter. | One `INCR`, queued on the pipeline that reads the instrument | Spreading orders evenly across accounts |
 | `fixed_priority` | Puts the brokers named in `UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_PRIORITY` first, in that order, then the rest of the rotation in turn order | None | Sending everything to one preferred broker, with the others as fallbacks |
 
-With round robin, a skipped broker's turn passes to the next broker in the rotation, so the broker after a skipped one takes two turns in a row.
+With round robin, a skipped broker's turn passes to the next broker in the rotation, and the counter is then moved on past every broker passed over with one `INCRBY`, so the next order starts after the broker that took this one. A run of orders some brokers cannot take, such as after-market orders, is therefore spread evenly over the brokers that can. Before this, the broker after a skipped one took two turns in a row, and in the live test of 2026-09-27 INDmoney received 30 of 100 after-market orders.
 
 ### Why a broker is skipped
 
@@ -1125,14 +1293,15 @@ flowchart LR
     C -->|"everything refused"| D["429"]
 ```
 
-!!! warning "In direct mode the caps are counted, not enforced"
-    The refusal with <span class="status s4">429</span> happens only in the [order engine](order-engine.md), which checks the count before it places each leg. In direct mode the API workers count every placement, modification and cancellation, but they never refuse one because of the count. `PUT /api/orders/modify` and `DELETE /api/orders/cancel` are counted in both modes and refused in neither.
+The refusal with <span class="status s4">429</span> happens in the [order engine](order-engine.md), which checks the count before it places each leg. `PUT /api/orders/modify` and `DELETE /api/orders/cancel` are counted but never refused because of the count.
 
 When the engine refuses an order, the message says which limit was hit. For a new entry it is `<broker> has been sent <n> order messages today, and the last <m> of its daily cap of <cap> are kept for closing positions, so this was not sent`. For an exit it is `<broker> has been sent <n> order messages today, which is its daily cap of <cap>, so this was not sent`. A count that cannot be read never refuses an order; the failure is logged instead.
 
 ## Connection warming
 
-Opening a new TLS connection to a broker costs a noticeable share of an order's time, so the API can keep one connection per broker freshly used. `UNIFIED_BROKER_INTERFACE_API_ORDER_WARM_BROKERS` names the brokers to warm, comma-separated. For each one, a background thread sends a `HEAD` request with no credentials every `WARM_INTERVAL_SECONDS` through the same connection pool the orders use. After the answer, it watches the connection for one second and returns it to the pool only if the server has not closed it.
+Opening a new TLS connection to a broker costs 50 to 130 ms more than using an open one, so every connection in each broker's pool is kept freshly used. `UNIFIED_BROKER_INTERFACE_API_ORDER_WARM_BROKERS` names the brokers to warm, comma-separated, and is `all` unless set; set it empty to turn warming off. For each warmed broker, a background thread sends a `HEAD` request with no credentials through the same connection pool the orders use. After the answer, it watches the connection for one second and returns it to the pool only if the server has not closed it.
+
+A warmed broker's pool hands out the connection that has waited longest, rather than urllib3's usual most recent one, so single pings rotate through the whole pool. The warmer first sends one ping per place in the pool back to back, which opens every connection, and then pings one connection at a time, spaced so that each is used about once every `WARM_INTERVAL_SECONDS`. A ping that fails is followed by a pause of the whole interval. The order engine's pool for each broker holds `UNIFIED_BROKER_INTERFACE_API_ORDER_MAXIMUM_WORKERS_PER_BROKER` plus one connections (31 by default), one for every worker a broker's lane can grow to and one for the ping; an API worker's holds five, one for each of its four send threads and one for the ping. A broker that is not warmed keeps urllib3's usual order, which keeps its one busy connection hot.
 
 Each broker's pool also refuses to reuse a connection that has been idle longer than `MAXIMUM_IDLE_SECONDS`, well before the broker's server would drop it. The table below lists both values for each broker.
 
@@ -1149,6 +1318,8 @@ Each broker's pool also refuses to reuse a connection that has been idle longer 
 | Wisdom Capital | 15 | 45 | `https://trade.wisdomcapital.in/` |
 | Zerodha | 60 | 300 | `https://api.kite.trade/` |
 
+One round of a pool takes `WARM_INTERVAL_SECONDS` or the pool size times the one-second settle check, whichever is longer: about 31 seconds for a pool of 31, which is below the shortest idle limit, Shoonya's and Wisdom Capital's 45 seconds.
+
 Warming only saves time, so nothing about it can stop an order. An unknown broker name is logged and ignored, every exception in the warming thread is caught and logged, and a ping never touches the session's cookies or headers. Once a real request has gone to a broker, later pings go to that request's host instead of the default one.
 
 ## Redis round trips per route
@@ -1158,13 +1329,11 @@ The order routes were written so that the API's own work adds as little as possi
 | Route | Round trips | What they are |
 |---|---|---|
 | `GET /api/orders/details`, `/trades` | token check, then 1 | The token check, then one `GET` of the document |
-| `POST /place` (direct, `round_robin`) | 2 or 3 | The first pipeline; the instrument data plus the `INCR`; one more `ZRANGEBYLEX` when named by fields and not yet looked up by this worker |
-| `POST /place` (direct, `fixed_priority`) | 1 to 3 | As above, but the second pipeline is skipped when this worker already holds the instrument |
-| `POST /place` (engine) | 3 or 4 | The first pipeline, an optional lookup by fields, then `XADD` of the intent and `BLPOP` for the answer |
-| `PUT /modify` | 1 to 3 | The first pipeline with every broker's order book; the token candidates; their catalogue data, each skipped when held by this worker |
-| `PUT /modify`, a list | 1 to 3 | The same three, each read once for the whole list |
-| `DELETE /cancel` | 1 | One pipeline with the token, logins, settings and every broker's order book |
-| `DELETE /cancel`, a list | 1 | The same pipeline, holding every order of the list |
-| `POST /flatten` | 1, plus more | One read of everything; one re-read of the order books every 0.25 s while waiting for the cancels; three per position closed in direct mode; one re-read of the position books every 0.25 s while waiting for the closed positions to show zero |
+| `POST /place` | 4 or 5 | The first pipeline, an optional lookup by fields, the engine lock's `EXISTS`, the `XADD` of the intent and the `BLPOP` for the answer; the engine's own reads are not counted here |
+| `PUT /modify` | 2 to 4 | The first pipeline with every broker's order book; the token candidates; their catalogue data, each skipped when held by this worker; one more for the rate budget before sending |
+| `PUT /modify`, a list | 2 to 4 | The same three, each read once for the whole list, plus one for the rate budget per change sent |
+| `DELETE /cancel` | 2 | One pipeline with the token, logins, settings and every broker's order book, and one for the rate budget |
+| `DELETE /cancel`, a list | 1, plus one per cancel sent | The same pipeline, holding every order of the list, and one for the rate budget per cancel |
+| `POST /flatten` | 1, plus more | One read of everything; one for the rate budget per cancel; one re-read of the order books every 0.25 s while waiting for the cancels; an `HGET` per position closed, then the engine lock's `EXISTS`, one pipeline of `XADD`s and a `BLPOP` per answer; one re-read of the position books every 0.25 s while waiting for the closed positions to show zero |
 
 When a broker is capped by `ORDER_DAILY_CAPS`, each request sent to it costs one more pipeline afterwards, to increment the count.

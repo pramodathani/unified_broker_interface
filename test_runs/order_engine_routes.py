@@ -1,10 +1,10 @@
-"""Offline check of `POST /api/orders/place` in engine mode against a recording of its behaviour.
+"""Offline check of `POST /api/orders/place` against a recording of how it hands orders to the order engine.
 
-Runs the place route in-process through Flask's test client with `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT` set to `engine`, so the route writes the order to a Redis stream and waits for an answer instead of calling a broker. Redis is replaced by the same in-memory stand-in `test_runs/order_routes.py` uses, widened with the stream and list commands the handoff needs, and the engine is replaced by an answer seeded onto the reply list before the request is sent.
+Runs the place route in-process through Flask's test client, so the route writes the order to a Redis stream and waits for an answer. Redis is replaced by the stream-and-list stand-in in `test_runs/redis_stand_ins.py`, and the engine is replaced by an answer seeded onto the reply list before the request is sent, which is how the timeout, the engine being down and a malformed answer are each reached. `test_runs/order_routes.py` runs the real engine behind the same route instead.
 
 For each scenario it keeps the HTTP status, the response body, the intents that reached the stream and the number of Redis round trips, and compares them with `test_runs/fixtures/order_engine_routes.jsonl`.
 
-The recording is deliberately a second file. `--record` rewrites a whole fixture, so recording these scenarios into `order_routes.jsonl` would silently rewrite the recording that proves the direct path never changed.
+The recording is deliberately a second file. `--record` rewrites a whole fixture, so recording these scenarios into `order_routes.jsonl` would silently rewrite that suite's recording too.
 
 No Redis, database, credentials or network are used, and no request leaves the process. The project's `.env` still has to exist, because importing the blueprint imports `utilities.configurations`.
 
@@ -25,6 +25,7 @@ import flask
 import requests
 
 from test_runs import order_routes
+from test_runs import redis_stand_ins
 from unified_broker_interface.blueprints import base as blueprint_base
 from unified_broker_interface.blueprints import orders as orders_blueprint
 from unified_broker_interface.utilities.order_engine.utilities import engine_lock
@@ -40,72 +41,6 @@ UNRECORDED_INTENT_FIELDS = [
     'created_at',
     'deadline_at',
 ]
-
-
-class FakeEngineRedis(order_routes.FakeRedis):
-    """The order routes' stand-in, widened with the stream and list commands the handoff uses.
-
-    `blpop` never blocks: it answers with whatever was seeded onto the reply list, or with None, which is what a real wait that ran out of time returns. A scenario therefore exercises the timeout path without waiting for it.
-
-    Attributes:
-        streams (dict): Stream keys to lists of `(entry_id, fields)`.
-        lists (dict): List keys to their entries.
-    """
-
-    def __init__(self):
-        """Builds an empty stand-in with no streams and no lists.
-
-        Returns:
-            None: This method returns nothing.
-        """
-        super().__init__()
-        self.streams = {}
-        self.lists = {}
-
-    def xadd(self, key, fields, maxlen=None, approximate=False):
-        """Appends one entry to a stream in its own round trip.
-
-        Args:
-            key (str): The stream key.
-            fields (dict): The entry's fields.
-            maxlen (int | None): Accepted for compatibility with redis-py and ignored, since nothing here writes enough entries to trim.
-            approximate (bool): Accepted for compatibility with redis-py and ignored.
-
-        Returns:
-            str: The entry's id.
-
-        Raises:
-            redis.RedisError: When this round trip is the failing one.
-        """
-        del maxlen, approximate
-        self.start_round_trip()
-        entries = self.streams.setdefault(key, [])
-        entry_id = f'{len(entries) + 1}-0'
-        entries.append((entry_id, dict(fields)))
-        return entry_id
-
-    def blpop(self, key, timeout=None):
-        """Takes the first entry off a list, answering None when there is none.
-
-        Args:
-            key (str): The list key.
-            timeout (float | None): Accepted for compatibility with redis-py and ignored, since the stand-in never waits.
-
-        Returns:
-            tuple | None: `(key, value)` when the list held something, and None when it did not.
-
-        Raises:
-            redis.RedisError: When this round trip is the failing one.
-        """
-        del timeout
-        self.start_round_trip()
-        entries = self.lists.get(key)
-        if not entries:
-            return None
-        value = entries.pop(0)
-        if not entries:
-            self.lists.pop(key, None)
-        return key, value
 
 
 class OrderEngineScenarios:
@@ -352,17 +287,6 @@ class OrderEngineScenarios:
                 ),
                 reply=self.accepted_answer(),
             ),
-            self.place(
-                'direct_mode_writes_no_intent',
-                self.bodies.market_order(),
-                placement='direct',
-            ),
-            self.place(
-                'an_unknown_placement_mode_stops_the_worker',
-                None,
-                placement='engin',
-                expect_construction_error=True,
-            ),
         ]
 
 
@@ -370,7 +294,7 @@ class OrderEngineRoutesSuite:
     """Runs every engine-mode scenario against the order blueprint, then records or compares the results.
 
     Attributes:
-        fake_redis (FakeEngineRedis): The stand-in the blueprint under test reads.
+        fake_redis (redis_stand_ins.FakeEngineRedis): The stand-in the blueprint under test reads.
         network (FakeBrokerNetwork): The stubbed broker network, which nothing should reach in engine mode.
     """
 
@@ -380,14 +304,14 @@ class OrderEngineRoutesSuite:
         Returns:
             None: This method returns nothing.
         """
-        self.fake_redis = FakeEngineRedis()
+        self.fake_redis = redis_stand_ins.FakeEngineRedis()
         self.network = order_routes.FakeBrokerNetwork()
 
     def fake_cache(self):
         """Hands the blueprint the stand-in instead of a Redis client.
 
         Returns:
-            FakeEngineRedis: The current stand-in.
+            redis_stand_ins.FakeEngineRedis: The current stand-in.
         """
         return self.fake_redis
 
@@ -411,10 +335,10 @@ class OrderEngineRoutesSuite:
         """Builds a stand-in holding the order routes' starting contents, with streams and lists added.
 
         Returns:
-            FakeEngineRedis: The stand-in.
+            redis_stand_ins.FakeEngineRedis: The stand-in.
         """
         starting_state = order_routes.OrderRoutesState().build()
-        fake_redis = FakeEngineRedis()
+        fake_redis = redis_stand_ins.FakeEngineRedis()
         fake_redis.strings = starting_state.strings
         fake_redis.hashes = starting_state.hashes
         fake_redis.sorted_sets = starting_state.sorted_sets
@@ -427,6 +351,9 @@ class OrderEngineRoutesSuite:
             flask.testing.FlaskClient: The client.
         """
         application = flask.Flask('order_engine_routes_suite')
+        api_configuration['order_warm_brokers'] = [
+            '',
+        ]
         blueprint = orders_blueprint.OrdersBlueprint()
         application.register_blueprint(
             blueprint.blueprint,
@@ -517,10 +444,6 @@ class OrderEngineRoutesSuite:
         self.fake_redis = self.build_state()
         if scenario.get('engine_running', True):
             self.fake_redis.strings[engine_lock.LOCK_KEY] = 'engine-process'
-        api_configuration['order_placement'] = scenario.get(
-            'placement',
-            'engine',
-        )
         if scenario.get('expect_construction_error'):
             try:
                 self.build_client()
@@ -563,8 +486,8 @@ class OrderEngineRoutesSuite:
         original_get_mongo_database = blueprint_base.get_mongo_db
         original_request = requests.Session.request
         original_uuid4 = uuid.uuid4
-        original_placement = api_configuration['order_placement']
         original_excluded = api_configuration['order_excluded_brokers']
+        original_hold_limits = api_configuration['order_hold_limits']
         blueprint_base.get_cache = self.fake_cache
         blueprint_base.get_mongo_db = self.fake_mongo_database
         requests.Session.request = self.network.request
@@ -572,6 +495,7 @@ class OrderEngineRoutesSuite:
         api_configuration['order_excluded_brokers'] = [
             '',
         ]
+        api_configuration['order_hold_limits'] = False
         try:
             results = []
             for scenario in OrderEngineScenarios().build():
@@ -581,8 +505,8 @@ class OrderEngineRoutesSuite:
             blueprint_base.get_mongo_db = original_get_mongo_database
             requests.Session.request = original_request
             uuid.uuid4 = original_uuid4
-            api_configuration['order_placement'] = original_placement
             api_configuration['order_excluded_brokers'] = original_excluded
+            api_configuration['order_hold_limits'] = original_hold_limits
         return results
 
     def encode(self, result):

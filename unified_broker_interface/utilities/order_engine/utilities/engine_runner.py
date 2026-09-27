@@ -1,6 +1,7 @@
 """The order engine's loop: read an intent, place it, push the answer, acknowledge it."""
 
 import json
+import threading
 import time
 
 from unified_broker_interface.utilities.broker_orders.utilities.catalogue_availability import (
@@ -13,11 +14,16 @@ from unified_broker_interface.utilities.order_engine.utilities.engine_lock impor
     REFRESH_SECONDS,
 )
 from unified_broker_interface.utilities.order_engine.utilities.intent_handoff import (
+    ANSWER_KEY_PREFIX,
     INTENT_STREAM_FIELD,
     INTENT_STREAM_KEY,
 )
 from unified_broker_interface.utilities.order_engine.utilities.order_update_follower import (
     ORDER_UPDATES_STREAM_KEY,
+)
+from unified_broker_interface.utilities.order_engine.utilities.parent_commands import (
+    HALT_EVERY_PARENT,
+    ParentCommands,
 )
 from unified_broker_interface.utilities.order_engine.utilities.registry import (
     SYNTHETIC_ORDER_CLASSES,
@@ -29,6 +35,8 @@ ENTRIES_PER_READ = 10
 BLOCK_MILLISECONDS = 1000
 MINIMUM_BACKOFF_SECONDS = 1
 MAXIMUM_BACKOFF_SECONDS = 60
+DAY_ROLL_IDLE_WAIT_SECONDS = 30.0
+WORKER_STOP_SECONDS = 50.0
 
 
 class OrderEngine:
@@ -49,6 +57,12 @@ class OrderEngine:
         placed (int): How many intents have been placed.
         refused (int): How many intents have been answered without calling a broker.
         expired (int): How many intents were too old to place.
+        repeated (int): How many intents had already started a parent before they were read again.
+        router (ParentRouter | None): The lanes of worker threads that place orders and own their parents, or None to do everything on the main thread.
+        entries_per_read (int): How many stream entries one read takes.
+        reconciler (BookReconciler | None): What finds the order changes no socket delivered, by reading the brokers' polled order books.
+        counts_lock (threading.Lock): Guards the four counts, which worker threads update.
+        commands (ParentCommands): What runs a caller's change to a parent the engine owns.
     """
 
     def __init__(
@@ -66,6 +80,9 @@ class OrderEngine:
         ticker=None,
         price_ticker=None,
         day_roll=None,
+        router=None,
+        entries_per_read=ENTRIES_PER_READ,
+        reconciler=None,
     ):
         """Builds the engine.
 
@@ -83,6 +100,9 @@ class OrderEngine:
             ticker (ClockTicker | None): What wakes the order types that are waiting for a time rather than a fill.
             price_ticker (PriceTicker | None): What hands the live quote to the order types that are watching the market.
             day_roll (DayRoll | None): What rebuilds the parent caches when they expire at 06:00 IST.
+            router (ParentRouter | None): The lanes of worker threads that place orders and own their parents, or None to do everything on the main thread, one piece of work at a time.
+            entries_per_read (int): How many stream entries one read takes.
+            reconciler (BookReconciler | None): What finds the order changes no socket delivered, or None to rely on the sockets alone.
 
         Returns:
             None: This method returns nothing.
@@ -104,6 +124,18 @@ class OrderEngine:
         self.placed = 0
         self.refused = 0
         self.expired = 0
+        self.repeated = 0
+        self.router = router
+        self.entries_per_read = entries_per_read
+        self.reconciler = reconciler
+        self.counts_lock = threading.Lock()
+        self.commands = ParentCommands(
+            placement,
+            event_log,
+            parent_store,
+            logger,
+            gates,
+        )
 
     def streams(self):
         """The streams this engine reads, in the order a batch is handled.
@@ -161,6 +193,8 @@ class OrderEngine:
         pending_first = True
         refreshed_at = time.monotonic()
         exit_code = 0
+        if self.reconciler is not None:
+            self.reconcile_books()
         while not stop.is_set():
             try:
                 if time.monotonic() - refreshed_at >= REFRESH_SECONDS:
@@ -178,9 +212,11 @@ class OrderEngine:
                     entries = self.read(False)
                 for stream_key, entry_id, fields in entries:
                     if stream_key == INTENT_STREAM_KEY:
-                        self.handle(entry_id, fields)
+                        self.take_intent(entry_id, fields)
                     else:
-                        self.handle_update(entry_id, fields)
+                        self.take_update(entry_id, fields)
+                if self.follower is not None:
+                    self.take_early_updates()
                 # The read above blocks for about a second when nothing arrives, which is the tick
                 # the time-based types need. Doing it here rather than on a thread keeps one thing
                 # touching a parent at a time, so there is nothing to lock.
@@ -188,8 +224,10 @@ class OrderEngine:
                     self.ticker.tick()
                 if self.price_ticker is not None and self.price_ticker.due():
                     self.price_ticker.tick()
+                if self.reconciler is not None and self.reconciler.due():
+                    self.reconcile_books()
                 if self.day_roll is not None and self.day_roll.due():
-                    self.day_roll.roll()
+                    self.roll_day(stop)
                 backoff = MINIMUM_BACKOFF_SECONDS
             except Exception as exception:
                 self.logger.error(
@@ -201,11 +239,28 @@ class OrderEngine:
                     break
                 stop.wait(backoff)
                 backoff = min(backoff * 2, MAXIMUM_BACKOFF_SECONDS)
+        if self.router is not None:
+            if not self.router.stop(WORKER_STOP_SECONDS):
+                self.logger.warning(
+                    'Some order engine workers were still busy when the '
+                    'engine stopped; their unacknowledged intents are read '
+                    'again at the next start.'
+                )
+            self.logger.info(
+                f'Workers per lane: {self.router.worker_counts()}.'
+            )
         followed = self.follower.followed if self.follower else 0
         self.logger.info(
             f'Stopped. Placed {self.placed}, refused {self.refused}, '
-            f'expired {self.expired}, order updates followed {followed}.'
+            f'expired {self.expired}, repeated {self.repeated}, '
+            f'order updates followed {followed}.'
         )
+        if self.follower is not None:
+            self.logger.info(
+                f'Early order updates: {self.follower.held} held, '
+                f'{self.follower.replayed} applied once their order was known, '
+                f'{self.follower.early_updates.dropped} dropped unmatched.'
+            )
         if self.ticker is not None:
             self.logger.info(
                 f'Clock: {self.ticker.ticks} ticks, {self.ticker.acted} '
@@ -216,6 +271,12 @@ class OrderEngine:
                 f'Prices: {self.price_ticker.ticks} ticks, '
                 f'{self.price_ticker.quotes_read} quotes read, '
                 f'{self.price_ticker.acted} parents acted on one.'
+            )
+        if self.reconciler is not None:
+            self.logger.info(
+                f'Order books: {self.reconciler.passes} passes, '
+                f'{self.reconciler.found} changes found that no socket '
+                'delivered.'
             )
         if self.day_roll is not None and self.day_roll.rolls:
             self.logger.info(
@@ -243,7 +304,7 @@ class OrderEngine:
             GROUP,
             CONSUMER,
             requested,
-            count=ENTRIES_PER_READ,
+            count=self.entries_per_read,
             block=None if pending else BLOCK_MILLISECONDS,
         )
         entries = []
@@ -252,10 +313,10 @@ class OrderEngine:
                 entries.append((stream_key, entry_id, fields))
         return entries
 
-    def handle(self, entry_id, fields):
-        """Places one intent, pushes its answer and acknowledges it.
+    def take_intent(self, entry_id, fields):
+        """Places one intent on this thread, or hands it to a worker in the lane of the broker chosen for it.
 
-        An intent is acknowledged whatever happened to it, including when it could not be read at all, because a poisonous entry redelivered for ever would stop every order behind it.
+        An intent that could not be read is acknowledged unplaced, because a poisonous entry redelivered for ever would stop every order behind it. With lanes, an intent that was already started or is too old is answered here, before a broker is chosen for it, so it takes no round-robin turn.
 
         Args:
             entry_id (str): The stream entry's id.
@@ -272,14 +333,167 @@ class OrderEngine:
             )
             self.acknowledge(entry_id)
             return
+        if intent.get('command'):
+            self.take_command(entry_id, intent)
+            return
+        if self.router is None:
+            self.finish_intent(entry_id, intent, None)
+            return
+        early_answer = self.answer_without_placing(intent)
+        if early_answer is not None:
+            body, status = early_answer
+            self.reply(intent, body, status)
+            self.acknowledge(entry_id)
+            return
+        broker_name, skipped = self.placement.assign_broker(intent)
+        worker = self.router.worker_for_new_intent(broker_name)
+        worker.submit(
+            self.place_on_worker,
+            (
+                entry_id,
+                intent,
+                broker_name,
+                skipped,
+                worker,
+            ),
+        )
+
+    def take_command(self, entry_id, intent):
+        """Runs a caller's change to a parent on the worker that owns the parent, or here without lanes.
+
+        Halting every parent is handed to each open parent's owner and answered at once, with how many were halted. Each worker runs its halts before any work handed to it later, so a fill or a tick that arrives after the halt finds the parent already cancelled.
+
+        Args:
+            entry_id (str): The stream entry's id.
+            intent (dict): The intent document, with `command`.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        early_answer = self.answer_without_placing(intent)
+        if early_answer is not None:
+            body, status = early_answer
+            self.reply(intent, body, status)
+            self.acknowledge(entry_id)
+            return
+        if intent.get('command') == HALT_EVERY_PARENT:
+            self.halt_every_parent(entry_id, intent)
+            return
+        arguments = intent.get('body') or {}
+        if self.router is None:
+            self.finish_command(entry_id, intent)
+            return
+        self.router.route(
+            arguments.get('parent_id'),
+            arguments.get('broker'),
+            self.finish_command,
+            (
+                entry_id,
+                intent,
+            ),
+        )
+
+    def finish_command(self, entry_id, intent):
+        """Runs one command, pushes its answer and acknowledges it.
+
+        Args:
+            entry_id (str): The stream entry's id.
+            intent (dict): The intent document, with `command`.
+
+        Returns:
+            None: This method returns nothing.
+        """
         try:
-            body, status = self.answer(intent)
+            body, status = self.commands.run(intent)
         except RefusedRequestError as refusal:
-            self.refused = self.refused + 1
+            body, status = refusal.body, refusal.status
+        except Exception as exception:
+            self.logger.exception(
+                f'Command {intent.get("command")} in intent '
+                f'{intent.get("intent_id")} failed.'
+            )
+            body = {
+                'error': (
+                    'the order engine failed while making this change '
+                    f'({type(exception).__name__}), so its outcome is unknown'
+                ),
+            }
+            status = 504
+        self.reply(intent, body, status)
+        self.acknowledge(entry_id)
+
+    def halt_every_parent(self, entry_id, intent):
+        """Stops every open parent from acting again, on the worker that owns each, and answers with how many there were.
+
+        Args:
+            entry_id (str): The stream entry's id.
+            intent (dict): The intent document.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        parent_order_ids = []
+        try:
+            parent_order_ids = self.parent_store.open_parent_ids()
+        except Exception:
+            self.logger.exception(
+                'The open parents could not be read, so none was halted.'
+            )
+        for parent_order_id in parent_order_ids:
+            if self.router is None:
+                self.commands.halt(parent_order_id)
+            else:
+                self.router.route(
+                    parent_order_id,
+                    None,
+                    self.commands.halt,
+                    (parent_order_id,),
+                )
+        self.reply(intent, {
+            'halted_parents': len(parent_order_ids),
+        }, 200)
+        self.acknowledge(entry_id)
+
+    def place_on_worker(self, entry_id, intent, broker_name, skipped, worker):
+        """Places one intent on the worker that will own its parent, sending its first legs to the broker intake chose.
+
+        Args:
+            entry_id (str): The stream entry's id.
+            intent (dict): The intent document.
+            broker_name (str | None): The broker intake chose, or None to let the order type choose.
+            skipped (list): The brokers intake passed over, reported in the answer.
+            worker (ParentWorker): This worker, which is recorded as the parent's owner.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.placement.use_assignment(broker_name, skipped)
+        try:
+            self.finish_intent(entry_id, intent, worker)
+        finally:
+            self.placement.clear_assignment()
+
+    def finish_intent(self, entry_id, intent, worker):
+        """Answers one intent, pushes the answer and acknowledges it.
+
+        An intent is acknowledged whatever happened to it, so that one failing order cannot stop every order behind it.
+
+        Args:
+            entry_id (str): The stream entry's id.
+            intent (dict): The intent document.
+            worker (ParentWorker | None): The worker placing it, which will own its parent, or None on the main thread.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        try:
+            body, status = self.answer(intent, worker)
+        except RefusedRequestError as refusal:
+            self.count_refused()
             refusal = self.catalogue_availability.explained(refusal)
             body, status = refusal.body, refusal.status
         except Exception as exception:
-            self.refused = self.refused + 1
+            self.count_refused()
             self.logger.exception(
                 f'Intent {intent.get("intent_id")} could not be placed.'
             )
@@ -292,6 +506,15 @@ class OrderEngine:
             status = 504
         self.reply(intent, body, status)
         self.acknowledge(entry_id)
+
+    def count_refused(self):
+        """Counts one intent answered without calling a broker.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        with self.counts_lock:
+            self.refused = self.refused + 1
 
     def decode(self, fields):
         """Reads one stream entry's intent document.
@@ -310,11 +533,12 @@ class OrderEngine:
             return None
         return intent
 
-    def answer(self, intent):
-        """Places the intent's order, unless it is too old to be worth placing.
+    def answer(self, intent, worker=None):
+        """Places the intent's order, unless it was already started or is too old to be worth placing.
 
         Args:
             intent (dict): The intent document.
+            worker (ParentWorker | None): The worker placing it, recorded as the owner of the parent it creates, or None on the main thread.
 
         Returns:
             tuple: The answer's body (dict) and its HTTP status (int).
@@ -322,9 +546,58 @@ class OrderEngine:
         Raises:
             RefusedRequestError: For an order answered without calling a broker.
         """
+        early_answer = self.answer_without_placing(intent)
+        if early_answer is not None:
+            return early_answer
+        if self.gates is not None:
+            self.gates.check_before_accepting(intent)
+        started_at = time.perf_counter()
+        synthetic_order = self.synthetic_order(intent)
+        if self.router is not None and worker is not None:
+            self.router.register(
+                synthetic_order.parent.parent_order_id,
+                worker,
+            )
+        try:
+            body, status = synthetic_order.run(intent, started_at)
+        except RefusedRequestError as refusal:
+            synthetic_order.abandon(refusal.body.get('error'))
+            raise
+        with self.counts_lock:
+            self.placed = self.placed + 1
+        return body, status
+
+    def answer_without_placing(self, intent):
+        """The answer for an intent that must not be placed, because it already started a parent or is too old, or None for one that may be.
+
+        Args:
+            intent (dict): The intent document.
+
+        Returns:
+            tuple | None: The answer's body (dict) and its HTTP status (int), or None when the intent may be placed.
+        """
+        repeated_parent_id = self.started_parent_id(intent)
+        if repeated_parent_id is not None:
+            with self.counts_lock:
+                self.repeated = self.repeated + 1
+            self.logger.warning(
+                f'Intent {intent.get("intent_id")} was read again after it '
+                f'had already started parent {repeated_parent_id}, so it is '
+                'not placed a second time.'
+            )
+            return {
+                'error': (
+                    'the order engine had already started this order before '
+                    'it read it again, so it was not placed a second time; '
+                    'read the parent for its outcome'
+                ),
+                'intent_id': intent.get('intent_id'),
+                'parent_id': repeated_parent_id,
+            }, 409
         expired_for = time.time() - self.expiry_moment(intent)
         if expired_for > 0:
-            self.expired = self.expired + 1
+            with self.counts_lock:
+                self.expired = self.expired + 1
             self.logger.warning(
                 f'Intent {intent.get("intent_id")} passed its deadline '
                 f'{expired_for:.1f} seconds ago, so it is recorded rather '
@@ -338,17 +611,23 @@ class OrderEngine:
                 'intent_id': intent.get('intent_id'),
                 'expired_seconds': round(expired_for, 3),
             }, 409
-        if self.gates is not None:
-            self.gates.check_before_accepting(intent)
-        started_at = time.perf_counter()
-        synthetic_order = self.synthetic_order(intent)
-        try:
-            body, status = synthetic_order.run(intent, started_at)
-        except RefusedRequestError as refusal:
-            synthetic_order.abandon(refusal.body.get('error'))
-            raise
-        self.placed = self.placed + 1
-        return body, status
+        return None
+
+    def started_parent_id(self, intent):
+        """The parent this intent already started, or None when it has started nothing.
+
+        An intent is acknowledged only after its answer is pushed, so an engine that stops between sending an order and acknowledging its intent reads that intent again at its next start. Every parent is saved with its intent id before its first leg is sent, and recovery rebuilds that record from the event log, so a repeated intent is found here rather than placed twice.
+
+        Args:
+            intent (dict): The intent document.
+
+        Returns:
+            str | None: The parent order id.
+        """
+        intent_id = intent.get('intent_id')
+        if self.parent_store is None or not intent_id:
+            return None
+        return self.parent_store.parent_for_intent(intent_id)
 
     def synthetic_order(self, intent):
         """The runner for the kind of order an intent asks for.
@@ -397,7 +676,9 @@ class OrderEngine:
         return deadline_at + self.stale_intent_seconds
 
     def reply(self, intent, body, status):
-        """Pushes the answer onto the key the waiting API worker is blocked on.
+        """Pushes the answer onto the key the waiting API worker is blocked on, and stores it under the intent's id.
+
+        An intent that came in a list is answered on the list's shared key, so its answer names its place in the list. The stored copy is what `GET /api/orders/intents/<intent_id>` reads for a caller who stopped waiting. It is written only if none is there yet, so a repeated intent's 409 cannot replace the answer the first reading gave.
 
         Args:
             intent (dict): The intent document.
@@ -407,16 +688,59 @@ class OrderEngine:
         Returns:
             None: This method returns nothing.
         """
-        document = json.dumps({
+        stored = json.dumps({
             'body': body,
             'status': status,
         })
+        pushed = {
+            'body': body,
+            'status': status,
+        }
+        if intent.get('request_index') is not None:
+            pushed['request_index'] = intent['request_index']
+            pushed['intent_id'] = intent.get('intent_id')
         pipeline = self.cache.pipeline(transaction=False)
-        pipeline.rpush(intent['reply_key'], document)
+        pipeline.rpush(intent['reply_key'], json.dumps(pushed))
         pipeline.expire(intent['reply_key'], self.result_ttl_seconds)
+        if intent.get('intent_id'):
+            pipeline.set(
+                ANSWER_KEY_PREFIX + intent['intent_id'],
+                stored,
+                nx=True,
+                ex=self.result_ttl_seconds,
+            )
         pipeline.execute()
 
-    def handle_update(self, entry_id, fields):
+    def take_update(self, entry_id, fields):
+        """Applies one broker order update here, or hands it to the worker that owns its parent.
+
+        With lanes, an update whose order no parent owns yet is held by the follower and acknowledged, exactly as without them.
+
+        Args:
+            entry_id (str): The stream entry's id.
+            fields (dict): The stream entry's fields.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        if self.router is None:
+            self.apply_update(entry_id, fields)
+            return
+        parent_order_id, broker_name = self.follower.owning_parent(fields)
+        if parent_order_id is None:
+            self.acknowledge(entry_id, ORDER_UPDATES_STREAM_KEY)
+            return
+        self.router.route(
+            parent_order_id,
+            broker_name,
+            self.apply_update,
+            (
+                entry_id,
+                fields,
+            ),
+        )
+
+    def apply_update(self, entry_id, fields):
         """Applies one broker order update to the leg it belongs to, if the engine owns one.
 
         Most updates on that stream belong to orders placed somewhere else entirely, so an update that names no leg of ours is acknowledged and dropped. A failure to apply one is logged and the entry acknowledged: the broker's own book is read on the next start, so a lost update costs accuracy until then rather than correctness.
@@ -438,6 +762,142 @@ class OrderEngine:
                 'applied; the broker book is read again at the next start.'
             )
         self.acknowledge(entry_id, ORDER_UPDATES_STREAM_KEY)
+
+    def take_early_updates(self):
+        """Applies the held order updates whose order is now known, here or on the workers that own their parents.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        if self.router is None:
+            self.replay_early_updates()
+            return
+        try:
+            taken = self.follower.take_known_early_updates()
+        except Exception:
+            self.logger.exception(
+                'Order updates held for an order the engine did not know yet '
+                'could not be looked up; they are tried again after the next '
+                'read.'
+            )
+            return
+        for parent_order_id, broker_name, fields in taken:
+            self.router.route(
+                parent_order_id,
+                broker_name,
+                self.apply_replayed_update,
+                (fields,),
+            )
+
+    def apply_replayed_update(self, fields):
+        """Applies one held order update on the worker that owns its parent.
+
+        Args:
+            fields (dict): The stream entry's fields.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        try:
+            parent = self.follower.follow(fields)
+            if parent is not None:
+                self.follower.count_replayed()
+                self.parent_store.save(parent)
+        except Exception:
+            self.logger.exception(
+                'A held order update could not be applied; the broker book '
+                'is read again at the next start.'
+            )
+
+    def reconcile_books(self):
+        """Applies the order changes the brokers' polled books show and no socket delivered, here or on the workers that own their parents.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        try:
+            missed = self.reconciler.missed_updates()
+        except Exception:
+            self.logger.exception(
+                'The brokers\' order books could not be compared with the '
+                'open legs; they are compared again on the next pass.'
+            )
+            return
+        for parent_order_id, broker_name, fields in missed:
+            if self.router is None:
+                self.apply_reconciled_update(fields)
+            else:
+                self.router.route(
+                    parent_order_id,
+                    broker_name,
+                    self.apply_reconciled_update,
+                    (fields,),
+                )
+
+    def apply_reconciled_update(self, fields):
+        """Applies one change found in a broker's polled order book, on the worker that owns its parent.
+
+        The parent is read again here, so a socket update that reached the worker first leaves nothing to change and this one is ignored.
+
+        Args:
+            fields (dict): The change, shaped like an entry of the order update stream.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        try:
+            parent = self.follower.follow(fields)
+            if parent is not None:
+                self.parent_store.save(parent)
+        except Exception:
+            self.logger.exception(
+                'A change found in a broker\'s order book could not be '
+                'applied; it is found again on the next pass.'
+            )
+
+    def roll_day(self, stop):
+        """Rebuilds the parent caches at 06:00 IST, once no worker is changing a parent.
+
+        Nothing new reaches a worker while this waits, because only this thread hands out work. Every parent's owner is forgotten after the rebuild, and a parent still open is given an owner again when its next piece of work arrives.
+
+        Args:
+            stop (threading.Event): Set when the engine is stopping.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        if self.router is not None:
+            idle = self.router.wait_until_idle(
+                stop,
+                DAY_ROLL_IDLE_WAIT_SECONDS,
+            )
+            if not idle:
+                self.logger.warning(
+                    'The day rolled over while workers were still busy, so '
+                    'the parent caches are rebuilt on a later pass.'
+                )
+                return
+        self.day_roll.roll()
+        if self.router is not None:
+            self.router.forget_owners()
+
+    def replay_early_updates(self):
+        """Applies the order updates that arrived before their order was known, now that it may be.
+
+        A failure is logged rather than raised, for the same reason `handle_update` logs one: the broker's own book is read again at the next start, so a lost update costs accuracy until then rather than correctness.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        try:
+            for parent in self.follower.replay_early_updates():
+                self.parent_store.save(parent)
+        except Exception:
+            self.logger.exception(
+                'Order updates held for an order the engine did not know yet '
+                'could not be applied; the broker book is read again at the '
+                'next start.'
+            )
 
     def acknowledge(self, entry_id, stream_key=INTENT_STREAM_KEY):
         """Acknowledges one stream entry, so it is not redelivered.

@@ -240,7 +240,7 @@ systemctl --user enable --now unified.target unified-mapping.timer unified-price
 
 ## The order engine and the synthetic order book
 
-The order engine is deliberately left out of the unified install list. It runs only when the REST API is configured with `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT=engine`, and it uses the same `unified-orders@` template as the other order scripts.
+The order engine is in the unified install list, because it places every order the REST API accepts: the API cannot place an order while it is stopped. It uses the same `unified-orders@` template as the other order scripts, and exactly one copy may run.
 
 !!! danger "The order engine places real orders"
     `unified-orders@order_engine.service` reads every order the REST API accepts and sends it to a live broker account. Run exactly one. The `unified.target` header says a second engine refuses to start, because two would place every order twice; the engine holds the lock in the Redis key `unified:orders:engine:lock`.
@@ -339,7 +339,7 @@ The unified and database groups have their own units, listed in the table below.
 | `unified-orders@api_trade_details` | service | writes `unified:orders:trades` | always |
 | `unified-orders@websocket_order_details` | service | combines every broker's order and position update streams | always |
 | `unified-orders@store_orders_to_db` | service | drains `unified:order-updates:stream` into `unified.order_updates` | always |
-| `unified-orders@order_engine` | service, opt-in | places orders in engine mode | always, only in engine mode |
+| `unified-orders@order_engine` | service | places every order the REST API accepts | always |
 | `unified-orders@virtual_book` | service, opt-in | keeps `unified:orders:virtual_queue` | always, beside the engine |
 | `unified-portfolio@positions` | service | writes `unified:portfolio:positions` | always |
 | `unified-portfolio@holdings` | service | writes `unified:portfolio:holdings` | always |

@@ -1,35 +1,25 @@
 # Order engine
 
-The order engine is an optional background process that places orders on the REST API's behalf. By default, each API worker sends an order to the broker itself while your request waits. In engine mode, the worker instead hands the order to one long-running process, which places it, applies the risk limits, and can keep working an order after your request has been answered. That last ability is what makes brackets, trailing stops, time-sliced orders and every other [synthetic order type](synthetic-orders.md) possible.
+The order engine is the background process that places every order the REST API accepts. The API worker checks your request, hands the order to the engine and waits for its answer. The engine places it, applies the risk limits, and can keep working an order after your request has been answered. That last ability is what makes brackets, trailing stops, time-sliced orders and every other [synthetic order type](synthetic-orders.md) possible.
 
 !!! danger "The engine places real orders, and can place them later"
-    In engine mode, an order can reach a broker after `POST /api/orders/place` has answered: an armed trigger fires when the price arrives, a scheduled order is sent at its time, and a bracket places its stop and target when the entry fills. Each of those is a real order. Stopping the API does not stop the engine; stop `unified-orders@order_engine.service` as well.
+    An order can reach a broker after `POST /api/orders/place` has answered: an armed trigger fires when the price arrives, a scheduled order is sent at its time, and a bracket places its stop and target when the entry fills. Each of those is a real order. Stopping the API does not stop the engine; stop `unified-orders@order_engine.service` as well.
 
-## Direct mode and engine mode
+## Why every order goes through the engine
 
-`UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT` chooses between the two modes. It is `direct` unless set, and an unknown value stops the API worker from starting with `unknown order placement '<value>'; known modes are direct, engine`.
+The API used to have a second mode, `direct`, in which the API worker sent a plain order to the broker itself. It was removed, because it could not do most of what the place route promises and failed quietly when asked to: it placed a bracket or an iceberg as one plain order, and it sent a price or a quantity of `0` for an order that gave only a `price_reference` or a `quantity_reference`. The table below lists what the engine does that the direct mode did not.
 
-<figure class="diagram">
---8<-- "docs/assets/diagrams/direct-vs-engine.svg"
-<figcaption>The blue dot is a direct-mode order, which goes from the API worker straight to the broker. The orange dots are an engine-mode order travelling through the intent stream and the order engine, and the green dots are the engine's answer coming back through a per-intent list to the waiting worker.</figcaption>
-</figure>
+| | What the engine does |
+|---|---|
+| `synthetic` order types | All of them, as described in [Synthetic orders](synthetic-orders.md) |
+| `price_reference`, `quantity_reference` | Resolved from the live quote and the positions before the order is built |
+| Rate budget | At most 10 order messages a second to each broker, shared with the modify and cancel routes |
+| Loss lockout | New orders refused once the day's loss passes the configured limit |
+| Daily order caps | Counted and enforced with <span class="status s4">429</span> |
+| Parallel placement | One lane of worker threads per broker, so a slow broker holds up only its own orders |
+| Extra keys in the answer | `intent_id`, and `parent_id` for an order the engine recorded |
 
-The table below compares what each mode does and does not do.
-
-| | `direct` (default) | `engine` |
-|---|---|---|
-| Who sends the placement | The API worker handling the request | The single `bin/unified/orders/order_engine` process |
-| Plain orders | :material-check: | :material-check:, as the `simple` type |
-| `synthetic` order types | :material-close: ignored, placed as a plain order | :material-check: all 42 types |
-| `price_reference`, `quantity_reference` | :material-close: shape-checked, never resolved | :material-check: resolved from the live quote and positions |
-| Rate budget, loss lockout | :material-close: | :material-check: on placements |
-| Daily order caps | counted only | counted and enforced with <span class="status s4">429</span> |
-| Extra Redis round trips per order | none | an `XADD` and a `BLPOP` |
-| `modify` and `cancel` routes | straight to the broker | still straight to the broker |
-| Extra keys in the answer | none | `intent_id`, and `parent_id` for an order the engine recorded |
-
-!!! warning "Engine-only fields in direct mode"
-    In direct mode `POST /api/orders/place` does not read `synthetic`, so a bracket or an iceberg is silently placed as one plain order. It also does not resolve `price_reference` or `quantity_reference`: a `LIMIT` or `SL` order carrying only a `price_reference` is built with a price of `0`, and an order carrying only a `quantity_reference` is built with a quantity of `0`. The route refuses none of these, so do not send them unless the API runs in engine mode.
+The cost is two extra Redis round trips per order, an `XADD` and a `BLPOP`, which the hand-over was measured to add about half a millisecond for. `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT` no longer exists and is ignored if it is still set. The API cannot place an order while the engine is not running; it answers <span class="status s5">503</span> `the order engine is not running, so the order was not placed; start unified-orders@order_engine.service`.
 
 ## The life of an intent
 
@@ -56,7 +46,7 @@ sequenceDiagram
     E->>L: RPUSH answer, EXPIRE RESULT_TTL_SECONDS
     E->>S: XACK
     L-->>A: answer
-    A-->>C: same body as direct mode, plus intent_id
+    A-->>C: the engine's answer, plus intent_id
 ```
 
 The intent written to the stream carries these fields.
@@ -95,7 +85,7 @@ The worker waits `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_TIMEOUT_SECONDS` (5 
 
 The engine keeps the other half of that promise. When it reads an intent more than `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_STALE_INTENT_SECONDS` (30 by default) past its deadline, it does not place it. It answers <span class="status s4">409</span> `the order engine read this order after the caller had stopped waiting for it, so it was not placed`, with `intent_id` and `expired_seconds`, so a restart cannot fire an abandoned order into a market that has moved. The answer stays in the list for `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_RESULT_TTL_SECONDS` (300 by default).
 
-The table below lists every engine-mode answer that direct mode never gives.
+The table below lists every answer that comes from the engine or the hand-over rather than from a broker.
 
 | Status | Message | Meaning |
 |---|---|---|
@@ -104,12 +94,13 @@ The table below lists every engine-mode answer that direct mode never gives.
 | <span class="status s4">400</span> | a type's own field message | The `synthetic` object is missing or has a wrong field for its type. |
 | <span class="status s4">403</span> | `the day is down <loss>, which is past the <limit> limit, so no new order is being placed` | The daily loss lockout is on. |
 | <span class="status s4">409</span> | `the order engine read this order after the caller had stopped waiting for it, so it was not placed` | The intent went stale. |
+| <span class="status s4">409</span> | `the order engine had already started this order before it read it again, so it was not placed a second time; read the parent for its outcome` | The intent was read again after a restart, and had already started a parent. |
 | <span class="status s4">409</span> | a quantity reference message | A `quantity_reference` asked to reduce or close a position that is not there. |
 | <span class="status s4">429</span> | `<broker> has been sent <n> order messages today, ...` | The broker's daily order cap has no room for this kind of order. |
 | <span class="status s5">503</span> | `the order engine is not running, so the order was not placed; start unified-orders@order_engine.service` | No engine holds `unified:orders:engine:lock`, which a running engine refreshes every ten seconds and which expires thirty seconds after it stops. The API reads the key before it writes the intent, so nothing was queued. |
 | <span class="status s5">503</span> | `the order could not be written for the order engine: <error>` | The `XADD` failed; nothing was queued. |
 | <span class="status s5">503</span> | `today's instrument catalogue is not published yet: the catalogue for <date> has expired, and the daily mapping has not published a new one` | The engine refused the instrument as not mapped and found that the date's whole catalogue has expired. |
-| <span class="status s5">503</span> | `the order rate budget is full, so this order was not sent; try again in a moment` | No rate token arrived within the wait. |
+| <span class="status s5">503</span> | `the order rate budget is full, so this order was not sent; try again in a moment` | The broker's one-second window had no room within the wait. |
 | <span class="status s5">503</span> | `a price reference needs a tick size the brokers agree on and there is none for this instrument` | A price reference cannot be snapped to a tick. |
 | <span class="status s5">504</span> | `the order engine did not answer within <n> seconds, so this order may still be placed` | The wait ran out. |
 | <span class="status s5">504</span> | `the order was written for the order engine but its answer could not be read (<error>), so this order may still be placed` | Redis failed during the wait. |
@@ -122,15 +113,59 @@ The table below lists every engine-mode answer that direct mode never gives.
 
 1. **It takes a lock.** `unified:orders:engine:lock` holds the engine's process id for 30 seconds and is refreshed every 10. A second engine cannot take it and exits with code 1, and an engine that finds the lock taken over by another process stops placing and exits 1.
 2. **It prepares the event table.** It applies the DDL for `unified.synthetic_order_events`, and exits 1 if it cannot.
-3. **It builds its placement code.** A misspelt broker selector or unreadable daily caps exit with code 2, which systemd does not restart.
-4. **It recovers.** It replays today's events (and up to 30 days of events for the types that carry a parent overnight) through the same state machine the live path uses, rebuilds every parent that had not finished, and brings each leg up to date from the broker's own order book. A failure here exits 1, because placing new orders without knowing what is already at a broker is worse than not starting.
-5. **It loops.** It reads both `unified:orders:intents:stream` and `unified:order-updates:stream` in one `XREADGROUP` call as the group `engine`, up to 10 entries at a time, blocking for one second. After each read it gives a clock tick and a price tick to the types that asked for them, and rebuilds its caches when the day rolls over at 06:00 IST.
+3. **It builds its placement code and its worker lanes.** A misspelt broker selector, unreadable daily caps or a misspelt `UNIFIED_BROKER_INTERFACE_API_ORDER_WORKERS_PER_BROKER` exit with code 2, which systemd does not restart.
+4. **It recovers.** It replays today's events (and up to 30 days of events for the types that carry a parent overnight) through the same state machine the live path uses, rebuilds every parent that had not finished, and parks in `failed` any parent with a leg its broker's order book does not hold. What the brokers did with the other legs while the engine was down is applied by the first order book pass, described under [Changes no socket delivered](#changes-no-socket-delivered), which runs before the engine reads anything and records each change the way a socket's update is recorded. A failure here exits 1, because placing new orders without knowing what is already at a broker is worse than not starting.
+5. **It loops.** Its main thread reads both `unified:orders:intents:stream` and `unified:order-updates:stream` in one `XREADGROUP` call as the group `engine`, up to 100 entries at a time, blocking for one second, and hands the work to the worker lanes described below. After each read it hands a clock tick and a price tick to the parents of the types that asked for them, and rebuilds its caches when the day rolls over at 06:00 IST, once every worker is idle.
 
-The consumer group starts at the beginning of the intent stream, because an intent written while the engine was down is an order somebody is still owed an answer for. It starts at the end of the order-update stream, because older updates are about orders the engine never placed. An intent is acknowledged only after its answer has been pushed, so an engine that dies in between redelivers the intent at its next start, where the stale-intent check almost always refuses it. An intent that cannot be read at all is acknowledged unplaced, so that one bad entry cannot block every order behind it.
+### Broker lanes
+
+The main thread places nothing itself. Each broker has a lane of worker threads, and one more lane, `unassigned`, takes orders whose broker could not be chosen at intake. The engine keeps one piece of work about one parent on one worker, so no two threads ever touch the same parent and every order type's code still runs top to bottom with a broker call that waits for its answer.
+
+<figure class="diagram">
+--8<-- "docs/assets/diagrams/order-engine-lanes.svg"
+<figcaption>Orange dots are intents: the main thread chooses each one's broker and hands it to a worker in that broker's lane, which sends it. Blue dots are a broker's order update, which the main thread hands to the worker that owns the order's parent.</figcaption>
+</figure>
+
+| Work | Where it goes |
+|---|---|
+| A new intent | The main thread checks it was not already started or too old, chooses its broker with the configured selector exactly as a placement would, and hands it to the least busy worker in that broker's lane. The worker records itself as the parent's owner before anything is sent, and the parent's first legs go to that broker. |
+| A broker's order update | The main thread finds the parent through `unified:orders:children` and hands the update to the parent's owner. An update for an order no parent owns yet is held, as above. |
+| A change found in a broker's polled order book | The main thread compares the open legs with the books every few seconds, as described below, and hands each change it finds to the parent's owner, exactly as it hands an order update. |
+| A clock or price tick | The main thread finds the parents that want one and hands each tick to its owner, skipping a parent whose previous tick has not run yet. |
+| A parent recovered at start | It is given an owner the first time work for it arrives, in the lane of the broker its legs went to. |
+
+A lane starts with `UNIFIED_BROKER_INTERFACE_API_ORDER_WORKERS_PER_BROKER` workers, and starts one more whenever a new intent arrives while every worker in the lane has work, up to `UNIFIED_BROKER_INTERFACE_API_ORDER_MAXIMUM_WORKERS_PER_BROKER`. Workers are not stopped during the day, because a worker usually owns parents that are still live; the lanes go back to their starting size when the engine restarts. When the engine stops, each worker finishes the work already handed to it, and an intent it had not acknowledged is read again at the next start.
+
+`python -m test_runs.order_engine_throughput` measures the lanes against ten stub brokers that each take 200 ms to answer. With one worker per broker, 300 orders took 6.04 seconds, 5 orders a second per broker, which is all one thread can do when each call takes a fifth of a second. With ten workers per broker they took 2.24 seconds, and no broker was sent more than 10 in any one second: the rate budget, not the workers, was the limit, which is 100 orders a second across ten brokers.
+
+A broker chosen at intake binds only the legs a parent places when its intent arrives. A parent that waits for a price or a time before placing anything lets the selector choose again when it fires, as it always has, so a broker that has logged out since is passed over.
+
+The consumer group starts at the beginning of the intent stream, because an intent written while the engine was down is an order somebody is still owed an answer for. It starts at the end of the order-update stream, because older updates are about orders the engine never placed. An order update that names no known leg is held for up to 30 seconds rather than dropped, because a broker can report a fill before the engine has saved the order's id; after every batch the engine looks the held orders up again in one round trip and applies, in arrival order, the updates whose order has become known. An intent is acknowledged only after its answer has been pushed, so an engine that dies in between reads the intent again at its next start. Every parent is saved with its intent id before its first leg is sent, so the engine finds that the intent already started a parent and answers <span class="status s4">409</span> `the order engine had already started this order before it read it again, so it was not placed a second time; read the parent for its outcome`, with `intent_id` and `parent_id`, instead of placing it twice. This check comes before the stale-intent check, so an intent that was placed and then went stale is reported as already started rather than as not placed. An intent that cannot be read at all is acknowledged unplaced, so that one bad entry cannot block every order behind it.
+
+### Changes no socket delivered
+
+The order-update stream is fed only by the brokers' order websockets. A broker with no order socket running, such as Flattrade today, or a socket that drops a message, would leave an order the broker has already filled or cancelled looking live to the engine, and a parent waiting on it would never finish. The live test on 27 September 2026 left two parents in `cancelling` this way, one at Flattrade and one at INDmoney, although both orders were cancelled at the broker.
+
+So every `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_RECONCILE_SECONDS` (5 by default), the main thread compares every leg the engine has sent and not seen finish with its entry in `<broker>:orders:orders`, the book each broker's REST poller keeps. It reads the open parents in one round trip and the book entries in a second. A book entry that shows a finished status, or more filled than the leg records, becomes an order update and goes to the parent's owner, where it is applied exactly as a socket's update would be: the leg moves, the order type reacts, and the parent finishes if it should.
+
+Only changes that move a leg forward are taken. A poll can be older than a socket message about the same order, so a book that still says `OPEN` beside a leg the socket already filled is the book being behind, not the order reopening, and nothing changes. The owner reads the parent again before it applies the change, so a socket update that reached it first leaves nothing to apply. How quickly a missed change is found depends on the poller as well: it is at most this interval plus the broker's poll interval, which `UNIFIED_BROKER_INTERFACE_BOOK_POLL_SECONDS` can lengthen. One pass also runs when the engine starts, before it reads anything, so a fill or a cancel that happened while it was down is recorded and reacted to; recovery used to change such legs in memory only, which left a cancelled parent's legs finished but the parent itself stuck in `cancelling`, and repeated the same change on every restart because it was never recorded. Setting the interval to `0` turns the periodic passes off, but not the one at start. The engine logs how many passes ran and how many changes they found when it stops.
 
 ### Recovery and orphans
 
 The engine writes each transition to the database and commits it before acting on it. A leg is recorded in the state `sending` before its request leaves, so a crash between the two leaves evidence that an order may exist at the broker. On restart the orphan matcher looks for that order in the broker's book. It attributes the order only when exactly one unclaimed order matches every field that was sent, within 2 seconds of when it was sent. With zero matches or several, the parent is parked in `failed` for a person to look at, because hanging a stop and a target on the wrong position is worse than admitting the engine does not know.
+
+## Changing an order the engine owns
+
+An order the engine placed is a leg of one of its parents, and the parent's order type may be about to move it, reduce it or cancel it in reaction to a fill or a tick. So the order routes never change one behind the engine's back. `PUT /api/orders/modify` and `DELETE /api/orders/cancel` look each order up in `unified:orders:children`, in the Redis read they already make, and hand an order the engine owns to the worker that owns its parent as a command intent: `cancel_leg` or `modify_leg`. The worker runs it through the order type, which records it and carries on from it; see [Modify an order](orders.md#an-order-the-engine-placed).
+
+`DELETE /api/orders/parents` sends `cancel_parent`, which cancels every leg still resting and ends the parent as `cancelled`. `POST /api/orders/flatten` sends `halt` before it cancels anything: the main thread hands every open parent's owner a halt, which ends the parent as `cancelled` without touching its legs, and answers at once with how many there were. Each worker runs its halts before any fill or tick handed to it afterwards.
+
+| Command | Sent by | What the worker does |
+|---|---|---|
+| `cancel_leg` | `DELETE /api/orders/cancel` | Cancels the leg through `cancel_leg`, recording `leg_cancel_requested` and `leg_cancelled` |
+| `modify_leg` | `PUT /api/orders/modify` | Sends the change through `apply_outside_modification`, records it as a `leg_update`, and calls the type's `on_leg_modified` |
+| `cancel_parent` | `DELETE /api/orders/parents` | Cancels every resting leg and ends the parent as `cancelled` |
+| `halt` | `POST /api/orders/flatten` | Ends every open parent as `cancelled`, leaving its legs to flatten |
 
 ## Risk gates
 
@@ -140,11 +175,11 @@ Every order the engine sends passes the same set of limits, held together in one
 |---|---|---|---|
 | Daily loss lockout | Before the order is even understood | Adds `pnl.realized` and `pnl.unrealized` from `unified:portfolio:funds`. When the sum is at or below minus the limit, the order is refused. Off unless `ORDER_DAILY_LOSS_LIMIT` is above zero. An unreadable funds document does not lock trading out. | <span class="status s4">403</span> |
 | Daily order cap | After the broker is chosen, before anything is recorded | Refuses new entries once the broker's count reaches the entry limit, and every message at the cap itself. See [Daily order caps](orders.md#daily-order-caps). | <span class="status s4">429</span> |
-| Rate budget | After the leg is recorded, before it is sent | Two token buckets, one global and one per broker. An order waits up to `ORDER_RATE_WAIT_SECONDS` for a token from both, and is refused only if none arrives. | <span class="status s5">503</span> |
+| Rate budget | After the leg is recorded, before it is sent | At most `ORDER_RATE_PER_BROKER_PER_SECOND` messages to one broker in any one-second span (10 by default, 5 for Zerodha and INDmoney), counted in Redis in `unified:orders:rate:<broker>` and shared with the REST API's modifications and cancellations. A message waits up to `ORDER_RATE_WAIT_SECONDS` for room, and is refused only if none comes. An optional limit across every broker is counted the same way. | <span class="status s5">503</span> |
 | Re-pricing throttle | Before a resting leg is moved | Refuses to move one leg again sooner than `ORDER_REPRICE_MINIMUM_SECONDS` after its last move. The move is dropped and the next tick works out a fresh price. | recorded against the leg |
 | Order-to-trade ratio | After each send and fill | Counts orders sent and orders filled per broker, and reports them when the engine stops. It refuses nothing. | none |
 
-The loss lockout and the rate budget cover placements and the engine's own changes to its legs. `PUT /api/orders/modify` and `DELETE /api/orders/cancel` still go straight from an API worker to a broker, so they are held by neither, though they are counted against a daily cap.
+The rate budget covers every message: the engine's placements and its own changes to its legs, and the modifications and cancellations the REST API sends, including flatten's cancels. The loss lockout covers placements only. `PUT /api/orders/modify` and `DELETE /api/orders/cancel` still go straight from an API worker to a broker, so the lockout does not hold them, though they take room in the rate budget and are counted against a daily cap.
 
 ## Parents, legs and where they are kept
 
@@ -164,13 +199,18 @@ stateDiagram-v2
     protecting --> completed
     protecting --> cancelled
     protecting --> failed
+    received --> cancelling
+    working --> cancelling
+    protecting --> cancelling
+    cancelling --> cancelled
+    cancelling --> failed
     completed --> [*]
     cancelled --> [*]
     rejected --> [*]
     failed --> [*]
 ```
 
-A parent's state moves only along the arrows above. `failed` means a person has to look: the engine never retries out of it and never arms protective legs for a parent in it. A leg has its own states: `planned`, `sending`, `sent`, `acknowledged`, `partially_filled`, `filled`, `rejected`, `cancelled` and `unknown`.
+A parent's state moves only along the arrows above. `cancelling` means you cancelled the parent but a broker refused one of its legs' cancels, so a leg may still be live; the parent stops acting and becomes `cancelled` once every leg has finished. `failed` means a person has to look: the engine never retries out of it and never arms protective legs for a parent in it. A leg has its own states: `planned`, `sending`, `sent`, `acknowledged`, `partially_filled`, `filled`, `rejected`, `cancelled` and `unknown`.
 
 The engine keeps the same state in two places, and they have different jobs.
 
@@ -180,14 +220,15 @@ The engine keeps the same state in two places, and they have different jobs.
 | Redis | `unified:orders:parents` | A cache of every parent, by parent id |
 | Redis | `unified:orders:parents:open` | The set of parents that are not finished |
 | Redis | `unified:orders:children` | Each leg's `<broker>:<broker order id>` to its parent id, which is how an order update is matched to a leg |
+| Redis | `unified:orders:parents:intents` | Each intent id to the parent it started, which is how an intent read a second time is recognised |
 
-The three Redis keys expire at the next 06:00 IST, and every write moves that expiry forward. A flushed Redis costs a slower start, not a lost position, because recovery rebuilds all three from the table.
+The four Redis keys expire at the next 06:00 IST, and every write moves that expiry forward. A flushed Redis costs a slower start, not a lost position, because recovery rebuilds all four from the table.
 
 The `unified.synthetic_order_events` table is a TimescaleDB hypertable with one-day chunks, compressed after seven days. Its columns are listed below.
 
 | Columns | Meaning |
 |---|---|
-| `time`, `parent_order_id`, `sequence`, `event` | When, which parent, the parent's own counter, and what happened (`parent_received`, `parent_state_changed`, `leg_requested`, `leg_answered`, `leg_update` and others) |
+| `time`, `parent_order_id`, `sequence`, `event` | When, which parent, the parent's own counter, and what happened (`parent_received`, `parent_state_changed`, `leg_requested`, `leg_answered`, `leg_update` and others, including `outside_cancel_requested` and `outside_cancelled` for an order a square-off cancels that is not one of its own legs) |
 | `synthetic_type`, `parent_state` | The type, and the parent's state after the event |
 | `leg_id`, `leg_role`, `leg_state` | The leg the event is about, its role (such as `entry`, `stop`, `target`, `slice`, `chase`) and its state |
 | `broker`, `broker_order_id`, `exchange_order_id` | Where the leg went and the ids it got |
@@ -221,21 +262,25 @@ The table below lists every environment variable the engine reads, with its defa
 
 | Variable | Default | Effect |
 |---|---|---|
-| `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT` | `direct` | `engine` turns engine mode on in the API workers |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_TIMEOUT_SECONDS` | `5` | How long a worker waits for the engine's answer |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_RESULT_TTL_SECONDS` | `300` | How long an answer list is kept |
+| `UNIFIED_BROKER_INTERFACE_API_ORDER_WORKERS_PER_BROKER` | `10` | Worker threads each broker's lane starts with, such as `10,zerodha=6` |
+| `UNIFIED_BROKER_INTERFACE_API_ORDER_MAXIMUM_WORKERS_PER_BROKER` | `30` | The most workers one lane grows to |
+| `UNIFIED_BROKER_INTERFACE_API_ORDER_DATABASE_CONNECTIONS` | `8` | PostgreSQL connections the workers share for the event table |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_STALE_INTENT_SECONDS` | `30` | How far past its deadline an intent may be and still be placed |
-| `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_PER_SECOND` | `8` | Orders a second across every broker, also the largest burst |
-| `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_PER_BROKER_PER_SECOND` | `5` | Orders a second to any one broker |
-| `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_WAIT_SECONDS` | `1` | The longest an order waits for a rate token |
+| `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_RECONCILE_SECONDS` | `5` | How often the open legs are compared with the brokers' polled order books; `0` turns off all but the pass at start |
+| `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_PER_SECOND` | `0` (off) | Messages in any one-second span across every broker |
+| `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_PER_BROKER_PER_SECOND` | `10,zerodha=5,indmoney=5` | Messages in any one-second span to one broker: a default and `broker=number` overrides |
+| `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_WAIT_SECONDS` | `1` | The longest a message waits for room in the budget |
+| `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_WINDOW_SECONDS` | `1` | The span the rate limits are counted over; a little more than 1 leaves a margin for uneven arrival |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_LOSS_LIMIT` | `0` (off) | The most the day may lose, as a positive number |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_REPRICE_MINIMUM_SECONDS` | `1` | The shortest gap between two moves of one resting leg |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_CAPS` | empty | Daily message caps, as `broker=number,broker=number` |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_CAP_EXIT_RESERVE` | `0.05` | The share of each cap kept for closing positions, from 0 up to but not including 1 |
 
-The default rate of 8 orders a second is deliberately under the ten a second at which SEBI's retail algorithmic trading framework treats an account as running an algorithm that needs registration.
+SEBI's retail algorithmic trading framework treats more than ten orders a second as an algorithm that needs registration. The limit is kept per broker, so the default of 10 messages a second applies to each broker separately, and adding brokers raises what the system can send in total. The budget counts a sliding window rather than refilling a token bucket, because a bucket that holds ten and earns ten a second can send nineteen within one second; the window never lets an eleventh message into any one-second span. The window counts when each message is given room, and the request leaves a few milliseconds later, so a broker counting arrivals can occasionally see eleven within one second when one request is delayed more than its neighbour: the load test below saw that in two runs of six. Setting `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_WINDOW_SECONDS` a little above 1, such as `1.05`, keeps a margin for that at about 9.5 messages a second.
 
 ??? note "Under the hood"
     - **Files:** `bin/unified/orders/order_engine`, `bin/unified/orders/virtual_book`, and `unified_broker_interface/utilities/order_engine/`, whose `utilities/` folder holds the runner, the handoff, the gates, the stores and the registry.
     - **Classes:** [`IntentHandoff`][unified_broker_interface.utilities.order_engine.utilities.intent_handoff.IntentHandoff] writes an intent and waits; [`OrderIntent`][unified_broker_interface.utilities.order_engine.utilities.order_intent.OrderIntent] is the intent; [`OrderEngine`][unified_broker_interface.utilities.order_engine.utilities.engine_runner.OrderEngine] is the loop; [`RiskGates`][unified_broker_interface.utilities.order_engine.utilities.risk_gates.RiskGates] holds the limits; [`ParentStore`][unified_broker_interface.utilities.order_engine.utilities.parent_store.ParentStore] is the Redis cache; [`VirtualBook`][unified_broker_interface.utilities.order_engine.utilities.virtual_book.VirtualBook] keeps the queue estimates.
-    - **Offline checks:** `python -m test_runs.order_engine_routes` records the route in engine mode against a stubbed engine, `python -m test_runs.order_engine` runs the daemon against scripted intents and stubbed brokers, and `python -m test_runs.virtual_queue` checks the queue estimate.
+    - **Offline checks:** `python -m test_runs.order_engine_routes` records the hand-over against a stubbed engine, `python -m test_runs.order_routes` runs the real engine behind the route for every broker, `python -m test_runs.order_engine` runs the daemon against scripted intents and stubbed brokers, and `python -m test_runs.virtual_queue` checks the queue estimate, and `python -m test_runs.order_engine_throughput` measures the lanes under load.

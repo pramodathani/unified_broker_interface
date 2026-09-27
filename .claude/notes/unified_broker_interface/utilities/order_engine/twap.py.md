@@ -23,3 +23,7 @@ Dropping would leave the order short by a slice and nobody would be told. Sendin
 ## Why nothing here watches the price
 
 A slice is sent because its time has come. That is the entire definition of a time-weighted average price order, and the moment it starts looking at the book it becomes one of the types in the next stage.
+
+## Why a caller's change to a slice is carried into the next one
+
+A TWAP works each slice's size out from the total rather than counting what it has placed, so a slice the caller cut would otherwise leave its difference unplaced. `on_leg_modified` records the difference as `carried_quantity`, and `slice_order` adds it to the next slice and records the reset, so a restart neither loses nor repeats it. A change to the last slice has no later slice to carry into, so the total ends short or long by that much. VWAP and implementation shortfall inherit this.

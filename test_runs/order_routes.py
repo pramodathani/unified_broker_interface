@@ -17,14 +17,19 @@ import copy
 import json
 import pathlib
 import sys
+import time
 import uuid
 
 import flask
-import redis
 import requests
 
+from test_runs import engine_stand_ins
+from test_runs import redis_stand_ins
 from unified_broker_interface.blueprints import base as blueprint_base
 from unified_broker_interface.blueprints import orders as orders_blueprint
+from unified_broker_interface.utilities.order_engine.utilities.engine_lock import (
+    LOCK_KEY as ENGINE_LOCK_KEY,
+)
 from unified_broker_interface.utilities.broker_orders.utilities.registry import (
     BROKER_ORDER_CLASSES,
 )
@@ -49,420 +54,6 @@ CATALOGUE_PREFIX = f'unified:catalogue:{MAPPING_DATE}:'
 FIXTURE_PATH = (
     pathlib.Path(__file__).resolve().parent / 'fixtures' / 'order_routes.jsonl'
 )
-
-
-class FakeRedis:
-    """An in-memory stand-in for the parts of a Redis client the order routes use.
-
-    Every direct command and every pipeline execution counts as one round trip, and a round trip can be made to fail with `redis.RedisError`.
-
-    Attributes:
-        strings (dict): String keys to their values.
-        hashes (dict): Hash keys to dictionaries of fields and values.
-        sorted_sets (dict): Sorted set keys to lists of members, all scored 0.
-        round_trips (int): How many round trips have been made.
-        failing_round_trip (int | None): The 1-based round trip that raises `redis.RedisError`, or None when none fails.
-    """
-
-    def __init__(self):
-        """Builds an empty stand-in.
-
-        Returns:
-            None: This method returns nothing.
-        """
-        self.strings = {}
-        self.hashes = {}
-        self.sorted_sets = {}
-        self.round_trips = 0
-        self.failing_round_trip = None
-
-    def start_round_trip(self):
-        """Counts one round trip and raises when it is the one set to fail.
-
-        Returns:
-            None: This method returns nothing.
-
-        Raises:
-            redis.RedisError: When this round trip is the failing one.
-        """
-        self.round_trips = self.round_trips + 1
-        if self.round_trips == self.failing_round_trip:
-            raise redis.RedisError('stand-in failure')
-
-    def pipeline(self, transaction=True):
-        """Starts a pipeline over this stand-in.
-
-        Args:
-            transaction (bool): Accepted for compatibility with redis-py and ignored.
-
-        Returns:
-            FakePipeline: The pipeline.
-        """
-        del transaction
-        return FakePipeline(self)
-
-    def get(self, key):
-        """Reads a string key in its own round trip.
-
-        Args:
-            key (str): The key.
-
-        Returns:
-            str | None: The value, or None when the key is absent.
-
-        Raises:
-            redis.RedisError: When this round trip is set to fail.
-        """
-        self.start_round_trip()
-        return self.run_get(key)
-
-    def exists(self, key):
-        """Counts whether a key is held, in its own round trip.
-
-        Args:
-            key (str): The key.
-
-        Returns:
-            int: 1 when the key is held as a string, hash or sorted set, and 0 when it is not.
-
-        Raises:
-            redis.RedisError: When this round trip is set to fail.
-        """
-        self.start_round_trip()
-        if key in self.strings:
-            return 1
-        if self.hashes.get(key):
-            return 1
-        if self.sorted_sets.get(key):
-            return 1
-        return 0
-
-    def hget(self, key, field):
-        """Reads one hash field in its own round trip.
-
-        Args:
-            key (str): The hash key.
-            field (str): The field.
-
-        Returns:
-            str | None: The value, or None when absent.
-
-        Raises:
-            redis.RedisError: When this round trip is set to fail.
-        """
-        self.start_round_trip()
-        return self.run_hget(key, field)
-
-    def hmget(self, key, fields):
-        """Reads several hash fields in its own round trip.
-
-        Args:
-            key (str): The hash key.
-            fields (list): The field names, as strings.
-
-        Returns:
-            list: One value or None per field, in the order asked.
-
-        Raises:
-            redis.RedisError: When this round trip is set to fail.
-        """
-        self.start_round_trip()
-        return self.run_hmget(key, fields)
-
-    def hgetall(self, key):
-        """Reads every field of a hash in its own round trip.
-
-        Args:
-            key (str): The hash key.
-
-        Returns:
-            dict: The hash's fields to their values, empty when there is no such hash.
-
-        Raises:
-            redis.RedisError: When this round trip is set to fail.
-        """
-        self.start_round_trip()
-        return dict(self.hashes.get(key, {}))
-
-    def incr(self, key):
-        """Adds one to a string key in its own round trip.
-
-        Args:
-            key (str): The key.
-
-        Returns:
-            int: The value after the increment.
-
-        Raises:
-            redis.RedisError: When this round trip is set to fail.
-        """
-        self.start_round_trip()
-        return self.run_incr(key)
-
-    def zrangebylex(self, key, minimum, maximum, start=None, num=None):
-        """Reads a lexical range of a sorted set in its own round trip.
-
-        Args:
-            key (str): The sorted set key.
-            minimum (bytes | str): The lower bound, starting with `[` for inclusive or `(` for exclusive.
-            maximum (bytes | str): The upper bound, in the same form.
-            start (int | None): How many matching members to skip.
-            num (int | None): The most members to return.
-
-        Returns:
-            list: The matching members, as strings.
-
-        Raises:
-            redis.RedisError: When this round trip is set to fail.
-        """
-        self.start_round_trip()
-        return self.run_zrangebylex(key, minimum, maximum, start, num)
-
-    def run_get(self, key):
-        """Reads a string key without counting a round trip.
-
-        Args:
-            key (str): The key.
-
-        Returns:
-            str | None: The value, or None when absent.
-        """
-        return self.strings.get(key)
-
-    def run_hget(self, key, field):
-        """Reads one hash field without counting a round trip.
-
-        Args:
-            key (str): The hash key.
-            field (str): The field.
-
-        Returns:
-            str | None: The value, or None when absent.
-        """
-        return self.hashes.get(key, {}).get(field)
-
-    def run_hmget(self, key, fields):
-        """Reads several hash fields without counting a round trip.
-
-        Args:
-            key (str): The hash key.
-            fields (list): The field names, as strings.
-
-        Returns:
-            list: One value or None per field.
-        """
-        values = []
-        stored_fields = self.hashes.get(key, {})
-        for field in fields:
-            values.append(stored_fields.get(field))
-        return values
-
-    def run_incr(self, key):
-        """Adds one to a string key without counting a round trip.
-
-        Args:
-            key (str): The key.
-
-        Returns:
-            int: The value after the increment.
-        """
-        value = int(self.strings.get(key) or 0) + 1
-        self.strings[key] = str(value)
-        return value
-
-    def run_zrangebylex(self, key, minimum, maximum, start, num):
-        """Reads a lexical range of a sorted set without counting a round trip.
-
-        Args:
-            key (str): The sorted set key.
-            minimum (bytes | str): The lower bound, starting with `[` or `(`.
-            maximum (bytes | str): The upper bound, starting with `[` or `(`.
-            start (int | None): How many matching members to skip.
-            num (int | None): The most members to return.
-
-        Returns:
-            list: The matching members, as strings.
-        """
-        minimum_bytes = self.as_bytes(minimum)
-        maximum_bytes = self.as_bytes(maximum)
-        members = sorted(self.sorted_sets.get(key, []), key=self.as_bytes)
-        matching = []
-        for member in members:
-            member_bytes = self.as_bytes(member)
-            if not self.above_lower_bound(member_bytes, minimum_bytes):
-                continue
-            if not self.below_upper_bound(member_bytes, maximum_bytes):
-                continue
-            matching.append(member)
-        if start is not None:
-            matching = matching[start:]
-        if num is not None:
-            matching = matching[:num]
-        return matching
-
-    def as_bytes(self, value):
-        """Turns a member or bound into bytes for comparison.
-
-        Args:
-            value (bytes | str): The value.
-
-        Returns:
-            bytes: The value as UTF-8 bytes.
-        """
-        if isinstance(value, bytes):
-            return value
-        return value.encode('utf-8')
-
-    def above_lower_bound(self, member_bytes, bound_bytes):
-        """Whether a member lies at or above a lexical lower bound.
-
-        Args:
-            member_bytes (bytes): The member.
-            bound_bytes (bytes): The bound, starting with `[` or `(`, or `-` for no bound.
-
-        Returns:
-            bool: True when the member is inside the bound.
-        """
-        if bound_bytes == b'-':
-            return True
-        if bound_bytes.startswith(b'['):
-            return member_bytes >= bound_bytes[1:]
-        return member_bytes > bound_bytes[1:]
-
-    def below_upper_bound(self, member_bytes, bound_bytes):
-        """Whether a member lies at or below a lexical upper bound.
-
-        Args:
-            member_bytes (bytes): The member.
-            bound_bytes (bytes): The bound, starting with `[` or `(`, or `+` for no bound.
-
-        Returns:
-            bool: True when the member is inside the bound.
-        """
-        if bound_bytes == b'+':
-            return True
-        if bound_bytes.startswith(b'['):
-            return member_bytes <= bound_bytes[1:]
-        return member_bytes < bound_bytes[1:]
-
-
-class FakePipeline:
-    """A queue of commands sent to a `FakeRedis` in one round trip.
-
-    Attributes:
-        fake_redis (FakeRedis): The stand-in the commands run against.
-        commands (list): Queued `(command name, arguments)` tuples.
-    """
-
-    def __init__(self, fake_redis):
-        """Builds an empty pipeline.
-
-        Args:
-            fake_redis (FakeRedis): The stand-in the commands run against.
-
-        Returns:
-            None: This method returns nothing.
-        """
-        self.fake_redis = fake_redis
-        self.commands = []
-
-    def get(self, key):
-        """Queues a string read.
-
-        Args:
-            key (str): The key.
-
-        Returns:
-            FakePipeline: This pipeline.
-        """
-        self.commands.append((
-            'get',
-            [
-                key,
-            ],
-        ))
-        return self
-
-    def hget(self, key, field):
-        """Queues a hash field read.
-
-        Args:
-            key (str): The hash key.
-            field (str): The field.
-
-        Returns:
-            FakePipeline: This pipeline.
-        """
-        self.commands.append((
-            'hget',
-            [
-                key,
-                field,
-            ],
-        ))
-        return self
-
-    def hmget(self, key, fields):
-        """Queues a read of several hash fields.
-
-        Args:
-            key (str): The hash key.
-            fields (list): The field names, as strings.
-
-        Returns:
-            FakePipeline: This pipeline.
-        """
-        self.commands.append((
-            'hmget',
-            [
-                key,
-                list(fields),
-            ],
-        ))
-        return self
-
-    def incr(self, key):
-        """Queues an increment.
-
-        Args:
-            key (str): The key.
-
-        Returns:
-            FakePipeline: This pipeline.
-        """
-        self.commands.append((
-            'incr',
-            [
-                key,
-            ],
-        ))
-        return self
-
-    def execute(self):
-        """Runs every queued command in one round trip.
-
-        Returns:
-            list: One reply per queued command, in order.
-
-        Raises:
-            redis.RedisError: When this round trip is set to fail.
-            ValueError: When a queued command is not one the stand-in knows.
-        """
-        self.fake_redis.start_round_trip()
-        replies = []
-        for command_name, arguments in self.commands:
-            if command_name == 'get':
-                replies.append(self.fake_redis.run_get(*arguments))
-            elif command_name == 'hget':
-                replies.append(self.fake_redis.run_hget(*arguments))
-            elif command_name == 'hmget':
-                replies.append(self.fake_redis.run_hmget(*arguments))
-            elif command_name == 'incr':
-                replies.append(self.fake_redis.run_incr(*arguments))
-            else:
-                raise ValueError(f'unsupported stand-in command: {command_name!r}')
-        self.commands = []
-        return replies
 
 
 class FakeResponse:
@@ -630,9 +221,9 @@ class OrderRoutesState:
         """Builds a fresh stand-in holding the starting contents.
 
         Returns:
-            FakeRedis: The stand-in.
+            redis_stand_ins.FakeRedis: The stand-in.
         """
-        fake_redis = FakeRedis()
+        fake_redis = redis_stand_ins.FakeRedis()
         fake_redis.strings['unified:catalogue:current_date'] = MAPPING_DATE
         fake_redis.strings['unified:catalogue:warm_identifier'] = 'warm-one'
         fake_redis.strings['unified:orders:round_robin'] = '0'
@@ -647,7 +238,7 @@ class OrderRoutesState:
         """Adds the morning's contract size decisions for the currency and commodity instruments.
 
         Args:
-            fake_redis (FakeRedis): The stand-in to fill.
+            fake_redis (redis_stand_ins.FakeRedis): The stand-in to fill.
 
         Returns:
             None: This method returns nothing.
@@ -771,7 +362,7 @@ class OrderRoutesState:
         The token entries are kept as the warm keeps them: one `tokens:<broker>` hash per broker, whose fields are broker tokens and whose values are the comma-joined ids of every instrument that token names, in the order the instruments were added.
 
         Args:
-            fake_redis (FakeRedis): The stand-in to fill.
+            fake_redis (redis_stand_ins.FakeRedis): The stand-in to fill.
             name (str): The instrument's key in `INSTRUMENT_IDENTIFIERS`.
             identity (dict): The identity fields other than `instrument_id` and `mapping_date`.
             handles (dict | str): Broker names to order handles, or raw text to store as it is.
@@ -902,7 +493,7 @@ class OrderRoutesState:
         """Adds every instrument the scenarios use.
 
         Args:
-            fake_redis (FakeRedis): The stand-in to fill.
+            fake_redis (redis_stand_ins.FakeRedis): The stand-in to fill.
 
         Returns:
             None: This method returns nothing.
@@ -1146,7 +737,7 @@ class OrderRoutesState:
         """Adds the order book entries the cancel scenarios look up.
 
         Args:
-            fake_redis (FakeRedis): The stand-in to fill.
+            fake_redis (redis_stand_ins.FakeRedis): The stand-in to fill.
 
         Returns:
             None: This method returns nothing.
@@ -3805,8 +3396,9 @@ class OrderRoutesSuite:
     """Runs every scenario against the order blueprint, then records or compares the results.
 
     Attributes:
-        fake_redis (FakeRedis): The stand-in the blueprint under test reads.
+        fake_redis (redis_stand_ins.InlineEngineRedis): The stand-in the blueprint under test and the order engine behind it read.
         network (FakeBrokerNetwork): The stubbed broker network.
+        counting_uuid (engine_stand_ins.CountingUuid): The stand-in for `uuid.uuid4`, reset before each scenario.
     """
 
     def __init__(self):
@@ -3815,14 +3407,15 @@ class OrderRoutesSuite:
         Returns:
             None: This method returns nothing.
         """
-        self.fake_redis = FakeRedis()
+        self.fake_redis = redis_stand_ins.FakeRedis()
         self.network = FakeBrokerNetwork()
+        self.counting_uuid = engine_stand_ins.CountingUuid()
 
     def fake_cache(self):
         """Hands the blueprint the stand-in instead of a Redis client.
 
         Returns:
-            FakeRedis: The current stand-in.
+            redis_stand_ins.FakeRedis: The current stand-in.
         """
         return self.fake_redis
 
@@ -3880,6 +3473,9 @@ class OrderRoutesSuite:
             flask.testing.FlaskClient: The client.
         """
         application = flask.Flask('order_routes_suite')
+        api_configuration['order_warm_brokers'] = [
+            '',
+        ]
         blueprint = orders_blueprint.OrdersBlueprint()
         application.register_blueprint(
             blueprint.blueprint,
@@ -3972,6 +3568,22 @@ class OrderRoutesSuite:
             'redis_round_trips': self.fake_redis.round_trips,
         }
 
+    def build_state(self):
+        """Builds a stand-in holding the starting contents, with the order engine's lock taken so the place route hands orders over.
+
+        The order engine itself runs inside the stand-in whenever the route waits for an answer.
+
+        Returns:
+            redis_stand_ins.InlineEngineRedis: The stand-in.
+        """
+        starting_state = OrderRoutesState().build()
+        fake_redis = redis_stand_ins.InlineEngineRedis()
+        fake_redis.strings = starting_state.strings
+        fake_redis.hashes = starting_state.hashes
+        fake_redis.sorted_sets = starting_state.sorted_sets
+        fake_redis.strings[ENGINE_LOCK_KEY] = 'engine-process'
+        return fake_redis
+
     def run_scenario(self, scenario):
         """Runs one scenario from fresh Redis contents and a fresh blueprint.
 
@@ -3981,8 +3593,19 @@ class OrderRoutesSuite:
         Returns:
             dict: The scenario's recorded result.
         """
-        self.fake_redis = OrderRoutesState().build()
-        api_configuration['order_placement'] = 'direct'
+        self.fake_redis = self.build_state()
+        for broker_name in scenario.get('full_rate_windows', []):
+            filled_at = int(time.monotonic() * 1000000)
+            self.fake_redis.rate_windows[f'unified:orders:rate:{broker_name}'] = [
+                filled_at,
+            ] * 10
+        api_configuration['order_rate_per_second'] = 0
+        api_configuration['order_rate_per_broker_per_second'] = 10
+        api_configuration['order_rate_wait_seconds'] = scenario.get(
+            'rate_wait_seconds',
+            1,
+        )
+        self.counting_uuid.reset()
         api_configuration['order_broker_selector'] = scenario.get(
             'selector',
             'round_robin',
@@ -3993,6 +3616,7 @@ class OrderRoutesSuite:
                 '',
             ]
         api_configuration['order_broker_priority'] = priority
+        api_configuration['order_hold_limits'] = scenario.get('hold_limits', False)
         if scenario.get('expect_construction_error'):
             try:
                 self.build_client()
@@ -4008,6 +3632,9 @@ class OrderRoutesSuite:
         if scenario.get('open_markets'):
             return self.run_with_open_markets(scenario)
         client = self.build_client()
+        self.fake_redis.inline_engine = engine_stand_ins.InlineEngine(
+            self.fake_redis,
+        )
         if 'steps' not in scenario:
             result = self.send(client, scenario)
             result['name'] = scenario['name']
@@ -4073,11 +3700,11 @@ class OrderRoutesSuite:
         original_excluded = api_configuration['order_excluded_brokers']
         original_selector = api_configuration['order_broker_selector']
         original_priority = api_configuration['order_broker_priority']
-        original_placement = api_configuration['order_placement']
+        original_hold_limits = api_configuration['order_hold_limits']
         blueprint_base.get_cache = self.fake_cache
         blueprint_base.get_mongo_db = self.fake_mongo_database
         requests.Session.request = self.network.request
-        uuid.uuid4 = self.fixed_uuid
+        uuid.uuid4 = self.counting_uuid
         try:
             results = []
             for scenario in OrderRoutesScenarios().build():
@@ -4090,7 +3717,7 @@ class OrderRoutesSuite:
             api_configuration['order_excluded_brokers'] = original_excluded
             api_configuration['order_broker_selector'] = original_selector
             api_configuration['order_broker_priority'] = original_priority
-            api_configuration['order_placement'] = original_placement
+            api_configuration['order_hold_limits'] = original_hold_limits
         return results
 
     def encode(self, result):

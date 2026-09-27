@@ -21,3 +21,7 @@ Both of its prices are required together, for the same reason `ExitLegs` require
 ## Why the cancel comes before the exit
 
 The same rule the kill switch follows. A resting stop left alone while the exit fills can trigger afterwards, and then it is not closing a position any more — it is opening a brand new one in the opposite direction, unattended, with nothing left watching it.
+
+## Why the armed answer reports the backstop
+
+`arm` placed a real stop-limit order at a broker, but `PriceTrigger.run` answered `202 armed` with `order_id: None` whatever `arm` did. In the live test of 2026-09-27 a hidden stop and a candle-close stop left backstops at Kotak and Shoonya that no answer mentioned; they were found only when their parents were cancelled. `arm` now returns a summary of the order it placed, and the armed answer carries it as `backstop`. The base `arm` returns None, so every other trigger's answer is unchanged.

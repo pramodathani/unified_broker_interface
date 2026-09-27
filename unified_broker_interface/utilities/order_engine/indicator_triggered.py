@@ -33,6 +33,7 @@ class IndicatorTriggered(PriceTrigger):
 
     SYNTHETIC_TYPE = 'indicator_triggered'
     ARMED_MESSAGE = 'the watched field crosses the level'
+    TAKES_TRIGGER_ON = False
 
     def read_field(self):
         """Which field of the quote this order watches.

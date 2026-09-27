@@ -21,3 +21,21 @@ The reason is that one bad order must not stop every order behind it. An instrum
 ## Why the counters are on the object rather than logged per order
 
 `placed`, `refused` and `expired` are read at shutdown and by the offline recording. Logging a line per order would be the obvious alternative, and was avoided because the log is already the place a person looks for something that went wrong; a healthy engine placing a few hundred orders a day should be quiet, so that the lines that do appear are all worth reading.
+
+## Why a repeated intent is checked before the deadline
+
+`answer` looks for a parent the intent already started before it asks whether the intent is past its deadline. The order matters. An intent that was placed, and then read again after a restart long enough for it to go stale, would otherwise be answered "not placed", which is false and would invite the caller to place it again. Answering 409 with the parent's id tells the truth either way: the order exists, and the parent says what became of it.
+
+The check costs one `HGET` per intent, about a tenth of a millisecond, which shows in the recordings as one extra Redis round trip for every intent a scenario writes.
+
+## Why the main thread keeps the old path when there is no router
+
+`OrderEngine` still does everything on its own thread when it is built without a `ParentRouter`, which is how every recorded scenario in `test_runs/order_engine.py` runs. That kept all 159 recordings unchanged through the change to lanes, and the lane comparison check then runs every intent scenario a second time through a router with one worker and requires the replies, requests and events to be identical. The two paths share every method that decides anything; the router only changes which thread calls them.
+
+## What lanes cost in Redis
+
+With lanes, intake reads the credentials and the instrument to choose the broker, and checks whether the intent already started a parent before handing it over. The worker checks again, because an intent can go stale while it waits in a worker's inbox. The comparison check records how much this adds: most intents take two more round trips, about a fifth of a millisecond, against a broker call of tens to hundreds.
+
+## Why the day roll waits for idle workers
+
+The day roll replaces the parent caches with what the event log says. A worker changing a parent while that happens would have its change overwritten, so the roll waits up to 30 seconds for every worker to be idle and tries again on a later pass if they are not. Only the main thread hands out work, so nothing new starts while it waits.

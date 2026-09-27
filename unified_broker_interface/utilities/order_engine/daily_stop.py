@@ -9,6 +9,9 @@ from unified_broker_interface.utilities.broker_orders.utilities.refused_request 
 )
 from unified_broker_interface.utilities.order_engine.base import SyntheticOrder
 from unified_broker_interface.utilities.order_engine.utilities import moments
+from unified_broker_interface.utilities.order_engine.utilities.trading_days import (
+    TradingDays,
+)
 
 DEFAULT_ARM_AT = '09:20'
 DEFAULT_BUFFER_TICKS = 2
@@ -146,12 +149,17 @@ class DailyStop(SyntheticOrder):
             return self.placement.dry_run_answer(prepared, started_at)
 
         self.remember_tick_size(order)
-        self.record_received()
+        now = time.time()
+        segment = self.trading_segment()
+        first_day = self.first_arming_day(now, segment)
         self.parent.parameters = dict(self.parent.parameters)
-        self.parent.parameters['expires_at'] = (
-            time.time() + days * SECONDS_IN_A_DAY
-        )
+        self.parent.parameters['segment'] = segment
+        self.parent.parameters['expires_at'] = now + days * SECONDS_IN_A_DAY
         self.parent.parameters['armed_on'] = None
+        today = self.today_in_india(now)
+        if first_day.isoformat() != today:
+            self.parent.parameters['armed_on'] = today
+        self.record_received()
         self.save()
         return {
             'broker': None,
@@ -163,12 +171,52 @@ class DailyStop(SyntheticOrder):
             'arm_at': self.arm_at(),
             'stop_price': str(trigger),
             'valid_days': days,
+            'first_arm_on': first_day.isoformat(),
             'status_message': (
                 f'a stop at {trigger} will be placed at {self.arm_at()} every '
-                f'morning for the next {days} days'
+                f'trading morning from {first_day.isoformat()}, for the next '
+                f'{days} days'
             ),
             'skipped': [],
         }, 202
+
+    def arm_time(self, when):
+        """Today's arming moment, on the day of a given moment.
+
+        Args:
+            when (datetime.datetime): A moment in India.
+
+        Returns:
+            datetime.datetime | None: The moment the stop is armed that day, or None when `arm_at` cannot be read.
+        """
+        hours, _, minutes = self.arm_at().partition(':')
+        try:
+            return when.replace(
+                hour=int(hours),
+                minute=int(minutes),
+                second=0,
+                microsecond=0,
+            )
+        except ValueError:
+            return None
+
+    def first_arming_day(self, now, segment):
+        """The first day the stop will be placed: today when it trades and its arming time has not passed, otherwise the next trading day.
+
+        Args:
+            now (float): The Unix time.
+            segment (str): The instrument's exchange-prefixed segment.
+
+        Returns:
+            datetime.date: The day.
+        """
+        when = datetime.datetime.fromtimestamp(now, moments.INDIA)
+        trading_days = TradingDays()
+        arm_time = self.arm_time(when)
+        if trading_days.is_trading_day(segment, when.date()):
+            if arm_time is not None and when < arm_time:
+                return when.date()
+        return trading_days.next_trading_day(segment, when.date())
 
     def today_in_india(self, now):
         """Which date a moment falls on, in the exchange's own timezone.
@@ -191,22 +239,18 @@ class DailyStop(SyntheticOrder):
             now (float): The Unix time of the tick.
 
         Returns:
-            bool: True when the stop should be placed now.
+            bool: True when the stop should be placed now, which is never on a day the instrument does not trade.
         """
         if self.parent.parameters.get('armed_on') == self.today_in_india(now):
             return False
         when = datetime.datetime.fromtimestamp(now, moments.INDIA)
-        hours, _, minutes = self.arm_at().partition(':')
-        try:
-            arm_at = when.replace(
-                hour=int(hours),
-                minute=int(minutes),
-                second=0,
-                microsecond=0,
-            )
-        except ValueError:
+        segment = self.parent.parameters.get('segment')
+        if segment and not TradingDays().is_trading_day(segment, when.date()):
             return False
-        return when >= arm_at
+        arm_time = self.arm_time(when)
+        if arm_time is None:
+            return False
+        return when >= arm_time
 
     def on_clock_tick(self, now):
         """Arms today's stop, or exits the position if the market has already gone past it.

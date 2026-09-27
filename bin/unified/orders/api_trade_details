@@ -68,6 +68,8 @@ DELAY_SECONDS = 0.5
 STALE_SECONDS = 60
 
 BROKER_TOKENS_KEY = "unified:broker_tokens"
+ENGINE_CHILDREN_KEY = "unified:orders:children"
+ENGINE_PARENTS_KEY = "unified:orders:parents"
 INSTRUMENT_SYMBOLS_KEY = "unified:instrument_symbols"
 INSTRUMENTS_KEY = "unified:instruments"
 META_KEY = "unified:mapping:meta"
@@ -412,12 +414,73 @@ class Resolver:
                                "underlying_symbol": instrument[position["underlying_symbol"]]})
         return identities
 
-def trades_document(cache, resolver, now):
+class EngineLinks:
+    """
+    The order engine's parent, leg role, order type and intent for each trade of an order the engine placed, joined from its caches.
+
+    The engine keeps `unified:orders:children`, each `broker:order_id` to its parent, and `unified:orders:parents`, each
+    parent's record. A trade of an order the engine did not place gets None in all four fields, so every row carries them.
+    """
+
+    def __init__(self, cache):
+        """
+        Builds the joiner.
+
+        - `cache` is the Redis client.
+        """
+        self.cache = cache
+
+    def add(self, rows):
+        """
+        Adds `engine_parent_id`, `leg_role`, `synthetic_type` and `intent_id` to each row, in two round trips at most.
+
+        - `rows` is the list of trade rows, changed in place.
+        """
+        keys = []
+        for row in rows:
+            keys.append(f"{row['broker']}:{row['order_id']}")
+        parent_ids = []
+        if keys:
+            parent_ids = self.cache.hmget(ENGINE_CHILDREN_KEY, keys)
+        distinct_ids = sorted({parent_id for parent_id in parent_ids if parent_id})
+        documents = {}
+        if distinct_ids:
+            for parent_id, text in zip(distinct_ids, self.cache.hmget(ENGINE_PARENTS_KEY, distinct_ids)):
+                try:
+                    document = json.loads(text) if text else None
+                except ValueError:
+                    document = None
+                if isinstance(document, dict):
+                    documents[parent_id] = document
+        for position, row in enumerate(rows):
+            parent_id = parent_ids[position] if position < len(parent_ids) else None
+            document = documents.get(parent_id) or {}
+            row["engine_parent_id"] = parent_id
+            row["synthetic_type"] = document.get("synthetic_type")
+            row["intent_id"] = document.get("intent_id")
+            row["leg_role"] = self.leg_role(document, row)
+
+    def leg_role(self, document, row):
+        """
+        The role of the parent's leg this trade filled, such as `entry` or `stop`, or None.
+
+        - `document` is the parent's record, or an empty dict.
+        - `row` is the trade row.
+        """
+        for leg in document.get("legs") or []:
+            if not isinstance(leg, dict):
+                continue
+            if leg.get("broker") == row["broker"] and str(leg.get("broker_order_id")) == str(row["order_id"]):
+                return leg.get("role")
+        return None
+
+def trades_document(cache, resolver, links, now):
     """
     Every broker's stored trades as one document in the REST API's shape.
 
     - `cache` is the Redis client.
     - `resolver` is the Resolver.
+    - `links` is the EngineLinks, which adds the order engine's parent to each trade of an order it placed.
     - `now` is the current local time, for staleness and `as_of`.
     """
     rows, statuses = [], []
@@ -443,6 +506,7 @@ def trades_document(cache, resolver, now):
         rows.extend(NORMALIZERS[broker](row) for row in broker_rows)
 
     resolver.resolve(rows)
+    links.add(rows)
     # Each broker writes its timestamps its own way, so they only sort within a broker.
     rows.sort(key=lambda row: (row["broker"], str(row["trade_timestamp"] or row["exchange_timestamp"] or ""),
                                row["trade_id"] or ""))
@@ -465,6 +529,7 @@ def main():
     report = PollReporter(logger)
     cache = get_cache()
     resolver = Resolver(cache)
+    links = EngineLinks(cache)
     stop = threading.Event()
 
     def _handle_signal(signal_number, frame):
@@ -476,7 +541,7 @@ def main():
 
     while not stop.is_set():
         try:
-            document = trades_document(cache, resolver, datetime.now())
+            document = trades_document(cache, resolver, links, datetime.now())
             cache.set(REDIS_KEY, json.dumps(document))
             not_ok = [f"{status['broker']} {status['status']}" for status in document["brokers"] if status["status"] != "ok"]
             report.info(f"Wrote {document['summary']['count']} trade(s) to {REDIS_KEY}"

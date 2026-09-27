@@ -25,3 +25,13 @@ A broker's websocket repeats an order's state freely, and a poller re-reads the 
 ## Why a failed update is acknowledged rather than retried
 
 An update that cannot be applied is logged and acknowledged. Redelivering it would block every update behind it, and the cost of losing one is bounded: the broker's own order book is read at the next start, and it is the authority anyway. Accuracy until then, rather than correctness, is what is at stake.
+
+## Why an update for an unknown order is held rather than dropped
+
+An update used to be dropped the moment `unified:orders:children` named no parent for it. In a single-threaded engine that was safe: the engine saved a leg's broker order id before it read the next entry from either stream, so no update could arrive for a leg it had placed but not yet recorded.
+
+Broker lanes break that ordering. A worker thread sends an order and waits for the answer while the main loop keeps reading the order-update stream, so a fast fill can be read before the worker has saved the order id. Dropping it would lose the fill for good, and a bracket whose entry fill was lost never places its stop.
+
+So an unknown update is held in `EarlyUpdates` for up to 30 seconds. After every batch the engine looks up all held orders with one `HMGET` and applies the ones that are now known, in the order they arrived, so a partial fill held before a full one is applied first. Thirty seconds is far longer than any broker call, whose timeout is 10 seconds, and an update still unknown after that belongs to an order placed somewhere else. The area holds at most 10,000 updates, dropping the oldest, so a flood of updates for orders placed from a broker's own app cannot grow it without bound. The lookup is skipped entirely when nothing is held.
+
+This was fixed on the single-threaded engine before the lanes were built, so the two recorded checks show it working on its own.

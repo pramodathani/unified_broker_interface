@@ -24,6 +24,20 @@ class ScaleOut(Bracket):
 
     SYNTHETIC_TYPE = 'scale_out'
 
+    def on_leg_modified(self, leg, before):
+        """Leaves the other exits as they are after the caller changes one.
+
+        A scale-out's targets share the position between them and its stop covers all of it, so no one quantity follows from another the way a bracket's pair does. The caller's change stands on its own, and an exit can still only be reduced.
+
+        Args:
+            leg (OrderLeg): The exit the caller changed.
+            before (dict): What the leg held before.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        del leg, before
+
     def target_prices(self):
         """The prices the targets rest at, cheapest first for a long.
 

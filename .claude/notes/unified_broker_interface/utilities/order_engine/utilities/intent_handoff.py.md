@@ -39,3 +39,17 @@ What remains duplicated is about sixty-eight lines of pipeline sequencing, which
 The engine still reads the instrument's own catalogue entry, because it needs the order handles and the contract size at the moment it places each leg, and a bracket's stop may be placed minutes after its entry.
 
 The cost is one extra Redis round trip in engine mode for an order that names identity fields rather than an id, which the recording shows as four round trips against three. That round trip is one the route already makes in direct mode, so nothing new was added; it simply now happens before the handoff rather than after it.
+
+## Why a list shares one reply key
+
+`place_many` writes every intent of a list in one pipeline and gives them all one reply list, `unified:orders:intents:reply:<request_id>`, with each answer naming its `request_index`. One key lets the API worker wait with a single `BLPOP` at a time for whichever order the engine's lanes finish next, rather than polling one key per order in turn, which would wait on the slowest broker's order before seeing the fast ones.
+
+A single order keeps its own `unified:orders:intents:result:<intent_id>` list and its answer carries no `request_index`, so the single form and its recordings did not change.
+
+## Why a failed pipeline answers every order unknown
+
+The intents are written in one pipeline that is not a transaction, so a Redis failure part way through can leave some intents on the stream and not others. Nothing here can tell which, and the engine may place the ones that got through, so every order of the list is answered as outcome `unknown` with its `intent_id` rather than refused.
+
+## Why every answer is stored under its intent id
+
+A list can take longer than any one HTTP request should wait, and the wait is capped below gunicorn's worker timeout, so some orders may be answered only after the caller has been told `unknown`. The engine stores every answer at `unified:orders:intents:answer:<intent_id>`, with `SET NX` so a later 409 for a repeated intent never replaces the first answer, and `GET /api/orders/intents/<intent_id>` reads it back. It costs no extra round trip, since the write rides in the pipeline that pushes the reply.

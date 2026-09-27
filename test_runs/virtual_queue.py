@@ -382,6 +382,7 @@ class VirtualQueueSuite:
         self.the_book_follows_only_held_virtual_limits()
         self.the_book_moves_estimates_on_their_own_instrument()
         self.the_book_forgets_a_parent_that_has_closed()
+        self.the_book_starts_again_when_a_held_order_is_changed()
 
         total = self.passed + len(self.failed)
         print(f'{self.passed}/{total} checks passed.')
@@ -861,6 +862,35 @@ class VirtualQueueSuite:
         self.check('the closed parent\'s estimate is removed', sorted(cache.hashes[ESTIMATES_KEY]), [])
         book.write_changed()
         self.check('the held parent\'s new estimate is written', sorted(cache.hashes[ESTIMATES_KEY]), ['held'])
+
+    def the_book_starts_again_when_a_held_order_is_changed(self):
+        """A held order whose price or quantity was changed through the modify route gets a fresh estimate at its new terms.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        document = self.parent_document('held')
+        book, _ = self.book_with({
+            'held': document,
+        })
+        book.refresh()
+        first = book.estimates['held']
+        first.ahead = 3000
+        book.changed.clear()
+        book.refresh()
+        self.check('unchanged terms keep the estimate', book.estimates['held'] is first, True)
+        document['parameters'] = {
+            'type': 'virtual_limit',
+            'held_price': '97.5',
+            'held_quantity': 800,
+        }
+        book.refresh()
+        fresh = book.estimates['held']
+        self.check('a changed order gets a new estimate', fresh is first, False)
+        self.check('the new estimate is at the new price', fresh.price == decimal.Decimal('97.5'), True)
+        self.check('and for the new quantity', fresh.quantity, 800)
+        self.check('it has no place in the queue yet', fresh.ahead, None)
+        self.check('it is written on the next pass', sorted(book.changed), ['held'])
 
 
 if __name__ == '__main__':

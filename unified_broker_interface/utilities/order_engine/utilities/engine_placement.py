@@ -1,6 +1,9 @@
 """Placing one intent's order: the Redis reads the engine makes, and the answer it sends back."""
 
+import decimal
 import json
+import threading
+import time
 
 import redis
 
@@ -29,10 +32,31 @@ from unified_broker_interface.utilities.broker_orders.utilities.stored_order imp
     StoredOrder,
 )
 from unified_broker_interface.utilities.instrument_cache import InstrumentCache
+from utilities.configurations import api_configuration
 
 QUOTES_KEY = 'unified:quotes:live'
 POSITIONS_KEY = 'unified:portfolio:positions'
 ATTRIBUTES_SUFFIX = 'additional_attributes'
+STORED_ORDER_WAIT_SECONDS = 3.0
+STORED_ORDER_CHECK_SECONDS = 0.1
+
+
+class BrokerAssignment(threading.local):
+    """The broker the engine's intake chose for the parent a worker thread is running, held separately for each thread.
+
+    Attributes:
+        broker_name (str | None): The broker, or None when the thread is running nothing that was assigned one.
+        skipped (list): The brokers intake passed over on the way, each a dictionary with `broker` and `reason`.
+    """
+
+    def __init__(self):
+        """Builds an empty assignment for one thread.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.broker_name = None
+        self.skipped = []
 
 
 class EnginePlacement:
@@ -46,11 +70,13 @@ class EnginePlacement:
         cache (redis.Redis): The Redis client.
         order_placement (OrderPlacement): The half of placement that reads no store.
         instrument_cache (InstrumentCache): The engine's copy of the catalogue entries it has read under the current warm.
+        assignment (BrokerAssignment): The broker intake chose for the parent each worker thread is running now.
         logger (logging.Logger): The logger for failures that do not change an answer.
+        stored_order_wait_seconds (float): How long a cancel or change waits for a just-placed order to reach the broker's order book in Redis.
     """
 
     def __init__(self, cache, logger):
-        """Builds the placement, with one order class and one connection pool per broker.
+        """Builds the placement, with one order class and one connection pool per broker, each pool keeping one connection for every worker a broker's lane can grow to, plus one for the warmer's ping.
 
         Args:
             cache (redis.Redis): The Redis client.
@@ -64,8 +90,13 @@ class EnginePlacement:
         """
         self.cache = cache
         self.logger = logger
-        self.order_placement = OrderPlacement(logger)
+        self.order_placement = OrderPlacement(
+            logger,
+            api_configuration['order_maximum_workers_per_broker'] + 1,
+        )
         self.instrument_cache = InstrumentCache()
+        self.assignment = BrokerAssignment()
+        self.stored_order_wait_seconds = STORED_ORDER_WAIT_SECONDS
 
     def start_connection_warmers(self):
         """Starts the connection warmers configuration names, so an order does not pay for a new handshake.
@@ -217,30 +248,37 @@ class EnginePlacement:
         Returns:
             StoredOrder: The stored order.
 
+        An order placed moments ago reaches the book only with the broker's next order update or poll, so a missing order is looked for again every tenth of a second for up to `stored_order_wait_seconds`. In the live retest of 2026-09-27 a cancel sent within a second of the placement found nothing and was reported as unknown.
+
         Raises:
-            RefusedRequestError: With HTTP 503 when Redis cannot be read, and 404 when the broker's order book does not hold the order yet.
+            RefusedRequestError: With HTTP 503 when Redis cannot be read, and 404 when the broker's order book still does not hold the order after the wait.
         """
-        try:
-            stored = self.cache.hget(
-                f'{broker_name}:orders:orders',
-                str(broker_order_id),
-            )
-        except redis.RedisError as error:
-            raise RefusedRequestError.refusal(
-                f'Redis could not be read: {error}',
-                503,
-                broker=broker_name,
-            )
-        entry = self.decode(stored)
-        if entry is None:
-            raise RefusedRequestError.refusal(
-                f"{broker_name}'s order book does not hold {broker_order_id} "
-                'yet, so it cannot be changed',
-                404,
-                broker=broker_name,
-                order_id=str(broker_order_id),
-            )
-        return StoredOrder(entry)
+        deadline = time.monotonic() + self.stored_order_wait_seconds
+        while True:
+            try:
+                stored = self.cache.hget(
+                    f'{broker_name}:orders:orders',
+                    str(broker_order_id),
+                )
+            except redis.RedisError as error:
+                raise RefusedRequestError.refusal(
+                    f'Redis could not be read: {error}',
+                    503,
+                    broker=broker_name,
+                )
+            entry = self.decode(stored)
+            if entry is not None:
+                return StoredOrder(entry)
+            if time.monotonic() >= deadline:
+                raise RefusedRequestError.refusal(
+                    f"{broker_name}'s order book still does not hold "
+                    f'{broker_order_id} after {self.stored_order_wait_seconds:g} '
+                    'seconds, so it cannot be changed yet',
+                    404,
+                    broker=broker_name,
+                    order_id=str(broker_order_id),
+                )
+            time.sleep(STORED_ORDER_CHECK_SECONDS)
 
     def cancel(self, broker_name, broker_order_id):
         """Cancels one order at a broker.
@@ -355,6 +393,44 @@ class EnginePlacement:
         )
         return broker_orders.send_modify(broker_request)
 
+    def broker_quantity(self, broker_name, instrument_id, units):
+        """A quantity in units, converted into one broker's own terms for an instrument.
+
+        A securities quantity is unchanged. A currency or commodity quantity is converted as a placement converts it, by the instrument's trusted contract size and the broker's `QUANTITY_UNITS` entry for the market.
+
+        Args:
+            broker_name (str): The broker.
+            instrument_id (str): The instrument.
+            units (int): The quantity in units.
+
+        Returns:
+            int: The quantity the broker's request carries.
+
+        Raises:
+            RefusedRequestError: With HTTP 503 when the instrument cannot be read or its contract size is not trusted today, and 400 when the quantity is not a whole number of lots.
+        """
+        instrument, _, _ = self.market_context(instrument_id, False, False)
+        broker_orders = self.order_placement.broker_orders[broker_name]
+        handle = instrument.handles.get(broker_name)
+        if instrument.is_securities_market():
+            return broker_orders.broker_quantity(units, instrument, handle)
+        units_per_lot = instrument.trusted_units_per_lot()
+        if units_per_lot is None:
+            raise RefusedRequestError.refusal(
+                f'the contract size of this {instrument.segment} instrument is '
+                'not trusted today, so its quantity cannot be converted',
+                503,
+                instrument_id=instrument_id,
+            )
+        if decimal.Decimal(units) % units_per_lot != 0:
+            raise RefusedRequestError.refusal(
+                f'{units} is not a whole number of lots of '
+                f'{format(units_per_lot.normalize(), "f")}',
+                400,
+                instrument_id=instrument_id,
+            )
+        return broker_orders.broker_quantity(units, instrument, handle)
+
     def broker_attributes(self, instrument_id):
         """Every broker's extra fields for one instrument, such as the exchange freeze quantity.
 
@@ -426,6 +502,13 @@ class EnginePlacement:
                 503,
             )
 
+        uses_assignment = (
+            broker_name is None
+            and self.assignment.broker_name is not None
+        )
+        if uses_assignment:
+            broker_name = self.assignment.broker_name
+
         rotation = self.order_placement.rotation()
         mapping_date_text, warm_identifier, login_texts, settings_texts = (
             self.read_credentials()
@@ -441,8 +524,31 @@ class EnginePlacement:
             instrument_id,
             mapping_date_text,
             warm_identifier,
+            not uses_assignment,
         )
-        return self.order_placement.prepare(
+        if uses_assignment:
+            reason = self.order_placement.named_broker_skip_reason(
+                order,
+                instrument,
+                broker_name,
+                login_texts,
+                settings_texts,
+            )
+            if reason is not None:
+                self.logger.info(
+                    f'{broker_name}, which intake chose, cannot take this leg '
+                    f'({reason}), so the broker selector chooses again.'
+                )
+                uses_assignment = False
+                broker_name = None
+                instrument, selector_replies = self.read_instrument(
+                    order,
+                    instrument_id,
+                    mapping_date_text,
+                    warm_identifier,
+                    True,
+                )
+        prepared = self.order_placement.prepare(
             order,
             instrument,
             rotation,
@@ -451,6 +557,72 @@ class EnginePlacement:
             settings_texts,
             broker_name,
         )
+        if uses_assignment:
+            prepared.skipped = list(self.assignment.skipped)
+        elif broker_name is None:
+            try:
+                self.order_placement.broker_selector.record_passed_over(
+                    self.cache,
+                    len(prepared.skipped),
+                )
+            except redis.RedisError as error:
+                self.logger.warning(
+                    f'The broker turn could not be moved past the brokers '
+                    f'passed over: {error}'
+                )
+        return prepared
+
+    def assign_broker(self, intent):
+        """Chooses the broker for a new intent, the way its first leg would, so intake can hand it to that broker's lane.
+
+        The body is read as the route validated it, and the configured selector ranks the brokers and passes over any that cannot take the order, exactly as for a placement. Nothing is sent. A body that names its broker, as flatten's closing orders do, keeps that broker.
+
+        When no broker can be chosen here, because the body carries a reference this cannot work out or no broker can take it, the answer is None and the order type makes the choice itself when it runs, giving the same answer it always has.
+
+        Args:
+            intent (dict): The intent document.
+
+        Returns:
+            tuple: The broker's name (str or None) and the brokers passed over on the way (list).
+        """
+        body = intent.get('body') or {}
+        named_broker = body.get('broker')
+        if named_broker:
+            return named_broker, []
+        try:
+            order = PlaceOrderRequest(body)
+            prepared = self.prepare(order, intent.get('instrument_id'))
+        except (InvalidOrderError, RefusedRequestError):
+            return None, []
+        except Exception:
+            self.logger.exception(
+                f'No broker could be chosen for intent {intent.get("intent_id")} '
+                'at intake, so its order type will choose one.'
+            )
+            return None, []
+        return prepared.broker_name, list(prepared.skipped)
+
+    def use_assignment(self, broker_name, skipped):
+        """Makes this thread's order legs go to the broker intake chose, until `clear_assignment`.
+
+        Args:
+            broker_name (str | None): The broker, or None to let the selector choose.
+            skipped (list): The brokers intake passed over, reported in the first leg's answer.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.assignment.broker_name = broker_name
+        self.assignment.skipped = list(skipped)
+
+    def clear_assignment(self):
+        """Forgets this thread's assignment, so a later leg lets the selector choose again.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.assignment.broker_name = None
+        self.assignment.skipped = []
 
     def send(self, prepared_placement, started_at):
         """Sends a prepared order to its broker and reads the answer.
@@ -526,6 +698,7 @@ class EnginePlacement:
         instrument_id,
         mapping_date_text,
         warm_identifier,
+        with_selector=True,
     ):
         """Reads the instrument's catalogue entry and the broker selector's own commands in one round trip.
 
@@ -536,6 +709,7 @@ class EnginePlacement:
             instrument_id (str): The instrument the intent named.
             mapping_date_text (str): The mapping date as Redis holds it.
             warm_identifier (str | None): The current warm's identifier.
+            with_selector (bool): Whether to queue the selector's commands; False when intake already chose the broker, so a round-robin turn is not taken twice for one order.
 
         Returns:
             tuple: The instrument (Instrument) and the selector's replies (list).
@@ -560,13 +734,15 @@ class EnginePlacement:
                 catalogue_key_prefix + 'contract_sizes',
                 instrument_id,
             )
-        selector_command_count = (
-            self.order_placement.broker_selector.queue_redis_commands(
-                pipeline,
-                order,
-                instrument_id,
+        selector_command_count = 0
+        if with_selector:
+            selector_command_count = (
+                self.order_placement.broker_selector.queue_redis_commands(
+                    pipeline,
+                    order,
+                    instrument_id,
+                )
             )
-        )
         replies = []
         if kept_texts is None or selector_command_count > 0:
             try:

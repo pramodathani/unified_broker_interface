@@ -2,13 +2,30 @@
 
 A synthetic order is an order that no Indian exchange offers, built by the order engine out of ordinary broker orders. You ask for one by adding a `synthetic` object to the body of [`POST /api/orders/place`](orders.md#place-an-order), and the engine places, watches, moves and cancels the real orders it is made of.
 
-This page is the glossary of all 42 types the engine runs. It lists every field each type reads from the `synthetic` object, with the defaults and limits taken from the code.
+This page is the glossary of all 53 types the engine runs. It lists every field each type reads from the `synthetic` object, with the defaults and limits taken from the code.
 
 !!! danger "Synthetic orders place real orders, sometimes long after you asked"
     A synthetic order can place, modify or cancel orders at a broker minutes, hours or even days after your request, with nobody watching. Triggers, trailing stops, grids and schedules all act on their own. Send `"dry_run": true` first, which builds the first broker request without recording or sending anything.
 
-!!! warning "Engine mode only"
-    Synthetic orders run only when `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT=engine` and the order engine daemon is running. See [Order engine](order-engine.md) for how the two placement modes differ and what the direct mode does with a `synthetic` object.
+!!! note "The order engine runs them"
+    Synthetic orders are run by the [order engine](order-engine.md), which places every order the REST API accepts, so it has to be running.
+
+## Changing a synthetic order
+
+A leg of a synthetic order can be changed through [`PUT /api/orders/modify`](orders.md#an-order-the-engine-placed) like any other order, and the order type carries on from the change. The table below says what each kind of type does with it.
+
+| Type | After you change a leg |
+|---|---|
+| `trailing_stop`, `trailing_entry`, `atr_trail` | The trail continues from the trigger you set, whichever way you moved it |
+| `peg` | The peg follows the market at the new distance from its reference |
+| `chaser` | The chase continues from your price after a full step interval |
+| `oco`, `bracket`, `cover` | Reducing one exit reduces the other to match; an exit cannot be raised |
+| `scale_out` | The other exits stay as they were; an exit cannot be raised |
+| `iceberg`, `participation`, `liquidity_seeking` | A changed slice counts against the total, so later slices place the rest |
+| `twap`, `vwap`, `implementation_shortfall` | The difference is carried into the next slice |
+| Every other type | The leg simply keeps your new values |
+
+Only the price, trigger price and quantity of a synthetic order's leg can be changed.
 
 ## How to ask for one
 
@@ -37,14 +54,22 @@ Two fields can appear in any `synthetic` object. The table below lists them.
 
 | Field | Type | Required | Meaning |
 |---|---|:---:|---|
-| `type` | string | Yes | One of the 42 names in the table below. A body with no `synthetic` object, or no `type`, runs as `simple`. An unknown name is refused with `400` and the message `the order engine does not run '<name>' orders; it runs <list>`. |
+| `type` | string | Yes | One of the 53 names in the table below. A body with no `synthetic` object, or no `type`, runs as `simple`. An unknown name is refused with `400` and the message `the order engine does not run '<name>' orders; it runs <list>`. |
 | `closes_position` | boolean | No | `true` says every leg of this order closes a position, so it may use the part of a broker's daily order cap kept for exits. Only the literal `true` counts. |
 
 The engine also writes its own working values into the parent's copy of the `synthetic` object, such as `tick_size`, `triggered_at`, `watermark`, `placed_quantity`, `started_at` and `expires_at`. These are internal, so do not send them.
 
 ## What the first answer looks like
 
-Types that act at once answer with the broker's answer plus a `parent_id`; types that send several orders at once, such as `freeze_slicer` and `ladder`, combine them into one answer with a list of `order_ids`. Types that wait for a price or a time send nothing at first, and answer <span class="status s2">202</span> with an `outcome` of `armed` or `scheduled`. The answer below was recorded by the offline suite `test_runs/order_engine.py` against stubbed brokers, for a `market_if_touched` buy waiting for 995.
+Types that act at once answer with the broker's answer plus a `parent_id`; types that send several orders at once, such as `freeze_slicer` and `ladder`, combine them into one answer with a list of `order_ids`. The combined answer follows one rule for `freeze_slicer`, `ladder`, `grid`, `two_sided_quote`, `basket`, `oco`, `bracket` and `two_sided_breakout`, and each order's own outcome is listed in it:
+
+| The orders' outcomes | `outcome` | HTTP status |
+|---|---|---|
+| All accepted | `accepted` | <span class="status s2">200</span> |
+| Some accepted, some not | `partial` | <span class="status s2">207</span> |
+| None accepted | `unknown` if any is unknown, otherwise `rejected` | The highest of their statuses |
+
+Types that wait for a price or a time send nothing at first, and answer <span class="status s2">202</span> with an `outcome` of `armed` or `scheduled`. The answer below was recorded by the offline suite `test_runs/order_engine.py` against stubbed brokers, for a `market_if_touched` buy waiting for 995.
 
 ```json
 {
@@ -63,7 +88,7 @@ Types that act at once answer with the broker's answer plus a `parent_id`; types
 
 Keep the `parent_id`. It is the only handle on an order that has not reached a broker yet.
 
-## All 42 types
+## All 53 types
 
 The master table below lists every type registered in `SYNTHETIC_ORDER_CLASSES`, in the order the registry holds them. The "First answer" column says whether a broker order goes out when you ask (`200`, the broker's own answer) or whether the engine waits (`202`).
 
@@ -78,7 +103,7 @@ The master table below lists every type registered in `SYNTHETIC_ORDER_CLASSES`,
 | `scale_out` | Linked orders | A bracket with several targets that take the position off in tranches. | `target_prices`, `stop_price`, `stop_limit_price`, `breakeven_after` | 200 |
 | `two_sided_breakout` | Linked orders | Rests a buy stop above a range and a sell stop below it, and cancels the side that did not fire. | `buy_trigger`, `buy_limit`, `sell_trigger`, `sell_limit` | 200 |
 | `scheduled` | Time-based | Holds the order until a time of day, then places it. | `at_time` | 202 |
-| `good_till_time` | Time-based | Places the order now and cancels whatever has not filled at a time of day. | `until_time` | 200 |
+| `good_till_time` | Time-based | Places the order now and, at a time of day, cancels whatever has not filled or makes it marketable. | `until_time`, `at_expiry` | 200 |
 | `time_stop` | Time-based | Places an entry and closes what filled at a time of day or after some minutes. | `until_time` or `minutes` | 200 |
 | `twap` | Execution algorithms | Sends equal slices at even intervals over a period. | `slices`, `over_minutes` | 200 |
 | `peg` | Book-following limits | Keeps a limit order re-priced to the bid, the offer or the midpoint. | `reference`, `offset_ticks`, `cap_price` | 200 |
@@ -88,7 +113,7 @@ The master table below lists every type registered in `SYNTHETIC_ORDER_CLASSES`,
 | `hidden_stop` | Stops and trailing | A stop kept in the engine that watches the bid or offer, with an optional real backstop. | `trigger_price`, `backstop_price`, `backstop_limit_price`, `buffer_ticks` | 202 |
 | `cross_instrument` | Price triggers | A limit-if-touched order whose trigger watches a different instrument. | `watch_instrument_id`, `trigger_price`, `limit_price` | 202 |
 | `indicator_triggered` | Price triggers | Sends a limit when a chosen field of the live quote crosses a level. | `watch_field`, `trigger_price`, `limit_price` | 202 |
-| `trailing_stop` | Stops and trailing | A real stop at the broker whose trigger follows the market up, never down. | `trail_points` or `trail_percent`, `stop_limit_offset`, `step_ticks` | 200 |
+| `trailing_stop` | Stops and trailing | A real stop at the broker whose trigger follows the market up, never down. | `trail_points` or `trail_percent`, `stop_limit_offset`, `step_ticks`, `activate_at` | 200, or 202 with `activate_at` |
 | `trailing_entry` | Stops and trailing | A stop entry that follows a falling market down so the first bounce fills it. | `trail_points` or `trail_percent`, `stop_limit_offset`, `step_ticks` | 200 |
 | `post_only` | Book-following limits | Checks that a limit would rest rather than trade before sending it. | `on_crossing` | 200 |
 | `discretionary` | Book-following limits | Shows one limit price and quietly takes a slightly worse one when it comes within reach. | `discretion_points`, `discretion_quantity` | 200 |
@@ -111,8 +136,19 @@ The master table below lists every type registered in `SYNTHETIC_ORDER_CLASSES`,
 | `gtt` | Price triggers | A limit-if-touched order that keeps waiting across days until it expires. | `trigger_price`, `limit_price`, `valid_days` | 202 |
 | `daily_stop` | Stops and trailing | Places a fresh native stop every morning for a position held overnight. | `stop_price`, `stop_limit_price`, `arm_at`, `valid_days` | 202 |
 | `virtual_limit` | Book-following limits | Holds a limit order in the engine and sends it only when the other side reaches its price. | `paper` | 202 |
+| `opening_auction` | Time-based | Places the order during the pre-open, so it fills at the opening auction's price. | `at_time` | 202 |
+| `closing_price` | Execution algorithms | Slices the order by volume through the half hour the closing price is computed from. | `slices`, `window_start` | 202, or 200 inside the window |
+| `underlying_peg` | Book-following limits | Moves a resting limit by delta times another instrument's move, such as an option bid following the index. | `watch_instrument_id`, `delta`, `lowest_price`, `highest_price`, `step_ticks` | 200 |
+| `volatility` | Book-following limits | Prices an option from an implied volatility with Black-76, and re-prices it as the underlying and time move. | `watch_instrument_id`, `volatility`, `interest_rate` | 200 |
+| `stepped_stop` | Stops and trailing | A native stop moved to set levels at set profits, and switched to trailing at the last. | `entry_price`, `stop_price`, `stop_limit_offset`, `rules` | 200 |
+| `close_on_trigger` | Price triggers | At a level, cancels every order on the instrument to free margin, then closes the whole position. | `trigger_price`, `trigger_direction`, `trigger_on` | 202 |
+| `stop_and_reverse` | Price triggers | At a level, closes the position and opens the same size the other way. | `trigger_price`, `method` | 202 |
+| `attached_hedge` | Linked orders | Hedges each fill in another instrument, by a ratio or by an option's delta, in whole lots. | `hedge_instrument_id`, `ratio` or `delta_volatility` | 200 |
+| `scale_with_profit_taker` | Plain and laddered | A ladder whose every filled rung gets its own profit-taker, and is placed again once that profit is taken. | `from_price`, `to_price`, `steps`, `profit_points`, `most_cycles` | 200 |
+| `two_sided_quote` | Plain and laddered | A bid and an offer kept around the fair price, leaning away from the inventory they build. | `half_spread_points`, `skew_ticks`, `most_inventory` | 200 |
+| `account_conditional` | Price triggers | Sends an order when free margin, the day's profit or the open position count reaches a level, or cancels it then. | `account_field`, `account_level`, `trigger_direction`, `action` | 202, or 200 with `action: cancel` |
 
-The chart below counts how many of the 42 types fall into each family. The families are this page's own grouping, chosen to make the list easier to scan; the code does not group them.
+The chart below counts how many of the 53 types fall into each family. The families are this page's own grouping, chosen to make the list easier to scan; the code does not group them.
 
 ```vegalite
 {
@@ -122,13 +158,13 @@ The chart below counts how many of the 42 types fall into each family. The famil
   "height": 260,
   "data": {
     "values": [
-      {"family": "Linked orders", "types": 7},
-      {"family": "Execution algorithms", "types": 7},
-      {"family": "Stops and trailing", "types": 6},
-      {"family": "Book-following limits", "types": 5},
-      {"family": "Price triggers", "types": 5},
-      {"family": "Plain and laddered", "types": 4},
-      {"family": "Time-based", "types": 4},
+      {"family": "Linked orders", "types": 8},
+      {"family": "Execution algorithms", "types": 8},
+      {"family": "Stops and trailing", "types": 7},
+      {"family": "Book-following limits", "types": 7},
+      {"family": "Price triggers", "types": 8},
+      {"family": "Plain and laddered", "types": 6},
+      {"family": "Time-based", "types": 5},
       {"family": "Multi-instrument", "types": 4}
     ]
   },
@@ -162,6 +198,11 @@ stateDiagram-v2
     protecting --> completed
     protecting --> cancelled
     protecting --> failed
+    received --> cancelling: a leg's cancel refused
+    working --> cancelling: a leg's cancel refused
+    protecting --> cancelling: a leg's cancel refused
+    cancelling --> cancelled: every leg finished
+    cancelling --> failed
     completed --> [*]
     cancelled --> [*]
     rejected --> [*]
@@ -175,7 +216,10 @@ The states mean the following.
 | `received` | The parent is recorded. An armed or scheduled order stays here until its trigger fires or its time comes. |
 | `working` | At least one leg is live at a broker. |
 | `protecting` | A position exists and exit legs are guarding it, as in a bracket after its entry has filled. A hidden stop with a backstop is also here from the moment it is armed. |
+| `cancelling` | You cancelled the parent, but a broker refused the cancel of one of its legs, or its outcome is unknown, so that leg may still be live. The order type no longer acts on the parent. It becomes `cancelled` once every leg has finished, and cancelling it again retries the legs still resting. |
 | `completed` | The parent has nothing left to do. |
+
+A `simple`, `freeze_slicer`, `ladder`, `basket`, `oca` or `post_only` parent places everything at once and does nothing afterwards, so it finishes on its own once every order has: `completed` when any of them traded, `cancelled` when none did. That includes an order cancelled through `DELETE /api/orders/cancel`. Every other type decides for itself when it is done.
 | `cancelled` | The parent was called off, for example a `good_till_time` order whose time ran out. |
 | `rejected` | No request reached a broker, or the broker refused it. |
 | `failed` | The engine does not know what the broker has, so a person must look. The engine never retries out of this state and never arms protective legs for a parent in it. |
@@ -196,13 +240,33 @@ A few rules come from the shared base class rather than from any one type, and t
 - **Every price the engine computes is rounded to the tick.** Types that work prices out from the quote need a tick size that the brokers agree on, and are refused with `503` when there is none.
 - **Stops are always stop-limit orders.** Wherever a type places a stop, you must give both the trigger and the limit, and neither is defaulted.
 
+## Reduce-only orders
+
+Any type can be marked reduce-only (the Atlas's G11) by adding `"reduce_only": true` to its `synthetic` object. A plain order uses the `simple` type for this.
+
+```json
+{"type": "simple", "reduce_only": true}
+```
+
+Every leg of a reduce-only order is checked against the net position just before it is sent. The engine reads the position held in the leg's instrument and product, and lets the leg go only when it is on the side that closes that position and is no bigger than it. Anything else is refused with <span class="status s4">409</span> and sent to no broker:
+
+| Position held | Leg | Result |
+|---|---|---|
+| Long 75 | Sell 50 | Sent |
+| Long 75 | Sell 100 | Refused, because it would leave a short of 25 |
+| Long 75 | Buy 10 | Refused, because it would add to the long |
+| Short 40 | Buy 40 | Sent |
+| Nothing | Either side | Refused |
+
+The check reads the position at the moment of sending, so a trigger that fires hours later is checked against the position as it is then. It does not count other orders still resting, so two reduce-only orders that are each smaller than the position can together be larger than it. A value other than `true` or `false` is refused with `400`.
+
 ## Glossary by family
 
 The tabs below describe each type in detail, grouped by family. Every field table lists only what the type reads from the `synthetic` object, and every example shows only the `synthetic` object; the rest of the body is an ordinary order.
 
 === "Plain and laddered"
 
-    These four types act at once and place everything they need when you ask.
+    These six types act at once and place everything they need when you ask.
 
     #### `simple`
 
@@ -252,9 +316,58 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     {"type": "grid", "levels": 3, "step_points": 5, "most_inventory": 30}
     ```
 
+    #### `two_sided_quote`
+
+    A two-sided quote (the Atlas's G16, a market-making pair) keeps one buy and one sell limit around a fair price, which is the mid between the best bid and offer unless `fair_price` says `last`. Every second, both are moved to where they belong:
+
+    - The bid sits `half_spread_points` below the fair price and the ask the same distance above.
+    - **Inventory leans both quotes.** For each order's worth held, both prices move `skew_ticks` against the position. A long lowers both, so its ask is more likely to be taken and its bid less.
+    - A quote is only modified once it would move by at least `step_ticks`.
+    - When one side fills, the other is not cancelled; it is re-priced by the new lean, and the filled side is quoted again.
+    - Once the net position reaches `most_inventory`, the side that would add to it is cancelled and not quoted again until the position comes back.
+
+    In the offline suite, a quote of 10 with a half spread of 1 around a mid of 1000.025 was placed at 999.00 and 1001.05. When the market moved to 1010.025, both were modified, to 1009.00 and 1011.05. With `skew_ticks` 2 and `most_inventory` 10, a filled bid stopped the buying and moved the ask two ticks lower, to 1000.95.
+
+    !!! warning "This type sends the most modifies of any"
+        Every move of the fair price by a step is two modify messages, and each counts towards the broker's daily order messages and the order-to-trade ratio. Keep `step_ticks` as wide as the strategy allows.
+
+    The order's `quantity` is the size of each quote. The parent does not finish on its own; cancel it with [`DELETE /api/orders/parents`](orders.md#cancel-a-parent).
+
+    | Field | Type | Required | Rules |
+    |---|---|:---:|---|
+    | `half_spread_points` | number | Yes | Above zero. |
+    | `most_inventory` | integer | Yes | At least 1, as for `grid`. |
+    | `skew_ticks` | integer | No | At or above zero. Defaults to 0. |
+    | `step_ticks` | integer | No | At least 1. Defaults to 1. |
+    | `fair_price` | string | No | `mid` or `last`. Defaults to `mid`. |
+
+    ```json
+    {"type": "two_sided_quote", "half_spread_points": 1, "skew_ticks": 2, "step_ticks": 2, "most_inventory": 50}
+    ```
+
+    #### `scale_with_profit_taker`
+
+    A scale order with profit-takers (the Atlas's G15, Interactive Brokers' ScaleTrader) is a `ladder` that books its profit one rung at a time. The rungs are placed as a ladder places them. Each rung then goes round a cycle:
+
+    1. When the rung has completely filled, a limit for the same quantity goes out `profit_points` better, rounded to the tick: a sell above a filled buy, a buy below a filled sell.
+    2. When that profit-taker fills, the rung is placed again at its own price.
+    3. The cycle repeats, up to `most_cycles` times per rung, or until you cancel the parent.
+
+    A rung is placed again only after its profit-taker has closed it, so the position never grows past the ladder's own `quantity`. That is the cap the Atlas asks for. A rung that only partly fills waits for the rest before its profit-taker goes out. The parent does not finish on its own; cancel it with [`DELETE /api/orders/parents`](orders.md#cancel-a-parent) when you are done.
+
+    | Field | Type | Required | Rules |
+    |---|---|:---:|---|
+    | `from_price`, `to_price`, `steps` | | Yes | As for `ladder`. |
+    | `profit_points` | number | Yes | Above zero. |
+    | `most_cycles` | integer | No | At least 1. Without it, a rung cycles until the parent is cancelled. |
+
+    ```json
+    {"type": "scale_with_profit_taker", "from_price": 1000, "to_price": 990, "steps": 3, "profit_points": 4, "most_cycles": 5}
+    ```
+
 === "Linked orders"
 
-    These seven types place orders that watch each other. A fill on one leg changes, places or cancels another.
+    These eight types place orders that watch each other. A fill on one leg changes, places or cancels another.
 
     #### `oto`
 
@@ -266,6 +379,31 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     ```json
     {"type": "oto", "then": {"transaction_type": "SELL", "order_type": "LIMIT", "price": 1010}}
+    ```
+
+    #### `attached_hedge`
+
+    An attached hedge (the Atlas's G14) is an entry whose fills are hedged in another instrument as they happen. The hedge is `−ratio × filled`, in units of the hedge instrument, rounded to its nearest whole lot. A positive ratio hedges on the opposite side, so a bought stock is hedged by a sold future; a negative one, such as a bought put's delta, hedges on the same side.
+
+    There are two ways to size it, and you give exactly one:
+
+    | Field | Sizes the hedge by | Example |
+    |---|---|---|
+    | `ratio` | A fixed number of hedge units per filled unit: a beta, a pair ratio, or 1 for a stock hedged with its own future | A stock with a beta of 1.2 hedged with an index future |
+    | `delta_volatility` | The option's Black-76 delta at this volatility, worked out at each fill with the hedge instrument as the forward. The entry must be an option. | A Nifty option hedged with Nifty futures |
+
+    The hedge grows with the entry. After each fill, the target is worked out again from everything filled so far, and a new hedge order is sent for the whole lots still missing, so no resting order is resized. Each hedge goes to the entry's broker, as a limit two ticks past the hedge instrument's other side, rounded to that instrument's own tick.
+
+    In the offline suite, a buy of 1000 RELIANCE with `ratio` 1 against a future with a lot of 500 sent no hedge until 600 had filled, sold 500 futures then, and sold 500 more when the rest filled. A bought Nifty call of 1500 units, at a delta of about 0.5, was hedged with 1000 futures, which is 754 units rounded to 2 lots.
+
+    | Field | Type | Required | Rules |
+    |---|---|:---:|---|
+    | `hedge_instrument_id` | string | Yes | The instrument to hedge in. Not the entry's own. |
+    | `ratio` | number | One of the two | Not zero. |
+    | `delta_volatility` | number | One of the two | A percentage above zero. |
+
+    ```json
+    {"type": "attached_hedge", "hedge_instrument_id": "<RELIANCE future id>", "ratio": 1}
     ```
 
     #### `oco`
@@ -354,7 +492,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
 === "Price triggers"
 
-    These five types send nothing when you ask. They answer `202 armed` and send one order on the first price tick where the level is reached. They fire once. They run only while the engine is running, unlike a native stop at the exchange.
+    These eight types send nothing when you ask, apart from an `account_conditional` order with `action: cancel`. They answer `202 armed` and send one order on the first price tick where the level is reached, or, with `trigger_on`, where it is confirmed. They fire once. They run only while the engine is running, unlike a native stop at the exchange.
 
     Every price trigger reads the two fields below, and each type adds its own.
 
@@ -362,6 +500,25 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     |---|---|:---:|---|
     | `trigger_price` | number | Yes | The level. Above zero. |
     | `trigger_direction` | string | No | `at_or_above` or `at_or_below`. By default a buy waits for the price to fall to the level (`at_or_below`) and a sell waits for it to rise (`at_or_above`). |
+    | `trigger_on` | string | No | Which price is compared with the level, and how it must confirm. One of `last`, `bid`, `ask`, `mid`, `double_last` or `held`. Defaults to `last`. The table below explains each. |
+    | `hold_seconds` | number | With `held` | How long the level must stay reached. Above zero. |
+
+    `trigger_on` covers the Atlas's G10 triggers. It lets a trigger ignore a single stray trade, which is the usual reason a stop fires on a spike and then the price comes straight back.
+
+    | `trigger_on` | Price compared with the level | Fires on |
+    |---|---|---|
+    | `last` | The last traded price | The first tick that reaches the level |
+    | `bid` | The best bid | The first tick that reaches the level |
+    | `ask` | The best offer | The first tick that reaches the level |
+    | `mid` | Halfway between the best bid and offer | The first tick that reaches the level |
+    | `double_last` | The last traded price | The second tick in a row that reaches the level; a tick that does not reach it starts the count again |
+    | `held` | The last traded price | The first tick at least `hold_seconds` after the level was first reached, if every tick in between reached it too |
+
+    `hidden_stop`, `candle_close_stop`, `virtual_limit` and `indicator_triggered` already choose the price they watch, so they refuse `trigger_on` with `400`.
+
+    ```json
+    {"type": "market_if_touched", "trigger_price": 995, "trigger_on": "held", "hold_seconds": 5}
+    ```
 
     #### `market_if_touched`
 
@@ -426,13 +583,75 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     {"type": "gtt", "trigger_price": 950, "limit_price": 951, "valid_days": 30}
     ```
 
+    #### `close_on_trigger`
+
+    A close-on-trigger order (the Atlas's G12) is a stop that makes sure its exit is not rejected for margin. When the level is reached it does two things in order:
+
+    1. It cancels every order resting on the instrument, at every broker, including orders placed outside the engine. Pending orders hold margin, and on a short option position that margin can be what an exit is refused for.
+    2. It closes the whole net position held on the instrument and the order's product, with a limit two ticks past the other side's best price.
+
+    It closes what is held when it fires, not a quantity named in advance, so the body's `quantity` is not used. Set `transaction_type` to the side that opened the position: a long is protected by a `BUY`, which fires when the price falls to the level. If nothing is held when it fires, the parent completes without sending an order. It takes no fields besides the price trigger fields above, including `trigger_on`.
+
+    ```json
+    {"type": "close_on_trigger", "trigger_price": 995, "trigger_on": "held", "hold_seconds": 3}
+    ```
+
+    #### `stop_and_reverse`
+
+    A stop-and-reverse order (the Atlas's G13) turns a long of 75 into a short of 75, or the other way, when the level is reached. Like `close_on_trigger`, it first cancels every order resting on the instrument to free margin, acts on the net position held at that moment, and completes without an order if nothing is held. `method` decides how the flip is sent:
+
+    | `method` | What is sent | Trade-off |
+    |---|---|---|
+    | `sequential` (default) | A closing order for the position, and, once it has completely filled, a second order of the same size and side that opens the reverse | Nothing opens until the old position is gone, but there is a gap between the two |
+    | `double` | One order for twice the position | Faster, but the exchange sees one order of double size, and the broker must accept margin for the new side before the old one closes |
+
+    Both are limits two ticks past the other side's best price. A sequential close that only partly fills sends no reverse until it completes.
+
+    | Field | Type | Required | Rules |
+    |---|---|:---:|---|
+    | `method` | string | No | `sequential` or `double`. Defaults to `sequential`. |
+
+    ```json
+    {"type": "stop_and_reverse", "trigger_price": 995, "method": "sequential"}
+    ```
+
+    #### `account_conditional`
+
+    An account-conditional order (the Atlas's G17) waits on the account rather than on a price. It compares one of three figures with `account_level`, in `trigger_direction`:
+
+    | `account_field` | The figure | Read from |
+    |---|---|---|
+    | `available_balance` | The free margin across every broker | `summary.available_balance` in [the funds document](portfolio.md#funds) |
+    | `day_pnl` | Realized plus unrealized profit across every broker, as the daily loss lockout reads it | `pnl` in the funds document |
+    | `open_positions` | How many net positions are open | The `net` rows of [the positions document](portfolio.md#positions) with a quantity |
+
+    `action` says what happens when the condition holds:
+
+    - `place`, the default, sends nothing until then, which covers "send this once margin frees up" and "only once the book is flat". It answers `202 armed`.
+    - `cancel` sends the order at once and cancels it then, such as pulling a resting bid when the day's loss reaches a limit. It answers with the broker's answer, and the parent becomes `cancelled`.
+
+    The figures are read about once a second. `trigger_direction` is required, because the side of the order says nothing about which way the account has to move, and `trigger_price` and `trigger_on` are not used.
+
+    | Field | Type | Required | Rules |
+    |---|---|:---:|---|
+    | `account_field` | string | Yes | `available_balance`, `day_pnl` or `open_positions`. |
+    | `account_level` | number | Yes | The level. May be negative, for a loss. |
+    | `trigger_direction` | string | Yes | `at_or_above` or `at_or_below`. |
+    | `action` | string | No | `place` or `cancel`. Defaults to `place`. |
+
+    ```json
+    {"type": "account_conditional", "account_field": "day_pnl", "account_level": -5000, "trigger_direction": "at_or_below", "action": "cancel"}
+    ```
+
 === "Stops and trailing"
 
-    These six types protect a position or enter on a move. For the ones that protect a position, set `transaction_type` to the side that **opened** it, so a long is protected by asking for a `BUY`.
+    These seven types protect a position or enter on a move. For the ones that protect a position, set `transaction_type` to the side that **opened** it, so a long is protected by asking for a `BUY`.
 
     #### `hidden_stop`
 
     A hidden stop lives in the engine and answers `202 armed`. It watches the **bid** when protecting a long and the **offer** when protecting a short, rather than the last trade, and falls back to the last trade when that side of the book is empty. When it fires, it cancels the backstop first and sends an exit priced `buffer_ticks` past the touch. By default a long's stop fires when the price falls to the level. It takes `trigger_price` and `trigger_direction` as the price triggers do.
+
+    With a backstop, the backstop is a real stop-limit order placed at once, and the armed answer says so: it carries a `backstop` object with the `broker`, `order_id`, `outcome`, `trigger_price` and `price` of that order, and its `status_message` names the broker. `candle_close_stop` answers the same way.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
@@ -467,9 +686,42 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | `trail_percent` | number | One of the two | A distance as a percentage of the best price seen. Above zero. Give one of the two, not both. |
     | `stop_limit_offset` | number | Yes | How far past the trigger the limit sits. Above zero. |
     | `step_ticks` | integer | No | How far the trigger must be able to move before it is moved. At least 1. Defaults to 1. |
+    | `activate_at` | number | No | A price the market must reach before the stop is placed. Above zero. |
 
     ```json
     {"type": "trailing_stop", "trail_points": 10, "stop_limit_offset": 2}
+    ```
+
+    With `activate_at`, the order is a trailing take-profit (the Atlas's G9). Nothing is placed when you ask, and the answer is <span class="status s2">202</span> with an `outcome` of `armed`. On the first price tick where the last traded price reaches `activate_at` (at or above it for a sell stop, at or below it for a buy stop), the stop is placed a trail's distance from that price and trails from there. A profit that runs on is followed, and the first pullback of the trail distance exits.
+
+    ```json
+    {"type": "trailing_stop", "trail_points": 10, "stop_limit_offset": 2, "activate_at": 1030}
+    ```
+
+    #### `stepped_stop`
+
+    A stepped stop (the Atlas's G8, an adjustable stop or stop strategy) is a native stop-limit that is moved by a table of profit milestones. It is placed at `stop_price`. Each rule has a `gain`, the profit in points from `entry_price` that sets it off, and says either where to put the stop or that the stop should start trailing. The table below shows the example rules and what each does to a long bought at 1000.
+
+    | Rule | Reached at | What happens to the stop |
+    |---|---|---|
+    | `{"gain": 20, "stop_at_gain": 0}` | 1020 | Moves to 1000, breakeven |
+    | `{"gain": 40, "stop_at_gain": 15}` | 1040 | Moves to 1015, locking in 15 points |
+    | `{"gain": 60, "trail_points": 25}` | 1060 | Trails 25 points behind the best price, as a `trailing_stop` |
+
+    A market that jumps past several milestones at once applies them all on one tick, as one modify. A stop is only ever moved in the position's favour. A trailing rule must be the last, and a `stop_at_gain` at or past its own `gain` is refused, because that stop would fire at once. Changing the stop's trigger yourself before the trail starts leaves it there until the next milestone moves it further.
+
+    | Field | Type | Required | Rules |
+    |---|---|:---:|---|
+    | `entry_price` | number | Yes | The price the position was opened at, which gains are measured from. Above zero. |
+    | `stop_price` | number | Yes | Where the stop starts. Above zero. |
+    | `stop_limit_offset` | number | Yes | As for `trailing_stop`. |
+    | `rules` | list | Yes | From 1 to 20 rules, each with a `gain` above zero and larger than the one before, and exactly one of `stop_at_gain` (a number, negative to keep some risk) or `trail_points` (above zero). |
+    | `step_ticks` | integer | No | As for `trailing_stop`, once trailing. |
+
+    `trail_points`, `trail_percent` and `activate_at` are refused outside a rule.
+
+    ```json
+    {"type": "stepped_stop", "entry_price": 1000, "stop_price": 990, "stop_limit_offset": 2, "rules": [{"gain": 20, "stop_at_gain": 0}, {"gain": 40, "stop_at_gain": 15}, {"gain": 60, "trail_points": 25}]}
     ```
 
     #### `trailing_entry`
@@ -499,7 +751,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `daily_stop`
 
-    A daily stop places a fresh native stop every morning at `arm_at` for a position held overnight, and answers `202 scheduled`. If the market has already gapped through the stop, no stop is placed; the position is exited with a limit priced past the touch instead. It stops re-arming after `valid_days`.
+    A daily stop places a fresh native stop every trading morning at `arm_at` for a position held overnight, and answers `202 scheduled` with `first_arm_on`, the first date it will place one. It never arms on a weekend or an exchange holiday, and an order sent after that day's `arm_at` first arms on the next trading day. If the market has already gapped through the stop, no stop is placed; the position is exited with a limit priced past the touch instead. It stops re-arming after `valid_days`, counted in calendar days.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
@@ -514,7 +766,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
 === "Book-following limits"
 
-    These five types price a limit order from the live order book instead of leaving it at one price.
+    These seven types price a limit order from the market instead of leaving it at one price.
 
     #### `peg`
 
@@ -529,6 +781,55 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     ```json
     {"type": "peg", "reference": "own_touch", "offset_ticks": 0, "cap_price": 1005}
     ```
+
+    #### `underlying_peg`
+
+    An underlying peg (the Atlas's G6, pegged-to-stock or delta-pegged) is a limit order whose price follows another instrument, usually an option's underlying. It is placed at your `price`, and from then on its price is:
+
+    `price = your price + delta × (underlying now − underlying when placed)`
+
+    For a Nifty call bought with a delta of 0.5, a 40-point rise in the index moves the bid up by 20. The option's own book is never read, which matters on a far strike where one order can move the premium. The price is rounded to the option's tick, kept between `lowest_price` and `highest_price`, and modified only once it has moved at least `step_ticks`. If you change the order's price yourself, the peg starts again from your new price and the underlying's price at that moment.
+
+    | Field | Type | Required | Rules |
+    |---|---|:---:|---|
+    | `watch_instrument_id` | string | Yes | The instrument to follow. Not the traded instrument itself; use `peg` for that. |
+    | `delta` | number | Yes | How much the price moves per point of the underlying. Negative for a put. |
+    | `lowest_price` | number | No | The lowest price the order is moved to. Above zero. |
+    | `highest_price` | number | No | The highest price the order is moved to. Above zero, and not below `lowest_price`. |
+    | `step_ticks` | integer | No | The smallest move worth a modify. At least 1. Defaults to 1. |
+
+    The order must be a `LIMIT` with a `price`. It answers with the broker's answer plus `underlying_start`, the underlying's price the peg measures from.
+
+    ```json
+    {"type": "underlying_peg", "watch_instrument_id": "<Nifty index id>", "delta": 0.5, "step_ticks": 4}
+    ```
+
+    #### `volatility`
+
+    A volatility order (the Atlas's G7) is an option order stated as an implied volatility rather than a premium: "buy this call at 12.5 volatility". The engine works out the premium with the Black-76 model, and re-prices the order as the underlying moves and expiry comes closer. It follows the underlying through the same step and throttle as `underlying_peg`, and takes the same `lowest_price`, `highest_price` and `step_ticks`.
+
+    The model needs four things besides the volatility, and the table below says where each comes from.
+
+    | Input | Source |
+    |---|---|
+    | Strike, expiry and call or put | The traded instrument's catalogue entry. The option expires at 15:30 India time on its expiry date. |
+    | Forward price | The watched instrument's last price. When it is a future, it is used as the forward directly; otherwise, such as for the index itself, it is grown by `interest_rate` to expiry. |
+    | Interest rate | `interest_rate`, 0 unless you give one. |
+    | Time to expiry | From now to expiry, in years of 365 days. |
+
+    The order must be a `LIMIT`, and its `price` is the worst it will accept: the most a buy pays, the least a sell takes. The model's premium is used whenever it is better than that price. That price stays what the order was placed with, even after you change the leg. If you change the leg's price yourself, the order takes the volatility your price implies and carries on at that volatility. The answer carries `priced_at`, the price the order was first sent at.
+
+    | Field | Type | Required | Rules |
+    |---|---|:---:|---|
+    | `watch_instrument_id` | string | Yes | The underlying: the future of the same expiry for a true Black-76 forward, or the index. |
+    | `volatility` | number | Yes | A percentage above zero and at most 500, such as `12.5`. |
+    | `interest_rate` | number | No | A percentage. Defaults to 0. |
+
+    ```json
+    {"type": "volatility", "watch_instrument_id": "<Nifty future id>", "volatility": 12.5, "step_ticks": 4}
+    ```
+
+    For example, a Nifty 25000 call with 6.2 days to run, with the index at 25000 and a volatility of 12.5, was placed at 162.85 in the offline suite. When the index rose 100 points it was modified to 218.00.
 
     #### `chaser`
 
@@ -574,6 +875,8 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     A virtual limit is held in the engine's own book and sent, as a limit at your price, only once the other side reaches it: for a buy, when the best offer is at or below the price. It spends one daily order message instead of two for a limit that never fills. The body must be a `LIMIT` order with a `price`. A quote marked stale is never acted on. The separate `virtual_book` process estimates what a resting order would have filled, and that estimate is recorded as `missed_quantity` when the order is sent.
 
+    Every plain `LIMIT` order runs as a virtual limit unless it names another type, because [limit orders are held by default](orders.md#limit-orders-are-held-until-they-can-fill). While it is held, its price and quantity can be changed through [`PUT /api/orders/modify` with `parent_id`](orders.md#a-held-order), which sends nothing to a broker; once it has been sent, it is changed by its broker order id like any other order.
+
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
     | `paper` | boolean | No | `true` never sends anything; the order is filled on paper from the queue estimate and recorded as `paper_filled` events. |
@@ -584,7 +887,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
 === "Execution algorithms"
 
-    These seven types work a large order into the market over time or volume, or wait for liquidity.
+    These eight types work a large order into the market over time or volume, or wait for liquidity.
 
     #### `twap`
 
@@ -610,6 +913,22 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     ```json
     {"type": "vwap", "slices": 12, "over_minutes": 120}
+    ```
+
+    #### `closing_price`
+
+    A closing-price order (the Atlas's G2, market-on-close or limit-on-close) aims to pay close to the day's official closing price. NSE and BSE compute an equity's closing price as the volume-weighted average of trades from 15:00 to 15:30, so this type is a `vwap` spread across that window. The cash segment's post-closing session fills at the closing price exactly, but it takes only delivery orders; for futures, options and intraday orders this is the nearest there is.
+
+    An order that arrives before the window answers `202 scheduled`, and its first slice goes out when the window opens. One that arrives inside the window sends its first slice at once and spreads the rest over what is left until 15:30. One that arrives after 15:30 is refused with `400`. The duration is worked out from the window, so `over_minutes` is refused.
+
+    | Field | Type | Required | Rules |
+    |---|---|:---:|---|
+    | `slices` | integer | No | From 2 to 60. Defaults to 6, one every five minutes across the default window. |
+    | `window_start` | string | No | From 09:15 and before 15:30. Defaults to `15:00`. |
+    | `volume_profile` | list of numbers | No | As for `vwap`. |
+
+    ```json
+    {"type": "closing_price", "slices": 6}
     ```
 
     #### `implementation_shortfall`
@@ -666,7 +985,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `accumulation`
 
-    An accumulation buys the order's `quantity` every `every_minutes`, `purchases` times, measured from when the order was placed. Each purchase rests on its own side of the book and is not chased if it does not fill.
+    An accumulation buys the order's `quantity` every `every_minutes`, `purchases` times, measured from when the order was placed. Each purchase rests on its own side of the book and is not chased if it does not fill. A `LIMIT` order's `price` is the most a buy pays, or the least a sell takes: a purchase rests at the book's own touch when that is better, and at your price otherwise, including when the book shows nothing on that side.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
@@ -679,7 +998,15 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
 === "Time-based"
 
-    These four types act at a time of day. Every time is read as `HH:MM` or `HH:MM:SS` in India time (`Asia/Kolkata`), and a time that has already passed today is refused with `400` rather than taken to mean tomorrow.
+    These five types act at a time of day. Every time is read as `HH:MM` or `HH:MM:SS` in India time (`Asia/Kolkata`), on the instrument's own trading calendar:
+
+    | When you send the order | A time such as `15:00` means |
+    |---|---|
+    | On a trading day, before that time | That time today |
+    | On a trading day, after that time | Nothing: the order is refused with `400`, rather than taken to mean tomorrow |
+    | On a weekend or an exchange holiday | That time on the next trading day |
+
+    The trading calendar is the one the tick pipeline uses, read from the exchanges' published holiday lists for the instrument's calendar (equity, currency or commodity), including special sessions such as Muhurat trading. When the time falls on a later day, the answer names the date, as in `"place_at": "15:00 on 2026-09-28"`. The same rule applies to `closing_price`'s window, `opening_auction`'s pre-open and `daily_stop`'s arming time. A `time_stop` given in `minutes` is refused on a closed day, because minutes from now mean nothing until the market opens; give `until_time` instead.
 
     #### `scheduled`
 
@@ -700,9 +1027,16 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
     | `until_time` | string | Yes | A time later today. |
+    | `at_expiry` | string | No | `cancel` or `market`. Defaults to `cancel`. |
 
     ```json
     {"type": "good_till_time", "until_time": "14:30"}
+    ```
+
+    With `"at_expiry": "market"`, the order is a limit that becomes marketable at `until_time` (the Atlas's G5) instead of being cancelled. Each part still resting is modified to a limit two ticks past the other side's best price, or past the last traded price when that side of the book is empty, so it takes what is there. It stays a limit, as every order the engine sends to take liquidity does, and the parent carries on until the rest fills.
+
+    ```json
+    {"type": "good_till_time", "until_time": "14:30", "at_expiry": "market"}
     ```
 
     #### `time_stop`
@@ -720,7 +1054,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `square_off`
 
-    A square-off answers `202 scheduled` and, at `at_time`, cancels every open order on each instrument it is closing and then closes the positions with limit orders priced 2 ticks past the touch. Unlike [`POST /api/orders/flatten`](flatten.md), it leaves other products and other instruments alone.
+    A square-off answers `202 scheduled` and, at `at_time`, cancels every open order on each instrument it is closing and then closes the positions with limit orders priced 2 ticks past the touch. Each of those cancels takes a rate token and is recorded on the square-off's own parent, as `outside_cancel_requested` and `outside_cancelled`, because the order it cancels may not be one the engine placed. Unlike [`POST /api/orders/flatten`](flatten.md), it leaves other products and other instruments alone.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
@@ -730,6 +1064,28 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     ```json
     {"type": "square_off", "at_time": "15:10", "product": "intraday"}
+    ```
+
+    #### `opening_auction`
+
+    An opening-auction order (the Atlas's G1, market-on-open or limit-on-open) is placed while the pre-open session collects orders, so it takes part in the opening call auction and fills at the single price the auction discovers. It answers `202 scheduled` and is placed at `at_time`, or on the next clock tick when collection is already open.
+
+    The pre-open takes only some orders, and this type refuses the rest with `400` rather than sending them into continuous trading:
+
+    | Instrument | Limit orders until | Market orders until |
+    |---|---|---|
+    | NSE and BSE equities and exchange-traded funds | 09:10 | 09:05 |
+    | NSE stock and index futures | 09:07 | 09:05 |
+    | Options, commodities, currencies and everything else | No pre-open | No pre-open |
+
+    NSE collects futures orders until a random moment between 09:07 and 09:08, so this type stops at 09:07. Only current-month futures have a pre-open, and this type does not check the month, so a later-month future is sent and the broker or exchange decides. Stop orders and `IOC` are refused, because the pre-open does not take them.
+
+    | Field | Type | Required | Rules |
+    |---|---|:---:|---|
+    | `at_time` | string | No | From 09:00 and before the collection closes for the order, as in the table above. Defaults to `09:00:30`. |
+
+    ```json
+    {"type": "opening_auction"}
     ```
 
 === "Multi-instrument"
@@ -804,6 +1160,13 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
       {"instrument_id": "11111111-1111-5111-8111-000000000008", "exposure_per_unit": -0.30}
     ]}
     ```
+
+## Snap and midprice orders
+
+Two of the Atlas's order types need no type of their own, because a `price_reference` already expresses them.
+
+- **A snap order (G3)** is a limit priced from the book at the moment it is sent. Send a `simple` order, or no `synthetic` at all, with a `price_reference` such as `{"kind": "marketable"}` to take the other side's best price, or `{"kind": "bid_level", "offset_ticks": 1}` to join the bid one tick better.
+- **A midprice order (G4)** is a limit halfway between the best bid and offer. `{"kind": "mid"}` prices it once, when it is sent. For one that stays at the mid as the book moves, use `peg` with `"reference": "mid"`.
 
 ## Prices and quantities worked out for you
 

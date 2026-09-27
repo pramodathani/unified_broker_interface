@@ -37,3 +37,11 @@ Only capped brokers are counted, which also keeps the offline route recordings u
 ## What is refused, and what never is
 
 Refusing still happens only in the engine, where `refuse_if_capped` is asked before a placement (`place_leg`) and before a price change (`SyntheticOrder.has_room_today`, from `reprice_leg`). An entry's re-price stops where new entries stop; an exit's may use the reserve. `cancel_leg` and `reduce_leg` are never asked, because refusing a cancel could leave an unwanted order live, which is worse than exceeding a cap that the broker will enforce anyway.
+
+## Why the counters are behind a lock
+
+The broker-lane design runs many worker threads in one engine, and all of them share this object through `RiskGates`. Python's `x = x + 1` on an attribute is a read and a write, and two threads can interleave between them and lose a count. A `threading.Lock` around each change keeps the counts exact. The lock is held only for the arithmetic, never across a Redis call or a broker call, so it cannot slow an order down.
+
+## Why the cap is a reservation
+
+`refuse_if_capped` used to read the day's count and `count_sent` to add one after the broker answered. With one engine thread that was exact. With the broker lanes, every worker sending to one broker between those two steps passed on the same count, so the cap could be overshot by as many messages as there were threads; the check `twenty_threads_racing_for_ten_places_send_exactly_ten` in `test_runs/order_engine.py` races twenty for ten places. `RESERVE_SCRIPT` now adds one only while the count is below the limit, in one Redis step, and `refuse_if_capped` remembers the reservation for its thread. `count_sent` does not count a reserved message twice, and `release_if_reserved` gives the place back when the message was not sent after all: the rate budget refused it, the change could not be built, or the connection failed before the request left the machine (`BrokerOrders.count_message`). Cancels and quantity reductions are never held back by the cap, so they still count after they are sent, as the REST API's own modifications and cancels do. A side effect is one Redis round trip fewer per capped placement.

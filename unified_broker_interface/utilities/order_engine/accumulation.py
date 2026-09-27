@@ -130,7 +130,9 @@ class Accumulation(SyntheticOrder):
         return body, status
 
     def buy_once(self, order, started_at):
-        """One purchase, resting on its own side of the book.
+        """One purchase, resting on its own side of the book, and never past the caller's own limit price.
+
+        A caller who gave a `price` has said the most a buy pays, or the least a sell takes. The purchase rests at the book's own touch when that is better, and at the caller's price otherwise, including when the book shows nothing on that side.
 
         Args:
             order (PlaceOrderRequest): The validated order.
@@ -140,7 +142,7 @@ class Accumulation(SyntheticOrder):
             tuple: The answer's body (dict), its HTTP status (int) and the leg's id (str).
 
         Raises:
-            RefusedRequestError: With HTTP 503 when the live quote does not carry this order's own side of the book.
+            RefusedRequestError: With HTTP 503 when the order gives no price and the live quote does not carry its own side of the book.
         """
         _, quote, _ = self.placement.market_context(
             self.parent.instrument_id,
@@ -149,6 +151,14 @@ class Accumulation(SyntheticOrder):
         )
         view = self.view({self.parent.instrument_id: quote})
         price = view.own_touch(order.transaction_type)
+        limit = order.price if order.order_type == 'LIMIT' else None
+        if limit is not None:
+            if price is None:
+                price = limit
+            elif order.transaction_type == 'BUY':
+                price = min(price, limit)
+            else:
+                price = max(price, limit)
         if price is None:
             raise RefusedRequestError.refusal(
                 'an accumulation rests on its own side of the book and the '
