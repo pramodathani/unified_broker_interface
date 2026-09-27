@@ -14,6 +14,7 @@ from unified_broker_interface.utilities.order_engine.utilities.engine_lock impor
     REFRESH_SECONDS,
 )
 from unified_broker_interface.utilities.order_engine.utilities.intent_handoff import (
+    ANSWER_KEY_PREFIX,
     INTENT_STREAM_FIELD,
     INTENT_STREAM_KEY,
 )
@@ -550,7 +551,9 @@ class OrderEngine:
         return deadline_at + self.stale_intent_seconds
 
     def reply(self, intent, body, status):
-        """Pushes the answer onto the key the waiting API worker is blocked on.
+        """Pushes the answer onto the key the waiting API worker is blocked on, and stores it under the intent's id.
+
+        An intent that came in a list is answered on the list's shared key, so its answer names its place in the list. The stored copy is what `GET /api/orders/intents/<intent_id>` reads for a caller who stopped waiting. It is written only if none is there yet, so a repeated intent's 409 cannot replace the answer the first reading gave.
 
         Args:
             intent (dict): The intent document.
@@ -560,13 +563,27 @@ class OrderEngine:
         Returns:
             None: This method returns nothing.
         """
-        document = json.dumps({
+        stored = json.dumps({
             'body': body,
             'status': status,
         })
+        pushed = {
+            'body': body,
+            'status': status,
+        }
+        if intent.get('request_index') is not None:
+            pushed['request_index'] = intent['request_index']
+            pushed['intent_id'] = intent.get('intent_id')
         pipeline = self.cache.pipeline(transaction=False)
-        pipeline.rpush(intent['reply_key'], document)
+        pipeline.rpush(intent['reply_key'], json.dumps(pushed))
         pipeline.expire(intent['reply_key'], self.result_ttl_seconds)
+        if intent.get('intent_id'):
+            pipeline.set(
+                ANSWER_KEY_PREFIX + intent['intent_id'],
+                stored,
+                nx=True,
+                ex=self.result_ttl_seconds,
+            )
         pipeline.execute()
 
     def take_update(self, entry_id, fields):

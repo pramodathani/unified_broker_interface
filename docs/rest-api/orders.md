@@ -11,7 +11,8 @@ The table below lists the five routes on this page. The emergency route that can
 |---|---|---|
 | <span class="method get">GET</span> | [`/api/orders/details`](#order-book) | Today's orders at every broker, from a document kept in Redis |
 | <span class="method get">GET</span> | [`/api/orders/trades`](#trade-book) | Today's trades at every broker, from a document kept in Redis |
-| <span class="method post">POST</span> | [`/api/orders/place`](#place-an-order) | Places one order at a broker the API chooses |
+| <span class="method post">POST</span> | [`/api/orders/place`](#place-an-order) | Places one order at a broker the API chooses, or [each order of a list](#several-orders-in-one-request) |
+| <span class="method get">GET</span> | [`/api/orders/intents/<intent_id>`](#read-an-answer-later) | The order engine's answer for one order, after the place request stopped waiting |
 | <span class="method put">PUT</span> | [`/api/orders/modify`](#modify-an-order) | Changes one open order at the broker that holds it, or [each order of a list](#several-orders-in-one-request) |
 | <span class="method delete">DELETE</span> | [`/api/orders/cancel`](#cancel-an-order) | Cancels one open order at the broker that holds it, or [each order of a list](#several-orders-in-one-request) |
 
@@ -551,6 +552,47 @@ An instrument named by its identity fields costs the API one more round trip, a 
     - **Classes:** [`PlaceOrderRequest`][unified_broker_interface.utilities.broker_orders.utilities.place_order_request.PlaceOrderRequest] validates the body, [`IntentHandoff`][unified_broker_interface.utilities.order_engine.utilities.intent_handoff.IntentHandoff] writes the intent and waits, [`OrderPlacement`][unified_broker_interface.utilities.broker_orders.utilities.placement.OrderPlacement] chooses the broker and builds the request inside the engine, and each broker's [`BrokerOrders`][unified_broker_interface.utilities.broker_orders.base.BrokerOrders] subclass builds its own request and reads its own answer.
     - **Answer rules:** [`BrokerAnswer`][unified_broker_interface.utilities.broker_orders.utilities.broker_answer.BrokerAnswer] maps `accepted`, `rejected` and `unknown` to 200, 422 and 504.
 
+## Read an answer later
+
+<div class="endpoint" markdown><span class="method get">GET</span> `/api/orders/intents/<intent_id>`<span class="auth">access-token</span></div>
+
+This route returns what the order engine did with one order, for a caller whose place request stopped waiting before the answer came. Every place answer, single or listed, carries the order's `intent_id`. The engine keeps each answer for `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_RESULT_TTL_SECONDS`, 300 by default, after it gives it.
+
+### Request parameters
+
+| Name | In | Type | Required | Description |
+|---|---|---|---|---|
+| `access-token` | header | string | Yes | The token from [`connect`](session.md#connect) |
+| `intent_id` | path | string | Yes | The `intent_id` from the place answer |
+
+### Response
+
+```json
+{
+  "intent_id": "5e0c4f0c8f3a4f7e9a1d2b3c4d5e6f70",
+  "status": 200,
+  "response": {"broker": "flattrade", "outcome": "accepted", "order_id": "26091500000021", "parent_id": "…", "intent_id": "5e0c4f0c8f3a4f7e9a1d2b3c4d5e6f70", "…": "…"}
+}
+```
+
+| Attribute | Type | Description |
+|---|---|---|
+| `intent_id` | string | The id asked for |
+| `status` | integer | The HTTP status the place route would have answered this order with |
+| `response` | object | The body the place route would have answered this order with |
+
+### Errors
+
+| Status | Meaning |
+|---|---|
+| <span class="status s4">401</span> | The token is missing, wrong or expired. |
+| <span class="status s4">404</span> | `no answer is stored for this intent: the order engine has not answered it yet, the id is not one, or its answer has expired` |
+| <span class="status s5">503</span> | `Redis could not be read: <error>` |
+
+??? note "Under the hood"
+    - **Redis key read:** `unified:orders:intents:answer:<intent_id>`, which the engine writes, only if absent, as it answers each intent.
+    - **Classes:** [`IntentHandoff.stored_answer`][unified_broker_interface.utilities.order_engine.utilities.intent_handoff.IntentHandoff.stored_answer].
+
 ## Modify an order
 
 <div class="endpoint" markdown><span class="method put">PUT</span> `/api/orders/modify`<span class="auth">access-token</span></div>
@@ -955,17 +997,35 @@ A body with an `orders` list cancels each order in it. Each item carries `order_
 
 ## Several orders in one request
 
-`PUT /api/orders/modify` and `DELETE /api/orders/cancel` take a list of orders on the same paths. The list form is chosen by the body: a body with an `orders` key is a list and is answered with `{"results": [...]}`, even when it holds one order, and a body without one is the single form, answered exactly as described above. The shape of the answer follows the form of the request, never the number of orders.
+`POST /api/orders/place`, `PUT /api/orders/modify` and `DELETE /api/orders/cancel` take a list of orders on the same paths. The list form is chosen by the body: a body with an `orders` key is a list and is answered with `{"results": [...]}`, even when it holds one order, and a body without one is the single form, answered exactly as described above. The shape of the answer follows the form of the request, never the number of orders.
 
 #### Request body
 
 | Name | In | Type | Required | Description |
 |---|---|---|---|---|
 | `access-token` | header | string | Yes | The token from [`connect`](session.md#connect) |
-| `orders` | body | array of objects | Yes | One item per order, with no limit on the number. An item carries `order_id`, an optional `broker` and, for `modify`, the fields to change, exactly as the single body does. |
-| `dry_run` | body or query | boolean | No | `true` shows every order's broker request instead of sending it. It applies to the whole list. |
+| `orders` | body | array of objects | Yes | One item per order. For `place`, an item is one order exactly as the single body gives it, including a `synthetic` object for any order type, and a list holds at most `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACE_LIST_MAXIMUM` items, 500 by default. For `modify` and `cancel`, an item carries `order_id`, an optional `broker` and, for `modify`, the fields to change, with no limit on the number. |
+| `dry_run` | body, or query for `modify` and `cancel` | boolean | No | `true` shows every order's broker request instead of sending it. It applies to the whole list. |
 
 The list takes no other key, in the body or the query string, so a field such as `price` or `broker` has to go inside each order. That rule is there so that nobody can put `price` beside the list expecting it to apply to every order, and it is why `dry_run` is refused inside an order: one order must never go live while its neighbours are only shown.
+
+#### Placing a list
+
+A placed list goes to the [order engine](order-engine.md) in one step, and the engine's worker lanes place the orders in parallel, each at the broker its selector chooses, so a list spread over ten brokers goes out about ten times as fast as one order after another. A `broker` given in an item is ignored, as it is in the single form. An item that is not a valid order, or whose instrument cannot be found, gets its own entry and does not hold up the rest.
+
+The request waits for the engine's answers for the single form's wait plus a tenth of a second per order, and never longer than `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACE_LIST_WAIT_SECONDS`, 25 by default, which is below gunicorn's 30-second worker timeout. An order still unanswered then gets <span class="status s5">504</span> with outcome `unknown` and its `intent_id`, because the engine may still place it; [read its answer later](#read-an-answer-later) by that id. A place entry carries `intent_id` beside `request_index`, and it is `null` for an item refused before it reached the engine.
+
+```json
+{
+  "results": [
+    {"request_index": 0, "intent_id": "5e0c4f0c8f3a4f7e9a1d2b3c4d5e6f70", "status": 200, "response": {"broker": "flattrade", "outcome": "accepted", "order_id": "26091500000021", "parent_id": "…", "…": "…"}},
+    {"request_index": 1, "intent_id": null, "status": 400, "response": {"error": "quantity must be a whole number of at least 1"}},
+    {"request_index": 2, "intent_id": "8b1f2e3d4c5b6a79881726354a3b2c1d", "status": 200, "response": {"broker": "fyers", "outcome": "accepted", "order_id": "26091500000013", "…": "…"}}
+  ]
+}
+```
+
+The whole list is refused, with nothing placed, when `orders` is missing, empty or longer than the maximum, when the body has a key other than `orders` and `dry_run`, and with <span class="status s5">503</span> when the order engine is not running.
 
 #### Response
 

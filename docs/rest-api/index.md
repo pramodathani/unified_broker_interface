@@ -39,7 +39,8 @@ The table below lists all 26 routes in 33 rows, because the seven instrument rou
 | <span class="method get">GET</span> | [`/api/portfolio/positions`](portfolio.md#positions) | Open positions, combined | :material-lock: |
 | <span class="method get">GET</span> | [`/api/orders/details`](orders.md#order-book) | Today's orders at every broker | :material-lock: |
 | <span class="method get">GET</span> | [`/api/orders/trades`](orders.md#trade-book) | Today's trades at every broker | :material-lock: |
-| <span class="method post">POST</span> | [`/api/orders/place`](orders.md#place-an-order) | Places an order at a broker the API chooses | :material-lock: |
+| <span class="method post">POST</span> | [`/api/orders/place`](orders.md#place-an-order) | Places an order at a broker the API chooses, or [each order of a list](orders.md#several-orders-in-one-request) | :material-lock: |
+| <span class="method get">GET</span> | [`/api/orders/intents/<intent_id>`](orders.md#read-an-answer-later) | The order engine's answer for one order, read after the place request stopped waiting | :material-lock: |
 | <span class="method put">PUT</span> | [`/api/orders/modify`](orders.md#modify-an-order) | Changes an open order, or [each order of a list](orders.md#several-orders-in-one-request) | :material-lock: |
 | <span class="method delete">DELETE</span> | [`/api/orders/cancel`](orders.md#cancel-an-order) | Cancels an open order, or [each order of a list](orders.md#several-orders-in-one-request) | :material-lock: |
 | <span class="method post">POST</span> | [`/api/orders/flatten`](flatten.md) | Cancels every open order and closes every position, everywhere | :material-lock: |

@@ -52,6 +52,9 @@ from unified_broker_interface.utilities.broker_orders.utilities.order_modificati
 from unified_broker_interface.utilities.broker_orders.utilities.order_request import (
     InvalidOrderError,
 )
+from unified_broker_interface.utilities.broker_orders.utilities.place_order_list import (
+    PlaceOrderList,
+)
 from unified_broker_interface.utilities.broker_orders.utilities.place_order_request import (
     PlaceOrderRequest,
 )
@@ -88,6 +91,7 @@ from utilities.configurations import api_configuration
 from utilities.configurations import get_logger
 
 ORDER_SEND_THREADS = 4
+LIST_SECONDS_PER_ORDER = 0.1
 
 
 class OrdersBlueprint(BaseBlueprint):
@@ -111,6 +115,7 @@ class OrdersBlueprint(BaseBlueprint):
         ('/details', 'details', ['GET']),
         ('/trades', 'trades', ['GET']),
         ('/place', 'place', ['POST']),
+        ('/intents/<intent_id>', 'intent', ['GET']),
         ('/modify', 'modify', ['PUT']),
         ('/cancel', 'cancel', ['DELETE']),
         ('/flatten', 'flatten', ['POST']),
@@ -345,8 +350,17 @@ class OrdersBlueprint(BaseBlueprint):
 
         self.check_access_token(access_token, token_document_text)
 
+        body = request.get_json(silent=True)
+        if isinstance(body, dict) and 'orders' in body:
+            return self.place_order_list(
+                body,
+                mapping_date_text,
+                warm_identifier,
+                started_at,
+            )
+
         try:
-            order = PlaceOrderRequest(request.get_json(silent=True))
+            order = PlaceOrderRequest(body)
         except InvalidOrderError as error:
             raise self.refuse(str(error), 400)
 
@@ -364,6 +378,113 @@ class OrdersBlueprint(BaseBlueprint):
             instrument_id,
             started_at,
         )
+
+    def place_order_list(self, body, mapping_date_text, warm_identifier, started_at):
+        """Places every order of a list, answering each on its own.
+
+        Each item is validated and its instrument found as the single form does it, and every order that passes is written for the order engine in one round trip. The engine's workers place them in parallel, one lane per broker, and the answers come back on one list. An item refused before it reaches the engine, and an order still unanswered when the wait runs out, get entries of their own without holding up the rest.
+
+        Args:
+            body (dict): The decoded JSON body, which holds `orders`.
+            mapping_date_text (str | None): The mapping date as Redis holds it.
+            warm_identifier (str | None): The current warm's identifier.
+            started_at (float): `time.perf_counter()` when the request arrived.
+
+        Returns:
+            tuple: The answer's body `{"results": [...]}` (dict) and the HTTP status 200.
+
+        Raises:
+            RefusedRequestError: With 400 for an invalid list, and 503 when nothing is mapped yet, Redis cannot be read or the order engine is not running.
+        """
+        try:
+            order_list = PlaceOrderList(
+                body,
+                api_configuration['order_place_list_maximum'],
+            )
+        except InvalidOrderError as error:
+            raise self.refuse(str(error), 400)
+        catalogue_key_prefix = self.catalogue_key_prefix(mapping_date_text)
+
+        answers = []
+        to_place = []
+        for request_index, entry in enumerate(order_list.entries):
+            if isinstance(entry, RefusedRequestError):
+                answers.append((entry.body, entry.status))
+                continue
+            try:
+                instrument_id = self.resolve_instrument_id(
+                    entry,
+                    mapping_date_text,
+                    warm_identifier,
+                    catalogue_key_prefix,
+                )
+            except RefusedRequestError as refusal:
+                refusal = self.catalogue_availability.explained(refusal)
+                answers.append((refusal.body, refusal.status))
+                continue
+            answers.append(None)
+            to_place.append((
+                request_index,
+                order_list.bodies[request_index],
+                instrument_id,
+            ))
+
+        if to_place:
+            placed = self.order_handoff.place_many(
+                to_place,
+                self.list_wait_seconds(len(to_place)),
+                started_at,
+            )
+            for request_index, answer in placed.items():
+                answers[request_index] = answer
+        return {
+            'results': order_list.results(answers),
+        }, 200
+
+    def list_wait_seconds(self, order_count):
+        """How long a list request waits for the engine's answers.
+
+        Each order is given a tenth of a second beyond the single form's wait, which is what one broker's ten-a-second limit costs when every order of the list goes to the same broker. The wait is capped below gunicorn's thirty-second worker timeout, and any order still unanswered is reported as unknown with its `intent_id`.
+
+        Args:
+            order_count (int): How many orders are being handed to the engine.
+
+        Returns:
+            float: The wait in seconds.
+        """
+        wait_seconds = (
+            api_configuration['order_engine_timeout_seconds']
+            + order_count * LIST_SECONDS_PER_ORDER
+        )
+        return min(wait_seconds, api_configuration['order_place_list_wait_seconds'])
+
+    @authenticated
+    def intent(self, intent_id):
+        """Answers with what the order engine did with one order, for a caller who stopped waiting before the answer came.
+
+        The engine keeps each answer for `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_RESULT_TTL_SECONDS` after it gives it.
+
+        Args:
+            intent_id (str): The order's `intent_id`, from the place route's answer.
+
+        Returns:
+            tuple: The Flask JSON response (flask.Response) and its HTTP status (int): 200 with `intent_id`, `status` and `response` once the engine has answered, 404 when no answer is stored, and 503 when Redis cannot be read.
+        """
+        try:
+            stored = self.order_handoff.stored_answer(intent_id)
+        except RefusedRequestError as refusal:
+            return jsonify(refusal.body), refusal.status
+        if stored is None:
+            return jsonify({
+                'error': 'no answer is stored for this intent: the order engine has not answered it yet, the id is not one, or its answer has expired',
+                'intent_id': intent_id,
+            }), 404
+        answer_body, status = stored
+        return jsonify({
+            'intent_id': intent_id,
+            'status': status,
+            'response': answer_body,
+        }), 200
 
     def catalogue_key_prefix(self, mapping_date_text):
         """The prefix of today's catalogue keys, refusing the order when nothing has been mapped.

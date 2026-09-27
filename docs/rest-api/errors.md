@@ -61,7 +61,7 @@ The API registers no error handlers of its own. A path that matches no route the
 
 ## Which route returns which status
 
-The matrix below has one row for each of the 26 routes, plus a `POST` row for each of the seven instrument routes that also take a list, and one column for each status code the API returns. A :material-check: means the route can return that status in either placement mode. A :material-cog: means the route returns it only when `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT` is `engine` (see [Order engine](order-engine.md)).
+The matrix below has one row for each of the 27 routes, plus a `POST` row for each of the seven instrument routes that also take a list, and one column for each status code the API returns. A :material-check: means the route can return that status.
 
 | Route | 200 | 202 | 207 | 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500 | 501 | 502 | 503 | 504 |
 |---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
@@ -94,7 +94,8 @@ The matrix below has one row for each of the 26 routes, plus a `POST` row for ea
 | `GET /api/portfolio/positions` | :material-check: | | | | :material-check: | | | | | | | | :material-check: | :material-check: | |
 | `GET /api/orders/details` | :material-check: | | | | :material-check: | | | | | | | | :material-check: | :material-check: | |
 | `GET /api/orders/trades` | :material-check: | | | | :material-check: | | | | | | | | :material-check: | :material-check: | |
-| `POST /api/orders/place` | :material-check: | :material-cog: | | :material-check: | :material-check: | :material-cog: | :material-check: | :material-cog: | :material-check: | :material-cog: | | | | :material-check: | :material-check: |
+| `POST /api/orders/place` | :material-check: | :material-check: | | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | | | | :material-check: | :material-check: |
+| `GET /api/orders/intents/<intent_id>` | :material-check: | | | | :material-check: | | :material-check: | | | | | | | :material-check: | |
 | `PUT /api/orders/modify` | :material-check: | | | :material-check: | :material-check: | | :material-check: | :material-check: | :material-check: | | | :material-check: | | :material-check: | :material-check: |
 | `DELETE /api/orders/cancel` | :material-check: | | | :material-check: | :material-check: | | :material-check: | :material-check: | :material-check: | | | | | :material-check: | :material-check: |
 | `POST /api/orders/flatten` | :material-check: | | :material-check: | :material-check: | :material-check: | | | | | | | | | :material-check: | |
@@ -172,6 +173,8 @@ The instrument routes check their query parameters before doing any work. The ta
 ### Placing an order
 
 `POST /api/orders/place` validates the body before it looks at any broker. The recorded route tests include most of these messages exactly as they appear here.
+
+A list of orders is refused whole with `orders must be a non-empty list`, `a list may hold at most {maximum} orders, not {count}`, or `a list takes only orders and dry_run, so give {name} inside each order`. Inside a list, an item gets its own `400` with `each entry of orders must be an object` or `dry_run applies to the whole list, so give it beside orders rather than inside an order`, and the other items are still placed.
 
 | Message | Cause |
 |---|---|

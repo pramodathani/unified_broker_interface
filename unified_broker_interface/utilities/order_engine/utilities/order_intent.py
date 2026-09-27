@@ -22,15 +22,25 @@ class OrderIntent:
         synthetic_type (str): The kind of order the engine is being asked to run, `simple` unless the body named another.
         instrument_id (str): The instrument the order is for, already resolved by the API worker.
         body (dict): The caller's decoded JSON body, exactly as it arrived.
+        request_index (int | None): The order's place in the list it came in, or None for an order sent on its own.
     """
 
-    def __init__(self, body, instrument_id, timeout_seconds):
+    def __init__(
+        self,
+        body,
+        instrument_id,
+        timeout_seconds,
+        request_index=None,
+        reply_key=None,
+    ):
         """Builds the intent for one accepted order.
 
         Args:
             body (dict | None): The caller's decoded JSON body, or None when there was none.
             instrument_id (str): The instrument the order is for, as the API worker resolved it.
             timeout_seconds (float): How long the API worker will wait for the answer, which sets the deadline.
+            request_index (int | None): The order's place in the list it came in, or None for an order sent on its own.
+            reply_key (str | None): The list every order of one request is answered on, or None for a list of this order's own.
 
         Returns:
             None: This method returns nothing.
@@ -39,7 +49,8 @@ class OrderIntent:
         self.instrument_id = instrument_id
         self.created_at = time.time()
         self.deadline_at = self.created_at + timeout_seconds
-        self.reply_key = REPLY_KEY_PREFIX + self.intent_id
+        self.request_index = request_index
+        self.reply_key = reply_key or (REPLY_KEY_PREFIX + self.intent_id)
         self.api_worker = f'{socket.gethostname()}:{os.getpid()}'
         self.body = body if isinstance(body, dict) else {}
         self.synthetic_type = self.read_synthetic_type(self.body)
@@ -68,7 +79,7 @@ class OrderIntent:
         Returns:
             dict: The intent's fields, all of them JSON types.
         """
-        return {
+        document = {
             'intent_id': self.intent_id,
             'created_at': self.created_at,
             'deadline_at': self.deadline_at,
@@ -78,3 +89,6 @@ class OrderIntent:
             'instrument_id': self.instrument_id,
             'body': self.body,
         }
+        if self.request_index is not None:
+            document['request_index'] = self.request_index
+        return document

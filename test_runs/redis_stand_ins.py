@@ -551,6 +551,18 @@ class FakeEngineRedis(FakeRedis):
         """
         del maxlen, approximate
         self.start_round_trip()
+        return self.run_xadd(key, fields)
+
+    def run_xadd(self, key, fields):
+        """Appends one entry to a stream, as part of a round trip already counted.
+
+        Args:
+            key (str): The stream key.
+            fields (dict): The entry's fields.
+
+        Returns:
+            str: The entry's id.
+        """
         entries = self.streams.setdefault(key, [])
         entry_id = f'{len(entries) + 1}-0'
         entries.append((entry_id, dict(fields)))
@@ -699,6 +711,20 @@ class FakeEngineStoreRedis(FakeEngineRedis):
             bool | None: True when the key was set, and None when `nx` was given and it already existed.
         """
         self.start_round_trip()
+        return self.run_set(key, value, nx, ex)
+
+    def run_set(self, key, value, nx=False, ex=None):
+        """Sets a string key, as part of a round trip already counted.
+
+        Args:
+            key (str): The key.
+            value (str): The value.
+            nx (bool): Only set the key when it does not already exist.
+            ex (int | None): The expiry in seconds.
+
+        Returns:
+            bool | None: True when the key was set, and None when `nx` was given and it already existed.
+        """
         if nx and key in self.strings:
             return None
         self.strings[key] = value
@@ -877,7 +903,38 @@ class FakeEngineStoreRedis(FakeEngineRedis):
 
 
 class FakeEnginePipeline(FakePipeline):
-    """The order routes' pipeline, widened with the list commands the engine queues."""
+    """The order routes' pipeline, widened with the list, string and stream commands the engine and the list handoff queue."""
+
+    def set(self, key, value, nx=False, ex=None):
+        """Queues a string write.
+
+        Args:
+            key (str): The key.
+            value (str): The value.
+            nx (bool): Only set the key when it does not already exist.
+            ex (int | None): The expiry in seconds.
+
+        Returns:
+            FakeEnginePipeline: This pipeline.
+        """
+        self.commands.append(('set', (key, value, nx, ex)))
+        return self
+
+    def xadd(self, key, fields, maxlen=None, approximate=False):
+        """Queues an append to a stream.
+
+        Args:
+            key (str): The stream key.
+            fields (dict): The entry's fields.
+            maxlen (int | None): Accepted for compatibility with redis-py and ignored.
+            approximate (bool): Accepted for compatibility with redis-py and ignored.
+
+        Returns:
+            FakeEnginePipeline: This pipeline.
+        """
+        del maxlen, approximate
+        self.commands.append(('xadd', (key, fields)))
+        return self
 
     def rpush(self, key, value):
         """Queues an append to a list.
@@ -1019,6 +1076,10 @@ class FakeEnginePipeline(FakePipeline):
                 replies.append(self.fake_redis.run_delete(*arguments))
             elif command_name == 'hgetall':
                 replies.append(self.fake_redis.run_hgetall(*arguments))
+            elif command_name == 'set':
+                replies.append(self.fake_redis.run_set(*arguments))
+            elif command_name == 'xadd':
+                replies.append(self.fake_redis.run_xadd(*arguments))
             else:
                 raise ValueError(
                     f'unsupported stand-in command: {command_name!r}'

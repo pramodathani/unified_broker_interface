@@ -57,6 +57,8 @@ api_configuration = {
     'order_maximum_workers_per_broker': int(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_MAXIMUM_WORKERS_PER_BROKER', '30')),
     'order_database_connections': int(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_DATABASE_CONNECTIONS', '8')),
     'order_engine_timeout_seconds': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_TIMEOUT_SECONDS', '5')),
+    'order_place_list_maximum': int(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_PLACE_LIST_MAXIMUM', '500')),
+    'order_place_list_wait_seconds': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_PLACE_LIST_WAIT_SECONDS', '25')),
     'order_engine_result_ttl_seconds': int(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_RESULT_TTL_SECONDS', '300')),
     'order_engine_stale_intent_seconds': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_STALE_INTENT_SECONDS', '30')),
     'order_rate_per_second': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_PER_SECOND', '0')),

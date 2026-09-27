@@ -193,6 +193,8 @@ The order engine and the REST API's order routes share the keys below. The engin
 | `unified:orders:rate:all` | sorted set | The rate budget, only when `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_PER_SECOND` is above zero | The same budget | The same, across every broker |
 | `unified:orders:daily_count:<broker>` | string (counter) | Every placement, modification and cancellation sent to a broker with a daily cap, from an API worker or the engine | The same code, before sending | Expires at the next 06:00 IST |
 | `unified:orders:engine:lock` | string | `bin/unified/orders/order_engine` | A second engine, which then exits | The engine's pid; 30 seconds, refreshed every 10 |
+| `unified:orders:intents:reply:<request_id>` | list | The order engine, with `RPUSH`, one answer per order of a listed placement, each naming its `request_index` | The waiting API worker, with `BLPOP` until every order is answered | `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_RESULT_TTL_SECONDS` |
+| `unified:orders:intents:answer:<intent_id>` | string | The order engine, with `SET NX` as it answers each intent | `GET /api/orders/intents/<intent_id>` | `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_RESULT_TTL_SECONDS` |
 | `unified:orders:intents:result:<intent_id>` | list | The order engine, with `RPUSH` | The waiting API worker, with `BLPOP` | `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_RESULT_TTL_SECONDS`, 300 by default |
 | `unified:orders:parents` | hash | The order engine | The engine and `bin/unified/orders/virtual_book` | Every parent order, by id; expires at the next 06:00 IST |
 | `unified:orders:parents:open` | set | The order engine | The engine and `virtual_book` | The ids of parents not yet finished; expires at the next 06:00 IST |
