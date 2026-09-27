@@ -3,7 +3,7 @@ A `POST` body naming several instruments for the instrument routes, and the resu
 
 The body is a JSON object whose `instruments` list names each instrument with the same fields the `GET` form takes in its query string: `instrument_id`, or `exchange`, `segment` and the segment's identity fields. Every other key in the body is a parameter shared by all the instruments, such as `date`, `interval` or `start`, spelled as in the query string. JSON numbers and booleans are accepted wherever the query string takes text, so `"strike_price": 25000` and `"adjusted": false` work.
 
-An item that names no instrument properly gets its own 400 entry in the answer, and the other items are still answered. A body that is not an object, a missing or empty list, or a list longer than MAX_BATCH_INSTRUMENTS is refused as a whole.
+An item that names no instrument properly gets its own 400 entry in the answer, and the other items are still answered. A body that is not an object, or a missing or empty list, is refused as a whole. There is no upper limit on the length of the list.
 
 Typical usage:
 
@@ -13,8 +13,6 @@ Typical usage:
 """
 
 from unified_broker_interface.utilities.instrument_identity import RequestError, parse_instrument
-
-MAX_BATCH_INSTRUMENTS = 50
 
 
 class InstrumentBatch:
@@ -37,15 +35,13 @@ class InstrumentBatch:
             None: This method returns nothing.
 
         Raises:
-            RequestError: When the body is not a JSON object, `instruments` is missing, not a list, empty or longer than MAX_BATCH_INSTRUMENTS, or a shared parameter is not text, a number or a boolean.
+            RequestError: When the body is not a JSON object, `instruments` is missing, not a list or empty, or a shared parameter is not text, a number or a boolean.
         """
         if not isinstance(body, dict):
             raise RequestError("the body must be a JSON object with an instruments list")
         items = body.get("instruments")
         if not isinstance(items, list) or not items:
             raise RequestError("instruments must be a non-empty list")
-        if len(items) > MAX_BATCH_INSTRUMENTS:
-            raise RequestError(f"instruments may hold at most {MAX_BATCH_INSTRUMENTS} entries, not {len(items)}")
 
         self.parameters = {}
         for name, value in body.items():

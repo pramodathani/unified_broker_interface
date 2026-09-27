@@ -18,9 +18,9 @@ One unknown instrument should not throw away the other forty-nine answers. Each 
 
 The query-string parsers in `instrument_identity.py` call `.strip()` on every value, so a JSON number such as `"strike_price": 25000` would raise `AttributeError` and answer 500. `as_text` turns numbers into their text and booleans into `"true"` or `"false"`, which the same parsers already accept. That keeps one set of parsers and one set of error messages for both forms. An object or a list is refused with a message, because there is no text the query string would have had for it.
 
-## Why the limit is 50
+## Why the list has no upper limit
 
-The limit bounds how long one request can hold a gunicorn thread and how many broker quote calls one request can cause. Fifty covers a typical watchlist or option chain slice, and it is a constant, `MAX_BATCH_INSTRUMENTS`, so it can be raised in one place.
+The list used to be capped at 50 instruments by a constant, `MAX_BATCH_INSTRUMENTS`, to bound how long one request could hold a gunicorn thread and how many broker quote calls one request could cause. The user asked for the cap to be removed, so a list of any length is now accepted. A caller sending a very long list should expect the request to take longer, because `/ltp`, `/ohlc` and `/quote` fall back to one broker REST call per instrument whose cached quote is not recent enough, and `/ticks` reads each instrument from the database in turn. The recorded offline case `details_batch_many_instruments` sends 120 instruments and expects every one answered.
 
 ## The shape of `results` and `valid_instruments`
 
