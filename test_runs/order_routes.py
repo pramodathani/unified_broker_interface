@@ -3616,6 +3616,7 @@ class OrderRoutesSuite:
                 '',
             ]
         api_configuration['order_broker_priority'] = priority
+        api_configuration['order_hold_limits'] = scenario.get('hold_limits', False)
         if scenario.get('expect_construction_error'):
             try:
                 self.build_client()
@@ -3699,6 +3700,7 @@ class OrderRoutesSuite:
         original_excluded = api_configuration['order_excluded_brokers']
         original_selector = api_configuration['order_broker_selector']
         original_priority = api_configuration['order_broker_priority']
+        original_hold_limits = api_configuration['order_hold_limits']
         blueprint_base.get_cache = self.fake_cache
         blueprint_base.get_mongo_db = self.fake_mongo_database
         requests.Session.request = self.network.request
@@ -3715,6 +3717,7 @@ class OrderRoutesSuite:
             api_configuration['order_excluded_brokers'] = original_excluded
             api_configuration['order_broker_selector'] = original_selector
             api_configuration['order_broker_priority'] = original_priority
+            api_configuration['order_hold_limits'] = original_hold_limits
         return results
 
     def encode(self, result):

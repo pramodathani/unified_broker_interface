@@ -487,6 +487,7 @@ class OrderEngineRoutesSuite:
         original_request = requests.Session.request
         original_uuid4 = uuid.uuid4
         original_excluded = api_configuration['order_excluded_brokers']
+        original_hold_limits = api_configuration['order_hold_limits']
         blueprint_base.get_cache = self.fake_cache
         blueprint_base.get_mongo_db = self.fake_mongo_database
         requests.Session.request = self.network.request
@@ -494,6 +495,7 @@ class OrderEngineRoutesSuite:
         api_configuration['order_excluded_brokers'] = [
             '',
         ]
+        api_configuration['order_hold_limits'] = False
         try:
             results = []
             for scenario in OrderEngineScenarios().build():
@@ -504,6 +506,7 @@ class OrderEngineRoutesSuite:
             requests.Session.request = original_request
             uuid.uuid4 = original_uuid4
             api_configuration['order_excluded_brokers'] = original_excluded
+            api_configuration['order_hold_limits'] = original_hold_limits
         return results
 
     def encode(self, result):

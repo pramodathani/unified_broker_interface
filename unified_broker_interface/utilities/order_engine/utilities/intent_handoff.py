@@ -27,20 +27,23 @@ class IntentHandoff:
     Attributes:
         cache (redis.Redis): The Redis client.
         timeout_seconds (float): How long to wait for the engine before answering that the outcome is unknown.
+        hold_limits (bool): Whether a plain limit order is held in the engine's virtual order book rather than sent at once.
     """
 
-    def __init__(self, cache, timeout_seconds):
+    def __init__(self, cache, timeout_seconds, hold_limits=False):
         """Builds the handoff.
 
         Args:
             cache (redis.Redis): The Redis client.
             timeout_seconds (float): How long to wait for the engine's answer.
+            hold_limits (bool): Whether a plain limit order is held in the virtual order book.
 
         Returns:
             None: This method returns nothing.
         """
         self.cache = cache
         self.timeout_seconds = timeout_seconds
+        self.hold_limits = hold_limits
 
     def place(self, body, instrument_id, started_at):
         """Writes the order down for the engine and answers with what the engine did.
@@ -59,7 +62,12 @@ class IntentHandoff:
             RefusedRequestError: With HTTP 503 when the order engine is not running or the order cannot be written for it.
         """
         self.refuse_unless_engine_running()
-        intent = OrderIntent(body, instrument_id, self.timeout_seconds)
+        intent = OrderIntent(
+            body,
+            instrument_id,
+            self.timeout_seconds,
+            hold_limits=self.hold_limits,
+        )
         try:
             self.cache.xadd(
                 INTENT_STREAM_KEY,
@@ -117,6 +125,7 @@ class IntentHandoff:
                 wait_seconds,
                 request_index,
                 reply_key,
+                hold_limits=self.hold_limits,
             )
         return self.hand_over_many(intents, reply_key, wait_seconds, started_at)
 

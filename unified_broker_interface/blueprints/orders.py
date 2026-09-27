@@ -174,6 +174,7 @@ class OrdersBlueprint(BaseBlueprint):
         self.order_handoff = IntentHandoff(
             self.cache,
             api_configuration['order_engine_timeout_seconds'],
+            api_configuration['order_hold_limits'],
         )
         self.order_placement.start_connection_warmers()
 

@@ -17,3 +17,11 @@ It could have been recomputed in the engine from `created_at` plus the engine's 
 ## Why `synthetic_type` is read here but not checked here
 
 The type is read off the body so that the stream entry says what kind of order it is without anyone having to parse the body again, which matters for reading a backlog by hand. It is deliberately not validated: what a bracket needs beside its type, and whether those values make sense together, is the bracket's own business and is checked where the engine builds one. Validating it in two places would mean two lists of legal types to keep in step.
+
+## Why plain limit orders are held by default, and decided here
+
+The user asked for the place route to behave as they remembered the old order manager: an order goes to a broker only once it could realistically fill. On `main` that only happened for an order that asked for `virtual_limit` while the API ran in engine mode; direct mode, the default, sent everything at once. `UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS`, on by default, makes a plain limit order a `virtual_limit`.
+
+The decision is made where the intent is built, in the API worker, so the intent on the stream, the parent's `synthetic_type` and the answer all name the type that actually runs. Only a `DAY` limit with its own `price` and no `synthetic` object is held. An `IOC` order means "now or never", which holding would change; a limit priced only by `price_reference` cannot be held, because `VirtualLimit` holds at the body's own price; and a body that names any type, `simple` included, has chosen, which is how a caller opts out and how flatten's closing orders stay immediate.
+
+The offline route suites pin the setting off, because their scenarios test sending at once; `order_engine_changes` turns it on for the scenarios about holding.

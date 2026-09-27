@@ -55,8 +55,11 @@ class OrderEngineChangesSuite(order_routes.OrderRoutesSuite):
         self.network = order_change_lists.ListBrokerNetwork()
         self.client = None
 
-    def start_scenario(self):
+    def start_scenario(self, hold_limits=False):
         """Resets the stand-ins and builds a client whose orders all go to Flattrade.
+
+        Args:
+            hold_limits (bool): Whether plain limit orders are held in the virtual order book.
 
         Returns:
             None: This method returns nothing.
@@ -72,6 +75,7 @@ class OrderEngineChangesSuite(order_routes.OrderRoutesSuite):
         ]
         api_configuration['order_rate_per_second'] = 0
         api_configuration['order_rate_per_broker_per_second'] = 10
+        api_configuration['order_hold_limits'] = hold_limits
         answers = order_routes.OrderRoutesAnswers()
         self.network.reset({
             'by_url': [
