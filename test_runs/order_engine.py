@@ -2515,6 +2515,36 @@ class OrderEngineSuite:
             ),
         ]
 
+    def priced_clock_result(self, name, request_body, quote):
+        """Places one timed order against a quote and records the price of every leg it placed.
+
+        Args:
+            name (str): The check's name.
+            request_body (dict): The request body.
+            quote (dict): The live quote to seed.
+
+        Returns:
+            dict: The recorded result, with `leg_prices`.
+        """
+        accepted = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        result = self.clock_result(
+            name,
+            request_body,
+            [],
+            FROZEN_NOW.timestamp() + 60,
+            accepted,
+            quote=quote,
+        )
+        prices = []
+        for document in self.fake_redis.hashes.get('unified:orders:parents', {}).values():
+            for leg in ParentOrder.from_document(json.loads(document)).legs:
+                prices.append(leg.price)
+        result['leg_prices'] = prices
+        return result
+
     def clock_result(
         self,
         name,
@@ -3316,6 +3346,36 @@ class OrderEngineSuite:
                 frozen + 2000,
                 accepted,
                 quote=self.scenarios.quote(),
+            ),
+            self.priced_clock_result(
+                'an_accumulation_never_bids_above_the_callers_limit',
+                dict(entry, quantity=5, price=995, synthetic={
+                    'type': 'accumulation',
+                    'every_minutes': 30,
+                    'purchases': 4,
+                }),
+                self.scenarios.quote(),
+            ),
+            self.priced_clock_result(
+                'an_accumulation_rests_on_the_bid_when_it_is_better_than_the_limit',
+                dict(entry, quantity=5, price=1005, synthetic={
+                    'type': 'accumulation',
+                    'every_minutes': 30,
+                    'purchases': 4,
+                }),
+                self.scenarios.quote(),
+            ),
+            self.priced_clock_result(
+                'an_accumulation_with_no_bid_rests_at_the_callers_limit',
+                dict(entry, quantity=5, price=995, synthetic={
+                    'type': 'accumulation',
+                    'every_minutes': 30,
+                    'purchases': 4,
+                }),
+                self.scenarios.quote(depth={
+                    'buy': [],
+                    'sell': [],
+                }),
             ),
             self.clock_result(
                 'an_accumulation_waits_out_the_gap_between_purchases',

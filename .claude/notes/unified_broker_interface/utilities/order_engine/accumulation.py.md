@@ -13,3 +13,7 @@ The Atlas suggests a chaser for each purchase, which would be better still and w
 ## Why the schedule is measured from placement
 
 "Every thirty minutes, eight times" means what it says whenever it was started, rather than depending on a clock time the caller would also have to supply. That makes it the one timed type in the package with no `at_time`, and it reads the same clock the tick reads for the reason every timed type does.
+
+## Why a purchase never goes past the caller's price
+
+`buy_once` priced every purchase at the book's own touch and never read the caller's `price`. In the live test of 2026-09-27 an accumulation asked to buy at ₹20.50 was placed at ₹22.50, the weekend quote's bid, and on a trading day would have filled at a price the caller never agreed to. The caller's limit is now a cap for a buy and a floor for a sell, as it is for the volatility order, and the book's touch is used only when it is better. With no touch on that side the caller's price is used rather than refusing, since the caller has already named a price they will accept. An order with no price, such as a MARKET body, keeps the old behaviour.

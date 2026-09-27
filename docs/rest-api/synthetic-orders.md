@@ -973,7 +973,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `accumulation`
 
-    An accumulation buys the order's `quantity` every `every_minutes`, `purchases` times, measured from when the order was placed. Each purchase rests on its own side of the book and is not chased if it does not fill.
+    An accumulation buys the order's `quantity` every `every_minutes`, `purchases` times, measured from when the order was placed. Each purchase rests on its own side of the book and is not chased if it does not fill. A `LIMIT` order's `price` is the most a buy pays, or the least a sell takes: a purchase rests at the book's own touch when that is better, and at your price otherwise, including when the book shows nothing on that side.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
