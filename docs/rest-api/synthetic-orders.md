@@ -2,7 +2,7 @@
 
 A synthetic order is an order that no Indian exchange offers, built by the order engine out of ordinary broker orders. You ask for one by adding a `synthetic` object to the body of [`POST /api/orders/place`](orders.md#place-an-order), and the engine places, watches, moves and cancels the real orders it is made of.
 
-This page is the glossary of all 50 types the engine runs. It lists every field each type reads from the `synthetic` object, with the defaults and limits taken from the code.
+This page is the glossary of all 51 types the engine runs. It lists every field each type reads from the `synthetic` object, with the defaults and limits taken from the code.
 
 !!! danger "Synthetic orders place real orders, sometimes long after you asked"
     A synthetic order can place, modify or cancel orders at a broker minutes, hours or even days after your request, with nobody watching. Triggers, trailing stops, grids and schedules all act on their own. Send `"dry_run": true` first, which builds the first broker request without recording or sending anything.
@@ -54,7 +54,7 @@ Two fields can appear in any `synthetic` object. The table below lists them.
 
 | Field | Type | Required | Meaning |
 |---|---|:---:|---|
-| `type` | string | Yes | One of the 50 names in the table below. A body with no `synthetic` object, or no `type`, runs as `simple`. An unknown name is refused with `400` and the message `the order engine does not run '<name>' orders; it runs <list>`. |
+| `type` | string | Yes | One of the 51 names in the table below. A body with no `synthetic` object, or no `type`, runs as `simple`. An unknown name is refused with `400` and the message `the order engine does not run '<name>' orders; it runs <list>`. |
 | `closes_position` | boolean | No | `true` says every leg of this order closes a position, so it may use the part of a broker's daily order cap kept for exits. Only the literal `true` counts. |
 
 The engine also writes its own working values into the parent's copy of the `synthetic` object, such as `tick_size`, `triggered_at`, `watermark`, `placed_quantity`, `started_at` and `expires_at`. These are internal, so do not send them.
@@ -80,7 +80,7 @@ Types that act at once answer with the broker's answer plus a `parent_id`; types
 
 Keep the `parent_id`. It is the only handle on an order that has not reached a broker yet.
 
-## All 50 types
+## All 51 types
 
 The master table below lists every type registered in `SYNTHETIC_ORDER_CLASSES`, in the order the registry holds them. The "First answer" column says whether a broker order goes out when you ask (`200`, the broker's own answer) or whether the engine waits (`202`).
 
@@ -136,8 +136,9 @@ The master table below lists every type registered in `SYNTHETIC_ORDER_CLASSES`,
 | `close_on_trigger` | Price triggers | At a level, cancels every order on the instrument to free margin, then closes the whole position. | `trigger_price`, `trigger_direction`, `trigger_on` | 202 |
 | `stop_and_reverse` | Price triggers | At a level, closes the position and opens the same size the other way. | `trigger_price`, `method` | 202 |
 | `attached_hedge` | Linked orders | Hedges each fill in another instrument, by a ratio or by an option's delta, in whole lots. | `hedge_instrument_id`, `ratio` or `delta_volatility` | 200 |
+| `scale_with_profit_taker` | Plain and laddered | A ladder whose every filled rung gets its own profit-taker, and is placed again once that profit is taken. | `from_price`, `to_price`, `steps`, `profit_points`, `most_cycles` | 200 |
 
-The chart below counts how many of the 50 types fall into each family. The families are this page's own grouping, chosen to make the list easier to scan; the code does not group them.
+The chart below counts how many of the 51 types fall into each family. The families are this page's own grouping, chosen to make the list easier to scan; the code does not group them.
 
 ```vegalite
 {
@@ -152,7 +153,7 @@ The chart below counts how many of the 50 types fall into each family. The famil
       {"family": "Stops and trailing", "types": 7},
       {"family": "Book-following limits", "types": 7},
       {"family": "Price triggers", "types": 7},
-      {"family": "Plain and laddered", "types": 4},
+      {"family": "Plain and laddered", "types": 5},
       {"family": "Time-based", "types": 5},
       {"family": "Multi-instrument", "types": 4}
     ]
@@ -247,7 +248,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
 === "Plain and laddered"
 
-    These four types act at once and place everything they need when you ask.
+    These five types act at once and place everything they need when you ask.
 
     #### `simple`
 
@@ -295,6 +296,26 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     ```json
     {"type": "grid", "levels": 3, "step_points": 5, "most_inventory": 30}
+    ```
+
+    #### `scale_with_profit_taker`
+
+    A scale order with profit-takers (the Atlas's G15, Interactive Brokers' ScaleTrader) is a `ladder` that books its profit one rung at a time. The rungs are placed as a ladder places them. Each rung then goes round a cycle:
+
+    1. When the rung has completely filled, a limit for the same quantity goes out `profit_points` better, rounded to the tick: a sell above a filled buy, a buy below a filled sell.
+    2. When that profit-taker fills, the rung is placed again at its own price.
+    3. The cycle repeats, up to `most_cycles` times per rung, or until you cancel the parent.
+
+    A rung is placed again only after its profit-taker has closed it, so the position never grows past the ladder's own `quantity`. That is the cap the Atlas asks for. A rung that only partly fills waits for the rest before its profit-taker goes out. The parent does not finish on its own; cancel it with [`DELETE /api/orders/parents`](orders.md#cancel-a-parent) when you are done.
+
+    | Field | Type | Required | Rules |
+    |---|---|:---:|---|
+    | `from_price`, `to_price`, `steps` | | Yes | As for `ladder`. |
+    | `profit_points` | number | Yes | Above zero. |
+    | `most_cycles` | integer | No | At least 1. Without it, a rung cycles until the parent is cancelled. |
+
+    ```json
+    {"type": "scale_with_profit_taker", "from_price": 1000, "to_price": 990, "steps": 3, "profit_points": 4, "most_cycles": 5}
     ```
 
 === "Linked orders"

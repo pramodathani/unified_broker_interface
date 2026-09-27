@@ -77,6 +77,9 @@ from unified_broker_interface.utilities.order_engine.participation import (
 )
 from unified_broker_interface.utilities.order_engine.post_only import PostOnly
 from unified_broker_interface.utilities.order_engine.scale_out import ScaleOut
+from unified_broker_interface.utilities.order_engine.scale_with_profit_taker import (
+    ScaleWithProfitTaker,
+)
 from unified_broker_interface.utilities.order_engine.scheduled import Scheduled
 from unified_broker_interface.utilities.order_engine.simple import SimpleOrder
 from unified_broker_interface.utilities.order_engine.square_off import SquareOff
@@ -162,4 +165,5 @@ SYNTHETIC_ORDER_CLASSES = {
     CloseOnTrigger.SYNTHETIC_TYPE: CloseOnTrigger,
     StopAndReverse.SYNTHETIC_TYPE: StopAndReverse,
     AttachedHedge.SYNTHETIC_TYPE: AttachedHedge,
+    ScaleWithProfitTaker.SYNTHETIC_TYPE: ScaleWithProfitTaker,
 }

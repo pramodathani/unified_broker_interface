@@ -104,6 +104,52 @@ RESULT_TTL_SECONDS = 300
 FROZEN_NOW = datetime.datetime(2026, 9, 23, 10, 0, 0, tzinfo=moments.INDIA)
 
 
+
+class NumberingBrokerNetwork(order_routes.FakeBrokerNetwork):
+    """The stubbed broker network, able to give each placed order its own Flattrade order id.
+
+    An answer carrying `number_orders: true` has its `norenordno` replaced on every `PlaceOrder` by `26091500000101`, `26091500000102` and so on, so a type with several legs can be sent an update for one of them. Every other answer is exactly the stubbed one.
+
+    Attributes:
+        placed (int): How many orders have been numbered since the last reset.
+    """
+
+    def reset(self, answer):
+        """Clears the captured requests and the numbering, and sets the answer for the next calls.
+
+        Args:
+            answer (dict | None): The answer, or None for an empty JSON object with HTTP 200.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        super().reset(answer)
+        self.placed = 0
+
+    def request(self, method, url, **keyword_arguments):
+        """Captures one outgoing request and answers it, numbering a placed order when the answer asks for it.
+
+        Args:
+            method (str): The HTTP method.
+            url (str): The URL.
+            **keyword_arguments: The remaining `requests` arguments.
+
+        Returns:
+            FakeResponse: The stubbed answer.
+        """
+        if not self.answer.get('number_orders') or not url.endswith('/PlaceOrder'):
+            return super().request(method, url, **keyword_arguments)
+        self.placed = self.placed + 1
+        stubbed = self.answer
+        numbered = dict(stubbed)
+        numbered['json'] = dict(stubbed.get('json') or {})
+        numbered['json']['norenordno'] = str(26091500000100 + self.placed)
+        self.answer = numbered
+        try:
+            return super().request(method, url, **keyword_arguments)
+        finally:
+            self.answer = stubbed
+
 class OrderEngineScenarios:
     """Every scenario the engine's recording covers.
 
@@ -959,7 +1005,7 @@ class OrderEngineSuite:
 
     Attributes:
         fake_redis (redis_stand_ins.FakeEngineStoreRedis): The stand-in the engine reads and writes.
-        network (FakeBrokerNetwork): The stubbed broker network.
+        network (NumberingBrokerNetwork): The stubbed broker network.
     """
 
     def __init__(self):
@@ -969,7 +1015,7 @@ class OrderEngineSuite:
             None: This method returns nothing.
         """
         self.fake_redis = redis_stand_ins.FakeEngineStoreRedis()
-        self.network = order_routes.FakeBrokerNetwork()
+        self.network = NumberingBrokerNetwork()
         self.counting_uuid = engine_stand_ins.CountingUuid()
         self.scenarios = OrderEngineScenarios()
 
@@ -4284,6 +4330,69 @@ class OrderEngineSuite:
                     'hedge_instrument_id': order_routes.OrderRoutesState.
                     INSTRUMENT_IDENTIFIERS['reliance_future'],
                     'delta_volatility': 12.5,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_scale_with_profit_taker_takes_each_rungs_profit_and_places_it_again',
+                dict(entry, quantity=30, synthetic={
+                    'type': 'scale_with_profit_taker',
+                    'from_price': 1000,
+                    'to_price': 990,
+                    'steps': 3,
+                    'profit_points': 4,
+                    'most_cycles': 1,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {
+                        'quote': steady,
+                        'at': 1,
+                        'updates': [
+                            self.update('26091500000102', 'COMPLETE', 10),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 2,
+                        'updates': [
+                            self.update('26091500000104', 'COMPLETE', 10),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 3,
+                        'updates': [
+                            self.update('26091500000105', 'COMPLETE', 10),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 4,
+                        'updates': [
+                            self.update('26091500000106', 'COMPLETE', 10),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 5,
+                        'updates': [
+                            self.update('26091500000107', 'COMPLETE', 10),
+                        ],
+                    },
+                ],
+                dict(accepted, number_orders=True),
+            ),
+            self.price_result(
+                'a_scale_with_profit_taker_without_a_profit_distance_is_refused',
+                dict(entry, quantity=30, synthetic={
+                    'type': 'scale_with_profit_taker',
+                    'from_price': 1000,
+                    'to_price': 990,
+                    'steps': 3,
                 }),
                 [
                     {'quote': steady, 'at': 0},
