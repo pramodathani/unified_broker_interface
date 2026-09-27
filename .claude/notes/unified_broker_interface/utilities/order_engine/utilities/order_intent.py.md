@@ -25,3 +25,7 @@ The user asked for the place route to behave as they remembered the old order ma
 The decision is made where the intent is built, in the API worker, so the intent on the stream, the parent's `synthetic_type` and the answer all name the type that actually runs. Only a `DAY` limit with its own `price` and no `synthetic` object is held. An `IOC` order means "now or never", which holding would change; a limit priced only by `price_reference` cannot be held, because `VirtualLimit` holds at the body's own price; and a body that names any type, `simple` included, has chosen, which is how a caller opts out and how flatten's closing orders stay immediate.
 
 The offline route suites pin the setting off, because their scenarios test sending at once; `order_engine_changes` turns it on for the scenarios about holding.
+
+## Why an after-market order is never held
+
+An after-market order is queued by the broker for the next session's open. Nothing about the current quote says when it could fill, and outside market hours no fresh quote arrives to release it, so holding it meant it was never sent at all. A live test through tradingmachine on 2026-09-27 confirmed this: every after-market limit order came back `armed` and none reached a broker. `is_after_market` reads the flag with the same spellings `OrderRequest.parse_flag` accepts, so a body the route treats as after-market is never held. The scenario `a_plain_limit_order_is_held_by_default_and_nothing_else_is` in `test_runs/order_engine_changes.py` places one and records it being sent at once.

@@ -5,6 +5,10 @@ import socket
 import time
 import uuid
 
+from unified_broker_interface.utilities.broker_orders.utilities.order_request import (
+    OrderRequest,
+)
+
 REPLY_KEY_PREFIX = 'unified:orders:intents:result:'
 HELD_TYPE = 'virtual_limit'
 
@@ -88,7 +92,7 @@ class OrderIntent:
     def is_holdable(self, body):
         """Whether an order that names no type is one the virtual order book can hold.
 
-        Only a limit order with a price of its own is held. An `IOC` order asks to trade now or never, so holding it would change what it means, and a body with a `synthetic` object has chosen its type, `simple` included.
+        Only a limit order with a price of its own is held. An `IOC` order asks to trade now or never, so holding it would change what it means. An after-market order is queued at the broker for the next session, when no live price arrives to release it, so holding it would mean it is never sent. A body with a `synthetic` object has chosen its type, `simple` included.
 
         Args:
             body (dict): The caller's decoded JSON body.
@@ -102,7 +106,23 @@ class OrderIntent:
             return False
         if body.get('price') is None:
             return False
+        if self.is_after_market(body):
+            return False
         return str(body.get('validity') or 'DAY').upper() != 'IOC'
+
+    def is_after_market(self, body):
+        """Whether the body asks for an after-market order.
+
+        The flag is read with the same spellings `OrderRequest.parse_flag` accepts, so a body the route reads as after-market is never held.
+
+        Args:
+            body (dict): The caller's decoded JSON body.
+
+        Returns:
+            bool: True when `after_market` is true in any spelling the route accepts.
+        """
+        spelling = str(body.get('after_market')).strip().lower()
+        return spelling in OrderRequest.TRUE_SPELLINGS
 
     def document(self):
         """The intent as the engine reads it off the stream.

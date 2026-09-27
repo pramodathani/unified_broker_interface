@@ -476,7 +476,7 @@ class OrderEngineChangesSuite(order_routes.OrderRoutesSuite):
         }
 
     def limits_held_by_default(self):
-        """Places four orders with limits held by default: only the plain DAY limit is held.
+        """Places five orders with limits held by default: only the plain DAY limit is held, and an after-market limit is sent at once.
 
         Returns:
             dict: The recorded result.
@@ -488,8 +488,9 @@ class OrderEngineChangesSuite(order_routes.OrderRoutesSuite):
         }))
         immediate = self.call('POST', '/place', self.limit_body(validity='IOC'))
         market = self.call('POST', '/place', order_routes.OrderRoutesScenarios().market_order(dry_run=None))
+        after_market = self.call('POST', '/place', self.limit_body(after_market=True))
         placed = []
-        for answer in (plain, named_simple, immediate, market):
+        for answer in (plain, named_simple, immediate, market, after_market):
             parent_order_id = (answer['body'] or {}).get('parent_id')
             placed.append({
                 'status': answer['status'],
