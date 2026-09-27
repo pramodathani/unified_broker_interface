@@ -1,6 +1,9 @@
 """The synthetic order types, by the name a caller's `synthetic.type` selects them with."""
 
 from unified_broker_interface.utilities.order_engine.bracket import Bracket
+from unified_broker_interface.utilities.order_engine.account_conditional import (
+    AccountConditional,
+)
 from unified_broker_interface.utilities.order_engine.accumulation import (
     Accumulation,
 )
@@ -170,4 +173,5 @@ SYNTHETIC_ORDER_CLASSES = {
     AttachedHedge.SYNTHETIC_TYPE: AttachedHedge,
     ScaleWithProfitTaker.SYNTHETIC_TYPE: ScaleWithProfitTaker,
     TwoSidedQuote.SYNTHETIC_TYPE: TwoSidedQuote,
+    AccountConditional.SYNTHETIC_TYPE: AccountConditional,
 }

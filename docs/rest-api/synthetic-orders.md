@@ -2,7 +2,7 @@
 
 A synthetic order is an order that no Indian exchange offers, built by the order engine out of ordinary broker orders. You ask for one by adding a `synthetic` object to the body of [`POST /api/orders/place`](orders.md#place-an-order), and the engine places, watches, moves and cancels the real orders it is made of.
 
-This page is the glossary of all 52 types the engine runs. It lists every field each type reads from the `synthetic` object, with the defaults and limits taken from the code.
+This page is the glossary of all 53 types the engine runs. It lists every field each type reads from the `synthetic` object, with the defaults and limits taken from the code.
 
 !!! danger "Synthetic orders place real orders, sometimes long after you asked"
     A synthetic order can place, modify or cancel orders at a broker minutes, hours or even days after your request, with nobody watching. Triggers, trailing stops, grids and schedules all act on their own. Send `"dry_run": true` first, which builds the first broker request without recording or sending anything.
@@ -54,7 +54,7 @@ Two fields can appear in any `synthetic` object. The table below lists them.
 
 | Field | Type | Required | Meaning |
 |---|---|:---:|---|
-| `type` | string | Yes | One of the 52 names in the table below. A body with no `synthetic` object, or no `type`, runs as `simple`. An unknown name is refused with `400` and the message `the order engine does not run '<name>' orders; it runs <list>`. |
+| `type` | string | Yes | One of the 53 names in the table below. A body with no `synthetic` object, or no `type`, runs as `simple`. An unknown name is refused with `400` and the message `the order engine does not run '<name>' orders; it runs <list>`. |
 | `closes_position` | boolean | No | `true` says every leg of this order closes a position, so it may use the part of a broker's daily order cap kept for exits. Only the literal `true` counts. |
 
 The engine also writes its own working values into the parent's copy of the `synthetic` object, such as `tick_size`, `triggered_at`, `watermark`, `placed_quantity`, `started_at` and `expires_at`. These are internal, so do not send them.
@@ -80,7 +80,7 @@ Types that act at once answer with the broker's answer plus a `parent_id`; types
 
 Keep the `parent_id`. It is the only handle on an order that has not reached a broker yet.
 
-## All 52 types
+## All 53 types
 
 The master table below lists every type registered in `SYNTHETIC_ORDER_CLASSES`, in the order the registry holds them. The "First answer" column says whether a broker order goes out when you ask (`200`, the broker's own answer) or whether the engine waits (`202`).
 
@@ -138,8 +138,9 @@ The master table below lists every type registered in `SYNTHETIC_ORDER_CLASSES`,
 | `attached_hedge` | Linked orders | Hedges each fill in another instrument, by a ratio or by an option's delta, in whole lots. | `hedge_instrument_id`, `ratio` or `delta_volatility` | 200 |
 | `scale_with_profit_taker` | Plain and laddered | A ladder whose every filled rung gets its own profit-taker, and is placed again once that profit is taken. | `from_price`, `to_price`, `steps`, `profit_points`, `most_cycles` | 200 |
 | `two_sided_quote` | Plain and laddered | A bid and an offer kept around the fair price, leaning away from the inventory they build. | `half_spread_points`, `skew_ticks`, `most_inventory` | 200 |
+| `account_conditional` | Price triggers | Sends an order when free margin, the day's profit or the open position count reaches a level, or cancels it then. | `account_field`, `account_level`, `trigger_direction`, `action` | 202, or 200 with `action: cancel` |
 
-The chart below counts how many of the 52 types fall into each family. The families are this page's own grouping, chosen to make the list easier to scan; the code does not group them.
+The chart below counts how many of the 53 types fall into each family. The families are this page's own grouping, chosen to make the list easier to scan; the code does not group them.
 
 ```vegalite
 {
@@ -153,7 +154,7 @@ The chart below counts how many of the 52 types fall into each family. The famil
       {"family": "Execution algorithms", "types": 8},
       {"family": "Stops and trailing", "types": 7},
       {"family": "Book-following limits", "types": 7},
-      {"family": "Price triggers", "types": 7},
+      {"family": "Price triggers", "types": 8},
       {"family": "Plain and laddered", "types": 6},
       {"family": "Time-based", "types": 5},
       {"family": "Multi-instrument", "types": 4}
@@ -475,7 +476,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
 === "Price triggers"
 
-    These seven types send nothing when you ask. They answer `202 armed` and send one order on the first price tick where the level is reached, or, with `trigger_on`, where it is confirmed. They fire once. They run only while the engine is running, unlike a native stop at the exchange.
+    These eight types send nothing when you ask, apart from an `account_conditional` order with `action: cancel`. They answer `202 armed` and send one order on the first price tick where the level is reached, or, with `trigger_on`, where it is confirmed. They fire once. They run only while the engine is running, unlike a native stop at the exchange.
 
     Every price trigger reads the two fields below, and each type adds its own.
 
@@ -596,6 +597,34 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     ```json
     {"type": "stop_and_reverse", "trigger_price": 995, "method": "sequential"}
+    ```
+
+    #### `account_conditional`
+
+    An account-conditional order (the Atlas's G17) waits on the account rather than on a price. It compares one of three figures with `account_level`, in `trigger_direction`:
+
+    | `account_field` | The figure | Read from |
+    |---|---|---|
+    | `available_balance` | The free margin across every broker | `summary.available_balance` in [the funds document](portfolio.md#funds) |
+    | `day_pnl` | Realized plus unrealized profit across every broker, as the daily loss lockout reads it | `pnl` in the funds document |
+    | `open_positions` | How many net positions are open | The `net` rows of [the positions document](portfolio.md#positions) with a quantity |
+
+    `action` says what happens when the condition holds:
+
+    - `place`, the default, sends nothing until then, which covers "send this once margin frees up" and "only once the book is flat". It answers `202 armed`.
+    - `cancel` sends the order at once and cancels it then, such as pulling a resting bid when the day's loss reaches a limit. It answers with the broker's answer, and the parent becomes `cancelled`.
+
+    The figures are read about once a second. `trigger_direction` is required, because the side of the order says nothing about which way the account has to move, and `trigger_price` and `trigger_on` are not used.
+
+    | Field | Type | Required | Rules |
+    |---|---|:---:|---|
+    | `account_field` | string | Yes | `available_balance`, `day_pnl` or `open_positions`. |
+    | `account_level` | number | Yes | The level. May be negative, for a loss. |
+    | `trigger_direction` | string | Yes | `at_or_above` or `at_or_below`. |
+    | `action` | string | No | `place` or `cancel`. Defaults to `place`. |
+
+    ```json
+    {"type": "account_conditional", "account_field": "day_pnl", "account_level": -5000, "trigger_direction": "at_or_below", "action": "cancel"}
     ```
 
 === "Stops and trailing"

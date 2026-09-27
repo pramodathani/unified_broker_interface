@@ -2703,7 +2703,7 @@ class OrderEngineSuite:
         Args:
             name (str): The check's name.
             request_body (dict): The request body.
-            steps (list): One `{"quote": dict | None, "at": float}` per tick, where `at` is seconds after the order was placed, and optionally `other_quotes` for other instruments and `updates`, order updates applied before the tick.
+            steps (list): One `{"quote": dict | None, "at": float}` per tick, where `at` is seconds after the order was placed, and optionally `other_quotes` for other instruments, `updates`, order updates applied before the tick, and `funds`, the combined funds document.
             answer (dict | None): The stubbed broker answer.
             throttle_seconds (float): The shortest gap the re-pricing throttle allows between two moves of one order.
             book_overrides (dict | None): Fields to replace on the broker's order book entry, for a type whose order is not a plain limit.
@@ -2821,6 +2821,8 @@ class OrderEngineSuite:
             try:
                 self.seed_quote(step.get('quote'))
                 self.seed_other_quotes(step)
+                if step.get('funds') is not None:
+                    self.fake_redis.strings['unified:portfolio:funds'] = json.dumps(step['funds'])
                 for update in step.get('updates') or []:
                     changed = follower.follow({
                         'update': json.dumps(update),
@@ -4444,6 +4446,76 @@ class OrderEngineSuite:
                 dict(entry, synthetic={
                     'type': 'two_sided_quote',
                     'most_inventory': 10,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'an_account_conditional_order_waits_for_margin_to_free_up',
+                dict(entry, synthetic={
+                    'type': 'account_conditional',
+                    'account_field': 'available_balance',
+                    'account_level': 50000,
+                    'trigger_direction': 'at_or_above',
+                }),
+                [
+                    {'quote': steady, 'at': 0, 'funds': {'summary': {'available_balance': 40000.0}, 'pnl': {'realized': 0.0, 'unrealized': 0.0}}},
+                    {'quote': steady, 'at': 1, 'funds': {'summary': {'available_balance': 60000.0}, 'pnl': {'realized': 0.0, 'unrealized': 0.0}}},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'an_account_conditional_order_is_cancelled_when_the_day_loss_is_reached',
+                dict(entry, synthetic={
+                    'type': 'account_conditional',
+                    'account_field': 'day_pnl',
+                    'account_level': -5000,
+                    'trigger_direction': 'at_or_below',
+                    'action': 'cancel',
+                }),
+                [
+                    {'quote': steady, 'at': 0, 'funds': {'summary': {'available_balance': 60000.0}, 'pnl': {'realized': -1000.0, 'unrealized': 0.0}}},
+                    {'quote': steady, 'at': 1, 'funds': {'summary': {'available_balance': 60000.0}, 'pnl': {'realized': -6000.0, 'unrealized': 0.0}}},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'an_account_conditional_order_waits_while_a_position_is_open',
+                dict(entry, synthetic={
+                    'type': 'account_conditional',
+                    'account_field': 'open_positions',
+                    'account_level': 0,
+                    'trigger_direction': 'at_or_below',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1},
+                ],
+                accepted,
+                positions=75,
+            ),
+            self.price_result(
+                'an_account_conditional_order_is_placed_once_the_book_is_flat',
+                dict(entry, synthetic={
+                    'type': 'account_conditional',
+                    'account_field': 'open_positions',
+                    'account_level': 0,
+                    'trigger_direction': 'at_or_below',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+                positions=0,
+            ),
+            self.price_result(
+                'an_account_conditional_order_without_a_direction_is_refused',
+                dict(entry, synthetic={
+                    'type': 'account_conditional',
+                    'account_field': 'day_pnl',
+                    'account_level': -5000,
                 }),
                 [
                     {'quote': steady, 'at': 0},
