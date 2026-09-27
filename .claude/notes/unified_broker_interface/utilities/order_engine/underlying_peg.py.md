@@ -15,3 +15,7 @@ The Atlas's G6 formula uses the delta the caller states. A real option's delta c
 ## How the test suite gives it a second quote
 
 `price_result` in `test_runs/order_engine.py` seeds only RELIANCE's quote. A step can now carry `other_quotes`, keyed by a name in `INSTRUMENT_IDENTIFIERS`, and they are seeded before the order is placed and on each tick. The scenarios use the Nifty index as the underlying and RELIANCE as the traded instrument.
+
+## Why `number`'s message names the parent's type
+
+`VolatilityOrder` inherits `number`, so its refusal names whichever type the parent is ("an order of type volatility needs volatility") rather than always saying underlying peg.

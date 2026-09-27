@@ -61,7 +61,7 @@ class UnderlyingPeg(Peg):
         if value is None:
             if required:
                 raise RefusedRequestError.refusal(
-                    f'an underlying peg needs {name}',
+                    f'an order of type {self.parent.synthetic_type} needs {name}',
                     400,
                 )
             return None
@@ -146,6 +146,19 @@ class UnderlyingPeg(Peg):
         )
         delta = self.number('delta', True)
         price = start_price + delta * (underlying_price - underlying_start)
+        return self.bounded(price, view, transaction_type)
+
+    def bounded(self, price, view, transaction_type):
+        """A computed price kept inside the caller's range and above zero, then rounded onto the tick.
+
+        Args:
+            price (decimal.Decimal): The computed price.
+            view (MarketView): The traded instrument's view, for its tick size.
+            transaction_type (str): BUY or SELL.
+
+        Returns:
+            decimal.Decimal | None: The price, or None when the tick size is not known.
+        """
         lowest, highest = self.read_range()
         if lowest is not None and price < lowest:
             price = lowest

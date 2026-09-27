@@ -2658,7 +2658,12 @@ class OrderEngineSuite:
         Returns:
             dict: The recorded result.
         """
-        scenario = self.scenarios.intents(name, [request_body], answer=answer)
+        settings = {
+            'answer': answer,
+        }
+        if request_body.get('instrument_id'):
+            settings['instrument_id'] = request_body['instrument_id']
+        scenario = self.scenarios.intents(name, [request_body], **settings)
         self.fake_redis = self.build_state()
         self.network.reset(answer)
         self.counting_uuid.reset()
@@ -4220,6 +4225,78 @@ class OrderEngineSuite:
                 }),
                 [
                     {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_volatility_order_is_priced_by_the_model_and_follows_the_index',
+                dict(
+                    entry,
+                    instrument_id=order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['nifty_option'],
+                    quantity=75,
+                    price=500,
+                    synthetic={
+                        'type': 'volatility',
+                        'watch_instrument_id': order_routes.OrderRoutesState.
+                        INSTRUMENT_IDENTIFIERS['nifty_index'],
+                        'volatility': 12.5,
+                    },
+                ),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=25000)}},
+                    {'quote': steady, 'at': 1, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=25000)}},
+                    {'quote': steady, 'at': 2, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=25100)}},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_volatility_order_never_pays_more_than_its_own_price',
+                dict(
+                    entry,
+                    instrument_id=order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['nifty_option'],
+                    quantity=75,
+                    price=150,
+                    synthetic={
+                        'type': 'volatility',
+                        'watch_instrument_id': order_routes.OrderRoutesState.
+                        INSTRUMENT_IDENTIFIERS['nifty_index'],
+                        'volatility': 12.5,
+                    },
+                ),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=25000)}},
+                    {'quote': steady, 'at': 1, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=24900)}},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_volatility_order_without_a_volatility_is_refused',
+                dict(
+                    entry,
+                    instrument_id=order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['nifty_option'],
+                    quantity=75,
+                    price=500,
+                    synthetic={
+                        'type': 'volatility',
+                        'watch_instrument_id': order_routes.OrderRoutesState.
+                        INSTRUMENT_IDENTIFIERS['nifty_index'],
+                    },
+                ),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=25000)}},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_volatility_order_on_something_that_is_not_an_option_is_refused',
+                dict(entry, synthetic={
+                    'type': 'volatility',
+                    'watch_instrument_id': order_routes.OrderRoutesState.
+                    INSTRUMENT_IDENTIFIERS['nifty_index'],
+                    'volatility': 12.5,
+                }),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=25000)}},
                 ],
                 accepted,
             ),

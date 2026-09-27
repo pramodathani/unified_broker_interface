@@ -91,6 +91,9 @@ from unified_broker_interface.utilities.order_engine.virtual_limit import (
 from unified_broker_interface.utilities.order_engine.underlying_peg import (
     UnderlyingPeg,
 )
+from unified_broker_interface.utilities.order_engine.volatility_order import (
+    VolatilityOrder,
+)
 from unified_broker_interface.utilities.order_engine.vwap import Vwap
 from unified_broker_interface.utilities.order_engine.two_sided_breakout import (
     TwoSidedBreakout,
@@ -142,4 +145,5 @@ SYNTHETIC_ORDER_CLASSES = {
     OpeningAuction.SYNTHETIC_TYPE: OpeningAuction,
     ClosingPrice.SYNTHETIC_TYPE: ClosingPrice,
     UnderlyingPeg.SYNTHETIC_TYPE: UnderlyingPeg,
+    VolatilityOrder.SYNTHETIC_TYPE: VolatilityOrder,
 }
