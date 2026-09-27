@@ -8,7 +8,7 @@ from unified_broker_interface.utilities.broker_selection.base import (
 class RoundRobinSelector(BrokerSelector):
     """Offers each order first to the broker after the one offered the previous order.
 
-    The turn is `INCR unified:orders:round_robin` modulo the number of brokers in the rotation. When the broker whose turn it is cannot take the order, the next broker in the rotation is tried, so the broker after a skipped one takes two turns in a row.
+    The turn is `INCR unified:orders:round_robin` modulo the number of brokers in the rotation. When the broker whose turn it is cannot take the order, the next broker in the rotation is tried, and the counter is then moved on past every broker passed over, so the next order starts after the broker that took this one. Without that, the broker after an unable one took two turns in a row: in the live test of 2026-09-27 INDmoney received 30 of 100 after-market orders, because Groww, which takes none, sits before it.
 
     Attributes:
         COUNTER_KEY (str): The Redis key holding the turn counter.
@@ -32,6 +32,19 @@ class RoundRobinSelector(BrokerSelector):
         del instrument_id
         pipeline.incr(self.COUNTER_KEY)
         return 1
+
+    def record_passed_over(self, cache, passed_over):
+        """Moves the turn on past the brokers this order passed over.
+
+        Args:
+            cache (redis.Redis): The Redis client.
+            passed_over (int): How many brokers were passed over before the chosen one.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        if passed_over > 0:
+            cache.incrby(self.COUNTER_KEY, passed_over)
 
     def ranked_brokers(self, order, instrument, rotation, redis_replies):
         """Lists the rotation starting at the broker whose turn it is.

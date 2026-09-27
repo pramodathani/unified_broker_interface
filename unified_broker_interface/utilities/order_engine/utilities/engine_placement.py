@@ -508,6 +508,17 @@ class EnginePlacement:
         )
         if uses_assignment:
             prepared.skipped = list(self.assignment.skipped)
+        elif broker_name is None:
+            try:
+                self.order_placement.broker_selector.record_passed_over(
+                    self.cache,
+                    len(prepared.skipped),
+                )
+            except redis.RedisError as error:
+                self.logger.warning(
+                    f'The broker turn could not be moved past the brokers '
+                    f'passed over: {error}'
+                )
         return prepared
 
     def assign_broker(self, intent):

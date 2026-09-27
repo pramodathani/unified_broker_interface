@@ -248,6 +248,24 @@ class FakeRedis:
         self.start_round_trip()
         return self.run_incr(key)
 
+    def incrby(self, key, amount):
+        """Adds an amount to a string key in its own round trip.
+
+        Args:
+            key (str): The key.
+            amount (int): How much to add.
+
+        Returns:
+            int: The value after the increment.
+
+        Raises:
+            redis.RedisError: When this round trip is set to fail.
+        """
+        self.start_round_trip()
+        value = int(self.strings.get(key) or 0) + int(amount)
+        self.strings[key] = str(value)
+        return value
+
     def zrangebylex(self, key, minimum, maximum, start=None, num=None):
         """Reads a lexical range of a sorted set in its own round trip.
 

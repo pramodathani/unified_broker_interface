@@ -5244,6 +5244,42 @@ class OrderEngineSuite:
             ),
         ]
 
+    def run_rotation_checks(self):
+        """Checks that the round robin spreads a run of orders some brokers cannot take evenly over the brokers that can.
+
+        In the live test of 2026-09-27, a burst of after-market orders gave INDmoney 30 of 100, because the broker after one that cannot take the order took two turns.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        self.fake_redis = self.build_state()
+        logger = logging.getLogger('test_runs.order_engine')
+        placement = EnginePlacement(self.fake_redis, logger)
+        instrument_id = order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['reliance']
+        order = PlaceOrderRequest(self.scenarios.bodies.market_order(
+            dry_run=None,
+            order_type='LIMIT',
+            price=1000,
+            after_market=True,
+        ))
+        counts = {}
+        refused = 0
+        for _ in range(28):
+            try:
+                prepared = placement.prepare(order, instrument_id)
+            except RefusedRequestError:
+                refused = refused + 1
+                continue
+            counts[prepared.broker_name] = counts.get(prepared.broker_name, 0) + 1
+        return [
+            {
+                'name': 'after_market_orders_are_spread_evenly_over_the_brokers_that_take_them',
+                'orders': 28,
+                'refused': refused,
+                'per_broker': dict(sorted(counts.items())),
+            },
+        ]
+
     def run_stoxkart_algo_checks(self):
         """Checks that Stoxkart's placement carries the Algo-ID from its settings, and `99999` when they have none.
 
@@ -5550,6 +5586,7 @@ class OrderEngineSuite:
             results.extend(self.run_assignment_checks())
             results.extend(self.run_rate_limit_checks())
             results.extend(self.run_stoxkart_algo_checks())
+            results.extend(self.run_rotation_checks())
         finally:
             requests.Session.request = original_request
             uuid.uuid4 = original_uuid4

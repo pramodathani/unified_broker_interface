@@ -1218,7 +1218,7 @@ flowchart TD
 | `round_robin` (default) | Starts at `INCR unified:orders:round_robin` modulo the rotation's length and walks the rotation from there. Every gunicorn worker shares the counter. | One `INCR`, queued on the pipeline that reads the instrument | Spreading orders evenly across accounts |
 | `fixed_priority` | Puts the brokers named in `UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_PRIORITY` first, in that order, then the rest of the rotation in turn order | None | Sending everything to one preferred broker, with the others as fallbacks |
 
-With round robin, a skipped broker's turn passes to the next broker in the rotation, so the broker after a skipped one takes two turns in a row.
+With round robin, a skipped broker's turn passes to the next broker in the rotation, and the counter is then moved on past every broker passed over with one `INCRBY`, so the next order starts after the broker that took this one. A run of orders some brokers cannot take, such as after-market orders, is therefore spread evenly over the brokers that can. Before this, the broker after a skipped one took two turns in a row, and in the live test of 2026-09-27 INDmoney received 30 of 100 after-market orders.
 
 ### Why a broker is skipped
 
