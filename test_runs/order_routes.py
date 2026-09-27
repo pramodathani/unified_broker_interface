@@ -17,6 +17,7 @@ import copy
 import json
 import pathlib
 import sys
+import threading
 import time
 import uuid
 
@@ -55,8 +56,11 @@ FIXTURE_PATH = (
 class FakeRateWindowScript:
     """What the rate budget's Lua script does, run against the stand-in's memory.
 
+    Redis runs a script as one step with nothing interleaved, so the stand-in holds a lock for the whole call, or two threads could both find room for one last message.
+
     Attributes:
         fake_redis (FakeRedis): The stand-in whose windows are counted.
+        lock (threading.Lock): Makes each call one uninterrupted step.
     """
 
     def __init__(self, fake_redis):
@@ -69,6 +73,7 @@ class FakeRateWindowScript:
             None: This method returns nothing.
         """
         self.fake_redis = fake_redis
+        self.lock = threading.Lock()
 
     def __call__(self, keys, args):
         """Counts one message in every named window if all have room, or says how long until they do.
@@ -84,6 +89,19 @@ class FakeRateWindowScript:
             redis.RedisError: When this round trip is set to fail.
         """
         self.fake_redis.start_round_trip()
+        with self.lock:
+            return self.count_one(keys, args)
+
+    def count_one(self, keys, args):
+        """Counts one message in every named window if all have room, holding the call's lock.
+
+        Args:
+            keys (list): The window keys.
+            args (list): The window length in microseconds, a member name, and one limit per key.
+
+        Returns:
+            int: 0 when counted, otherwise the microseconds until there is room.
+        """
         now = int(time.monotonic() * 1000000)
         window = int(args[0])
         longest_wait = 0
@@ -102,6 +120,7 @@ class FakeRateWindowScript:
             return longest_wait
         for key in keys:
             self.fake_redis.rate_windows[key].append(now)
+            self.fake_redis.rate_log.append((key, now))
         return 0
 
 
@@ -115,6 +134,7 @@ class FakeRedis:
         hashes (dict): Hash keys to dictionaries of fields and values.
         sorted_sets (dict): Sorted set keys to lists of members, all scored 0.
         rate_windows (dict): Each rate budget key to the monotonic times, in microseconds, of the messages counted in it.
+        rate_log (list): Every message the rate window script counted, as `(key, microseconds)`, never pruned.
         round_trips (int): How many round trips have been made.
         failing_round_trip (int | None): The 1-based round trip that raises `redis.RedisError`, or None when none fails.
     """
@@ -129,6 +149,7 @@ class FakeRedis:
         self.hashes = {}
         self.sorted_sets = {}
         self.rate_windows = {}
+        self.rate_log = []
         self.round_trips = 0
         self.failing_round_trip = None
 

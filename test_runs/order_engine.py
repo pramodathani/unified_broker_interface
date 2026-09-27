@@ -177,6 +177,8 @@ class FakeEngineStoreRedis(order_engine_routes.FakeEngineRedis):
             pending = self.pending.setdefault(key, [])
             entries = []
             for entry_id, fields in self.streams.get(key, []):
+                if count is not None and len(entries) >= count:
+                    break
                 if position == '0':
                     if entry_id in pending:
                         entries.append((entry_id, fields))
@@ -184,8 +186,6 @@ class FakeEngineStoreRedis(order_engine_routes.FakeEngineRedis):
                     delivered.append(entry_id)
                     pending.append(entry_id)
                     entries.append((entry_id, fields))
-            if count is not None:
-                entries = entries[:count]
             if entries:
                 response.append((key, entries))
         return response
