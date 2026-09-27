@@ -412,6 +412,62 @@ class SyntheticOrder:
         })
         return answer.outcome == 'accepted'
 
+    def cancel_outside_order(self, broker_name, broker_order_id, reason):
+        """Cancels an order that is not one of this parent's legs, and records both the asking and the answer.
+
+        A square-off cancels every order resting in the instruments it closes, wherever the order came from, so the order has no leg here to record against. The cancel is still recorded on this parent, before it is sent and after, and still takes a rate token, because an exchange counts it the same as any other cancel. The two events name the order by broker and broker order id, and replaying them changes nothing about the parent.
+
+        Args:
+            broker_name (str): The broker holding the order.
+            broker_order_id (str): The broker's id for the order.
+            reason (str): Why, for a person reading the parent later.
+
+        Returns:
+            bool: True when the broker accepted the cancel.
+        """
+        self.record({
+            'event': 'outside_cancel_requested',
+            'parent_state': self.parent.state,
+            'broker': broker_name,
+            'broker_order_id': broker_order_id,
+            'status_message': reason,
+        })
+        outcome = None
+        status_message = None
+        response_body = None
+        if self.gates is not None:
+            try:
+                self.gates.take_rate_token(broker_name)
+            except RefusedRequestError as refusal:
+                outcome = 'rejected'
+                status_message = (
+                    f'{reason}; not sent: {refusal.body.get("error")}'
+                )
+        if outcome is None:
+            try:
+                answer = self.placement.cancel(broker_name, broker_order_id)
+                outcome = answer.outcome
+                status_message = answer.status_message
+                response_body = answer.response_body
+            except RefusedRequestError as refusal:
+                outcome = 'rejected'
+                status_message = refusal.body.get('error')
+            except Exception as error:
+                outcome = 'unknown'
+                status_message = f'the cancel could not be sent: {error}'
+        self.record({
+            'event': 'outside_cancelled',
+            'parent_state': self.parent.state,
+            'broker': broker_name,
+            'broker_order_id': broker_order_id,
+            'outcome': outcome,
+            'status_message': status_message,
+            'detail': {
+                'broker_response': response_body,
+            },
+        })
+        return outcome == 'accepted'
+
     def reduce_leg(self, leg, quantity, reason):
         """Reduces one leg's quantity at its broker, rather than cancelling and replacing it.
 

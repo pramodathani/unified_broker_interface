@@ -37,3 +37,7 @@ The offline recording covers this with a bracket run behind a budget of three re
 ## The daily cap check in `place_leg`, and `CLOSES_POSITIONS`
 
 `place_leg` asks `RiskGates.refuse_if_capped` whether the chosen broker has room left today before it records `leg_requested`, so a leg refused for the cap never appears in the event log. The check needs to know whether the leg closes a position, because the last share of a broker's cap is kept for exits (see the note on `utilities/daily_order_count.py`). `closes_position` answers that from the leg's role, from the class attribute `CLOSES_POSITIONS` for types whose every leg is an exit whatever it is called, and from the caller's own `closes_position` parameter for a plain order. `HiddenStop` is the only type that sets the attribute today, because it fires through `PriceTrigger.fire`, which names every leg `entry`.
+
+## Why `cancel_outside_order` records against the parent without a leg
+
+A cancel of an order that is not one of this parent's legs still needs to be in the record, because it is something the parent did, and it still costs a request an exchange counts. The events carry the broker and broker order id and no leg id. `ParentOrder.apply_event` ignores both names, exactly as it ignores `leg_cancel_requested` and `leg_cancelled`, so replaying them after a restart changes nothing. A refusal by the rate budget is recorded as outcome `rejected` rather than raised, for the same reason `take_rate_token` does not raise: the caller has other orders to cancel and a position to close.

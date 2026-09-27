@@ -189,7 +189,7 @@ The `unified.synthetic_order_events` table is a TimescaleDB hypertable with one-
 
 | Columns | Meaning |
 |---|---|
-| `time`, `parent_order_id`, `sequence`, `event` | When, which parent, the parent's own counter, and what happened (`parent_received`, `parent_state_changed`, `leg_requested`, `leg_answered`, `leg_update` and others) |
+| `time`, `parent_order_id`, `sequence`, `event` | When, which parent, the parent's own counter, and what happened (`parent_received`, `parent_state_changed`, `leg_requested`, `leg_answered`, `leg_update` and others, including `outside_cancel_requested` and `outside_cancelled` for an order a square-off cancels that is not one of its own legs) |
 | `synthetic_type`, `parent_state` | The type, and the parent's state after the event |
 | `leg_id`, `leg_role`, `leg_state` | The leg the event is about, its role (such as `entry`, `stop`, `target`, `slice`, `chase`) and its state |
 | `broker`, `broker_order_id`, `exchange_order_id` | Where the leg went and the ids it got |

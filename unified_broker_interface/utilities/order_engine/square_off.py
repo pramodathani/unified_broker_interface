@@ -188,7 +188,7 @@ class SquareOff(SyntheticOrder):
     def cancel_resting(self, instrument_ids):
         """Cancels the orders that could re-open a position after it is closed.
 
-        A cancel that a broker refuses is logged and the square-off carries on. Leaving a position open because one stale order could not be cancelled would be the worse mistake: the broker's own square-off is minutes away and will not be so careful.
+        A cancel that a broker refuses is recorded and the square-off carries on. Leaving a position open because one stale order could not be cancelled would be the worse mistake: the broker's own square-off is minutes away and will not be so careful.
 
         Args:
             instrument_ids (set): The instruments being closed.
@@ -200,15 +200,12 @@ class SquareOff(SyntheticOrder):
         for broker_name, broker_order_id in self.resting_orders(
             instrument_ids,
         ):
-            try:
-                answer = self.placement.cancel(broker_name, broker_order_id)
-            except RefusedRequestError as refusal:
-                self.logger.warning(
-                    f'{broker_name} order {broker_order_id} could not be '
-                    f'cancelled before squaring off: {refusal.body.get("error")}'
-                )
-                continue
-            if answer.outcome == 'accepted':
+            accepted = self.cancel_outside_order(
+                broker_name,
+                broker_order_id,
+                'cancelled before squaring off, so it cannot re-open the position',
+            )
+            if accepted:
                 cancelled = cancelled + 1
         return cancelled
 

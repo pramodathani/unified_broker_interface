@@ -2901,6 +2901,7 @@ class OrderEngineSuite:
         answer=None,
         quote=None,
         positions=None,
+        resting=None,
     ):
         """Places one timed order, optionally fills it, then gives it a clock tick.
 
@@ -2914,6 +2915,7 @@ class OrderEngineSuite:
             answer (dict | None): The stubbed broker answer.
             quote (dict | None): A live quote to seed, for a type that reads the book when it is placed.
             positions (float | None): A net position in RELIANCE to seed, for a type that reads the account's holdings.
+            resting (list | None): Flattrade order ids of open RELIANCE orders placed outside the engine, for a type that cancels what is resting.
 
         Returns:
             dict: The recorded result.
@@ -2926,6 +2928,18 @@ class OrderEngineSuite:
             self.fake_redis.strings['unified:portfolio:positions'] = json.dumps(
                 self.scenarios.positions(positions),
             )
+        for order_id in resting or []:
+            self.fake_redis.hashes.setdefault('unified:order-updates', {})[
+                f'flattrade:{order_id}'
+            ] = json.dumps({
+                'broker': 'flattrade',
+                'order_id': order_id,
+                'instrument_id': order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['reliance'],
+                'status': 'OPEN',
+            })
+            self.fake_redis.hashes.setdefault('flattrade:orders:orders', {})[
+                order_id
+            ] = self.broker_book_entry(order_id)
         self.network.reset(answer)
         self.counting_uuid.reset()
         reply_keys = self.write_intents(scenario)
@@ -2989,7 +3003,7 @@ class OrderEngineSuite:
                 {},
             ).values()
         ]
-        return {
+        result = {
             'name': name,
             'reply': reply,
             'sent_before_tick': before,
@@ -3011,6 +3025,18 @@ class OrderEngineSuite:
             ],
             'parent_states': [parent.state for parent in parents],
         }
+        if resting is not None:
+            result['outside_cancels'] = [
+                {
+                    'event': event['event'],
+                    'broker': event.get('broker'),
+                    'broker_order_id': event.get('broker_order_id'),
+                    'outcome': event.get('outcome'),
+                }
+                for event in event_log.events
+                if event['event'].startswith('outside_cancel')
+            ]
+        return result
 
     def restart_parents(self, event_log, parent_store):
         """Rebuilds every parent from its recorded events alone, which is all an engine restart has.
@@ -3396,6 +3422,21 @@ class OrderEngineSuite:
                 accepted,
                 quote=self.scenarios.quote(),
                 positions=8,
+            ),
+            self.clock_result(
+                'a_square_off_records_the_cancel_of_an_order_placed_outside_the_engine',
+                dict(entry, synthetic={
+                    'type': 'square_off',
+                    'at_time': '15:10',
+                }),
+                [],
+                frozen + 20000,
+                accepted,
+                quote=self.scenarios.quote(),
+                positions=8,
+                resting=[
+                    '26091500000077',
+                ],
             ),
             self.clock_result(
                 'a_square_off_with_nothing_held_closes_nothing',

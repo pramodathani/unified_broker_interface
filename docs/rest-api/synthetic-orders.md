@@ -720,7 +720,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `square_off`
 
-    A square-off answers `202 scheduled` and, at `at_time`, cancels every open order on each instrument it is closing and then closes the positions with limit orders priced 2 ticks past the touch. Unlike [`POST /api/orders/flatten`](flatten.md), it leaves other products and other instruments alone.
+    A square-off answers `202 scheduled` and, at `at_time`, cancels every open order on each instrument it is closing and then closes the positions with limit orders priced 2 ticks past the touch. Each of those cancels takes a rate token and is recorded on the square-off's own parent, as `outside_cancel_requested` and `outside_cancelled`, because the order it cancels may not be one the engine placed. Unlike [`POST /api/orders/flatten`](flatten.md), it leaves other products and other instruments alone.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
