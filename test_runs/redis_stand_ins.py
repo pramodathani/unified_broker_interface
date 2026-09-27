@@ -1039,8 +1039,11 @@ class FakeEnginePipeline(FakePipeline):
         self.commands.append(('hgetall', (key,)))
         return self
 
-    def execute(self):
+    def execute(self, raise_on_error=True):
         """Runs every queued command in one round trip.
+
+        Args:
+            raise_on_error (bool): Accepted for compatibility with redis-py; the stand-in's commands do not fail one by one.
 
         Returns:
             list: One reply per queued command, in order.
@@ -1049,6 +1052,7 @@ class FakeEnginePipeline(FakePipeline):
             redis.RedisError: When this round trip is set to fail.
             ValueError: When a queued command is not one the stand-in knows.
         """
+        del raise_on_error
         self.fake_redis.start_round_trip()
         replies = []
         for command_name, arguments in self.commands:

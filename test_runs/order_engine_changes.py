@@ -14,6 +14,9 @@ Typical usage:
 
 import argparse
 import copy
+import datetime
+import importlib.machinery
+import importlib.util
 import json
 import pathlib
 import sys
@@ -313,6 +316,66 @@ class OrderEngineChangesSuite(order_routes.OrderRoutesSuite):
             'parent': self.parent_after(parent_order_id),
         }
 
+    def order_book_filtered_by_parent(self):
+        """Places an order, builds the day's order book with the real combiner, and reads it back by the order's parent.
+
+        Returns:
+            dict: The recorded result.
+        """
+        self.start_scenario()
+        placed = self.placed_limit_order()
+        parent_order_id = placed['body']['parent_id']
+        combiner = self.orders_combiner()
+        document = combiner.orders_document(
+            self.fake_redis,
+            combiner.Resolver(self.fake_redis),
+            combiner.EngineLinks(self.fake_redis),
+            datetime.datetime.now(),
+        )
+        self.fake_redis.strings['unified:orders:orders'] = json.dumps(document)
+        by_parent = self.call('GET', '/details', query={
+            'parent_id': parent_order_id,
+        })
+        orders = (by_parent['body'] or {}).get('orders') or []
+        shown = []
+        for order in orders:
+            shown.append({
+                'broker': order.get('broker'),
+                'order_id': order.get('order_id'),
+                'is_the_placed_parent': order.get('engine_parent_id') == parent_order_id,
+                'leg_role': order.get('leg_role'),
+                'synthetic_type': order.get('synthetic_type'),
+            })
+        open_page = self.call('GET', '/details', query={
+            'status': 'open',
+            'limit': 2,
+        })
+        bad_limit = self.call('GET', '/details', query={
+            'limit': 0,
+        })
+        return {
+            'name': 'the_order_book_is_filtered_by_the_engine_parent',
+            'orders_in_the_day': len(document['orders']),
+            'by_parent_status': by_parent['status'],
+            'by_parent': shown,
+            'by_parent_page': (by_parent['body'] or {}).get('page'),
+            'open_page': (open_page['body'] or {}).get('page'),
+            'bad_limit': bad_limit,
+        }
+
+    def orders_combiner(self):
+        """The orders combiner script, loaded as a module so its document builder can run against the stand-in.
+
+        Returns:
+            module: The loaded script.
+        """
+        path = pathlib.Path(__file__).resolve().parents[1] / 'bin' / 'unified' / 'orders' / 'api_order_details'
+        loader = importlib.machinery.SourceFileLoader('unified_api_order_details', str(path))
+        specification = importlib.util.spec_from_loader(loader.name, loader)
+        module = importlib.util.module_from_spec(specification)
+        loader.exec_module(module)
+        return module
+
     def run_every_scenario(self):
         """Runs every scenario with Redis, MongoDB, the broker network and `uuid.uuid4` replaced.
 
@@ -337,6 +400,7 @@ class OrderEngineChangesSuite(order_routes.OrderRoutesSuite):
                 self.list_open_parents(),
                 self.refusals(),
                 self.flatten_halts_open_parents(),
+                self.order_book_filtered_by_parent(),
             ]
         finally:
             blueprint_base.get_cache = original_get_cache

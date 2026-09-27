@@ -97,6 +97,10 @@ from unified_broker_interface.utilities.order_engine.utilities.intent_handoff im
 from unified_broker_interface.utilities.order_engine.utilities.rate_budget import (
     RateBudget,
 )
+from unified_broker_interface.utilities.order_book_filter import (
+    OrderBookFilter,
+    OrderBookFilterError,
+)
 from unified_broker_interface.utilities.unified_documents import read_document
 from utilities.configurations import api_configuration
 from utilities.configurations import get_logger
@@ -175,9 +179,9 @@ class OrdersBlueprint(BaseBlueprint):
 
     @authenticated
     def details(self):
-        """Answers today's orders at every broker, with how each broker's data was read.
+        """Answers today's orders at every broker, with how each broker's data was read, narrowed by any filters in the query string.
 
-        See `utilities/unified_documents.py` for when the document is not served.
+        See `utilities/unified_documents.py` for when the document is not served, and `utilities/order_book_filter.py` for the filters: `order_id`, `parent_id`, `intent_id`, `broker`, `status`, `limit` and `cursor`.
 
         Returns:
             tuple: The Flask JSON response (flask.Response) and its HTTP status (int).
@@ -188,13 +192,13 @@ class OrdersBlueprint(BaseBlueprint):
             30,
             'orders',
         )
-        return jsonify(body), status
+        return self.filtered(body, status, 'orders')
 
     @authenticated
     def trades(self):
-        """Answers today's trades at every broker, with how each broker's data was read.
+        """Answers today's trades at every broker, with how each broker's data was read, narrowed by any filters in the query string.
 
-        See `utilities/unified_documents.py` for when the document is not served.
+        See `utilities/unified_documents.py` for when the document is not served, and `utilities/order_book_filter.py` for the filters: `order_id`, `parent_id`, `intent_id`, `broker`, `status`, `limit` and `cursor`.
 
         Returns:
             tuple: The Flask JSON response (flask.Response) and its HTTP status (int).
@@ -205,7 +209,28 @@ class OrdersBlueprint(BaseBlueprint):
             30,
             'trades',
         )
-        return jsonify(body), status
+        return self.filtered(body, status, 'trades')
+
+    def filtered(self, body, status, list_name):
+        """Narrows a served order or trade document to the filters and page in the query string, when any are given.
+
+        Args:
+            body (dict): The document, or the refusal `read_document` answered with.
+            status (int): Its HTTP status.
+            list_name (str): The list the filters apply to, `orders` or `trades`.
+
+        Returns:
+            tuple: The Flask JSON response (flask.Response) and its HTTP status (int), which is 400 for a filter that cannot be read.
+        """
+        try:
+            order_book_filter = OrderBookFilter(request.args)
+        except OrderBookFilterError as error:
+            return jsonify({
+                'error': str(error),
+            }), 400
+        if status != 200 or not order_book_filter.is_active():
+            return jsonify(body), status
+        return jsonify(order_book_filter.apply(body, list_name)), status
 
     def refuse(self, message, status, **fields):
         """Builds the refusal for a request answered without calling a broker.

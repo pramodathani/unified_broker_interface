@@ -61,11 +61,18 @@ This route answers with today's orders at every broker. It never asks a broker. 
 
 ### Request parameters
 
-This route takes only the token header.
+With only the token header, the route answers with the whole day. The query parameters below narrow it; several together must all match. A filtered answer keeps the day's `summary` and `brokers` and adds `page`.
 
 | Name | In | Type | Required | Description |
 |---|---|---|:---:|---|
 | `access-token` | header | string | yes | The token from [`POST /api/session/connect`](session.md#connect) |
+| `order_id` | query | string | no | Keep only these orders: give it more than once, or as a comma-separated list |
+| `parent_id` | query | string | no | Keep only the orders of this order engine parent |
+| `intent_id` | query | string | no | Keep only the orders placed for this intent, as a place answer names it |
+| `broker` | query | string | no | Keep only this broker's |
+| `status` | query | string | no | `open` for everything not yet `COMPLETE`, `CANCELLED`, `REJECTED` or `EXPIRED`, or one status such as `COMPLETE` |
+| `limit` | query | number | no | The most entries to return, from 1 to 10000 |
+| `cursor` | query | number | no | How many matching entries to skip; pass the previous page's `page.next_cursor` |
 
 === "curl"
 
@@ -153,12 +160,19 @@ The document has four top-level keys. Each order in `orders` follows the order c
 | `orders[].price`, `trigger_price`, `average_price` | number | Prices, as the broker reports them |
 | `orders[].order_timestamp`, `exchange_timestamp` | string | ISO timestamps with the IST offset |
 | `orders[].instrument_id` | string or null | The unified instrument id, or null when the order could not be resolved to one |
-| `summary.count` | number | How many orders there are |
+| `orders[].engine_parent_id` | string or null | The order engine parent that placed this order, or null for an order placed elsewhere |
+| `orders[].leg_role` | string or null | The order's role in that parent, such as `entry`, `stop`, `target` or `slice` |
+| `orders[].synthetic_type` | string or null | The parent's order type, such as `bracket` |
+| `orders[].intent_id` | string or null | The intent the parent was placed for, as the place answer named it |
+| `summary.count` | number | How many orders there are in the day, whatever the filters |
 | `summary.by_status` | object | How many orders there are in each status |
 | `summary.filled_value` | number | The sum of filled quantity times average price, rounded to two places |
 | `brokers[]` | array | One entry per broker, with `broker`, `status` and `as_of` |
 | `brokers[].status` | string | `ok` (seen within a minute), `stale` (older than a minute, still included), `missing` (no data today) or `unreadable` |
 | `as_of` | string | When the document was written, in local time |
+| `page.matched` | number | With filters: how many entries matched |
+| `page.returned` | number | With filters: how many entries this answer carries |
+| `page.cursor`, `page.next_cursor` | number or null | With filters: where this page started, and where the next one starts, which is null on the last page |
 
 ### Status codes
 
@@ -186,11 +200,17 @@ This route answers with today's fills at every broker. Like the order book, it n
 
 ### Request parameters
 
-This route takes only the token header.
+The trade book takes the same filters as the [order book](#order-book), each applied to the trade's own order.
 
 | Name | In | Type | Required | Description |
 |---|---|---|:---:|---|
 | `access-token` | header | string | yes | The token from [`POST /api/session/connect`](session.md#connect) |
+| `order_id` | query | string | no | Keep only the fills of these orders: give it more than once, or as a comma-separated list |
+| `parent_id` | query | string | no | Keep only the fills of this order engine parent |
+| `intent_id` | query | string | no | Keep only the fills of orders placed for this intent, as a place answer names it |
+| `broker` | query | string | no | Keep only this broker's |
+| `limit` | query | number | no | The most entries to return, from 1 to 10000 |
+| `cursor` | query | number | no | How many matching entries to skip; pass the previous page's `page.next_cursor` |
 
 === "curl"
 
@@ -261,6 +281,7 @@ Each trade is one fill, in the same shape for every broker.
 |---|---|---|
 | `trades` | array | Every fill, sorted by broker, then trade time, then trade id |
 | `trades[].trade_id`, `order_id` | string | The broker's own ids for the fill and its order |
+| `trades[].engine_parent_id`, `leg_role`, `synthetic_type`, `intent_id` | string or null | The order engine parent the fill's order belongs to, as for an order; null for an order placed elsewhere |
 | `trades[].exchange_order_id`, `exchange_trade_id` | string or null | The exchange's ids, when the broker reports them |
 | `trades[].transaction_type`, `product` | string | On the shared vocabulary |
 | `trades[].quantity`, `price` | number | The fill's size and price |
