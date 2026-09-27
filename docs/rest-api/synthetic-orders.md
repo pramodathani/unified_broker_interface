@@ -2,7 +2,7 @@
 
 A synthetic order is an order that no Indian exchange offers, built by the order engine out of ordinary broker orders. You ask for one by adding a `synthetic` object to the body of [`POST /api/orders/place`](orders.md#place-an-order), and the engine places, watches, moves and cancels the real orders it is made of.
 
-This page is the glossary of all 51 types the engine runs. It lists every field each type reads from the `synthetic` object, with the defaults and limits taken from the code.
+This page is the glossary of all 52 types the engine runs. It lists every field each type reads from the `synthetic` object, with the defaults and limits taken from the code.
 
 !!! danger "Synthetic orders place real orders, sometimes long after you asked"
     A synthetic order can place, modify or cancel orders at a broker minutes, hours or even days after your request, with nobody watching. Triggers, trailing stops, grids and schedules all act on their own. Send `"dry_run": true` first, which builds the first broker request without recording or sending anything.
@@ -54,7 +54,7 @@ Two fields can appear in any `synthetic` object. The table below lists them.
 
 | Field | Type | Required | Meaning |
 |---|---|:---:|---|
-| `type` | string | Yes | One of the 51 names in the table below. A body with no `synthetic` object, or no `type`, runs as `simple`. An unknown name is refused with `400` and the message `the order engine does not run '<name>' orders; it runs <list>`. |
+| `type` | string | Yes | One of the 52 names in the table below. A body with no `synthetic` object, or no `type`, runs as `simple`. An unknown name is refused with `400` and the message `the order engine does not run '<name>' orders; it runs <list>`. |
 | `closes_position` | boolean | No | `true` says every leg of this order closes a position, so it may use the part of a broker's daily order cap kept for exits. Only the literal `true` counts. |
 
 The engine also writes its own working values into the parent's copy of the `synthetic` object, such as `tick_size`, `triggered_at`, `watermark`, `placed_quantity`, `started_at` and `expires_at`. These are internal, so do not send them.
@@ -80,7 +80,7 @@ Types that act at once answer with the broker's answer plus a `parent_id`; types
 
 Keep the `parent_id`. It is the only handle on an order that has not reached a broker yet.
 
-## All 51 types
+## All 52 types
 
 The master table below lists every type registered in `SYNTHETIC_ORDER_CLASSES`, in the order the registry holds them. The "First answer" column says whether a broker order goes out when you ask (`200`, the broker's own answer) or whether the engine waits (`202`).
 
@@ -137,8 +137,9 @@ The master table below lists every type registered in `SYNTHETIC_ORDER_CLASSES`,
 | `stop_and_reverse` | Price triggers | At a level, closes the position and opens the same size the other way. | `trigger_price`, `method` | 202 |
 | `attached_hedge` | Linked orders | Hedges each fill in another instrument, by a ratio or by an option's delta, in whole lots. | `hedge_instrument_id`, `ratio` or `delta_volatility` | 200 |
 | `scale_with_profit_taker` | Plain and laddered | A ladder whose every filled rung gets its own profit-taker, and is placed again once that profit is taken. | `from_price`, `to_price`, `steps`, `profit_points`, `most_cycles` | 200 |
+| `two_sided_quote` | Plain and laddered | A bid and an offer kept around the fair price, leaning away from the inventory they build. | `half_spread_points`, `skew_ticks`, `most_inventory` | 200 |
 
-The chart below counts how many of the 51 types fall into each family. The families are this page's own grouping, chosen to make the list easier to scan; the code does not group them.
+The chart below counts how many of the 52 types fall into each family. The families are this page's own grouping, chosen to make the list easier to scan; the code does not group them.
 
 ```vegalite
 {
@@ -153,7 +154,7 @@ The chart below counts how many of the 51 types fall into each family. The famil
       {"family": "Stops and trailing", "types": 7},
       {"family": "Book-following limits", "types": 7},
       {"family": "Price triggers", "types": 7},
-      {"family": "Plain and laddered", "types": 5},
+      {"family": "Plain and laddered", "types": 6},
       {"family": "Time-based", "types": 5},
       {"family": "Multi-instrument", "types": 4}
     ]
@@ -248,7 +249,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
 === "Plain and laddered"
 
-    These five types act at once and place everything they need when you ask.
+    These six types act at once and place everything they need when you ask.
 
     #### `simple`
 
@@ -296,6 +297,35 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     ```json
     {"type": "grid", "levels": 3, "step_points": 5, "most_inventory": 30}
+    ```
+
+    #### `two_sided_quote`
+
+    A two-sided quote (the Atlas's G16, a market-making pair) keeps one buy and one sell limit around a fair price, which is the mid between the best bid and offer unless `fair_price` says `last`. Every second, both are moved to where they belong:
+
+    - The bid sits `half_spread_points` below the fair price and the ask the same distance above.
+    - **Inventory leans both quotes.** For each order's worth held, both prices move `skew_ticks` against the position. A long lowers both, so its ask is more likely to be taken and its bid less.
+    - A quote is only modified once it would move by at least `step_ticks`.
+    - When one side fills, the other is not cancelled; it is re-priced by the new lean, and the filled side is quoted again.
+    - Once the net position reaches `most_inventory`, the side that would add to it is cancelled and not quoted again until the position comes back.
+
+    In the offline suite, a quote of 10 with a half spread of 1 around a mid of 1000.025 was placed at 999.00 and 1001.05. When the market moved to 1010.025, both were modified, to 1009.00 and 1011.05. With `skew_ticks` 2 and `most_inventory` 10, a filled bid stopped the buying and moved the ask two ticks lower, to 1000.95.
+
+    !!! warning "This type sends the most modifies of any"
+        Every move of the fair price by a step is two modify messages, and each counts towards the broker's daily order messages and the order-to-trade ratio. Keep `step_ticks` as wide as the strategy allows.
+
+    The order's `quantity` is the size of each quote. The parent does not finish on its own; cancel it with [`DELETE /api/orders/parents`](orders.md#cancel-a-parent).
+
+    | Field | Type | Required | Rules |
+    |---|---|:---:|---|
+    | `half_spread_points` | number | Yes | Above zero. |
+    | `most_inventory` | integer | Yes | At least 1, as for `grid`. |
+    | `skew_ticks` | integer | No | At or above zero. Defaults to 0. |
+    | `step_ticks` | integer | No | At least 1. Defaults to 1. |
+    | `fair_price` | string | No | `mid` or `last`. Defaults to `mid`. |
+
+    ```json
+    {"type": "two_sided_quote", "half_spread_points": 1, "skew_ticks": 2, "step_ticks": 2, "most_inventory": 50}
     ```
 
     #### `scale_with_profit_taker`

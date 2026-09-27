@@ -2792,6 +2792,13 @@ class OrderEngineSuite:
             status='OPEN',
             **(book_overrides or {}),
         )
+        for number in range(1, self.network.placed + 1):
+            numbered = str(26091500000100 + number)
+            book[numbered] = self.broker_book_entry(
+                numbered,
+                status='OPEN',
+                **(book_overrides or {}),
+            )
 
         follower = OrderUpdateFollower(
             parent_store,
@@ -4393,6 +4400,50 @@ class OrderEngineSuite:
                     'from_price': 1000,
                     'to_price': 990,
                     'steps': 3,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_two_sided_quote_follows_the_mid',
+                dict(entry, synthetic={
+                    'type': 'two_sided_quote',
+                    'half_spread_points': 1,
+                    'most_inventory': 30,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1010.00, 1010.05), 'at': 1},
+                ],
+                dict(accepted, number_orders=True),
+            ),
+            self.price_result(
+                'a_filled_bid_skews_the_ask_and_stops_buying_at_the_cap',
+                dict(entry, synthetic={
+                    'type': 'two_sided_quote',
+                    'half_spread_points': 1,
+                    'skew_ticks': 2,
+                    'most_inventory': 10,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {
+                        'quote': steady,
+                        'at': 1,
+                        'updates': [
+                            self.update('26091500000101', 'COMPLETE', 10),
+                        ],
+                    },
+                ],
+                dict(accepted, number_orders=True),
+            ),
+            self.price_result(
+                'a_two_sided_quote_without_a_spread_is_refused',
+                dict(entry, synthetic={
+                    'type': 'two_sided_quote',
+                    'most_inventory': 10,
                 }),
                 [
                     {'quote': steady, 'at': 0},

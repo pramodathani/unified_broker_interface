@@ -103,6 +103,9 @@ from unified_broker_interface.utilities.order_engine.twap import Twap
 from unified_broker_interface.utilities.order_engine.virtual_limit import (
     VirtualLimit,
 )
+from unified_broker_interface.utilities.order_engine.two_sided_quote import (
+    TwoSidedQuote,
+)
 from unified_broker_interface.utilities.order_engine.underlying_peg import (
     UnderlyingPeg,
 )
@@ -166,4 +169,5 @@ SYNTHETIC_ORDER_CLASSES = {
     StopAndReverse.SYNTHETIC_TYPE: StopAndReverse,
     AttachedHedge.SYNTHETIC_TYPE: AttachedHedge,
     ScaleWithProfitTaker.SYNTHETIC_TYPE: ScaleWithProfitTaker,
+    TwoSidedQuote.SYNTHETIC_TYPE: TwoSidedQuote,
 }
