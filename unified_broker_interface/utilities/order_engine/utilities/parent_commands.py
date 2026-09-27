@@ -232,7 +232,7 @@ class ParentCommands:
             arguments (dict): `parent_id`.
 
         Returns:
-            tuple: The answer's body (dict) and its HTTP status (int), which is 200 once the parent is cancelled, whatever each leg's cancel came back as.
+            tuple: The answer's body (dict) and its HTTP status (int): 200 once the parent is cancelled, and 207 when a leg's cancel was refused or unknown, which leaves the parent `cancelling` until that leg finishes.
 
         Raises:
             RefusedRequestError: With HTTP 409 when the parent has already finished.
@@ -247,12 +247,15 @@ class ParentCommands:
         cancelled_legs = runner.cancel_by_caller(
             'cancelled through DELETE /api/orders/parents',
         )
+        status = 200
+        if runner.parent.state == 'cancelling':
+            status = 207
         return {
             'parent_id': runner.parent.parent_order_id,
             'synthetic_type': runner.parent.synthetic_type,
             'state': runner.parent.state,
             'cancelled_legs': cancelled_legs,
-        }, 200
+        }, status
 
     def modify_held(self, arguments):
         """Changes the price or quantity of an order the engine is still holding, such as a virtual limit order.

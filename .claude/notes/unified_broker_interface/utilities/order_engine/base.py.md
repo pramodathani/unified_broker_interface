@@ -57,3 +57,9 @@ Flatten halts every parent before it cancels every order itself. If a halt cance
 ## Why `place_leg` checks reduce-only before `prepare`
 
 See the note on `utilities/reduce_only.py`. The check is the first thing `place_leg` does, so a leg it refuses is never recorded, never takes a rate token and never counts against the daily cap.
+
+## Why a refused cancel leaves the parent `cancelling`
+
+`cancel_by_caller` used to end the parent as `cancelled` whatever each leg's cancel came back as. In the live test of 2026-09-27, INDmoney refused one cancel for its rate limit; `DELETE /api/orders/parents` answered 200 with the parent cancelled, and the order stayed pending at the broker until the order book showed it. A cancelled parent is terminal and no longer followed, so nothing would ever have noticed.
+
+The parent now becomes `cancelling`, a state that is not terminal, so it stays in the open set, the follower keeps applying its legs' updates, and a second cancel can retry. The price and clock tickers skip it and the follower calls `finish_cancelling` instead of the type's `on_leg_update`, so the type never places, moves or re-arms anything for a parent the caller has cancelled. `finish_cancelling` ends it as `cancelled` once no leg is still resting. Flatten's halt still uses `stop_acting`, because flatten cancels every order itself afterwards and checks the result.

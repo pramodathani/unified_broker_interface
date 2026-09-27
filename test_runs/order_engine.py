@@ -1757,6 +1757,44 @@ class OrderEngineSuite:
             ],
         }
 
+    def cancelling_parent_result(self, name, update):
+        """Delivers an update for the last live leg of a parent that is `cancelling`, and records whether the parent ends.
+
+        Args:
+            name (str): The check's name.
+            update (dict): The update, on the order contract.
+
+        Returns:
+            dict: The recorded result.
+        """
+        self.fake_redis = self.build_state()
+        parent_store = ParentStore(self.fake_redis)
+        parent = self.followed_parent()
+        parent.state = 'cancelling'
+        parent_store.save(parent)
+        logger = logging.getLogger('test_runs.order_engine')
+        follower = OrderUpdateFollower(
+            parent_store,
+            engine_stand_ins.RecordingEventLog(),
+            logger,
+            None,
+            EnginePlacement(self.fake_redis, logger),
+        )
+        changed = follower.follow({
+            'update': json.dumps(update),
+        })
+        if changed is not None:
+            parent_store.save(changed)
+        stored = ParentOrder.from_document(
+            parent_store.parent(parent.parent_order_id),
+        )
+        return {
+            'name': name,
+            'leg_state': stored.legs[0].state,
+            'parent_state': stored.state,
+            'sent': len(self.network.sent_requests),
+        }
+
     def early_update_result(self, name, registered_before_replay, hold_seconds):
         """Delivers a fill before its order is registered, then replays the held updates.
 
@@ -1866,6 +1904,14 @@ class OrderEngineSuite:
                 'an_early_update_whose_order_never_becomes_known_is_dropped',
                 False,
                 0.0,
+            ),
+            self.cancelling_parent_result(
+                'a_cancelling_parent_ends_when_its_last_leg_is_cancelled',
+                dict(ours, status='CANCELLED', filled_quantity=0),
+            ),
+            self.cancelling_parent_result(
+                'a_cancelling_parent_waits_while_its_leg_is_still_open',
+                dict(ours, status='OPEN', filled_quantity=0),
             ),
             self.follower_result(
                 'an_update_that_changes_nothing_is_not_recorded',

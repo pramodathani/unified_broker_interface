@@ -190,13 +190,18 @@ stateDiagram-v2
     protecting --> completed
     protecting --> cancelled
     protecting --> failed
+    received --> cancelling
+    working --> cancelling
+    protecting --> cancelling
+    cancelling --> cancelled
+    cancelling --> failed
     completed --> [*]
     cancelled --> [*]
     rejected --> [*]
     failed --> [*]
 ```
 
-A parent's state moves only along the arrows above. `failed` means a person has to look: the engine never retries out of it and never arms protective legs for a parent in it. A leg has its own states: `planned`, `sending`, `sent`, `acknowledged`, `partially_filled`, `filled`, `rejected`, `cancelled` and `unknown`.
+A parent's state moves only along the arrows above. `cancelling` means you cancelled the parent but a broker refused one of its legs' cancels, so a leg may still be live; the parent stops acting and becomes `cancelled` once every leg has finished. `failed` means a person has to look: the engine never retries out of it and never arms protective legs for a parent in it. A leg has its own states: `planned`, `sending`, `sent`, `acknowledged`, `partially_filled`, `filled`, `rejected`, `cancelled` and `unknown`.
 
 The engine keeps the same state in two places, and they have different jobs.
 

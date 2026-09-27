@@ -403,6 +403,39 @@ class OrderEngineChangesSuite(order_routes.OrderRoutesSuite):
             'held_quantity': parameters.get('held_quantity'),
         }
 
+    def parent_cancel_refused_at_the_broker(self):
+        """Cancels a parent whose broker refuses the first cancel, then cancels it again once the broker takes it.
+
+        On 2026-09-27 INDmoney refused one cancel for its rate limit while the parent was reported cancelled, leaving the order live at the broker.
+
+        Returns:
+            dict: The recorded result.
+        """
+        self.start_scenario()
+        placed = self.placed_limit_order()
+        parent_order_id = placed['body']['parent_id']
+        answers = order_routes.OrderRoutesAnswers()
+        self.network.answers_by_url.insert(0, (
+            'CancelOrder',
+            answers.json_answer(200, answers.cancel_refusal('flattrade')),
+        ))
+        refused = self.call('DELETE', '/parents', {
+            'parent_id': parent_order_id,
+        })
+        after_refusal = self.parent_after(parent_order_id)
+        self.network.answers_by_url.pop(0)
+        retried = self.call('DELETE', '/parents', {
+            'parent_id': parent_order_id,
+        })
+        return {
+            'name': 'a_parent_whose_cancel_is_refused_stays_cancelling_until_retried',
+            'refused': refused,
+            'after_refusal': after_refusal,
+            'retried': retried,
+            'after_retry': self.parent_after(parent_order_id),
+            'sent': self.sent(),
+        }
+
     def limits_held_by_default(self):
         """Places four orders with limits held by default: only the plain DAY limit is held.
 
@@ -555,6 +588,7 @@ class OrderEngineChangesSuite(order_routes.OrderRoutesSuite):
                 self.refusals(),
                 self.flatten_halts_open_parents(),
                 self.order_book_filtered_by_parent(),
+                self.parent_cancel_refused_at_the_broker(),
                 self.limits_held_by_default(),
                 self.modify_a_held_order(),
                 self.modify_a_mixed_list(),

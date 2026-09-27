@@ -190,6 +190,11 @@ stateDiagram-v2
     protecting --> completed
     protecting --> cancelled
     protecting --> failed
+    received --> cancelling: a leg's cancel refused
+    working --> cancelling: a leg's cancel refused
+    protecting --> cancelling: a leg's cancel refused
+    cancelling --> cancelled: every leg finished
+    cancelling --> failed
     completed --> [*]
     cancelled --> [*]
     rejected --> [*]
@@ -203,6 +208,7 @@ The states mean the following.
 | `received` | The parent is recorded. An armed or scheduled order stays here until its trigger fires or its time comes. |
 | `working` | At least one leg is live at a broker. |
 | `protecting` | A position exists and exit legs are guarding it, as in a bracket after its entry has filled. A hidden stop with a backstop is also here from the moment it is armed. |
+| `cancelling` | You cancelled the parent, but a broker refused the cancel of one of its legs, or its outcome is unknown, so that leg may still be live. The order type no longer acts on the parent. It becomes `cancelled` once every leg has finished, and cancelling it again retries the legs still resting. |
 | `completed` | The parent has nothing left to do. |
 | `cancelled` | The parent was called off, for example a `good_till_time` order whose time ran out. |
 | `rejected` | No request reached a broker, or the broker refused it. |

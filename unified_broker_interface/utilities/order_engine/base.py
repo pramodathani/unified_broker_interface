@@ -586,6 +586,8 @@ class SyntheticOrder:
     def cancel_by_caller(self, reason):
         """Cancels this parent because a caller asked: every leg still resting at a broker is cancelled, and the parent ends as `cancelled`.
 
+        When a broker refuses a leg's cancel, or its outcome is unknown, that leg may still be live, so the parent is not called cancelled. It becomes `cancelling` instead: the order type no longer acts on it, and it ends as `cancelled` once every leg has finished. Cancelling it again retries the legs still resting.
+
         Args:
             reason (str): Why, for a person reading the parent later.
 
@@ -604,8 +606,36 @@ class SyntheticOrder:
                 'outcome': outcome,
                 'status_message': status_message,
             })
-        self.stop_acting(reason)
+        still_resting = []
+        for entry in cancelled:
+            if entry['outcome'] != 'accepted':
+                still_resting.append(f"{entry['broker']} {entry['order_id']}")
+        if not still_resting:
+            self.stop_acting(reason)
+            return cancelled
+        if self.parent.state != 'cancelling' and self.parent.can_change_to('cancelling'):
+            self.record_state(
+                'cancelling',
+                f'{reason}; not yet cancelled at the broker: '
+                + ', '.join(still_resting),
+            )
+            self.save()
         return cancelled
+
+    def finish_cancelling(self):
+        """Ends a `cancelling` parent as `cancelled` once none of its legs is still resting.
+
+        Returns:
+            bool: True when the parent was ended on this call.
+        """
+        if self.parent.state != 'cancelling':
+            return False
+        for leg in self.parent.legs:
+            if not leg.is_finished() and leg.broker_order_id:
+                return False
+        self.record_state('cancelled', 'every leg has now finished')
+        self.save()
+        return True
 
     def stop_acting(self, reason):
         """Ends this parent as `cancelled` without touching its legs, so it places, moves and cancels nothing more.

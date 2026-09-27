@@ -177,6 +177,8 @@ class ClockTicker:
             bool: True when the parent did something.
         """
         parent = ParentOrder.from_document(document)
+        if parent.state == 'cancelling':
+            return False
         synthetic_order_class = SYNTHETIC_ORDER_CLASSES.get(
             parent.synthetic_type,
         )

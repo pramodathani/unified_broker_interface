@@ -312,6 +312,9 @@ class OrderUpdateFollower:
             self.gates,
         )
         try:
+            if parent.state == 'cancelling':
+                runner.finish_cancelling()
+                return
             runner.on_leg_update(leg, changes)
             with self.counts_lock:
                 self.reacted = self.reacted + 1
