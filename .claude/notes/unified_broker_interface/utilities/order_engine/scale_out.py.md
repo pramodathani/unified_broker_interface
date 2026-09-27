@@ -21,3 +21,7 @@ A trade that has reached its first target has paid for itself, and a stop still 
 ## Why fewer units than targets collapses to the last target
 
 An entry that filled two units against three targets cannot be split three ways. Rather than placing an order for zero, or one for each unit and leaving the third target empty, the whole of it goes on the last target — the furthest one, which is the one somebody scaling out would keep if they had to choose.
+
+## Why a caller's change leaves the other exits alone
+
+A scale-out's targets share the position between them and its stop covers all of it, so no one exit's quantity follows from another's the way a bracket's pair does. `on_leg_modified` is overridden to do nothing, and the reduce-only rule inherited from the OCO still applies.

@@ -17,3 +17,7 @@ So `counted_volume` is only advanced when a slice actually goes out. The volume 
 A percentage-of-volume order in a market that stops trading stops trading too. It can finish the day with most of the order undone, and nothing about it will complain, because from the inside "the market is quiet" and "I am nearly finished" look the same.
 
 `most_slices` bounds the requests rather than the outcome. The real answer is that somebody has to watch it, or wrap it in a time stop, and saying so in the class docstring is better than adding a deadline that would quietly turn it into a different type at the worst moment.
+
+## Why a caller's change to a slice adjusts `placed_quantity`
+
+The parent sizes each slice from what is left of the total, counted by `placed_quantity`. A slice the caller cut from 500 to 300 placed 200 less than was counted, so `on_leg_modified` takes 200 off the count and a later slice places it; a slice the caller raised takes from the later ones. The parent's total stays what the caller first asked for, and the new count is recorded with `parameters_changed` so a restart keeps it.

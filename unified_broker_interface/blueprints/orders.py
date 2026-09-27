@@ -1193,18 +1193,20 @@ class OrdersBlueprint(BaseBlueprint):
             modification (OrderModification): The change, with the quantity already in the broker's own terms.
 
         Returns:
-            dict: `parent_id`, `broker`, `order_id`, and `quantity`, `price` and `trigger_price`, each None when unchanged.
+            dict: `parent_id`, `broker`, `order_id`, and `quantity` (in the broker's own terms, to send), `quantity_units` (as the caller gave it, which is how a leg records its quantity), `price` and `trigger_price`, each None when unchanged.
         """
         arguments = {
             'parent_id': parent_order_id,
             'broker': broker_name,
             'order_id': order_id,
             'quantity': None,
+            'quantity_units': None,
             'price': None,
             'trigger_price': None,
         }
         if modification.changes('quantity'):
             arguments['quantity'] = modification.quantity
+            arguments['quantity_units'] = modify_request.quantity
         if modification.changes('price'):
             arguments['price'] = str(modify_request.price)
         if modification.changes('trigger_price'):

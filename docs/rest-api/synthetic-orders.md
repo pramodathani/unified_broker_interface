@@ -10,6 +10,23 @@ This page is the glossary of all 42 types the engine runs. It lists every field 
 !!! note "The order engine runs them"
     Synthetic orders are run by the [order engine](order-engine.md), which places every order the REST API accepts, so it has to be running.
 
+## Changing a synthetic order
+
+A leg of a synthetic order can be changed through [`PUT /api/orders/modify`](orders.md#an-order-the-engine-placed) like any other order, and the order type carries on from the change. The table below says what each kind of type does with it.
+
+| Type | After you change a leg |
+|---|---|
+| `trailing_stop`, `trailing_entry`, `atr_trail` | The trail continues from the trigger you set, whichever way you moved it |
+| `peg` | The peg follows the market at the new distance from its reference |
+| `chaser` | The chase continues from your price after a full step interval |
+| `oco`, `bracket`, `cover` | Reducing one exit reduces the other to match; an exit cannot be raised |
+| `scale_out` | The other exits stay as they were; an exit cannot be raised |
+| `iceberg`, `participation`, `liquidity_seeking` | A changed slice counts against the total, so later slices place the rest |
+| `twap`, `vwap`, `implementation_shortfall` | The difference is carried into the next slice |
+| Every other type | The leg simply keeps your new values |
+
+Only the price, trigger price and quantity of a synthetic order's leg can be changed.
+
 ## How to ask for one
 
 The request body is an ordinary order body, and the `synthetic` object sits beside the other fields. The engine reads the type from `synthetic.type`, and the rest of the object holds that type's own settings. The example below asks for a bracket: a limit buy of 10 that, once it fills, is protected by a stop and a target.

@@ -153,6 +153,53 @@ class TrailingOrder(SyntheticOrder):
             )
         return number
 
+    def on_leg_modified(self, leg, before):
+        """Moves the watermark so the trail carries on from the trigger the caller set.
+
+        The stop is worked out as the watermark less the trail, and it only ever moves in the favourable direction. A trigger the caller loosened would therefore be pulled straight back on the next tick unless the watermark moves with it, and a trigger the caller tightened would be left alone only until the market rose far enough. Setting the watermark to the price whose trail lands exactly on the caller's trigger makes the stop continue from there, whichever way it was moved.
+
+        Args:
+            leg (OrderLeg): The stop, holding its new trigger.
+            before (dict): What the leg held before, with `trigger_price`.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        if leg.trigger_price is None or leg.trigger_price == before.get('trigger_price'):
+            return
+        trigger = decimal.Decimal(str(leg.trigger_price))
+        watermark = self.watermark_for_trigger(trigger, leg.transaction_type)
+        self.parent.parameters = dict(self.parent.parameters)
+        self.parent.parameters['watermark'] = format(watermark, 'f')
+        self.record_parameters(
+            f'the caller moved the trigger to {trigger}, so the trail continues from a watermark of {watermark}'
+        )
+        self.save()
+
+    def watermark_for_trigger(self, trigger, leg_side):
+        """The watermark whose trail lands exactly on a trigger.
+
+        Args:
+            trigger (decimal.Decimal): The trigger price.
+            leg_side (str): BUY or SELL, the side the stop is on.
+
+        Returns:
+            decimal.Decimal: The watermark.
+        """
+        points = self.parent.parameters.get('trail_points')
+        if points is not None:
+            distance = self.positive(points, 'trail_points')
+            if leg_side == 'SELL':
+                return trigger + distance
+            return trigger - distance
+        share = self.positive(
+            self.parent.parameters.get('trail_percent'),
+            'trail_percent',
+        ) / HUNDRED
+        if leg_side == 'SELL':
+            return trigger / (1 - share)
+        return trigger / (1 + share)
+
     def watermark(self):
         """The best price seen since this order was armed.
 

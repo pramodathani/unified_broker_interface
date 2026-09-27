@@ -28,6 +28,7 @@ There is no `pyproject.toml`, no build step and no pytest suite. The project roo
 | Offline order engine load test | `python -m test_runs.order_engine_throughput` (broker lanes against ten stub brokers that take 200 ms; about 11 seconds) |
 | Offline flatten route tests | `python -m test_runs.order_flatten` (the panic button; pins that cancels are sent before closes) |
 | Offline instrument route tests | `python -m test_runs.instrument_routes` (`/details` to `/ticks` against a stubbed mapping cache, quote cache, brokers and tick table; its own fixture) |
+| Offline leg modification checks | `python -m test_runs.leg_modifications` (each order type carrying on from a caller's modify) |
 | Offline contract size rule tests | `python -m test_runs.contract_sizes` |
 | Offline candle cache tests | `python -m test_runs.price_cache` |
 | Offline synthetic order book tests | `python -m test_runs.virtual_queue` (the queue estimate and the process that keeps it) |

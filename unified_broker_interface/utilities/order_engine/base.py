@@ -423,16 +423,24 @@ class SyntheticOrder:
         })
         return answer.outcome, answer.status_message, answer.response_body
 
-    def apply_outside_modification(self, leg, quantity, price, trigger_price):
+    def apply_outside_modification(
+        self,
+        leg,
+        quantity,
+        price,
+        trigger_price,
+        quantity_units=None,
+    ):
         """Sends a change the caller asked for through `PUT /api/orders/modify` to one of this parent's legs, records it, and lets the type carry on from the new values.
 
         The change is recorded as a `leg_update`, the event a type's own repricing and reducing already write, so recovery replays it and the leg keeps the caller's price and quantity after a restart. The re-pricing throttle, the day's order cap and the rate budget apply to it as they do to the type's own changes. When the broker accepts it, `on_leg_modified` is called with what the leg held before.
 
         Args:
             leg (OrderLeg): The leg to change.
-            quantity (int | None): The new quantity, in the broker's own terms, or None to leave it.
+            quantity (int | None): The new quantity, in the broker's own terms, which is what is sent, or None to leave it.
             price (decimal.Decimal | None): The new limit price, or None to leave it.
             trigger_price (decimal.Decimal | None): The new trigger price, or None to leave it.
+            quantity_units (int | None): The new quantity as the caller gave it, which is how a leg records its quantity; None records `quantity` instead.
 
         Returns:
             tuple: The outcome (str: `accepted`, `rejected` or `unknown`), the status message (str or None) and the broker's response (object or None).
@@ -489,7 +497,10 @@ class SyntheticOrder:
             },
         }
         if accepted and quantity is not None:
-            event['quantity'] = quantity
+            if quantity_units is not None:
+                event['quantity'] = quantity_units
+            else:
+                event['quantity'] = quantity
         if accepted and price is not None:
             event['price'] = self.json_number(price)
         if accepted and trigger_price is not None:
@@ -498,6 +509,21 @@ class SyntheticOrder:
         if accepted:
             self.on_leg_modified(leg, before)
         return answer.outcome, answer.status_message, answer.response_body
+
+    def outside_change_problem(self, leg, quantity_units):
+        """Why a caller's change to one of this parent's legs cannot be made, or None when it can.
+
+        Most types take any change the modify route has already checked. A type whose legs must stay within a position overrides this, so a change that would break that is refused before anything is sent.
+
+        Args:
+            leg (OrderLeg): The leg to be changed.
+            quantity_units (int | None): The new quantity as the caller gave it, or None when the quantity is not changing.
+
+        Returns:
+            str | None: The reason, or None.
+        """
+        del leg, quantity_units
+        return None
 
     def on_leg_modified(self, leg, before):
         """Lets the order type carry on from a change the caller made to one of its legs.
@@ -512,6 +538,26 @@ class SyntheticOrder:
             None: This method returns nothing.
         """
         del leg, before
+
+    def record_parameters(self, reason):
+        """Records the order type's parameters as they are now, so a restart replays them.
+
+        A type that re-anchors itself after a caller's change, such as a peg taking a new offset, would otherwise keep the new value only in the Redis cache and lose it when recovery rebuilds the parent from the record.
+
+        Args:
+            reason (str): Why they changed, for a person reading the parent later.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.record({
+            'event': 'parameters_changed',
+            'parent_state': self.parent.state,
+            'status_message': reason,
+            'detail': {
+                'parameters': dict(self.parent.parameters),
+            },
+        })
 
     def cancel_by_caller(self, reason):
         """Cancels this parent because a caller asked: every leg still resting at a broker is cancelled, and the parent ends as `cancelled`.

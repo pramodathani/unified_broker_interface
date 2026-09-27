@@ -191,13 +191,24 @@ class ParentCommands:
         """Changes one leg of a parent through its order type, which then carries on from the new values.
 
         Args:
-            arguments (dict): `parent_id`, `broker`, `order_id`, and any of `quantity` (in the broker's own terms), `price` and `trigger_price`.
+            arguments (dict): `parent_id`, `broker`, `order_id`, and any of `quantity` (in the broker's own terms), `quantity_units` (as the caller gave it), `price` and `trigger_price`.
 
         Returns:
             tuple: The answer's body (dict) and its HTTP status (int).
         """
         runner = self.runner_for(arguments.get('parent_id'))
         leg = self.leg_to_change(runner, arguments)
+        problem = runner.outside_change_problem(
+            leg,
+            arguments.get('quantity_units'),
+        )
+        if problem is not None:
+            raise RefusedRequestError.refusal(
+                problem,
+                409,
+                broker=leg.broker,
+                order_id=leg.broker_order_id,
+            )
         quantity = arguments.get('quantity')
         price = self.decimal_or_none(arguments.get('price'))
         trigger_price = self.decimal_or_none(arguments.get('trigger_price'))
@@ -206,6 +217,7 @@ class ParentCommands:
             quantity,
             price,
             trigger_price,
+            arguments.get('quantity_units'),
         )
         runner.save()
         return self.answered(runner, leg, outcome, status_message, broker_response)

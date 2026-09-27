@@ -25,6 +25,29 @@ class Participation(SyntheticOrder):
     SYNTHETIC_TYPE = 'participation'
     WANTS_PRICES = True
 
+    def on_leg_modified(self, leg, before):
+        """Counts a caller's change to a slice's quantity against what is still to place, so the parent's total stays what the caller asked for.
+
+        The parent keeps `placed_quantity`, the quantity sent so far, and sizes the next slice from what is left of the total. A slice the caller cut from 500 to 300 has placed 200 less than was counted, so those 200 go into a later slice; a slice the caller raised takes from the later ones.
+
+        Args:
+            leg (OrderLeg): The slice the caller changed, holding its new quantity.
+            before (dict): What the leg held before, with `quantity`.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        old_quantity = before.get('quantity')
+        if leg.quantity is None or old_quantity is None or leg.quantity == old_quantity:
+            return
+        placed = self.parent.parameters.get('placed_quantity') or 0
+        self.parent.parameters = dict(self.parent.parameters)
+        self.parent.parameters['placed_quantity'] = placed + leg.quantity - old_quantity
+        self.record_parameters(
+            f'the caller changed a slice from {old_quantity} to {leg.quantity}, so the rest of the total is placed in later slices'
+        )
+        self.save()
+
     def read_percent(self):
         """What share of the market's volume this order takes.
 
