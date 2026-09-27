@@ -300,3 +300,7 @@ A modify list first calls `warm_order_instruments`, which reads every order's to
 `send_prepared` catches every exception from one send and answers it as a 504 entry, because by then other orders of the list may already be at their brokers, and a 500 for the whole request would hide their outcomes. 504 is the status the single form already uses for an unknown outcome.
 
 Broker requests of one list go out on up to `ORDER_SEND_THREADS` (4) threads, matching gunicorn's threads per worker. The broker order classes were already shared by those threads, and their connection pools and origin tracking hold locks for that reason. A single change, or a list with one order to send, is sent on the request's own thread with no pool.
+
+## Why flatten's closes go out as one list
+
+Flatten used to close positions one after another, each close handed to the engine and waited for before the next was written. With the list form of the place route and the engine's lanes, writing every close in one pipeline lets the closes at different brokers go out at the same time, which is what a panic button should do. The answers come back on one reply list and are matched to their positions by `request_index`. The recorded flatten scenarios kept every status, body and broker request; only the route's Redis round trips changed. `place_closing_order` and `close_one_position` were folded into `close_every_position` and `closing_body`.

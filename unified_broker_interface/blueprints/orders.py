@@ -1755,7 +1755,9 @@ class OrdersBlueprint(BaseBlueprint):
         return still_held
 
     def close_every_position(self, closing, started_at):
-        """Sends a closing order for every position that is not flat, at the broker holding it.
+        """Sends a closing order for every position that is not flat, at the broker holding it, all in one hand-over to the order engine.
+
+        Every closing order is written for the engine in one step, so the engine's lanes send the closes at different brokers at the same time rather than one after another. A position whose instrument cannot be found is reported without being sent, and does not hold up the rest.
 
         Args:
             closing (list): What `KillSwitch.positions_to_close` returned.
@@ -1765,60 +1767,74 @@ class OrdersBlueprint(BaseBlueprint):
             list: One dictionary per position, with what was sent and what happened.
         """
         answers = []
+        to_place = []
         for position in closing:
-            answers.append(self.close_one_position(position, started_at))
+            answer = dict(position)
+            answer['sent'] = False
+            answer['outcome'] = None
+            answer['status_message'] = None
+            answers.append(answer)
+            instrument_id = self.instrument_for_broker_token(
+                position['broker'],
+                position['instrument_token'],
+            )
+            if instrument_id is None:
+                answer['status_message'] = (
+                    "the broker's token does not name exactly one mapped "
+                    'instrument, so this position was not closed'
+                )
+                continue
+            to_place.append((
+                len(answers) - 1,
+                self.closing_body(position, instrument_id),
+                instrument_id,
+            ))
+        if not to_place:
+            return answers
+        try:
+            placed = self.order_handoff.place_many(
+                to_place,
+                self.list_wait_seconds(len(to_place)),
+                started_at,
+            )
+        except RefusedRequestError as refusal:
+            for request_index, _, _ in to_place:
+                answers[request_index]['status_message'] = refusal.body.get('error')
+            return answers
+        for request_index, placed_answer in placed.items():
+            sent, status = placed_answer
+            answer = answers[request_index]
+            answer['sent'] = True
+            answer['outcome'] = sent.get('outcome')
+            answer['order_id'] = sent.get('order_id')
+            answer['status_message'] = sent.get('status_message') or sent.get('error')
+            answer['http_status'] = status
         return answers
 
-    def close_one_position(self, position, started_at):
-        """Closes one position at the broker holding it, without raising.
+    def closing_body(self, position, instrument_id):
+        """The body of the order that closes one position, as handed to the order engine.
+
+        The body names the broker holding the position in `broker`, which the plain `simple` type sends the order to, and marks the order with `closes_position` so that it may use the part of the broker's daily cap kept for exits.
 
         Args:
             position (dict): One entry from `KillSwitch.positions_to_close`.
-            started_at (float): `time.perf_counter()` when the request arrived.
+            instrument_id (str): The instrument the position is in.
 
         Returns:
-            dict: What happened, with the position, `sent`, `outcome` and `status_message`.
+            dict: The order body.
         """
-        answer = dict(position)
-        answer['sent'] = False
-        answer['outcome'] = None
-        answer['status_message'] = None
-        instrument_id = self.instrument_for_broker_token(
-            position['broker'],
-            position['instrument_token'],
-        )
-        if instrument_id is None:
-            answer['status_message'] = (
-                "the broker's token does not name exactly one mapped "
-                'instrument, so this position was not closed'
-            )
-            return answer
-        body = {
+        return {
             'instrument_id': instrument_id,
             'transaction_type': position['transaction_type'],
             'product': self.closing_product(position['product']),
             'order_type': 'MARKET',
             'quantity': position['close_quantity'],
+            'broker': position['broker'],
+            'synthetic': {
+                'type': 'simple',
+                'closes_position': True,
+            },
         }
-        try:
-            sent, status = self.place_closing_order(
-                body,
-                instrument_id,
-                position['broker'],
-                started_at,
-            )
-        except RefusedRequestError as refusal:
-            answer['status_message'] = refusal.body.get('error')
-            return answer
-        except Exception as error:
-            answer['status_message'] = f'the close could not be sent: {error}'
-            return answer
-        answer['sent'] = True
-        answer['outcome'] = sent.get('outcome')
-        answer['order_id'] = sent.get('order_id')
-        answer['status_message'] = sent.get('status_message')
-        answer['http_status'] = status
-        return answer
 
     def closing_product(self, product):
         """The product a closing order carries, on the vocabulary `POST /place` takes.
@@ -1864,35 +1880,6 @@ class OrdersBlueprint(BaseBlueprint):
         if not isinstance(instrument_ids, list) or len(instrument_ids) != 1:
             return None
         return str(instrument_ids[0])
-
-    def place_closing_order(self, body, instrument_id, broker_name, started_at):
-        """Hands one closing order to the order engine, for the broker that holds the position.
-
-        The body handed to the engine names the broker in `broker`, which the plain `simple` type sends the order to, and marks the order with `closes_position` so that it may use the part of the broker's daily cap kept for exits.
-
-        Args:
-            body (dict): The order body.
-            instrument_id (str): The instrument.
-            broker_name (str): The broker holding the position.
-            started_at (float): `time.perf_counter()` when the request arrived.
-
-        Returns:
-            tuple: The answer's body (dict) and its HTTP status (int).
-
-        Raises:
-            RefusedRequestError: For an order answered without calling a broker.
-        """
-        engine_body = dict(body)
-        engine_body['broker'] = broker_name
-        engine_body['synthetic'] = {
-            'type': 'simple',
-            'closes_position': True,
-        }
-        return self.order_handoff.place(
-            engine_body,
-            instrument_id,
-            started_at,
-        )
 
     def find_stored_order(self, order_request, order_texts):
         """Finds the one broker whose order book holds the order.

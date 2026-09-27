@@ -1227,6 +1227,6 @@ The order routes were written so that the API's own work adds as little as possi
 | `PUT /modify`, a list | 2 to 4 | The same three, each read once for the whole list, plus one for the rate budget per change sent |
 | `DELETE /cancel` | 2 | One pipeline with the token, logins, settings and every broker's order book, and one for the rate budget |
 | `DELETE /cancel`, a list | 1, plus one per cancel sent | The same pipeline, holding every order of the list, and one for the rate budget per cancel |
-| `POST /flatten` | 1, plus more | One read of everything; one for the rate budget per cancel; one re-read of the order books every 0.25 s while waiting for the cancels; the engine lock's `EXISTS`, an `XADD` and a `BLPOP` per position closed; one re-read of the position books every 0.25 s while waiting for the closed positions to show zero |
+| `POST /flatten` | 1, plus more | One read of everything; one for the rate budget per cancel; one re-read of the order books every 0.25 s while waiting for the cancels; an `HGET` per position closed, then the engine lock's `EXISTS`, one pipeline of `XADD`s and a `BLPOP` per answer; one re-read of the position books every 0.25 s while waiting for the closed positions to show zero |
 
 When a broker is capped by `ORDER_DAILY_CAPS`, each request sent to it costs one more pipeline afterwards, to increment the count.

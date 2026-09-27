@@ -296,13 +296,14 @@ sequenceDiagram
         A->>R: HGETALL every order book
         R-->>A: statuses
     end
-    loop every open position
-        A->>R: HGET unified:broker_tokens, XADD the closing order
+    A->>R: HGET unified:broker_tokens for each position
+    A->>R: XADD every closing order in one pipeline
+    par each broker's lane at the same time
         E->>B: MARKET order, opposite side, same broker
         B-->>E: answer
-        E->>R: RPUSH the answer
-        R-->>A: the answer, through BLPOP
     end
+    E->>R: RPUSH each answer onto the request's reply list
+    R-->>A: the answers, through BLPOP
     loop every 0.25 s until every closed position shows zero or the wait runs out
         A->>R: HGETALL every position book
         R-->>A: quantities
@@ -335,7 +336,7 @@ The close goes through the same checks as `POST /api/orders/place`, with the bro
 
 ### How a close reaches the broker
 
-The cancels are sent straight from the API worker, but each close is written to the order engine as an intent and waits up to `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_TIMEOUT_SECONDS` for its answer, one close after another. The intent's body carries two additions, shown below as the offline suite recorded them.
+The cancels are sent straight from the API worker. The closes are written to the order engine together, in one pipeline, the way a [list of orders](orders.md#several-orders-in-one-request) is placed, so the engine's lanes send the closes at different brokers at the same time. The route waits for their answers for the single form's wait plus a tenth of a second per close, capped at `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACE_LIST_WAIT_SECONDS`. The intent's body carries two additions, shown below as the offline suite recorded them.
 
 ```json
 {
