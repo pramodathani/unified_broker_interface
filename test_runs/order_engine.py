@@ -65,6 +65,9 @@ from unified_broker_interface.utilities.order_engine.utilities.order_to_trade_ra
 from unified_broker_interface.utilities.order_engine.utilities.order_update_follower import (
     OrderUpdateFollower,
 )
+from unified_broker_interface.utilities.broker_orders.utilities.place_order_request import (
+    PlaceOrderRequest,
+)
 from unified_broker_interface.utilities.broker_orders.utilities.refused_request import (
     RefusedRequestError,
 )
@@ -4925,6 +4928,58 @@ class OrderEngineSuite:
             ),
         ]
 
+    def run_assignment_checks(self):
+        """Checks that a leg the broker intake chose cannot take goes to one that can.
+
+        Intake chooses a broker from the caller's body, which for an OCO or a trailing stop is a plain limit, while the type's first real leg is a stop-limit. On 2026-09-27 such legs were sent to INDmoney, which takes no stop-limit orders, and refused.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        self.fake_redis = self.build_state()
+        logger = logging.getLogger('test_runs.order_engine')
+        placement = EnginePlacement(self.fake_redis, logger)
+        instrument_id = order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['reliance']
+        stop = self.scenarios.bodies.market_order(
+            dry_run=None,
+            order_type='SL',
+            price=990,
+            trigger_price=991,
+            transaction_type='SELL',
+        )
+        limit = self.scenarios.bodies.market_order(
+            dry_run=None,
+            order_type='LIMIT',
+            price=1000,
+        )
+        results = []
+        for name, assigned, body in (
+            ('a_stop_leg_assigned_to_a_broker_without_stops_goes_elsewhere', 'indmoney', stop),
+            ('a_stop_leg_assigned_to_a_broker_with_stops_stays', 'flattrade', stop),
+            ('a_limit_leg_assigned_to_a_broker_without_stops_stays', 'indmoney', limit),
+        ):
+            placement.use_assignment(assigned, [])
+            try:
+                prepared = placement.prepare(
+                    PlaceOrderRequest(body),
+                    instrument_id,
+                )
+                placed_at = prepared.broker_name
+                error = None
+            except RefusedRequestError as refusal:
+                placed_at = None
+                error = refusal.body.get('error')
+            finally:
+                placement.clear_assignment()
+            results.append({
+                'name': name,
+                'assigned': assigned,
+                'order_type': body['order_type'],
+                'placed_at': placed_at,
+                'error': error,
+            })
+        return results
+
     def run_wiring_checks(self):
         """Checks the things a file move can quietly break without any test noticing.
 
@@ -5078,6 +5133,7 @@ class OrderEngineSuite:
             results.extend(self.run_clock_checks())
             results.extend(self.run_price_checks())
             results.extend(self.run_wiring_checks())
+            results.extend(self.run_assignment_checks())
         finally:
             requests.Session.request = original_request
             uuid.uuid4 = original_uuid4

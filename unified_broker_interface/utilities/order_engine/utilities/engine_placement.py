@@ -475,6 +475,28 @@ class EnginePlacement:
             warm_identifier,
             not uses_assignment,
         )
+        if uses_assignment:
+            reason = self.order_placement.named_broker_skip_reason(
+                order,
+                instrument,
+                broker_name,
+                login_texts,
+                settings_texts,
+            )
+            if reason is not None:
+                self.logger.info(
+                    f'{broker_name}, which intake chose, cannot take this leg '
+                    f'({reason}), so the broker selector chooses again.'
+                )
+                uses_assignment = False
+                broker_name = None
+                instrument, selector_replies = self.read_instrument(
+                    order,
+                    instrument_id,
+                    mapping_date_text,
+                    warm_identifier,
+                    True,
+                )
         prepared = self.order_placement.prepare(
             order,
             instrument,

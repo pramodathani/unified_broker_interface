@@ -29,3 +29,11 @@ The order types choose brokers through `prepare` in 25 files, including every dr
 The assignment lasts only for the `run` of the intent. A parent that places nothing until a price or a time arrives chooses its broker when it fires, with the selector, as before, so a broker that logged out in the meantime is still passed over.
 
 `assign_broker` answers None rather than raising when it cannot choose, including for a body that fails validation or carries a reference it cannot work out. The intent then goes to the `unassigned` lane and the order type makes the choice itself, giving the same answer, 400 included, that it always has.
+
+## Why an assigned broker that cannot take a leg is dropped
+
+Intake chooses a broker with `assign_broker` from the caller's body, so the order can go to that broker's lane. For most types the body is the first leg, but for an OCO, a trailing stop or a trailing entry the body is a plain limit while the first leg sent is a stop-limit. In the live test on 2026-09-27 the round robin gave those orders to INDmoney, which takes no stop-limit orders, and the leg was refused with `indmoney cannot take this order: takes no SL orders`. On `main`, before the lanes, the broker was chosen from the first leg itself, so this was a regression.
+
+`prepare` now asks `OrderPlacement.named_broker_skip_reason` whether the assigned broker can take the leg in hand. When it cannot, the assignment is dropped for that leg and the selector chooses again, which costs one more Redis round trip only in that case. Later legs name the broker the first leg went to, as they always have, so a bracket's stop follows its entry. The parent stays on the worker in the lane intake chose; the lanes are for spreading work, and the rate budget is kept per broker in Redis, so a leg at another broker is still limited correctly.
+
+`run_assignment_checks` in `test_runs/order_engine.py` reproduces the live failure; without this fix its first check fails with the live error.

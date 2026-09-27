@@ -246,6 +246,38 @@ class OrderPlacement:
             skipped=skipped,
         )
 
+    def named_broker_skip_reason(
+        self,
+        order,
+        instrument,
+        broker_name,
+        login_texts,
+        settings_texts,
+    ):
+        """Why a named broker cannot take an order, or None when it can.
+
+        Args:
+            order (PlaceOrderRequest): The validated order.
+            instrument (Instrument): The tradeable instrument.
+            broker_name (str): The broker.
+            login_texts (list): Every broker's login as Redis holds it, in `broker_names` order.
+            settings_texts (list): Every broker's settings as Redis holds them, in `broker_names` order.
+
+        Returns:
+            str | None: The reason, such as `takes no SL orders`, or None; also None for a broker this API does not know, which `choose_named_broker` refuses on its own.
+        """
+        broker_orders = self.broker_orders.get(broker_name)
+        if broker_orders is None:
+            return None
+        position = self.broker_names.index(broker_name)
+        return broker_orders.place_skip_reason(
+            order,
+            instrument,
+            instrument.handles.get(broker_name),
+            broker_orders.decode_login(login_texts[position]),
+            broker_orders.decode_settings(settings_texts[position]),
+        )
+
     def choose_named_broker(
         self,
         order,
@@ -280,13 +312,12 @@ class OrderPlacement:
                 503,
                 broker=broker_name,
             )
-        position = self.broker_names.index(broker_name)
-        reason = broker_orders.place_skip_reason(
+        reason = self.named_broker_skip_reason(
             order,
             instrument,
-            instrument.handles.get(broker_name),
-            broker_orders.decode_login(login_texts[position]),
-            broker_orders.decode_settings(settings_texts[position]),
+            broker_name,
+            login_texts,
+            settings_texts,
         )
         if reason is not None:
             raise RefusedRequestError.refusal(
