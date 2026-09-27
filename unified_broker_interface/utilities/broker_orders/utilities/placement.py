@@ -1,8 +1,8 @@
 """Choosing the broker for one order, building its request, sending it and reading the answer.
 
-This is the half of order placement that reads no store. The caller reads Redis and hands the decoded texts in, which is what lets both the REST API worker and the order engine place an order the same way, through the same code, and answer with the same body.
+This is the half of order placement that reads no store. The caller reads Redis and hands the decoded texts in. The order engine places every order through it, and the REST API uses the same broker objects and connection warmers for its modifications and cancellations.
 
-The answer bodies built here are the REST API's own. That is a deliberate compromise: the alternative is for the order engine to carry its own copy of the same fifteen lines, and the whole point of the engine is that a caller cannot tell which process placed the order.
+The answer bodies built here are the ones the REST API returns for a placement, so a caller sees the same keys whichever order type the engine ran.
 """
 
 import time
@@ -443,41 +443,3 @@ class OrderPlacement:
             },
         }, answer.http_status()
 
-    def place(
-        self,
-        order,
-        instrument,
-        rotation,
-        selector_replies,
-        login_texts,
-        settings_texts,
-        started_at,
-    ):
-        """Chooses the broker, builds the request and either sends it or answers a dry run.
-
-        Args:
-            order (PlaceOrderRequest): The validated order.
-            instrument (Instrument): The instrument the order is for.
-            rotation (list): The broker names not excluded by configuration.
-            selector_replies (list): The replies to the commands the broker selector queued.
-            login_texts (list): Every broker's login as Redis holds it, in `broker_names` order.
-            settings_texts (list): Every broker's settings as Redis holds them, in `broker_names` order.
-            started_at (float): `time.perf_counter()` when the request arrived.
-
-        Returns:
-            tuple: The answer's body (dict) and its HTTP status (int).
-
-        Raises:
-            RefusedRequestError: For an order answered without calling a broker.
-        """
-        prepared_placement = self.prepare(
-            order,
-            instrument,
-            rotation,
-            selector_replies,
-            login_texts,
-            settings_texts,
-        )
-        if order.dry_run:
-            return self.dry_run_answer(prepared_placement, started_at)
-        return self.send(prepared_placement, started_at)

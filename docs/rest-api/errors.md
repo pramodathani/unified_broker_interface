@@ -24,8 +24,8 @@ Some errors carry extra keys beside `error`, so that your program can act on the
 | `skipped` | `place` | Each broker that was passed over, with a `reason` |
 | `contract_size_status` | `place`, `modify` | Why a currency or commodity contract's size is not trusted today, such as `conflict` or `undecided` |
 | `as_of` | Portfolio and order books | When the stored document was last written |
-| `intent_id` | `place` in engine mode | The id of the order intent handed to the order engine |
-| `expired_seconds` | `place` in engine mode | How long past its deadline the engine read the intent |
+| `intent_id` | `place` | The id of the order intent handed to the order engine |
+| `expired_seconds` | `place` | How long past its deadline the engine read the intent |
 
 ### Order answers are not error bodies
 
@@ -132,7 +132,7 @@ These three are not errors, but they are listed here so that the set is complete
 | Status | Route | Meaning |
 |---|---|---|
 | <span class="status s2">200</span> | Every route | Done. For the order routes, the broker accepted the request, or the request was a dry run. |
-| <span class="status s2">202</span> | `place`, engine mode | A synthetic order is armed and waiting for its trigger. Nothing has been sent to a broker yet. See [Order engine](order-engine.md). |
+| <span class="status s2">202</span> | `place` | A synthetic order is armed and waiting for its trigger. Nothing has been sent to a broker yet. See [Order engine](order-engine.md). |
 | <span class="status s2">207</span> | `flatten` | At least one cancel was not sent, an order was still open after the wait, or a close was not sent or not accepted. The body lists each part. See [Flatten everything](flatten.md). |
 
 ## 400 Bad Request
@@ -216,10 +216,10 @@ The optional `price_reference` and `quantity_reference` objects have messages of
 | `level must be a whole number from 1 to 5, which is as deep as the unified quote carries` | A `bid_level` or `offer_level` reference asks for a level deeper than 5 |
 | `{field} must be a number` | `buffer_percent`, `offset_percent` or `offset_ticks` is not a number |
 | `{field} must be a whole number` | `offset_ticks` is a fraction |
-| `a {kind} quantity_reference needs a quantity of at least 1` | An `absolute` or `add_to_position` reference was given no quantity (engine mode) |
-| `the {kind} price reference worked out at {price}, which is not a price an order can carry` | The resolved price came out at zero or below (engine mode) |
+| `a {kind} quantity_reference needs a quantity of at least 1` | An `absolute` or `add_to_position` reference was given no quantity |
+| `the {kind} price reference worked out at {price}, which is not a price an order can carry` | The resolved price came out at zero or below |
 
-In engine mode, two more `400` messages come from the engine itself. `the order engine does not run {type!r} orders; it runs {types}` means the `synthetic` type is not one the engine knows. Each synthetic order type also checks its own fields and answers `400` with a message naming the field, for example `a twap needs over_minutes above zero, the time to spread the order across`. [Synthetic orders](synthetic-orders.md) lists each type's fields.
+Two more `400` messages come from the engine itself. `the order engine does not run {type!r} orders; it runs {types}` means the `synthetic` type is not one the engine knows. Each synthetic order type also checks its own fields and answers `400` with a message naming the field, for example `a twap needs over_minutes above zero, the time to spread the order across`. [Synthetic orders](synthetic-orders.md) lists each type's fields.
 
 ### Modifying and cancelling an order
 
@@ -268,7 +268,7 @@ There is one token for the whole application, and the first `connect` after 07:0
 
 ## 403 Forbidden
 
-A `403` comes only from `place` in engine mode, when the day's loss has reached the configured limit. The engine refuses every new order until the next trading day.
+A `403` comes only from `place`, when the day's loss has reached the configured limit. The engine refuses every new order until the next trading day.
 
 ```text
 the day is down {loss}, which is past the {limit} limit, so no new order is being placed
@@ -302,8 +302,8 @@ A `409` means the request made sense when it was written but no longer matches t
 | `the order is already {status}` | `modify`, `cancel` | The stored order is `COMPLETE`, `CANCELLED`, `REJECTED` or `EXPIRED` |
 | `more than one broker holds an order with this order_id, so give broker` | `modify`, `cancel` | Two brokers use the same id; the body lists them in `brokers`, so send the request again with `broker` |
 | `the order has {field} {value}, which the modify route does not handle` | `modify` | The stored order has a product or validity outside the route's words, for example `the order has product BO, which the modify route does not handle` |
-| `the order engine read this order after the caller had stopped waiting for it, so it was not placed` | `place`, engine mode | The engine was behind and the intent passed its deadline; nothing was sent |
-| `a {kind} quantity_reference found no open position in this instrument, so there is nothing to close` | `place`, engine mode | A `reduce_position` or `liquidate_position` reference found nothing to close |
+| `the order engine read this order after the caller had stopped waiting for it, so it was not placed` | `place` | The engine was behind and the intent passed its deadline; nothing was sent |
+| `a {kind} quantity_reference found no open position in this instrument, so there is nothing to close` | `place` | A `reduce_position` or `liquidate_position` reference found nothing to close |
 
 Some synthetic order types also answer `409` for a state they refuse to act on. For example, a post-only order whose price would cross the book answers `a post-only {side} at {price} would take liquidity against a book of {bid} bid and {offer} offered, so nothing was sent`.
 
@@ -315,7 +315,7 @@ One `422` never reached the broker at all. When the connection could not be open
 
 ## 429 Too Many Requests
 
-A `429` comes only from `place` in engine mode. It means the chosen broker has been sent so many order messages today that its daily cap, set by `UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_CAPS`, has no room left for this kind of order. Every placement, modification and cancellation counts as one message, whichever process sent it. The last part of each cap is kept back for orders that close a position, so a new entry is refused before a closing order is. That share is set by `UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_CAP_EXIT_RESERVE` and is 0.05 by default.
+A `429` comes only from `place`. It means the chosen broker has been sent so many order messages today that its daily cap, set by `UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_CAPS`, has no room left for this kind of order. Every placement, modification and cancellation counts as one message, whichever process sent it. The last part of each cap is kept back for orders that close a position, so a new entry is refused before a closing order is. That share is set by `UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_CAP_EXIT_RESERVE` and is 0.05 by default.
 
 | Message | Cause |
 |---|---|
@@ -427,9 +427,9 @@ These messages mean Redis does not yet hold something the broker needs to identi
 
 A price-only change does not need the instrument, so when a quantity change is refused for one of the last three reasons, a change to `price` or `trigger_price` alone may still go through.
 
-### Engine mode
+### From the order engine
 
-In engine mode, `place` has a few more `503` messages. The table below lists the general ones; some synthetic order types add their own, such as a missing side of the book.
+`place` has a few more `503` messages from the order engine. The table below lists the general ones; some synthetic order types add their own, such as a missing side of the book.
 
 | Message | Cause |
 |---|---|
@@ -449,7 +449,7 @@ A `504` means the outcome is **unknown**. The request may well have reached the 
 !!! danger "Never resend an order after a 504 without checking first"
     A `504` from `place`, `modify` or `cancel` does not mean the request failed. Read [`GET /api/orders/details`](orders.md#order-book) and look for the order before you send anything again, or you may end up with two orders.
 
-In direct mode, a `504` is an order answer with `outcome` set to `unknown`. The recorded tests show these `status_message` values, among others.
+A `504` from a broker is an order answer with `outcome` set to `unknown`. The recorded tests show these `status_message` values, among others.
 
 | `status_message` | What happened |
 |---|---|
@@ -458,7 +458,7 @@ In direct mode, a `504` is an order answer with `outcome` set to `unknown`. The 
 | `the broker answered without an order id: {body}` | The broker answered success but gave no order id |
 | The broker's own message | The broker answered with a server error that its rules do not settle as a refusal |
 
-In engine mode, `place` has its own `504` answers from the handoff between the API worker and the order engine. The table below lists them.
+`place` also has its own `504` answers from the hand-over between the API worker and the order engine. The table below lists them.
 
 | Message | Where it appears |
 |---|---|

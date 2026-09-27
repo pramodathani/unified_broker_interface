@@ -1,35 +1,25 @@
 # Order engine
 
-The order engine is an optional background process that places orders on the REST API's behalf. By default, each API worker sends an order to the broker itself while your request waits. In engine mode, the worker instead hands the order to one long-running process, which places it, applies the risk limits, and can keep working an order after your request has been answered. That last ability is what makes brackets, trailing stops, time-sliced orders and every other [synthetic order type](synthetic-orders.md) possible.
+The order engine is the background process that places every order the REST API accepts. The API worker checks your request, hands the order to the engine and waits for its answer. The engine places it, applies the risk limits, and can keep working an order after your request has been answered. That last ability is what makes brackets, trailing stops, time-sliced orders and every other [synthetic order type](synthetic-orders.md) possible.
 
 !!! danger "The engine places real orders, and can place them later"
-    In engine mode, an order can reach a broker after `POST /api/orders/place` has answered: an armed trigger fires when the price arrives, a scheduled order is sent at its time, and a bracket places its stop and target when the entry fills. Each of those is a real order. Stopping the API does not stop the engine; stop `unified-orders@order_engine.service` as well.
+    An order can reach a broker after `POST /api/orders/place` has answered: an armed trigger fires when the price arrives, a scheduled order is sent at its time, and a bracket places its stop and target when the entry fills. Each of those is a real order. Stopping the API does not stop the engine; stop `unified-orders@order_engine.service` as well.
 
-## Direct mode and engine mode
+## Why every order goes through the engine
 
-`UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT` chooses between the two modes. It is `direct` unless set, and an unknown value stops the API worker from starting with `unknown order placement '<value>'; known modes are direct, engine`.
+The API used to have a second mode, `direct`, in which the API worker sent a plain order to the broker itself. It was removed, because it could not do most of what the place route promises and failed quietly when asked to: it placed a bracket or an iceberg as one plain order, and it sent a price or a quantity of `0` for an order that gave only a `price_reference` or a `quantity_reference`. The table below lists what the engine does that the direct mode did not.
 
-<figure class="diagram">
---8<-- "docs/assets/diagrams/direct-vs-engine.svg"
-<figcaption>The blue dot is a direct-mode order, which goes from the API worker straight to the broker. The orange dots are an engine-mode order travelling through the intent stream and the order engine, and the green dots are the engine's answer coming back through a per-intent list to the waiting worker.</figcaption>
-</figure>
+| | What the engine does |
+|---|---|
+| `synthetic` order types | All of them, as described in [Synthetic orders](synthetic-orders.md) |
+| `price_reference`, `quantity_reference` | Resolved from the live quote and the positions before the order is built |
+| Rate budget | At most 10 order messages a second to each broker, shared with the modify and cancel routes |
+| Loss lockout | New orders refused once the day's loss passes the configured limit |
+| Daily order caps | Counted and enforced with <span class="status s4">429</span> |
+| Parallel placement | One lane of worker threads per broker, so a slow broker holds up only its own orders |
+| Extra keys in the answer | `intent_id`, and `parent_id` for an order the engine recorded |
 
-The table below compares what each mode does and does not do.
-
-| | `direct` (default) | `engine` |
-|---|---|---|
-| Who sends the placement | The API worker handling the request | The single `bin/unified/orders/order_engine` process |
-| Plain orders | :material-check: | :material-check:, as the `simple` type |
-| `synthetic` order types | :material-close: ignored, placed as a plain order | :material-check: all 42 types |
-| `price_reference`, `quantity_reference` | :material-close: shape-checked, never resolved | :material-check: resolved from the live quote and positions |
-| Rate budget, loss lockout | :material-close: | :material-check: on placements |
-| Daily order caps | counted only | counted and enforced with <span class="status s4">429</span> |
-| Extra Redis round trips per order | none | an `XADD` and a `BLPOP` |
-| `modify` and `cancel` routes | straight to the broker | still straight to the broker |
-| Extra keys in the answer | none | `intent_id`, and `parent_id` for an order the engine recorded |
-
-!!! warning "Engine-only fields in direct mode"
-    In direct mode `POST /api/orders/place` does not read `synthetic`, so a bracket or an iceberg is silently placed as one plain order. It also does not resolve `price_reference` or `quantity_reference`: a `LIMIT` or `SL` order carrying only a `price_reference` is built with a price of `0`, and an order carrying only a `quantity_reference` is built with a quantity of `0`. The route refuses none of these, so do not send them unless the API runs in engine mode.
+The cost is two extra Redis round trips per order, an `XADD` and a `BLPOP`, which the hand-over was measured to add about half a millisecond for. `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT` no longer exists and is ignored if it is still set. The API cannot place an order while the engine is not running; it answers <span class="status s5">503</span> `the order engine is not running, so the order was not placed; start unified-orders@order_engine.service`.
 
 ## The life of an intent
 
@@ -56,7 +46,7 @@ sequenceDiagram
     E->>L: RPUSH answer, EXPIRE RESULT_TTL_SECONDS
     E->>S: XACK
     L-->>A: answer
-    A-->>C: same body as direct mode, plus intent_id
+    A-->>C: the engine's answer, plus intent_id
 ```
 
 The intent written to the stream carries these fields.
@@ -95,7 +85,7 @@ The worker waits `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_TIMEOUT_SECONDS` (5 
 
 The engine keeps the other half of that promise. When it reads an intent more than `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_STALE_INTENT_SECONDS` (30 by default) past its deadline, it does not place it. It answers <span class="status s4">409</span> `the order engine read this order after the caller had stopped waiting for it, so it was not placed`, with `intent_id` and `expired_seconds`, so a restart cannot fire an abandoned order into a market that has moved. The answer stays in the list for `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_RESULT_TTL_SECONDS` (300 by default).
 
-The table below lists every engine-mode answer that direct mode never gives.
+The table below lists every answer that comes from the engine or the hand-over rather than from a broker.
 
 | Status | Message | Meaning |
 |---|---|---|
@@ -245,7 +235,6 @@ The table below lists every environment variable the engine reads, with its defa
 
 | Variable | Default | Effect |
 |---|---|---|
-| `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT` | `direct` | `engine` turns engine mode on in the API workers |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_TIMEOUT_SECONDS` | `5` | How long a worker waits for the engine's answer |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_RESULT_TTL_SECONDS` | `300` | How long an answer list is kept |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_WORKERS_PER_BROKER` | `10` | Worker threads each broker's lane starts with, such as `10,zerodha=6` |
@@ -266,4 +255,4 @@ SEBI's retail algorithmic trading framework treats more than ten orders a second
 ??? note "Under the hood"
     - **Files:** `bin/unified/orders/order_engine`, `bin/unified/orders/virtual_book`, and `unified_broker_interface/utilities/order_engine/`, whose `utilities/` folder holds the runner, the handoff, the gates, the stores and the registry.
     - **Classes:** [`IntentHandoff`][unified_broker_interface.utilities.order_engine.utilities.intent_handoff.IntentHandoff] writes an intent and waits; [`OrderIntent`][unified_broker_interface.utilities.order_engine.utilities.order_intent.OrderIntent] is the intent; [`OrderEngine`][unified_broker_interface.utilities.order_engine.utilities.engine_runner.OrderEngine] is the loop; [`RiskGates`][unified_broker_interface.utilities.order_engine.utilities.risk_gates.RiskGates] holds the limits; [`ParentStore`][unified_broker_interface.utilities.order_engine.utilities.parent_store.ParentStore] is the Redis cache; [`VirtualBook`][unified_broker_interface.utilities.order_engine.utilities.virtual_book.VirtualBook] keeps the queue estimates.
-    - **Offline checks:** `python -m test_runs.order_engine_routes` records the route in engine mode against a stubbed engine, `python -m test_runs.order_engine` runs the daemon against scripted intents and stubbed brokers, and `python -m test_runs.virtual_queue` checks the queue estimate.
+    - **Offline checks:** `python -m test_runs.order_engine_routes` records the hand-over against a stubbed engine, `python -m test_runs.order_routes` runs the real engine behind the route for every broker, `python -m test_runs.order_engine` runs the daemon against scripted intents and stubbed brokers, and `python -m test_runs.virtual_queue` checks the queue estimate, and `python -m test_runs.order_engine_throughput` measures the lanes under load.

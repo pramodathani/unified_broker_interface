@@ -152,7 +152,7 @@ systemctl --user enable --now unified.target unified-mapping.timer unified-price
     unified-rest-api.service
 ```
 
-The order engine is deliberately not in that list. It runs only when the API is configured with `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT=engine`, and exactly one copy may run.
+The order engine is in that list, because the REST API hands it every order to place. Exactly one copy may run.
 
 When everything is started, `bin/check-services` reports every unit that is down and starts the long-running ones.
 

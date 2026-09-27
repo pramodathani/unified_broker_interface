@@ -89,11 +89,6 @@ from utilities.configurations import get_logger
 
 ORDER_SEND_THREADS = 4
 
-ORDER_PLACEMENT_MODES = (
-    'direct',
-    'engine',
-)
-
 
 class OrdersBlueprint(BaseBlueprint):
     """The `/api/orders` routes: order and trade books from Redis, and placing, modifying and cancelling orders.
@@ -104,8 +99,7 @@ class OrdersBlueprint(BaseBlueprint):
         broker_orders (dict): Each broker's name to its order class instance; the same dictionary `order_placement` holds.
         broker_selector (BrokerSelector): The algorithm that orders the brokers an order is offered to, named by `UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_SELECTOR`; the same object `order_placement` holds.
         connection_warmers (list): One `ConnectionWarmer` per broker named in `UNIFIED_BROKER_INTERFACE_API_ORDER_WARM_BROKERS`, each running on its own daemon thread; the same list `order_placement` holds.
-        placement_mode (str): `direct` when this worker sends orders to brokers itself, or `engine` when it hands them to the order engine, named by `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT`.
-        order_handoff (IntentHandoff | None): The handoff to the order engine in `engine` mode, and None in `direct` mode, which is what `place_order` branches on.
+        order_handoff (IntentHandoff): The handoff that writes each order for the order engine to place and waits for its answer.
         instrument_cache (InstrumentCache): This worker's copy of the catalogue data placements and modifications have read under the current warm.
         catalogue_availability (CatalogueAvailability): What turns a "not mapped" refusal into a 503 when the day's catalogue has expired and the next one is not published yet.
         kill_switch (KillSwitch): What decides, from decoded order books and positions, what `POST /flatten` cancels and closes.
@@ -129,7 +123,7 @@ class OrdersBlueprint(BaseBlueprint):
             None: This method returns nothing.
 
         Raises:
-            ValueError: When the configured broker selector or the configured order placement mode is not a known one, or the daily order caps cannot be read, so a misspelt name stops the worker from starting rather than routing orders some other way.
+            ValueError: When the configured broker selector is not a known one, or the daily order caps cannot be read, so a misspelt name stops the worker from starting rather than routing orders some other way.
         """
         super().__init__()
         self.logger = get_logger('rest_api.orders')
@@ -141,12 +135,6 @@ class OrdersBlueprint(BaseBlueprint):
         self.broker_orders = self.order_placement.broker_orders
         self.broker_selector = self.order_placement.broker_selector
         self.connection_warmers = self.order_placement.connection_warmers
-        self.placement_mode = api_configuration['order_placement']
-        if self.placement_mode not in ORDER_PLACEMENT_MODES:
-            known_modes = ', '.join(ORDER_PLACEMENT_MODES)
-            raise ValueError(
-                f'unknown order placement {self.placement_mode!r}; known modes are {known_modes}'
-            )
         self.instrument_cache = InstrumentCache()
         self.catalogue_availability = CatalogueAvailability(self.cache)
         self.order_placement.attach_daily_count(
@@ -161,12 +149,10 @@ class OrdersBlueprint(BaseBlueprint):
             self.logger,
             api_configuration['order_rate_window_seconds'],
         )
-        self.order_handoff = None
-        if self.placement_mode == 'engine':
-            self.order_handoff = IntentHandoff(
-                self.cache,
-                api_configuration['order_engine_timeout_seconds'],
-            )
+        self.order_handoff = IntentHandoff(
+            self.cache,
+            api_configuration['order_engine_timeout_seconds'],
+        )
         self.order_placement.start_connection_warmers()
 
     @authenticated
@@ -307,23 +293,19 @@ class OrdersBlueprint(BaseBlueprint):
         return self.refuse(f'Redis could not be read: {error}', 503)
 
     def place(self):
-        """Places one order at the first broker the configured broker selector ranks that can take it.
+        """Hands one order to the order engine, which places it at the first broker the configured broker selector ranks that can take it.
 
         The JSON body names the instrument by `instrument_id`, or by `exchange`, `segment` and the segment's identity fields (`symbol`, or `underlying_symbol` and `expiry_date`, and for an option `strike_price` and `option_type`).
-        It gives `transaction_type` (BUY or SELL), `product` (CNC, MIS or NRML), `order_type` (MARKET, LIMIT, SL or SL-M) and `quantity` in units.
-        It may give `validity` (DAY or IOC, default DAY), `price`, `trigger_price`, `disclosed_quantity`, `after_market`, `tag` and `dry_run`.
+        It gives `transaction_type` (BUY or SELL), `product` (CNC, MIS or NRML), `order_type` (MARKET, LIMIT, SL or SL-M) and `quantity` in units, or a `price_reference` or `quantity_reference` in their place.
+        It may give `validity` (DAY or IOC, default DAY), `price`, `trigger_price`, `disclosed_quantity`, `after_market`, `tag`, `synthetic` and `dry_run`.
 
-        The method reads Redis in one to three round trips and then sends one request to one broker: one for the token, logins, settings and mapping marker, one for the instrument's catalogue data unless this worker already holds it under the current warm, and one more to find an instrument named by its fields unless that lookup is held too.
-        It never reads MongoDB or PostgreSQL, never calls a broker for anything but the order itself, and never retries a sent order at another broker.
-        With `dry_run` it answers with the request it would have sent instead of sending it.
+        The method checks the token and the body itself, finds the instrument, writes the order to `unified:orders:intents:stream` for `bin/unified/orders/order_engine` to place, and waits on `unified:orders:intents:result:<intent_id>` for the answer.
+        A `broker` field in the body is removed before the handoff, because the caller never chooses the broker; only `flatten` names one, for a position that can only be closed where it is held.
+        The answer carries the engine's keys plus `intent_id`, and an engine that does not answer in time is reported as outcome `unknown` with HTTP 504, because the order may still be placed.
         Every failure is answered with an HTTP status rather than raised.
 
-        All of that describes `direct` placement, which is the default. When `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT` is `engine`, the method checks the token and the body itself and then writes the order to `unified:orders:intents:stream` for `bin/unified/orders/order_engine` to place, waiting on `unified:orders:intents:result:<intent_id>` for the answer.
-        A `broker` field in the body is removed before the handoff, because the caller never chooses the broker; only `flatten` names one, for a position that can only be closed where it is held.
-        The answer carries the same keys with one addition, `intent_id`, and an engine that does not answer in time is reported as outcome `unknown` with HTTP 504, because the order may still be placed.
-
         Returns:
-            tuple: The Flask JSON response (flask.Response) and its HTTP status (int), which is 200 when the broker accepted the order or for a dry run, 422 when the broker refused it, 504 when the outcome is unknown, 400 for an order that is not valid, 401 for a missing, wrong or expired access token, 404 for an instrument that is not mapped, and 503 when Redis cannot be read, today's instrument catalogue is not published yet, the order engine is not running, or no broker can take the order.
+            tuple: The Flask JSON response (flask.Response) and its HTTP status (int), which is 200 when the broker accepted the order or for a dry run, 202 for a synthetic order waiting for a price, a time or a fill, 422 when the broker refused it, 504 when the outcome is unknown, 400 for an order that is not valid, 401 for a missing, wrong or expired access token, 404 for an instrument that is not mapped, 409 or 429 for an order the engine refused, and 503 when Redis cannot be read, today's instrument catalogue is not published yet, the order engine is not running, or no broker can take the order.
         """
         started_at = time.perf_counter()
         try:
@@ -353,17 +335,13 @@ class OrdersBlueprint(BaseBlueprint):
             pipeline = self.cache.pipeline(transaction=False)
             pipeline.hget('last_login', 'unified_broker_interface')
             pipeline.get('unified:catalogue:current_date')
-            pipeline.hmget('last_login', self.broker_names)
-            pipeline.hmget('settings', self.broker_names)
             pipeline.get('unified:catalogue:warm_identifier')
             first_replies = pipeline.execute()
         except redis.RedisError as error:
             raise self.redis_unreadable(error)
         token_document_text = first_replies[0]
         mapping_date_text = first_replies[1]
-        login_texts = first_replies[2]
-        settings_texts = first_replies[3]
-        warm_identifier = first_replies[4]
+        warm_identifier = first_replies[2]
 
         self.check_access_token(access_token, token_document_text)
 
@@ -372,23 +350,6 @@ class OrdersBlueprint(BaseBlueprint):
         except InvalidOrderError as error:
             raise self.refuse(str(error), 400)
 
-        if self.order_handoff is not None:
-            catalogue_key_prefix = self.catalogue_key_prefix(mapping_date_text)
-            instrument_id = self.resolve_instrument_id(
-                order,
-                mapping_date_text,
-                warm_identifier,
-                catalogue_key_prefix,
-            )
-            engine_body = dict(request.get_json(silent=True))
-            engine_body.pop('broker', None)
-            return self.order_handoff.place(
-                engine_body,
-                instrument_id,
-                started_at,
-            )
-
-        rotation = self.order_placement.rotation()
         catalogue_key_prefix = self.catalogue_key_prefix(mapping_date_text)
         instrument_id = self.resolve_instrument_id(
             order,
@@ -396,61 +357,11 @@ class OrdersBlueprint(BaseBlueprint):
             warm_identifier,
             catalogue_key_prefix,
         )
-
-        kept_texts = self.instrument_cache.instrument(
-            mapping_date_text,
-            warm_identifier,
+        engine_body = dict(request.get_json(silent=True))
+        engine_body.pop('broker', None)
+        return self.order_handoff.place(
+            engine_body,
             instrument_id,
-        )
-        pipeline = self.cache.pipeline(transaction=False)
-        if kept_texts is None:
-            pipeline.hget(catalogue_key_prefix + 'identity', instrument_id)
-            pipeline.hget(catalogue_key_prefix + 'order_handles', instrument_id)
-            pipeline.hget(catalogue_key_prefix + 'contract_sizes', instrument_id)
-        selector_command_count = self.broker_selector.queue_redis_commands(
-            pipeline,
-            order,
-            instrument_id,
-        )
-        second_replies = []
-        if kept_texts is None or selector_command_count > 0:
-            try:
-                second_replies = pipeline.execute()
-            except redis.RedisError as error:
-                raise self.redis_unreadable(error)
-        if kept_texts is None:
-            identity_text = second_replies[0]
-            handles_text = second_replies[1]
-            contract_size_text = second_replies[2]
-            selector_replies = second_replies[3:]
-        else:
-            identity_text = kept_texts[0]
-            handles_text = kept_texts[1]
-            contract_size_text = kept_texts[2]
-            selector_replies = second_replies
-
-        instrument = Instrument.decoded(
-            instrument_id,
-            identity_text,
-            handles_text,
-            contract_size_text,
-        )
-        if kept_texts is None:
-            self.instrument_cache.keep_instrument(
-                mapping_date_text,
-                warm_identifier,
-                instrument_id,
-                identity_text,
-                handles_text,
-                contract_size_text,
-            )
-        return self.order_placement.place(
-            order,
-            instrument,
-            rotation,
-            selector_replies,
-            login_texts,
-            settings_texts,
             started_at,
         )
 
@@ -1834,9 +1745,9 @@ class OrdersBlueprint(BaseBlueprint):
         return str(instrument_ids[0])
 
     def place_closing_order(self, body, instrument_id, broker_name, started_at):
-        """Places one closing order at a named broker, through whichever placement mode is configured.
+        """Hands one closing order to the order engine, for the broker that holds the position.
 
-        In engine mode the body handed to the engine names the broker in `broker`, which the plain `simple` type sends the order to, and marks the order with `closes_position` so that it may use the part of the broker's daily cap kept for exits.
+        The body handed to the engine names the broker in `broker`, which the plain `simple` type sends the order to, and marks the order with `closes_position` so that it may use the part of the broker's daily cap kept for exits.
 
         Args:
             body (dict): The order body.
@@ -1850,46 +1761,17 @@ class OrdersBlueprint(BaseBlueprint):
         Raises:
             RefusedRequestError: For an order answered without calling a broker.
         """
-        order = PlaceOrderRequest(body)
-        if self.order_handoff is not None:
-            engine_body = dict(body)
-            engine_body['broker'] = broker_name
-            engine_body['synthetic'] = {
-                'type': 'simple',
-                'closes_position': True,
-            }
-            return self.order_handoff.place(
-                engine_body,
-                instrument_id,
-                started_at,
-            )
-        rotation = self.order_placement.rotation()
-        catalogue_key_prefix = self.catalogue_key_prefix(
-            self.cache.get('unified:catalogue:current_date'),
-        )
-        pipeline = self.cache.pipeline(transaction=False)
-        pipeline.hget(catalogue_key_prefix + 'identity', instrument_id)
-        pipeline.hget(catalogue_key_prefix + 'order_handles', instrument_id)
-        pipeline.hget(catalogue_key_prefix + 'contract_sizes', instrument_id)
-        pipeline.hmget('last_login', self.broker_names)
-        pipeline.hmget('settings', self.broker_names)
-        replies = pipeline.execute()
-        instrument = Instrument.decoded(
+        engine_body = dict(body)
+        engine_body['broker'] = broker_name
+        engine_body['synthetic'] = {
+            'type': 'simple',
+            'closes_position': True,
+        }
+        return self.order_handoff.place(
+            engine_body,
             instrument_id,
-            replies[0],
-            replies[1],
-            replies[2],
+            started_at,
         )
-        prepared = self.order_placement.prepare(
-            order,
-            instrument,
-            rotation,
-            [],
-            replies[3],
-            replies[4],
-            broker_name,
-        )
-        return self.order_placement.send(prepared, started_at)
 
     def find_stored_order(self, order_request, order_texts):
         """Finds the one broker whose order book holds the order.

@@ -1,10 +1,10 @@
-"""Offline check of `POST /api/orders/place` in engine mode against a recording of its behaviour.
+"""Offline check of `POST /api/orders/place` against a recording of how it hands orders to the order engine.
 
-Runs the place route in-process through Flask's test client with `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT` set to `engine`, so the route writes the order to a Redis stream and waits for an answer instead of calling a broker. Redis is replaced by the same in-memory stand-in `test_runs/order_routes.py` uses, widened with the stream and list commands the handoff needs, and the engine is replaced by an answer seeded onto the reply list before the request is sent.
+Runs the place route in-process through Flask's test client, so the route writes the order to a Redis stream and waits for an answer. Redis is replaced by the stream-and-list stand-in in `test_runs/redis_stand_ins.py`, and the engine is replaced by an answer seeded onto the reply list before the request is sent, which is how the timeout, the engine being down and a malformed answer are each reached. `test_runs/order_routes.py` runs the real engine behind the same route instead.
 
 For each scenario it keeps the HTTP status, the response body, the intents that reached the stream and the number of Redis round trips, and compares them with `test_runs/fixtures/order_engine_routes.jsonl`.
 
-The recording is deliberately a second file. `--record` rewrites a whole fixture, so recording these scenarios into `order_routes.jsonl` would silently rewrite the recording that proves the direct path never changed.
+The recording is deliberately a second file. `--record` rewrites a whole fixture, so recording these scenarios into `order_routes.jsonl` would silently rewrite that suite's recording too.
 
 No Redis, database, credentials or network are used, and no request leaves the process. The project's `.env` still has to exist, because importing the blueprint imports `utilities.configurations`.
 
@@ -287,17 +287,6 @@ class OrderEngineScenarios:
                 ),
                 reply=self.accepted_answer(),
             ),
-            self.place(
-                'direct_mode_writes_no_intent',
-                self.bodies.market_order(),
-                placement='direct',
-            ),
-            self.place(
-                'an_unknown_placement_mode_stops_the_worker',
-                None,
-                placement='engin',
-                expect_construction_error=True,
-            ),
         ]
 
 
@@ -455,10 +444,6 @@ class OrderEngineRoutesSuite:
         self.fake_redis = self.build_state()
         if scenario.get('engine_running', True):
             self.fake_redis.strings[engine_lock.LOCK_KEY] = 'engine-process'
-        api_configuration['order_placement'] = scenario.get(
-            'placement',
-            'engine',
-        )
         if scenario.get('expect_construction_error'):
             try:
                 self.build_client()
@@ -501,7 +486,6 @@ class OrderEngineRoutesSuite:
         original_get_mongo_database = blueprint_base.get_mongo_db
         original_request = requests.Session.request
         original_uuid4 = uuid.uuid4
-        original_placement = api_configuration['order_placement']
         original_excluded = api_configuration['order_excluded_brokers']
         blueprint_base.get_cache = self.fake_cache
         blueprint_base.get_mongo_db = self.fake_mongo_database
@@ -519,7 +503,6 @@ class OrderEngineRoutesSuite:
             blueprint_base.get_mongo_db = original_get_mongo_database
             requests.Session.request = original_request
             uuid.uuid4 = original_uuid4
-            api_configuration['order_placement'] = original_placement
             api_configuration['order_excluded_brokers'] = original_excluded
         return results
 

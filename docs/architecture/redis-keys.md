@@ -54,7 +54,7 @@ Every stream is trimmed approximately (`MAXLEN ~`) as entries are added, so it h
 | `unified:quotes:stream` | `quote` | `bin/unified/instruments/websocket_quotes` | 1,000,000 | `persist`: `bin/unified/instruments/store_quotes_to_db`; also read without a group by `bin/unified/orders/virtual_book` |
 | `unified:order-updates:stream` | `update` | `bin/unified/orders/websocket_order_details` | 50,000 | `persist`: `bin/unified/orders/store_orders_to_db`; `engine`: `bin/unified/orders/order_engine` |
 | `unified:positions_updates:stream` | `position` | `bin/unified/orders/websocket_order_details` | 50,000 | `persist`: `bin/unified/portfolio/store_positions_to_db` |
-| `unified:orders:intents:stream` | `intent` | REST API workers, when `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT=engine` | 10,000 | `engine`: `bin/unified/orders/order_engine` |
+| `unified:orders:intents:stream` | `intent` | REST API workers, for every order placed | 10,000 | `engine`: `bin/unified/orders/order_engine` |
 
 The caps come from `STREAM_MAX_LENGTH` in each writer, and `QUOTES_STREAM_MAX_LENGTH` in `bin/unified/instruments/websocket_quotes`. Where each group starts reading the first time differs:
 

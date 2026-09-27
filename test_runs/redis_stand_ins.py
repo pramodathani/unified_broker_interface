@@ -1025,3 +1025,37 @@ class FakeEnginePipeline(FakePipeline):
                 )
         self.commands = []
         return replies
+
+
+class InlineEngineRedis(FakeEngineStoreRedis):
+    """The engine stand-in, which runs an engine over the waiting intents when a reply list is waited on and is empty.
+
+    Attributes:
+        inline_engine (engine_stand_ins.InlineEngine | None): The engine to run, or None to answer a wait with nothing, as `FakeEngineRedis` does.
+    """
+
+    def __init__(self):
+        """Builds an empty stand-in with no engine yet.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        super().__init__()
+        self.inline_engine = None
+
+    def blpop(self, key, timeout=None):
+        """Takes the first entry off a list, running the engine first when the list is empty.
+
+        Args:
+            key (str): The list key.
+            timeout (float | None): Accepted for compatibility with redis-py and ignored.
+
+        Returns:
+            tuple | None: `(key, value)` when the list held something, and None when it did not.
+
+        Raises:
+            redis.RedisError: When this round trip is the failing one.
+        """
+        if not self.lists.get(key) and self.inline_engine is not None:
+            self.inline_engine.place_waiting_intents()
+        return super().blpop(key, timeout)

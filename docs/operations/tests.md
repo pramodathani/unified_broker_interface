@@ -17,7 +17,7 @@ The table below lists all thirteen. "Fixture" is the recording a suite compares 
 | `python -m test_runs.candle_parse` | The seven historical candle parsers, against payloads recorded from the live APIs on 2026-09-12 | none (expected values in the file) | no | 0.3 s |
 | `python -m test_runs.unified_ticks_sessions` | The session gate against the exchanges' 2026 calendars: holidays, half-closed commodity days, NCDEX's shorter evening, Muhurat trading | none | no | 0.1 s |
 | `python -m test_runs.order_routes` | `place`, `modify` and `cancel`: status, body, every outgoing broker request and the number of Redis round trips | `test_runs/fixtures/order_routes.jsonl` (618 scenarios) | rewrites the whole file | 2.5 s |
-| `python -m test_runs.order_engine_routes` | `POST /api/orders/place` in engine mode: status, body, the intents written to the stream, Redis round trips | `test_runs/fixtures/order_engine_routes.jsonl` (20) | rewrites the whole file | 0.9 s |
+| `python -m test_runs.order_engine_routes` | How `POST /api/orders/place` hands orders to a stubbed engine, including timeouts and an engine that is down: status, body, the intents written to the stream, Redis round trips | `test_runs/fixtures/order_engine_routes.jsonl` (20) | rewrites the whole file | 0.9 s |
 | `python -m test_runs.order_change_lists` | The list form of `modify` and `cancel`: each entry's status and body, the broker requests (sorted, since a list sends on several threads) and the Redis round trips | `test_runs/fixtures/order_change_lists.jsonl` (23) | rewrites the whole file | 0.9 s |
 | `python -m test_runs.order_engine` | The order engine daemon against scripted intents and stubbed brokers: replies, broker requests, acknowledgements, counters | `test_runs/fixtures/order_engine.jsonl` (154) | rewrites the whole file | 0.9 s |
 | `python -m test_runs.order_engine_throughput` | The order engine's broker lanes against ten stub brokers that take 200 ms each: every order accepted, no broker sent more than 10 messages in any one second, and ten workers per broker at least 80 orders a second in total | none | no | 11 s |
@@ -29,11 +29,11 @@ The table below lists all thirteen. "Fixture" is the recording a suite compares 
 | `python -m test_runs.websocket_feeds` | Every broker's quotes and order sockets against scripted connections: every Redis command, frame sent, log line, login and wait | `test_runs/fixtures/websocket_feeds.jsonl` (160) | rewrites only the named brokers' lines | 0.6 s |
 | `python -m test_runs.connection_warming` | That connection warming and the idle limit never make an order fail, against a local HTTP server that misbehaves | none | no | 36.4 s |
 
-`order_engine_routes` and `order_change_lists` each have a fixture of their own on purpose. `--record` rewrites a whole file, so recording their scenarios into `order_routes.jsonl` would silently rewrite the recording that proves the direct path and the single form never changed.
+`order_engine_routes` and `order_change_lists` each have a fixture of their own on purpose. `--record` rewrites a whole file, so recording their scenarios into `order_routes.jsonl` would silently rewrite the recording that proves the single form and every broker's placement never changed.
 
 ## Running them all
 
-The output below is the last lines of each suite from one run on 2026-09-26. `order_routes` was run with `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT=direct`, for the reason explained in the warning after it.
+The output below is the last lines of each suite from one run on 2026-09-26.
 
 ```text
 ===== candle_parse
@@ -63,13 +63,6 @@ The output below is the last lines of each suite from one run on 2026-09-26. `or
 ===== connection_warming
 22/22 checks passed.
 ```
-
-!!! warning "`order_routes` needs direct placement mode"
-    `order_routes` records the direct path, in which the API worker calls the broker itself. It reads its configuration from `.env`, so when `.env` sets `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT=engine`, the place route tries to write to a Redis stream that the suite's stand-in does not have. On this machine that made 288 of 618 scenarios fail with status `500` and `AttributeError: 'FakeRedis' object has no attribute 'xadd'` in the log. Setting the variable for the one command fixes it, because an environment variable that is already set wins over `.env`:
-
-    ```bash
-    UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT=direct .venv/bin/python -m test_runs.order_routes
-    ```
 
 ## How the recording suites work
 

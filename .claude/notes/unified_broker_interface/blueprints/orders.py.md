@@ -26,13 +26,13 @@ The split was checked with `python -m test_runs.order_routes`, whose recording w
 
 A refusal that is answered without calling a broker is raised as `RefusedRequestError` and turned into its JSON answer in `place`, `modify` and `cancel`, so each step can be a method of its own without every caller checking a returned status.
 
-## The placement mode, and why it is a switch rather than a branch in git
+## Why direct placement was removed
 
-The order engine replaces this module's broker call with a handoff to a daemon, so that an order can outlive the HTTP request that asked for it and become a bracket, an OCO pair or a chaser. That is a large change to the one path in this project that spends real money, and merging it would leave no way back except reverting a commit under pressure during a session.
+The order engine arrived behind a switch, `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT`, so its code could be merged long before anyone trusted it, with `direct` as the way back. The live system ran in engine mode from 2026-09-26.
 
-`UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT` is the way back. At `direct` the module behaves exactly as it always has, so the engine's code can be merged into `main` long before anyone trusts it, and a session that goes wrong is recovered with an environment variable and a restart. `ORDER_PLACEMENT_MODES` lists the two accepted values, and `__init__` refuses anything else with a `ValueError`, exactly as it already refuses an unknown broker selector. Both checks are deliberately fatal: a misspelt mode that quietly fell back to `direct` would look like a working engine that silently was not one, which is the worst of the three outcomes.
+On 2026-09-27 the user asked for the place route to take lists, run every synthetic type and reach hundreds of orders a second, with the engine as the only path. Direct placement could do none of those, and it failed quietly when asked: it placed a bracket or an iceberg as one plain order, and it built a price or a quantity of `0` from a body that gave only a reference. So the switch, `ORDER_PLACEMENT_MODES`, the direct branch of `place_order`, the direct branch of flatten's `place_closing_order` and `OrderPlacement.place` were all removed. The first read of `place_order` no longer fetches every broker's login and settings, since only the engine uses them now.
 
-The mode is read once in `__init__` rather than per request, because it cannot change without a restart and because reading it per request would put a dictionary lookup on the measured path for no benefit.
+The per-broker request coverage the direct recordings gave was kept rather than lost. `test_runs/order_routes.py` now runs the real engine on the route's own thread whenever the route waits for an answer, through `engine_stand_ins.InlineEngine`, and every one of its 627 recorded results kept the same status, body and broker requests, apart from the new `intent_id` and `parent_id` fields and the route's Redis round trips.
 
 ## What an order costs
 

@@ -273,7 +273,7 @@ A failure after the first read never changes the status to anything but 207; it 
 
 ## What it does, step by step
 
-The sequence below follows a real run with one open order and one position, in direct placement mode.
+The sequence below follows a run with one open order and one position.
 
 ```mermaid
 sequenceDiagram
@@ -281,6 +281,7 @@ sequenceDiagram
     participant C as Your program
     participant A as API worker
     participant R as Redis
+    participant E as Order engine
     participant B as Broker
     C->>A: POST /api/orders/flatten {"confirm": "FLATTEN"}
     A->>A: header present? confirm is FLATTEN?
@@ -296,9 +297,11 @@ sequenceDiagram
         R-->>A: statuses
     end
     loop every open position
-        A->>R: HGET unified:broker_tokens, catalogue data
-        A->>B: MARKET order, opposite side, same broker
-        B-->>A: answer
+        A->>R: HGET unified:broker_tokens, XADD the closing order
+        E->>B: MARKET order, opposite side, same broker
+        B-->>E: answer
+        E->>R: RPUSH the answer
+        R-->>A: the answer, through BLPOP
     end
     loop every 0.25 s until every closed position shows zero or the wait runs out
         A->>R: HGETALL every position book
@@ -328,11 +331,11 @@ Each closing order is an ordinary placement with these fields.
 | `quantity` | The absolute net quantity |
 | broker | The broker that holds the position, never the selector's choice |
 
-In direct mode the close goes through the same checks as `POST /api/orders/place`, with the broker named: the broker must still be able to take the order, and the quantity must fit the lot size. The broker exclusion list does not stop a close, because a position can only be closed where it is held.
+The close goes through the same checks as `POST /api/orders/place`, with the broker named: the broker must still be able to take the order, and the quantity must fit the lot size. The broker exclusion list does not stop a close, because a position can only be closed where it is held.
 
-### Flatten in engine mode
+### How a close reaches the broker
 
-When `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT` is `engine`, the cancels are still sent straight from the API worker, but each close is written to the order engine as an intent and waits up to `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_TIMEOUT_SECONDS` for its answer, one close after another. The intent's body carries two additions, shown below as the offline suite recorded them.
+The cancels are sent straight from the API worker, but each close is written to the order engine as an intent and waits up to `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_TIMEOUT_SECONDS` for its answer, one close after another. The intent's body carries two additions, shown below as the offline suite recorded them.
 
 ```json
 {

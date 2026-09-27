@@ -7,8 +7,8 @@ This page is the glossary of all 42 types the engine runs. It lists every field 
 !!! danger "Synthetic orders place real orders, sometimes long after you asked"
     A synthetic order can place, modify or cancel orders at a broker minutes, hours or even days after your request, with nobody watching. Triggers, trailing stops, grids and schedules all act on their own. Send `"dry_run": true` first, which builds the first broker request without recording or sending anything.
 
-!!! warning "Engine mode only"
-    Synthetic orders run only when `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT=engine` and the order engine daemon is running. See [Order engine](order-engine.md) for how the two placement modes differ and what the direct mode does with a `synthetic` object.
+!!! note "The order engine runs them"
+    Synthetic orders are run by the [order engine](order-engine.md), which places every order the REST API accepts, so it has to be running.
 
 ## How to ask for one
 

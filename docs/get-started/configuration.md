@@ -71,7 +71,6 @@ These variables decide which broker receives an order placed through `POST /api/
 
 | Variable | Default | Type | Effect | Read by |
 |---|---|---|---|---|
-| `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT` | `direct` | `direct` or `engine` | `direct` sends the order from the API worker. `engine` hands it to `bin/unified/orders/order_engine` through a Redis Stream. Any other value stops the worker from starting. | `unified_broker_interface/blueprints/orders.py` |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_SELECTOR` | `round_robin` | `round_robin` or `fixed_priority` | Which broker selection class ranks the brokers. An unknown name stops the API and the engine from starting, rather than falling back. | `unified_broker_interface/utilities/broker_orders/utilities/placement.py` |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_PRIORITY` | empty | list | The preference order for `fixed_priority`. Brokers it does not name follow the named ones, in turn order. | `unified_broker_interface/utilities/broker_selection/fixed_priority.py` |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_EXCLUDED_BROKERS` | empty | list | Brokers that never receive an order. When every broker is excluded, placing answers `503` with `every broker is excluded from order placement`. | `unified_broker_interface/utilities/broker_orders/utilities/placement.py` |
@@ -82,7 +81,7 @@ These variables decide which broker receives an order placed through `POST /api/
 
 ### The order engine
 
-These variables matter only when `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT` is `engine`.
+These variables tune the order engine, which places every order the REST API accepts.
 
 | Variable | Default | Type | Effect | Read by |
 |---|---|---|---|---|

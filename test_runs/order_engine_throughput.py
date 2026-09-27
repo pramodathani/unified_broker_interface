@@ -19,7 +19,7 @@ import urllib.parse
 
 import requests
 
-from test_runs import order_engine
+from test_runs import engine_stand_ins
 from test_runs import order_routes
 from test_runs import redis_stand_ins
 from unified_broker_interface.utilities.broker_orders.utilities.registry import (
@@ -394,7 +394,7 @@ class OrderEngineThroughputSuite:
                 self.logger,
                 30.0,
                 300,
-                order_engine.RecordingEventLog(),
+                engine_stand_ins.RecordingEventLog(),
                 ParentStore(fake_redis),
                 None,
                 gates,

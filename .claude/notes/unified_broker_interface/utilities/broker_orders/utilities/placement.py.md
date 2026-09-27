@@ -39,3 +39,7 @@ The file is larger than the code that left the blueprint — 382 lines against 3
 ## Why the pool size is a constructor argument
 
 The API worker and the engine need different pool sizes from the same classes. An API worker sends at most four changes at once, so it keeps five connections per broker, four plus one for the warmer's ping. The engine keeps one more than the most workers a broker's lane can grow to. The offline order suites turn warming off explicitly when they build the blueprint, because a warmer's ping goes through the adapter rather than `requests.Session.request`, which the suites replace, and would otherwise reach the real brokers.
+
+## Why `place` is gone
+
+`OrderPlacement.place` chose, built, and sent or dry-ran an order in one call, for the REST API's direct placement. Direct placement was removed on 2026-09-27, and the order engine always went through `prepare` and `send` separately, because it records the leg between the two. Nothing called `place` any more, so it was removed rather than kept unused.

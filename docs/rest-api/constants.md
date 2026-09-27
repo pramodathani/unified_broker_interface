@@ -17,10 +17,9 @@ The table below is an index of the sections on this page.
 | [Segments](#segments) | Every instrument |
 | [Option type](#option-type) | Option instruments |
 | [Outcome](#outcome) | Answers to place, modify and cancel |
-| [Placement mode](#placement-mode) | Server configuration |
 | [Broker names](#broker-names) | Every `broker` field |
 | [Price and quantity reference kinds](#price-and-quantity-reference-kinds) | Order bodies |
-| [Synthetic order types](#synthetic-order-types) | Order bodies, in engine mode |
+| [Synthetic order types](#synthetic-order-types) | Order bodies |
 | [Read status](#read-status) | Portfolio and order book documents |
 | [Quote and history values](#quote-and-history-values) | Market quotes and historical data |
 
@@ -187,15 +186,6 @@ Every answer to placing, modifying or cancelling an order that reached a broker 
 
 !!! warning "`unknown` does not mean the order failed"
     An `unknown` outcome means the request may have reached the broker. Check [`GET /api/orders/details`](orders.md#order-book) before sending it again, or you may place the same order twice.
-
-## Placement mode
-
-The placement mode decides who sends orders to the brokers. It is not a request parameter. It is set on the server with `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT`.
-
-| Value | Meaning |
-|---|---|
-| `direct` | The default. The API worker that received the order sends it to the broker itself. |
-| `engine` | The API hands the order to the order engine process, which sends it and can run synthetic orders. See [Order engine](order-engine.md). |
 
 ## Broker names
 

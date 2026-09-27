@@ -23,9 +23,13 @@ import uuid
 import flask
 import requests
 
+from test_runs import engine_stand_ins
 from test_runs import redis_stand_ins
 from unified_broker_interface.blueprints import base as blueprint_base
 from unified_broker_interface.blueprints import orders as orders_blueprint
+from unified_broker_interface.utilities.order_engine.utilities.engine_lock import (
+    LOCK_KEY as ENGINE_LOCK_KEY,
+)
 from unified_broker_interface.utilities.broker_orders.utilities.registry import (
     BROKER_ORDER_CLASSES,
 )
@@ -3392,8 +3396,9 @@ class OrderRoutesSuite:
     """Runs every scenario against the order blueprint, then records or compares the results.
 
     Attributes:
-        fake_redis (redis_stand_ins.FakeRedis): The stand-in the blueprint under test reads.
+        fake_redis (redis_stand_ins.InlineEngineRedis): The stand-in the blueprint under test and the order engine behind it read.
         network (FakeBrokerNetwork): The stubbed broker network.
+        counting_uuid (engine_stand_ins.CountingUuid): The stand-in for `uuid.uuid4`, reset before each scenario.
     """
 
     def __init__(self):
@@ -3404,6 +3409,7 @@ class OrderRoutesSuite:
         """
         self.fake_redis = redis_stand_ins.FakeRedis()
         self.network = FakeBrokerNetwork()
+        self.counting_uuid = engine_stand_ins.CountingUuid()
 
     def fake_cache(self):
         """Hands the blueprint the stand-in instead of a Redis client.
@@ -3562,6 +3568,22 @@ class OrderRoutesSuite:
             'redis_round_trips': self.fake_redis.round_trips,
         }
 
+    def build_state(self):
+        """Builds a stand-in holding the starting contents, with the order engine's lock taken so the place route hands orders over.
+
+        The order engine itself runs inside the stand-in whenever the route waits for an answer.
+
+        Returns:
+            redis_stand_ins.InlineEngineRedis: The stand-in.
+        """
+        starting_state = OrderRoutesState().build()
+        fake_redis = redis_stand_ins.InlineEngineRedis()
+        fake_redis.strings = starting_state.strings
+        fake_redis.hashes = starting_state.hashes
+        fake_redis.sorted_sets = starting_state.sorted_sets
+        fake_redis.strings[ENGINE_LOCK_KEY] = 'engine-process'
+        return fake_redis
+
     def run_scenario(self, scenario):
         """Runs one scenario from fresh Redis contents and a fresh blueprint.
 
@@ -3571,7 +3593,7 @@ class OrderRoutesSuite:
         Returns:
             dict: The scenario's recorded result.
         """
-        self.fake_redis = OrderRoutesState().build()
+        self.fake_redis = self.build_state()
         for broker_name in scenario.get('full_rate_windows', []):
             filled_at = int(time.monotonic() * 1000000)
             self.fake_redis.rate_windows[f'unified:orders:rate:{broker_name}'] = [
@@ -3583,7 +3605,7 @@ class OrderRoutesSuite:
             'rate_wait_seconds',
             1,
         )
-        api_configuration['order_placement'] = 'direct'
+        self.counting_uuid.reset()
         api_configuration['order_broker_selector'] = scenario.get(
             'selector',
             'round_robin',
@@ -3609,6 +3631,9 @@ class OrderRoutesSuite:
         if scenario.get('open_markets'):
             return self.run_with_open_markets(scenario)
         client = self.build_client()
+        self.fake_redis.inline_engine = engine_stand_ins.InlineEngine(
+            self.fake_redis,
+        )
         if 'steps' not in scenario:
             result = self.send(client, scenario)
             result['name'] = scenario['name']
@@ -3674,11 +3699,10 @@ class OrderRoutesSuite:
         original_excluded = api_configuration['order_excluded_brokers']
         original_selector = api_configuration['order_broker_selector']
         original_priority = api_configuration['order_broker_priority']
-        original_placement = api_configuration['order_placement']
         blueprint_base.get_cache = self.fake_cache
         blueprint_base.get_mongo_db = self.fake_mongo_database
         requests.Session.request = self.network.request
-        uuid.uuid4 = self.fixed_uuid
+        uuid.uuid4 = self.counting_uuid
         try:
             results = []
             for scenario in OrderRoutesScenarios().build():
@@ -3691,7 +3715,6 @@ class OrderRoutesSuite:
             api_configuration['order_excluded_brokers'] = original_excluded
             api_configuration['order_broker_selector'] = original_selector
             api_configuration['order_broker_priority'] = original_priority
-            api_configuration['order_placement'] = original_placement
         return results
 
     def encode(self, result):

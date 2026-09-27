@@ -38,7 +38,7 @@ There is no `pyproject.toml`, no build step and no pytest suite. The project roo
 | Apply price history DDL | `python -m stock_brokers.instruments.historical.utilities.sql.apply_ddl` |
 | Apply unified mapping DDL | `python -m stock_brokers.instruments.mapping.utilities.sql.apply_ddl` |
 | Run the REST API | `bin/rest-api` (gunicorn on 127.0.0.1:8080), or `bin/rest-api --dev` for Flask's development server |
-| Run the order engine | `bin/unified/orders/order_engine` (only with `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT=engine`; run one) |
+| Run the order engine | `bin/unified/orders/order_engine` (the REST API hands it every order to place; run one) |
 | Check every systemd unit and start the ones that are down | `bin/check-services` (`--check-only` to report without starting) |
 | Wait until Redis has finished loading its dataset | `bin/wait-for-redis` (`--timeout-seconds` to wait other than five minutes) |
 | REST API test page | `bin/rest-api-app` (Streamlit on port 8501; start the API first) |
@@ -51,7 +51,7 @@ There is no `pyproject.toml`, no build step and no pytest suite. The project roo
 
 Lint is not clean on an untouched tree. `ruff check .` reports 41 findings on `main`, almost all of them in `stock_brokers/api/` and `test_runs/`: star imports and the names they hide (`F403`, `F405`), assigned but unused variables (`F841`), comparisons to `True` and `False` with `==` (`E712`), unused imports (`F401`) and one lambda bound to a name (`E731`). Treat that as the baseline, and judge a change by whether it adds a finding rather than by whether the run is silent.
 
-The offline suites are plain scripts, not pytest files, so there is no way to run a single case other than editing or importing the module. They need no Redis, database, credentials or network, though `order_routes` imports the API and so reads `.env`. `order_routes` compares the order routes' statuses, bodies, outgoing broker requests and Redis round trips with a recording, so a refactor of `unified_broker_interface/blueprints/orders.py` must leave it unchanged.
+The offline suites are plain scripts, not pytest files, so there is no way to run a single case other than editing or importing the module. They need no Redis, database, credentials or network, though `order_routes` imports the API and so reads `.env`. `order_routes` compares the order routes' statuses, bodies, outgoing broker requests and Redis round trips with a recording, running the real order engine behind the place route on the same thread, so a refactor of `unified_broker_interface/blueprints/orders.py` or of the engine must leave it unchanged.
 
 `test_runs/broker_login_test.py` logs in to live broker accounts, and anything under `bin/<broker>/` reaches real trading accounts, so do not run them without the user's say-so. Two scripts at the top of `bin/` do the same from outside that directory pattern: `bin/check-broker-connections` authenticates to every broker in turn, and `bin/zerodha-quote` calls three live Kite endpoints. Both only read, but several brokers log in by driving a headless Chrome and consuming a TOTP, so running either one repeatedly means authenticating for real each time.
 

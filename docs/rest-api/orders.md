@@ -325,10 +325,7 @@ The body is a JSON object. You name the instrument in one of two ways: by `instr
 
 The true-or-false fields `after_market` and `dry_run` accept a JSON boolean, or the text `true`, `1`, `yes`, `false`, `0`, `no` or an empty string, in any case. Anything else is refused with <span class="status s4">400</span>.
 
-!!! warning "In direct mode the engine-only fields do nothing useful"
-    When `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT` is `direct` (the default), the route does not read `synthetic` at all, so the order is placed as a plain order and the synthetic behavior you asked for silently does not happen. `price_reference` and `quantity_reference` are checked for shape but never resolved. A `LIMIT` or `SL` order that carries only a `price_reference` passes validation and its request is built with a price of `0`, and an order that carries only a `quantity_reference` is built with a quantity of `0`. Only send these fields when the API runs in [engine mode](order-engine.md).
-
-The API then runs these checks against the instrument and the chosen broker. Each failure is answered without calling a broker.
+The order engine then runs these checks against the instrument and the chosen broker. Each failure is answered without calling a broker.
 
 1. The instrument must be mapped today, or the answer is <span class="status s4">404</span> `the instrument is not mapped`. When the whole catalogue is missing rather than the one instrument, which happens every night between midnight, when the day's catalogue keys expire, and the morning mapping that publishes the next one, the answer is <span class="status s5">503</span> `today's instrument catalogue is not published yet: the catalogue for <date> has expired, and the daily mapping has not published a new one` instead. That check runs only after an order has already been refused as not mapped, so an order that is placed pays nothing for it.
 2. The instrument's segment must be tradeable, or the answer is <span class="status s4">400</span> `orders are not sent for <segment> instruments`.
@@ -476,7 +473,7 @@ The last example is shortened: the recording lists all ten brokers in `skipped`,
 
 ### Response attributes
 
-A sent order and a dry run share most keys. In engine mode every answer also carries `intent_id`, and a synthetic order carries `parent_id`; see [Order engine](order-engine.md).
+A sent order and a dry run share most keys. Every answer also carries `intent_id`, and an order the engine recorded carries `parent_id`; see [Order engine](order-engine.md).
 
 | Attribute | Type | Description |
 |---|---|---|
@@ -510,11 +507,11 @@ Every failure below is answered without calling a broker, except the three outco
 | <span class="status s5">503</span> | `Redis could not be read: <error>`, `no instruments have been mapped yet`, `today's instrument catalogue is not published yet: the catalogue for <date> has expired, and the daily mapping has not published a new one`, `every broker is excluded from order placement`, `no broker can take this order` (with `skipped`), or `the contract size of this <segment> instrument is not trusted today (<status>), so no order is sent` (with `contract_size_status`). |
 | <span class="status s5">504</span> | `outcome` is `unknown`: the broker answered with a server error, answered success without an order id, or the network failed after the request left. **The order may exist.** |
 
-Engine mode adds <span class="status s2">202</span>, <span class="status s4">403</span>, <span class="status s4">409</span>, <span class="status s4">429</span> and more <span class="status s5">503</span> and <span class="status s5">504</span> cases; they are listed on the [Order engine](order-engine.md) page.
+The engine adds <span class="status s2">202</span>, <span class="status s4">403</span>, <span class="status s4">409</span>, <span class="status s4">429</span> and more <span class="status s5">503</span> and <span class="status s5">504</span> cases; they are listed on the [Order engine](order-engine.md) page.
 
 ### What happens, step by step
 
-The sequence below shows a direct-mode placement by `instrument_id` with the default round-robin selector. It is the path taken when `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT` is `direct`.
+The sequence below shows a placement by `instrument_id` with the default round-robin selector.
 
 ```mermaid
 sequenceDiagram
@@ -522,32 +519,36 @@ sequenceDiagram
     participant C as Your program
     participant A as API worker
     participant R as Redis
+    participant E as Order engine
     participant B as Chosen broker
     C->>A: POST /api/orders/place
     A->>A: header present?
-    A->>R: pipeline 1: token, mapping date,<br/>logins, settings, warm id
+    A->>R: pipeline: token, mapping date, warm id
     R-->>A: replies
     A->>A: check token, validate body
-    A->>R: pipeline 2: identity, order handles,<br/>contract size, INCR round_robin
-    R-->>A: replies
-    A->>A: tradeable? contract size?<br/>rank brokers, skip unfit ones
-    A->>A: lot size and tick size checks
+    A->>R: EXISTS engine lock, XADD intent
+    A->>R: BLPOP the intent's reply list
+    E->>R: read the intent, choose the broker<br/>(INCR round_robin, skip unfit brokers)
+    E->>E: tradeable? contract size?<br/>lot size and tick size checks
     alt dry_run
-        A-->>C: 200 with the request it would send
+        E->>R: RPUSH 200 with the request it would send
     else send
-        A->>B: one HTTP request
-        B-->>A: answer
-        A-->>C: 200 accepted / 422 rejected / 504 unknown
+        E->>B: one HTTP request
+        B-->>E: answer
+        E->>R: RPUSH 200 accepted / 422 rejected / 504 unknown
     end
+    R-->>A: the answer
+    A-->>C: the answer, plus intent_id
 ```
 
-Pipeline 2 is skipped entirely when this worker already holds the instrument's catalogue data for the current warm and the selector queues nothing, which is only possible with `fixed_priority`. An instrument named by its identity fields costs one more round trip, a `ZRANGEBYLEX` on the segment's catalogue, unless the worker has already looked that name up under the current warm.
+An instrument named by its identity fields costs the API one more round trip, a `ZRANGEBYLEX` on the segment's catalogue, unless the worker has already looked that name up under the current warm.
 
 ??? note "Under the hood"
-    - **Redis keys read:** `last_login` (the API's token and every broker's login), `settings`, `unified:catalogue:current_date`, `unified:catalogue:warm_identifier`, `unified:catalogue:<date>:identity`, `:order_handles`, `:contract_sizes`, `:catalogue:<segment>` (only for a lookup by fields), and `unified:orders:round_robin` (incremented by the round-robin selector).
-    - **Redis keys written:** `unified:orders:round_robin`, and `unified:orders:daily_count:<broker>` when that broker is capped.
+    - **Redis keys the route reads:** `last_login` (the API's token), `unified:catalogue:current_date`, `unified:catalogue:warm_identifier`, `:catalogue:<segment>` (only for a lookup by fields), `unified:orders:engine:lock`, and the intent's reply list.
+    - **Redis keys the route writes:** `unified:orders:intents:stream`.
+    - **What the engine reads and writes:** every broker's login and settings, the instrument's catalogue data, `unified:orders:round_robin`, the rate budget's windows, and `unified:orders:daily_count:<broker>` when that broker is capped; see [Order engine](order-engine.md).
     - **Stores never read:** MongoDB and PostgreSQL.
-    - **Classes:** [`PlaceOrderRequest`][unified_broker_interface.utilities.broker_orders.utilities.place_order_request.PlaceOrderRequest] validates the body, [`OrderPlacement`][unified_broker_interface.utilities.broker_orders.utilities.placement.OrderPlacement] chooses the broker and builds the request, and each broker's [`BrokerOrders`][unified_broker_interface.utilities.broker_orders.base.BrokerOrders] subclass builds its own request and reads its own answer.
+    - **Classes:** [`PlaceOrderRequest`][unified_broker_interface.utilities.broker_orders.utilities.place_order_request.PlaceOrderRequest] validates the body, [`IntentHandoff`][unified_broker_interface.utilities.order_engine.utilities.intent_handoff.IntentHandoff] writes the intent and waits, [`OrderPlacement`][unified_broker_interface.utilities.broker_orders.utilities.placement.OrderPlacement] chooses the broker and builds the request inside the engine, and each broker's [`BrokerOrders`][unified_broker_interface.utilities.broker_orders.base.BrokerOrders] subclass builds its own request and reads its own answer.
     - **Answer rules:** [`BrokerAnswer`][unified_broker_interface.utilities.broker_orders.utilities.broker_answer.BrokerAnswer] maps `accepted`, `rejected` and `unknown` to 200, 422 and 504.
 
 ## Modify an order
@@ -1125,8 +1126,7 @@ flowchart LR
     C -->|"everything refused"| D["429"]
 ```
 
-!!! warning "In direct mode the caps are counted, not enforced"
-    The refusal with <span class="status s4">429</span> happens only in the [order engine](order-engine.md), which checks the count before it places each leg. In direct mode the API workers count every placement, modification and cancellation, but they never refuse one because of the count. `PUT /api/orders/modify` and `DELETE /api/orders/cancel` are counted in both modes and refused in neither.
+The refusal with <span class="status s4">429</span> happens in the [order engine](order-engine.md), which checks the count before it places each leg. `PUT /api/orders/modify` and `DELETE /api/orders/cancel` are counted but never refused because of the count.
 
 When the engine refuses an order, the message says which limit was hit. For a new entry it is `<broker> has been sent <n> order messages today, and the last <m> of its daily cap of <cap> are kept for closing positions, so this was not sent`. For an exit it is `<broker> has been sent <n> order messages today, which is its daily cap of <cap>, so this was not sent`. A count that cannot be read never refuses an order; the failure is logged instead.
 
@@ -1162,13 +1162,11 @@ The order routes were written so that the API's own work adds as little as possi
 | Route | Round trips | What they are |
 |---|---|---|
 | `GET /api/orders/details`, `/trades` | token check, then 1 | The token check, then one `GET` of the document |
-| `POST /place` (direct, `round_robin`) | 2 or 3 | The first pipeline; the instrument data plus the `INCR`; one more `ZRANGEBYLEX` when named by fields and not yet looked up by this worker |
-| `POST /place` (direct, `fixed_priority`) | 1 to 3 | As above, but the second pipeline is skipped when this worker already holds the instrument |
-| `POST /place` (engine) | 3 or 4 | The first pipeline, an optional lookup by fields, then `XADD` of the intent and `BLPOP` for the answer |
-| `PUT /modify` | 1 to 3 | The first pipeline with every broker's order book; the token candidates; their catalogue data, each skipped when held by this worker |
-| `PUT /modify`, a list | 1 to 3 | The same three, each read once for the whole list |
-| `DELETE /cancel` | 1 | One pipeline with the token, logins, settings and every broker's order book |
-| `DELETE /cancel`, a list | 1 | The same pipeline, holding every order of the list |
-| `POST /flatten` | 1, plus more | One read of everything; one re-read of the order books every 0.25 s while waiting for the cancels; three per position closed in direct mode; one re-read of the position books every 0.25 s while waiting for the closed positions to show zero |
+| `POST /place` | 4 or 5 | The first pipeline, an optional lookup by fields, the engine lock's `EXISTS`, the `XADD` of the intent and the `BLPOP` for the answer; the engine's own reads are not counted here |
+| `PUT /modify` | 2 to 4 | The first pipeline with every broker's order book; the token candidates; their catalogue data, each skipped when held by this worker; one more for the rate budget before sending |
+| `PUT /modify`, a list | 2 to 4 | The same three, each read once for the whole list, plus one for the rate budget per change sent |
+| `DELETE /cancel` | 2 | One pipeline with the token, logins, settings and every broker's order book, and one for the rate budget |
+| `DELETE /cancel`, a list | 1, plus one per cancel sent | The same pipeline, holding every order of the list, and one for the rate budget per cancel |
+| `POST /flatten` | 1, plus more | One read of everything; one for the rate budget per cancel; one re-read of the order books every 0.25 s while waiting for the cancels; the engine lock's `EXISTS`, an `XADD` and a `BLPOP` per position closed; one re-read of the position books every 0.25 s while waiting for the closed positions to show zero |
 
 When a broker is capped by `ORDER_DAILY_CAPS`, each request sent to it costs one more pipeline afterwards, to increment the count.

@@ -25,6 +25,7 @@ import uuid
 
 import requests
 
+from test_runs import engine_stand_ins
 from test_runs import order_routes
 from test_runs import redis_stand_ins
 from unified_broker_interface.utilities.order_engine.utilities import engine_lock
@@ -101,207 +102,6 @@ RESULT_TTL_SECONDS = 300
 # A fixed moment in the middle of an Indian trading day, so a scenario naming a time of day means
 # the same thing on every run and whatever timezone the machine keeps.
 FROZEN_NOW = datetime.datetime(2026, 9, 23, 10, 0, 0, tzinfo=moments.INDIA)
-
-
-class RecordingEventLog:
-    """Stands in for the event log, keeping every transition in a list instead of a database.
-
-    The engine's recovery reads this back, so the stand-in has to behave like the table in the one way that matters: `read_since` returns rows oldest first within each parent.
-
-    Attributes:
-        events (list): Every event recorded, in the order it was written.
-        failing_event (int | None): The 1-based write that raises, or None when none does.
-        writes (int): How many events have been written.
-    """
-
-    def __init__(self):
-        """Builds an empty log.
-
-        Returns:
-            None: This method returns nothing.
-        """
-        self.events = []
-        self.failing_event = None
-        self.writes = 0
-
-    def apply_table(self):
-        """Does nothing, since there is no table.
-
-        Returns:
-            None: This method returns nothing.
-        """
-
-    def record(self, event):
-        """Keeps one transition.
-
-        Args:
-            event (dict): The event.
-
-        Returns:
-            None: This method returns nothing.
-
-        Raises:
-            RuntimeError: When this write is the one set to fail.
-        """
-        self.writes = self.writes + 1
-        if self.writes == self.failing_event:
-            raise RuntimeError('stand-in event log failure')
-        self.events.append(dict(event))
-
-    def record_many(self, events):
-        """Keeps several transitions.
-
-        Args:
-            events (list): The events.
-
-        Returns:
-            None: This method returns nothing.
-        """
-        for event in events:
-            self.record(event)
-
-    def read_since_for_types(self, moment, types):
-        """Every transition kept whose order type is one of `types`.
-
-        The real one reads a longer window for the types that outlive a trading day. The stand-in keeps one run's events, so the window means nothing here and only the type filter does.
-
-        Args:
-            moment (datetime.datetime): Ignored, since the stand-in keeps only one run's events.
-            types (list): The `synthetic_type` values to read.
-
-        Returns:
-            list: The matching events, by parent and then sequence.
-        """
-        wanted = set(types or [])
-        return [
-            event
-            for event in self.read_since(moment)
-            if event.get('synthetic_type') in wanted
-        ]
-
-    def read_since(self, moment):
-        """Every transition kept, ordered as the table orders them.
-
-        Args:
-            moment (datetime.datetime): Ignored, since the stand-in keeps only one run's events.
-
-        Returns:
-            list: The events, by parent and then sequence.
-        """
-        del moment
-        return sorted(
-            self.events,
-            key=lambda event: (
-                str(event.get('parent_order_id')),
-                event.get('sequence') or 0,
-            ),
-        )
-
-    def shown(self):
-        """The events with the values that differ between runs left out.
-
-        Returns:
-            list: One dictionary per event, carrying only what a recording can compare.
-        """
-        shown = []
-        for event in self.events:
-            kept = {}
-            for name, value in event.items():
-                if name in ('time', 'engine_instance', 'parent_order_id', 'intent_id'):
-                    continue
-                if name == 'leg_id' and value:
-                    kept[name] = 'leg:' + str(value).rsplit(':', 1)[1]
-                    continue
-                kept[name] = value
-            shown.append(kept)
-        return shown
-
-
-class CountingUuid:
-    """A stand-in for `uuid.uuid4` that counts rather than being random.
-
-    Two things in one scenario need different identifiers — two parents, and the tag Groww generates for itself — so replacing `uuid.uuid4` with one constant the way the route suites do is not open here. Counting gives values that are distinct within a scenario and the same on every run, and the count is reset before each scenario so one scenario's numbering does not depend on what ran before it.
-
-    Attributes:
-        count (int): How many identifiers have been handed out since the last reset.
-    """
-
-    def __init__(self):
-        """Builds the counter.
-
-        Returns:
-            None: This method returns nothing.
-        """
-        self.count = 0
-
-    def reset(self):
-        """Starts the numbering again, before a scenario.
-
-        Returns:
-            None: This method returns nothing.
-        """
-        self.count = 0
-
-    def __call__(self):
-        """The next identifier.
-
-        Returns:
-            uuid.UUID: A version 4 identifier whose value is the count.
-        """
-        self.count = self.count + 1
-        return uuid.UUID(int=self.count, version=4)
-
-
-class OnePassStop:
-    """A stop event that lets the engine's loop run a fixed number of passes and then stop.
-
-    The engine blocks on Redis for new entries and runs until it is asked to stop, neither of which suits a recording. This reports "not stopping" for the first few checks and "stopping" afterwards, so `run` makes exactly the passes a scenario needs and returns.
-
-    Attributes:
-        remaining (int): How many more checks report that the engine should keep going.
-    """
-
-    def __init__(self, passes):
-        """Builds the stop event.
-
-        Args:
-            passes (int): How many passes of the loop to allow.
-
-        Returns:
-            None: This method returns nothing.
-        """
-        self.remaining = passes
-
-    def is_set(self):
-        """Whether the engine should stop, counting down one pass each time it is asked.
-
-        Returns:
-            bool: False while passes remain, and True afterwards.
-        """
-        if self.remaining > 0:
-            self.remaining = self.remaining - 1
-            return False
-        return True
-
-    def set(self):
-        """Stops the engine at its next check.
-
-        Returns:
-            None: This method returns nothing.
-        """
-        self.remaining = 0
-
-    def wait(self, seconds):
-        """Returns at once instead of waiting, so a backoff costs no time.
-
-        Args:
-            seconds (float): Ignored.
-
-        Returns:
-            bool: True.
-        """
-        del seconds
-        return True
 
 
 class OrderEngineScenarios:
@@ -1056,7 +856,7 @@ class OrderEngineSuite:
         """
         self.fake_redis = redis_stand_ins.FakeEngineStoreRedis()
         self.network = order_routes.FakeBrokerNetwork()
-        self.counting_uuid = CountingUuid()
+        self.counting_uuid = engine_stand_ins.CountingUuid()
         self.scenarios = OrderEngineScenarios()
 
     def build_state(self):
@@ -1263,7 +1063,7 @@ class OrderEngineSuite:
         logger = logging.getLogger('test_runs.order_engine')
         placement = EnginePlacement(self.fake_redis, logger)
         lock = EngineLock(self.fake_redis, logger)
-        event_log = RecordingEventLog()
+        event_log = engine_stand_ins.RecordingEventLog()
         event_log.failing_event = scenario.get('failing_event')
         gates = self.build_gates(scenario, logger)
         if gates is not None:
@@ -1291,7 +1091,7 @@ class OrderEngineSuite:
             router=router,
         )
         self.fake_redis.round_trips = 0
-        exit_code = engine.run(OnePassStop(scenario.get('passes', 3)))
+        exit_code = engine.run(engine_stand_ins.OnePassStop(scenario.get('passes', 3)))
 
         delivered = self.fake_redis.pending.get(INTENT_STREAM_KEY, [])
         result = {
@@ -1654,7 +1454,7 @@ class OrderEngineSuite:
         self.fake_redis.strings['flattrade:orders:orders:polled_at'] = str(
             time.time() - polled_ago,
         )
-        event_log = RecordingEventLog()
+        event_log = engine_stand_ins.RecordingEventLog()
         event_log.events = [dict(event) for event in events]
         logger = logging.getLogger('test_runs.order_engine')
         parent_store = ParentStore(self.fake_redis)
@@ -1755,7 +1555,7 @@ class OrderEngineSuite:
         parent_store = ParentStore(self.fake_redis)
         parent = self.followed_parent()
         parent_store.save(parent)
-        event_log = RecordingEventLog()
+        event_log = engine_stand_ins.RecordingEventLog()
         follower = OrderUpdateFollower(
             parent_store,
             event_log,
@@ -1802,7 +1602,7 @@ class OrderEngineSuite:
         self.fake_redis = self.build_state()
         parent_store = ParentStore(self.fake_redis)
         parent = self.followed_parent()
-        event_log = RecordingEventLog()
+        event_log = engine_stand_ins.RecordingEventLog()
         follower = OrderUpdateFollower(
             parent_store,
             event_log,
@@ -1982,7 +1782,7 @@ class OrderEngineSuite:
 
         logger = logging.getLogger('test_runs.order_engine')
         placement = EnginePlacement(self.fake_redis, logger)
-        event_log = RecordingEventLog()
+        event_log = engine_stand_ins.RecordingEventLog()
         parent_store = ParentStore(self.fake_redis)
         gates = None
         if gated:
@@ -2003,7 +1803,7 @@ class OrderEngineSuite:
             None,
             gates,
         )
-        engine.run(OnePassStop(3))
+        engine.run(engine_stand_ins.OnePassStop(3))
 
         follower = OrderUpdateFollower(
             parent_store,
@@ -2554,7 +2354,7 @@ class OrderEngineSuite:
 
         logger = logging.getLogger('test_runs.order_engine')
         placement = EnginePlacement(self.fake_redis, logger)
-        event_log = RecordingEventLog()
+        event_log = engine_stand_ins.RecordingEventLog()
         parent_store = ParentStore(self.fake_redis)
         ticker = ClockTicker(parent_store, event_log, placement, logger, None)
         engine = OrderEngine(
@@ -2572,7 +2372,7 @@ class OrderEngineSuite:
         original_time = time.time
         time.time = lambda: FROZEN_NOW.timestamp()
         try:
-            engine.run(OnePassStop(3))
+            engine.run(engine_stand_ins.OnePassStop(3))
         finally:
             time.time = original_time
         reply = self.shown_replies(reply_keys)[0]
@@ -2650,7 +2450,7 @@ class OrderEngineSuite:
         """Rebuilds every parent from its recorded events alone, which is all an engine restart has.
 
         Args:
-            event_log (RecordingEventLog): The recorded events.
+            event_log (engine_stand_ins.RecordingEventLog): The recorded events.
             parent_store (ParentStore): The Redis copy to replace.
 
         Returns:
@@ -2733,7 +2533,7 @@ class OrderEngineSuite:
 
         logger = logging.getLogger('test_runs.order_engine')
         placement = EnginePlacement(self.fake_redis, logger)
-        event_log = RecordingEventLog()
+        event_log = engine_stand_ins.RecordingEventLog()
         parent_store = ParentStore(self.fake_redis)
         gates = RiskGates(
             RateBudget(self.fake_redis, 100, 100, 0, logger),
@@ -2773,7 +2573,7 @@ class OrderEngineSuite:
         original_time = time.time
         time.time = lambda: started
         try:
-            engine.run(OnePassStop(3))
+            engine.run(engine_stand_ins.OnePassStop(3))
         finally:
             time.time = original_time
         reply = self.shown_replies(reply_keys)[0]
