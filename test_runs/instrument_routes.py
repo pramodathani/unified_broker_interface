@@ -28,6 +28,7 @@ from stock_brokers.instruments.mapping.utilities.cache import MappingRedisConnec
 from stock_brokers.instruments.mapping.utilities.cache import MappingRedisTier
 from stock_brokers.instruments.ticks.utilities.pipeline import TICK_COLUMNS
 from test_runs import order_routes
+from test_runs import redis_stand_ins
 from unified_broker_interface.blueprints import base as blueprint_base
 from unified_broker_interface.blueprints import instruments as instruments_blueprint
 from unified_broker_interface.utilities.broker_quotes.base import QuoteUnavailable
@@ -65,7 +66,7 @@ class FixedClock:
         return NOW
 
 
-class InstrumentRoutesRedis(order_routes.FakeRedis):
+class InstrumentRoutesRedis(redis_stand_ins.FakeRedis):
     """The order routes' stand-in, widened with the commands the instrument routes read with."""
 
     def pipeline(self, transaction=True):
@@ -81,7 +82,7 @@ class InstrumentRoutesRedis(order_routes.FakeRedis):
         return InstrumentRoutesPipeline(self)
 
 
-class InstrumentRoutesPipeline(order_routes.FakePipeline):
+class InstrumentRoutesPipeline(redis_stand_ins.FakePipeline):
     """The order routes' pipeline, widened with a lexical range read of a sorted set."""
 
     def zrangebylex(self, key, minimum, maximum, start=None, num=None):

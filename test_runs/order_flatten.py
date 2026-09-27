@@ -26,8 +26,8 @@ import uuid
 import flask
 import requests
 
-from test_runs import order_engine
 from test_runs import order_routes
+from test_runs import redis_stand_ins
 from unified_broker_interface.blueprints import base as blueprint_base
 from unified_broker_interface.blueprints import orders as orders_blueprint
 from unified_broker_interface.utilities.order_engine.utilities import engine_lock
@@ -38,7 +38,7 @@ FIXTURE_PATH = (
 )
 
 
-class FakeFlattenRedis(order_engine.FakeEngineStoreRedis):
+class FakeFlattenRedis(redis_stand_ins.FakeEngineStoreRedis):
     """The engine suite's stand-in, with order books that change after they are first read.
 
     A real cancel is not reflected in `<broker>:orders:orders` instantly; the broker's poller or its order websocket writes the new status a moment later, and the route re-reads until it sees it. Serving one set of entries on the first read and another afterwards is how that is modelled without any waiting.

@@ -25,6 +25,7 @@ import flask
 import requests
 
 from test_runs import order_routes
+from test_runs import redis_stand_ins
 from unified_broker_interface.blueprints import base as blueprint_base
 from unified_broker_interface.blueprints import orders as orders_blueprint
 from unified_broker_interface.utilities.order_engine.utilities import engine_lock
@@ -40,72 +41,6 @@ UNRECORDED_INTENT_FIELDS = [
     'created_at',
     'deadline_at',
 ]
-
-
-class FakeEngineRedis(order_routes.FakeRedis):
-    """The order routes' stand-in, widened with the stream and list commands the handoff uses.
-
-    `blpop` never blocks: it answers with whatever was seeded onto the reply list, or with None, which is what a real wait that ran out of time returns. A scenario therefore exercises the timeout path without waiting for it.
-
-    Attributes:
-        streams (dict): Stream keys to lists of `(entry_id, fields)`.
-        lists (dict): List keys to their entries.
-    """
-
-    def __init__(self):
-        """Builds an empty stand-in with no streams and no lists.
-
-        Returns:
-            None: This method returns nothing.
-        """
-        super().__init__()
-        self.streams = {}
-        self.lists = {}
-
-    def xadd(self, key, fields, maxlen=None, approximate=False):
-        """Appends one entry to a stream in its own round trip.
-
-        Args:
-            key (str): The stream key.
-            fields (dict): The entry's fields.
-            maxlen (int | None): Accepted for compatibility with redis-py and ignored, since nothing here writes enough entries to trim.
-            approximate (bool): Accepted for compatibility with redis-py and ignored.
-
-        Returns:
-            str: The entry's id.
-
-        Raises:
-            redis.RedisError: When this round trip is the failing one.
-        """
-        del maxlen, approximate
-        self.start_round_trip()
-        entries = self.streams.setdefault(key, [])
-        entry_id = f'{len(entries) + 1}-0'
-        entries.append((entry_id, dict(fields)))
-        return entry_id
-
-    def blpop(self, key, timeout=None):
-        """Takes the first entry off a list, answering None when there is none.
-
-        Args:
-            key (str): The list key.
-            timeout (float | None): Accepted for compatibility with redis-py and ignored, since the stand-in never waits.
-
-        Returns:
-            tuple | None: `(key, value)` when the list held something, and None when it did not.
-
-        Raises:
-            redis.RedisError: When this round trip is the failing one.
-        """
-        del timeout
-        self.start_round_trip()
-        entries = self.lists.get(key)
-        if not entries:
-            return None
-        value = entries.pop(0)
-        if not entries:
-            self.lists.pop(key, None)
-        return key, value
 
 
 class OrderEngineScenarios:
@@ -370,7 +305,7 @@ class OrderEngineRoutesSuite:
     """Runs every engine-mode scenario against the order blueprint, then records or compares the results.
 
     Attributes:
-        fake_redis (FakeEngineRedis): The stand-in the blueprint under test reads.
+        fake_redis (redis_stand_ins.FakeEngineRedis): The stand-in the blueprint under test reads.
         network (FakeBrokerNetwork): The stubbed broker network, which nothing should reach in engine mode.
     """
 
@@ -380,14 +315,14 @@ class OrderEngineRoutesSuite:
         Returns:
             None: This method returns nothing.
         """
-        self.fake_redis = FakeEngineRedis()
+        self.fake_redis = redis_stand_ins.FakeEngineRedis()
         self.network = order_routes.FakeBrokerNetwork()
 
     def fake_cache(self):
         """Hands the blueprint the stand-in instead of a Redis client.
 
         Returns:
-            FakeEngineRedis: The current stand-in.
+            redis_stand_ins.FakeEngineRedis: The current stand-in.
         """
         return self.fake_redis
 
@@ -411,10 +346,10 @@ class OrderEngineRoutesSuite:
         """Builds a stand-in holding the order routes' starting contents, with streams and lists added.
 
         Returns:
-            FakeEngineRedis: The stand-in.
+            redis_stand_ins.FakeEngineRedis: The stand-in.
         """
         starting_state = order_routes.OrderRoutesState().build()
-        fake_redis = FakeEngineRedis()
+        fake_redis = redis_stand_ins.FakeEngineRedis()
         fake_redis.strings = starting_state.strings
         fake_redis.hashes = starting_state.hashes
         fake_redis.sorted_sets = starting_state.sorted_sets

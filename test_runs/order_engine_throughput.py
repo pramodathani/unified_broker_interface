@@ -21,6 +21,7 @@ import requests
 
 from test_runs import order_engine
 from test_runs import order_routes
+from test_runs import redis_stand_ins
 from unified_broker_interface.utilities.broker_orders.utilities.registry import (
     BROKER_ORDER_CLASSES,
 )
@@ -179,7 +180,7 @@ class MomentCounter:
         return most
 
 
-class WaitingEngineRedis(order_engine.FakeEngineStoreRedis):
+class WaitingEngineRedis(redis_stand_ins.FakeEngineStoreRedis):
     """The engine suite's Redis stand-in, pausing briefly on an empty stream read the way a blocking read would, so the main thread does not spin."""
 
     def xreadgroup(self, group, consumer, streams, count=None, block=None):
