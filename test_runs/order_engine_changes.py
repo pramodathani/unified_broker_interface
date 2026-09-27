@@ -20,6 +20,7 @@ import importlib.util
 import json
 import pathlib
 import sys
+import threading
 import uuid
 
 import requests
@@ -436,6 +437,44 @@ class OrderEngineChangesSuite(order_routes.OrderRoutesSuite):
             'sent': self.sent(),
         }
 
+    def cancel_before_the_book_has_the_order(self, appears_after_seconds):
+        """Cancels a parent while its order is not yet in the broker's order book in Redis, as happens when the cancel follows the placement within a poll.
+
+        Args:
+            appears_after_seconds (float | None): When the order reaches the book, or None for never.
+
+        Returns:
+            dict: The recorded result.
+        """
+        self.start_scenario()
+        placed = self.placed_limit_order()
+        parent_order_id = placed['body']['parent_id']
+        book = self.fake_redis.hashes['flattrade:orders:orders']
+        entry = book.pop(FLATTRADE_ORDER)
+        timer = None
+        if appears_after_seconds is not None:
+            timer = threading.Timer(
+                appears_after_seconds,
+                book.__setitem__,
+                (FLATTRADE_ORDER, entry),
+            )
+            timer.start()
+        cancelled = self.call('DELETE', '/parents', {
+            'parent_id': parent_order_id,
+        })
+        if timer is not None:
+            timer.join()
+        if appears_after_seconds is None:
+            name = 'a_cancel_for_an_order_never_in_the_book_is_rejected_not_unknown'
+        else:
+            name = 'a_cancel_waits_for_a_just_placed_order_to_reach_the_book'
+        return {
+            'name': name,
+            'cancelled': cancelled,
+            'sent': self.sent(),
+            'parent': self.parent_after(parent_order_id),
+        }
+
     def limits_held_by_default(self):
         """Places four orders with limits held by default: only the plain DAY limit is held.
 
@@ -589,6 +628,8 @@ class OrderEngineChangesSuite(order_routes.OrderRoutesSuite):
                 self.flatten_halts_open_parents(),
                 self.order_book_filtered_by_parent(),
                 self.parent_cancel_refused_at_the_broker(),
+                self.cancel_before_the_book_has_the_order(0.3),
+                self.cancel_before_the_book_has_the_order(None),
                 self.limits_held_by_default(),
                 self.modify_a_held_order(),
                 self.modify_a_mixed_list(),

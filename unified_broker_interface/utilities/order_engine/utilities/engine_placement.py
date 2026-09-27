@@ -2,6 +2,7 @@
 
 import json
 import threading
+import time
 
 import redis
 
@@ -35,6 +36,8 @@ from utilities.configurations import api_configuration
 QUOTES_KEY = 'unified:quotes:live'
 POSITIONS_KEY = 'unified:portfolio:positions'
 ATTRIBUTES_SUFFIX = 'additional_attributes'
+STORED_ORDER_WAIT_SECONDS = 3.0
+STORED_ORDER_CHECK_SECONDS = 0.1
 
 
 class BrokerAssignment(threading.local):
@@ -68,6 +71,7 @@ class EnginePlacement:
         instrument_cache (InstrumentCache): The engine's copy of the catalogue entries it has read under the current warm.
         assignment (BrokerAssignment): The broker intake chose for the parent each worker thread is running now.
         logger (logging.Logger): The logger for failures that do not change an answer.
+        stored_order_wait_seconds (float): How long a cancel or change waits for a just-placed order to reach the broker's order book in Redis.
     """
 
     def __init__(self, cache, logger):
@@ -91,6 +95,7 @@ class EnginePlacement:
         )
         self.instrument_cache = InstrumentCache()
         self.assignment = BrokerAssignment()
+        self.stored_order_wait_seconds = STORED_ORDER_WAIT_SECONDS
 
     def start_connection_warmers(self):
         """Starts the connection warmers configuration names, so an order does not pay for a new handshake.
@@ -242,30 +247,37 @@ class EnginePlacement:
         Returns:
             StoredOrder: The stored order.
 
+        An order placed moments ago reaches the book only with the broker's next order update or poll, so a missing order is looked for again every tenth of a second for up to `stored_order_wait_seconds`. In the live retest of 2026-09-27 a cancel sent within a second of the placement found nothing and was reported as unknown.
+
         Raises:
-            RefusedRequestError: With HTTP 503 when Redis cannot be read, and 404 when the broker's order book does not hold the order yet.
+            RefusedRequestError: With HTTP 503 when Redis cannot be read, and 404 when the broker's order book still does not hold the order after the wait.
         """
-        try:
-            stored = self.cache.hget(
-                f'{broker_name}:orders:orders',
-                str(broker_order_id),
-            )
-        except redis.RedisError as error:
-            raise RefusedRequestError.refusal(
-                f'Redis could not be read: {error}',
-                503,
-                broker=broker_name,
-            )
-        entry = self.decode(stored)
-        if entry is None:
-            raise RefusedRequestError.refusal(
-                f"{broker_name}'s order book does not hold {broker_order_id} "
-                'yet, so it cannot be changed',
-                404,
-                broker=broker_name,
-                order_id=str(broker_order_id),
-            )
-        return StoredOrder(entry)
+        deadline = time.monotonic() + self.stored_order_wait_seconds
+        while True:
+            try:
+                stored = self.cache.hget(
+                    f'{broker_name}:orders:orders',
+                    str(broker_order_id),
+                )
+            except redis.RedisError as error:
+                raise RefusedRequestError.refusal(
+                    f'Redis could not be read: {error}',
+                    503,
+                    broker=broker_name,
+                )
+            entry = self.decode(stored)
+            if entry is not None:
+                return StoredOrder(entry)
+            if time.monotonic() >= deadline:
+                raise RefusedRequestError.refusal(
+                    f"{broker_name}'s order book still does not hold "
+                    f'{broker_order_id} after {self.stored_order_wait_seconds:g} '
+                    'seconds, so it cannot be changed yet',
+                    404,
+                    broker=broker_name,
+                    order_id=str(broker_order_id),
+                )
+            time.sleep(STORED_ORDER_CHECK_SECONDS)
 
     def cancel(self, broker_name, broker_order_id):
         """Cancels one order at a broker.

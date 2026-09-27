@@ -398,6 +398,20 @@ class SyntheticOrder:
             return 'rejected', 'the order rate budget is full, so the cancel was not sent', None
         try:
             answer = self.placement.cancel(leg.broker, leg.broker_order_id)
+        except RefusedRequestError as refusal:
+            status_message = f"the cancel was not sent: {refusal.body.get('error')}"
+            self.record({
+                'event': 'leg_cancelled',
+                'parent_state': self.parent.state,
+                'leg_id': leg.leg_id,
+                'leg_role': leg.role,
+                'leg_state': leg.state,
+                'broker': leg.broker,
+                'broker_order_id': leg.broker_order_id,
+                'outcome': 'rejected',
+                'status_message': status_message,
+            })
+            return 'rejected', status_message, None
         except Exception as error:
             status_message = f'the cancel could not be sent: {error}'
             self.record({
