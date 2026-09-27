@@ -2657,7 +2657,7 @@ class OrderEngineSuite:
         Args:
             name (str): The check's name.
             request_body (dict): The request body.
-            steps (list): One `{"quote": dict | None, "at": float}` per tick, where `at` is seconds after the order was placed, and optionally `other_quotes` for other instruments.
+            steps (list): One `{"quote": dict | None, "at": float}` per tick, where `at` is seconds after the order was placed, and optionally `other_quotes` for other instruments and `updates`, order updates applied before the tick.
             answer (dict | None): The stubbed broker answer.
             throttle_seconds (float): The shortest gap the re-pricing throttle allows between two moves of one order.
             book_overrides (dict | None): Fields to replace on the broker's order book entry, for a type whose order is not a plain limit.
@@ -2765,6 +2765,12 @@ class OrderEngineSuite:
         for step in steps:
             self.seed_quote(step.get('quote'))
             self.seed_other_quotes(step)
+            for update in step.get('updates') or []:
+                changed = follower.follow({
+                    'update': json.dumps(update),
+                })
+                if changed is not None:
+                    parent_store.save(changed)
             if step.get('estimate') is not None:
                 self.seed_estimate(step['estimate'])
             before = len(self.network.sent_requests)
@@ -4139,6 +4145,53 @@ class OrderEngineSuite:
                 ],
                 accepted,
                 positions=-40,
+            ),
+            self.price_result(
+                'a_stop_and_reverse_closes_then_reverses_once_the_close_fills',
+                dict(entry, synthetic={
+                    'type': 'stop_and_reverse',
+                    'trigger_price': 995,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                    {'quote': self.book_at(994.00, 994.05), 'at': 2},
+                    {
+                        'quote': self.book_at(994.00, 994.05),
+                        'at': 3,
+                        'updates': [
+                            self.update('26091500000021', 'COMPLETE', 75),
+                        ],
+                    },
+                ],
+                accepted,
+                positions=75,
+            ),
+            self.price_result(
+                'a_doubled_stop_and_reverse_sends_one_order_for_twice_the_position',
+                dict(entry, synthetic={
+                    'type': 'stop_and_reverse',
+                    'trigger_price': 995,
+                    'method': 'double',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                ],
+                accepted,
+                positions=75,
+            ),
+            self.price_result(
+                'a_stop_and_reverse_with_an_unknown_method_is_refused',
+                dict(entry, synthetic={
+                    'type': 'stop_and_reverse',
+                    'trigger_price': 995,
+                    'method': 'sideways',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
             ),
             self.price_result(
                 'a_fired_trigger_does_not_fire_again_after_a_restart',

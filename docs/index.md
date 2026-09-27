@@ -81,7 +81,7 @@ The table below counts what the repository holds today, so you can judge the siz
 | Brokers | 10 | `stock_brokers/api/` |
 | REST API routes | 26 | `unified_broker_interface/blueprints/` |
 | Endpoint groups (blueprints) | 7 | session, users, brokers, exchanges, instruments, portfolio, orders |
-| Synthetic order types in the order engine | 48 | `unified_broker_interface/utilities/order_engine/` |
+| Synthetic order types in the order engine | 49 | `unified_broker_interface/utilities/order_engine/` |
 | Data stores | 3 | Redis, MongoDB, TimescaleDB |
 | Offline test suites | 11 | `test_runs/` |
 

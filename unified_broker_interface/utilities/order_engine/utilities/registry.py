@@ -80,6 +80,9 @@ from unified_broker_interface.utilities.order_engine.square_off import SquareOff
 from unified_broker_interface.utilities.order_engine.stepped_stop import (
     SteppedStop,
 )
+from unified_broker_interface.utilities.order_engine.stop_and_reverse import (
+    StopAndReverse,
+)
 from unified_broker_interface.utilities.order_engine.strategy_stop import (
     StrategyStop,
 )
@@ -154,4 +157,5 @@ SYNTHETIC_ORDER_CLASSES = {
     VolatilityOrder.SYNTHETIC_TYPE: VolatilityOrder,
     SteppedStop.SYNTHETIC_TYPE: SteppedStop,
     CloseOnTrigger.SYNTHETIC_TYPE: CloseOnTrigger,
+    StopAndReverse.SYNTHETIC_TYPE: StopAndReverse,
 }

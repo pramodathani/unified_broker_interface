@@ -233,7 +233,7 @@ The table below lists the kinds a `quantity_reference` accepts. Each may carry a
 
 ## Synthetic order types
 
-An order body can carry `synthetic: {"type": "<name>"}` to have the order engine run it as one of 48 synthetic order types. The table below lists the names alphabetically. [Synthetic orders](synthetic-orders.md) describes each one.
+An order body can carry `synthetic: {"type": "<name>"}` to have the order engine run it as one of 49 synthetic order types. The table below lists the names alphabetically. [Synthetic orders](synthetic-orders.md) describes each one.
 
 | | | | | | |
 |---|---|---|---|---|---|
@@ -243,8 +243,9 @@ An order body can carry `synthetic: {"type": "<name>"}` to have the order engine
 | `iceberg` | `implementation_shortfall` | `indicator_triggered` | `ladder` | `legged_spread` | `limit_if_touched` |
 | `liquidity_seeking` | `market_if_touched` | `oca` | `oco` | `opening_auction` | `oto` |
 | `participation` | `peg` | `post_only` | `scale_out` | `scheduled` | `simple` |
-| `square_off` | `stepped_stop` | `strategy_stop` | `time_stop` | `trailing_entry` | `trailing_stop` |
-| `twap` | `two_sided_breakout` | `underlying_peg` | `virtual_limit` | `volatility` | `vwap` |
+| `square_off` | `stepped_stop` | `stop_and_reverse` | `strategy_stop` | `time_stop` | `trailing_entry` |
+| `trailing_stop` | `twap` | `two_sided_breakout` | `underlying_peg` | `virtual_limit` | `volatility` |
+| `vwap` |  |  |  |  |  |
 
 ## Read status
 

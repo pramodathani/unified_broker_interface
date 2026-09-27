@@ -2,7 +2,7 @@
 
 A synthetic order is an order that no Indian exchange offers, built by the order engine out of ordinary broker orders. You ask for one by adding a `synthetic` object to the body of [`POST /api/orders/place`](orders.md#place-an-order), and the engine places, watches, moves and cancels the real orders it is made of.
 
-This page is the glossary of all 48 types the engine runs. It lists every field each type reads from the `synthetic` object, with the defaults and limits taken from the code.
+This page is the glossary of all 49 types the engine runs. It lists every field each type reads from the `synthetic` object, with the defaults and limits taken from the code.
 
 !!! danger "Synthetic orders place real orders, sometimes long after you asked"
     A synthetic order can place, modify or cancel orders at a broker minutes, hours or even days after your request, with nobody watching. Triggers, trailing stops, grids and schedules all act on their own. Send `"dry_run": true` first, which builds the first broker request without recording or sending anything.
@@ -54,7 +54,7 @@ Two fields can appear in any `synthetic` object. The table below lists them.
 
 | Field | Type | Required | Meaning |
 |---|---|:---:|---|
-| `type` | string | Yes | One of the 48 names in the table below. A body with no `synthetic` object, or no `type`, runs as `simple`. An unknown name is refused with `400` and the message `the order engine does not run '<name>' orders; it runs <list>`. |
+| `type` | string | Yes | One of the 49 names in the table below. A body with no `synthetic` object, or no `type`, runs as `simple`. An unknown name is refused with `400` and the message `the order engine does not run '<name>' orders; it runs <list>`. |
 | `closes_position` | boolean | No | `true` says every leg of this order closes a position, so it may use the part of a broker's daily order cap kept for exits. Only the literal `true` counts. |
 
 The engine also writes its own working values into the parent's copy of the `synthetic` object, such as `tick_size`, `triggered_at`, `watermark`, `placed_quantity`, `started_at` and `expires_at`. These are internal, so do not send them.
@@ -80,7 +80,7 @@ Types that act at once answer with the broker's answer plus a `parent_id`; types
 
 Keep the `parent_id`. It is the only handle on an order that has not reached a broker yet.
 
-## All 48 types
+## All 49 types
 
 The master table below lists every type registered in `SYNTHETIC_ORDER_CLASSES`, in the order the registry holds them. The "First answer" column says whether a broker order goes out when you ask (`200`, the broker's own answer) or whether the engine waits (`202`).
 
@@ -134,8 +134,9 @@ The master table below lists every type registered in `SYNTHETIC_ORDER_CLASSES`,
 | `volatility` | Book-following limits | Prices an option from an implied volatility with Black-76, and re-prices it as the underlying and time move. | `watch_instrument_id`, `volatility`, `interest_rate` | 200 |
 | `stepped_stop` | Stops and trailing | A native stop moved to set levels at set profits, and switched to trailing at the last. | `entry_price`, `stop_price`, `stop_limit_offset`, `rules` | 200 |
 | `close_on_trigger` | Price triggers | At a level, cancels every order on the instrument to free margin, then closes the whole position. | `trigger_price`, `trigger_direction`, `trigger_on` | 202 |
+| `stop_and_reverse` | Price triggers | At a level, closes the position and opens the same size the other way. | `trigger_price`, `method` | 202 |
 
-The chart below counts how many of the 48 types fall into each family. The families are this page's own grouping, chosen to make the list easier to scan; the code does not group them.
+The chart below counts how many of the 49 types fall into each family. The families are this page's own grouping, chosen to make the list easier to scan; the code does not group them.
 
 ```vegalite
 {
@@ -149,7 +150,7 @@ The chart below counts how many of the 48 types fall into each family. The famil
       {"family": "Execution algorithms", "types": 8},
       {"family": "Stops and trailing", "types": 7},
       {"family": "Book-following limits", "types": 7},
-      {"family": "Price triggers", "types": 6},
+      {"family": "Price triggers", "types": 7},
       {"family": "Plain and laddered", "types": 4},
       {"family": "Time-based", "types": 5},
       {"family": "Multi-instrument", "types": 4}
@@ -397,7 +398,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
 === "Price triggers"
 
-    These six types send nothing when you ask. They answer `202 armed` and send one order on the first price tick where the level is reached, or, with `trigger_on`, where it is confirmed. They fire once. They run only while the engine is running, unlike a native stop at the exchange.
+    These seven types send nothing when you ask. They answer `202 armed` and send one order on the first price tick where the level is reached, or, with `trigger_on`, where it is confirmed. They fire once. They run only while the engine is running, unlike a native stop at the exchange.
 
     Every price trigger reads the two fields below, and each type adds its own.
 
@@ -499,6 +500,25 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     ```json
     {"type": "close_on_trigger", "trigger_price": 995, "trigger_on": "held", "hold_seconds": 3}
+    ```
+
+    #### `stop_and_reverse`
+
+    A stop-and-reverse order (the Atlas's G13) turns a long of 75 into a short of 75, or the other way, when the level is reached. Like `close_on_trigger`, it first cancels every order resting on the instrument to free margin, acts on the net position held at that moment, and completes without an order if nothing is held. `method` decides how the flip is sent:
+
+    | `method` | What is sent | Trade-off |
+    |---|---|---|
+    | `sequential` (default) | A closing order for the position, and, once it has completely filled, a second order of the same size and side that opens the reverse | Nothing opens until the old position is gone, but there is a gap between the two |
+    | `double` | One order for twice the position | Faster, but the exchange sees one order of double size, and the broker must accept margin for the new side before the old one closes |
+
+    Both are limits two ticks past the other side's best price. A sequential close that only partly fills sends no reverse until it completes.
+
+    | Field | Type | Required | Rules |
+    |---|---|:---:|---|
+    | `method` | string | No | `sequential` or `double`. Defaults to `sequential`. |
+
+    ```json
+    {"type": "stop_and_reverse", "trigger_price": 995, "method": "sequential"}
     ```
 
 === "Stops and trailing"
