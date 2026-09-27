@@ -124,6 +124,16 @@ class RiskGates:
             return
         self.daily_count.refuse_if_capped(broker_name, closes_position)
 
+    def release_reservation(self):
+        """Gives back the daily cap place this thread counted for a message it did not send.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        if self.daily_count is None:
+            return
+        self.daily_count.release_if_reserved()
+
     def count_sent(self, broker_name):
         """Counts one order sent, for the order-to-trade ratio.
 

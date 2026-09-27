@@ -640,6 +640,7 @@ class BrokerOrders:
         if self.daily_count is None:
             return
         if answer.outcome == 'rejected' and answer.status_code is None:
+            self.daily_count.release_if_reserved()
             return
         self.daily_count.count_sent(self.BROKER_NAME)
 

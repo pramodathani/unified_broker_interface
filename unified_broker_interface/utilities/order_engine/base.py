@@ -878,6 +878,7 @@ class SyntheticOrder:
         if not self.has_room_today(leg, reason):
             return False
         if not self.take_rate_token(leg, reason):
+            self.release_daily_place()
             return False
         try:
             answer = self.placement.modify_leg(
@@ -887,6 +888,7 @@ class SyntheticOrder:
                 trigger_price=trigger_price,
             )
         except Exception as error:
+            self.release_daily_place()
             self.record({
                 'event': 'leg_update',
                 'parent_state': self.parent.state,
@@ -1195,6 +1197,45 @@ class SyntheticOrder:
                 prepared.broker_name,
                 self.closes_position(role),
             )
+        try:
+            return self.record_and_send_leg(
+                role,
+                order,
+                prepared,
+                started_at,
+                instrument_id,
+            )
+        except Exception:
+            self.release_daily_place()
+            raise
+
+    def release_daily_place(self):
+        """Gives back the daily cap place this thread counted for a message that was not sent.
+
+        After a send the place has already been settled, so this changes nothing then.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        if self.gates is not None:
+            self.gates.release_reservation()
+
+    def record_and_send_leg(self, role, order, prepared, started_at, instrument_id):
+        """Records a leg as requested, takes a rate token, sends it and records the answer.
+
+        Args:
+            role (str): What the leg is for.
+            order (PlaceOrderRequest): The order to send.
+            prepared (PreparedPlacement): The chosen broker and the request built for it.
+            started_at (float | None): `time.perf_counter()` when the engine took the intent, or None.
+            instrument_id (str): The instrument the leg trades.
+
+        Returns:
+            tuple: The answer's body (dict), its HTTP status (int) and the leg's id (str).
+
+        Raises:
+            RefusedRequestError: When the rate budget gives no token.
+        """
         if started_at is None:
             # A leg placed in reaction to a fill has no request waiting on it, so there is no
             # arrival to measure from. Measuring from here reports the engine's own work on this

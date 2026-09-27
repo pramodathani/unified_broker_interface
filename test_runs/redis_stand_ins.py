@@ -80,6 +80,48 @@ class FakeRateWindowScript:
         return 0
 
 
+class FakeReserveScript:
+    """Stands in for the daily order count's reservation script: counts a message only while the count is below a limit.
+
+    Attributes:
+        fake_redis (FakeRedis): The stand-in whose strings hold the counts.
+        lock (threading.Lock): Makes each call atomic, as a Lua script is.
+    """
+
+    def __init__(self, fake_redis):
+        """Builds the script.
+
+        Args:
+            fake_redis (FakeRedis): The stand-in.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.fake_redis = fake_redis
+        self.lock = threading.Lock()
+
+    def __call__(self, keys, args):
+        """Adds one to the count when it is below the limit.
+
+        Args:
+            keys (list): The count's key.
+            args (list): The limit and the expiry, which the stand-in ignores.
+
+        Returns:
+            int: The count after adding one, or minus one less the count when it was already at the limit.
+
+        Raises:
+            redis.RedisError: When this round trip is set to fail.
+        """
+        self.fake_redis.start_round_trip()
+        with self.lock:
+            sent = int(self.fake_redis.strings.get(keys[0]) or 0)
+            if sent >= int(args[0]):
+                return -1 - sent
+            self.fake_redis.strings[keys[0]] = str(sent + 1)
+            return sent + 1
+
+
 class FakeRedis:
     """An in-memory stand-in for the parts of a Redis client the order routes use.
 
@@ -119,11 +161,13 @@ class FakeRedis:
             FakeRateWindowScript: A callable that does what the script does, in one round trip.
 
         Raises:
-            NotImplementedError: When the script is not the rate window, which this stand-in cannot run.
+            NotImplementedError: When the script is neither the rate window nor the daily count's reservation.
         """
-        if 'ZREMRANGEBYSCORE' not in script_text:
-            raise NotImplementedError('the stand-in runs only the rate window script')
-        return FakeRateWindowScript(self)
+        if 'ZREMRANGEBYSCORE' in script_text:
+            return FakeRateWindowScript(self)
+        if 'EXPIREAT' in script_text and 'INCR' in script_text:
+            return FakeReserveScript(self)
+        raise NotImplementedError('the stand-in runs only the rate window and daily count scripts')
 
     def start_round_trip(self):
         """Counts one round trip and raises when it is the one set to fail.
@@ -247,6 +291,23 @@ class FakeRedis:
         """
         self.start_round_trip()
         return self.run_incr(key)
+
+    def decr(self, key):
+        """Takes one from a string key in its own round trip.
+
+        Args:
+            key (str): The key.
+
+        Returns:
+            int: The value after the decrement.
+
+        Raises:
+            redis.RedisError: When this round trip is set to fail.
+        """
+        self.start_round_trip()
+        value = int(self.strings.get(key) or 0) - 1
+        self.strings[key] = str(value)
+        return value
 
     def incrby(self, key, amount):
         """Adds an amount to a string key in its own round trip.

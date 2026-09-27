@@ -15,6 +15,17 @@ from utilities.configurations import api_configuration
 COUNT_KEY_PREFIX = 'unified:orders:daily_count:'
 
 
+RESERVE_SCRIPT = """
+local sent = tonumber(redis.call('GET', KEYS[1]) or '0')
+if sent >= tonumber(ARGV[1]) then
+    return -1 - sent
+end
+local counted = redis.call('INCR', KEYS[1])
+redis.call('EXPIREAT', KEYS[1], ARGV[2])
+return counted
+"""
+
+
 class DailyOrderCount:
     """How many order messages each capped broker has been sent today, against the cap that broker allows.
 
@@ -31,6 +42,8 @@ class DailyOrderCount:
         logger (logging.Logger): The logger.
         refused (int): How many orders have been refused.
         lock (threading.Lock): Guards the refusal count, which several threads update.
+        reserve_script (object | None): The Redis script that counts a message only while its broker is below a limit, or None when no broker is capped.
+        reservation (threading.local): The broker this thread has counted a message for and not yet sent it to, in `broker`.
     """
 
     def __init__(self, cache, caps, exit_reserve, logger):
@@ -59,6 +72,10 @@ class DailyOrderCount:
         self.logger = logger
         self.refused = 0
         self.lock = threading.Lock()
+        self.reserve_script = None
+        if caps:
+            self.reserve_script = cache.register_script(RESERVE_SCRIPT)
+        self.reservation = threading.local()
 
     @classmethod
     def from_configuration(cls, cache, logger):
@@ -174,7 +191,9 @@ class DailyOrderCount:
             return None
 
     def refuse_if_capped(self, broker_name, closes_position):
-        """Refuses one order when its broker is too close to the day's cap.
+        """Counts one order message against its broker's cap before it is sent, or refuses it when the broker is too close to the cap.
+
+        The check and the count are one Redis step, so several threads sending at once cannot all pass on the same count. Reading the count here and adding to it after the send let as many messages through at the last place as there were threads sending. The message counted here is remembered for this thread: `count_sent` does not count it again once it is sent, and `release_if_reserved` gives the place back when it is not sent after all.
 
         Args:
             broker_name (str): The broker the order would go to.
@@ -189,12 +208,28 @@ class DailyOrderCount:
         cap = self.caps.get(broker_name)
         if cap is None:
             return
-        sent = self.sent_today(broker_name)
-        if sent is None:
-            return
+        self.release_if_reserved()
         limit = cap if closes_position else self.entry_limit(cap)
-        if sent < limit:
+        try:
+            result = int(self.reserve_script(
+                keys=[
+                    self.key(broker_name),
+                ],
+                args=[
+                    limit,
+                    self.next_reset(),
+                ],
+            ))
+        except Exception as error:
+            self.logger.warning(
+                f'The daily order count for {broker_name} could not be read '
+                f'({error}), so its cap is not being applied to this order.'
+            )
             return
+        if result >= 0:
+            self.reservation.broker = broker_name
+            return
+        sent = -1 - result
         with self.lock:
             self.refused = self.refused + 1
         if closes_position:
@@ -215,7 +250,7 @@ class DailyOrderCount:
         )
 
     def count_sent(self, broker_name):
-        """Counts one order message sent to a broker, when that broker is capped.
+        """Counts one order message sent to a broker, when that broker is capped and the message was not already counted by `refuse_if_capped`.
 
         Args:
             broker_name (str): The broker.
@@ -224,6 +259,9 @@ class DailyOrderCount:
             None: This method returns nothing.
         """
         if broker_name not in self.caps:
+            return
+        if getattr(self.reservation, 'broker', None) == broker_name:
+            self.reservation.broker = None
             return
         key = self.key(broker_name)
         try:
@@ -235,6 +273,24 @@ class DailyOrderCount:
             self.logger.warning(
                 f'The daily order count for {broker_name} could not be '
                 f'written ({error}), so today\'s count is now short by one.'
+            )
+
+    def release_if_reserved(self):
+        """Gives back the place this thread counted for a message it did not send.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        broker_name = getattr(self.reservation, 'broker', None)
+        if broker_name is None:
+            return
+        self.reservation.broker = None
+        try:
+            self.cache.decr(self.key(broker_name))
+        except Exception as error:
+            self.logger.warning(
+                f'The daily order count for {broker_name} could not be given '
+                f'back ({error}), so today\'s count is now one too high.'
             )
 
     def counts(self):

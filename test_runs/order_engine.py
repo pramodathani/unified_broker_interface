@@ -20,6 +20,7 @@ import logging
 import pathlib
 import re
 import sys
+import threading
 import time
 import uuid
 
@@ -5302,6 +5303,93 @@ class OrderEngineSuite:
             ),
         ]
 
+    def run_daily_cap_race_checks(self):
+        """Checks that threads sending at once to a broker near its daily cap cannot overshoot it, and that a place not used is given back.
+
+        The count used to be read before a send and added to after it, so every thread sending in between passed on the same count.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        self.fake_redis = self.build_state()
+        logger = logging.getLogger('test_runs.order_engine')
+        daily_count = DailyOrderCount(
+            self.fake_redis,
+            {
+                'flattrade': 10,
+            },
+            0.0,
+            logger,
+        )
+        outcomes = []
+        outcomes_lock = threading.Lock()
+        start = threading.Barrier(20)
+        threads = []
+        for _ in range(20):
+            thread = threading.Thread(
+                target=self.race_for_a_place,
+                args=(
+                    daily_count,
+                    start,
+                    outcomes,
+                    outcomes_lock,
+                ),
+            )
+            threads.append(thread)
+            thread.start()
+        for thread in threads:
+            thread.join()
+        counted = outcomes.count('sent')
+        results = [
+            {
+                'name': 'twenty_threads_racing_for_ten_places_send_exactly_ten',
+                'sent': counted,
+                'refused': outcomes.count('refused'),
+                'count_in_redis': self.fake_redis.strings.get(daily_count.key('flattrade')),
+            },
+        ]
+        self.fake_redis = self.build_state()
+        daily_count = DailyOrderCount(
+            self.fake_redis,
+            {
+                'flattrade': 10,
+            },
+            0.0,
+            logger,
+        )
+        daily_count.refuse_if_capped('flattrade', False)
+        after_reserving = self.fake_redis.strings.get(daily_count.key('flattrade'))
+        daily_count.release_if_reserved()
+        results.append({
+            'name': 'a_place_counted_for_a_message_not_sent_is_given_back',
+            'after_reserving': after_reserving,
+            'after_releasing': self.fake_redis.strings.get(daily_count.key('flattrade')),
+        })
+        return results
+
+    def race_for_a_place(self, daily_count, start, outcomes, outcomes_lock):
+        """One thread's attempt to send a message to a capped broker: reserve a place, then count the send.
+
+        Args:
+            daily_count (DailyOrderCount): The count.
+            start (threading.Barrier): Holds every thread until all are ready, so they race.
+            outcomes (list): Where each thread writes `sent` or `refused`.
+            outcomes_lock (threading.Lock): Guards `outcomes`.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        start.wait()
+        try:
+            daily_count.refuse_if_capped('flattrade', False)
+        except RefusedRequestError:
+            with outcomes_lock:
+                outcomes.append('refused')
+            return
+        daily_count.count_sent('flattrade')
+        with outcomes_lock:
+            outcomes.append('sent')
+
     def run_quantity_conversion_checks(self):
         """Checks that a leg reduced in units is sent in each broker's own terms.
 
@@ -5702,6 +5790,7 @@ class OrderEngineSuite:
             results.extend(self.run_stoxkart_algo_checks())
             results.extend(self.run_rotation_checks())
             results.extend(self.run_quantity_conversion_checks())
+            results.extend(self.run_daily_cap_race_checks())
         finally:
             requests.Session.request = original_request
             uuid.uuid4 = original_uuid4
