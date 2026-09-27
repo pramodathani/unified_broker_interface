@@ -1679,7 +1679,7 @@ class OrderEngineSuite:
             'data': {},
         })
 
-    def recovery_result(self, name, events, book, polled_ago=5.0):
+    def recovery_result(self, name, events, book, polled_ago=5.0, first_pass=False):
         """Runs recovery once against a fresh stand-in and records what it decided.
 
         Args:
@@ -1687,6 +1687,7 @@ class OrderEngineSuite:
             events (list): The transitions already recorded.
             book (dict): Flattrade's order book entries, by the broker's order id.
             polled_ago (float): How long ago that book was last read, in seconds.
+            first_pass (bool): Whether the engine's first order book pass runs after recovery, as it does at start.
 
         Returns:
             dict: The recorded result.
@@ -1708,6 +1709,27 @@ class OrderEngineSuite:
             logger,
         )
         counts = recovery.recover()
+        if first_pass:
+            placement = EnginePlacement(self.fake_redis, logger)
+            engine = OrderEngine(
+                self.fake_redis,
+                placement,
+                EngineLock(self.fake_redis, logger),
+                logger,
+                STALE_INTENT_SECONDS,
+                RESULT_TTL_SECONDS,
+                event_log,
+                parent_store,
+                OrderUpdateFollower(
+                    parent_store,
+                    event_log,
+                    logger,
+                    None,
+                    placement,
+                ),
+                reconciler=BookReconciler(self.fake_redis, parent_store, 0.0),
+            )
+            engine.reconcile_books()
         # What recovery wrote to Redis, not a fresh replay of the events: the replay would discard
         # every reconciliation recovery just made, which is the thing being checked.
         stored = self.fake_redis.hashes.get('unified:orders:parents', {})
@@ -5866,7 +5888,7 @@ class OrderEngineSuite:
             polled_ago=600.0,
         ))
         results.append(self.recovery_result(
-            'a_live_leg_is_brought_up_to_date_from_the_book',
+            'recovery_leaves_a_live_leg_as_recorded_for_the_first_book_pass',
             crashed[:1] + [
                 dict(
                     crashed[1],
@@ -5881,6 +5903,48 @@ class OrderEngineSuite:
                     average_price=999.5,
                 ),
             },
+        ))
+        results.append(self.recovery_result(
+            'the_first_book_pass_records_a_fill_made_while_the_engine_was_down',
+            crashed[:1] + [
+                dict(
+                    crashed[1],
+                    leg_state='acknowledged',
+                    broker_order_id='26091500000021',
+                ),
+            ],
+            {
+                '26091500000021': self.book_order(
+                    status='COMPLETE',
+                    filled_quantity=10,
+                    average_price=999.5,
+                ),
+            },
+            first_pass=True,
+        ))
+        results.append(self.recovery_result(
+            'the_first_book_pass_ends_a_cancelling_parent_whose_order_was_cancelled_while_the_engine_was_down',
+            crashed[:1] + [
+                dict(
+                    crashed[1],
+                    leg_state='acknowledged',
+                    broker_order_id='26091500000021',
+                ),
+                {
+                    'time': '2026-09-23T10:00:03+00:00',
+                    'parent_order_id': crashed[0]['parent_order_id'],
+                    'sequence': 3,
+                    'event': 'parent_state_changed',
+                    'synthetic_type': 'simple',
+                    'parent_state': 'cancelling',
+                },
+            ],
+            {
+                '26091500000021': self.book_order(
+                    status='CANCELLED',
+                ),
+            },
+            first_pass=True,
         ))
         results.append(self.recovery_result(
             'a_leg_the_book_has_lost_becomes_unknown',

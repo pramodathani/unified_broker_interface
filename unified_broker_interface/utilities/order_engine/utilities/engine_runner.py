@@ -193,6 +193,8 @@ class OrderEngine:
         pending_first = True
         refreshed_at = time.monotonic()
         exit_code = 0
+        if self.reconciler is not None:
+            self.reconcile_books()
         while not stop.is_set():
             try:
                 if time.monotonic() - refreshed_at >= REFRESH_SECONDS:

@@ -15,3 +15,7 @@ The follower already decides what an update means, records it, tells the risk ga
 ## Cost
 
 One pass is two Redis round trips: an `HMGET` of the open parents and one pipeline of `HGET`s into the books. No broker is contacted. The interval defaults to 5 seconds because the pollers themselves poll every half second to five seconds, so checking more often finds little extra.
+
+## Why recovery hands its book changes to this class
+
+Recovery used to copy each open leg's status, filled quantity and average price from the book straight into the rebuilt parent. That change was never recorded and the order type never saw it, so a `cancelling` parent whose legs were cancelled while the engine was down got finished legs but stayed `cancelling` for ever, and the next start made the same unrecorded change again. The first live test of this class found exactly that: both stuck parents had been "brought up to date" by recovery, so the reconciler, which skips finished legs, had nothing left to do. Now recovery only parks a parent whose leg is missing from the book, and the engine runs one reconciler pass before its first read, so every change goes through the follower and the event log. That first pass runs even when the interval is 0, so turning the periodic passes off never loses what recovery used to do.

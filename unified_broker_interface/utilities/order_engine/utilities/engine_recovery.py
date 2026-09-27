@@ -16,14 +16,6 @@ from unified_broker_interface.utilities.order_engine.utilities.registry import (
 # How far back the carried types are read. Long enough for a stop armed before a long weekend and a
 # holiday to still be found, short enough that the query stays small.
 CARRY_DAYS = 30
-LEG_STATES_FROM_STATUS = {
-    'PENDING': 'acknowledged',
-    'OPEN': 'acknowledged',
-    'COMPLETE': 'filled',
-    'CANCELLED': 'cancelled',
-    'REJECTED': 'rejected',
-    'EXPIRED': 'cancelled',
-}
 
 
 class EngineRecovery:
@@ -66,7 +58,7 @@ class EngineRecovery:
         """Rebuilds every parent, brings its legs up to date and resolves what a crash left behind.
 
         Returns:
-            dict: What was found: `parents`, `open`, `attributed`, `abandoned` and `reconciled` counts, and the rebuilt open parents.
+            dict: What was found: `parents`, `open`, `attributed`, `abandoned` and `missing` counts.
         """
         parents = self.replay()
         open_parents = []
@@ -79,7 +71,7 @@ class EngineRecovery:
             'open': len(open_parents),
             'attributed': 0,
             'abandoned': 0,
-            'reconciled': 0,
+            'missing': 0,
         }
         if open_parents:
             books, polled_at = self.read_broker_books()
@@ -90,7 +82,8 @@ class EngineRecovery:
         self.parent_store.rebuild(parents)
         self.logger.info(
             f'Recovered {counts["parents"]} parents, {counts["open"]} of them '
-            f'open: {counts["reconciled"]} legs brought up to date, '
+            f'open: {counts["missing"]} legs missing from their broker\'s '
+            'book, '
             f'{counts["attributed"]} orphans attributed, '
             f'{counts["abandoned"]} abandoned.'
         )
@@ -245,7 +238,9 @@ class EngineRecovery:
         return claimed
 
     def reconcile(self, parent, books, polled_at, claimed, counts):
-        """Brings one open parent's legs up to date and resolves anything left in `sending`.
+        """Checks one open parent's legs against the broker's book and resolves anything left in `sending`.
+
+        A leg the book holds is left exactly as recorded. What the broker did with it while the engine was down, such as a fill or a cancel, is applied by the engine's first order book pass, which records the change and lets the order type react to it.
 
         Args:
             parent (ParentOrder): The parent.
@@ -262,10 +257,10 @@ class EngineRecovery:
                 self.resolve_orphan(parent, leg, books, polled_at, claimed, counts)
                 continue
             if leg.broker_order_id and not leg.is_finished():
-                self.refresh_leg(parent, leg, books, counts)
+                self.check_leg_in_book(parent, leg, books, counts)
 
-    def refresh_leg(self, parent, leg, books, counts):
-        """Updates one leg from the broker's own book, which moved on while the engine was down.
+    def check_leg_in_book(self, parent, leg, books, counts):
+        """Parks the parent of a leg its broker's book does not hold.
 
         A leg the book does not hold is put into `unknown` rather than assumed finished, because absence is not evidence that an order was never placed.
 
@@ -280,26 +275,15 @@ class EngineRecovery:
         """
         entry = books.get(leg.broker, {}).get(str(leg.broker_order_id))
         order = (entry or {}).get('order')
-        if not isinstance(order, dict):
-            # Absence is not evidence the order was never placed. The book may have been trimmed,
-            # or the broker may simply not report it, so the parent is parked rather than closed.
-            leg.state = 'unknown'
-            parent.state = 'failed'
-            parent.last_error = (
-                f'leg {leg.leg_id} is not in {leg.broker}\'s order book, so '
-                'its outcome is unknown'
-            )
-            counts['reconciled'] = counts['reconciled'] + 1
+        if isinstance(order, dict):
             return
-        status = str(order.get('status') or '').upper()
-        leg.state = LEG_STATES_FROM_STATUS.get(status, leg.state)
-        if order.get('filled_quantity') is not None:
-            leg.filled_quantity = order['filled_quantity']
-        if order.get('average_price') is not None:
-            leg.average_price = order['average_price']
-        if order.get('exchange_order_id'):
-            leg.exchange_order_id = order['exchange_order_id']
-        counts['reconciled'] = counts['reconciled'] + 1
+        leg.state = 'unknown'
+        parent.state = 'failed'
+        parent.last_error = (
+            f'leg {leg.leg_id} is not in {leg.broker}\'s order book, so '
+            'its outcome is unknown'
+        )
+        counts['missing'] = counts['missing'] + 1
 
     def resolve_orphan(self, parent, leg, books, polled_at, claimed, counts):
         """Decides what a leg left in `sending` by a crash should become, and records it.

@@ -69,8 +69,9 @@ deadline by then and is refused rather than placed.
 
 **It rebuilds itself before it places anything.** Every transition is written to `unified.synthetic_order_events` and
 committed before it is acted on, so on start the engine replays the day's rows through the same state machine the live
-path uses and rebuilds every parent that had not finished. Legs are then brought up to date from each broker's own order
-book. A leg still in `sending` means a crash between recording an order and hearing the answer, so the order may be live
+path uses and rebuilds every parent that had not finished. A leg its broker's order book does not hold parks its parent in
+`failed`; what the broker did with the others while the engine was down is applied by the first order book pass, which
+runs before anything else and records each change like a socket's. A leg still in `sending` means a crash between recording an order and hearing the answer, so the order may be live
 at the broker under the caller's own tag: the orphan matcher attributes it only when exactly one unclaimed order matches
 every field that was sent, within seconds of when it was sent, and otherwise parks the parent in `failed` for a person
 to look at rather than guessing. Recovery reads Redis only for the brokers' order books, and rewrites its own keys from
