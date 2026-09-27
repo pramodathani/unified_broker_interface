@@ -61,6 +61,7 @@ api_configuration = {
     'order_hold_limits': os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS', 'true').strip().lower() in ('true', '1', 'yes'),
     'order_place_list_wait_seconds': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_PLACE_LIST_WAIT_SECONDS', '25')),
     'order_engine_result_ttl_seconds': int(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_RESULT_TTL_SECONDS', '300')),
+    'order_engine_reconcile_seconds': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_RECONCILE_SECONDS', '5')),
     'order_engine_stale_intent_seconds': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_STALE_INTENT_SECONDS', '30')),
     'order_rate_per_second': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_PER_SECOND', '0')),
     'order_rate_per_broker_per_second': os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_PER_BROKER_PER_SECOND', '10,zerodha=5,indmoney=5'),

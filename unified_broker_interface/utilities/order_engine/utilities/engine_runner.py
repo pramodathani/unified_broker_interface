@@ -60,6 +60,7 @@ class OrderEngine:
         repeated (int): How many intents had already started a parent before they were read again.
         router (ParentRouter | None): The lanes of worker threads that place orders and own their parents, or None to do everything on the main thread.
         entries_per_read (int): How many stream entries one read takes.
+        reconciler (BookReconciler | None): What finds the order changes no socket delivered, by reading the brokers' polled order books.
         counts_lock (threading.Lock): Guards the four counts, which worker threads update.
         commands (ParentCommands): What runs a caller's change to a parent the engine owns.
     """
@@ -81,6 +82,7 @@ class OrderEngine:
         day_roll=None,
         router=None,
         entries_per_read=ENTRIES_PER_READ,
+        reconciler=None,
     ):
         """Builds the engine.
 
@@ -100,6 +102,7 @@ class OrderEngine:
             day_roll (DayRoll | None): What rebuilds the parent caches when they expire at 06:00 IST.
             router (ParentRouter | None): The lanes of worker threads that place orders and own their parents, or None to do everything on the main thread, one piece of work at a time.
             entries_per_read (int): How many stream entries one read takes.
+            reconciler (BookReconciler | None): What finds the order changes no socket delivered, or None to rely on the sockets alone.
 
         Returns:
             None: This method returns nothing.
@@ -124,6 +127,7 @@ class OrderEngine:
         self.repeated = 0
         self.router = router
         self.entries_per_read = entries_per_read
+        self.reconciler = reconciler
         self.counts_lock = threading.Lock()
         self.commands = ParentCommands(
             placement,
@@ -218,6 +222,8 @@ class OrderEngine:
                     self.ticker.tick()
                 if self.price_ticker is not None and self.price_ticker.due():
                     self.price_ticker.tick()
+                if self.reconciler is not None and self.reconciler.due():
+                    self.reconcile_books()
                 if self.day_roll is not None and self.day_roll.due():
                     self.roll_day(stop)
                 backoff = MINIMUM_BACKOFF_SECONDS
@@ -263,6 +269,12 @@ class OrderEngine:
                 f'Prices: {self.price_ticker.ticks} ticks, '
                 f'{self.price_ticker.quotes_read} quotes read, '
                 f'{self.price_ticker.acted} parents acted on one.'
+            )
+        if self.reconciler is not None:
+            self.logger.info(
+                f'Order books: {self.reconciler.passes} passes, '
+                f'{self.reconciler.found} changes found that no socket '
+                'delivered.'
             )
         if self.day_roll is not None and self.day_roll.rolls:
             self.logger.info(
@@ -793,6 +805,52 @@ class OrderEngine:
             self.logger.exception(
                 'A held order update could not be applied; the broker book '
                 'is read again at the next start.'
+            )
+
+    def reconcile_books(self):
+        """Applies the order changes the brokers' polled books show and no socket delivered, here or on the workers that own their parents.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        try:
+            missed = self.reconciler.missed_updates()
+        except Exception:
+            self.logger.exception(
+                'The brokers\' order books could not be compared with the '
+                'open legs; they are compared again on the next pass.'
+            )
+            return
+        for parent_order_id, broker_name, fields in missed:
+            if self.router is None:
+                self.apply_reconciled_update(fields)
+            else:
+                self.router.route(
+                    parent_order_id,
+                    broker_name,
+                    self.apply_reconciled_update,
+                    (fields,),
+                )
+
+    def apply_reconciled_update(self, fields):
+        """Applies one change found in a broker's polled order book, on the worker that owns its parent.
+
+        The parent is read again here, so a socket update that reached the worker first leaves nothing to change and this one is ignored.
+
+        Args:
+            fields (dict): The change, shaped like an entry of the order update stream.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        try:
+            parent = self.follower.follow(fields)
+            if parent is not None:
+                self.parent_store.save(parent)
+        except Exception:
+            self.logger.exception(
+                'A change found in a broker\'s order book could not be '
+                'applied; it is found again on the next pass.'
             )
 
     def roll_day(self, stop):

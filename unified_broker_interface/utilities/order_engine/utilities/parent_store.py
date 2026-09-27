@@ -155,6 +155,29 @@ class ParentStore:
             return None
         return document
 
+    def parents(self, parent_order_ids):
+        """Several parents as Redis holds them, in one round trip.
+
+        Args:
+            parent_order_ids (list): The parents' ids.
+
+        Returns:
+            list: One document (dict) per parent that could be read, skipping any that are missing or unreadable.
+        """
+        if not parent_order_ids:
+            return []
+        documents = []
+        for stored in self.cache.hmget(PARENTS_KEY, parent_order_ids):
+            if not stored:
+                continue
+            try:
+                document = json.loads(stored)
+            except ValueError:
+                continue
+            if isinstance(document, dict):
+                documents.append(document)
+        return documents
+
     def rebuild(self, parents):
         """Replaces the whole cache with the parents recovery rebuilt from the event log.
 

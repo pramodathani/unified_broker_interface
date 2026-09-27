@@ -28,7 +28,9 @@ that ask for a tick are read at all, so an engine running nothing but plain orde
 `bin/unified/orders/websocket_order_details` already fills with every broker's order updates - as a consumer group of
 its own, and applies an update to the leg it belongs to. An update naming no leg of this engine's is acknowledged and
 dropped, which is most of them. Both streams are read in one call, so a fill and a new order reach the same loop and
-neither starves the other.
+neither starves the other. Every `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_RECONCILE_SECONDS` (5 by default) it also
+compares its open legs with each broker's polled book in `<broker>:orders:orders`, and applies a fill or a cancel the
+book shows and no socket delivered, so a broker with no order socket still finishes its parents.
 
 **Every order passes the same gates.** The daily loss lockout is checked before the order is even understood, so a
 day that is past its limit costs nothing; it is off unless `UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_LOSS_LIMIT` is
@@ -102,6 +104,7 @@ def main():
     parser.parse_args()
 
     from utilities.configurations import api_configuration, get_cache, get_logger, get_postgres
+    from unified_broker_interface.utilities.order_engine.utilities.book_reconciler import BookReconciler
     from unified_broker_interface.utilities.order_engine.utilities.day_roll import DayRoll
     from unified_broker_interface.utilities.order_engine.utilities.engine_lock import EngineLock
     from unified_broker_interface.utilities.order_engine.utilities.engine_placement import EnginePlacement
@@ -250,6 +253,7 @@ def main():
         DayRoll(recovery, parent_store, logger),
         router,
         ENTRIES_PER_READ_WITH_LANES,
+        BookReconciler(cache, parent_store, api_configuration["order_engine_reconcile_seconds"]),
     )
     exit_code = engine.run(stop)
     lock.release()

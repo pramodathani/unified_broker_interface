@@ -31,6 +31,9 @@ from test_runs import order_routes
 from test_runs import redis_stand_ins
 from unified_broker_interface.utilities.order_engine.utilities import engine_lock
 from unified_broker_interface.utilities.order_engine.utilities import moments
+from unified_broker_interface.utilities.order_engine.utilities.book_reconciler import (
+    BookReconciler,
+)
 from unified_broker_interface.utilities.order_engine.utilities.clock_ticker import (
     ClockTicker,
 )
@@ -1908,6 +1911,91 @@ class OrderEngineSuite:
             'sent': len(self.network.sent_requests),
         }
 
+    def reconciled_result(self, name, parent_state, book_order, leg_filled=0):
+        """Runs one reconciliation pass against a stored parent and a broker book, with no socket update at all.
+
+        Args:
+            name (str): The check's name.
+            parent_state (str): The parent's state before the pass, such as `working` or `cancelling`.
+            book_order (dict | None): Fields to set on the leg's book entry, or None for no entry.
+            leg_filled (int): How much the leg already records as filled.
+
+        Returns:
+            dict: The recorded result.
+        """
+        self.fake_redis = self.build_state()
+        parent_store = ParentStore(self.fake_redis)
+        parent = self.followed_parent()
+        parent.state = parent_state
+        parent.legs[0].filled_quantity = leg_filled
+        if leg_filled:
+            parent.legs[0].state = 'partially_filled'
+        parent_store.save(parent)
+        if book_order is not None:
+            book = self.fake_redis.hashes.setdefault(
+                'flattrade:orders:orders',
+                {},
+            )
+            book['26091500000021'] = self.broker_book_entry(
+                '26091500000021',
+                **book_order,
+            )
+        logger = logging.getLogger('test_runs.order_engine')
+        event_log = engine_stand_ins.RecordingEventLog()
+        placement = EnginePlacement(self.fake_redis, logger)
+        reconciler = BookReconciler(self.fake_redis, parent_store, 5.0)
+        engine = OrderEngine(
+            self.fake_redis,
+            placement,
+            EngineLock(self.fake_redis, logger),
+            logger,
+            STALE_INTENT_SECONDS,
+            RESULT_TTL_SECONDS,
+            event_log,
+            parent_store,
+            OrderUpdateFollower(
+                parent_store,
+                event_log,
+                logger,
+                None,
+                placement,
+            ),
+            reconciler=reconciler,
+        )
+        engine.reconcile_books()
+        engine.reconcile_books()
+        stored = ParentOrder.from_document(
+            parent_store.parent(parent.parent_order_id),
+        )
+        return {
+            'name': name,
+            'found': reconciler.found,
+            'leg_state': stored.legs[0].state,
+            'leg_filled': stored.legs[0].filled_quantity,
+            'parent_state': stored.state,
+            'still_open': parent.parent_order_id in self.fake_redis.sets.get(
+                'unified:orders:parents:open',
+                set(),
+            ),
+        }
+
+    def reconciler_due_result(self, name, interval_seconds, elapsed_seconds):
+        """Records whether a reconciliation pass is due.
+
+        Args:
+            name (str): The check's name.
+            interval_seconds (float): The configured interval.
+            elapsed_seconds (float): How long ago the last pass ran.
+
+        Returns:
+            dict: The recorded result.
+        """
+        reconciler = BookReconciler(None, None, interval_seconds)
+        return {
+            'name': name,
+            'due': reconciler.due(reconciler.checked_at + elapsed_seconds),
+        }
+
     def early_update_result(self, name, registered_before_replay, hold_seconds):
         """Delivers a fill before its order is registered, then replays the held updates.
 
@@ -2061,6 +2149,74 @@ class OrderEngineSuite:
             self.cancelling_parent_result(
                 'a_cancelling_parent_waits_while_its_leg_is_still_open',
                 dict(ours, status='OPEN', filled_quantity=0),
+            ),
+            self.reconciled_result(
+                'a_cancel_only_the_polled_book_shows_finishes_the_parent',
+                'working',
+                {
+                    'status': 'CANCELLED',
+                },
+            ),
+            self.reconciled_result(
+                'a_fill_only_the_polled_book_shows_completes_the_parent',
+                'working',
+                {
+                    'status': 'COMPLETE',
+                    'quantity': 10,
+                    'filled_quantity': 10,
+                    'average_price': 1009.5,
+                },
+            ),
+            self.reconciled_result(
+                'a_cancelling_parent_ends_when_the_polled_book_shows_its_cancel',
+                'cancelling',
+                {
+                    'status': 'CANCELLED',
+                },
+            ),
+            self.reconciled_result(
+                'a_partial_fill_only_the_polled_book_shows_is_recorded',
+                'working',
+                {
+                    'status': 'OPEN',
+                    'filled_quantity': 4,
+                },
+            ),
+            self.reconciled_result(
+                'a_polled_book_behind_the_socket_changes_nothing',
+                'working',
+                {
+                    'status': 'OPEN',
+                    'filled_quantity': 2,
+                },
+                4,
+            ),
+            self.reconciled_result(
+                'a_resting_order_in_the_polled_book_changes_nothing',
+                'working',
+                {
+                    'status': 'OPEN',
+                },
+            ),
+            self.reconciled_result(
+                'an_order_missing_from_the_polled_book_changes_nothing',
+                'working',
+                None,
+            ),
+            self.reconciler_due_result(
+                'reconciliation_waits_for_its_interval',
+                5.0,
+                4.0,
+            ),
+            self.reconciler_due_result(
+                'reconciliation_runs_once_its_interval_has_passed',
+                5.0,
+                5.0,
+            ),
+            self.reconciler_due_result(
+                'reconciliation_is_off_when_its_interval_is_zero',
+                0.0,
+                100.0,
             ),
             self.follower_result(
                 'an_update_that_changes_nothing_is_not_recorded',
