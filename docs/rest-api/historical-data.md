@@ -2,14 +2,14 @@
 
 The historical data routes return what has already been stored about one instrument: its candles from the unified price history, and every tick the live feed recorded. Neither route calls a broker. Both read TimescaleDB, and the candle route keeps a copy of each answer in Redis so that a repeated request costs no database query.
 
-The table below lists the two routes on this page. Each also takes a list of up to 50 instruments by `POST`.
+The table below lists the two routes on this page. Each also takes a list of instruments by `POST`.
 
 | Method | Endpoint | Description |
 |---|---|---|
 | <span class="method get">GET</span> | [`/api/instruments/prices`](#prices) | Candles between two dates, or for the last so many days, adjusted for corporate actions where that applies |
-| <span class="method post">POST</span> | [`/api/instruments/prices`](#prices-for-several-instruments) | The same interval and range for up to 50 instruments in one request |
+| <span class="method post">POST</span> | [`/api/instruments/prices`](#prices-for-several-instruments) | The same interval and range for a list of instruments in one request |
 | <span class="method get">GET</span> | [`/api/instruments/ticks`](#ticks) | Every recorded tick between two instants, streamed as one JSON array |
-| <span class="method post">POST</span> | [`/api/instruments/ticks`](#ticks-for-several-instruments) | The same period for up to 50 instruments, streamed instrument by instrument |
+| <span class="method post">POST</span> | [`/api/instruments/ticks`](#ticks-for-several-instruments) | The same period for a list of instruments, streamed instrument by instrument |
 
 Both take the instrument the same way as the [instrument routes](instruments.md#naming-an-instrument), and the `POST` form takes a list of them in a JSON body, as described under [Several instruments at once](instruments.md#several-instruments-at-once). Unlike those routes, they also find an instrument that is no longer listed today, such as an expired future or a delisted stock, because such an instrument still has history.
 
@@ -223,7 +223,7 @@ The rules that keep the copy honest are listed below.
 
 <div class="endpoint" markdown><span class="method post">POST</span> `/api/instruments/prices`<span class="auth">access-token</span></div>
 
-The `POST` form reads the same interval and range for up to 50 instruments. The body carries `instruments` and, beside it, the parameters above other than the instrument: `interval`, then `from` and `to` or `days`, and optionally `adjusted` and `known_as_of`. The answer is `{"results": [...]}`, with each answered entry's `data` exactly as above, including its own `source` and `price_basis`. A problem with a shared parameter, such as a missing `interval` or an intraday range longer than 366 days, refuses the whole request with <span class="status s4">400</span> before any instrument is read. [Several instruments at once](instruments.md#several-instruments-at-once) describes the entries and statuses.
+The `POST` form reads the same interval and range for a list of instruments. The body carries `instruments` and, beside it, the parameters above other than the instrument: `interval`, then `from` and `to` or `days`, and optionally `adjusted` and `known_as_of`. The answer is `{"results": [...]}`, with each answered entry's `data` exactly as above, including its own `source` and `price_basis`. A problem with a shared parameter, such as a missing `interval` or an intraday range longer than 366 days, refuses the whole request with <span class="status s4">400</span> before any instrument is read. [Several instruments at once](instruments.md#several-instruments-at-once) describes the entries and statuses.
 
 === "curl"
 
@@ -387,7 +387,7 @@ A tick has no identity fields, no `received_at` and no `stale`, because the head
 
 <div class="endpoint" markdown><span class="method post">POST</span> `/api/instruments/ticks`<span class="auth">access-token</span></div>
 
-The `POST` form streams the same period for up to 50 instruments. The body carries `instruments` and, beside it, `start`, `end` and optionally `adjusted`. Every instrument is looked up before the stream starts, so an unknown one gets its own entry with its status. Each instrument's ticks are then read from the database as the stream reaches its entry, one instrument after another.
+The `POST` form streams the same period for a list of instruments. The body carries `instruments` and, beside it, `start`, `end` and optionally `adjusted`. Every instrument is looked up before the stream starts, so an unknown one gets its own entry with its status. Each instrument's ticks are then read from the database as the stream reaches its entry, one instrument after another.
 
 Headers can describe only one instrument, so a batch puts that description in each entry instead. An answered entry's `data` holds the nine identity fields plus `adjustable`, `price_basis`, `start` and `end`, which are the values the `GET` form sends as `X-` headers. The instrument's ticks follow in `ticks`, beside `data`, so they can be written as they are read.
 

@@ -10,9 +10,9 @@ The table below lists the five routes on this page. The last two also take a lis
 | <span class="method get">GET</span> | [`/api/instruments/master`](#master) | Every instrument in a segment, an exchange or everywhere, streamed as one JSON array |
 | <span class="method get">GET</span> | [`/api/instruments/search`](#search) | Instruments in one segment whose symbol or underlying contains a search term |
 | <span class="method get">GET</span> | [`/api/instruments/details`](#details) | One instrument, its lot and tick size, and how each broker names it |
-| <span class="method post">POST</span> | [`/api/instruments/details`](#details-for-several-instruments) | The same for up to 50 instruments in one request |
+| <span class="method post">POST</span> | [`/api/instruments/details`](#details-for-several-instruments) | The same for a list of instruments in one request |
 | <span class="method get">GET</span> | [`/api/instruments/additional_details`](#additional-details) | One instrument and the extra attributes each broker's instrument file carries |
-| <span class="method post">POST</span> | [`/api/instruments/additional_details`](#additional-details-for-several-instruments) | The same for up to 50 instruments in one request |
+| <span class="method post">POST</span> | [`/api/instruments/additional_details`](#additional-details-for-several-instruments) | The same for a list of instruments in one request |
 
 ## Glossary of constants
 
@@ -73,7 +73,7 @@ The symbol and underlying are upper-cased before the lookup, so `infy` finds `IN
 
 ## Several instruments at once
 
-The seven routes that act on one instrument (`details`, `additional_details`, [`ltp`, `ohlc` and `quote`](market-quotes.md), and [`prices` and `ticks`](historical-data.md)) also accept a list of up to 50 instruments in one request. You send the same path with `POST` instead of `GET`, and put the instruments in a JSON body. The `GET` form is unchanged, so existing callers are not affected.
+The seven routes that act on one instrument (`details`, `additional_details`, [`ltp`, `ohlc` and `quote`](market-quotes.md), and [`prices` and `ticks`](historical-data.md)) also accept a list of instruments in one request. The list has no upper limit on its length. You send the same path with `POST` instead of `GET`, and put the instruments in a JSON body. The `GET` form is unchanged, so existing callers are not affected.
 
 The rule to remember is that **the method decides the shape of the answer, not the number of instruments**. A `GET` always answers with one instrument's object, exactly as described on each route's page. A `POST` always answers `{"results": [...]}`, even when its list holds a single instrument, so client code never needs a special case for a list of one.
 
@@ -84,7 +84,7 @@ Each item of `instruments` names one instrument with the same fields the `GET` f
 | Name | In | Type | Required | Description |
 |---|---|---|---|---|
 | `access-token` | header | string | Yes | The token from [`connect`](session.md#connect) |
-| `instruments` | body | array of objects | Yes | 1 to 50 instruments, each named as under [Naming an instrument](#naming-an-instrument) |
+| `instruments` | body | array of objects | Yes | One or more instruments, each named as under [Naming an instrument](#naming-an-instrument) |
 | Shared parameters | body | string, number or boolean | Depends on the route | Applied to every instrument; the table below lists them |
 
 The table below lists the shared parameters each route reads. JSON numbers and booleans are accepted wherever the query string takes text, so `"strike_price": 25000` and `"adjusted": false` both work.
@@ -182,7 +182,7 @@ The status of the whole response and the status of each entry answer different q
 | Status | When |
 |---|---|
 | <span class="status s2">200</span> | The body was readable. Each entry then carries its own status, so a 200 can hold failed entries. |
-| <span class="status s4">400</span> | `the body must be a JSON object with an instruments list`, `instruments must be a non-empty list`, `instruments may hold at most 50 entries, not <n>`, `<name> must be text, a number or true or false` for a shared parameter, or any message about a shared parameter that the `GET` form gives, such as `interval is required` or `end must be after start`. |
+| <span class="status s4">400</span> | `the body must be a JSON object with an instruments list`, `instruments must be a non-empty list`, `<name> must be text, a number or true or false` for a shared parameter, or any message about a shared parameter that the `GET` form gives, such as `interval is required` or `end must be after start`. |
 | <span class="status s4">401</span> | `Access token is required`, `Invalid access token` or `Access token has expired`. |
 | <span class="status s4">404</span> | `nothing had been mapped on or before <date>`. |
 | <span class="status s5">503</span> | `no instruments have been mapped yet`. |
@@ -205,7 +205,7 @@ A list costs a fixed number of Redis round trips rather than a number that grows
 Two kinds of work still grow with the list. A broker quote is one HTTP call per instrument that has no usable cached quote, and a `POST` runs up to four of them at once; [Where a quote comes from](market-quotes.md#where-a-quote-comes-from) explains when that happens. `prices` reads each instrument's candles separately, and `ticks` runs one query per instrument while it streams.
 
 ??? note "Under the hood"
-    - Body parsing and result entries: [`InstrumentBatch`][unified_broker_interface.utilities.instrument_batch.InstrumentBatch] in `unified_broker_interface/utilities/instrument_batch.py`. `MAX_BATCH_INSTRUMENTS` is 50.
+    - Body parsing and result entries: [`InstrumentBatch`][unified_broker_interface.utilities.instrument_batch.InstrumentBatch] in `unified_broker_interface/utilities/instrument_batch.py`.
     - Resolving the list: [`InstrumentCatalogue.resolve_many`][unified_broker_interface.utilities.instrument_catalogue.InstrumentCatalogue.resolve_many]. The catalogue look-ups share one pipeline through [`MappingRedisTier.read_catalogue_for_prefixes`][stock_brokers.instruments.mapping.utilities.cache.MappingRedisTier.read_catalogue_for_prefixes], and every identity is read with one `HMGET`.
     - An instrument that the cache cannot answer for, because of a past `date`, a cold cache, or history of an instrument no longer mapped, is looked up in Postgres on its own.
 
@@ -663,7 +663,7 @@ The sizes are sent as text in `carried_by` on purpose. A lot size or tick size t
 
 <div class="endpoint" markdown><span class="method post">POST</span> `/api/instruments/details`<span class="auth">access-token</span></div>
 
-The `POST` form takes up to 50 instruments in a JSON body and answers `{"results": [...]}`, with each answered entry's `data` exactly as above. The body can carry `date`, which applies to every instrument. [Several instruments at once](#several-instruments-at-once) describes the body, the entries and the statuses, and uses this route as its example.
+The `POST` form takes a list of instruments in a JSON body and answers `{"results": [...]}`, with each answered entry's `data` exactly as above. The body can carry `date`, which applies to every instrument. [Several instruments at once](#several-instruments-at-once) describes the body, the entries and the statuses, and uses this route as its example.
 
 The seen dates and handles of every instrument found in the cache are read with one `HMGET` each, so a list costs the same Redis round trips as one instrument.
 
@@ -793,7 +793,7 @@ Values are always text, exactly as the broker's file held them, because the raw 
 
 <div class="endpoint" markdown><span class="method post">POST</span> `/api/instruments/additional_details`<span class="auth">access-token</span></div>
 
-The `POST` form takes up to 50 instruments in a JSON body and answers `{"results": [...]}`, with each answered entry's `data` exactly as above. The body can carry `date`, which applies to every instrument. [Several instruments at once](#several-instruments-at-once) describes the body, the entries and the statuses.
+The `POST` form takes a list of instruments in a JSON body and answers `{"results": [...]}`, with each answered entry's `data` exactly as above. The body can carry `date`, which applies to every instrument. [Several instruments at once](#several-instruments-at-once) describes the body, the entries and the statuses.
 
 === "curl"
 

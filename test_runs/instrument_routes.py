@@ -1038,9 +1038,9 @@ class InstrumentRoutesScenarios:
         Returns:
             list: The scenarios.
         """
-        too_many = []
-        for _ in range(51):
-            too_many.append(self.by_id('infy'))
+        many_instruments = []
+        for _ in range(120):
+            many_instruments.append(self.by_id('infy'))
         return [
             self.post('details_batch_mixed', 'details', {'instruments': self.mixed_instruments()}),
             self.post(
@@ -1074,7 +1074,7 @@ class InstrumentRoutesScenarios:
             ),
             self.post('details_batch_no_list', 'details', {'date': '2026-09-15'}),
             self.post('details_batch_empty_list', 'details', {'instruments': []}),
-            self.post('details_batch_over_limit', 'details', {'instruments': too_many}),
+            self.post('details_batch_many_instruments', 'details', {'instruments': many_instruments}),
             self.post(
                 'details_batch_bad_date',
                 'details',

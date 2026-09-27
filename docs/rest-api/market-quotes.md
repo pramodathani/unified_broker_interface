@@ -2,16 +2,16 @@
 
 The market quote routes return the live price of one instrument, at three levels of detail. All three read the same unified quote document, which is built from whichever broker is currently streaming that instrument, so the answer looks the same whichever broker it came from.
 
-The table below lists the three routes on this page. Each also takes a list of up to 50 instruments by `POST`.
+The table below lists the three routes on this page. Each also takes a list of instruments by `POST`.
 
 | Method | Endpoint | Description |
 |---|---|---|
 | <span class="method get">GET</span> | [`/api/instruments/ltp`](#ltp) | The last traded price, with the instrument's identity and when the price was received |
-| <span class="method post">POST</span> | [`/api/instruments/ltp`](#ltp-for-several-instruments) | The same for up to 50 instruments in one request |
+| <span class="method post">POST</span> | [`/api/instruments/ltp`](#ltp-for-several-instruments) | The same for a list of instruments in one request |
 | <span class="method get">GET</span> | [`/api/instruments/ohlc`](#ohlc) | The last traded price plus the day's open, high and low, the previous close and the change |
-| <span class="method post">POST</span> | [`/api/instruments/ohlc`](#ohlc-for-several-instruments) | The same for up to 50 instruments in one request |
+| <span class="method post">POST</span> | [`/api/instruments/ohlc`](#ohlc-for-several-instruments) | The same for a list of instruments in one request |
 | <span class="method get">GET</span> | [`/api/instruments/quote`](#quote) | The whole unified quote document, including volume, open interest and five levels of market depth |
-| <span class="method post">POST</span> | [`/api/instruments/quote`](#quote-for-several-instruments) | The same for up to 50 instruments in one request |
+| <span class="method post">POST</span> | [`/api/instruments/quote`](#quote-for-several-instruments) | The same for a list of instruments in one request |
 
 All three take the instrument the same way as the [instrument routes](instruments.md#naming-an-instrument): either `instrument_id`, or `exchange`, `segment` and the identity fields. The `POST` form takes a list of them in a JSON body, as described under [Several instruments at once](instruments.md#several-instruments-at-once).
 
@@ -208,7 +208,7 @@ Every field is described in [The unified quote document](#the-unified-quote-docu
 
 <div class="endpoint" markdown><span class="method post">POST</span> `/api/instruments/ltp`<span class="auth">access-token</span></div>
 
-The `POST` form takes up to 50 instruments in a JSON body and answers `{"results": [...]}`, one entry per instrument in request order, with each answered entry's `data` exactly as above. [Several instruments at once](instruments.md#several-instruments-at-once) describes the body, the entries and the statuses.
+The `POST` form takes a list of instruments in a JSON body and answers `{"results": [...]}`, one entry per instrument in request order, with each answered entry's `data` exactly as above. [Several instruments at once](instruments.md#several-instruments-at-once) describes the body, the entries and the statuses.
 
 === "curl"
 
@@ -359,7 +359,7 @@ The status codes are the same as for [`ltp`](#ltp).
 
 <div class="endpoint" markdown><span class="method post">POST</span> `/api/instruments/ohlc`<span class="auth">access-token</span></div>
 
-The `POST` form takes up to 50 instruments in a JSON body and answers `{"results": [...]}`, with each answered entry's `data` exactly as above. It works exactly like [`ltp` for several instruments](#ltp-for-several-instruments), and [Several instruments at once](instruments.md#several-instruments-at-once) describes the body, the entries and the statuses.
+The `POST` form takes a list of instruments in a JSON body and answers `{"results": [...]}`, with each answered entry's `data` exactly as above. It works exactly like [`ltp` for several instruments](#ltp-for-several-instruments), and [Several instruments at once](instruments.md#several-instruments-at-once) describes the body, the entries and the statuses.
 
 ??? note "Under the hood"
     - Route: `InstrumentsBlueprint.ohlc`, which keeps only the keys in `_OHLC_KEYS`, the `ltp` keys plus `ohlc`, `previous_close` and `change_percent`.
@@ -474,7 +474,7 @@ The status codes are the same as for [`ltp`](#ltp).
 
 <div class="endpoint" markdown><span class="method post">POST</span> `/api/instruments/quote`<span class="auth">access-token</span></div>
 
-The `POST` form takes up to 50 instruments in a JSON body and answers `{"results": [...]}`, with each answered entry's `data` exactly as above. It works exactly like [`ltp` for several instruments](#ltp-for-several-instruments), and [Several instruments at once](instruments.md#several-instruments-at-once) describes the body, the entries and the statuses.
+The `POST` form takes a list of instruments in a JSON body and answers `{"results": [...]}`, with each answered entry's `data` exactly as above. It works exactly like [`ltp` for several instruments](#ltp-for-several-instruments), and [Several instruments at once](instruments.md#several-instruments-at-once) describes the body, the entries and the statuses.
 
 ??? note "Under the hood"
     - Route: `InstrumentsBlueprint.quote`, which returns the document from [`QuoteService.quote`][unified_broker_interface.utilities.broker_quotes.utilities.service.QuoteService.quote] unchanged apart from `source`.

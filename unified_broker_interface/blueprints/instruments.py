@@ -10,7 +10,7 @@
 
 Every route except the first three takes one instrument by `GET`, as `instrument_id` or as `exchange`,
 `segment` and the identity fields; see `utilities/instrument_identity.py`. The same routes take a list of
-up to 50 instruments by `POST`, as a JSON body `{"instruments": [...]}`, and answer `{"results": [...]}`
+any number of instruments by `POST`, as a JSON body `{"instruments": [...]}`, and answer `{"results": [...]}`
 with one entry per instrument; see `utilities/instrument_batch.py`. The routes only read parameters and
 shape responses - the work is in `utilities/`.
 """
