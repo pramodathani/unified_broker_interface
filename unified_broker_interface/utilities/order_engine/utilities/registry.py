@@ -10,6 +10,9 @@ from unified_broker_interface.utilities.order_engine.candle_close_stop import (
     CandleCloseStop,
 )
 from unified_broker_interface.utilities.order_engine.chaser import Chaser
+from unified_broker_interface.utilities.order_engine.closing_price import (
+    ClosingPrice,
+)
 from unified_broker_interface.utilities.order_engine.cover import Cover
 from unified_broker_interface.utilities.order_engine.cross_instrument import (
     CrossInstrument,
@@ -134,4 +137,5 @@ SYNTHETIC_ORDER_CLASSES = {
     DailyStop.SYNTHETIC_TYPE: DailyStop,
     VirtualLimit.SYNTHETIC_TYPE: VirtualLimit,
     OpeningAuction.SYNTHETIC_TYPE: OpeningAuction,
+    ClosingPrice.SYNTHETIC_TYPE: ClosingPrice,
 }

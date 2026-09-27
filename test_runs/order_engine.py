@@ -2966,6 +2966,47 @@ class OrderEngineSuite:
                 taken_at=FROZEN_NOW.replace(hour=9, minute=8),
             ),
             self.clock_result(
+                'a_closing_price_order_waits_for_the_window_and_then_slices',
+                dict(entry, quantity=60, synthetic={
+                    'type': 'closing_price',
+                }),
+                [],
+                FROZEN_NOW.replace(hour=15, minute=0).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(hour=14, minute=30),
+            ),
+            self.clock_result(
+                'a_closing_price_order_inside_the_window_starts_at_once',
+                dict(entry, quantity=40, synthetic={
+                    'type': 'closing_price',
+                    'slices': 4,
+                }),
+                [],
+                FROZEN_NOW.replace(hour=15, minute=15).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(hour=15, minute=10),
+            ),
+            self.clock_result(
+                'a_closing_price_order_after_the_close_is_refused',
+                dict(entry, synthetic={
+                    'type': 'closing_price',
+                }),
+                [],
+                FROZEN_NOW.replace(hour=15, minute=32).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(hour=15, minute=31),
+            ),
+            self.clock_result(
+                'a_closing_price_window_starting_after_the_close_is_refused',
+                dict(entry, synthetic={
+                    'type': 'closing_price',
+                    'window_start': '15:40',
+                }),
+                [],
+                frozen + 60,
+                accepted,
+            ),
+            self.clock_result(
                 'a_time_stop_closes_what_it_filled',
                 dict(entry, synthetic={
                     'type': 'time_stop',

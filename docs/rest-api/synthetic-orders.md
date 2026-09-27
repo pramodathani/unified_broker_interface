@@ -2,7 +2,7 @@
 
 A synthetic order is an order that no Indian exchange offers, built by the order engine out of ordinary broker orders. You ask for one by adding a `synthetic` object to the body of [`POST /api/orders/place`](orders.md#place-an-order), and the engine places, watches, moves and cancels the real orders it is made of.
 
-This page is the glossary of all 43 types the engine runs. It lists every field each type reads from the `synthetic` object, with the defaults and limits taken from the code.
+This page is the glossary of all 44 types the engine runs. It lists every field each type reads from the `synthetic` object, with the defaults and limits taken from the code.
 
 !!! danger "Synthetic orders place real orders, sometimes long after you asked"
     A synthetic order can place, modify or cancel orders at a broker minutes, hours or even days after your request, with nobody watching. Triggers, trailing stops, grids and schedules all act on their own. Send `"dry_run": true` first, which builds the first broker request without recording or sending anything.
@@ -54,7 +54,7 @@ Two fields can appear in any `synthetic` object. The table below lists them.
 
 | Field | Type | Required | Meaning |
 |---|---|:---:|---|
-| `type` | string | Yes | One of the 43 names in the table below. A body with no `synthetic` object, or no `type`, runs as `simple`. An unknown name is refused with `400` and the message `the order engine does not run '<name>' orders; it runs <list>`. |
+| `type` | string | Yes | One of the 44 names in the table below. A body with no `synthetic` object, or no `type`, runs as `simple`. An unknown name is refused with `400` and the message `the order engine does not run '<name>' orders; it runs <list>`. |
 | `closes_position` | boolean | No | `true` says every leg of this order closes a position, so it may use the part of a broker's daily order cap kept for exits. Only the literal `true` counts. |
 
 The engine also writes its own working values into the parent's copy of the `synthetic` object, such as `tick_size`, `triggered_at`, `watermark`, `placed_quantity`, `started_at` and `expires_at`. These are internal, so do not send them.
@@ -80,7 +80,7 @@ Types that act at once answer with the broker's answer plus a `parent_id`; types
 
 Keep the `parent_id`. It is the only handle on an order that has not reached a broker yet.
 
-## All 43 types
+## All 44 types
 
 The master table below lists every type registered in `SYNTHETIC_ORDER_CLASSES`, in the order the registry holds them. The "First answer" column says whether a broker order goes out when you ask (`200`, the broker's own answer) or whether the engine waits (`202`).
 
@@ -129,8 +129,9 @@ The master table below lists every type registered in `SYNTHETIC_ORDER_CLASSES`,
 | `daily_stop` | Stops and trailing | Places a fresh native stop every morning for a position held overnight. | `stop_price`, `stop_limit_price`, `arm_at`, `valid_days` | 202 |
 | `virtual_limit` | Book-following limits | Holds a limit order in the engine and sends it only when the other side reaches its price. | `paper` | 202 |
 | `opening_auction` | Time-based | Places the order during the pre-open, so it fills at the opening auction's price. | `at_time` | 202 |
+| `closing_price` | Execution algorithms | Slices the order by volume through the half hour the closing price is computed from. | `slices`, `window_start` | 202, or 200 inside the window |
 
-The chart below counts how many of the 43 types fall into each family. The families are this page's own grouping, chosen to make the list easier to scan; the code does not group them.
+The chart below counts how many of the 44 types fall into each family. The families are this page's own grouping, chosen to make the list easier to scan; the code does not group them.
 
 ```vegalite
 {
@@ -141,7 +142,7 @@ The chart below counts how many of the 43 types fall into each family. The famil
   "data": {
     "values": [
       {"family": "Linked orders", "types": 7},
-      {"family": "Execution algorithms", "types": 7},
+      {"family": "Execution algorithms", "types": 8},
       {"family": "Stops and trailing", "types": 6},
       {"family": "Book-following limits", "types": 5},
       {"family": "Price triggers", "types": 5},
@@ -648,7 +649,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
 === "Execution algorithms"
 
-    These seven types work a large order into the market over time or volume, or wait for liquidity.
+    These eight types work a large order into the market over time or volume, or wait for liquidity.
 
     #### `twap`
 
@@ -674,6 +675,22 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     ```json
     {"type": "vwap", "slices": 12, "over_minutes": 120}
+    ```
+
+    #### `closing_price`
+
+    A closing-price order (the Atlas's G2, market-on-close or limit-on-close) aims to pay close to the day's official closing price. NSE and BSE compute an equity's closing price as the volume-weighted average of trades from 15:00 to 15:30, so this type is a `vwap` spread across that window. The cash segment's post-closing session fills at the closing price exactly, but it takes only delivery orders; for futures, options and intraday orders this is the nearest there is.
+
+    An order that arrives before the window answers `202 scheduled`, and its first slice goes out when the window opens. One that arrives inside the window sends its first slice at once and spreads the rest over what is left until 15:30. One that arrives after 15:30 is refused with `400`. The duration is worked out from the window, so `over_minutes` is refused.
+
+    | Field | Type | Required | Rules |
+    |---|---|:---:|---|
+    | `slices` | integer | No | From 2 to 60. Defaults to 6, one every five minutes across the default window. |
+    | `window_start` | string | No | From 09:15 and before 15:30. Defaults to `15:00`. |
+    | `volume_profile` | list of numbers | No | As for `vwap`. |
+
+    ```json
+    {"type": "closing_price", "slices": 6}
     ```
 
     #### `implementation_shortfall`
