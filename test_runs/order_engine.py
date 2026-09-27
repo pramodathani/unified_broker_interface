@@ -1615,8 +1615,9 @@ class OrderEngineSuite:
             )
         return RiskGates(
             RateBudget(
-                scenario.get('rate_per_second', 8),
-                scenario.get('rate_per_broker_per_second', 5),
+                self.fake_redis,
+                scenario.get('rate_per_second', 0),
+                scenario.get('rate_per_broker_per_second', 10),
                 scenario.get('rate_wait_seconds', 0),
                 logger,
             ),
@@ -2379,7 +2380,7 @@ class OrderEngineSuite:
         gates = None
         if gated:
             gates = RiskGates(
-                RateBudget(gated, gated, 0, logger),
+                RateBudget(self.fake_redis, gated, gated, 0, logger),
                 LossLockout(self.fake_redis, 0, logger),
                 OrderToTradeRatio(),
             )
@@ -3128,7 +3129,7 @@ class OrderEngineSuite:
         event_log = RecordingEventLog()
         parent_store = ParentStore(self.fake_redis)
         gates = RiskGates(
-            RateBudget(100, 100, 0, logger),
+            RateBudget(self.fake_redis, 100, 100, 0, logger),
             LossLockout(self.fake_redis, 0, logger),
             OrderToTradeRatio(),
             RepricingThrottle(throttle_seconds),

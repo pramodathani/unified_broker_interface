@@ -26,6 +26,8 @@ The order of the two halves is the whole point of this route. Suppose you hold a
 
 This route decides what to cancel and what to close from Redis alone. Open orders come from each broker's `<broker>:orders:orders` hash, and positions come from each broker's own `<broker>:portfolio:positions` hash rather than from the merged portfolio document, because a closing order has to go to the broker that actually holds the position.
 
+Each cancel takes room in the per-broker rate budget before it is sent, waiting up to `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_WAIT_SECONDS` when the broker has already been sent ten messages in the last second. A cancel that finds no room in time is reported as not sent, with the budget's message, and the route goes on to the rest.
+
 ### Request parameters
 
 The body is a JSON object with a confirmation word, so that a stray or mistyped request cannot unwind an account.

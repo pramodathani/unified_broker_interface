@@ -80,6 +80,9 @@ from unified_broker_interface.utilities.order_engine.utilities.daily_order_count
 from unified_broker_interface.utilities.order_engine.utilities.intent_handoff import (
     IntentHandoff,
 )
+from unified_broker_interface.utilities.order_engine.utilities.rate_budget import (
+    RateBudget,
+)
 from unified_broker_interface.utilities.unified_documents import read_document
 from utilities.configurations import api_configuration
 from utilities.configurations import get_logger
@@ -147,6 +150,13 @@ class OrdersBlueprint(BaseBlueprint):
             DailyOrderCount.from_configuration(self.cache, self.logger),
         )
         self.kill_switch = KillSwitch(self.broker_names)
+        self.rate_budget = RateBudget(
+            self.cache,
+            api_configuration['order_rate_per_second'],
+            api_configuration['order_rate_per_broker_per_second'],
+            api_configuration['order_rate_wait_seconds'],
+            self.logger,
+        )
         self.order_handoff = None
         if self.placement_mode == 'engine':
             self.order_handoff = IntentHandoff(
@@ -238,6 +248,48 @@ class OrdersBlueprint(BaseBlueprint):
             expires_at = None
         if expires_at is None or expires_at <= datetime.datetime.now():
             raise self.refuse('Access token has expired', 401)
+
+    def take_rate_room(self, broker_name):
+        """Takes room in the shared per-broker rate budget for one modification or cancellation, waiting briefly if the last second is full.
+
+        The order engine takes room from the same Redis window before every request it sends, so a busy second of engine orders and API changes together still stays within the limit at each broker.
+
+        Args:
+            broker_name (str): The broker the change is going to.
+
+        Returns:
+            None: This method returns nothing.
+
+        Raises:
+            RefusedRequestError: With HTTP 503 when no room came within the wait, or when Redis could not be read.
+        """
+        try:
+            allowed = self.rate_budget.take(broker_name)
+        except redis.RedisError as error:
+            raise self.redis_unreadable(error)
+        if not allowed:
+            raise self.refuse(
+                'the order rate budget is full, so this change was not sent; '
+                'try again in a moment',
+                503,
+                broker=broker_name,
+            )
+
+    def send_change(self, prepared, started_at):
+        """Sends one prepared modification or cancellation, after taking room for it in the rate budget.
+
+        Args:
+            prepared (PreparedCancel | PreparedModification): The change to send.
+            started_at (float): `time.perf_counter()` when the request arrived.
+
+        Returns:
+            tuple: The answer's body (dict) and its HTTP status (int).
+
+        Raises:
+            RefusedRequestError: With HTTP 503 when the rate budget had no room, or Redis could not be read.
+        """
+        self.take_rate_room(prepared.broker_name)
+        return prepared.send(started_at)
 
     def redis_unreadable(self, error):
         """Builds the refusal for a Redis read that failed.
@@ -557,7 +609,7 @@ class OrdersBlueprint(BaseBlueprint):
         if modify_request.dry_run:
             answer_body, status = prepared.dry_run_answer(started_at)
         else:
-            answer_body, status = prepared.send(started_at)
+            answer_body, status = self.send_change(prepared, started_at)
         return jsonify(answer_body), status
 
     def modify_order_list(self, access_token, body, started_at):
@@ -759,7 +811,9 @@ class OrdersBlueprint(BaseBlueprint):
             tuple: The answer's body (dict) and its HTTP status (int): the broker's answer, or 504 when sending failed unexpectedly and whether the broker received the change is unknown.
         """
         try:
-            return prepared.send(started_at)
+            return self.send_change(prepared, started_at)
+        except RefusedRequestError as refusal:
+            return refusal.body, refusal.status
         except Exception as error:
             self.logger.exception(
                 'sending a change to %s order %s failed unexpectedly',
@@ -1264,7 +1318,7 @@ class OrdersBlueprint(BaseBlueprint):
         if cancel_request.dry_run:
             answer_body, status = prepared.dry_run_answer(started_at)
         else:
-            answer_body, status = prepared.send(started_at)
+            answer_body, status = self.send_change(prepared, started_at)
         return jsonify(answer_body), status
 
     def cancel_order_list(self, access_token, body, started_at):
@@ -1582,6 +1636,11 @@ class OrdersBlueprint(BaseBlueprint):
             )
         except (OrderNotReadyError, KeyError, TypeError, ValueError) as error:
             answer['status_message'] = f'the cancel could not be built: {error}'
+            return answer
+        try:
+            self.take_rate_room(order['broker'])
+        except RefusedRequestError as refusal:
+            answer['status_message'] = refusal.body.get('error')
             return answer
         try:
             sent = broker_orders.send_cancel(broker_request)

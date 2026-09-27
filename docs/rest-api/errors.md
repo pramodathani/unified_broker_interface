@@ -436,6 +436,7 @@ In engine mode, `place` has a few more `503` messages. The table below lists the
 | `the order engine is not running, so the order was not placed; start unified-orders@order_engine.service` | No engine holds its lock; nothing was queued. Start the engine, and enable it so it comes back after a reboot. |
 | `the order could not be written for the order engine: {error}` | Redis refused the intent; nothing was queued |
 | `the order rate budget is full, so this order was not sent; try again in a moment` | The per-broker rate budget had no room; this one is worth retrying |
+| `the order rate budget is full, so this change was not sent; try again in a moment` | A modification or cancellation found the broker's rate budget full; this one is worth retrying |
 | `a price reference needs a tick size the brokers agree on and there is none for this instrument` | A `price_reference` cannot be rounded to a tick |
 | `a {kind} price reference needs a live quote for this instrument and there is none` | No live quote to resolve the reference from |
 | `a {kind} price reference needs {level} level(s) on the {side} side of the book and the quote carries {count}` | The book is too shallow |

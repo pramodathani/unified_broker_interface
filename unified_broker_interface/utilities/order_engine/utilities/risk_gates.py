@@ -1,5 +1,7 @@
 """The limits every order the engine sends has to pass, in one place."""
 
+import redis
+
 from unified_broker_interface.utilities.broker_orders.utilities.refused_request import (
     RefusedRequestError,
 )
@@ -15,7 +17,7 @@ class RiskGates:
 
     This is the reason the order engine exists rather than a simpler design. A limit written into a gunicorn worker is enforced once per worker, which is to say enforced twice and therefore not at all; a limit here is enforced once, because exactly one engine runs and nothing else in engine mode sends a placement.
 
-    That claim has one honest hole in it, recorded here rather than left to be discovered: `PUT /api/orders/modify` and `DELETE /api/orders/cancel` still go straight from an API worker to a broker. They count towards an exchange's order rate too. Until they are routed through the engine, these are limits on placements.
+    The rate budget is the exception to "enforced once, here": it lives in Redis, because `PUT /api/orders/modify` and `DELETE /api/orders/cancel` still go straight from an API worker to a broker and count towards the same per-broker limit, so they take room from the same budget. The loss lockout and the daily-cap refusal still hold placements only.
 
     Attributes:
         rate_budget (RateBudget): How fast orders may be sent.
@@ -83,9 +85,18 @@ class RiskGates:
             None: This method returns nothing.
 
         Raises:
-            RefusedRequestError: With HTTP 503 when no token arrived in time, since the order could be placed later but not now.
+            RefusedRequestError: With HTTP 503 when no room came in time, or when the budget in Redis could not be read, since the order could be sent later but not now.
         """
-        if self.rate_budget.take(broker_name):
+        try:
+            allowed = self.rate_budget.take(broker_name)
+        except redis.RedisError as error:
+            raise RefusedRequestError.refusal(
+                f'the order rate budget could not be read ({error}), so this '
+                'order was not sent',
+                503,
+                broker=broker_name,
+            )
+        if allowed:
             return
         raise RefusedRequestError.refusal(
             'the order rate budget is full, so this order was not sent; try '

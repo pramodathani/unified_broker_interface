@@ -86,9 +86,9 @@ These variables matter only when `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT` 
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_TIMEOUT_SECONDS` | `5` | decimal | How long an API worker waits for the engine's answer before it answers that the outcome is unknown | `unified_broker_interface/utilities/order_engine/utilities/intent_handoff.py` |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_RESULT_TTL_SECONDS` | `300` | integer | How long the engine keeps an answer in Redis for a worker that never came back for it | `bin/unified/orders/order_engine` |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_STALE_INTENT_SECONDS` | `30` | decimal | An order the engine reads more than this long after the worker's deadline is answered `409` and recorded, not placed | `bin/unified/orders/order_engine` |
-| `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_PER_SECOND` | `8` | decimal | The engine's overall budget of orders a second, as a token bucket | `bin/unified/orders/order_engine` |
-| `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_PER_BROKER_PER_SECOND` | `5` | decimal | The same budget for any one broker | `bin/unified/orders/order_engine` |
-| `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_WAIT_SECONDS` | `1` | decimal | How long a burst waits for a token before the order is refused | `bin/unified/orders/order_engine` |
+| `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_PER_SECOND` | `0` | decimal | Order messages allowed in any one-second span across every broker; zero turns this limit off | `bin/unified/orders/order_engine`, the REST API |
+| `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_PER_BROKER_PER_SECOND` | `10` | decimal | Order messages (placements, modifications and cancellations) allowed in any one-second span to any one broker, shared by the engine and the REST API through Redis | `bin/unified/orders/order_engine`, the REST API |
+| `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_WAIT_SECONDS` | `1` | decimal | How long a message waits for room in the rate budget before it is refused | `bin/unified/orders/order_engine`, the REST API |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_LOSS_LIMIT` | `0` | decimal | New orders are refused once the day's realized plus unrealized loss, read from `unified:portfolio:funds`, reaches this. Zero or less turns the check off, and the engine logs a warning at start when it is off. | `bin/unified/orders/order_engine` |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_REPRICE_MINIMUM_SECONDS` | `1` | decimal | The shortest time between two price changes of one resting order. Zero turns the check off. | `bin/unified/orders/order_engine` |
 

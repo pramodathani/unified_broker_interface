@@ -219,6 +219,16 @@ class OrderChangeListScenarios:
         return [
             self.cancel('cancel_list_every_broker', {'orders': self.every_open_order()}),
             self.cancel(
+                'cancel_list_refuses_only_the_item_whose_broker_rate_budget_is_full',
+                {
+                    'orders': self.every_open_order(),
+                },
+                full_rate_windows=[
+                    'zerodha',
+                ],
+                rate_wait_seconds=0,
+            ),
+            self.cancel(
                 'cancel_list_every_broker_dry_run',
                 {
                     'orders': self.every_open_order(),

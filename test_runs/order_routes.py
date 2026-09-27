@@ -17,6 +17,7 @@ import copy
 import json
 import pathlib
 import sys
+import time
 import uuid
 
 import flask
@@ -51,6 +52,59 @@ FIXTURE_PATH = (
 )
 
 
+class FakeRateWindowScript:
+    """What the rate budget's Lua script does, run against the stand-in's memory.
+
+    Attributes:
+        fake_redis (FakeRedis): The stand-in whose windows are counted.
+    """
+
+    def __init__(self, fake_redis):
+        """Builds the script.
+
+        Args:
+            fake_redis (FakeRedis): The stand-in whose windows are counted.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.fake_redis = fake_redis
+
+    def __call__(self, keys, args):
+        """Counts one message in every named window if all have room, or says how long until they do.
+
+        Args:
+            keys (list): The window keys.
+            args (list): The window length in microseconds, a member name, and one limit per key.
+
+        Returns:
+            int: 0 when counted, otherwise the microseconds until there is room.
+
+        Raises:
+            redis.RedisError: When this round trip is set to fail.
+        """
+        self.fake_redis.start_round_trip()
+        now = int(time.monotonic() * 1000000)
+        window = int(args[0])
+        longest_wait = 0
+        for position, key in enumerate(keys):
+            limit = float(args[position + 2])
+            kept = []
+            for moment in self.fake_redis.rate_windows.get(key, []):
+                if moment > now - window:
+                    kept.append(moment)
+            self.fake_redis.rate_windows[key] = kept
+            if len(kept) >= limit:
+                wait = kept[0] + window - now
+                if wait > longest_wait:
+                    longest_wait = wait
+        if longest_wait > 0:
+            return longest_wait
+        for key in keys:
+            self.fake_redis.rate_windows[key].append(now)
+        return 0
+
+
 class FakeRedis:
     """An in-memory stand-in for the parts of a Redis client the order routes use.
 
@@ -60,6 +114,7 @@ class FakeRedis:
         strings (dict): String keys to their values.
         hashes (dict): Hash keys to dictionaries of fields and values.
         sorted_sets (dict): Sorted set keys to lists of members, all scored 0.
+        rate_windows (dict): Each rate budget key to the monotonic times, in microseconds, of the messages counted in it.
         round_trips (int): How many round trips have been made.
         failing_round_trip (int | None): The 1-based round trip that raises `redis.RedisError`, or None when none fails.
     """
@@ -73,8 +128,25 @@ class FakeRedis:
         self.strings = {}
         self.hashes = {}
         self.sorted_sets = {}
+        self.rate_windows = {}
         self.round_trips = 0
         self.failing_round_trip = None
+
+    def register_script(self, script_text):
+        """Registers a Lua script, which here can only be the rate budget's sliding window.
+
+        Args:
+            script_text (str): The script's source.
+
+        Returns:
+            FakeRateWindowScript: A callable that does what the script does, in one round trip.
+
+        Raises:
+            NotImplementedError: When the script is not the rate window, which this stand-in cannot run.
+        """
+        if 'ZREMRANGEBYSCORE' not in script_text:
+            raise NotImplementedError('the stand-in runs only the rate window script')
+        return FakeRateWindowScript(self)
 
     def start_round_trip(self):
         """Counts one round trip and raises when it is the one set to fail.
@@ -3982,6 +4054,17 @@ class OrderRoutesSuite:
             dict: The scenario's recorded result.
         """
         self.fake_redis = OrderRoutesState().build()
+        for broker_name in scenario.get('full_rate_windows', []):
+            filled_at = int(time.monotonic() * 1000000)
+            self.fake_redis.rate_windows[f'unified:orders:rate:{broker_name}'] = [
+                filled_at,
+            ] * 10
+        api_configuration['order_rate_per_second'] = 0
+        api_configuration['order_rate_per_broker_per_second'] = 10
+        api_configuration['order_rate_wait_seconds'] = scenario.get(
+            'rate_wait_seconds',
+            1,
+        )
         api_configuration['order_placement'] = 'direct'
         api_configuration['order_broker_selector'] = scenario.get(
             'selector',

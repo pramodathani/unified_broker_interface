@@ -189,6 +189,8 @@ The order engine and the REST API's order routes share the keys below. The engin
 | Key | Type | Written by | Read by | Lifetime |
 |---|---|---|---|---|
 | `unified:orders:round_robin` | string (counter) | The round-robin broker selector, with `INCR` on each order | The same selector | Kept |
+| `unified:orders:rate:<broker>` | sorted set | The rate budget, in the order engine and the REST API, before each order message | The same budget | One member per message sent in the last second, scored by Redis server time in microseconds; expires two seconds after the last message |
+| `unified:orders:rate:all` | sorted set | The rate budget, only when `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_PER_SECOND` is above zero | The same budget | The same, across every broker |
 | `unified:orders:daily_count:<broker>` | string (counter) | Every placement, modification and cancellation sent to a broker with a daily cap, from an API worker or the engine | The same code, before sending | Expires at the next 06:00 IST |
 | `unified:orders:engine:lock` | string | `bin/unified/orders/order_engine` | A second engine, which then exits | The engine's pid; 30 seconds, refreshed every 10 |
 | `unified:orders:intents:result:<intent_id>` | list | The order engine, with `RPUSH` | The waiting API worker, with `BLPOP` | `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_RESULT_TTL_SECONDS`, 300 by default |

@@ -110,7 +110,7 @@ The table below lists every engine-mode answer that direct mode never gives.
 | <span class="status s5">503</span> | `the order engine is not running, so the order was not placed; start unified-orders@order_engine.service` | No engine holds `unified:orders:engine:lock`, which a running engine refreshes every ten seconds and which expires thirty seconds after it stops. The API reads the key before it writes the intent, so nothing was queued. |
 | <span class="status s5">503</span> | `the order could not be written for the order engine: <error>` | The `XADD` failed; nothing was queued. |
 | <span class="status s5">503</span> | `today's instrument catalogue is not published yet: the catalogue for <date> has expired, and the daily mapping has not published a new one` | The engine refused the instrument as not mapped and found that the date's whole catalogue has expired. |
-| <span class="status s5">503</span> | `the order rate budget is full, so this order was not sent; try again in a moment` | No rate token arrived within the wait. |
+| <span class="status s5">503</span> | `the order rate budget is full, so this order was not sent; try again in a moment` | The broker's one-second window had no room within the wait. |
 | <span class="status s5">503</span> | `a price reference needs a tick size the brokers agree on and there is none for this instrument` | A price reference cannot be snapped to a tick. |
 | <span class="status s5">504</span> | `the order engine did not answer within <n> seconds, so this order may still be placed` | The wait ran out. |
 | <span class="status s5">504</span> | `the order was written for the order engine but its answer could not be read (<error>), so this order may still be placed` | Redis failed during the wait. |
@@ -141,11 +141,11 @@ Every order the engine sends passes the same set of limits, held together in one
 |---|---|---|---|
 | Daily loss lockout | Before the order is even understood | Adds `pnl.realized` and `pnl.unrealized` from `unified:portfolio:funds`. When the sum is at or below minus the limit, the order is refused. Off unless `ORDER_DAILY_LOSS_LIMIT` is above zero. An unreadable funds document does not lock trading out. | <span class="status s4">403</span> |
 | Daily order cap | After the broker is chosen, before anything is recorded | Refuses new entries once the broker's count reaches the entry limit, and every message at the cap itself. See [Daily order caps](orders.md#daily-order-caps). | <span class="status s4">429</span> |
-| Rate budget | After the leg is recorded, before it is sent | Two token buckets, one global and one per broker. An order waits up to `ORDER_RATE_WAIT_SECONDS` for a token from both, and is refused only if none arrives. | <span class="status s5">503</span> |
+| Rate budget | After the leg is recorded, before it is sent | At most `ORDER_RATE_PER_BROKER_PER_SECOND` messages to one broker in any one-second span, counted in Redis in `unified:orders:rate:<broker>` and shared with the REST API's modifications and cancellations. A message waits up to `ORDER_RATE_WAIT_SECONDS` for room, and is refused only if none comes. An optional limit across every broker is counted the same way. | <span class="status s5">503</span> |
 | Re-pricing throttle | Before a resting leg is moved | Refuses to move one leg again sooner than `ORDER_REPRICE_MINIMUM_SECONDS` after its last move. The move is dropped and the next tick works out a fresh price. | recorded against the leg |
 | Order-to-trade ratio | After each send and fill | Counts orders sent and orders filled per broker, and reports them when the engine stops. It refuses nothing. | none |
 
-The loss lockout and the rate budget cover placements and the engine's own changes to its legs. `PUT /api/orders/modify` and `DELETE /api/orders/cancel` still go straight from an API worker to a broker, so they are held by neither, though they are counted against a daily cap.
+The rate budget covers every message: the engine's placements and its own changes to its legs, and the modifications and cancellations the REST API sends, including flatten's cancels. The loss lockout covers placements only. `PUT /api/orders/modify` and `DELETE /api/orders/cancel` still go straight from an API worker to a broker, so the lockout does not hold them, though they take room in the rate budget and are counted against a daily cap.
 
 ## Parents, legs and where they are kept
 
@@ -227,15 +227,15 @@ The table below lists every environment variable the engine reads, with its defa
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_TIMEOUT_SECONDS` | `5` | How long a worker waits for the engine's answer |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_RESULT_TTL_SECONDS` | `300` | How long an answer list is kept |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_STALE_INTENT_SECONDS` | `30` | How far past its deadline an intent may be and still be placed |
-| `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_PER_SECOND` | `8` | Orders a second across every broker, also the largest burst |
-| `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_PER_BROKER_PER_SECOND` | `5` | Orders a second to any one broker |
-| `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_WAIT_SECONDS` | `1` | The longest an order waits for a rate token |
+| `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_PER_SECOND` | `0` (off) | Messages in any one-second span across every broker |
+| `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_PER_BROKER_PER_SECOND` | `10` | Messages in any one-second span to any one broker |
+| `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_WAIT_SECONDS` | `1` | The longest a message waits for room in the budget |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_LOSS_LIMIT` | `0` (off) | The most the day may lose, as a positive number |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_REPRICE_MINIMUM_SECONDS` | `1` | The shortest gap between two moves of one resting leg |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_CAPS` | empty | Daily message caps, as `broker=number,broker=number` |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_CAP_EXIT_RESERVE` | `0.05` | The share of each cap kept for closing positions, from 0 up to but not including 1 |
 
-The default rate of 8 orders a second is deliberately under the ten a second at which SEBI's retail algorithmic trading framework treats an account as running an algorithm that needs registration.
+SEBI's retail algorithmic trading framework treats more than ten orders a second as an algorithm that needs registration. The limit is kept per broker, so the default of 10 messages a second applies to each broker separately, and adding brokers raises what the system can send in total. The budget counts a sliding window rather than refilling a token bucket, because a bucket that holds ten and earns ten a second can send nineteen within one second; the window never lets an eleventh message into any one-second span.
 
 ??? note "Under the hood"
     - **Files:** `bin/unified/orders/order_engine`, `bin/unified/orders/virtual_book`, and `unified_broker_interface/utilities/order_engine/`, whose `utilities/` folder holds the runner, the handoff, the gates, the stores and the registry.
