@@ -69,6 +69,8 @@ Types that act at once answer with the broker's answer plus a `parent_id`; types
 | Some accepted, some not | `partial` | <span class="status s2">207</span> |
 | None accepted | `unknown` if any is unknown, otherwise `rejected` | The highest of their statuses |
 
+When a combined answer is refused and does not already carry an `error` or `status_message`, the engine adds `status_message` holding each distinct reason its brokers gave, joined by `; `. Not every type lists a reason beside each of its orders, so this top-level field is where to read why the order was refused.
+
 Types that wait for a price or a time send nothing at first, and answer <span class="status s2">202</span> with an `outcome` of `armed` or `scheduled`. The answer below was recorded by the offline suite `test_runs/order_engine.py` against stubbed brokers, for a `market_if_touched` buy waiting for 995.
 
 ```json

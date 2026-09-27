@@ -472,4 +472,6 @@ A `504` from a broker is an order answer with `outcome` set to `unknown`. The re
 | `the order engine answered with something that could not be read, so the outcome of this order is unknown` | `error` |
 | `the order engine failed while placing this order ({exception}), so its outcome is unknown` | `error` |
 
+When the engine fails before any leg of the order was written down as sending, nothing can have reached a broker, so it answers <span class="status s5">503</span> `the order engine failed before sending this order to any broker ({exception}), so nothing was placed` instead, and the order can be sent again.
+
 An engine answer that carries no status is also passed on with `504`. Each of these bodies carries `intent_id`, which you can use to find the order in the engine's records (see [Order engine](order-engine.md)).

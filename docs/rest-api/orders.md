@@ -328,6 +328,7 @@ The table below shows which orders are held.
 | Order | Held? |
 |---|---|
 | `LIMIT` with a `price`, `DAY` validity, no `synthetic` object | Yes |
+| `LIMIT` with `after_market` true, which the broker queues for the next session | No, sent at once, because no live price arrives to release it |
 | `LIMIT` with `"synthetic": {"type": "simple"}` | No, sent at once |
 | `LIMIT` with `IOC` validity, which means trade now or never | No, sent at once |
 | `MARKET`, `SL`, `SL-M`, or a `LIMIT` priced only by `price_reference` | No, sent at once |
