@@ -27,3 +27,7 @@ Conflating them is not theoretical. The first version set the closing order's pr
 They cannot go through `cancel_leg`, because the orders a square-off cancels are found in `unified:order-updates`, which holds every order in the system, and most of them are not legs of this parent. `cancel_outside_order` in the base class records the cancel against this parent by broker and broker order id, before it is sent and after it is answered, and takes a rate token for that broker first. Replaying those two events changes nothing about the parent, since they describe an order it does not own.
 
 When one of those orders is a leg of another engine parent, the cancel still goes straight to the broker from this parent's thread. The owning parent learns of it from the broker's order update, as it would of any cancel it did not ask for. Handing such cancels to the owning worker belongs to the broker-lane work, where it is part of making modify and cancel aware of the engine.
+
+## Where the closing steps went
+
+Finding the positions, cancelling what rests on them and pricing the closing orders moved to `utilities/position_closer.py`, so `close_on_trigger` can take the same steps. `SquareOff` keeps what is its own: the time, the product and the instruments to close.

@@ -1,10 +1,5 @@
 """Closing the day's positions on your own terms, before the broker closes them on its."""
 
-import decimal
-import json
-
-import redis
-
 from unified_broker_interface.utilities.broker_orders.utilities.refused_request import (
     RefusedRequestError,
 )
@@ -12,14 +7,11 @@ from unified_broker_interface.utilities.order_engine.base import SyntheticOrder
 from unified_broker_interface.utilities.order_engine.utilities.moments import (
     Moments,
 )
-
-DEFAULT_BUFFER_TICKS = 2
-DEFAULT_PRODUCT = 'intraday'
-ORDER_UPDATES_KEY = 'unified:order-updates'
-OPEN_STATUSES = (
-    'OPEN',
-    'TRIGGER_PENDING',
+from unified_broker_interface.utilities.order_engine.utilities.position_closer import (
+    PositionCloser,
 )
+
+DEFAULT_PRODUCT = 'intraday'
 
 
 class SquareOff(SyntheticOrder):
@@ -114,133 +106,6 @@ class SquareOff(SyntheticOrder):
             )
         return set(given)
 
-    def open_positions(self):
-        """The positions this square-off is responsible for.
-
-        Returns:
-            list: One `(instrument_id, quantity)` per position, quantity signed.
-        """
-        _, _, positions = self.placement.market_context(
-            self.parent.instrument_id,
-            False,
-            True,
-        )
-        wanted = self.wanted_instruments()
-        found = []
-        if not isinstance(positions, dict):
-            return found
-        for entry in positions.get('net') or []:
-            if not isinstance(entry, dict):
-                continue
-            if str(entry.get('product') or '').lower() != self.product():
-                continue
-            instrument_id = entry.get('instrument_id')
-            if not instrument_id:
-                continue
-            if wanted is not None and instrument_id not in wanted:
-                continue
-            try:
-                quantity = decimal.Decimal(str(entry.get('quantity', 0)))
-            except (decimal.InvalidOperation, TypeError, ValueError):
-                continue
-            if quantity == 0:
-                continue
-            found.append((instrument_id, quantity))
-        return found
-
-    def resting_orders(self, instrument_ids):
-        """Every open order at every broker on the instruments being closed.
-
-        `unified:order-updates` is a hash keyed `broker:order_id` holding the latest update for every order the whole system has seen, which is exactly the right place to look: it covers orders this engine never placed, including ones sent by hand or by another tool, and those are as capable of re-opening a position as the engine's own.
-
-        Args:
-            instrument_ids (set): The instruments being closed.
-
-        Returns:
-            list: One `(broker_name, broker_order_id)` per open order.
-        """
-        found = []
-        try:
-            stored = self.placement.cache.hgetall(ORDER_UPDATES_KEY)
-        except redis.RedisError as error:
-            self.logger.error(
-                f'The open orders could not be read, so nothing was cancelled '
-                f'before squaring off: {error}'
-            )
-            return found
-        for document in (stored or {}).values():
-            try:
-                order = json.loads(document)
-            except (TypeError, ValueError):
-                continue
-            if not isinstance(order, dict):
-                continue
-            if order.get('instrument_id') not in instrument_ids:
-                continue
-            if order.get('status') not in OPEN_STATUSES:
-                continue
-            broker = order.get('broker')
-            order_id = order.get('order_id')
-            if broker and order_id:
-                found.append((broker, str(order_id)))
-        return found
-
-    def cancel_resting(self, instrument_ids):
-        """Cancels the orders that could re-open a position after it is closed.
-
-        A cancel that a broker refuses is recorded and the square-off carries on. Leaving a position open because one stale order could not be cancelled would be the worse mistake: the broker's own square-off is minutes away and will not be so careful.
-
-        Args:
-            instrument_ids (set): The instruments being closed.
-
-        Returns:
-            int: How many cancels the brokers accepted.
-        """
-        cancelled = 0
-        for broker_name, broker_order_id in self.resting_orders(
-            instrument_ids,
-        ):
-            accepted = self.cancel_outside_order(
-                broker_name,
-                broker_order_id,
-                'cancelled before squaring off, so it cannot re-open the position',
-            )
-            if accepted:
-                cancelled = cancelled + 1
-        return cancelled
-
-    def closing_order(self, instrument_id, quantity):
-        """The order that closes one position.
-
-        Args:
-            instrument_id (str): The instrument.
-            quantity (decimal.Decimal): The net position, signed.
-
-        Returns:
-            PlaceOrderRequest | None: The order, or None when the book gives nothing to price against.
-        """
-        side = 'SELL' if quantity > 0 else 'BUY'
-        _, quote, _ = self.placement.market_context(instrument_id, True, False)
-        view = self.view({instrument_id: quote})
-        touch = view.opposite_touch(side)
-        if touch is None:
-            touch = view.last()
-        if touch is None:
-            return None
-        price = view.moved(touch, DEFAULT_BUFFER_TICKS, side, True)
-        price = view.rounded(price, side)
-        if price is None or price <= 0:
-            return None
-        body = dict(self.parent.body)
-        body.pop('price_reference', None)
-        body.pop('quantity_reference', None)
-        body.pop('synthetic', None)
-        body['order_type'] = 'LIMIT'
-        body['quantity'] = int(abs(quantity))
-        body['transaction_type'] = side
-        body['price'] = str(price)
-        return self.read_order(body)
-
     def on_clock_tick(self, now):
         """Cancels what is resting and closes what is held, once the time has come.
 
@@ -259,7 +124,11 @@ class SquareOff(SyntheticOrder):
         self.parent.parameters['squared_off_at'] = now
         self.save()
 
-        positions = self.open_positions()
+        closer = PositionCloser(self)
+        positions = closer.open_positions(
+            self.product(),
+            self.wanted_instruments(),
+        )
         if not positions:
             self.record_state(
                 'completed',
@@ -269,10 +138,13 @@ class SquareOff(SyntheticOrder):
             return True
 
         instrument_ids = {instrument_id for instrument_id, _ in positions}
-        cancelled = self.cancel_resting(instrument_ids)
+        cancelled = closer.cancel_resting(
+            instrument_ids,
+            'cancelled before squaring off, so it cannot re-open the position',
+        )
         placed = 0
         for instrument_id, quantity in positions:
-            order = self.closing_order(instrument_id, quantity)
+            order = closer.closing_order(instrument_id, quantity)
             if order is None:
                 continue
             self.place_leg(

@@ -2458,18 +2458,7 @@ class OrderEngineSuite:
             self.fake_redis.strings['unified:portfolio:positions'] = json.dumps(
                 self.scenarios.positions(positions),
             )
-        for order_id in resting or []:
-            self.fake_redis.hashes.setdefault('unified:order-updates', {})[
-                f'flattrade:{order_id}'
-            ] = json.dumps({
-                'broker': 'flattrade',
-                'order_id': order_id,
-                'instrument_id': order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['reliance'],
-                'status': 'OPEN',
-            })
-            self.fake_redis.hashes.setdefault('flattrade:orders:orders', {})[
-                order_id
-            ] = self.broker_book_entry(order_id)
+        self.seed_resting(resting)
         self.network.reset(answer)
         self.counting_uuid.reset()
         reply_keys = self.write_intents(scenario)
@@ -2610,6 +2599,28 @@ class OrderEngineSuite:
             return
         quotes[instrument_id] = json.dumps(quote)
 
+    def seed_resting(self, resting):
+        """Puts open RELIANCE orders placed outside the engine where the order updates and the broker's book hold them.
+
+        Args:
+            resting (list | None): Flattrade order ids.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        for order_id in resting or []:
+            self.fake_redis.hashes.setdefault('unified:order-updates', {})[
+                f'flattrade:{order_id}'
+            ] = json.dumps({
+                'broker': 'flattrade',
+                'order_id': order_id,
+                'instrument_id': order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['reliance'],
+                'status': 'OPEN',
+            })
+            self.fake_redis.hashes.setdefault('flattrade:orders:orders', {})[
+                order_id
+            ] = self.broker_book_entry(order_id)
+
     def seed_other_quotes(self, step):
         """Puts the quotes a step carries for instruments other than RELIANCE, such as an underlying.
 
@@ -2637,6 +2648,7 @@ class OrderEngineSuite:
         restart_between_ticks=False,
         daily_caps=None,
         daily_sent=None,
+        resting=None,
     ):
         """Places one watching order, then walks it through a sequence of quotes.
 
@@ -2654,6 +2666,7 @@ class OrderEngineSuite:
             restart_between_ticks (bool): Whether to rebuild every parent from its recorded events after every tick, as an engine restart does.
             daily_caps (dict | None): Each capped broker's daily cap, or None for no daily order count.
             daily_sent (dict | None): Each broker's order messages already sent today, written before the order is placed.
+            resting (list | None): Flattrade order ids of open RELIANCE orders placed outside the engine, for a type that cancels what is resting.
 
         Returns:
             dict: The recorded result.
@@ -2671,6 +2684,7 @@ class OrderEngineSuite:
         self.seed_quote(starting)
         if steps:
             self.seed_other_quotes(steps[0])
+        self.seed_resting(resting)
         if positions is not None:
             self.fake_redis.strings['unified:portfolio:positions'] = json.dumps(
                 self.scenarios.positions(positions),
@@ -4082,6 +4096,49 @@ class OrderEngineSuite:
                     {'quote': steady, 'at': 0},
                 ],
                 accepted,
+            ),
+            self.price_result(
+                'a_close_on_trigger_cancels_resting_orders_then_closes_the_long',
+                dict(entry, synthetic={
+                    'type': 'close_on_trigger',
+                    'trigger_price': 995,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                    {'quote': self.book_at(994.00, 994.05), 'at': 2},
+                ],
+                accepted,
+                positions=75,
+                resting=[
+                    '26091500000077',
+                ],
+            ),
+            self.price_result(
+                'a_close_on_trigger_with_nothing_held_completes_without_an_order',
+                dict(entry, synthetic={
+                    'type': 'close_on_trigger',
+                    'trigger_price': 995,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                ],
+                accepted,
+                positions=0,
+            ),
+            self.price_result(
+                'a_close_on_trigger_buys_back_a_short_when_the_price_rises',
+                dict(entry, transaction_type='SELL', synthetic={
+                    'type': 'close_on_trigger',
+                    'trigger_price': 1005,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1005.00, 1005.05), 'at': 1},
+                ],
+                accepted,
+                positions=-40,
             ),
             self.price_result(
                 'a_fired_trigger_does_not_fire_again_after_a_restart',

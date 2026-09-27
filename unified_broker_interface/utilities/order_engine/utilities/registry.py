@@ -10,6 +10,9 @@ from unified_broker_interface.utilities.order_engine.candle_close_stop import (
     CandleCloseStop,
 )
 from unified_broker_interface.utilities.order_engine.chaser import Chaser
+from unified_broker_interface.utilities.order_engine.close_on_trigger import (
+    CloseOnTrigger,
+)
 from unified_broker_interface.utilities.order_engine.closing_price import (
     ClosingPrice,
 )
@@ -150,4 +153,5 @@ SYNTHETIC_ORDER_CLASSES = {
     UnderlyingPeg.SYNTHETIC_TYPE: UnderlyingPeg,
     VolatilityOrder.SYNTHETIC_TYPE: VolatilityOrder,
     SteppedStop.SYNTHETIC_TYPE: SteppedStop,
+    CloseOnTrigger.SYNTHETIC_TYPE: CloseOnTrigger,
 }
