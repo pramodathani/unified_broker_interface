@@ -2763,21 +2763,26 @@ class OrderEngineSuite:
 
         moves = []
         for step in steps:
-            self.seed_quote(step.get('quote'))
-            self.seed_other_quotes(step)
-            for update in step.get('updates') or []:
-                changed = follower.follow({
-                    'update': json.dumps(update),
-                })
-                if changed is not None:
-                    parent_store.save(changed)
-            if step.get('estimate') is not None:
-                self.seed_estimate(step['estimate'])
-            before = len(self.network.sent_requests)
-            self.tick_at(ticker, started + step.get('at', 0))
-            moves.append(len(self.network.sent_requests) - before)
-            if restart_between_ticks:
-                self.restart_parents(event_log, parent_store)
+            step_at = started + step.get('at', 0)
+            time.time = lambda: step_at
+            try:
+                self.seed_quote(step.get('quote'))
+                self.seed_other_quotes(step)
+                for update in step.get('updates') or []:
+                    changed = follower.follow({
+                        'update': json.dumps(update),
+                    })
+                    if changed is not None:
+                        parent_store.save(changed)
+                if step.get('estimate') is not None:
+                    self.seed_estimate(step['estimate'])
+                before = len(self.network.sent_requests)
+                self.tick_at(ticker, step_at)
+                moves.append(len(self.network.sent_requests) - before)
+                if restart_between_ticks:
+                    self.restart_parents(event_log, parent_store)
+            finally:
+                time.time = original_time
 
         parents = [
             ParentOrder.from_document(json.loads(one))
@@ -4187,6 +4192,98 @@ class OrderEngineSuite:
                     'type': 'stop_and_reverse',
                     'trigger_price': 995,
                     'method': 'sideways',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'an_attached_hedge_sells_the_future_in_whole_lots_as_the_entry_fills',
+                dict(entry, quantity=1000, synthetic={
+                    'type': 'attached_hedge',
+                    'hedge_instrument_id': order_routes.OrderRoutesState.
+                    INSTRUMENT_IDENTIFIERS['reliance_future'],
+                    'ratio': 1,
+                }),
+                [
+                    {
+                        'quote': steady,
+                        'at': 0,
+                        'other_quotes': {
+                            'reliance_future': self.scenarios.quote(),
+                        },
+                    },
+                    {
+                        'quote': steady,
+                        'at': 1,
+                        'updates': [
+                            self.update('26091500000021', 'OPEN', 600),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 2,
+                        'updates': [
+                            self.update('26091500000021', 'COMPLETE', 1000),
+                        ],
+                    },
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'an_attached_hedge_sized_by_delta_sells_about_half_a_bought_call',
+                dict(
+                    entry,
+                    instrument_id=order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['nifty_option'],
+                    quantity=1500,
+                    price=160,
+                    synthetic={
+                        'type': 'attached_hedge',
+                        'hedge_instrument_id': order_routes.OrderRoutesState.
+                        INSTRUMENT_IDENTIFIERS['reliance_future'],
+                        'delta_volatility': 12.5,
+                    },
+                ),
+                [
+                    {
+                        'quote': steady,
+                        'at': 0,
+                        'other_quotes': {
+                            'reliance_future': self.scenarios.quote(last_price=25000),
+                        },
+                    },
+                    {
+                        'quote': steady,
+                        'at': 1,
+                        'updates': [
+                            self.update('26091500000021', 'COMPLETE', 1500),
+                        ],
+                    },
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'an_attached_hedge_with_both_a_ratio_and_a_delta_is_refused',
+                dict(entry, synthetic={
+                    'type': 'attached_hedge',
+                    'hedge_instrument_id': order_routes.OrderRoutesState.
+                    INSTRUMENT_IDENTIFIERS['reliance_future'],
+                    'ratio': 1,
+                    'delta_volatility': 12.5,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'an_attached_hedge_sized_by_delta_on_a_stock_is_refused',
+                dict(entry, synthetic={
+                    'type': 'attached_hedge',
+                    'hedge_instrument_id': order_routes.OrderRoutesState.
+                    INSTRUMENT_IDENTIFIERS['reliance_future'],
+                    'delta_volatility': 12.5,
                 }),
                 [
                     {'quote': steady, 'at': 0},

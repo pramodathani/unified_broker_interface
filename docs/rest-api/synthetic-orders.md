@@ -2,7 +2,7 @@
 
 A synthetic order is an order that no Indian exchange offers, built by the order engine out of ordinary broker orders. You ask for one by adding a `synthetic` object to the body of [`POST /api/orders/place`](orders.md#place-an-order), and the engine places, watches, moves and cancels the real orders it is made of.
 
-This page is the glossary of all 49 types the engine runs. It lists every field each type reads from the `synthetic` object, with the defaults and limits taken from the code.
+This page is the glossary of all 50 types the engine runs. It lists every field each type reads from the `synthetic` object, with the defaults and limits taken from the code.
 
 !!! danger "Synthetic orders place real orders, sometimes long after you asked"
     A synthetic order can place, modify or cancel orders at a broker minutes, hours or even days after your request, with nobody watching. Triggers, trailing stops, grids and schedules all act on their own. Send `"dry_run": true` first, which builds the first broker request without recording or sending anything.
@@ -54,7 +54,7 @@ Two fields can appear in any `synthetic` object. The table below lists them.
 
 | Field | Type | Required | Meaning |
 |---|---|:---:|---|
-| `type` | string | Yes | One of the 49 names in the table below. A body with no `synthetic` object, or no `type`, runs as `simple`. An unknown name is refused with `400` and the message `the order engine does not run '<name>' orders; it runs <list>`. |
+| `type` | string | Yes | One of the 50 names in the table below. A body with no `synthetic` object, or no `type`, runs as `simple`. An unknown name is refused with `400` and the message `the order engine does not run '<name>' orders; it runs <list>`. |
 | `closes_position` | boolean | No | `true` says every leg of this order closes a position, so it may use the part of a broker's daily order cap kept for exits. Only the literal `true` counts. |
 
 The engine also writes its own working values into the parent's copy of the `synthetic` object, such as `tick_size`, `triggered_at`, `watermark`, `placed_quantity`, `started_at` and `expires_at`. These are internal, so do not send them.
@@ -80,7 +80,7 @@ Types that act at once answer with the broker's answer plus a `parent_id`; types
 
 Keep the `parent_id`. It is the only handle on an order that has not reached a broker yet.
 
-## All 49 types
+## All 50 types
 
 The master table below lists every type registered in `SYNTHETIC_ORDER_CLASSES`, in the order the registry holds them. The "First answer" column says whether a broker order goes out when you ask (`200`, the broker's own answer) or whether the engine waits (`202`).
 
@@ -135,8 +135,9 @@ The master table below lists every type registered in `SYNTHETIC_ORDER_CLASSES`,
 | `stepped_stop` | Stops and trailing | A native stop moved to set levels at set profits, and switched to trailing at the last. | `entry_price`, `stop_price`, `stop_limit_offset`, `rules` | 200 |
 | `close_on_trigger` | Price triggers | At a level, cancels every order on the instrument to free margin, then closes the whole position. | `trigger_price`, `trigger_direction`, `trigger_on` | 202 |
 | `stop_and_reverse` | Price triggers | At a level, closes the position and opens the same size the other way. | `trigger_price`, `method` | 202 |
+| `attached_hedge` | Linked orders | Hedges each fill in another instrument, by a ratio or by an option's delta, in whole lots. | `hedge_instrument_id`, `ratio` or `delta_volatility` | 200 |
 
-The chart below counts how many of the 49 types fall into each family. The families are this page's own grouping, chosen to make the list easier to scan; the code does not group them.
+The chart below counts how many of the 50 types fall into each family. The families are this page's own grouping, chosen to make the list easier to scan; the code does not group them.
 
 ```vegalite
 {
@@ -146,7 +147,7 @@ The chart below counts how many of the 49 types fall into each family. The famil
   "height": 260,
   "data": {
     "values": [
-      {"family": "Linked orders", "types": 7},
+      {"family": "Linked orders", "types": 8},
       {"family": "Execution algorithms", "types": 8},
       {"family": "Stops and trailing", "types": 7},
       {"family": "Book-following limits", "types": 7},
@@ -298,7 +299,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
 === "Linked orders"
 
-    These seven types place orders that watch each other. A fill on one leg changes, places or cancels another.
+    These eight types place orders that watch each other. A fill on one leg changes, places or cancels another.
 
     #### `oto`
 
@@ -310,6 +311,31 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     ```json
     {"type": "oto", "then": {"transaction_type": "SELL", "order_type": "LIMIT", "price": 1010}}
+    ```
+
+    #### `attached_hedge`
+
+    An attached hedge (the Atlas's G14) is an entry whose fills are hedged in another instrument as they happen. The hedge is `−ratio × filled`, in units of the hedge instrument, rounded to its nearest whole lot. A positive ratio hedges on the opposite side, so a bought stock is hedged by a sold future; a negative one, such as a bought put's delta, hedges on the same side.
+
+    There are two ways to size it, and you give exactly one:
+
+    | Field | Sizes the hedge by | Example |
+    |---|---|---|
+    | `ratio` | A fixed number of hedge units per filled unit: a beta, a pair ratio, or 1 for a stock hedged with its own future | A stock with a beta of 1.2 hedged with an index future |
+    | `delta_volatility` | The option's Black-76 delta at this volatility, worked out at each fill with the hedge instrument as the forward. The entry must be an option. | A Nifty option hedged with Nifty futures |
+
+    The hedge grows with the entry. After each fill, the target is worked out again from everything filled so far, and a new hedge order is sent for the whole lots still missing, so no resting order is resized. Each hedge goes to the entry's broker, as a limit two ticks past the hedge instrument's other side, rounded to that instrument's own tick.
+
+    In the offline suite, a buy of 1000 RELIANCE with `ratio` 1 against a future with a lot of 500 sent no hedge until 600 had filled, sold 500 futures then, and sold 500 more when the rest filled. A bought Nifty call of 1500 units, at a delta of about 0.5, was hedged with 1000 futures, which is 754 units rounded to 2 lots.
+
+    | Field | Type | Required | Rules |
+    |---|---|:---:|---|
+    | `hedge_instrument_id` | string | Yes | The instrument to hedge in. Not the entry's own. |
+    | `ratio` | number | One of the two | Not zero. |
+    | `delta_volatility` | number | One of the two | A percentage above zero. |
+
+    ```json
+    {"type": "attached_hedge", "hedge_instrument_id": "<RELIANCE future id>", "ratio": 1}
     ```
 
     #### `oco`

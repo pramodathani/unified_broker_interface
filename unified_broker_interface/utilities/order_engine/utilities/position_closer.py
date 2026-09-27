@@ -5,6 +5,10 @@ import json
 
 import redis
 
+from unified_broker_interface.utilities.order_engine.utilities.market_view import (
+    MarketView,
+)
+
 DEFAULT_BUFFER_TICKS = 2
 ORDER_UPDATES_KEY = 'unified:order-updates'
 OPEN_STATUSES = (
@@ -135,20 +139,26 @@ class PositionCloser:
     def closing_order(self, instrument_id, quantity):
         """The limit order that closes one position, priced two ticks past the other side's best price.
 
+        The price is rounded with the tick size the brokers agree on for that instrument, which is not always the parent's own.
+
         Args:
             instrument_id (str): The instrument.
             quantity (decimal.Decimal): The net position, signed.
 
         Returns:
-            PlaceOrderRequest | None: The order, or None when the book gives nothing to price against.
+            PlaceOrderRequest | None: The order, or None when the book gives nothing to price against or the instrument has no agreed tick size.
         """
         side = 'SELL' if quantity > 0 else 'BUY'
-        _, quote, _ = self.runner.placement.market_context(
+        instrument, quote, _ = self.runner.placement.market_context(
             instrument_id,
             True,
             False,
         )
-        view = self.runner.view({instrument_id: quote})
+        template = self.runner.read_order(self.runner.parent.body)
+        tick_size = template.agreed_tick_size(instrument.handles)
+        if tick_size is None:
+            return None
+        view = MarketView(quote, tick_size)
         touch = view.opposite_touch(side)
         if touch is None:
             touch = view.last()

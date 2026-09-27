@@ -4,6 +4,9 @@ from unified_broker_interface.utilities.order_engine.bracket import Bracket
 from unified_broker_interface.utilities.order_engine.accumulation import (
     Accumulation,
 )
+from unified_broker_interface.utilities.order_engine.attached_hedge import (
+    AttachedHedge,
+)
 from unified_broker_interface.utilities.order_engine.atr_trail import AtrTrail
 from unified_broker_interface.utilities.order_engine.basket import Basket
 from unified_broker_interface.utilities.order_engine.candle_close_stop import (
@@ -158,4 +161,5 @@ SYNTHETIC_ORDER_CLASSES = {
     SteppedStop.SYNTHETIC_TYPE: SteppedStop,
     CloseOnTrigger.SYNTHETIC_TYPE: CloseOnTrigger,
     StopAndReverse.SYNTHETIC_TYPE: StopAndReverse,
+    AttachedHedge.SYNTHETIC_TYPE: AttachedHedge,
 }
