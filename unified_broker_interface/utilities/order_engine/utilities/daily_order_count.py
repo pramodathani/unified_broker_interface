@@ -1,6 +1,7 @@
 """Counting every order message sent to each broker in a day, and refusing new ones before a broker's daily cap is reached."""
 
 import datetime
+import threading
 
 from unified_broker_interface.utilities.broker_orders.utilities.refused_request import (
     RefusedRequestError,
@@ -29,6 +30,7 @@ class DailyOrderCount:
         exit_reserve (float): The share of each cap kept back for orders that close a position, between 0 and 1.
         logger (logging.Logger): The logger.
         refused (int): How many orders have been refused.
+        lock (threading.Lock): Guards the refusal count, which several threads update.
     """
 
     def __init__(self, cache, caps, exit_reserve, logger):
@@ -56,6 +58,7 @@ class DailyOrderCount:
         self.exit_reserve = exit_reserve
         self.logger = logger
         self.refused = 0
+        self.lock = threading.Lock()
 
     @classmethod
     def from_configuration(cls, cache, logger):
@@ -192,7 +195,8 @@ class DailyOrderCount:
         limit = cap if closes_position else self.entry_limit(cap)
         if sent < limit:
             return
-        self.refused = self.refused + 1
+        with self.lock:
+            self.refused = self.refused + 1
         if closes_position:
             reason = (
                 f'{broker_name} has been sent {sent} order messages today, '

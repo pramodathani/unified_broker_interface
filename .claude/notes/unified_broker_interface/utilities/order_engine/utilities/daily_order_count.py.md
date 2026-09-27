@@ -37,3 +37,7 @@ Only capped brokers are counted, which also keeps the offline route recordings u
 ## What is refused, and what never is
 
 Refusing still happens only in the engine, where `refuse_if_capped` is asked before a placement (`place_leg`) and before a price change (`SyntheticOrder.has_room_today`, from `reprice_leg`). An entry's re-price stops where new entries stop; an exit's may use the reserve. `cancel_leg` and `reduce_leg` are never asked, because refusing a cancel could leave an unwanted order live, which is worse than exceeding a cap that the broker will enforce anyway.
+
+## Why the counters are behind a lock
+
+The broker-lane design runs many worker threads in one engine, and all of them share this object through `RiskGates`. Python's `x = x + 1` on an attribute is a read and a write, and two threads can interleave between them and lose a count. A `threading.Lock` around each change keeps the counts exact. The lock is held only for the arithmetic, never across a Redis call or a broker call, so it cannot slow an order down.

@@ -1,5 +1,6 @@
 """How often one resting order may be moved, which is what keeps a chasing type honest."""
 
+import threading
 import time
 
 
@@ -17,6 +18,7 @@ class RepricingThrottle:
         moved_at (dict): The monotonic time each leg was last moved at, by leg id.
         suppressed (int): How many moves were refused for being too soon.
         allowed (int): How many moves were allowed.
+        lock (threading.Lock): Guards the memory and the counters, which several worker threads use.
     """
 
     def __init__(self, minimum_seconds):
@@ -32,6 +34,7 @@ class RepricingThrottle:
         self.moved_at = {}
         self.suppressed = 0
         self.allowed = 0
+        self.lock = threading.Lock()
 
     def allows(self, leg_id, now=None):
         """Whether this leg may be moved now, counting the answer either way.
@@ -43,16 +46,17 @@ class RepricingThrottle:
         Returns:
             bool: True when the move may be sent.
         """
-        if self.minimum_seconds <= 0:
+        with self.lock:
+            if self.minimum_seconds <= 0:
+                self.allowed = self.allowed + 1
+                return True
+            now = now if now is not None else time.monotonic()
+            last = self.moved_at.get(leg_id)
+            if last is not None and (now - last) < self.minimum_seconds:
+                self.suppressed = self.suppressed + 1
+                return False
             self.allowed = self.allowed + 1
             return True
-        now = now if now is not None else time.monotonic()
-        last = self.moved_at.get(leg_id)
-        if last is not None and (now - last) < self.minimum_seconds:
-            self.suppressed = self.suppressed + 1
-            return False
-        self.allowed = self.allowed + 1
-        return True
 
     def record(self, leg_id, now=None):
         """Remembers that this leg has just been moved.
@@ -66,7 +70,8 @@ class RepricingThrottle:
         Returns:
             None: This method returns nothing.
         """
-        self.moved_at[leg_id] = now if now is not None else time.monotonic()
+        with self.lock:
+            self.moved_at[leg_id] = now if now is not None else time.monotonic()
 
     def forget(self, leg_id):
         """Drops a finished leg's memory, so the map does not grow all day.
@@ -77,7 +82,8 @@ class RepricingThrottle:
         Returns:
             None: This method returns nothing.
         """
-        self.moved_at.pop(leg_id, None)
+        with self.lock:
+            self.moved_at.pop(leg_id, None)
 
     def counts(self):
         """What the throttle has done, for the engine's closing log line.
@@ -85,8 +91,9 @@ class RepricingThrottle:
         Returns:
             dict: The allowed and suppressed counts and the gap in force.
         """
-        return {
-            'minimum_seconds': self.minimum_seconds,
-            'allowed': self.allowed,
-            'suppressed': self.suppressed,
-        }
+        with self.lock:
+            return {
+                'minimum_seconds': self.minimum_seconds,
+                'allowed': self.allowed,
+                'suppressed': self.suppressed,
+            }

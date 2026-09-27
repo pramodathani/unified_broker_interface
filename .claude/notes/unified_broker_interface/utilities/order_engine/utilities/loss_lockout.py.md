@@ -21,3 +21,7 @@ The failure is logged at warning so it is visible rather than silent. The positi
 ## Why the check happens before the parent is created
 
 `RiskGates.check_before_accepting` runs before the intent becomes a parent, so an order refused for a locked-out day leaves nothing in the event log and nothing in the open set. Whether the day may trade at all does not depend on which broker the order would go to, so there is nothing to be gained by working it out first.
+
+## Why the counters are behind a lock
+
+The broker-lane design runs many worker threads in one engine, and all of them share this object through `RiskGates`. Python's `x = x + 1` on an attribute is a read and a write, and two threads can interleave between them and lose a count. A `threading.Lock` around each change keeps the counts exact. The lock is held only for the arithmetic, never across a Redis call or a broker call, so it cannot slow an order down.

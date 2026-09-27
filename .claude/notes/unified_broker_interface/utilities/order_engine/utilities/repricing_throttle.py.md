@@ -19,3 +19,7 @@ After a restart the map is empty and every leg's first move is allowed at once. 
 ## Why `record` is called after the broker accepts
 
 A move the broker refused did not move anything. Starting the gap from the attempt would leave the order sitting at a price the market has left, waiting out a throttle for a change that never happened.
+
+## Why the counters are behind a lock
+
+The broker-lane design runs many worker threads in one engine, and all of them share this object through `RiskGates`. Python's `x = x + 1` on an attribute is a read and a write, and two threads can interleave between them and lose a count. A `threading.Lock` around each change keeps the counts exact. The lock is held only for the arithmetic, never across a Redis call or a broker call, so it cannot slow an order down.

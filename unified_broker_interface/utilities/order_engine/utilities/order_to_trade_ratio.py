@@ -1,5 +1,7 @@
 """How many orders the engine sends for each one that actually trades, per broker."""
 
+import threading
+
 
 class OrderToTradeRatio:
     """Counts what the engine sends against what fills, which is what brokers police.
@@ -13,6 +15,7 @@ class OrderToTradeRatio:
     Attributes:
         sent (dict): Orders sent, by broker name.
         traded (dict): Orders that filled, wholly or partly, by broker name.
+        lock (threading.Lock): Guards both counts, which several worker threads update.
     """
 
     def __init__(self):
@@ -23,6 +26,7 @@ class OrderToTradeRatio:
         """
         self.sent = {}
         self.traded = {}
+        self.lock = threading.Lock()
 
     def count_sent(self, broker_name):
         """Counts one order sent to a broker.
@@ -33,7 +37,8 @@ class OrderToTradeRatio:
         Returns:
             None: This method returns nothing.
         """
-        self.sent[broker_name] = self.sent.get(broker_name, 0) + 1
+        with self.lock:
+            self.sent[broker_name] = self.sent.get(broker_name, 0) + 1
 
     def count_traded(self, broker_name):
         """Counts one order that traded at a broker.
@@ -44,7 +49,8 @@ class OrderToTradeRatio:
         Returns:
             None: This method returns nothing.
         """
-        self.traded[broker_name] = self.traded.get(broker_name, 0) + 1
+        with self.lock:
+            self.traded[broker_name] = self.traded.get(broker_name, 0) + 1
 
     def ratio(self, broker_name):
         """Orders sent for each one that traded at a broker.
@@ -67,7 +73,9 @@ class OrderToTradeRatio:
             dict: One entry per broker name.
         """
         counted = {}
-        for broker_name in sorted(self.sent):
+        with self.lock:
+            broker_names = sorted(self.sent)
+        for broker_name in broker_names:
             counted[broker_name] = {
                 'sent': self.sent.get(broker_name, 0),
                 'traded': self.traded.get(broker_name, 0),
