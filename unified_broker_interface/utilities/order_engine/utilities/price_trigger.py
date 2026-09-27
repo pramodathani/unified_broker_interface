@@ -11,6 +11,14 @@ DIRECTIONS = (
     'at_or_above',
     'at_or_below',
 )
+TRIGGER_ON_CHOICES = (
+    'last',
+    'bid',
+    'ask',
+    'mid',
+    'double_last',
+    'held',
+)
 OPPOSITE_SIDES = {
     'BUY': 'SELL',
     'SELL': 'BUY',
@@ -30,10 +38,12 @@ class PriceTrigger(SyntheticOrder):
 
     Attributes:
         ARMED_MESSAGE (str): What the `202` answer says this parent is waiting for.
+        TAKES_TRIGGER_ON (bool): Whether the caller may choose the watched price with `trigger_on`; False for a type that chooses its own.
     """
 
     WANTS_PRICES = True
     ARMED_MESSAGE = 'the level is reached'
+    TAKES_TRIGGER_ON = True
 
     def run(self, intent, started_at):
         """Records the order and waits, without sending anything.
@@ -51,6 +61,7 @@ class PriceTrigger(SyntheticOrder):
         order = self.concrete_order(self.read_order(self.parent.body))
         level = self.read_level()
         direction = self.direction(order.transaction_type)
+        self.read_trigger_on()
 
         if order.dry_run:
             prepared = self.placement.prepare(
@@ -165,10 +176,60 @@ class PriceTrigger(SyntheticOrder):
         """
         return self.parent.instrument_id
 
+    def read_trigger_on(self):
+        """Which price the caller asked the trigger to watch, and how it must confirm.
+
+        Returns:
+            str: One of `TRIGGER_ON_CHOICES`, `last` when the caller did not say.
+
+        Raises:
+            RefusedRequestError: With HTTP 400 for another value, for `trigger_on` on a type that chooses its own price, and for `held` without a `hold_seconds` above zero.
+        """
+        named = self.parent.parameters.get('trigger_on')
+        if named is None:
+            return 'last'
+        if not self.TAKES_TRIGGER_ON:
+            raise RefusedRequestError.refusal(
+                f'a {self.parent.synthetic_type} order chooses the price it '
+                'watches itself, so it does not take trigger_on',
+                400,
+            )
+        if named not in TRIGGER_ON_CHOICES:
+            raise RefusedRequestError.refusal(
+                f'trigger_on must be one of {", ".join(TRIGGER_ON_CHOICES)}, '
+                f'not {named!r}',
+                400,
+            )
+        if named == 'held':
+            self.read_hold_seconds()
+        return named
+
+    def read_hold_seconds(self):
+        """How long the level must stay reached before a `held` trigger fires.
+
+        Returns:
+            decimal.Decimal: The time, in seconds.
+
+        Raises:
+            RefusedRequestError: With HTTP 400 when it is missing or is not a number above zero.
+        """
+        value = self.parent.parameters.get('hold_seconds')
+        try:
+            seconds = decimal.Decimal(str(value))
+        except (decimal.InvalidOperation, TypeError, ValueError):
+            seconds = None
+        if value is None or seconds is None or not seconds > 0:
+            raise RefusedRequestError.refusal(
+                'trigger_on held needs hold_seconds, a number of seconds '
+                f'above zero, not {value!r}',
+                400,
+            )
+        return seconds
+
     def watched_price(self, view):
         """Which price out of the watched instrument's quote the level is compared against.
 
-        The last traded price, which is what a native stop watches too. A type that would rather watch the bid or the offer, so that one stray trade does not fire it, overrides this.
+        The last traded price unless the caller chose the bid, the offer or the mid with `trigger_on`. A type that has its own reason to watch one side of the book overrides this and sets `TAKES_TRIGGER_ON` to False.
 
         Args:
             view (MarketView): The watched instrument's quote.
@@ -176,7 +237,53 @@ class PriceTrigger(SyntheticOrder):
         Returns:
             decimal.Decimal | None: The price, or None when the quote does not carry it.
         """
+        trigger_on = self.read_trigger_on()
+        if trigger_on == 'bid':
+            return view.best_bid()
+        if trigger_on == 'ask':
+            return view.best_offer()
+        if trigger_on == 'mid':
+            return view.mid()
         return view.last()
+
+    def is_confirmed(self, reached, now):
+        """Whether a reached level has been confirmed the way `trigger_on` asks, keeping count between ticks.
+
+        `double_last` needs two ticks in a row at or through the level, and `held` needs the level to stay reached for `hold_seconds`. A tick that does not reach the level starts the count again. The other choices fire on the first tick that reaches it.
+
+        Args:
+            reached (bool): Whether this tick's price reached the level.
+            now (float): The Unix time of the tick.
+
+        Returns:
+            bool: True when the trigger should fire on this tick.
+        """
+        trigger_on = self.read_trigger_on()
+        if trigger_on not in ('double_last', 'held'):
+            return reached
+        parameters = self.parent.parameters
+        if not reached:
+            if 'reached_ticks' in parameters or 'reached_since' in parameters:
+                self.parent.parameters = dict(parameters)
+                self.parent.parameters.pop('reached_ticks', None)
+                self.parent.parameters.pop('reached_since', None)
+                self.save()
+            return False
+        self.parent.parameters = dict(parameters)
+        if trigger_on == 'double_last':
+            count = int(parameters.get('reached_ticks') or 0) + 1
+            if count >= 2:
+                return True
+            self.parent.parameters['reached_ticks'] = count
+            self.save()
+            return False
+        since = parameters.get('reached_since')
+        if since is None:
+            self.parent.parameters['reached_since'] = now
+            self.save()
+            since = now
+        held_for = decimal.Decimal(str(now)) - decimal.Decimal(str(since))
+        return held_for >= self.read_hold_seconds()
 
     def has_triggered(self, price, level, direction):
         """Whether the price has reached the level from the side that fires.
@@ -259,11 +366,12 @@ class PriceTrigger(SyntheticOrder):
         if price is None:
             return False
         level = self.read_level()
-        if not self.has_triggered(
+        reached = self.has_triggered(
             price,
             level,
             self.direction(order.transaction_type),
-        ):
+        )
+        if not self.is_confirmed(reached, now):
             return False
         traded = self.view(quotes)
         child = self.child_order(order, traded)

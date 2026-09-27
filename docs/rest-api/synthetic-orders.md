@@ -95,7 +95,7 @@ The master table below lists every type registered in `SYNTHETIC_ORDER_CLASSES`,
 | `scale_out` | Linked orders | A bracket with several targets that take the position off in tranches. | `target_prices`, `stop_price`, `stop_limit_price`, `breakeven_after` | 200 |
 | `two_sided_breakout` | Linked orders | Rests a buy stop above a range and a sell stop below it, and cancels the side that did not fire. | `buy_trigger`, `buy_limit`, `sell_trigger`, `sell_limit` | 200 |
 | `scheduled` | Time-based | Holds the order until a time of day, then places it. | `at_time` | 202 |
-| `good_till_time` | Time-based | Places the order now and cancels whatever has not filled at a time of day. | `until_time` | 200 |
+| `good_till_time` | Time-based | Places the order now and, at a time of day, cancels whatever has not filled or makes it marketable. | `until_time`, `at_expiry` | 200 |
 | `time_stop` | Time-based | Places an entry and closes what filled at a time of day or after some minutes. | `until_time` or `minutes` | 200 |
 | `twap` | Execution algorithms | Sends equal slices at even intervals over a period. | `slices`, `over_minutes` | 200 |
 | `peg` | Book-following limits | Keeps a limit order re-priced to the bid, the offer or the midpoint. | `reference`, `offset_ticks`, `cap_price` | 200 |
@@ -105,7 +105,7 @@ The master table below lists every type registered in `SYNTHETIC_ORDER_CLASSES`,
 | `hidden_stop` | Stops and trailing | A stop kept in the engine that watches the bid or offer, with an optional real backstop. | `trigger_price`, `backstop_price`, `backstop_limit_price`, `buffer_ticks` | 202 |
 | `cross_instrument` | Price triggers | A limit-if-touched order whose trigger watches a different instrument. | `watch_instrument_id`, `trigger_price`, `limit_price` | 202 |
 | `indicator_triggered` | Price triggers | Sends a limit when a chosen field of the live quote crosses a level. | `watch_field`, `trigger_price`, `limit_price` | 202 |
-| `trailing_stop` | Stops and trailing | A real stop at the broker whose trigger follows the market up, never down. | `trail_points` or `trail_percent`, `stop_limit_offset`, `step_ticks` | 200 |
+| `trailing_stop` | Stops and trailing | A real stop at the broker whose trigger follows the market up, never down. | `trail_points` or `trail_percent`, `stop_limit_offset`, `step_ticks`, `activate_at` | 200, or 202 with `activate_at` |
 | `trailing_entry` | Stops and trailing | A stop entry that follows a falling market down so the first bounce fills it. | `trail_points` or `trail_percent`, `stop_limit_offset`, `step_ticks` | 200 |
 | `post_only` | Book-following limits | Checks that a limit would rest rather than trade before sending it. | `on_crossing` | 200 |
 | `discretionary` | Book-following limits | Shows one limit price and quietly takes a slightly worse one when it comes within reach. | `discretion_points`, `discretion_quantity` | 200 |
@@ -212,6 +212,26 @@ A few rules come from the shared base class rather than from any one type, and t
 - **Re-prices are throttled and count against the daily cap.** A re-price of an entry stops where new entries stop, and a re-price of an exit may use the exit reserve. Cancels and quantity reductions are never held back.
 - **Every price the engine computes is rounded to the tick.** Types that work prices out from the quote need a tick size that the brokers agree on, and are refused with `503` when there is none.
 - **Stops are always stop-limit orders.** Wherever a type places a stop, you must give both the trigger and the limit, and neither is defaulted.
+
+## Reduce-only orders
+
+Any type can be marked reduce-only (the Atlas's G11) by adding `"reduce_only": true` to its `synthetic` object. A plain order uses the `simple` type for this.
+
+```json
+{"type": "simple", "reduce_only": true}
+```
+
+Every leg of a reduce-only order is checked against the net position just before it is sent. The engine reads the position held in the leg's instrument and product, and lets the leg go only when it is on the side that closes that position and is no bigger than it. Anything else is refused with <span class="status s4">409</span> and sent to no broker:
+
+| Position held | Leg | Result |
+|---|---|---|
+| Long 75 | Sell 50 | Sent |
+| Long 75 | Sell 100 | Refused, because it would leave a short of 25 |
+| Long 75 | Buy 10 | Refused, because it would add to the long |
+| Short 40 | Buy 40 | Sent |
+| Nothing | Either side | Refused |
+
+The check reads the position at the moment of sending, so a trigger that fires hours later is checked against the position as it is then. It does not count other orders still resting, so two reduce-only orders that are each smaller than the position can together be larger than it. A value other than `true` or `false` is refused with `400`.
 
 ## Glossary by family
 
@@ -371,7 +391,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
 === "Price triggers"
 
-    These five types send nothing when you ask. They answer `202 armed` and send one order on the first price tick where the level is reached. They fire once. They run only while the engine is running, unlike a native stop at the exchange.
+    These five types send nothing when you ask. They answer `202 armed` and send one order on the first price tick where the level is reached, or, with `trigger_on`, where it is confirmed. They fire once. They run only while the engine is running, unlike a native stop at the exchange.
 
     Every price trigger reads the two fields below, and each type adds its own.
 
@@ -379,6 +399,25 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     |---|---|:---:|---|
     | `trigger_price` | number | Yes | The level. Above zero. |
     | `trigger_direction` | string | No | `at_or_above` or `at_or_below`. By default a buy waits for the price to fall to the level (`at_or_below`) and a sell waits for it to rise (`at_or_above`). |
+    | `trigger_on` | string | No | Which price is compared with the level, and how it must confirm. One of `last`, `bid`, `ask`, `mid`, `double_last` or `held`. Defaults to `last`. The table below explains each. |
+    | `hold_seconds` | number | With `held` | How long the level must stay reached. Above zero. |
+
+    `trigger_on` covers the Atlas's G10 triggers. It lets a trigger ignore a single stray trade, which is the usual reason a stop fires on a spike and then the price comes straight back.
+
+    | `trigger_on` | Price compared with the level | Fires on |
+    |---|---|---|
+    | `last` | The last traded price | The first tick that reaches the level |
+    | `bid` | The best bid | The first tick that reaches the level |
+    | `ask` | The best offer | The first tick that reaches the level |
+    | `mid` | Halfway between the best bid and offer | The first tick that reaches the level |
+    | `double_last` | The last traded price | The second tick in a row that reaches the level; a tick that does not reach it starts the count again |
+    | `held` | The last traded price | The first tick at least `hold_seconds` after the level was first reached, if every tick in between reached it too |
+
+    `hidden_stop`, `candle_close_stop`, `virtual_limit` and `indicator_triggered` already choose the price they watch, so they refuse `trigger_on` with `400`.
+
+    ```json
+    {"type": "market_if_touched", "trigger_price": 995, "trigger_on": "held", "hold_seconds": 5}
+    ```
 
     #### `market_if_touched`
 
@@ -484,9 +523,16 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | `trail_percent` | number | One of the two | A distance as a percentage of the best price seen. Above zero. Give one of the two, not both. |
     | `stop_limit_offset` | number | Yes | How far past the trigger the limit sits. Above zero. |
     | `step_ticks` | integer | No | How far the trigger must be able to move before it is moved. At least 1. Defaults to 1. |
+    | `activate_at` | number | No | A price the market must reach before the stop is placed. Above zero. |
 
     ```json
     {"type": "trailing_stop", "trail_points": 10, "stop_limit_offset": 2}
+    ```
+
+    With `activate_at`, the order is a trailing take-profit (the Atlas's G9). Nothing is placed when you ask, and the answer is <span class="status s2">202</span> with an `outcome` of `armed`. On the first price tick where the last traded price reaches `activate_at` (at or above it for a sell stop, at or below it for a buy stop), the stop is placed a trail's distance from that price and trails from there. A profit that runs on is followed, and the first pullback of the trail distance exits.
+
+    ```json
+    {"type": "trailing_stop", "trail_points": 10, "stop_limit_offset": 2, "activate_at": 1030}
     ```
 
     #### `trailing_entry`
@@ -717,9 +763,16 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
     | `until_time` | string | Yes | A time later today. |
+    | `at_expiry` | string | No | `cancel` or `market`. Defaults to `cancel`. |
 
     ```json
     {"type": "good_till_time", "until_time": "14:30"}
+    ```
+
+    With `"at_expiry": "market"`, the order is a limit that becomes marketable at `until_time` (the Atlas's G5) instead of being cancelled. Each part still resting is modified to a limit two ticks past the other side's best price, or past the last traded price when that side of the book is empty, so it takes what is there. It stays a limit, as every order the engine sends to take liquidity does, and the parent carries on until the rest fills.
+
+    ```json
+    {"type": "good_till_time", "until_time": "14:30", "at_expiry": "market"}
     ```
 
     #### `time_stop`
@@ -821,6 +874,13 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
       {"instrument_id": "11111111-1111-5111-8111-000000000008", "exposure_per_unit": -0.30}
     ]}
     ```
+
+## Snap and midprice orders
+
+Two of the Atlas's order types need no type of their own, because a `price_reference` already expresses them.
+
+- **A snap order (G3)** is a limit priced from the book at the moment it is sent. Send a `simple` order, or no `synthetic` at all, with a `price_reference` such as `{"kind": "marketable"}` to take the other side's best price, or `{"kind": "bid_level", "offset_ticks": 1}` to join the bid one tick better.
+- **A midprice order (G4)** is a limit halfway between the best bid and offer. `{"kind": "mid"}` prices it once, when it is sent. For one that stays at the mid as the book moves, use `peg` with `"reference": "mid"`.
 
 ## Prices and quantities worked out for you
 

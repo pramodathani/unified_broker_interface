@@ -20,6 +20,9 @@ from unified_broker_interface.utilities.order_engine.utilities.market_view impor
 from unified_broker_interface.utilities.order_engine.utilities.parent_order import (
     ParentOrder,
 )
+from unified_broker_interface.utilities.order_engine.utilities.reduce_only import (
+    ReduceOnlyCheck,
+)
 from unified_broker_interface.utilities.order_engine.utilities.price_reference import (
     PriceReference,
 )
@@ -1034,9 +1037,12 @@ class SyntheticOrder:
             tuple: The answer's body (dict), its HTTP status (int) and the leg's id (str).
 
         Raises:
-            RefusedRequestError: For an order answered without calling a broker, including one the rate budget would not give a token to, and one refused because its broker is too close to the day's order cap.
+            RefusedRequestError: For an order answered without calling a broker, including one the rate budget would not give a token to, one refused because its broker is too close to the day's order cap, and a leg of a reduce-only order that would not make its position smaller.
         """
         instrument_id = instrument_id or self.parent.instrument_id
+        reduce_only = ReduceOnlyCheck(self.placement)
+        if reduce_only.is_asked_for(self.parent.parameters):
+            reduce_only.refuse_if_it_adds(order, instrument_id)
         prepared = self.placement.prepare(
             order,
             instrument_id,

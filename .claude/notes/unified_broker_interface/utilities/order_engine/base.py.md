@@ -53,3 +53,7 @@ The order types need only to know whether a cancel was accepted, so `cancel_leg`
 ## Why `stop_acting` leaves the legs alone
 
 Flatten halts every parent before it cancels every order itself. If a halt cancelled the parent's legs too, each leg would be cancelled twice, once by the parent and once by flatten, spending two order messages on one order. A parent cancelled through `DELETE /api/orders/parents` does cancel its legs, through `cancel_by_caller`, because nothing else will.
+
+## Why `place_leg` checks reduce-only before `prepare`
+
+See the note on `utilities/reduce_only.py`. The check is the first thing `place_leg` does, so a leg it refuses is never recorded, never takes a rate token and never counts against the daily cap.

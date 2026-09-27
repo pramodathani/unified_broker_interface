@@ -31,3 +31,9 @@ That was a fixture bug rather than a code bug, but it is worth writing down, bec
 ## Why a caller's trigger moves the watermark
 
 The stop sits a trail behind the watermark and only moves in the favourable direction, so a trigger the caller loosens would be pulled back on the next tick. `on_leg_modified` sets the watermark to the price whose trail lands exactly on the caller's trigger: the trigger plus the points for a sell stop, or the trigger divided by one less the percentage. The watermark is kept in plain decimal notation, because a one per cent trail from 990 works out as `1.00E+3` in Python's default form, which is a poor thing to find in a record a person reads. It is recorded with `parameters_changed`, so a restart keeps it.
+
+## Why `activate_at` answers 202 and places nothing
+
+A trailing take-profit (the Atlas's G9) must not rest a stop before the market reaches the target. A stop placed at once would sit a trail behind today's price and could exit a trade that never got near its target. So `run` records the parent and answers `202 armed`, as the price triggers do, and `on_price_tick` calls `activate` while the parent has no legs. The stop is placed by `place_trailing_stop`, the same method `run` uses, with the activating price as the watermark, so the order behaves exactly like one that was sent at that price.
+
+The trail distance, the limit offset, the step and `activate_at` are all read at the top of `run`, before anything is recorded. Moving the placing code into `place_trailing_stop` first left the distance to be read after `record_received`, and the scenario `a_trailing_order_without_a_distance_is_refused` then showed a `rejected` parent where none had been recorded before. A request refused for a bad field should leave no parent behind.

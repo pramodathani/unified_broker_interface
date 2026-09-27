@@ -29,6 +29,7 @@ class VirtualLimit(PriceTrigger):
 
     SYNTHETIC_TYPE = 'virtual_limit'
     ARMED_MESSAGE = 'the other side of the book reaches the limit price'
+    TAKES_TRIGGER_ON = False
 
     def is_paper(self):
         """Whether this order is filled from the queue estimate instead of being sent.

@@ -641,6 +641,120 @@ class OrderEngineScenarios:
                 ),
             ),
             self.intents(
+                'a_reduce_only_sell_smaller_than_the_long_is_sent',
+                [
+                    self.bodies.market_order(
+                        dry_run=None,
+                        transaction_type='SELL',
+                        quantity=50,
+                        synthetic={
+                            'type': 'simple',
+                            'reduce_only': True,
+                        },
+                    ),
+                ],
+                positions=self.positions(75),
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
+                'a_reduce_only_buy_that_would_add_to_a_long_is_refused',
+                [
+                    self.bodies.market_order(
+                        dry_run=None,
+                        transaction_type='BUY',
+                        quantity=10,
+                        synthetic={
+                            'type': 'simple',
+                            'reduce_only': True,
+                        },
+                    ),
+                ],
+                positions=self.positions(75),
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
+                'a_reduce_only_sell_larger_than_the_long_is_refused',
+                [
+                    self.bodies.market_order(
+                        dry_run=None,
+                        transaction_type='SELL',
+                        quantity=100,
+                        synthetic={
+                            'type': 'simple',
+                            'reduce_only': True,
+                        },
+                    ),
+                ],
+                positions=self.positions(75),
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
+                'a_reduce_only_order_with_nothing_held_is_refused',
+                [
+                    self.bodies.market_order(
+                        dry_run=None,
+                        transaction_type='SELL',
+                        quantity=10,
+                        synthetic={
+                            'type': 'simple',
+                            'reduce_only': True,
+                        },
+                    ),
+                ],
+                positions=self.positions(0),
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
+                'a_reduce_only_buy_back_of_a_short_is_sent',
+                [
+                    self.bodies.market_order(
+                        dry_run=None,
+                        transaction_type='BUY',
+                        quantity=40,
+                        synthetic={
+                            'type': 'simple',
+                            'reduce_only': True,
+                        },
+                    ),
+                ],
+                positions=self.positions(-40),
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
+                'a_reduce_only_flag_that_is_not_true_or_false_is_refused',
+                [
+                    self.bodies.market_order(
+                        dry_run=None,
+                        transaction_type='SELL',
+                        quantity=10,
+                        synthetic={
+                            'type': 'simple',
+                            'reduce_only': 'yes',
+                        },
+                    ),
+                ],
+                positions=self.positions(75),
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
                 'reducing_a_position_cannot_close_more_than_is_held',
                 [
                     self.referenced(
@@ -2740,6 +2854,18 @@ class OrderEngineSuite:
                 accepted,
             ),
             self.clock_result(
+                'a_limit_then_market_order_is_made_marketable_when_its_time_comes',
+                dict(entry, synthetic={
+                    'type': 'good_till_time',
+                    'until_time': '10:30',
+                    'at_expiry': 'market',
+                }),
+                [],
+                frozen + 1900,
+                accepted,
+                quote=self.scenarios.quote(),
+            ),
+            self.clock_result(
                 'a_time_stop_closes_what_it_filled',
                 dict(entry, synthetic={
                     'type': 'time_stop',
@@ -3567,6 +3693,54 @@ class OrderEngineSuite:
                 },
             ),
             self.price_result(
+                'a_trailing_take_profit_waits_for_its_level_and_then_trails',
+                dict(entry, synthetic={
+                    'type': 'trailing_stop',
+                    'trail_points': 10,
+                    'stop_limit_offset': 2,
+                    'activate_at': 1030,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1020.00, 1020.05), 'at': 1},
+                    {'quote': self.book_at(1035.00, 1035.05), 'at': 2},
+                    {'quote': self.book_at(1050.00, 1050.05), 'at': 3},
+                ],
+                accepted,
+                book_overrides={
+                    'order_type': 'SL',
+                    'trigger_price': 1025.05,
+                },
+            ),
+            self.price_result(
+                'a_trailing_take_profit_places_nothing_below_its_level',
+                dict(entry, synthetic={
+                    'type': 'trailing_stop',
+                    'trail_points': 10,
+                    'stop_limit_offset': 2,
+                    'activate_at': 1030,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1020.00, 1020.05), 'at': 1},
+                    {'quote': self.book_at(990.00, 990.05), 'at': 2},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_trailing_take_profit_with_a_level_below_zero_is_refused',
+                dict(entry, synthetic={
+                    'type': 'trailing_stop',
+                    'trail_points': 10,
+                    'stop_limit_offset': 2,
+                    'activate_at': -5,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
                 'a_market_if_touched_order_waits_and_then_takes_the_offer',
                 dict(entry, synthetic={
                     'type': 'market_if_touched',
@@ -3576,6 +3750,77 @@ class OrderEngineSuite:
                     {'quote': steady, 'at': 0},
                     {'quote': self.book_at(994.90, 994.95), 'at': 1},
                     {'quote': self.book_at(994.90, 994.95), 'at': 2},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_trigger_on_the_bid_fires_before_the_last_trade_gets_there',
+                dict(entry, synthetic={
+                    'type': 'market_if_touched',
+                    'trigger_price': 995,
+                    'trigger_on': 'bid',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 995.20), 'at': 1},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_double_last_trigger_starts_again_when_a_tick_falls_back',
+                dict(entry, synthetic={
+                    'type': 'market_if_touched',
+                    'trigger_price': 995,
+                    'trigger_on': 'double_last',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                    {'quote': self.book_at(995.50, 995.55), 'at': 2},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 3},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 4},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_held_trigger_waits_until_the_level_has_held_long_enough',
+                dict(entry, synthetic={
+                    'type': 'market_if_touched',
+                    'trigger_price': 995,
+                    'trigger_on': 'held',
+                    'hold_seconds': 5,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 3},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 7},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_held_trigger_without_a_hold_time_is_refused',
+                dict(entry, synthetic={
+                    'type': 'market_if_touched',
+                    'trigger_price': 995,
+                    'trigger_on': 'held',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_type_that_chooses_its_own_price_refuses_trigger_on',
+                dict(entry, synthetic={
+                    'type': 'hidden_stop',
+                    'trigger_price': 995,
+                    'backstop_price': 990,
+                    'backstop_limit_price': 988,
+                    'trigger_on': 'last',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
                 ],
                 accepted,
             ),
