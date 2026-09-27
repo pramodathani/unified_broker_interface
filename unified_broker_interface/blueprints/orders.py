@@ -159,6 +159,7 @@ class OrdersBlueprint(BaseBlueprint):
             api_configuration['order_rate_per_broker_per_second'],
             api_configuration['order_rate_wait_seconds'],
             self.logger,
+            api_configuration['order_rate_window_seconds'],
         )
         self.order_handoff = None
         if self.placement_mode == 'engine':

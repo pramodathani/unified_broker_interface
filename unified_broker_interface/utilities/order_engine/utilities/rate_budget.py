@@ -6,7 +6,7 @@ import time
 
 RATE_KEY_PREFIX = 'unified:orders:rate:'
 GLOBAL_RATE_KEY = 'unified:orders:rate:all'
-WINDOW_MICROSECONDS = 1000000
+MICROSECONDS_PER_SECOND = 1000000
 RATE_WINDOW_SCRIPT = """
 local now_parts = redis.call('TIME')
 local now = tonumber(now_parts[1]) * 1000000 + tonumber(now_parts[2])
@@ -29,7 +29,7 @@ if longest_wait > 0 then
 end
 for index, key in ipairs(KEYS) do
     redis.call('ZADD', key, now, member)
-    redis.call('PEXPIRE', key, 2000)
+    redis.call('PEXPIRE', key, math.floor(window / 1000) + 1000)
 end
 return 0
 """
@@ -51,6 +51,7 @@ class RateBudget:
         per_second (float): Messages a second across every broker, or 0 for no such limit.
         per_broker_per_second (float): Messages a second to any one broker, or 0 for no limit.
         wait_seconds (float): The longest a message waits for room before it is refused.
+        window_seconds (float): The length of the window the limits are counted over; 1.0 counts per second exactly, and a little more leaves a margin for requests that reach a broker unevenly.
         logger (logging.Logger): The logger.
         script (redis.commands.core.Script): The registered window script.
         counts_lock (threading.Lock): Guards the two counters, which several threads update.
@@ -65,15 +66,17 @@ class RateBudget:
         per_broker_per_second,
         wait_seconds,
         logger,
+        window_seconds=1.0,
     ):
         """Builds the budget.
 
         Args:
             cache (redis.Redis): The Redis client.
-            per_second (float): Messages a second across every broker, or 0 for no such limit.
-            per_broker_per_second (float): Messages a second to any one broker, or 0 for no limit.
+            per_second (float): Messages in one window across every broker, or 0 for no such limit.
+            per_broker_per_second (float): Messages in one window to any one broker, or 0 for no limit.
             wait_seconds (float): The longest a message waits for room.
             logger (logging.Logger): The logger.
+            window_seconds (float): The length of the window the limits are counted over.
 
         Returns:
             None: This method returns nothing.
@@ -82,6 +85,7 @@ class RateBudget:
         self.per_second = per_second
         self.per_broker_per_second = per_broker_per_second
         self.wait_seconds = wait_seconds
+        self.window_seconds = window_seconds
         self.logger = logger
         self.script = cache.register_script(RATE_WINDOW_SCRIPT)
         self.counts_lock = threading.Lock()
@@ -120,7 +124,7 @@ class RateBudget:
             waited = True
             pause_seconds = min(
                 remaining,
-                max(0.001, wait_microseconds / WINDOW_MICROSECONDS),
+                max(0.001, wait_microseconds / MICROSECONDS_PER_SECOND),
             )
             if self.pause(pause_seconds, stop):
                 self.count_refused()
@@ -146,7 +150,7 @@ class RateBudget:
         if not keys:
             return 0
         arguments = [
-            WINDOW_MICROSECONDS,
+            int(self.window_seconds * MICROSECONDS_PER_SECOND),
             secrets.token_hex(8),
         ]
         arguments.extend(limits)

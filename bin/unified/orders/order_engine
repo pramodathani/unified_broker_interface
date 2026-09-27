@@ -186,6 +186,7 @@ def main():
             api_configuration["order_rate_per_broker_per_second"],
             api_configuration["order_rate_wait_seconds"],
             logger,
+            api_configuration["order_rate_window_seconds"],
         ),
         LossLockout(cache, api_configuration["order_daily_loss_limit"], logger),
         OrderToTradeRatio(),
