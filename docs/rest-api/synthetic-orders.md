@@ -2,7 +2,7 @@
 
 A synthetic order is an order that no Indian exchange offers, built by the order engine out of ordinary broker orders. You ask for one by adding a `synthetic` object to the body of [`POST /api/orders/place`](orders.md#place-an-order), and the engine places, watches, moves and cancels the real orders it is made of.
 
-This page is the glossary of all 44 types the engine runs. It lists every field each type reads from the `synthetic` object, with the defaults and limits taken from the code.
+This page is the glossary of all 45 types the engine runs. It lists every field each type reads from the `synthetic` object, with the defaults and limits taken from the code.
 
 !!! danger "Synthetic orders place real orders, sometimes long after you asked"
     A synthetic order can place, modify or cancel orders at a broker minutes, hours or even days after your request, with nobody watching. Triggers, trailing stops, grids and schedules all act on their own. Send `"dry_run": true` first, which builds the first broker request without recording or sending anything.
@@ -54,7 +54,7 @@ Two fields can appear in any `synthetic` object. The table below lists them.
 
 | Field | Type | Required | Meaning |
 |---|---|:---:|---|
-| `type` | string | Yes | One of the 44 names in the table below. A body with no `synthetic` object, or no `type`, runs as `simple`. An unknown name is refused with `400` and the message `the order engine does not run '<name>' orders; it runs <list>`. |
+| `type` | string | Yes | One of the 45 names in the table below. A body with no `synthetic` object, or no `type`, runs as `simple`. An unknown name is refused with `400` and the message `the order engine does not run '<name>' orders; it runs <list>`. |
 | `closes_position` | boolean | No | `true` says every leg of this order closes a position, so it may use the part of a broker's daily order cap kept for exits. Only the literal `true` counts. |
 
 The engine also writes its own working values into the parent's copy of the `synthetic` object, such as `tick_size`, `triggered_at`, `watermark`, `placed_quantity`, `started_at` and `expires_at`. These are internal, so do not send them.
@@ -80,7 +80,7 @@ Types that act at once answer with the broker's answer plus a `parent_id`; types
 
 Keep the `parent_id`. It is the only handle on an order that has not reached a broker yet.
 
-## All 44 types
+## All 45 types
 
 The master table below lists every type registered in `SYNTHETIC_ORDER_CLASSES`, in the order the registry holds them. The "First answer" column says whether a broker order goes out when you ask (`200`, the broker's own answer) or whether the engine waits (`202`).
 
@@ -130,8 +130,9 @@ The master table below lists every type registered in `SYNTHETIC_ORDER_CLASSES`,
 | `virtual_limit` | Book-following limits | Holds a limit order in the engine and sends it only when the other side reaches its price. | `paper` | 202 |
 | `opening_auction` | Time-based | Places the order during the pre-open, so it fills at the opening auction's price. | `at_time` | 202 |
 | `closing_price` | Execution algorithms | Slices the order by volume through the half hour the closing price is computed from. | `slices`, `window_start` | 202, or 200 inside the window |
+| `underlying_peg` | Book-following limits | Moves a resting limit by delta times another instrument's move, such as an option bid following the index. | `watch_instrument_id`, `delta`, `lowest_price`, `highest_price`, `step_ticks` | 200 |
 
-The chart below counts how many of the 44 types fall into each family. The families are this page's own grouping, chosen to make the list easier to scan; the code does not group them.
+The chart below counts how many of the 45 types fall into each family. The families are this page's own grouping, chosen to make the list easier to scan; the code does not group them.
 
 ```vegalite
 {
@@ -144,7 +145,7 @@ The chart below counts how many of the 44 types fall into each family. The famil
       {"family": "Linked orders", "types": 7},
       {"family": "Execution algorithms", "types": 8},
       {"family": "Stops and trailing", "types": 6},
-      {"family": "Book-following limits", "types": 5},
+      {"family": "Book-following limits", "types": 6},
       {"family": "Price triggers", "types": 5},
       {"family": "Plain and laddered", "types": 4},
       {"family": "Time-based", "types": 5},
@@ -579,7 +580,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
 === "Book-following limits"
 
-    These five types price a limit order from the live order book instead of leaving it at one price.
+    These six types price a limit order from the market instead of leaving it at one price.
 
     #### `peg`
 
@@ -593,6 +594,28 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     ```json
     {"type": "peg", "reference": "own_touch", "offset_ticks": 0, "cap_price": 1005}
+    ```
+
+    #### `underlying_peg`
+
+    An underlying peg (the Atlas's G6, pegged-to-stock or delta-pegged) is a limit order whose price follows another instrument, usually an option's underlying. It is placed at your `price`, and from then on its price is:
+
+    `price = your price + delta × (underlying now − underlying when placed)`
+
+    For a Nifty call bought with a delta of 0.5, a 40-point rise in the index moves the bid up by 20. The option's own book is never read, which matters on a far strike where one order can move the premium. The price is rounded to the option's tick, kept between `lowest_price` and `highest_price`, and modified only once it has moved at least `step_ticks`. If you change the order's price yourself, the peg starts again from your new price and the underlying's price at that moment.
+
+    | Field | Type | Required | Rules |
+    |---|---|:---:|---|
+    | `watch_instrument_id` | string | Yes | The instrument to follow. Not the traded instrument itself; use `peg` for that. |
+    | `delta` | number | Yes | How much the price moves per point of the underlying. Negative for a put. |
+    | `lowest_price` | number | No | The lowest price the order is moved to. Above zero. |
+    | `highest_price` | number | No | The highest price the order is moved to. Above zero, and not below `lowest_price`. |
+    | `step_ticks` | integer | No | The smallest move worth a modify. At least 1. Defaults to 1. |
+
+    The order must be a `LIMIT` with a `price`. It answers with the broker's answer plus `underlying_start`, the underlying's price the peg measures from.
+
+    ```json
+    {"type": "underlying_peg", "watch_instrument_id": "<Nifty index id>", "delta": 0.5, "step_ticks": 4}
     ```
 
     #### `chaser`

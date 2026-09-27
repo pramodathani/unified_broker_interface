@@ -88,6 +88,9 @@ from unified_broker_interface.utilities.order_engine.twap import Twap
 from unified_broker_interface.utilities.order_engine.virtual_limit import (
     VirtualLimit,
 )
+from unified_broker_interface.utilities.order_engine.underlying_peg import (
+    UnderlyingPeg,
+)
 from unified_broker_interface.utilities.order_engine.vwap import Vwap
 from unified_broker_interface.utilities.order_engine.two_sided_breakout import (
     TwoSidedBreakout,
@@ -138,4 +141,5 @@ SYNTHETIC_ORDER_CLASSES = {
     VirtualLimit.SYNTHETIC_TYPE: VirtualLimit,
     OpeningAuction.SYNTHETIC_TYPE: OpeningAuction,
     ClosingPrice.SYNTHETIC_TYPE: ClosingPrice,
+    UnderlyingPeg.SYNTHETIC_TYPE: UnderlyingPeg,
 }

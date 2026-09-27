@@ -2610,6 +2610,20 @@ class OrderEngineSuite:
             return
         quotes[instrument_id] = json.dumps(quote)
 
+    def seed_other_quotes(self, step):
+        """Puts the quotes a step carries for instruments other than RELIANCE, such as an underlying.
+
+        Args:
+            step (dict): The step, whose `other_quotes` maps an instrument's name in `INSTRUMENT_IDENTIFIERS` to its quote.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        quotes = self.fake_redis.hashes.setdefault('unified:quotes:live', {})
+        for name, quote in (step.get('other_quotes') or {}).items():
+            instrument_id = order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS[name]
+            quotes[instrument_id] = json.dumps(quote)
+
     def price_result(
         self,
         name,
@@ -2631,7 +2645,7 @@ class OrderEngineSuite:
         Args:
             name (str): The check's name.
             request_body (dict): The request body.
-            steps (list): One `{"quote": dict | None, "at": float}` per tick, where `at` is seconds after the order was placed.
+            steps (list): One `{"quote": dict | None, "at": float}` per tick, where `at` is seconds after the order was placed, and optionally `other_quotes` for other instruments.
             answer (dict | None): The stubbed broker answer.
             throttle_seconds (float): The shortest gap the re-pricing throttle allows between two moves of one order.
             book_overrides (dict | None): Fields to replace on the broker's order book entry, for a type whose order is not a plain limit.
@@ -2650,6 +2664,8 @@ class OrderEngineSuite:
         self.counting_uuid.reset()
         starting = steps[0]['quote'] if steps else None
         self.seed_quote(starting)
+        if steps:
+            self.seed_other_quotes(steps[0])
         if positions is not None:
             self.fake_redis.strings['unified:portfolio:positions'] = json.dumps(
                 self.scenarios.positions(positions),
@@ -2729,6 +2745,7 @@ class OrderEngineSuite:
         moves = []
         for step in steps:
             self.seed_quote(step.get('quote'))
+            self.seed_other_quotes(step)
             if step.get('estimate') is not None:
                 self.seed_estimate(step['estimate'])
             before = len(self.network.sent_requests)
@@ -4146,6 +4163,63 @@ class OrderEngineSuite:
                 [
                     {'quote': steady, 'at': 0},
                     {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'an_underlying_peg_moves_with_the_index_by_its_delta',
+                dict(entry, synthetic={
+                    'type': 'underlying_peg',
+                    'watch_instrument_id': order_routes.OrderRoutesState.
+                    INSTRUMENT_IDENTIFIERS['nifty_index'],
+                    'delta': 0.5,
+                    'step_ticks': 20,
+                }),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=25000)}},
+                    {'quote': steady, 'at': 1, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=25040)}},
+                    {'quote': steady, 'at': 2, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=25041)}},
+                    {'quote': steady, 'at': 3, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=24960)}},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'an_underlying_peg_stays_inside_its_range',
+                dict(entry, synthetic={
+                    'type': 'underlying_peg',
+                    'watch_instrument_id': order_routes.OrderRoutesState.
+                    INSTRUMENT_IDENTIFIERS['nifty_index'],
+                    'delta': 0.5,
+                    'highest_price': 1010,
+                }),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=25000)}},
+                    {'quote': steady, 'at': 1, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=25100)}},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'an_underlying_peg_without_a_delta_is_refused',
+                dict(entry, synthetic={
+                    'type': 'underlying_peg',
+                    'watch_instrument_id': order_routes.OrderRoutesState.
+                    INSTRUMENT_IDENTIFIERS['nifty_index'],
+                }),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=25000)}},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'an_underlying_peg_on_its_own_instrument_is_refused',
+                dict(entry, synthetic={
+                    'type': 'underlying_peg',
+                    'watch_instrument_id': order_routes.OrderRoutesState.
+                    INSTRUMENT_IDENTIFIERS['reliance'],
+                    'delta': 0.5,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
                 ],
                 accepted,
             ),
