@@ -102,10 +102,11 @@ The table below lists every answer that comes from the engine or the hand-over r
 | <span class="status s5">503</span> | `today's instrument catalogue is not published yet: the catalogue for <date> has expired, and the daily mapping has not published a new one` | The engine refused the instrument as not mapped and found that the date's whole catalogue has expired. |
 | <span class="status s5">503</span> | `the order rate budget is full, so this order was not sent; try again in a moment` | The broker's one-second window had no room within the wait. |
 | <span class="status s5">503</span> | `a price reference needs a tick size the brokers agree on and there is none for this instrument` | A price reference cannot be snapped to a tick. |
+| <span class="status s5">503</span> | `the order engine failed before sending this order to any broker (<exception>), so nothing was placed` | The engine raised before any of the order's legs was written down as sending, such as when its database write failed. Every leg is written down before it is sent, so nothing reached a broker. The body also carries `intent_id` and `parent_id`, and the parent is closed as `rejected`. |
 | <span class="status s5">504</span> | `the order engine did not answer within <n> seconds, so this order may still be placed` | The wait ran out. |
 | <span class="status s5">504</span> | `the order was written for the order engine but its answer could not be read (<error>), so this order may still be placed` | Redis failed during the wait. |
 | <span class="status s5">504</span> | `the order engine answered with something that could not be read, so the outcome of this order is unknown` | The answer was not a JSON object with a `body`. |
-| <span class="status s5">504</span> | `the order engine failed while placing this order (<exception>), so its outcome is unknown` | The engine raised while placing. |
+| <span class="status s5">504</span> | `the order engine failed while placing this order (<exception>), so its outcome is unknown` | The engine raised after at least one leg was written down as sending, so that leg may have reached its broker. |
 
 ## The engine process
 

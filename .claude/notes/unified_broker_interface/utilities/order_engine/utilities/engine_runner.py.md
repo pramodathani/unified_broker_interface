@@ -18,6 +18,16 @@ The pending-first read, the doubling backoff to a minute, and the `stop.wait` in
 
 The reason is that one bad order must not stop every order behind it. An instrument whose catalogue entry is malformed, or a broker class that raises on a field it has never seen, would otherwise take order entry down for the whole account until someone noticed. The engine is the only path to a broker in this mode, so its availability is the system's availability.
 
+## Why a failure before any leg was sent answers 503 rather than 504
+
+A live test through tradingmachine on 2026-09-27 placed an order just after the TimescaleDB container restarted. The engine's first event log write failed with `OperationalError`, and the caller was told the outcome was unknown, although the engine's own log showed nothing had been sent.
+
+The engine can tell the two cases apart without guessing. `SyntheticOrder.record` applies an event to the parent in memory only after the database has committed it, and `place_leg` commits a `leg_requested` row before any request leaves the machine. A parent with no legs in memory has therefore never sent anything, so `answer` refuses it with 503 and closes the parent through `abandon`, which also stops recovery from finding it open at every restart. A parent with at least one leg keeps the old 504, because that leg may have reached its broker. The recorded scenarios `the_event_log_fails_before_the_order_is_sent` and `the_event_log_fails_after_the_order_is_sent` pin the two sides.
+
+## Why a refused combined answer gets its reason from the legs
+
+The same live test found that a refused ladder, grid, OCO or two-sided breakout answered HTTP 422 with no reason at the top, and the ladder and grid list their rungs without one either, so a client could only say "HTTP 422". Every leg keeps the broker's `status_message` from its `leg_answered` event, so `add_refusal_reason` copies the distinct reasons into the answer's `status_message` when the type left it out. Doing it once here, rather than in each type's own answer, covers every combined type, including ones added later.
+
 ## Why the counters are on the object rather than logged per order
 
 `placed`, `refused` and `expired` are read at shutdown and by the offline recording. Logging a line per order would be the obvious alternative, and was avoided because the log is already the place a person looks for something that went wrong; a healthy engine placing a few hundred orders a day should be quiet, so that the lines that do appear are all worth reading.

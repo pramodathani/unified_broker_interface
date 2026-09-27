@@ -563,9 +563,52 @@ class OrderEngine:
         except RefusedRequestError as refusal:
             synthetic_order.abandon(refusal.body.get('error'))
             raise
+        except Exception as exception:
+            if synthetic_order.parent.legs:
+                raise
+            self.logger.exception(
+                f'Intent {intent.get("intent_id")} failed before any of its '
+                'orders was sent.'
+            )
+            message = (
+                'the order engine failed before sending this order to any '
+                f'broker ({type(exception).__name__}), so nothing was placed'
+            )
+            synthetic_order.abandon(message)
+            raise RefusedRequestError.refusal(
+                message,
+                503,
+                intent_id=intent.get('intent_id'),
+                parent_id=synthetic_order.parent.parent_order_id,
+            )
+        self.add_refusal_reason(synthetic_order, body, status)
         with self.counts_lock:
             self.placed = self.placed + 1
         return body, status
+
+    def add_refusal_reason(self, synthetic_order, body, status):
+        """Gives a refused answer the brokers' reasons when its order type left them out.
+
+        A combined order such as a ladder, a grid or an OCO answers with one entry per leg, and not every type copies the brokers' reasons into its answer. The legs keep them, so they are read from there.
+
+        Args:
+            synthetic_order (SyntheticOrder): The runner that answered.
+            body (dict): The answer's body, changed in place.
+            status (int): The answer's HTTP status.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        if status < 400:
+            return
+        if body.get('status_message') or body.get('error'):
+            return
+        reasons = []
+        for leg in synthetic_order.parent.legs:
+            if leg.status_message and leg.status_message not in reasons:
+                reasons.append(leg.status_message)
+        if reasons:
+            body['status_message'] = '; '.join(reasons)
 
     def answer_without_placing(self, intent):
         """The answer for an intent that must not be placed, because it already started a parent or is too old, or None for one that may be.
