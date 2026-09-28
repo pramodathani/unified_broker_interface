@@ -12,8 +12,6 @@ from unified_broker_interface.utilities.broker_orders.utilities.stored_order imp
 class StoxkartOrders(BrokerOrders):
     """Stoxkart's order requests, sent as JSON to `openapi.stoxkart.com` with the Algo-ID in a header.
 
-    Stoxkart takes no orders once the market has closed, after-market orders included, and refuses them with `invalid algo_id` although the Algo-ID is valid, so `TAKES_AFTER_MARKET` is False and the broker selector passes Stoxkart over for an after-market order.
-
     Attributes:
         ALGO_IDENTIFIER (str): The Algo-ID of the approved non-registered strategy, sent as `X-Algo-Id` and in the body.
         ORDER_TYPE_CODES (dict): The shared order types to Stoxkart's.
@@ -62,7 +60,6 @@ class StoxkartOrders(BrokerOrders):
         ('ncdex', 'commodity', 'derivative'): 'broker_lot_size',
     }
     ALGO_IDENTIFIER = '99999'
-    TAKES_AFTER_MARKET = False
     ORDER_TYPE_CODES = {
         'MARKET': 'MARKET',
         'LIMIT': 'LIMIT',
@@ -96,7 +93,7 @@ class StoxkartOrders(BrokerOrders):
     def algo_identifier(self, settings):
         """The Algo-ID Stoxkart's order requests carry: `algo_id` from Stoxkart's settings, or `ALGO_IDENTIFIER` when the settings have none.
 
-        The id is read from the settings, so it can be changed without a release. An `invalid algo_id` refusal outside market hours does not mean the id is wrong: Stoxkart answers every order that way once the market has closed, as it did on Sunday 2026-09-27 and on the evening of 2026-09-28, and accepts the same id while the market is open.
+        Stoxkart accepted `99999` on 2026-09-15 and refused it with `invalid algo_id` on 2026-09-27, so the id is read from the settings, where it can be changed without a release.
 
         Args:
             settings (dict): Stoxkart's decoded settings.
@@ -110,7 +107,7 @@ class StoxkartOrders(BrokerOrders):
         return str(configured).strip()
 
     def build_place_request(self, order, instrument, handle, login, settings):
-        """Builds `POST /orders/normal`, the only variety sent, because Stoxkart takes no after-market orders and `skip_reason` passes it over for one.
+        """Builds `POST /orders/{variety}`, where the variety is `amo` for an after-market order and `normal` otherwise.
 
         Args:
             order (PlaceOrderRequest): The validated order.
@@ -122,6 +119,9 @@ class StoxkartOrders(BrokerOrders):
         Returns:
             BrokerRequest: The request.
         """
+        variety = 'normal'
+        if order.after_market:
+            variety = 'amo'
         json_body = {
             'exchange': self.MARKETS[instrument.market()],
             'token': str(handle.get('broker_token')),
@@ -141,7 +141,7 @@ class StoxkartOrders(BrokerOrders):
             json_body['tag'] = order.tag
         return BrokerRequest(
             'POST',
-            'https://openapi.stoxkart.com/orders/normal',
+            f'https://openapi.stoxkart.com/orders/{variety}',
             self.headers(login, settings),
             json_body=json_body,
             tag=order.tag,
