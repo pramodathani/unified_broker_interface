@@ -6,7 +6,7 @@ Decide, once per mapping date, how many quotation units one lot of every currenc
 
 The brokers' own `lot_size` figures cannot be compared on these markets, because each broker counts a lot in its own unit: on MCX, GOLD's lot is 1 at Zerodha (one lot), 1 at Kotak (one kilogram) and 100 at Groww (quotation units of 10 grams). Several brokers' instrument files also carry the exchange's contract size fields, and those are read here as independent sources, each in quotation units: Wisdom Capital's `multiplier`, Kotak's lot size times its general numerator over its general denominator (or its multiplier on the currency segment), Groww's commodity lot size, Shoonya's lot size times its multiplier on NSE currencies, and Stoxkart's lot size on the currency and NCDEX segments.
 
-A contract is `confirmed` when at least two sources give a size and every one gives the same size. It is `single_source` when exactly one does, `conflict` when sources disagree, and `no_source` when none does. `tradeable` is true for a confirmed contract, and for a single-source contract only on BSE currencies and NCDEX, where Stoxkart is the only broker that lists them.
+A contract is `confirmed` when at least two sources give a size and every one gives the same size. It is `single_source` when exactly one does, `conflict` when sources disagree or one source gives two different sizes for it, and `no_source` when none does. A source's file can list a contract twice, as Stoxkart's did for 34 nse currency options on 2026-09-28 with lots of 1000 and 2000; its sizes are then recorded together, such as `1000|2000`, rather than one of them being kept by the order the rows happen to arrive in. `tradeable` is true for a confirmed contract, and for a single-source contract only on BSE currencies and NCDEX, where Stoxkart is the only broker that lists them.
 
 On MCX a newly listed far-month contract often has one source only, because some brokers list new expiries later than others. Such a contract is `sibling_confirmed` and tradeable when every confirmed contract of the same underlying in the same segment on the date has one and the same size, and that size is the single source's figure. An underlying whose confirmed contracts already come in more than one size, as when the exchange has revised a lot size, gives no such answer, and its single-source contracts stay untradeable. The decision and every source's figure are written to `unified.contract_sizes` for the date, so an order reads a stored decision rather than making one.
 """
@@ -103,7 +103,7 @@ class ContractSizeSource:
             segments (list): The exchange-prefixed segments to read.
 
         Returns:
-            dict: Instrument ids to sizes as decimals, leaving out rows whose size is missing, zero or negative.
+            dict: Instrument ids to the set of distinct sizes, as decimals, that the source's rows give for the contract, leaving out rows whose size is missing, zero or negative. A set holds more than one size when the source's file lists the contract twice with different sizes.
         """
         rows = connection.execute(
             self.statement(),
@@ -121,7 +121,7 @@ class ContractSizeSource:
             units = decimal.Decimal(row.units)
             if units <= 0:
                 continue
-            sizes[row.instrument_id] = units.normalize()
+            sizes.setdefault(row.instrument_id, set()).add(units.normalize())
         return sizes
 
 
@@ -284,17 +284,22 @@ class ContractSizeDecision:
             return (exchange, "currency")
         return (exchange, "commodity")
 
-    def decide(self, segment, figures):
+    def decide(self, segment, figures, contradicting_sources=None):
         """
         Decides one contract's size from what each source says.
 
+        A source that gives two different sizes for the same contract contradicts itself, and makes the contract a conflict just as two disagreeing sources do. Keeping either of its sizes would make the decision depend on the order the database happens to return the rows in.
+
         Args:
             segment (str): The contract's exchange-prefixed segment.
-            figures (dict): Source names to sizes as decimals, for the sources that give one.
+            figures (dict): Source names to sizes as decimals, for the sources that give exactly one.
+            contradicting_sources (set | None): The names of the sources that give more than one size for the contract, or None for none.
 
         Returns:
             tuple: `(units_per_lot, status, tradeable)`, where `units_per_lot` is a decimal or None, `status` one of `confirmed`, `single_source`, `conflict` and `no_source`, and `tradeable` a bool.
         """
+        if contradicting_sources:
+            return None, "conflict", False
         distinct_sizes = set(figures.values())
         if not figures:
             return None, "no_source", False
@@ -426,20 +431,26 @@ class ContractSizeResolver:
         """
         segments = self.segments()
         figures_by_contract = collections.defaultdict(dict)
+        contradictions_by_contract = collections.defaultdict(dict)
         with self.engine.connect() as connection:
             contracts = self.live_contracts(connection, mapping_date, segments)
             for source_class in self.SOURCES:
                 source = source_class()
                 sizes = source.read(connection, mapping_date, segments)
-                for instrument_id, units in sizes.items():
-                    figures_by_contract[instrument_id][source.NAME] = units
+                for instrument_id, distinct_sizes in sizes.items():
+                    if len(distinct_sizes) == 1:
+                        figures_by_contract[instrument_id][source.NAME] = next(iter(distinct_sizes))
+                    else:
+                        contradictions_by_contract[instrument_id][source.NAME] = distinct_sizes
         decided = {}
         confirmed_sizes = collections.defaultdict(set)
         for instrument_id, (segment, underlying_symbol) in contracts.items():
             figures = figures_by_contract.get(instrument_id, {})
+            contradictions = contradictions_by_contract.get(instrument_id, {})
             units_per_lot, status, tradeable = self.decision.decide(
                 segment,
                 figures,
+                set(contradictions),
             )
             decided[instrument_id] = (units_per_lot, status, tradeable)
             if status == "confirmed" and underlying_symbol is not None:
@@ -459,6 +470,11 @@ class ContractSizeResolver:
             recorded_figures = {}
             for source_name, units in figures.items():
                 recorded_figures[source_name] = format(units, "f")
+            for source_name, distinct_sizes in contradictions_by_contract.get(instrument_id, {}).items():
+                texts = []
+                for units in sorted(distinct_sizes):
+                    texts.append(format(units, "f"))
+                recorded_figures[source_name] = "|".join(texts)
             rows.append({
                 "instrument_id": instrument_id,
                 "mapping_date": mapping_date,

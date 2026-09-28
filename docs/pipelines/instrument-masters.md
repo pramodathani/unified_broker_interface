@@ -194,10 +194,12 @@ The brokers' own lot sizes cannot be compared on currency and commodity markets,
 | `confirmed` | At least two sources give a size and all agree | :material-check: |
 | `single_source` | Exactly one source gives a size | only on BSE currencies and NCDEX |
 | `sibling_confirmed` | On MCX, exactly one source gives a size, and every confirmed contract of the same underlying in the same segment that day has that one size | :material-check: |
-| `conflict` | Sources disagree | :material-close: |
+| `conflict` | Sources disagree, or one source gives two different sizes for the contract | :material-close: |
 | `no_source` | No source gives a size | :material-close: |
 
 The `sibling_confirmed` status exists for newly listed far-month MCX contracts. Wisdom Capital and Groww often list a new expiry later than Kotak does, so for a few days Kotak's figure is the only one, although the exchange's contract size for that commodity has not changed. The size is accepted only when the underlying's confirmed contracts in the segment all agree on one size. An underlying whose lot size the exchange has revised, so that its confirmed contracts come in two sizes, gets no such answer: on 2026-09-26, MCXBULLDEX's confirmed index options were sized 15 and 30, and its 142 single-source contracts stayed untradeable, while 332 NATURALGAS, NATGASMINI and ZINC options and two futures became tradeable.
+
+A source can contradict itself. On 2026-09-28 Stoxkart's file listed 34 nse currency options twice, once with a lot of 1000 and once with 2000. The decision used to keep whichever row the database returned last, so the same data made those contracts a conflict in the morning's run and confirmed in an evening rerun. A source that gives two sizes now makes the contract a conflict, and its sizes are recorded together, such as `1000|2000`.
 
 Almost every MCX `no_source` contract is a row that only Stoxkart lists. Stoxkart's file carries GOLD, SILVER and SILVERM options on a 100-rupee strike grid under tokens that no other broker's MCX file has, and it also keeps contracts that expired long ago. These rows are mapped like any other but never become tradeable, and orders on the real contracts use the exchange token every broker shares.
 
