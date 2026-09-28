@@ -12,7 +12,7 @@ timeline
     Downloads : dhan : zerodha : flattrade : shoonya : fyers
               : indmoney : wisdom_capital : groww : kotak : stoxkart
     bin/unified/instruments/map : 1 apply the mapping DDL : 2 map every broker in MAPPED_BROKERS order
-                                : 3 decide contract sizes : 4 write the Redis cache : 5 warm the REST API catalogue
+                                : 3 decide contract sizes and underlyings : 4 write the Redis cache : 5 warm the REST API catalogue
 ```
 
 The unit file says the whole job takes about three quarters of an hour for ten downloads of up to 120 MB each and a full mapping. It must finish before the 09:00 pre-open, when the live feeds resolve their ticks against the new mapping. The timer is `Persistent=true`, so a machine that was off at 07:45 runs the job as soon as it starts, because the brokers publish only today's file and a missed day can never be fetched later.
@@ -33,11 +33,13 @@ flowchart LR
     MAP --> UI[("unified.instruments")]
     MAP --> UB[("unified.broker_mappings")]
     MAP --> CS[("unified.contract_sizes")]
+    MAP --> UU[("unified.underlyings")]
     UI --> CACHE["Redis cache<br/>unified:instruments<br/>unified:broker_mappings<br/>unified:broker_tokens<br/>unified:instrument_symbols<br/>unified:mapping:meta"]
     UB --> CACHE
     UI --> CAT["unified:catalogue:*<br/>REST API catalogue"]
     UB --> CAT
     CS --> CAT
+    UU --> CAT
 ```
 
 ## Step 1: downloading each broker's master
@@ -94,7 +96,7 @@ Beside the hash, `<broker>:instruments:meta` holds `download_date`, `rows`, `col
 |---|---|---|
 | 1. Tables | Applies the DDL in `stock_brokers/instruments/mapping/utilities/sql/ddl`, which is safe to run again | the `unified` schema |
 | 2. Mapping | Classifies each broker's rows with its rules file and computes each row's `instrument_id` | `unified.instruments`, `unified.broker_mappings` |
-| 3. Contract sizes | Decides how many quotation units one lot of every currency and commodity derivative is | `unified.contract_sizes` |
+| 3. Contract sizes and underlyings | Decides how many quotation units one lot of every currency and commodity derivative is, then which instrument every live future and option is written on | `unified.contract_sizes`, `unified.underlyings` |
 | 4. Cache | Writes the date's rows to Redis, swapped in all at once | the five keys in the cache table below |
 | 5. Catalogue | Warms the REST API's instrument cache for the date and clears other dates | `unified:catalogue:*` |
 
@@ -200,6 +202,10 @@ The `sibling_confirmed` status exists for newly listed far-month MCX contracts. 
 Almost every MCX `no_source` contract is a row that only Stoxkart lists. Stoxkart's file carries GOLD, SILVER and SILVERM options on a 100-rupee strike grid under tokens that no other broker's MCX file has, and it also keeps contracts that expired long ago. These rows are mapped like any other but never become tradeable, and orders on the real contracts use the exchange token every broker shares.
 
 A failure in this step is logged and does not fail the run, but orders on those contracts are then refused, because the catalogue warm finds no decision for them.
+
+### Underlyings
+
+Straight after the contract sizes, `underlyings.py` decides which instrument every live future and option is written on, from the exchange code Dhan, Groww and Fyers each give for its underlying, looked up only in the segments the underlying can be in. It writes every decision, its status and each broker's code to `unified.underlyings`, and the catalogue warm copies the resolved ones into `unified:catalogue:<date>:underlyings` for `/details` and `/master`. The [Underlyings](../rest-api/instruments.md#underlyings) section of the instrument routes explains the four statuses and shows the first date's counts. A failure here is logged and does not fail the run; every derivative then answers with no underlying.
 
 Before this step, the job runs `ANALYZE` on `unified.broker_mappings`, `unified.instruments` and every broker's `instruments` table, which takes about half a minute. The day's rows have only just been written, and autovacuum samples a table only once a tenth of it has changed since its last sample, so until then PostgreSQL's planner takes the new date for one that holds almost no rows. With that estimate it joins the day's mappings to a broker's snapshot with a nested loop that re-reads the whole snapshot once per mapping. On 2026-09-26, after a crash had reset the database's change counters, that made this step take about ninety minutes instead of under two seconds.
 

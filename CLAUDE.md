@@ -35,6 +35,7 @@ There is no `pyproject.toml`, no build step and no pytest suite. The project roo
 | Offline websocket feed tests | `python -m test_runs.websocket_feeds` (every broker's quotes and order sockets against scripted connections; name brokers to run only those, and `--record` rewrites only their lines) |
 | Run the synthetic limit order book | `bin/unified/orders/virtual_book` (beside the order engine; follows held `virtual_limit` orders) |
 | Decide a date's currency and commodity contract sizes | `python -m stock_brokers.instruments.mapping.utilities.contract_sizes --date 2026-09-15` (the daily mapping run does this itself) |
+| Decide which instrument every live derivative is written on | `python -m stock_brokers.instruments.mapping.utilities.underlyings --date 2026-09-28` (the daily mapping run does this itself; `--dry-run` prints the decisions without writing `unified.underlyings`) |
 | Offline connection warming tests | `python -m test_runs.connection_warming` (a local HTTP server that misbehaves; about 40 seconds) |
 | Download instrument masters | `python -m test_runs.download_instruments zerodha dhan` (no arguments means every broker) |
 | Apply broker schema and instrument DDL | `python -m stock_brokers.instruments.sql.apply_ddl` |

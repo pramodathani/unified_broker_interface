@@ -21,6 +21,7 @@ flowchart LR
         UI["instruments"]
         UM["broker_mappings"]
         UC["contract_sizes"]
+        UU["underlyings"]
         UPH["price_history<br/>+ sources, factors,<br/>corrections, yahoo state"]
         UT["ticks"]
         UO["order_updates"]
@@ -64,6 +65,7 @@ The table below lists every table in the database. "Chunk" is the size of each T
 | `unified` | `instruments` | ordinary table | | `bin/unified/instruments/map` | `stock_brokers/instruments/mapping/utilities/sql/ddl/110_unified_instruments.sql` |
 | `unified` | `broker_mappings` | 1 month, by `mapping_date` | not compressed | `bin/unified/instruments/map` | `…/mapping/utilities/sql/ddl/120_unified_broker_mappings.sql` |
 | `unified` | `contract_sizes` | 1 month, by `mapping_date` | not compressed | `bin/unified/instruments/map` | `…/mapping/utilities/sql/ddl/130_unified_contract_sizes.sql` |
+| `unified` | `underlyings` | 1 month, by `mapping_date` | not compressed | `bin/unified/instruments/map` | `…/mapping/utilities/sql/ddl/140_unified_underlyings.sql` |
 | `unified` | `price_history` | 1 month | 30 days | `bin/unified/instruments/price_history` | `…/historical/utilities/sql/ddl/200_unified_price_history.sql` |
 | `unified` | `price_history_sources` | ordinary table | | `bin/unified/instruments/price_history` | `…/historical/utilities/sql/ddl/210_unified_price_history_sources.sql` |
 | `unified` | `adjustment_factors` | ordinary table | | `bin/unified/instruments/price_history` | `…/historical/utilities/sql/ddl/220_unified_adjustment_factors.sql` |
@@ -121,6 +123,7 @@ erDiagram
     instruments ||--o| yahoo_fetch_state : "fetched as"
     instruments ||--o{ price_history_corrections : "corrected by"
     instruments ||..o{ contract_sizes : "sized on a date"
+    instruments ||..o{ underlyings : "linked on a date"
     instruments ||..o{ price_history : "bars"
     price_history_sources ||..o{ price_history : "source_id"
     instruments ||..o{ ticks : "ticks"
@@ -158,6 +161,14 @@ erDiagram
         numeric units_per_lot
         text status
         boolean tradeable
+        jsonb sources
+    }
+    underlyings {
+        uuid instrument_id PK
+        date mapping_date PK
+        text segment
+        uuid underlying_instrument_id
+        text status
         jsonb sources
     }
     price_history {
@@ -268,7 +279,7 @@ On an empty database the directories must be applied in the order below, because
 
 ```mermaid
 flowchart TD
-    A["stock_brokers/instruments/sql/ddl<br/>000 broker schemas, 010–100 instruments"] --> B["mapping/utilities/sql/ddl<br/>100 unified schema, 110 instruments,<br/>120 broker_mappings, 130 contract_sizes"]
+    A["stock_brokers/instruments/sql/ddl<br/>000 broker schemas, 010–100 instruments"] --> B["mapping/utilities/sql/ddl<br/>100 unified schema, 110 instruments,<br/>120 broker_mappings, 130 contract_sizes,<br/>140 underlyings"]
     B --> C["historical/utilities/sql/ddl<br/>000–060 broker price history,<br/>200–250 unified price history"]
     A --> D["ticks/utilities/sql/ddl 010–100<br/>applied by each broker's persisters"]
     B --> E["ticks/utilities/sql/ddl 300, 310, 320<br/>applied by the unified persisters"]
