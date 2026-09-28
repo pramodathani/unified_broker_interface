@@ -48,7 +48,7 @@ class ContractSizeDecisionSuite:
             figures[source_name] = decimal.Decimal(size)
         return figures
 
-    def check(self, name, segment, figures, expected):
+    def check(self, name, segment, figures, expected, contradicting_sources=None):
         """Runs the rule on one case and records whether it gave the expected decision.
 
         Args:
@@ -56,11 +56,12 @@ class ContractSizeDecisionSuite:
             segment (str): The contract's segment.
             figures (dict): The source figures.
             expected (tuple): The expected `(units_per_lot, status, tradeable)`.
+            contradicting_sources (set | None): The sources that gave more than one size, or None for none.
 
         Returns:
             None: This method returns nothing.
         """
-        actual = self.decision.decide(segment, figures)
+        actual = self.decision.decide(segment, figures, contradicting_sources)
         if actual == expected:
             self.passed = self.passed + 1
             print(f'ok      {name}: {actual}')
@@ -196,6 +197,31 @@ class ContractSizeDecisionSuite:
                 decimal.Decimal('1'),
             },
             ('single_source', False),
+        )
+        self.check(
+            'a source giving two sizes makes a conflict, even when two others agree',
+            'nse_currency_options',
+            self.figures(kotak='1000', shoonya='1000'),
+            (None, 'conflict', False),
+            {
+                'stoxkart_lot_size',
+            },
+        )
+        self.check(
+            'a source giving two sizes makes a conflict on its own',
+            'bse_currency_options',
+            {},
+            (None, 'conflict', False),
+            {
+                'stoxkart_lot_size',
+            },
+        )
+        self.check(
+            'an empty set of contradicting sources changes nothing',
+            'nse_currency_options',
+            self.figures(kotak='1000', shoonya='1000'),
+            (thousand, 'confirmed', True),
+            set(),
         )
         self.check_siblings(
             'a conflict is never upgraded',
