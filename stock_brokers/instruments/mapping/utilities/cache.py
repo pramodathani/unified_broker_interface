@@ -20,6 +20,7 @@ import redis
 from redis.backoff import NoBackoff
 from redis.retry import Retry
 from sqlalchemy import text
+from sqlalchemy.exc import ProgrammingError
 
 from stock_brokers.instruments.mapping.utilities import tables
 from utilities.configurations import get_postgres_engine, redis_configuration
@@ -235,6 +236,18 @@ class MappingRedisTier:
             str: The full key.
         """
         return f"{self.KEY_PREFIX}{mapping_date.isoformat()}:contract_sizes"
+
+    def underlyings_key(self, mapping_date):
+        """
+        The key of the hash holding one date's resolved underlyings: each derivative's instrument id to the instrument id of what it is written on.
+
+        Args:
+            mapping_date (datetime.date): The mapping date the hash covers.
+
+        Returns:
+            str: The full key.
+        """
+        return f"{self.KEY_PREFIX}{mapping_date.isoformat()}:underlyings"
 
     def additional_attributes_key(self, mapping_date):
         """
@@ -562,6 +575,66 @@ class MappingRedisTier:
                 first, last = value.split("|")
                 seen[instrument_identifier] = (datetime.date.fromisoformat(first), datetime.date.fromisoformat(last))
         return seen
+
+    def read_seen_and_underlyings(self, mapping_date, instrument_identifiers):
+        """
+        Instruments' first and last seen dates and their resolved underlyings, read in one round trip.
+
+        The two hashes are read together because `/details` needs both for the same instruments, and a separate read would add a round trip to every details request.
+
+        Args:
+            mapping_date (datetime.date): The mapping date to read.
+            instrument_identifiers (list[str]): The instrument ids to read.
+
+        Returns:
+            tuple: A dict of instrument id to a (first_seen_date, last_seen_date) pair of dates, and a dict of instrument id to its underlying's instrument id. Instruments Redis did not hold, and instruments with no resolved underlying, are absent.
+        """
+        client = self.connection.client()
+        if client is None or not instrument_identifiers:
+            return {}, {}
+        try:
+            pipeline = client.pipeline(transaction=False)
+            pipeline.hmget(self.seen_key(mapping_date), instrument_identifiers)
+            pipeline.hmget(self.underlyings_key(mapping_date), instrument_identifiers)
+            stored_seen, stored_underlyings = pipeline.execute()
+        except redis.RedisError:
+            return {}, {}
+        seen = {}
+        underlyings = {}
+        for position, instrument_identifier in enumerate(instrument_identifiers):
+            value = as_text(stored_seen[position])
+            if value:
+                first, last = value.split("|")
+                seen[instrument_identifier] = (datetime.date.fromisoformat(first), datetime.date.fromisoformat(last))
+            underlying = as_text(stored_underlyings[position])
+            if underlying:
+                underlyings[instrument_identifier] = underlying
+        return seen, underlyings
+
+    def read_underlyings(self, mapping_date, instrument_identifiers):
+        """
+        Instruments' resolved underlyings.
+
+        Args:
+            mapping_date (datetime.date): The mapping date to read.
+            instrument_identifiers (list[str]): The instrument ids to read.
+
+        Returns:
+            dict: Mapping of instrument id to its underlying's instrument id. Instruments with no resolved underlying are absent.
+        """
+        client = self.connection.client()
+        if client is None or not instrument_identifiers:
+            return {}
+        try:
+            stored = client.hmget(self.underlyings_key(mapping_date), instrument_identifiers)
+        except redis.RedisError:
+            return {}
+        underlyings = {}
+        for position, instrument_identifier in enumerate(instrument_identifiers):
+            underlying = as_text(stored[position])
+            if underlying:
+                underlyings[instrument_identifier] = underlying
+        return underlyings
 
     def encode_seen(self, first_seen_date, last_seen_date):
         """
@@ -1356,6 +1429,57 @@ class MappingPostgresTier:
         with self.streaming_connection() as connection:
             for row in connection.execute(statement, {"mapping_date": mapping_date}):
                 yield str(row.instrument_id), row.units_per_lot, row.status, row.tradeable
+
+    def stream_underlyings(self, mapping_date):
+        """
+        Yield every resolved underlying for the date.
+
+        Args:
+            mapping_date (datetime.date): The mapping date to read.
+
+        Yields:
+            tuple: The derivative's instrument id and its underlying's instrument id, both as text.
+        """
+        statement = text(
+            "SELECT instrument_id, underlying_instrument_id "
+            f"FROM {tables.UNDERLYINGS} "
+            "WHERE mapping_date = :mapping_date AND underlying_instrument_id IS NOT NULL"
+        )
+        with self.streaming_connection() as connection:
+            for row in connection.execute(statement, {"mapping_date": mapping_date}):
+                yield str(row.instrument_id), str(row.underlying_instrument_id)
+
+    def read_underlyings(self, mapping_date, instrument_identifiers):
+        """
+        Read instruments' resolved underlyings straight out of unified.underlyings.
+
+        Args:
+            mapping_date (datetime.date): The mapping date to read.
+            instrument_identifiers (list[str]): The instrument ids to read.
+
+        Returns:
+            dict: Mapping of instrument id to its underlying's instrument id, both as text. Instruments with no resolved underlying are absent, and so is everything when the table does not exist yet.
+        """
+        if not instrument_identifiers:
+            return {}
+        statement = text(
+            "SELECT instrument_id, underlying_instrument_id "
+            f"FROM {tables.UNDERLYINGS} "
+            "WHERE mapping_date = :mapping_date AND underlying_instrument_id IS NOT NULL "
+            "AND instrument_id = ANY(CAST(:instrument_ids AS uuid[]))"
+        )
+        parameters = {
+            "mapping_date": mapping_date,
+            "instrument_ids": list(instrument_identifiers),
+        }
+        underlyings = {}
+        try:
+            with self.engine.connect() as connection:
+                for row in connection.execute(statement, parameters):
+                    underlyings[str(row.instrument_id)] = str(row.underlying_instrument_id)
+        except ProgrammingError:
+            return {}
+        return underlyings
 
     def stream_additional_attributes(self, mapping_date):
         """

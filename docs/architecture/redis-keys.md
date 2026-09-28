@@ -137,6 +137,7 @@ The same run warms the REST API's instrument catalogue under `unified:catalogue:
 | `unified:catalogue:<date>:tokens:<broker>` | hash | One broker's tokens, by broker token |
 | `unified:catalogue:<date>:order_handles` | hash | What each broker needs to place an order on the instrument, by instrument id |
 | `unified:catalogue:<date>:contract_sizes` | hash | The day's contract size decision for currency and commodity derivatives, by instrument id |
+| `unified:catalogue:<date>:underlyings` | hash | The day's resolved underlying of each future and option: the derivative's instrument id to its underlying's |
 | `unified:catalogue:<date>:additional_attributes` | hash | Extra broker attributes, kept apart so the order path stays small |
 | `unified:catalogue:<date>:segments` | hash | How many instruments each segment has |
 | `unified:catalogue:<date>:catalogue:<segment>` | sorted set | One segment's instruments in name order |

@@ -37,7 +37,11 @@ run for hours. Then `stock_brokers/instruments/mapping/utilities/contract_sizes.
 one lot of every live currency and commodity derivative is, from the contract size fields several brokers' snapshots
 carry, and writes each decision, its status and every source's figure to `unified.contract_sizes` for the date. An
 order on such a contract reads only that decision. A failure is logged and does not fail the run; orders on those
-contracts are then refused, because the warm finds no decision for them.
+contracts are then refused, because the warm finds no decision for them. Straight after,
+`stock_brokers/instruments/mapping/utilities/underlyings.py` decides which instrument every live future and option is
+written on, from the exchange code three brokers give for each one's underlying, and writes the decisions to
+`unified.underlyings`; `/details` and `/master` answer `underlying_instrument_id` from them. A failure is logged and does
+not fail the run; every derivative then answers with no underlying.
 
 **4. Cache.** The mapped date's rows are written to Redis, whether or not every broker mapped:
 
@@ -60,7 +64,7 @@ background. For today's date that is about half a million instruments and two mi
 
 **5. The REST API's catalogue.** The REST API's instrument routes read the mapping cache in
 `stock_brokers/instruments/mapping/utilities/cache.py` - identities, each broker's tokens, order handles, and a
-browsable catalogue per segment, and the contract size decisions - so it is warmed for the date from the unified tables, under `unified:catalogue:`,
+browsable catalogue per segment, the contract size decisions and the resolved underlyings - so it is warmed for the date from the unified tables, under `unified:catalogue:`,
 and every other date's keys there are cleared. A warm that fails is logged and does not fail the run: the API reads the
 unified tables until the next warm succeeds.
 
@@ -291,6 +295,26 @@ def decide_contract_sizes(mapping_date, logger):
             logger.warning(f"  {count} {segment} contract(s) are not tradeable: {status}")
     return True
 
+def decide_underlyings(mapping_date, logger):
+    """
+    Decide which instrument every live derivative is written on for the date, and say whether it worked.
+
+    - `mapping_date` is the date to decide.
+    - `logger` is where the summary and any failure are reported.
+    """
+    from stock_brokers.instruments.mapping.utilities.underlyings import UnderlyingResolver
+
+    try:
+        summary = UnderlyingResolver().run(mapping_date)
+    except Exception as exception:
+        logger.error(f"Could not decide underlyings: {type(exception).__name__}: {exception}")
+        return False
+    totals = {}
+    for (segment, status), count in summary.items():
+        totals[status] = totals.get(status, 0) + count
+    logger.info(f"Underlyings for {mapping_date}: {totals}")
+    return True
+
 def warm_catalogue(mapping_date, logger):
     """
     Warm the REST API's mapping cache for the date from the unified tables, and say whether it worked.
@@ -346,6 +370,7 @@ def main():
             return 1
         refresh_statistics(get_postgres, MAPPED_BROKERS, logger)
         decide_contract_sizes(mapping_date, logger)
+        decide_underlyings(mapping_date, logger)
         warm_catalogue(mapping_date, logger)
         return 0
 
@@ -370,6 +395,7 @@ def main():
     if results:
         refresh_statistics(get_postgres, MAPPED_BROKERS, logger)
         decide_contract_sizes(mapping_date, logger)
+        decide_underlyings(mapping_date, logger)
 
     try:
         cached = write_cache(get_cache(), get_postgres, mapping_date, logger)

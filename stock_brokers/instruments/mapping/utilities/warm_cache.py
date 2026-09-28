@@ -197,6 +197,30 @@ class CacheWarmer:
         written += self.redis_tier.write_fields(key, fields, self.expiry_seconds)
         return written
 
+    def warm_underlyings(self):
+        """
+        Write every resolved underlying for the date, keyed by the derivative's instrument id.
+
+        The underlyings are decided in `underlyings.py` straight after the mapping, and `/details` and `/master` read only this hash for a derivative's `underlying_instrument_id`. A database without the table yet, because its DDL has not been applied, writes nothing, and every derivative then answers with no underlying.
+
+        Returns:
+            int: The number of underlyings written.
+        """
+        key = self.redis_tier.underlyings_key(self.mapping_date)
+        written = 0
+        fields = {}
+        try:
+            for instrument_identifier, underlying_identifier in self.postgres_tier.stream_underlyings(self.mapping_date):
+                fields[instrument_identifier] = underlying_identifier
+                if len(fields) >= self.WRITE_BATCH_FIELDS:
+                    written += self.redis_tier.write_fields(key, fields, self.expiry_seconds)
+                    fields = {}
+        except ProgrammingError as error:
+            print(f"  underlyings could not be read, so none were warmed: {error.orig}")
+            return written
+        written += self.redis_tier.write_fields(key, fields, self.expiry_seconds)
+        return written
+
     def warm_catalogue(self):
         """
         Write the lookup indexes a caller browsing or searching the instruments needs.
@@ -248,7 +272,7 @@ class CacheWarmer:
             clear (bool): Whether to delete the cached keys of every other date.
 
         Returns:
-            dict: The counts written, with keys "identities", "tokens", "instruments", "contract_sizes", "additional_attributes", "catalogued" and "cleared".
+            dict: The counts written, with keys "identities", "tokens", "instruments", "contract_sizes", "underlyings", "additional_attributes", "catalogued" and "cleared".
 
         Raises:
             SystemExit: If Redis cannot be reached.
@@ -274,6 +298,9 @@ class CacheWarmer:
         contract_sizes = self.warm_contract_sizes()
         print(f"  contract sizes            {contract_sizes:>10}")
 
+        underlyings = self.warm_underlyings()
+        print(f"  underlyings               {underlyings:>10}")
+
         additional_attributes = self.warm_additional_attributes()
         print(f"  additional attributes     {additional_attributes:>10}")
 
@@ -295,6 +322,7 @@ class CacheWarmer:
             "tokens": tokens,
             "instruments": instruments,
             "contract_sizes": contract_sizes,
+            "underlyings": underlyings,
             "additional_attributes": additional_attributes,
             "catalogued": catalogued,
             "cleared": cleared,

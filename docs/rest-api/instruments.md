@@ -404,14 +404,15 @@ X-Mapping-Date: 2026-09-26
     "underlying_symbol": "CRUDEOIL",
     "expiry_date": "2026-10-19",
     "strike_price": null,
-    "option_type": null
+    "option_type": null,
+    "underlying_instrument_id": null
   }
 ]
 ```
 
 #### Response attributes
 
-Every element of the array is an instrument identity, which has the fields below. The same nine fields open the answers of `search`, `details`, `additional_details`, the quote routes and `prices`.
+Every element of the array is an instrument identity, which has the nine fields below, followed by `underlying_instrument_id`. The same nine fields open the answers of `search`, `details`, `additional_details`, the quote routes and `prices`; `underlying_instrument_id` follows them only here and in `details`.
 
 | Attribute | Type | Description |
 |---|---|---|
@@ -424,6 +425,7 @@ Every element of the array is an instrument identity, which has the fields below
 | `expiry_date` | string or null | The expiry, `YYYY-MM-DD`, for a future or option |
 | `strike_price` | number or null | The strike, for an option |
 | `option_type` | string or null | `CE` or `PE`, for an option |
+| `underlying_instrument_id` | string or null | For a future or option, the UUID of the instrument it is written on, as the brokers' own records say; `null` for a security and for a derivative whose underlying could not be decided. See [Underlyings](#underlyings). |
 
 Instruments come in segment order, and within a segment by name, expiry, strike and option type.
 
@@ -609,6 +611,7 @@ The example below is shortened to two brokers. The id is a placeholder, and the 
   "expiry_date": null,
   "strike_price": null,
   "option_type": null,
+  "underlying_instrument_id": null,
   "mapping_date": "2026-09-26",
   "first_seen_date": "2026-06-01",
   "last_seen_date": "2026-09-26",
@@ -627,6 +630,7 @@ The answer starts with the nine identity fields described under [`master`](#mast
 
 | Attribute | Type | Description |
 |---|---|---|
+| `underlying_instrument_id` | string or null | For a future or option, the UUID of the instrument it is written on; `null` for a security and for a derivative whose underlying could not be decided. See [Underlyings](#underlyings). |
 | `mapping_date` | string | The mapping date answered |
 | `first_seen_date` | string or null | The first mapping date the instrument appeared on |
 | `last_seen_date` | string or null | The last mapping date the instrument appeared on |
@@ -673,6 +677,33 @@ The seen dates and handles of every instrument found in the cache are read with 
     - Redis: `unified:catalogue:<date>:identity`, `unified:catalogue:<date>:order_handles` and `unified:catalogue:<date>:seen`.
     - Fallback: `unified.instruments` for the identity and seen dates, and `unified.broker_mappings` for the handles.
     - Consensus: `units_per_lot` in `stock_brokers/instruments/ticks/utilities/resolution.py` and [`InstrumentCatalogue.agreed_tick_size`][unified_broker_interface.utilities.instrument_catalogue.InstrumentCatalogue.agreed_tick_size].
+
+## Underlyings
+
+A future or option names what it is written on only by `underlying_symbol`, and that name does not always match the underlying's own `symbol`: the nse's `NIFTYFPI` contracts are written on the index stored as "Nifty FPI 150", and the bse's `SENSEX50` contracts on "SNSX50". So each morning's mapping run decides every live derivative's underlying from the brokers' own records, and `master` and `details` answer it as `underlying_instrument_id`.
+
+Dhan, Groww and Fyers each give the exchange's code for a derivative's underlying. The same codes identify the candidates: Dhan's and Groww's own token for a share or a future is the exchange's code, and Fyers records an index's and a share's own code. A derivative's codes are looked up only on its own exchange and in the segments its underlying can be in, which are the family's cash or index segment and, for an option, the family's futures segment, because an MCX option is written on a future. The table below lists the four outcomes.
+
+| Status | Meaning | `underlying_instrument_id` |
+|---|---|---|
+| `resolved` | Every code leads to one and the same instrument | That instrument's id |
+| `ambiguous` | The codes lead to more than one instrument | `null` |
+| `unresolved` | The codes lead to no instrument | `null` |
+| `no_code` | No broker gives a code | `null` |
+
+The table below counts the decisions for 2026-09-28, the first date they were made, by family. Every resolved link was checked that day: its name equalled the derivative's `underlying_symbol` except for `NIFTYFPI`, `SENSEX50` and the 91-day treasury bill `91DTB`, whose underlyings carry other names, and every linked future expired on or after its option.
+
+| Derivatives | Live | Resolved | Ambiguous | Unresolved | No code |
+|---|---:|---:|---:|---:|---:|
+| Equity, nse and bse | 118,014 | 113,116 | 1,017 | 18 | 3,863 |
+| Commodity, mcx, nse and ncdex | 48,699 | 34,254 | 0 | 1,976 | 12,469 |
+| Currency, nse and bse | 25,184 | 0 | 0 | 11,770 | 13,414 |
+| Fixed income, nse and bse | 6,225 | 4 | 0 | 54 | 6,167 |
+
+A commodity or currency contract's own underlying is a reference record, so an option there resolves to the future it settles into, or not at all; the nse's currency codes lead to nothing in the right segments, and neither Dhan, Groww nor Fyers gives a code for NCDEX or most fixed income contracts. The ambiguous ones are the bse's FOCIT contracts, whose code names two bse indices.
+
+??? note "Under the hood"
+    `stock_brokers/instruments/mapping/utilities/underlyings.py` decides the date's underlyings straight after the contract sizes, and writes every decision, its status and each broker's code to `unified.underlyings`. The warm copies the resolved ones into the hash `unified:catalogue:<date>:underlyings`, keyed by the derivative's id. `details` reads it in the same pipelined round trip as the seen dates, so the route's cost is unchanged, and `master` reads it once per batch of 5,000. A past date or a cold cache reads `unified.underlyings` instead. Run `python -m stock_brokers.instruments.mapping.utilities.underlyings --date YYYY-MM-DD --dry-run` to see a date's decisions without writing them.
 
 ## Additional details
 

@@ -187,10 +187,11 @@ class InstrumentCatalogue:
                     logger.error(f"Redis became unreachable while listing {scoped}; the listing is incomplete")
                     return
                 identities = self.redis.read_identities(mapping_date, identifiers)
+                underlyings = self.redis.read_underlyings(mapping_date, identifiers)
                 for identifier in identifiers:
                     identity = identities.get(identifier)
                     if identity is not None:
-                        yield identity_to_json(identity)
+                        yield {**identity_to_json(identity), "underlying_instrument_id": underlyings.get(identifier)}
 
     def _master_from_postgres(self, mapping_date, exchange, segment):
         """
@@ -207,8 +208,15 @@ class InstrumentCatalogue:
         statement = text(f"SELECT {_IDENTITY_COLUMNS} FROM {tables.MASTER} m "
                          f"WHERE {' AND '.join(conditions)} ORDER BY {_LISTING_ORDER}")
         with self.engine.connect().execution_options(stream_results=True, max_row_buffer=BATCH) as connection:
-            for row in connection.execute(statement, parameters):
-                yield identity_to_json(row._mapping)
+            rows = connection.execute(statement, parameters)
+            while True:
+                batch = rows.fetchmany(BATCH)
+                if not batch:
+                    return
+                identifiers = [str(row.instrument_id) for row in batch]
+                underlyings = self.cache.postgres_tier.read_underlyings(mapping_date, identifiers)
+                for row in batch:
+                    yield {**identity_to_json(row._mapping), "underlying_instrument_id": underlyings.get(str(row.instrument_id))}
 
     def search(self, exchange, segment, query, as_of=None, limit=50):
         """
@@ -425,7 +433,7 @@ class InstrumentCatalogue:
         """
         Several instruments' details, as details gives them, read together.
 
-        The seen dates and handles of every instrument found in the cache are read with one HMGET each, whatever the number of instruments. An instrument answered from Postgres has its broker rows read on its own.
+        The seen dates and resolved underlyings of every instrument found in the cache are read in one pipelined round trip, and their handles with one HMGET, whatever the number of instruments. An instrument answered from Postgres has its broker rows read on its own, and the underlyings of all such instruments are read in one query.
 
         Args:
             instruments (list[InstrumentQuery]): The instruments the request named, in order.
@@ -439,14 +447,19 @@ class InstrumentCatalogue:
         """
         mapping_date, resolutions = self.resolve_many(instruments, as_of)
         cached_identifiers = []
+        uncached_identifiers = []
         for resolution in resolutions:
             if isinstance(resolution, RequestError):
                 continue
             identity, cached = resolution
             if cached:
                 cached_identifiers.append(str(identity["instrument_id"]))
-        seen_by_instrument = self.redis.read_seen(mapping_date, cached_identifiers)
+            else:
+                uncached_identifiers.append(str(identity["instrument_id"]))
+        seen_by_instrument, underlyings = self.redis.read_seen_and_underlyings(mapping_date, cached_identifiers)
         handles_by_instrument = self.redis.read_order_handles(mapping_date, cached_identifiers)
+        if uncached_identifiers:
+            underlyings.update(self.cache.postgres_tier.read_underlyings(mapping_date, uncached_identifiers))
 
         answers = []
         for resolution in resolutions:
@@ -465,10 +478,11 @@ class InstrumentCatalogue:
                               | {"lot_size": None if row["lot_size"] is None else str(row["lot_size"]),
                                  "tick_size": None if row["tick_size"] is None else str(row["tick_size"])}
                               for row in self._resolver.broker_rows_on_date(identifier, mapping_date)]
-            answers.append(self._details_answer(identity, mapping_date, first_seen, last_seen, carried_by))
+            answers.append(self._details_answer(identity, mapping_date, first_seen, last_seen, carried_by,
+                                                underlyings.get(identifier)))
         return answers
 
-    def _details_answer(self, identity, mapping_date, first_seen, last_seen, carried_by):
+    def _details_answer(self, identity, mapping_date, first_seen, last_seen, carried_by, underlying_identifier=None):
         """
         One instrument's details answer, from what was read for it.
 
@@ -478,6 +492,7 @@ class InstrumentCatalogue:
             first_seen (datetime.date | None): The first date the instrument was mapped.
             last_seen (datetime.date | None): The last date the instrument was mapped.
             carried_by (list[dict]): Each broker's handle, with its broker name, in broker order.
+            underlying_identifier (str | None): The instrument id of what a derivative is written on, as `underlyings.py` resolved it, or None.
 
         Returns:
             dict: The details, as the `/details` route sends them.
@@ -488,6 +503,7 @@ class InstrumentCatalogue:
         lot_size, _ = units_per_lot(identity, handles_by_broker)
         return {
             **identity_to_json(identity),
+            "underlying_instrument_id": underlying_identifier,
             "mapping_date": mapping_date.isoformat(),
             "first_seen_date": first_seen.isoformat() if first_seen else None,
             "last_seen_date": last_seen.isoformat() if last_seen else None,

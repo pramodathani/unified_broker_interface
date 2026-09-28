@@ -368,7 +368,7 @@ class InstrumentRoutesState:
         return fake_redis
 
     def add_instruments(self, fake_redis):
-        """Adds every instrument's identity, catalogue member, seen dates, handles and attributes.
+        """Adds every instrument's identity, catalogue member, seen dates, handles and attributes, and one resolved underlying, the NIFTY option's, so that `underlying_instrument_id` is answered with an id as well as with null.
 
         Args:
             fake_redis (InstrumentRoutesRedis): The stand-in to fill.
@@ -468,6 +468,9 @@ class InstrumentRoutesState:
             'nse_equities': '3',
             'nse_equity_index_futures': '1',
             'nse_equity_index_options': '1',
+        }
+        fake_redis.hashes[self.prefix + 'underlyings'] = {
+            INSTRUMENT_IDENTIFIERS['nifty_option']: INSTRUMENT_IDENTIFIERS['nifty_future'],
         }
 
     def add_instrument(self, fake_redis, name, identity, handles, attributes):
