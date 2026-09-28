@@ -265,7 +265,7 @@
 {"body": "99999", "header": "99999", "name": "stoxkart_sends_99999_when_its_settings_name_no_algo_id"}
 {"body": "123456", "header": "123456", "name": "stoxkart_sends_the_algo_id_its_settings_name"}
 {"body": "99999", "header": "99999", "name": "stoxkart_treats_a_blank_algo_id_as_none"}
-{"name": "after_market_orders_are_spread_evenly_over_the_brokers_that_take_them", "orders": 28, "per_broker": {"dhan": 4, "flattrade": 4, "indmoney": 4, "kotak": 4, "shoonya": 4, "stoxkart": 4, "zerodha": 4}, "refused": 0}
+{"name": "after_market_orders_are_spread_evenly_over_the_brokers_that_take_them", "orders": 28, "per_broker": {"dhan": 4, "flattrade": 5, "indmoney": 5, "kotak": 5, "shoonya": 5, "zerodha": 4}, "refused": 0}
 {"converted": {"dhan": 3, "flattrade": 300, "kotak": 300, "zerodha": 3}, "name": "three_hundred_units_of_crude_in_each_brokers_terms"}
 {"name": "a_quantity_that_is_not_whole_lots_is_refused", "refusal": "150 is not a whole number of lots of 100"}
 {"accepted": true, "name": "a_crude_exit_reduced_to_200_units_is_sent_as_2_lots_to_zerodha", "sent": [["zerodha", "2104110000000001", 2]]}
