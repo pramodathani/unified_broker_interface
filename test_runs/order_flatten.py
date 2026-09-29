@@ -443,6 +443,7 @@ class OrderFlattenSuite:
         original_request = requests.Session.request
         original_uuid4 = uuid.uuid4
         original_wait = api_configuration['order_flatten_wait_seconds']
+        original_selector = api_configuration['order_broker_selector']
         blueprint_base.get_cache = self.fake_cache
         blueprint_base.get_mongo_db = self.fake_mongo_database
         requests.Session.request = self.network.request
@@ -450,6 +451,7 @@ class OrderFlattenSuite:
         # Long enough for one more read of the books, short enough that a cancel nobody confirms
         # does not hold the suite up.
         api_configuration['order_flatten_wait_seconds'] = 0.6
+        api_configuration['order_broker_selector'] = 'round_robin'
         try:
             results = []
             for scenario in OrderFlattenScenarios().build():
@@ -460,6 +462,7 @@ class OrderFlattenSuite:
             requests.Session.request = original_request
             uuid.uuid4 = original_uuid4
             api_configuration['order_flatten_wait_seconds'] = original_wait
+            api_configuration['order_broker_selector'] = original_selector
         return results
 
     def encode(self, result):
