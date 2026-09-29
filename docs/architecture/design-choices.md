@@ -239,7 +239,7 @@ flowchart TD
 
 **The problem.** `POST /api/orders/place` names an instrument, not a broker, so something has to choose the broker. The round-robin selector needs a counter shared by every gunicorn worker, which lives in Redis. A separate Redis call for the counter would add a network round trip to every order.
 
-**The choice.** A selector does not talk to Redis itself. It implements `queue_redis_commands`, which adds its commands to the pipeline the route is already sending to read the instrument's identity, order handles and contract size, and `ranked_brokers` receives the replies. The round-robin selector queues one `INCR unified:orders:round_robin`; the fixed-priority selector queues nothing.
+**The choice.** A selector does not talk to Redis itself. It implements `queue_redis_commands`, which adds its commands to the pipeline the route is already sending to read the instrument's identity, order handles and contract size, and `ranked_brokers` receives the replies. The lowest-cost selector, the default, queues one `EVAL` of a script that returns every broker's message counts; the round-robin selector queues one `INCR unified:orders:round_robin`; the fixed-priority selector queues nothing.
 
 ```mermaid
 sequenceDiagram
@@ -255,4 +255,4 @@ sequenceDiagram
 
 **The cost.** A selector can only queue commands before it knows the instrument's details, and it cannot read something and then decide what to read next. With round robin, a turn is spent as soon as the order has been validated, even if the order is refused afterwards, and the broker after one that cannot take the order takes two turns in a row.
 
-**In the code.** `BrokerSelector` in `unified_broker_interface/utilities/broker_selection/base.py`, `RoundRobinSelector` and `FixedPrioritySelector` beside it, and the two pipelines in the place route of `unified_broker_interface/blueprints/orders.py`.
+**In the code.** `BrokerSelector` in `unified_broker_interface/utilities/broker_selection/base.py`, `LowestCostSelector`, `RoundRobinSelector` and `FixedPrioritySelector` beside it, and the two pipelines in the place route of `unified_broker_interface/blueprints/orders.py`.

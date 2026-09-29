@@ -105,7 +105,7 @@ Each script in `bin/unified/` keeps its own tuple of broker names, and some keep
 - [ ] Add it to `BROKER_ORDER_CLASSES` in `unified_broker_interface/utilities/broker_orders/utilities/registry.py`. The list's order is the order brokers take turns in.
 - [ ] If the broker's REST quotes are verified, write `unified_broker_interface/utilities/broker_quotes/newbroker.py` with a `BrokerQuoteSource` subclass and add it to `SOURCES` in `unified_broker_interface/utilities/broker_quotes/utilities/service.py`.
 - [ ] Add the broker's display name to `BROKER_CODES` in `unified_broker_interface/utilities/import_details.py`, and its document to the `broker_details` export that `bin/import-api-details` loads.
-- [ ] If the broker caps order messages per day, add it to `UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_CAPS` in `.env`.
+- [ ] Add the broker's row to `unified.broker_order_costs`: its order limits per second, minute, hour and day, and its brokerage for delivery, F&O and intraday. The statement to copy is in [Choosing a broker by cost](../architecture/broker-selection.md#changing-a-row-or-adding-a-broker). Without a row the broker is offered orders only after every broker that has one.
 
 ### 9. Services
 

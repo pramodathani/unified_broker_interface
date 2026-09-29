@@ -163,7 +163,7 @@ The API uses a small set of HTTP status codes, and each one means the same thing
 | <span class="status s4">404</span> | The instrument, order or document does not exist. |
 | <span class="status s4">409</span> | The request conflicts with the current state, for example the order is already complete. |
 | <span class="status s4">422</span> | The broker rejected the order. |
-| <span class="status s4">429</span> | Order engine only: the broker's daily order cap, set by `UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_CAPS`, has no room left for this kind of order. |
+| <span class="status s4">429</span> | Order engine only: the broker's daily order cap, from `unified.broker_order_costs` or `UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_CAPS`, has no room left for this kind of order. |
 | <span class="status s5">500</span> | The API itself is not configured. |
 | <span class="status s5">501</span> | The broker cannot modify that field. |
 | <span class="status s5">502</span> | The stored order book, trade book or portfolio document exists, but no broker in it has usable data. |

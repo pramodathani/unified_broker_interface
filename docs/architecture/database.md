@@ -66,6 +66,7 @@ The table below lists every table in the database. "Chunk" is the size of each T
 | `unified` | `broker_mappings` | 1 month, by `mapping_date` | not compressed | `bin/unified/instruments/map` | `…/mapping/utilities/sql/ddl/120_unified_broker_mappings.sql` |
 | `unified` | `contract_sizes` | 1 month, by `mapping_date` | not compressed | `bin/unified/instruments/map` | `…/mapping/utilities/sql/ddl/130_unified_contract_sizes.sql` |
 | `unified` | `underlyings` | 1 month, by `mapping_date` | not compressed | `bin/unified/instruments/map` | `…/mapping/utilities/sql/ddl/140_unified_underlyings.sql` |
+| `unified` | `broker_order_costs` | ordinary table | | by hand; seeded by its DDL file, and read by the REST API and the order engine at start-up and at 06:00 IST (see [Choosing a broker by cost](broker-selection.md)) | `…/mapping/utilities/sql/ddl/150_unified_broker_order_costs.sql` |
 | `unified` | `price_history` | 1 month | 30 days | `bin/unified/instruments/price_history` | `…/historical/utilities/sql/ddl/200_unified_price_history.sql` |
 | `unified` | `price_history_sources` | ordinary table | | `bin/unified/instruments/price_history` | `…/historical/utilities/sql/ddl/210_unified_price_history_sources.sql` |
 | `unified` | `adjustment_factors` | ordinary table | | `bin/unified/instruments/price_history` | `…/historical/utilities/sql/ddl/220_unified_adjustment_factors.sql` |
