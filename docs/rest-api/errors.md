@@ -320,7 +320,7 @@ One `422` never reached the broker at all. When the connection could not be open
 
 ## 429 Too Many Requests
 
-A `429` comes only from `place`. It means the chosen broker has been sent so many order messages today that its daily cap, set by `UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_CAPS`, has no room left for this kind of order. Every placement, modification and cancellation counts as one message, whichever process sent it. The last part of each cap is kept back for orders that close a position, so a new entry is refused before a closing order is. That share is set by `UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_CAP_EXIT_RESERVE` and is 0.05 by default.
+A `429` comes only from `place`. It means the chosen broker has been sent so many order messages today that its daily cap, set by `orders_per_day` in `unified.broker_order_costs` or else by `UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_CAPS`, has no room left for this kind of order. Every placement, modification and cancellation counts as one message, whichever process sent it. The last part of each cap is kept back for orders that close a position, so a new entry is refused before a closing order is. That share is set by `UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_CAP_EXIT_RESERVE` and is 0.05 by default.
 
 | Message | Cause |
 |---|---|

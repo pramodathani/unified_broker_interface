@@ -29,3 +29,14 @@ When the script cannot run, `RiskGates.take_rate_token` turns the Redis error in
 ## Why some brokers have their own limit
 
 In the live burst of 2026-09-27 the sliding window held every broker to 10 messages in any second, and still Zerodha refused 10 of its 20 orders (`Maximum allowed order requests per second exceeded`) and INDmoney 4 of 20 (`Rate limit exceeded`). Either their limits are lower than 10 as this engine counts, or they count every API call, including the order-book polls the pollers make twice a second. The limit is therefore set per broker, in the same `default,broker=number` form as the worker counts, and defaults to 5 for these two. The 5 is a cautious guess, not a measured limit; a weekday burst after this change is what should settle it.
+
+## Why the cost table's limits replace the configured ones
+
+From 2026-09-29 the limits come first from `unified.broker_order_costs`, the table the lowest-cost selector reads, so that one table holds every number a broker is routed and limited by. Where the table gives a per-second limit it replaces `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_PER_BROKER_PER_SECOND`; that setting remains the fallback for a broker with no row or an empty cell, so a broker added to the code before its row is written is still held to 10 a second rather than to nothing.
+
+This raised Zerodha from 5 to 9 and INDmoney from 5 to 7, because those are the values in the user's table. The live burst described above saw Zerodha refuse orders at 10 a second, so 9 may still be too high for Zerodha; the next weekday burst should show whether its row needs lowering.
+
+## Why each key carries its own window
+
+The per-minute and per-hour limits are separate sorted sets, `:minute` and `:hour`, checked in the same Lua step as the per-second set, so a message is counted in every window or in none. The script therefore takes a window length for each key rather than one for all, and gives each key an expiry a second longer than its own window. The per-second key keeps its old name, so the sets already in Redis stay valid.
+

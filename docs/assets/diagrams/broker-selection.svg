@@ -1,0 +1,59 @@
+<svg class="ubi-svg" viewBox="0 0 900 420" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="broker-selection-title broker-selection-description">
+  <title id="broker-selection-title">The lowest-cost broker selector</title>
+  <desc id="broker-selection-description">F&amp;O orders enter the lowest-cost selector, which holds the broker cost table in memory and reads every broker's counts from Redis in one command per order. Most orders leave for the two brokers that charge nothing for F&amp;O; when their minutes fill, orders go to the five-rupee broker, and only after that to the twenty-rupee brokers. The cost table is read from PostgreSQL once a day.</desc>
+  <path id="broker-selection-in" class="wire" d="M150,215 L220,215"/>
+  <path id="broker-selection-free" class="wire" d="M430,200 C510,200 540,85 620,85"/>
+  <path id="broker-selection-five" class="wire" d="M430,215 L620,215"/>
+  <path id="broker-selection-twenty" class="wire" d="M430,230 C510,230 540,335 620,335"/>
+  <path id="broker-selection-table" class="wire" d="M325,70 L325,135"/>
+  <path id="broker-selection-counts" class="wire" d="M325,360 L325,295"/>
+  <circle class="dot" r="6">
+    <animateMotion dur="2s" repeatCount="indefinite" begin="0s"><mpath href="#broker-selection-in"/></animateMotion>
+  </circle>
+  <circle class="dot" r="6">
+    <animateMotion dur="2s" repeatCount="indefinite" begin="-1s"><mpath href="#broker-selection-in"/></animateMotion>
+  </circle>
+  <circle class="dot" r="6">
+    <animateMotion dur="2s" repeatCount="indefinite" begin="0s"><mpath href="#broker-selection-free"/></animateMotion>
+  </circle>
+  <circle class="dot" r="6">
+    <animateMotion dur="2s" repeatCount="indefinite" begin="-1s"><mpath href="#broker-selection-free"/></animateMotion>
+  </circle>
+  <circle class="dot" r="6">
+    <animateMotion dur="8s" repeatCount="indefinite" begin="-4s" keyPoints="0;1;1" keyTimes="0;0.25;1" calcMode="linear"><mpath href="#broker-selection-five"/></animateMotion>
+  </circle>
+  <circle class="dot alt" r="6">
+    <animateMotion dur="2s" repeatCount="indefinite" begin="0s"><mpath href="#broker-selection-counts"/></animateMotion>
+  </circle>
+  <circle class="dot alt" r="6">
+    <animateMotion dur="8s" repeatCount="indefinite" begin="0s" keyPoints="0;1;1" keyTimes="0;0.25;1" calcMode="linear"><mpath href="#broker-selection-table"/></animateMotion>
+  </circle>
+  <rect class="box" x="20" y="185" width="130" height="60" rx="8"/>
+  <text class="title" x="85" y="211" text-anchor="middle">F&amp;O order</text>
+  <text class="small" x="85" y="229" text-anchor="middle">no broker named</text>
+  <rect class="store" x="210" y="20" width="230" height="50" rx="6"/>
+  <text x="325" y="42" text-anchor="middle">broker cost table</text>
+  <text class="mono" x="325" y="59" text-anchor="middle">unified.broker_order_costs</text>
+  <text class="small" x="335" y="106">read at start-up and 06:00 IST</text>
+  <rect class="accent-box" x="220" y="135" width="210" height="160" rx="8"/>
+  <text class="title" x="325" y="170" text-anchor="middle">Lowest-cost selector</text>
+  <text class="small" x="325" y="194" text-anchor="middle">1 budget used up? last</text>
+  <text class="small" x="325" y="211" text-anchor="middle">2 cheapest fee</text>
+  <text class="small" x="325" y="228" text-anchor="middle">3 least needed elsewhere</text>
+  <text class="small" x="325" y="245" text-anchor="middle">4 least full</text>
+  <text class="small" x="325" y="262" text-anchor="middle">5 place in rotation</text>
+  <rect class="store" x="210" y="360" width="230" height="50" rx="6"/>
+  <text x="325" y="382" text-anchor="middle">Redis counts</text>
+  <text class="mono" x="325" y="399" text-anchor="middle">rate windows, daily_count</text>
+  <text class="small" x="335" y="332">one EVAL per order</text>
+  <rect class="box" x="620" y="50" width="260" height="70" rx="8"/>
+  <text class="title" x="634" y="76">₹0 for F&amp;O</text>
+  <text class="small" x="634" y="96">Flattrade, Wisdom Capital</text>
+  <text class="small" x="634" y="111">720 orders a minute between them</text>
+  <rect class="box" x="620" y="185" width="260" height="60" rx="8"/>
+  <text class="title" x="634" y="211">₹5 for F&amp;O</text>
+  <text class="small" x="634" y="231">Shoonya, once the ₹0 minutes are full</text>
+  <rect class="box" x="620" y="305" width="260" height="60" rx="8"/>
+  <text class="title" x="634" y="331">₹20 for F&amp;O</text>
+  <text class="small" x="634" y="351">the other seven, last</text>
+</svg>

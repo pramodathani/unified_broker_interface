@@ -554,7 +554,7 @@ The engine adds <span class="status s2">202</span>, <span class="status s4">403<
 
 ### What happens, step by step
 
-The sequence below shows a placement by `instrument_id` with the default round-robin selector.
+The sequence below shows a placement by `instrument_id` with the default lowest-cost selector.
 
 ```mermaid
 sequenceDiagram
@@ -571,7 +571,7 @@ sequenceDiagram
     A->>A: check token, validate body
     A->>R: EXISTS engine lock, XADD intent
     A->>R: BLPOP the intent's reply list
-    E->>R: read the intent, choose the broker<br/>(INCR round_robin, skip unfit brokers)
+    E->>R: read the intent, choose the broker<br/>(one EVAL of every broker's counts, skip unfit brokers)
     E->>E: tradeable? contract size?<br/>lot size and tick size checks
     alt dry_run
         E->>R: RPUSH 200 with the request it would send
@@ -589,8 +589,8 @@ An instrument named by its identity fields costs the API one more round trip, a 
 ??? note "Under the hood"
     - **Redis keys the route reads:** `last_login` (the API's token), `unified:catalogue:current_date`, `unified:catalogue:warm_identifier`, `:catalogue:<segment>` (only for a lookup by fields), `unified:orders:engine:lock`, and the intent's reply list.
     - **Redis keys the route writes:** `unified:orders:intents:stream`.
-    - **What the engine reads and writes:** every broker's login and settings, the instrument's catalogue data, `unified:orders:round_robin`, the rate budget's windows, and `unified:orders:daily_count:<broker>` when that broker is capped; see [Order engine](order-engine.md).
-    - **Stores never read:** MongoDB and PostgreSQL.
+    - **What the engine reads and writes:** every broker's login and settings, the instrument's catalogue data, the rate budget's windows, and `unified:orders:daily_count:<broker>`, which the lowest-cost selector reads for every broker and the daily count writes for a capped one; see [Order engine](order-engine.md).
+    - **Stores never read:** MongoDB and PostgreSQL. The broker cost table comes from PostgreSQL, but only when a process starts and at 06:00 IST, never while an order waits.
     - **Classes:** [`PlaceOrderRequest`][unified_broker_interface.utilities.broker_orders.utilities.place_order_request.PlaceOrderRequest] validates the body, [`IntentHandoff`][unified_broker_interface.utilities.order_engine.utilities.intent_handoff.IntentHandoff] writes the intent and waits, [`OrderPlacement`][unified_broker_interface.utilities.broker_orders.utilities.placement.OrderPlacement] chooses the broker and builds the request inside the engine, and each broker's [`BrokerOrders`][unified_broker_interface.utilities.broker_orders.base.BrokerOrders] subclass builds its own request and reads its own answer.
     - **Answer rules:** [`BrokerAnswer`][unified_broker_interface.utilities.broker_orders.utilities.broker_answer.BrokerAnswer] maps `accepted`, `rejected` and `unknown` to 200, 422 and 504.
 
@@ -1195,7 +1195,7 @@ flowchart TD
     B -- no --> C["Rotation"]
     C --> D{"Any broker left?"}
     D -- no --> E["503 every broker is excluded<br/>from order placement"]
-    D -- yes --> F["Selector ranks the rotation<br/>round_robin or fixed_priority"]
+    D -- yes --> F["Selector ranks the rotation<br/>lowest_cost, round_robin or fixed_priority"]
     F --> G["Next broker in the ranking"]
     G --> H{"place_skip_reason<br/>says it can take it?"}
     H -- no --> I["Add to skipped<br/>with the reason"]
@@ -1210,13 +1210,14 @@ flowchart TD
 
 `UNIFIED_BROKER_INTERFACE_API_ORDER_EXCLUDED_BROKERS` is a comma-separated list of broker names that never receive a placement. When it names every broker, every placement is refused with <span class="status s5">503</span> `every broker is excluded from order placement`. Modify and cancel ignore this setting, because an order already at a broker can only be changed there.
 
-### The two selectors
+### The three selectors
 
-`UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_SELECTOR` picks the ranking algorithm, and an unknown name stops the API from starting rather than falling back. The table below compares the two selectors.
+`UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_SELECTOR` picks the ranking algorithm, and an unknown name stops the API from starting rather than falling back. The table below compares the three selectors.
 
 | Selector | How it ranks | Redis cost | When to use it |
 |---|---|---|---|
-| `round_robin` (default) | Starts at `INCR unified:orders:round_robin` modulo the rotation's length and walks the rotation from there. Every gunicorn worker shares the counter. | One `INCR`, queued on the pipeline that reads the instrument | Spreading orders evenly across accounts |
+| `lowest_cost` (default) | Cheapest broker for the order's category first, keeping every broker inside its per-second, per-minute, per-hour and per-day budgets, with every number read from `unified.broker_order_costs`; see [Choosing a broker by cost](../architecture/broker-selection.md) | One `EVAL`, queued on the pipeline that reads the instrument | Paying the least brokerage without running a broker out of its order budget |
+| `round_robin` | Starts at `INCR unified:orders:round_robin` modulo the rotation's length and walks the rotation from there. Every gunicorn worker shares the counter. | One `INCR`, queued on the pipeline that reads the instrument | Spreading orders evenly across accounts |
 | `fixed_priority` | Puts the brokers named in `UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_PRIORITY` first, in that order, then the rest of the rotation in turn order | None | Sending everything to one preferred broker, with the others as fallbacks |
 
 With round robin, a skipped broker's turn passes to the next broker in the rotation, and the counter is then moved on past every broker passed over with one `INCRBY`, so the next order starts after the broker that took this one. A run of orders some brokers cannot take, such as after-market orders, is therefore spread evenly over the brokers that can. Before this, the broker after a skipped one took two turns in a row, and in the live test of 2026-09-27 INDmoney received 30 of 100 after-market orders.
@@ -1276,13 +1277,13 @@ Because the lookup reads Redis rather than the broker, an order placed a moment 
 
 ## Daily order caps
 
-Some brokers refuse every order message past a fixed number a day, and a modification or a cancellation counts as a message just like a placement. `UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_CAPS` sets a cap per broker, written as `broker=number,broker=number`, for example `zerodha=5000,dhan=7000`. It is empty by default, which caps nothing and costs nothing.
+Some brokers refuse every order message past a fixed number a day, and a modification or a cancellation counts as a message just like a placement. A broker's cap is its `orders_per_day` in `unified.broker_order_costs`, which caps Zerodha at 4,500 and Fyers at 100,000. For a broker the table leaves uncapped, `UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_CAPS` can still set one, written as `broker=number,broker=number`, for example `dhan=7000`. That setting is empty by default. A broker capped by neither is never counted, which costs nothing.
 
 When a broker is capped, every request actually sent to it is counted in the Redis key `unified:orders:daily_count:<broker>`. The count expires at the next 06:00 IST, so it starts again each trading day. A request that could not even connect is not counted; one the broker refused is.
 
 | Setting | Default | Effect |
 |---|---|---|
-| `UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_CAPS` | empty | The caps, per broker |
+| `UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_CAPS` | empty | Caps for brokers whose `orders_per_day` in the cost table is empty |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_CAP_EXIT_RESERVE` | `0.05` | The share of each cap kept back for orders that close a position |
 
 The diagram below shows how a cap of 5,000 with the default reserve is split.

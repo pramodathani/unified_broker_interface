@@ -164,7 +164,11 @@ class OrdersBlueprint(BaseBlueprint):
         self.instrument_cache = InstrumentCache()
         self.catalogue_availability = CatalogueAvailability(self.cache)
         self.order_placement.attach_daily_count(
-            DailyOrderCount.from_configuration(self.cache, self.logger),
+            DailyOrderCount.from_configuration(
+                self.cache,
+                self.logger,
+                self.order_placement.cost_table,
+            ),
         )
         self.kill_switch = KillSwitch(self.broker_names)
         per_broker_limit, per_broker_overrides = RateBudget.limits_from_text(
@@ -179,6 +183,7 @@ class OrdersBlueprint(BaseBlueprint):
             self.logger,
             api_configuration['order_rate_window_seconds'],
             per_broker_overrides,
+            self.order_placement.cost_table,
         )
         self.order_handoff = IntentHandoff(
             self.cache,
@@ -2364,4 +2369,5 @@ class OrdersBlueprint(BaseBlueprint):
         return broker_name, StoredOrder(matched_entries[broker_name])
 
 
-orders_bp = OrdersBlueprint().blueprint
+orders_blueprint = OrdersBlueprint()
+orders_bp = orders_blueprint.blueprint
