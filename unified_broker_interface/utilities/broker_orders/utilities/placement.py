@@ -22,6 +22,9 @@ from unified_broker_interface.utilities.broker_orders.utilities.refused_request 
 from unified_broker_interface.utilities.broker_orders.utilities.registry import (
     BROKER_ORDER_CLASSES,
 )
+from unified_broker_interface.utilities.broker_selection.utilities.broker_cost_table import (
+    BrokerCostTable,
+)
 from unified_broker_interface.utilities.broker_selection.utilities.registry import (
     BROKER_SELECTOR_CLASSES,
 )
@@ -37,6 +40,7 @@ class OrderPlacement:
         broker_names (list): Every broker's name, in the order the brokers take turns.
         broker_orders (dict): Each broker's name to its order class instance, built once.
         broker_selector (BrokerSelector): The algorithm that orders the brokers an order is offered to, named by `UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_SELECTOR`.
+        cost_table (BrokerCostTable): Each broker's brokerage and order-rate limits, shared with the selector, the rate budget and the daily order count. It is empty until the process calls its `start`, which the order engine and `api.py` do and the offline suites do not.
         connection_warmers (list): One `ConnectionWarmer` per broker named in `UNIFIED_BROKER_INTERFACE_API_ORDER_WARM_BROKERS`, each running on its own daemon thread.
         logger (logging.Logger): The logger for failures that do not change an answer.
     """
@@ -55,6 +59,7 @@ class OrderPlacement:
             ValueError: When the configured broker selector is not a known one, so a misspelt name stops the worker from starting rather than routing orders some other way.
         """
         self.logger = logger
+        self.cost_table = BrokerCostTable(logger)
         self.broker_names = []
         self.broker_orders = {}
         warmed_names = self.warm_broker_names()
@@ -69,7 +74,9 @@ class OrderPlacement:
             raise ValueError(
                 f'unknown order broker selector {selector_name!r}; known selectors are {known_names}'
             )
-        self.broker_selector = BROKER_SELECTOR_CLASSES[selector_name]()
+        self.broker_selector = BROKER_SELECTOR_CLASSES[selector_name](
+            self.cost_table,
+        )
         self.connection_warmers = []
 
     def start_connection_warmers(self):
@@ -375,6 +382,7 @@ class OrderPlacement:
                 login_texts,
                 settings_texts,
             )
+            self.broker_selector.record_chosen(broker_orders.BROKER_NAME)
         else:
             broker_orders, skipped = self.choose_named_broker(
                 order,

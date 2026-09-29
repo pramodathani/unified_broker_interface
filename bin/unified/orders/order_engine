@@ -104,6 +104,8 @@ def main():
         description="Place every order the REST API accepts, from unified:orders:intents:stream, until stopped.")
     parser.parse_args()
 
+    import psycopg2
+
     from utilities.configurations import api_configuration, get_cache, get_logger, get_postgres
     from unified_broker_interface.utilities.order_engine.utilities.book_reconciler import BookReconciler
     from unified_broker_interface.utilities.order_engine.utilities.day_roll import DayRoll
@@ -153,6 +155,17 @@ def main():
         lock.release()
         return 2
 
+    try:
+        placement.order_placement.cost_table.start(placement.order_placement.broker_names)
+    except ValueError as error:
+        logger.error(f"The broker cost table is not usable: {error}")
+        lock.release()
+        return 2
+    except psycopg2.Error as error:
+        logger.error(f"Could not read unified.broker_order_costs: {type(error).__name__}: {error}")
+        lock.release()
+        return 1
+
     placement.start_connection_warmers()
 
     parent_store = ParentStore(cache)
@@ -176,7 +189,11 @@ def main():
         signal.signal(signal_number, _handle_signal)
 
     try:
-        daily_count = DailyOrderCount.from_configuration(cache, logger)
+        daily_count = DailyOrderCount.from_configuration(
+            cache,
+            logger,
+            placement.order_placement.cost_table,
+        )
     except ValueError as error:
         logger.error(f"The daily order caps are not configured correctly: {error}")
         lock.release()
@@ -201,15 +218,16 @@ def main():
             logger,
             api_configuration["order_rate_window_seconds"],
             per_broker_overrides,
+            placement.order_placement.cost_table,
         ),
         LossLockout(cache, api_configuration["order_daily_loss_limit"], logger),
         OrderToTradeRatio(),
         RepricingThrottle(api_configuration["order_reprice_minimum_seconds"]),
         daily_count,
     )
-    logger.info(f"Limiting each broker to {per_broker_limit:g} order messages a second, with {per_broker_overrides or 'no'} per-broker overrides.")
+    logger.info(f"Limiting each broker to the order messages a second, minute and hour that unified.broker_order_costs gives it, and a broker it gives none to {per_broker_limit:g} a second, with {per_broker_overrides or 'no'} per-broker overrides.")
     if daily_count is not None:
-        logger.info(f"Capping each day's order messages at {daily_count.caps}, keeping {daily_count.exit_reserve:.0%} of each cap for exits.")
+        logger.info(f"Capping each day's order messages at {daily_count.current_caps()}, keeping {daily_count.exit_reserve:.0%} of each cap for exits.")
     if gates.loss_lockout.is_configured():
         logger.info(f"Refusing new orders once the day is down {api_configuration['order_daily_loss_limit']}.")
     else:

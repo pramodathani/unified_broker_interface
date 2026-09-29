@@ -33,27 +33,29 @@ class DailyOrderCount:
 
     Counting happens in `BrokerOrders.send`, which every placement, modification and cancellation passes through, whether the order engine or a REST API worker sent it, so a message cannot reach a capped broker without being counted. A request that could not connect is not counted, because it never left; one the broker answered with a refusal is. The count lives in Redis, one key per broker, and expires at the next 06:00 IST, so it is shared between processes, survives a restart and starts again every trading day.
 
-    Only brokers with a configured cap are counted, so an order to any other broker costs no Redis call. A broker with no configured cap is never refused. A count that cannot be read does not refuse either, for the same reason the loss lockout does not: Redis being unreadable for a moment should not become an outage of its own. The failure is logged.
+    A broker's cap is its `orders_per_day` in the broker cost table when the table gives one, and otherwise the configured one; the table is consulted on every message, so its daily reload takes effect without a restart. Only brokers with a cap are counted, so an order to any other broker costs no Redis call. A broker with no configured cap is never refused. A count that cannot be read does not refuse either, for the same reason the loss lockout does not: Redis being unreadable for a moment should not become an outage of its own. The failure is logged.
 
     Attributes:
         cache (redis.Redis): The Redis client.
-        caps (dict): Each capped broker's daily cap (int), by broker name.
+        caps (dict): Each capped broker's configured daily cap (int), by broker name, used where the cost table gives none.
         exit_reserve (float): The share of each cap kept back for orders that close a position, between 0 and 1.
         logger (logging.Logger): The logger.
+        cost_table (BrokerCostTable | None): The table whose per-day limits replace the configured caps, or None.
         refused (int): How many orders have been refused.
         lock (threading.Lock): Guards the refusal count, which several threads update.
-        reserve_script (object | None): The Redis script that counts a message only while its broker is below a limit, or None when no broker is capped.
+        reserve_script (object): The Redis script that counts a message only while its broker is below a limit.
         reservation (threading.local): The broker this thread has counted a message for and not yet sent it to, in `broker`.
     """
 
-    def __init__(self, cache, caps, exit_reserve, logger):
+    def __init__(self, cache, caps, exit_reserve, logger, cost_table=None):
         """Builds the count.
 
         Args:
             cache (redis.Redis): The Redis client.
-            caps (dict): Each capped broker's daily cap (int), by broker name.
+            caps (dict): Each capped broker's configured daily cap (int), by broker name.
             exit_reserve (float): The share of each cap kept back for exits, between 0 and 1.
             logger (logging.Logger): The logger.
+            cost_table (BrokerCostTable | None): The table whose per-day limits replace the configured caps.
 
         Returns:
             None: This method returns nothing.
@@ -70,20 +72,20 @@ class DailyOrderCount:
         self.caps = caps
         self.exit_reserve = exit_reserve
         self.logger = logger
+        self.cost_table = cost_table
         self.refused = 0
         self.lock = threading.Lock()
-        self.reserve_script = None
-        if caps:
-            self.reserve_script = cache.register_script(RESERVE_SCRIPT)
+        self.reserve_script = cache.register_script(RESERVE_SCRIPT)
         self.reservation = threading.local()
 
     @classmethod
-    def from_configuration(cls, cache, logger):
-        """Builds the count from the configured caps, or returns None when no broker is capped.
+    def from_configuration(cls, cache, logger, cost_table=None):
+        """Builds the count, or returns None when no broker is capped by configuration and there is no cost table to cap one later.
 
         Args:
             cache (redis.Redis): The Redis client.
             logger (logging.Logger): The logger.
+            cost_table (BrokerCostTable | None): The table whose per-day limits replace the configured caps.
 
         Returns:
             DailyOrderCount | None: The count.
@@ -92,13 +94,14 @@ class DailyOrderCount:
             ValueError: When the configured caps or exit reserve cannot be read.
         """
         caps = cls.read_caps(api_configuration['order_daily_caps'])
-        if not caps:
+        if not caps and cost_table is None:
             return None
         return cls(
             cache,
             caps,
             api_configuration['order_daily_cap_exit_reserve'],
             logger,
+            cost_table,
         )
 
     @staticmethod
@@ -122,6 +125,32 @@ class DailyOrderCount:
             if not separator or not broker_name or not number.isdigit():
                 raise ValueError(f'A daily order cap must read broker=number: {entry=}')
             caps[broker_name] = int(number)
+        return caps
+
+    def cap_for(self, broker_name):
+        """A broker's daily cap: the cost table's when it gives one, otherwise the configured one.
+
+        Args:
+            broker_name (str): The broker.
+
+        Returns:
+            int | None: The cap, or None when the broker is not capped.
+        """
+        if self.cost_table is not None:
+            table_cap = self.cost_table.per_day_limit(broker_name)
+            if table_cap is not None:
+                return table_cap
+        return self.caps.get(broker_name)
+
+    def current_caps(self):
+        """Every broker's cap as it stands now, the cost table's replacing the configured ones.
+
+        Returns:
+            dict: The cap (int) by broker name.
+        """
+        caps = dict(self.caps)
+        if self.cost_table is not None:
+            caps.update(self.cost_table.day_capped_brokers())
         return caps
 
     def key(self, broker_name):
@@ -205,7 +234,7 @@ class DailyOrderCount:
         Raises:
             RefusedRequestError: With HTTP 429 when the broker has no room left for this kind of order.
         """
-        cap = self.caps.get(broker_name)
+        cap = self.cap_for(broker_name)
         if cap is None:
             return
         self.release_if_reserved()
@@ -258,7 +287,7 @@ class DailyOrderCount:
         Returns:
             None: This method returns nothing.
         """
-        if broker_name not in self.caps:
+        if self.cap_for(broker_name) is None:
             return
         if getattr(self.reservation, 'broker', None) == broker_name:
             self.reservation.broker = None
@@ -297,9 +326,9 @@ class DailyOrderCount:
         """What the count has done, for the engine's shutdown line.
 
         Returns:
-            dict: `refused`, and `caps` as configured.
+            dict: `refused`, and `caps` as they stand now.
         """
         return {
             'refused': self.refused,
-            'caps': dict(self.caps),
+            'caps': self.current_caps(),
         }

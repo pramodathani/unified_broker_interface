@@ -6,15 +6,19 @@ import time
 
 RATE_KEY_PREFIX = 'unified:orders:rate:'
 GLOBAL_RATE_KEY = 'unified:orders:rate:all'
+MINUTE_KEY_SUFFIX = ':minute'
+HOUR_KEY_SUFFIX = ':hour'
 MICROSECONDS_PER_SECOND = 1000000
+MINUTE_SECONDS = 60
+HOUR_SECONDS = 3600
 RATE_WINDOW_SCRIPT = """
 local now_parts = redis.call('TIME')
 local now = tonumber(now_parts[1]) * 1000000 + tonumber(now_parts[2])
-local window = tonumber(ARGV[1])
-local member = ARGV[2]
+local member = ARGV[1]
 local longest_wait = 0
 for index, key in ipairs(KEYS) do
-    local limit = tonumber(ARGV[index + 2])
+    local window = tonumber(ARGV[index * 2])
+    local limit = tonumber(ARGV[index * 2 + 1])
     redis.call('ZREMRANGEBYSCORE', key, '-inf', now - window)
     if redis.call('ZCARD', key) >= limit then
         local oldest = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
@@ -28,6 +32,7 @@ if longest_wait > 0 then
     return longest_wait
 end
 for index, key in ipairs(KEYS) do
+    local window = tonumber(ARGV[index * 2])
     redis.call('ZADD', key, now, member)
     redis.call('PEXPIRE', key, math.floor(window / 1000) + 1000)
 end
@@ -46,6 +51,8 @@ class RateBudget:
 
     An optional limit across every broker, `unified:orders:rate:all`, is counted the same way in the same step. It is off unless configured, because the compliance limit is per broker.
 
+    When a `BrokerCostTable` is given, its per-second limit replaces the configured one for every broker it names, and its per-minute and per-hour limits add two more windows per broker, `unified:orders:rate:<broker>:minute` and `:hour`, counted in the same step. The table is consulted on every message, so its daily reload takes effect without a restart.
+
     Attributes:
         cache (redis.Redis): The Redis client.
         per_second (float): Messages a second across every broker, or 0 for no such limit.
@@ -53,6 +60,7 @@ class RateBudget:
         wait_seconds (float): The longest a message waits for room before it is refused.
         window_seconds (float): The length of the window the limits are counted over; 1.0 counts per second exactly, and a little more leaves a margin for requests that reach a broker unevenly.
         logger (logging.Logger): The logger.
+        cost_table (BrokerCostTable | None): The table whose limits replace and add to the configured ones, or None to use configuration alone.
         script (redis.commands.core.Script): The registered window script.
         counts_lock (threading.Lock): Guards the two counters, which several threads update.
         waited (int): How many messages have waited for room.
@@ -68,6 +76,7 @@ class RateBudget:
         logger,
         window_seconds=1.0,
         per_broker_overrides=None,
+        cost_table=None,
     ):
         """Builds the budget.
 
@@ -79,6 +88,7 @@ class RateBudget:
             logger (logging.Logger): The logger.
             window_seconds (float): The length of the window the limits are counted over.
             per_broker_overrides (dict | None): A broker's name to its own limit, for a broker stricter than the default.
+            cost_table (BrokerCostTable | None): The table whose limits replace and add to the configured ones.
 
         Returns:
             None: This method returns nothing.
@@ -90,6 +100,7 @@ class RateBudget:
         self.wait_seconds = wait_seconds
         self.window_seconds = window_seconds
         self.logger = logger
+        self.cost_table = cost_table
         self.script = cache.register_script(RATE_WINDOW_SCRIPT)
         self.counts_lock = threading.Lock()
         self.waited = 0
@@ -134,7 +145,7 @@ class RateBudget:
                 return False
 
     def limit_for(self, broker_name):
-        """How many messages one broker may be sent in a window.
+        """How many messages one broker may be sent in a window, taken from the cost table when it names one.
 
         Args:
             broker_name (str): The broker.
@@ -142,7 +153,40 @@ class RateBudget:
         Returns:
             float: The limit, 0 for none.
         """
+        if self.cost_table is not None:
+            table_limit = self.cost_table.per_second_limit(broker_name)
+            if table_limit is not None:
+                return float(table_limit)
         return self.per_broker_overrides.get(broker_name, self.per_broker_per_second)
+
+    def longer_windows_for(self, broker_name):
+        """The per-minute and per-hour windows the cost table gives a broker.
+
+        Args:
+            broker_name (str): The broker.
+
+        Returns:
+            list: One `(key, window in seconds, limit)` tuple per window the table limits, which is none without a table or a row.
+        """
+        windows = []
+        if self.cost_table is None:
+            return windows
+        costs = self.cost_table.costs(broker_name)
+        if costs is None:
+            return windows
+        if costs.orders_per_minute is not None:
+            windows.append((
+                RATE_KEY_PREFIX + broker_name + MINUTE_KEY_SUFFIX,
+                MINUTE_SECONDS,
+                costs.orders_per_minute,
+            ))
+        if costs.orders_per_hour is not None:
+            windows.append((
+                RATE_KEY_PREFIX + broker_name + HOUR_KEY_SUFFIX,
+                HOUR_SECONDS,
+                costs.orders_per_hour,
+            ))
+        return windows
 
     @staticmethod
     def limits_from_text(text, broker_names):
@@ -194,22 +238,26 @@ class RateBudget:
         Returns:
             int: 0 when the message was counted, otherwise how many microseconds until there is room.
         """
+        window_microseconds = int(self.window_seconds * MICROSECONDS_PER_SECOND)
         keys = []
-        limits = []
+        arguments = [
+            secrets.token_hex(8),
+        ]
         broker_limit = self.limit_for(broker_name)
         if broker_limit > 0:
             keys.append(RATE_KEY_PREFIX + broker_name)
-            limits.append(broker_limit)
+            arguments.append(window_microseconds)
+            arguments.append(broker_limit)
         if self.per_second > 0:
             keys.append(GLOBAL_RATE_KEY)
-            limits.append(self.per_second)
+            arguments.append(window_microseconds)
+            arguments.append(self.per_second)
+        for key, window_seconds, limit in self.longer_windows_for(broker_name):
+            keys.append(key)
+            arguments.append(window_seconds * MICROSECONDS_PER_SECOND)
+            arguments.append(limit)
         if not keys:
             return 0
-        arguments = [
-            int(self.window_seconds * MICROSECONDS_PER_SECOND),
-            secrets.token_hex(8),
-        ]
-        arguments.extend(limits)
         return int(self.script(keys=keys, args=arguments))
 
     def pause(self, seconds, stop):

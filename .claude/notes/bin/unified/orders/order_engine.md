@@ -52,3 +52,8 @@ The handoff therefore adds about **0.46 ms**, against a broker call that takes 1
 A narrower measurement of the Redis work alone — the `XADD`, the engine's `RPUSH` and `EXPIRE`, and the `BLPOP` — gave a median of 0.201 ms and a 95th percentile of 0.588 ms over three hundred rounds. The rest of the 0.46 ms is the engine's own two round trips for credentials and the instrument, which is work the API worker used to do itself rather than anything new.
 
 The same run confirmed the whole path end to end: the route resolved RELIANCE from its identity fields, the engine picked the intent up, chose a broker by the rotation and built that broker's real order request, and the answer came back with its `intent_id`. Six hundred and one orders were placed as dry runs, none refused, and every answer was collected by a waiting worker.
+
+## Why the cost table's read has two exit codes
+
+The engine reads `unified.broker_order_costs` straight after building its placement code. An empty table is a mistake a restart cannot fix, so it exits with 2, which the unit does not restart. An unreachable PostgreSQL usually comes back by itself, so it exits with 1 and systemd restarts the engine until it can read the table.
+

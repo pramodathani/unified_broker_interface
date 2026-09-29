@@ -17,12 +17,16 @@ class FixedPrioritySelector(BrokerSelector):
 
     NAME = 'fixed_priority'
 
-    def __init__(self):
+    def __init__(self, cost_table):
         """Builds the selector with the preference read from configuration.
+
+        Args:
+            cost_table (BrokerCostTable): Each broker's brokerage and order-rate limits, which this selector does not use.
 
         Returns:
             None: This method returns nothing.
         """
+        super().__init__(cost_table)
         self.priority = []
         for broker_name in api_configuration['order_broker_priority']:
             if broker_name and broker_name not in self.priority:

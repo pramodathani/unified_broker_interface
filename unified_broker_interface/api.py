@@ -14,7 +14,7 @@ from unified_broker_interface.blueprints.brokers import brokers_bp
 from unified_broker_interface.blueprints.exchanges import exchanges_bp
 from unified_broker_interface.blueprints.instruments import instruments_bp
 from unified_broker_interface.blueprints.portfolio import portfolio_bp
-from unified_broker_interface.blueprints.orders import orders_bp
+from unified_broker_interface.blueprints.orders import orders_blueprint, orders_bp
 
 api = Flask(__name__)
 api.register_blueprint(session_bp, url_prefix='/api/session')
@@ -24,6 +24,7 @@ api.register_blueprint(exchanges_bp, url_prefix='/api/exchanges')
 api.register_blueprint(instruments_bp, url_prefix='/api/instruments')
 api.register_blueprint(portfolio_bp, url_prefix='/api/portfolio')
 api.register_blueprint(orders_bp, url_prefix='/api/orders')
+orders_blueprint.order_placement.cost_table.start(orders_blueprint.broker_names)
 
 @api.route('/api/', methods=['GET'])
 def home():

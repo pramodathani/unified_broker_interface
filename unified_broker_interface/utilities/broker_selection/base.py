@@ -4,13 +4,25 @@
 class BrokerSelector:
     """Orders the brokers an order is offered to.
 
-    One instance is built per gunicorn worker, when the order blueprint is built. A subclass sets `NAME`, implements `ranked_brokers`, and overrides `queue_redis_commands` when it needs Redis and `record_outcome` when it learns from answers.
+    One instance is built per gunicorn worker, when the order blueprint is built, and one per order engine. A subclass sets `NAME`, implements `ranked_brokers`, and overrides `queue_redis_commands` when it needs Redis, `record_chosen` when it keeps track of its own choices and `record_outcome` when it learns from answers.
 
     Attributes:
         NAME (str): The name `UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_SELECTOR` selects the algorithm by.
+        cost_table (BrokerCostTable): Each broker's brokerage and order-rate limits, held in memory.
     """
 
     NAME = None
+
+    def __init__(self, cost_table):
+        """Builds the selector.
+
+        Args:
+            cost_table (BrokerCostTable): Each broker's brokerage and order-rate limits.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.cost_table = cost_table
 
     def queue_redis_commands(self, pipeline, order, instrument_id):
         """Queues the Redis commands the selector needs on the pipeline that also reads the instrument.
@@ -59,6 +71,19 @@ class BrokerSelector:
         """
         del cache
         del passed_over
+
+    def record_chosen(self, broker_name):
+        """Learns which broker this selector's ranking led to, in this process's memory only.
+
+        It is called once the broker has been chosen and before anything is sent, so it must be quick and must read and write no store.
+
+        Args:
+            broker_name (str): The broker chosen.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        del broker_name
 
     def record_outcome(self, broker_name, answer):
         """Learns from a sent order's answer, in this worker's memory only.

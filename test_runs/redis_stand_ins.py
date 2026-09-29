@@ -36,7 +36,7 @@ class FakeRateWindowScript:
 
         Args:
             keys (list): The window keys.
-            args (list): The window length in microseconds, a member name, and one limit per key.
+            args (list): A member name, then a window length in microseconds and a limit for each key.
 
         Returns:
             int: 0 when counted, otherwise the microseconds until there is room.
@@ -53,16 +53,16 @@ class FakeRateWindowScript:
 
         Args:
             keys (list): The window keys.
-            args (list): The window length in microseconds, a member name, and one limit per key.
+            args (list): A member name, then a window length in microseconds and a limit for each key.
 
         Returns:
             int: 0 when counted, otherwise the microseconds until there is room.
         """
         now = int(time.monotonic() * 1000000)
-        window = int(args[0])
         longest_wait = 0
         for position, key in enumerate(keys):
-            limit = float(args[position + 2])
+            window = int(args[position * 2 + 1])
+            limit = float(args[position * 2 + 2])
             kept = []
             for moment in self.fake_redis.rate_windows.get(key, []):
                 if moment > now - window:
