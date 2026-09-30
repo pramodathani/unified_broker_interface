@@ -1,0 +1,4 @@
+Cloudflare ban page: FyersBlockedError, dead session False
+Fyers rate limit: FyersBlockedError, dead session False
+expired token: FyersAPIException -16, dead session True
+plain HTTP 401: FyersAPIException 401, dead session True

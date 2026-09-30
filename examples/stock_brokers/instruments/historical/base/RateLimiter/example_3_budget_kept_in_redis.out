@@ -1,0 +1,5 @@
+First process spent 2 requests
+Restarted process starts at 2
+Its second request: Daily budget of 3 requests is spent.
+With the cap lifted, one more is allowed; spent today: 4
+Redis holds 4 under the key for today

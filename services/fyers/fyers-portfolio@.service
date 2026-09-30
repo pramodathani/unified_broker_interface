@@ -25,7 +25,8 @@ SyslogIdentifier=fyers-portfolio-%i
 ExecStartPre=/bin/sh -c 'sleep $$(shuf -i 0-30 -n 1)'
 ExecStart=%h/Projects/unified_broker_interface/bin/fyers/portfolio/%i
 Restart=always
-RestartSec=15
+# A minute, not fifteen seconds: on 2026-09-29 restarts every fifteen seconds into a Cloudflare ban kept it going all day.
+RestartSec=60
 # Exit 2 is a bad argument or configuration - nothing to subscribe to, say - which a restart cannot fix.
 RestartPreventExitStatus=2
 TimeoutStopSec=60

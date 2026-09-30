@@ -31,9 +31,10 @@ import datetime
 import zoneinfo
 from collections import namedtuple
 
+import redis
 from psycopg2.extras import execute_values
 
-from utilities.configurations import get_postgres, get_logger
+from utilities.configurations import get_cache, get_postgres, get_logger
 
 # Every exchange in this project trades in India, and every broker here stamps its bars against
 # that clock whatever offset it puts on the wire.
@@ -141,18 +142,24 @@ class RateLimiter:
     the limits here are low enough that concurrency would buy little before hitting them.
     """
 
-    def __init__(self, requests_per_second, requests_per_day=None):
+    def __init__(self, requests_per_second, requests_per_day=None, cache=None, budget_key=None):
         """
         Rate limiter for one broker.
 
         - `requests_per_second` is the sustained rate to hold.
         - `requests_per_day` is the broker's daily cap, or None when it publishes none.
+        - `cache` is the Redis client that keeps the day's count, or None to count in this process only.
+        - `budget_key` is the start of the Redis key for the day's count; the date in India is appended to it.
+
+        A count kept only in the process starts again at zero every time the downloader restarts, and the downloaders restart ten minutes after every exit, including the exit that follows a spent budget, so only a count in Redis holds the cap for a whole day.
         """
         self._minimum_gap = 1.0 / float(requests_per_second)
         self._next_slot = 0.0
         self._requests_per_day = requests_per_day
         self._spent_today = 0
         self._budget_date = datetime.date.today()
+        self._cache = cache
+        self._budget_key = budget_key
 
     def take(self):
         """
@@ -161,12 +168,7 @@ class RateLimiter:
         Raises `CandleThrottled` when the daily budget is exhausted, which the caller treats as a
         reason to stop for the day rather than to retry.
         """
-        today = datetime.date.today()
-        if today != self._budget_date:
-            self._budget_date = today
-            self._spent_today = 0
-
-        if self._requests_per_day is not None and self._spent_today >= self._requests_per_day:
+        if self._requests_per_day is not None and self.spent_today() >= self._requests_per_day:
             raise CandleThrottled(
                 f"Daily budget of {self._requests_per_day} requests is spent.")
 
@@ -174,7 +176,55 @@ class RateLimiter:
         if now < self._next_slot:
             time.sleep(self._next_slot - now)
         self._next_slot = max(now, self._next_slot) + self._minimum_gap
+        self._count_one()
+
+    def set_requests_per_day(self, requests_per_day):
+        """
+        Change the daily cap from the next request on, for a broker whose cap depends on the day.
+
+        - `requests_per_day` is the new cap, or None for no cap; requests already counted today still count.
+        """
+        self._requests_per_day = requests_per_day
+
+    def budget_date(self):
+        """
+        The day the daily budget is counted against: today in India.
+        """
+        return datetime.datetime.now(INDIA_TIMEZONE).date()
+
+    def spent_today(self):
+        """
+        How many requests have been counted against today's budget, in Redis when there is one and in this process otherwise.
+        """
+        today = self.budget_date()
+        if today != self._budget_date:
+            self._budget_date = today
+            self._spent_today = 0
+        if self._cache is None or self._budget_key is None:
+            return self._spent_today
+        try:
+            stored = self._cache.get(f"{self._budget_key}:{today.isoformat()}")
+        except redis.RedisError:
+            return self._spent_today
+        if stored is None:
+            return 0
+        return int(stored)
+
+    def _count_one(self):
+        """
+        Count one request against today's budget, in Redis when there is one, keeping the key for two days.
+        """
         self._spent_today += 1
+        if self._cache is None or self._budget_key is None:
+            return
+        key = f"{self._budget_key}:{self.budget_date().isoformat()}"
+        try:
+            pipeline = self._cache.pipeline(transaction=False)
+            pipeline.incr(key)
+            pipeline.expire(key, 2 * 24 * 60 * 60)
+            pipeline.execute()
+        except redis.RedisError:
+            pass
 
     def back_off(self, seconds):
         """
@@ -236,7 +286,8 @@ class BrokerCandles:
         """
         self._connection = get_postgres()
         self._logger = get_logger(f"candles.{self.BROKER_NAME}")
-        self._limiter = RateLimiter(self.REQUESTS_PER_SECOND, self.REQUESTS_PER_DAY)
+        self._limiter = RateLimiter(self.REQUESTS_PER_SECOND, self.REQUESTS_PER_DAY, get_cache(),
+                                    f"{self.BROKER_NAME}:price_history:requests")
         self._table = f"{self.BROKER_NAME}.price_history"
         self._progress_table = f"{self.BROKER_NAME}.price_history_progress"
         # Whether the one login allowed after a refused session has been spent. See `_fetch_bars`.
