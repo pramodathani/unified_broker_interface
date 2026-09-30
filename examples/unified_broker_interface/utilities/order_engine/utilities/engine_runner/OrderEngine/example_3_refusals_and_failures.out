@@ -1,0 +1,12 @@
+unknown_type: 400 the order engine does not run 'teleport' orders
+fails_while_choosing: 503 the order engine failed before sending this order to any broker (KeyError), so nothing was placed
+fails_while_sending: 504 the order engine failed while placing this order (TimeoutError), so its outcome is unknown
+Requests that reached the stand-in broker: 1
+Recorded: ['parent_received:received', 'parent_state_changed:rejected', 'parent_received:received', 'leg_requested:received']
+Placed 0, refused 3
+Decoded entry without a reply key: None
+Decoded missing entry: None
+Unacknowledged entries: []
+Refused after one more: 4
+Refused answer with the legs' reasons added: {'outcome': 'rejected', 'status_message': 'RMS: margin exceeds available funds'}
+Accepted answer is left alone: {'outcome': 'accepted'}

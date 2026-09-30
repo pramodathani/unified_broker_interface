@@ -1,0 +1,7 @@
+Selector: round_robin
+Counter key: unified:orders:round_robin
+Rotation: ['dhan', 'fyers', 'kotak', 'zerodha']
+Order 1: counter 1, ranked ['fyers', 'kotak', 'zerodha', 'dhan']
+Order 2: counter 2, ranked ['kotak', 'zerodha', 'dhan', 'fyers']
+Order 3: counter 3, ranked ['zerodha', 'dhan', 'fyers', 'kotak']
+Order 4: counter 4, ranked ['dhan', 'fyers', 'kotak', 'zerodha']

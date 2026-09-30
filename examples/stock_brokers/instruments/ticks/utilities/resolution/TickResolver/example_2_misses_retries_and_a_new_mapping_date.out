@@ -1,0 +1,20 @@
+LOG warning: zerodha token NSE:INFY did not resolve: unplaceable.
+LOG warning: zerodha token 408065 did not resolve: ambiguous (nse_equities:INFY, nse_equities:INFY-BE).
+LOG warning: zerodha token 1025 did not resolve: unmapped.
+LOG warning: zerodha token 13238786 did not resolve: unmapped.
+Compiled: [('zerodha', 738561)]
+Searches so far: 2
+LOG warning: upstox token 42 did not resolve: no_normalizer.
+plan_for upstox 42: None
+plan_for 408065 five minutes later: None, searches 2
+plan_for 408065 eleven minutes later: None, searches 3
+Unresolved ('upstox', '42', 'no_normalizer'): 1
+Unresolved ('zerodha', '1025', 'unmapped'): 1
+Unresolved ('zerodha', '13238786', 'unmapped'): 1
+Unresolved ('zerodha', '408065', 'ambiguous'): 2
+Unresolved ('zerodha', 'NSE:INFY', 'unplaceable'): 1
+Unresolved after draining: {}
+refresh later the same day: False
+LOG info: Mapping date is now 2026-09-16; instrument plans will be recompiled.
+refresh after the next mapping date: True
+Plans left: {}, mapping date 2026-09-16

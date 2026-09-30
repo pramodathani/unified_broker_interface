@@ -1,0 +1,15 @@
+prices INFY: 200 from cache, columns ['time', 'open', 'high', 'low', 'close', 'volume', 'oi', 'price_factor']
+  ['2026-09-02T00:00:00+05:30', 1502.0, 1512.0, 1492.0, 1507.0, 100002, None, 1.0]
+  ['2026-09-03T00:00:00+05:30', 1503.0, 1513.0, 1493.0, 1508.0, 100003, None, 1.0]
+  ['2026-09-04T00:00:00+05:30', 1504.0, 1514.0, 1494.0, 1509.0, 100004, None, 1.0]
+  tick queries run so far: 0
+prices of a list: 200
+  request 0: 200 2 candles from cache
+  request 1: 400 instrument_id must be a UUID
+ticks INFY: 200, 2 rows
+  2026-09-15T03:45:01+00:00 last 1520.0 from zerodha
+  2026-09-15T03:45:03+00:00 last 1520.5 from zerodha
+ticks of a list: 200
+  request 0: 200 22222222-2222-5222-8222-000000000001, price basis adjusted, 2 rows
+  request 1: 200 22222222-2222-5222-8222-000000000003, price basis as_served, 1 rows
+  tick queries run in all: 3

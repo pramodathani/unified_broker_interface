@@ -1,0 +1,8 @@
+Option: strike 10000.0, call True, expires 2030-09-24T10:00:00+00:00
+Run: HTTP 200, outcome accepted
+Delta at 15 per cent volatility: 1.00
+Sent to the broker: ['place BUY 150 LIMIT at 14000.00 -> 260930000001', 'place SELL 150 LIMIT at 23999.40 -> 260930000002']
+Parent: protecting
+Both sizings: HTTP 400, an attached hedge needs exactly one of ratio and delta_volatility
+Delta on a stock: HTTP 400, delta_volatility sizes the hedge by an option's delta, and this instrument is not an option with a strike and an expiry
+Hedged in itself: HTTP 400, an attached hedge trades another instrument, not the entry's own

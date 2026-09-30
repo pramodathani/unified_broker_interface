@@ -1,0 +1,5 @@
+Good exchange: {'exchange': 'nse', 'name': 'National Stock Exchange of India', 'short_name': ' NSE '}
+Good broker: {'broker_name': 'zerodha', 'name': 'Zerodha', 'website': 'https://zerodha.com'}
+Exchange without short name: DetailsImportError: exchange document without short_name: 'Metropolitan Stock Exchange'
+Unknown broker: DetailsImportError: no broker code for the display name 'Upstox'
+Unsupported broker code: DetailsImportError: broker code 'angel_one' is not a broker this project supports

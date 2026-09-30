@@ -1,0 +1,7 @@
+crudeoil-option: ['100']
+gold-future-oct: ['100']
+goldm-future-oct: ['10']
+Broker queried: groww
+Mapping date: 2026-09-28
+Segments: ['mcx_commodity_futures', 'mcx_commodity_options']
+Exchange labels: ['COMMODITY']

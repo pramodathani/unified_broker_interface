@@ -1,0 +1,9 @@
+1. Open intraday position in SBIN or WIPRO: 22222222-2222-5222-8222-000000000001 300
+2. Resting orders with Redis down: []
+3. Cancels accepted once Redis answers: 0
+   Recorded outside_cancel_requested for zerodha 250930000777: None, cancelled before squaring off
+   Recorded outside_cancelled for zerodha 250930000777: rejected, zerodha refused the cancel: the order 250930000777 is already complete
+4. Close SBIN with an empty book: SELL 300 LIMIT at 812.25
+5. Close with no quote: None
+   Close with disputed tick sizes: None
+ERROR The open orders could not be read, so nothing was cancelled before closing: Error 111 connecting to localhost:6379. Connection refused.

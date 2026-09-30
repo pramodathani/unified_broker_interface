@@ -1,0 +1,15 @@
+tick at 1790000400 price 2450.10 falls in bar starting 1790000400
+tick at 1790000415 price 2452.40 falls in bar starting 1790000400
+tick at 1790000430 price 2448.75 falls in bar starting 1790000400
+tick at 1790000459 price 2449.90 falls in bar starting 1790000400
+tick at 1790000460 price 2451.00 falls in bar starting 1790000460
+  closed bar: high 2452.40 low 2448.75 close 2449.90
+tick at 1790000490 price 2455.25 falls in bar starting 1790000460
+tick at 1790000519 price 2453.60 falls in bar starting 1790000460
+tick at 1790000520 price 2453.00 falls in bar starting 1790000520
+  closed bar: high 2455.25 low 2451.00 close 2453.60
+Bar being built: {'high': Decimal('2453.00'), 'low': Decimal('2453.00'), 'close': Decimal('2453.00')}
+Stored high as text: '2453.00'
+Stored high read back: 2453.00
+Closed bars: [{'high': Decimal('2452.40'), 'low': Decimal('2448.75'), 'close': Decimal('2449.90')}, {'high': Decimal('2455.25'), 'low': Decimal('2451.00'), 'close': Decimal('2453.60')}]
+Stored closed bars: [['2452.40', '2448.75', '2449.90'], ['2455.25', '2451.00', '2453.60']]

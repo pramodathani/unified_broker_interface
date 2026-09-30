@@ -1,0 +1,40 @@
+Date settled from the database: 2026-09-28
+warming the instrument mapping cache for 2026-09-28
+  identities                         3
+  tokens dhan                        2
+  tokens kotak                       0
+  tokens groww                       0
+  tokens stoxkart                    0
+  tokens fyers                       0
+  tokens wisdom_capital              0
+  tokens indmoney                    0
+  tokens flattrade                   0
+  tokens shoonya                     0
+  tokens zerodha                     3
+  order handles                      2
+  contract sizes                     1
+  underlyings                        1
+  additional attributes              1
+  catalogue                          3
+  other dates cleared                1
+published unified:catalogue:current_date = 2026-09-28 after <elapsed> seconds, 10 fields written.
+Counts: {'identities': 3, 'tokens': 5, 'instruments': 2, 'contract_sizes': 1, 'underlyings': 1, 'additional_attributes': 1, 'catalogued': 3, 'cleared': 1}
+Keys in Redis:
+  unified:catalogue:2026-09-28:additional_attributes: 1 entries
+  unified:catalogue:2026-09-28:catalogue:mcx_commodity_futures: 1 entries
+  unified:catalogue:2026-09-28:catalogue:mcx_commodity_options: 1 entries
+  unified:catalogue:2026-09-28:catalogue:nse_equities: 1 entries
+  unified:catalogue:2026-09-28:contract_sizes: 1 entries
+  unified:catalogue:2026-09-28:identity: 3 entries
+  unified:catalogue:2026-09-28:names:mcx_commodity_futures: 1 entries
+  unified:catalogue:2026-09-28:names:mcx_commodity_options: 1 entries
+  unified:catalogue:2026-09-28:names:nse_equities: 1 entries
+  unified:catalogue:2026-09-28:order_handles: 2 entries
+  unified:catalogue:2026-09-28:seen: 3 entries
+  unified:catalogue:2026-09-28:segments: 3 entries
+  unified:catalogue:2026-09-28:tokens:dhan: 2 entries
+  unified:catalogue:2026-09-28:tokens:zerodha: 3 entries
+  unified:catalogue:2026-09-28:underlyings: 1 entries
+  unified:catalogue:current_date: 2026-09-28
+  unified:catalogue:warm_identifier: a new random identifier
+INFY order handles: {"dhan": {"broker_token": "1594", "order_symbol": null, "lot_size": "1", "tick_size": "0.10"}, "zerodha": {"broker_token": "408065", "order_symbol": "INFY", "lot_size": "1", "tick_size": "0.10"}}

@@ -1,0 +1,8 @@
+Stand-in login number 1
+A socket was refused with kite-token-1
+WARNING Logging in to Zerodha again.
+Stand-in login number 2
+Token in force: kite-token-2
+A second socket was refused with kite-token-1
+Token in force: kite-token-2
+Logins made: 2

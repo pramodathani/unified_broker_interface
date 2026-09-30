@@ -1,0 +1,8 @@
+Stand-in login number 1
+Client 1100012345 was refused with dhan-token-1
+WARNING Logging in to Dhan again.
+Stand-in login number 2
+Token in force: dhan-token-2
+Token in force after the second request: dhan-token-2
+Token in force after another process logged in: dhan-token-from-another-process
+Logins made: 2

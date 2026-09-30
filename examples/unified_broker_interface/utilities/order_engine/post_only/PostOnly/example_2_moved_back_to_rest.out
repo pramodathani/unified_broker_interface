@@ -1,0 +1,8 @@
+would_cross BUY at 450.15: False
+would_cross BUY at 450.20: True
+would_cross SELL at 450.05: False
+would_cross SELL at 450.00: True
+priced at 450.20: SELL 40 LIMIT at 450.20
+Sell at 449.90 with on_crossing rest: HTTP 200, outcome accepted
+Sent to the broker: ['place SELL 40 LIMIT at 450.20 -> 260930000001']
+on_crossing cross: HTTP 400, on_crossing must be refuse or rest, not 'cross'

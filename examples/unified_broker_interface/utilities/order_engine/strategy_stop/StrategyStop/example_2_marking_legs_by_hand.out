@@ -1,0 +1,11 @@
+number('profit_target'): 1500, number('loss_limit'): None
+leg_profit of the SELL at 25000.0: 3000.00
+leg_profit of the BUY at 25150.0: -1350.00
+total_profit: 1650.00, every leg marked True
+exit_order for the SELL: BUY 75 at 24960.30, product NRML
+exit_order for the BUY: SELL 75 at 25131.70, product NRML
+close_everything sent, in order:
+  place BUY 75 LIMIT at 24960.30 -> 260930000003
+  place SELL 75 LIMIT at 25131.70 -> 260930000004
+Parent: completed, the strategy is up 1650.00, past its target of 1500
+A loss_limit of 2000: HTTP 400, loss_limit is a loss, so it must be below zero, not 2000

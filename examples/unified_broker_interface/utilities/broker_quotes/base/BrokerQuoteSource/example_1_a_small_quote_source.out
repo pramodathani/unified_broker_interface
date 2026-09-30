@@ -1,0 +1,34 @@
+Broker: paper, timeout: 5 seconds
+Request sent: [{'symbol': 'INFY'}]
+{
+    "id": "INFY",
+    "broker": "paper",
+    "instrument_token": "INFY",
+    "exchange": "nse",
+    "mode": "full",
+    "last_price": 1512.35,
+    "last_quantity": null,
+    "average_price": null,
+    "volume": 4312876,
+    "buy_quantity": null,
+    "sell_quantity": null,
+    "ohlc": {
+        "open": null,
+        "high": null,
+        "low": null,
+        "close": 1498.8
+    },
+    "change": null,
+    "oi": null,
+    "oi_day_high": null,
+    "oi_day_low": null,
+    "last_trade_time": null,
+    "exchange_timestamp": null,
+    "depth": {
+        "buy": [],
+        "sell": []
+    },
+    "received_at": 1789446605.0
+}
+RuntimeError('Session expired, please log in again') is an authentication error: True
+TimeoutError('read timed out') is an authentication error: False

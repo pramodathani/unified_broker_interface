@@ -1,0 +1,7 @@
+https://trade.wisdomcapital.in/apimarketdata/instruments/master -> HostnameCheckRelaxedAdapter
+http://example.com/ -> HTTPAdapter
+Pool for trade.wisdomcapital.in:443
+    assert_hostname: False
+    check_hostname: False
+    certificate verification: CERT_REQUIRED
+    connections kept: 2

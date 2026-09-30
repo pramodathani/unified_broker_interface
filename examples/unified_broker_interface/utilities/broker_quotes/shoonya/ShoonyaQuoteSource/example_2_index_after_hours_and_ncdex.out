@@ -1,0 +1,33 @@
+{
+    "id": "NSE|26000",
+    "broker": "shoonya",
+    "instrument_token": "NSE|26000",
+    "exchange": "nse",
+    "mode": "quote",
+    "last_price": 25114.05,
+    "last_quantity": null,
+    "average_price": null,
+    "volume": null,
+    "buy_quantity": null,
+    "sell_quantity": null,
+    "ohlc": {
+        "open": null,
+        "high": null,
+        "low": null,
+        "close": 25114.05
+    },
+    "change": 0.0,
+    "oi": null,
+    "oi_day_high": null,
+    "oi_day_low": null,
+    "last_trade_time": null,
+    "exchange_timestamp": null,
+    "depth": {
+        "buy": [],
+        "sell": []
+    },
+    "received_at": 1789882200.0
+}
+QuoteUnavailable: shoonya returned no quote for NCX|COTTON20NOV2026: Error Occurred : 5 "no data"
+    log in again: False
+Requests sent: [{'exch': 'NSE', 'token': '26000'}, {'exch': 'NCX', 'token': 'COTTON20NOV2026'}]

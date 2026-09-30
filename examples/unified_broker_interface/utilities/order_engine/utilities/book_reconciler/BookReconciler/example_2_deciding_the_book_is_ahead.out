@@ -1,0 +1,14 @@
+Due after 4.9 seconds: False
+Due after 5 seconds: True
+Due when switched off, an hour later: False
+Book shows OPEN, 4 filled: ahead=False
+Book shows OPEN, 7 filled: ahead=True
+Book shows OPEN, 0 filled: ahead=False
+Book shows rejected: ahead=True
+Book shows no fill reported: ahead=False
+order_in_entry('{"order": {"status": "OPEN"}}') = {'status': 'OPEN'}
+order_in_entry('{"raw": "no normalized order"}') = None
+order_in_entry('[1, 2]') = None
+order_in_entry('not json') = None
+order_in_entry(None) = None
+Book entries for two legs: [{'status': 'COMPLETE', 'filled_quantity': 10}, None]

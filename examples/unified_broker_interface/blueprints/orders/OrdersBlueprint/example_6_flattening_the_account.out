@@ -1,0 +1,21 @@
+flatten without confirm: 400 {"error": "flattening cancels every order and closes every position, so it needs confirm set to FLATTEN"}
+flatten_everything, a dry run: 200 {"dry_run": true, "would_cancel": [{"broker": "flattrade", "order_id": "26091500000021", "status": "OPEN"}], "would_close": [{"broker": "flattrade", "close_quantity": 10, "exchange": "NSE", "instrument_token": "1", "position_key": "RELIANCE-MIS", "product": "intraday", "quantity": 10, "segment": null, "tradingsymbol": "RELIANCE-flattrade", "transaction_type": "SELL"}]}
+flatten: 200 flat True, halted {'halted_parents': 0}
+  cancelled flattrade 26091500000021: accepted
+  closed flattrade 10 by SELL: accepted
+  sent to the broker, in this order: POST https://piconnect.flattrade.in/PiConnectAPI/CancelOrder
+  sent to the broker, in this order: POST https://piconnect.flattrade.in/PiConnectAPI/PlaceOrder
+halt_every_parent: {'halted_parents': 1}
+decode_books: flattrade holds ['26091500000021']
+shown_cancels: [{'broker': 'flattrade', 'order_id': '26091500000021', 'status': 'OPEN'}]
+cancel_every_order: [{'broker': 'flattrade', 'order_id': '26091500000021', 'sent': True, 'outcome': 'accepted', 'status_message': None}]
+cancel_one_order without a login: {'broker': 'flattrade', 'order_id': '26091500000021', 'sent': False, 'outcome': None, 'status_message': 'flattrade has no login in Redis'}
+wait_for_cancels: still open []
+instrument_for_broker_token flattrade 1: 11111111-1111-5111-8111-000000000001
+instrument_for_broker_token flattrade 999999: None
+closing_body: {"broker": "flattrade", "instrument_id": "11111111-1111-5111-8111-000000000001", "order_type": "MARKET", "product": "MIS", "quantity": 10, "synthetic": {"closes_position": true, "type": "simple"}, "transaction_type": "SELL"}
+closing_product delivery: CNC
+closing_product intraday: MIS
+closing_product margin: NRML
+close_every_position: sent True, outcome accepted, order id 26091500000099
+wait_for_positions: still held []

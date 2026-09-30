@@ -1,0 +1,4 @@
+NCX|61452|GUARSEED10DEC26: token 61452, exchange ncdex, 16 derivative segments to search
+Requested https://api.shoonya.com/NorenWClientAPI/TPSeries
+  body: {'exch': 'NCX', 'token': '61452', 'st': '1789065000', 'et': '1789151400', 'intrv': '5'}
+CandleThrottled: shoonya refused the request for rate: Rate_Limited: too many requests

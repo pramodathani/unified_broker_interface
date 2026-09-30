@@ -1,0 +1,16 @@
+Ping 1:
+    answered=True, failing=False
+Ping 2:
+    WARNING warming the order connection to dhan failed and will be retried: ConnectionError('Max retries exceeded with url: /')
+    answered=False, failing=True
+Ping 3:
+    answered=False, failing=True
+Ping 4:
+    INFO warming the order connection to dhan works again
+    answered=True, failing=False
+Ping 5:
+    answered=True, failing=False
+Running the loop on this thread:
+    WARNING warming the order connection to dhan failed and will be retried: ConnectionError('Max retries exceeded with url: /')
+    INFO warming the order connection to dhan works again
+Pings attempted: 8, failures: 3

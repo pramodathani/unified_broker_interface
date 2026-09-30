@@ -1,0 +1,20 @@
+Stand-in login number 1
+Connecting to wss://api-feed.dhan.co?version=2&token=dhan-token-1&clientId=1100012345&authType=2
+Sent: {"RequestCode": 21, "InstrumentCount": 1, "InstrumentList": [{"ExchangeSegment": "NSE_FNO", "SecurityId": "35001"}]}
+INFO socket_0 opened and subscribed to 1 instrument(s).
+WARNING socket_0 received a disconnect packet, code 807.
+INFO socket_0 closed with status 1000: normal closure
+WARNING Logging in to Dhan again.
+Stand-in login number 2
+WARNING socket_0 disconnected. Reconnecting in 0 seconds.
+Connecting to wss://api-feed.dhan.co?version=2&token=dhan-token-2&clientId=1100012345&authType=2
+Sent: {"RequestCode": 21, "InstrumentCount": 1, "InstrumentList": [{"ExchangeSegment": "NSE_FNO", "SecurityId": "35001"}]}
+INFO socket_0 opened and subscribed to 1 instrument(s).
+Tick NFO:NIFTY26SEPFUT (NSE_FNO:35001) on NSE_FNO in quote mode
+  last_price=25151.25 last_trade_time=1790311528 volume=1204500
+  ohlc={'open': 25131.25, 'close': 25111.25, 'high': 25161.25, 'low': 25126.25} change=0.1593
+  oi=None
+INFO socket_0 closed with status 1000: normal closure
+INFO socket_0 stopped.
+Gave up: False
+Logins made: 2

@@ -1,0 +1,4 @@
+Fyers answers HTTP 401 with: {"s": "error", "code": -16, "message": "Could not authenticate the user"}
+Caught: FyersAPIException
+code: -16
+message: Could not authenticate the user

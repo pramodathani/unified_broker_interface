@@ -1,0 +1,5 @@
+Stand-in login number 1
+User id WC0001, token claims {'session': 'interactive-1', 'userID': 'WC0001'}
+WARNING Checking the Wisdom Capital login, and logging in again if it is dead.
+Stand-in login number 2
+Token claims after the check: {'session': 'interactive-2', 'userID': 'WC0001'}

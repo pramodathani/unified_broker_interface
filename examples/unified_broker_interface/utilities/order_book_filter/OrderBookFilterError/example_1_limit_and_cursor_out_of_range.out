@@ -1,0 +1,5 @@
+limit=fifty: OrderBookFilterError: limit must be a whole number, not 'fifty'
+limit=0: OrderBookFilterError: limit must be from 1 to 10000, not 0
+limit=20000: OrderBookFilterError: limit must be from 1 to 10000, not 20000
+cursor=-5: OrderBookFilterError: cursor must be at least 0, not -5
+cursor=2.5: OrderBookFilterError: cursor must be a whole number, not '2.5'

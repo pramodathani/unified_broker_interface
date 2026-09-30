@@ -1,0 +1,22 @@
+read_current_date: None
+read_segment_counts: None
+read_catalogue: None
+read_catalogue_for_prefix: None
+read_catalogue_for_prefixes: None
+read_names: None
+read_identities: {}
+read_token_identifiers: {}
+read_order_handles: {}
+read_seen: {}
+read_underlyings: {}
+read_seen_and_underlyings: ({}, {})
+read_additional_attributes: {}
+has_additional_attributes: False
+write_current_date: False
+write_identities: False
+write_token_candidates: False
+write_order_handles: False
+write_fields: 0
+write_members: 0
+clear_other_dates: 0
+Failed connection attempts: 1

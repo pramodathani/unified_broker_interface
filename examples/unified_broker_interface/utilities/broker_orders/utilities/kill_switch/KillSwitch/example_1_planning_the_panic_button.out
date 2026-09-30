@@ -1,0 +1,7 @@
+1. Cancel:
+   zerodha 250915000000011 (OPEN)
+   zerodha 250915000000013 (TRIGGER PENDING)
+2. Wait until every cancel is confirmed.
+3. Close:
+   dhan NIFTY-Oct2026-25000-CE NRML: holds -75, send BUY 75
+   zerodha RELIANCE MIS: holds 10, send SELL 10

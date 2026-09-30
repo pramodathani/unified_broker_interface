@@ -1,0 +1,12 @@
+Place, accepted: accepted (HTTP 200), order id 1234567890, message None
+Place, refusal inside a success: rejected (HTTP 422), order id None, message Order rejected
+Place, settled server error: rejected (HTTP 422), order id None, message RMS rejected
+Place, plain server error: unknown (HTTP 504), order id None, message Internal error
+Cancel, accepted: accepted (HTTP 200), order id None, message None
+Cancel, refusal inside a success: rejected (HTTP 422), order id None, message Order not found
+Requests the stand-in received: ['POST https://trade.wisdomcapital.in/interactive/orders', 'POST https://trade.wisdomcapital.in/interactive/orders', 'POST https://trade.wisdomcapital.in/interactive/orders', 'POST https://trade.wisdomcapital.in/interactive/orders', 'DELETE https://trade.wisdomcapital.in/interactive/orders', 'DELETE https://trade.wisdomcapital.in/interactive/orders']
+read_order_id of the accepted body: 1234567890
+read_refusal of the refused body: Order rejected
+read_refusal of an error with no description: type error
+E-ORDER-0010 settles a refusal: True
+e-session-0002 settles a refusal: False

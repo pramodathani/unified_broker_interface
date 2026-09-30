@@ -1,0 +1,32 @@
+Engine body 0: {'instrument_id': '11111111-1111-5111-8111-000000000001', 'transaction_type': 'BUY', 'product': 'MIS', 'order_type': 'MARKET', 'quantity': 10, 'dry_run': True}
+Engine body 2: {'instrument_id': '11111111-1111-5111-8111-000000000003', 'transaction_type': 'SELL', 'product': 'CNC', 'order_type': 'LIMIT', 'price': '101.5', 'quantity': 5, 'dry_run': True}
+[
+  {
+    "request_index": 0,
+    "intent_id": "00000000000040008000000000000000",
+    "status": 200,
+    "response": {
+      "intent_id": "00000000000040008000000000000000",
+      "dry_run": true,
+      "instrument_id": "11111111-1111-5111-8111-000000000001"
+    }
+  },
+  {
+    "request_index": 1,
+    "intent_id": null,
+    "status": 400,
+    "response": {
+      "error": "quantity is required"
+    }
+  },
+  {
+    "request_index": 2,
+    "intent_id": "00000000000040008000000000000002",
+    "status": 200,
+    "response": {
+      "intent_id": "00000000000040008000000000000002",
+      "dry_run": true,
+      "instrument_id": "11111111-1111-5111-8111-000000000003"
+    }
+  }
+]

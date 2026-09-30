@@ -1,0 +1,14 @@
+wisdom_capital: segment NSECD returned no instruments.
+wisdom_capital: segment NSECO returned no instruments.
+wisdom_capital: segment BSECM returned no instruments.
+wisdom_capital: segment BSEFO returned no instruments.
+wisdom_capital: segment BSECD returned no instruments.
+wisdom_capital: segment NCDEX returned no instruments.
+Segments asked for: ['NSECM', 'NSEFO', 'NSECD', 'NSECO', 'BSECM', 'BSEFO', 'BSECD', 'MCXFO', 'NCDEX']
+Rows: 5
+  ExchangeSegment ExchangeInstrumentID InstrumentType  Series LotSize StrikePrice          ISIN data_category
+0           NSECM                 2885              8      EQ       1         NaN  INE002A01018      equities
+1           NSECM                 1594              8      EQ       1         NaN  INE009A01021      equities
+2           NSEFO                40001              2  OPTIDX      75       25000           NaN       options
+3           NSEFO                35001              1  FUTIDX      75         NaN           NaN       futures
+4           MCXFO               451669              1  FUTCOM     100         NaN           NaN       futures

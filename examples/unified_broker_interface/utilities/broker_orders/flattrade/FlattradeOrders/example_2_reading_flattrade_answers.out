@@ -1,0 +1,7 @@
+Place, accepted: accepted (HTTP 200), order id 26091500000021, message None
+Place, refusal inside a success: rejected (HTTP 422), order id None, message Session Expired :  Invalid Session Key
+Place, settled server error: rejected (HTTP 422), order id None, message Server busy
+Cancel, accepted: accepted (HTTP 200), order id None, message None
+Cancel, refusal inside a success: rejected (HTTP 422), order id None, message Rejected : ORA:Order not found to cancel
+Requests the stand-in received: ['POST https://piconnect.flattrade.in/PiConnectAPI/PlaceOrder', 'POST https://piconnect.flattrade.in/PiConnectAPI/PlaceOrder', 'POST https://piconnect.flattrade.in/PiConnectAPI/PlaceOrder', 'POST https://piconnect.flattrade.in/PiConnectAPI/CancelOrder', 'POST https://piconnect.flattrade.in/PiConnectAPI/CancelOrder']
+Account setting: username, base URL: https://piconnect.flattrade.in/PiConnectAPI

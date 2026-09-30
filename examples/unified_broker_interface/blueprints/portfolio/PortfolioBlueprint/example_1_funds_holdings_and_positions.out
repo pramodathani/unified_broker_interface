@@ -1,0 +1,3 @@
+/funds: 200 {"brokers": [{"broker": "zerodha", "status": "ok"}, {"broker": "dhan", "status": "stale"}], "summary": {"available_balance": 200000.0, "margin_utilized": 50000.0, "total_balance": 250000.0}}
+/holdings: 200 {"brokers": [{"broker": "zerodha", "status": "ok"}, {"broker": "dhan", "status": "stale"}], "holdings": [{"last_price": 1521.4, "quantity": 10, "symbol": "INFY"}]}
+/positions: 200 {"brokers": [{"broker": "zerodha", "status": "ok"}, {"broker": "dhan", "status": "stale"}], "net": [{"pnl": 1250.0, "quantity": 75, "symbol": "NIFTY26OCTFUT"}]}

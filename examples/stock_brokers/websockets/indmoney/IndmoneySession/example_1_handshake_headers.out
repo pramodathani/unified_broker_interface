@@ -1,0 +1,7 @@
+Stand-in login number 1
+Credentials: client_id=ind-client-7 access_token=indmoney-token-1
+Handshake headers: {'Authorization': 'indmoney-token-1', 'x-api-key': 'ind-client-7'} for token indmoney-token-1
+WARNING Logging in to INDmoney again.
+Stand-in login number 2
+Handshake headers: {'Authorization': 'indmoney-token-2', 'x-api-key': 'ind-client-7'} for token indmoney-token-2
+Logins made: 2

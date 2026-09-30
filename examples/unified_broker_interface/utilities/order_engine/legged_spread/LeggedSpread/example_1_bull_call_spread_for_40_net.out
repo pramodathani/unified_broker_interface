@@ -1,0 +1,8 @@
+Run: HTTP 200, outcome accepted, aiming at 40 net (read_net_price 40)
+Worked leg 22, other leg 24
+Sent: place BUY 75 LIMIT at 120.00 -> 260930000001
+25 filled at 119.5: place SELL 25 LIMIT at 79.5 -> 260930000002, hedged so far 25
+75 filled at 119.8: place SELL 50 LIMIT at 79.8 -> 260930000003, hedged so far 75
+Leg worked BUY 75 of 22 at 120.0
+Leg other  SELL 25 of 24 at 79.5
+Leg other  SELL 50 of 24 at 79.8

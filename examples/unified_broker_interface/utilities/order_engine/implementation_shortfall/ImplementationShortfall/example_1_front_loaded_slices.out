@@ -1,0 +1,9 @@
+Run: HTTP 200, outcome accepted, slices 5, urgency 1.0
+Arrival price recorded: 152.35
+Sent to the broker:
+  place BUY 516 MARKET -> 260930000001
+  place BUY 258 MARKET -> 260930000002
+  place BUY 129 MARKET -> 260930000003
+  place BUY 65 MARKET -> 260930000004
+  place BUY 32 MARKET -> 260930000005
+Parent: working, every slice has been sent

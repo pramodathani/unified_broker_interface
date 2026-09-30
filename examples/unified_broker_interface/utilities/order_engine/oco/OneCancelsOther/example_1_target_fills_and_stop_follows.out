@@ -1,0 +1,17 @@
+Run: HTTP 200, outcome accepted, broker zerodha
+  stop: 260930000001 accepted
+  target: 260930000002 accepted
+Target filled 40: parent protecting
+  stop   SELL 60 filled 0, acknowledged
+  target SELL 100 filled 40, partially_filled
+Target filled 100: parent protecting
+  stop   SELL 60 filled 0, acknowledged
+  target SELL 100 filled 100, filled
+Stop cancel confirmed: parent completed
+  stop   SELL 60 filled 0, cancelled
+  target SELL 100 filled 100, filled
+Sent to the broker:
+  place SELL 100 SL at 988 trigger 990 -> 260930000001
+  place SELL 100 LIMIT at 1010 -> 260930000002
+  modify 260930000001 quantity 60
+  cancel 260930000001

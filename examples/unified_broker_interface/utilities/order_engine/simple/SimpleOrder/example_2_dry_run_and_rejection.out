@@ -1,0 +1,10 @@
+Dry run:
+  HTTP status 200, answer {'broker': 'zerodha', 'dry_run': True, 'request': {'method': 'POST', 'url': 'https://broker.example/orders', 'json': {'transaction_type': 'BUY', 'quantity': 10, 'price': '1402.50'}}}
+  Events recorded: 0, legs: 0
+Real order:
+  HTTP status 400, outcome rejected
+  Orders the broker was sent: 1
+  Events recorded: ['parent_received', 'leg_requested', 'leg_answered', 'parent_state_changed']
+  Leg state: rejected
+  Parent state: rejected
+  Why: Insufficient funds. Required margin is 14025.00 but available margin is 3100.00.

@@ -1,0 +1,8 @@
+Zerodha accepts:
+  sent: [{'method': 'PUT', 'url': 'https://api.kite.trade/orders/regular/250915000000011', 'data': {'order_type': 'LIMIT', 'quantity': 20, 'price': '2501.5'}}]
+  HTTP 200, outcome accepted, message None
+  timings reported: ['broker', 'preparation']
+Zerodha fails:
+  sent: [{'method': 'PUT', 'url': 'https://api.kite.trade/orders/regular/250915000000011', 'data': {'order_type': 'LIMIT', 'quantity': 20, 'price': '2501.5'}}]
+  HTTP 504, outcome unknown, message internal error
+  timings reported: ['broker', 'preparation']

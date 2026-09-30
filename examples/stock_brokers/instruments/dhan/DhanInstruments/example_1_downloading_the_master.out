@@ -1,0 +1,10 @@
+Files read:
+    https://images.dhan.co/api-data/api-scrip-master-detailed.csv
+Rows: 4
+Columns: ['EXCH_ID', 'SEGMENT', 'SECURITY_ID', 'ISIN', 'INSTRUMENT', 'UNDERLYING_SECURITY_ID', 'UNDERLYING_SYMBOL', 'SYMBOL_NAME', 'DISPLAY_NAME', 'INSTRUMENT_TYPE', 'SERIES', 'LOT_SIZE', 'SM_EXPIRY_DATE', 'STRIKE_PRICE', 'OPTION_TYPE', 'TICK_SIZE', 'Unnamed: 16']
+First six columns:
+  EXCH_ID SEGMENT SECURITY_ID          ISIN INSTRUMENT UNDERLYING_SECURITY_ID
+0     NSE       E        1594  INE009A01021     EQUITY                    NaN
+1     NSE       E       11536  INE467B01029     EQUITY                    NaN
+2     BSE       E      500209  INE009A01021     EQUITY                    NaN
+3     NSE       D       52175           NaN     FUTIDX                  26000

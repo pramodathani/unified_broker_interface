@@ -1,0 +1,13 @@
+Cancel with login and settings: None
+Cancel without settings: example_broker has no api_key in its Redis settings
+Cancel without a login: example_broker has no login in Redis
+Login check beyond the access token: None
+Takes modifications: True
+Modify without a login: example_broker has no login in Redis
+Change the price: None
+Change the validity: example_broker cannot change validity on an order
+Change to SL-M: example_broker takes no SL-M orders
+Cancel request: {'method': 'DELETE', 'url': 'https://api.example-broker.in/orders/CASH/EX1'}
+Modify request: {'method': 'PUT', 'url': 'https://api.example-broker.in/orders/CASH/EX1', 'json': {'quantity': 10, 'price': 2505.0, 'order_type': 'LIMIT'}}
+stored_value of a held value: CASH
+Cancel of an order with no stored segment: HTTP 503, Redis does not hold this example_broker order's segment yet, so try again after the broker's next order book poll

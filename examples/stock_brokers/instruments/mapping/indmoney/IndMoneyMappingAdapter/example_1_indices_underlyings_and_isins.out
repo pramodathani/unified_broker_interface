@@ -1,0 +1,18 @@
+NSE RELIANCE (segment 'E')
+    ISIN on the row INE002A01018, resolved INE002A01018
+    nse_equities as {'symbol': 'RELIANCE'}
+NSE NIFTY NEXT 50 (segment 'Nifty Next 50')
+    ISIN on the row None, resolved None
+    nse_equity_indices as {'symbol': 'NIFTYNXT50'}
+NSE 360ONE-Nov2026-1000-CE (segment 'D')
+    ISIN on the row None, resolved None
+    nse_equity_options as {'underlying_symbol': '360ONE', 'expiry_date': datetime.date(2026, 11, 24), 'strike_price': 1000.0, 'option_type': 'CE'}
+BSE BANKEX-24Sep2026-57200-CE (segment 'D')
+    ISIN on the row None, resolved None
+    bse_equity_index_options as {'underlying_symbol': 'BANKEX', 'expiry_date': datetime.date(2026, 9, 24), 'strike_price': 57200.0, 'option_type': 'CE'}
+NSE 762GS2036 (segment 'E')
+    ISIN on the row None, resolved IN0020160019
+    nse_fixed_income as {'symbol': 'IN0020160019'}
+NSE LIQUIDCASE (segment 'E')
+    ISIN on the row INF0R8F01034, resolved INF0R8F01034
+    no segment, filed under nse_uncategorised

@@ -1,0 +1,53 @@
+Requests sent: [{'scrip-codes': 'NSE_2885'}]
+{
+    "id": "NSE:2885",
+    "broker": "indmoney",
+    "instrument_token": "NSE:2885",
+    "exchange": "nse",
+    "mode": "full",
+    "last_price": 1381.2,
+    "last_quantity": null,
+    "average_price": null,
+    "volume": 2183977,
+    "buy_quantity": 412776,
+    "sell_quantity": 598340,
+    "ohlc": {
+        "open": 1375.0,
+        "high": 1384.9,
+        "low": 1372.5,
+        "close": 1374.1
+    },
+    "change": 0.5167018412051624,
+    "oi": 0,
+    "oi_day_high": null,
+    "oi_day_low": null,
+    "last_trade_time": null,
+    "exchange_timestamp": null,
+    "depth": {
+        "buy": [
+            {
+                "quantity": 311,
+                "price": 1381.1,
+                "orders": null
+            },
+            {
+                "quantity": 156975,
+                "price": 1381.0,
+                "orders": null
+            }
+        ],
+        "sell": [
+            {
+                "quantity": 87,
+                "price": 1381.2,
+                "orders": null
+            },
+            {
+                "quantity": 640,
+                "price": 1381.3,
+                "orders": null
+            }
+        ]
+    },
+    "received_at": 1789446605.0
+}

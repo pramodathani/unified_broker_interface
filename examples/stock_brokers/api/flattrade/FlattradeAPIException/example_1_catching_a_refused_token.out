@@ -1,0 +1,4 @@
+Flattrade answers HTTP 400 with: {"stat": "Not_Ok", "emsg": "Session Expired :  Invalid Session Key"}
+Caught: FlattradeAPIException
+code: Not_Ok
+message: Session Expired :  Invalid Session Key

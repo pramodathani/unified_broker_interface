@@ -1,0 +1,13 @@
+Limit price kept as: 1512.5000
+as_price(98): 98.0000, as_price("98.0"): 98.0000, as_price("NaN"): None
+as_quantity("640"): 640, as_quantity(True): None
+Offer levels read: [(Decimal('1512.3000'), 120), (Decimal('1512.5000'), 640), (Decimal('1512.8000'), 75)]
+Bid levels read: [(Decimal('1512.1000'), 350), (Decimal('1512.0000'), 900)]
+Resting at 1512.50 on the offer side: 640
+Best bid, the opposite touch: 1512.1000
+Bid has reached 1512.50: False
+For a sell, 1512.30 is better than 1512.80: True
+A trade at 1512.80 went through the price: True
+A trade at 1512.30 went through the price: False
+Resting at 1512.50 behind a full book ending at 1511.40: None
+Bid raised to 1512.50, reached now: True

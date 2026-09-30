@@ -1,0 +1,10 @@
+150 units: None
+100 units: quantity must be a whole number of lots of 75
+Crude oil quantities against 100 barrels a lot: disclosed_quantity must be a whole number of lots of 100
+Agreed tick size: 0.05
+Price check: trigger_price must be a whole number of ticks of 0.05
+Agreed tick size when two brokers disagree: None
+Midpoint 120.025 for a buy: 120.00
+Midpoint 120.025 for a sell: 120.05
+Midpoint 120.025 to the nearest: 120.05
+Refused: tick size must be above zero, not Decimal('0')

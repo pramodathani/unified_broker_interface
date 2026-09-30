@@ -1,6 +1,6 @@
 # Offline tests
 
-UBI has no pytest suite. Instead, `test_runs/` holds eighteen plain Python scripts, each of which checks one part of the system against scripted inputs. They are called "offline" because they need no network, no broker, no Redis and no database: every outside service is replaced by a stand-in that lives in memory. You run each one as a module from the project root.
+UBI has no pytest suite. Instead, `test_runs/` holds nineteen plain Python scripts, each of which checks one part of the system against scripted inputs. They are called "offline" because they need no network, no broker, no Redis and no database: every outside service is replaced by a stand-in that lives in memory. You run each one as a module from the project root.
 
 ```bash
 .venv/bin/python -m test_runs.order_routes
@@ -10,7 +10,7 @@ Because they are plain scripts, there is no way to run a single case other than 
 
 ## The suites
 
-The table below lists all eighteen. "Fixture" is the recording a suite compares against, if it has one, and "Runtime" is what one run took on this machine on 2026-09-27 (on 2026-09-30 for `broker_selection`).
+The table below lists all nineteen. "Fixture" is the recording a suite compares against, if it has one, and "Runtime" is what one run took on this machine on 2026-09-27 (on 2026-09-30 for `broker_selection` and `examples`).
 
 | Command | What it pins | Fixture | `--record` | Runtime |
 |---|---|---|---|---:|
@@ -31,13 +31,14 @@ The table below lists all eighteen. "Fixture" is the recording a suite compares 
 | `python -m test_runs.price_cache` | The Redis copy of candles behind `/api/instruments/prices`: slicing, widening, and every reason a copy is thrown away | none | no | 0.4 s |
 | `python -m test_runs.virtual_queue` | The queue estimate behind the synthetic limit order book, and the process that keeps it | none | no | 0.1 s |
 | `python -m test_runs.websocket_feeds` | Every broker's quotes and order sockets against scripted connections: every Redis command, frame sent, log line, login and wait | `test_runs/fixtures/websocket_feeds.jsonl` (160) | rewrites only the named brokers' lines | 0.5 s |
+| `python -m test_runs.examples` | Every example program under `examples/`, the ones shown in the code reference: each runs in its own process with every data store and HTTP request pointed at a closed port, and prints exactly what it printed when it was recorded. `--coverage` lists classes with fewer than two programs and public methods no program calls | the `.out` file beside each program (704) | rewrites only the named folders' `.out` files | 27 s |
 | `python -m test_runs.connection_warming` | That connection warming and the idle limit never make an order fail, against a local HTTP server that misbehaves | none | no | 34 s |
 
 `order_engine_routes` and `order_change_lists` each have a fixture of their own on purpose. `--record` rewrites a whole file, so recording their scenarios into `order_routes.jsonl` would silently rewrite the recording that proves the single form and every broker's placement never changed.
 
 ## Running them all
 
-The output below is the last lines of each suite from one run on 2026-09-27, with `broker_selection` added from a run on 2026-09-30.
+The output below is the last lines of each suite from one run on 2026-09-27, with `broker_selection` and `examples` added from runs on 2026-09-30.
 
 ```text
 ===== candle_parse
@@ -76,6 +77,8 @@ The output below is the last lines of each suite from one run on 2026-09-27, wit
 160 of 160 scenarios match the recording, 0 differ
 ===== connection_warming
 22/22 checks passed.
+===== examples
+704/704 example programs passed.
 ```
 
 ## How the recording suites work

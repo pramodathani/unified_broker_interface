@@ -1,0 +1,35 @@
+Requests sent: ['https://e21.kotaksecurities.com/script-details/1.0/quotes/neosymbol/nse_cm|Nifty 50/all']
+{
+    "id": "nse_cm|26000",
+    "broker": "kotak",
+    "instrument_token": "nse_cm|26000",
+    "exchange": "nse",
+    "mode": "full",
+    "last_price": 25114.05,
+    "last_quantity": null,
+    "average_price": null,
+    "volume": null,
+    "buy_quantity": null,
+    "sell_quantity": null,
+    "ohlc": {
+        "open": 25051.2,
+        "high": 25139.8,
+        "low": 25030.65,
+        "close": 25024.7
+    },
+    "change": null,
+    "oi": null,
+    "oi_day_high": null,
+    "oi_day_low": null,
+    "last_trade_time": null,
+    "exchange_timestamp": null,
+    "depth": {
+        "buy": [],
+        "sell": []
+    },
+    "received_at": 1789446605.0
+}
+QuoteUnavailable: Kotak's quote name for index token 26017 is not known
+Requests sent in all: 1
+(401, '{"message": "unauthorised"}') -> log in again: True
+(424, '{"message": "Consumer key example-consumer-key is invalid"}') -> log in again: False

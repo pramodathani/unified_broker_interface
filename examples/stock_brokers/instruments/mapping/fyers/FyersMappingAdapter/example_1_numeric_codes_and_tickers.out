@@ -1,0 +1,14 @@
+NSE:RELIANCE-EQ (type 0) -> nse_equities
+    identity {'symbol': 'RELIANCE'}
+NSE:EMBASSY-RR (type 0) -> nse_investment_trusts
+    identity {'symbol': 'EMBASSY'}
+NSE:NIFTYBANK-INDEX (type 10) -> nse_equity_indices
+    identity {'symbol': 'BANKNIFTY'}
+NSE:NIFTYGS10YR-INDEX (type 10) -> no segment, filed under nse_uncategorised
+BSE:737GS2028-F (type 50) -> bse_fixed_income
+    identity {'symbol': 'IN0020230010'}
+BSE:SENSEX50-INDEX (type 10) -> bse_equity_indices
+    identity {'symbol': 'SNSX50'}
+NSE:ONMIBOR26OCTFUT (type 18) -> nse_fixed_income_index_futures
+    identity {'underlying_symbol': 'ONMIBOR', 'expiry_date': datetime.date(2026, 10, 30)}
+MCX:GOLDGUINEA26OCTSPD (type 99) -> no segment, filed under mcx_uncategorised

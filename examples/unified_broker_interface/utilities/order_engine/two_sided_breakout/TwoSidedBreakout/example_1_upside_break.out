@@ -1,0 +1,14 @@
+Run: HTTP 200, outcome accepted, parent working
+  BUY: 260930000001 accepted
+  SELL: 260930000002 accepted
+The buy side filled: parent protecting
+  entry  BUY 20 SL at 1012.0 trigger 1010.0
+  entry  SELL 20 SL at 988.0 trigger 990.0
+  stop   SELL 20 SL at 998.0 trigger 1000.0
+  target SELL 20 LIMIT at 1030.0 trigger None
+Sent to the broker, in order:
+  place BUY 20 SL at 1012 trigger 1010 -> 260930000001
+  place SELL 20 SL at 988 trigger 990 -> 260930000002
+  cancel 260930000002
+  place SELL 20 SL at 998 trigger 1000 -> 260930000003
+  place SELL 20 LIMIT at 1030 -> 260930000004

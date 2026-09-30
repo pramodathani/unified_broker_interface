@@ -1,0 +1,29 @@
+Third order of a list:
+  api_worker: <differs on every run>
+  body: {'transaction_type': 'BUY', 'order_type': 'MARKET', 'quantity': 75}
+  created_at: <differs on every run>
+  deadline_at: created_at + 15.0 seconds
+  instrument_id: NFO:NIFTY25OCT25000CE
+  intent_id: <differs on every run>
+  reply_key: unified:orders:intents:result:list-0001
+  request_index: 2
+  synthetic_type: simple
+An order with no body:
+  api_worker: <differs on every run>
+  body: {}
+  created_at: <differs on every run>
+  deadline_at: created_at + 5.0 seconds
+  instrument_id: NSE:SBIN
+  intent_id: <differs on every run>
+  reply_key: unified:orders:intents:result:<intent_id>
+  synthetic_type: simple
+A cancel_leg command:
+  api_worker: <differs on every run>
+  body: {'parent_id': 'p-7f3a', 'leg_id': 'p-7f3a:2'}
+  command: cancel_leg
+  created_at: <differs on every run>
+  deadline_at: created_at + 5.0 seconds
+  instrument_id: NSE:SBIN
+  intent_id: <differs on every run>
+  reply_key: unified:orders:intents:result:<intent_id>
+  synthetic_type: None

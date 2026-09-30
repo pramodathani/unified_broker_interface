@@ -1,0 +1,4 @@
+Fed b'MSG stocks/order/upd': []
+Fed b'ates.apex.subscription-77 1 10\r\n01234': []
+Fed b'56789\r\n': [('message', 'stocks/order/updates.apex.subscription-77', b'0123456789')]
+Fed "-ERR 'Authorization Violation'\r\n": [('error', "-ERR 'Authorization Violation'")]

@@ -1,0 +1,7 @@
+Socket name: Order updates socket
+Connecting to wss://ws.kite.trade/?api_key=kite-api-key&access_token=kite-access-token
+INFO Order updates socket opened. Waiting for order updates.
+Order 260925000000001 COMPLETE: BUY 10 INFY at 1499.5
+INFO Order updates socket closed with status 1000: normal closure
+INFO Order updates socket stopped.
+Gave up: False

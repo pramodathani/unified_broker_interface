@@ -1,0 +1,10 @@
+Following 12, now at 25030.00; delta -0.4, range 60 to None, step 1 tick
+target_price with the index at 25030: 68.00
+target_price with the index at 24900: 120.00
+target_price with the index at 25100: 60.00
+bounded(41.23): 60.00, bounded(97.02): 97.05
+The caller moved the offer to 85.0 with the index at 24990: start_price 85.0, underlying_start 24990.00
+Pegged to itself: HTTP 400, an underlying peg follows another instrument; to follow the traded instrument itself use peg
+A range upside down: HTTP 400, lowest_price 90 is above highest_price 70
+A step of zero ticks: HTTP 400, step_ticks must be a whole number of at least 1, not 0
+A market order: HTTP 400, an underlying peg starts from the price you give, so it must be a LIMIT order with a price

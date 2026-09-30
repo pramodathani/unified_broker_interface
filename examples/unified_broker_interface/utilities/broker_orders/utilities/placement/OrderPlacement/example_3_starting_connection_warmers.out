@@ -1,0 +1,6 @@
+With all: ['dhan', 'flattrade', 'fyers', 'groww', 'indmoney', 'kotak', 'shoonya', 'stoxkart', 'wisdom_capital', 'zerodha']
+With a list: ['zerodha', 'zerodah', '']
+Warmers started: 1
+  zerodha: running after stop False, failures 0
+First ping: HEAD https://api.kite.trade/
+Logged: ["WARNING not warming order connections to 'zerodah', which is not a broker"]

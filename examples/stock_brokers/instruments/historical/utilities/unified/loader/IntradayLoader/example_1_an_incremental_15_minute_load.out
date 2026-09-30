@@ -1,0 +1,15 @@
+Minutes per bar: 15; trading days copied: 44
+Source 51 previously seen from 2025-09-01T09:15:00+05:30 to 2026-09-25T15:15:00+05:30
+Source 52 previously seen from 2025-09-01T09:15:00+05:30 to 2026-09-25T15:15:00+05:30
+delete bars of PIDILITIND-BSE from 2026-09-22T15:15:00+05:30
+insert from flattrade: start 2026-09-22T15:15:00+05:30, every 15 minutes, exchange bse, series ('BSE|500331|PIDILITIND', 51, 0, None, None)
+insert from wisdom_capital: start 2026-09-22T15:15:00+05:30, every 15 minutes, exchange bse, series ('12|500331', 52, 0, None, None)
+bars_deleted: 118
+bars_gap_filled: 25
+bars_written: 125
+instruments_rebuilt: 1
+series_dhan: 0
+series_flattrade: 1
+series_wisdom_capital: 1
+series_zerodha: 0
+sources_superseded: 0

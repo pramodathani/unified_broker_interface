@@ -1,0 +1,2 @@
+('Input_Exception', 'Missing required fields'): CandleInstrumentUnknown, retire the series
+('Input_Exception', 'Data for Intraday Charts can be fetched for 90 days at a time'): an ordinary error, retry the series later

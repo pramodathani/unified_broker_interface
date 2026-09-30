@@ -1,0 +1,8 @@
+Rows read: 2 since this morning, 3 for ['daily_stop', 'gtt']
+Rows after merging: 4
+  aaaaaaaa #1 parent_received
+  aaaaaaaa #2 parameters_changed
+  aaaaaaaa #3 parent_state_changed
+  bbbbbbbb #1 parent_received
+Rebuilt aaaaaaaa: gtt, working, sequence 3, parameters {'type': 'gtt', 'trigger_price': '1050', 'armed_on': '2026-09-18'}
+Rebuilt bbbbbbbb: simple, received, sequence 1, parameters {}

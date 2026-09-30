@@ -1,0 +1,11 @@
+Base class: broker None, timeout 5 seconds
+BrokerQuoteSource.fetch raises NotImplementedError
+BrokerQuoteSource.is_authentication_error raises NotImplementedError
+ZerodhaQuoteSource: broker zerodha, timeout 5 seconds, fetch implemented True, authentication check implemented True
+DhanQuoteSource: broker dhan, timeout 5 seconds, fetch implemented True, authentication check implemented True
+KotakQuoteSource: broker kotak, timeout 5 seconds, fetch implemented True, authentication check implemented True
+FlattradeQuoteSource: broker flattrade, timeout 5 seconds, fetch implemented True, authentication check implemented True
+ShoonyaQuoteSource: broker shoonya, timeout 5 seconds, fetch implemented True, authentication check implemented True
+IndmoneyQuoteSource: broker indmoney, timeout 5 seconds, fetch implemented True, authentication check implemented True
+FyersQuoteSource: broker fyers, timeout 5 seconds, fetch implemented True, authentication check implemented True
+GrowwQuoteSource: broker groww, timeout 5 seconds, fetch implemented True, authentication check implemented True

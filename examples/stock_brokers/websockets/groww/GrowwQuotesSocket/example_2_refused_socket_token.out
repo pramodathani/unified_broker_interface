@@ -1,0 +1,23 @@
+Stand-in login number 1
+Socket token request with Bearer groww-token-1 for a key starting U: HTTP 403
+ERROR socket_0 socket token refused: HTTP 403: {"message": "Unauthorized"}
+WARNING Logging in to Groww again.
+Stand-in login number 2
+WARNING socket_0 disconnected. Reconnecting in 0 seconds.
+Socket token request with Bearer groww-token-2 for a key starting U: HTTP 200
+Connecting to wss://socket-api.groww.in
+INFO socket_0 opened. Waiting for the NATS INFO frame.
+Sent: CONNECT {"jwt": "socket-jwt", "sig": "<86 character signature>", "verbose": false, "pedantic": false, "tls_required": false, "lang": "python", "version": "1.0.0", "protocol": 1, "headers": true, "no_responders": false}
+Sent: PING
+Sent: SUB /ld/eq/nse/price_detailed.26000 1
+Sent: SUB /ld/eq/nse/book.26000 2
+INFO socket_0 subscribed to 2 subject(s) for 1 instrument(s).
+Sent: PONG
+Tick NSE:NIFTY (NSE|CASH|26000) in quote mode
+  last_price=25150.65 volume=None change=None exchange_timestamp=1790311529
+  ohlc={'open': None, 'high': None, 'low': None, 'close': None}
+  depth={'buy': [], 'sell': []}
+INFO socket_0 closed with status 1000: normal closure
+INFO socket_0 stopped.
+Gave up: False
+Logins made: 2

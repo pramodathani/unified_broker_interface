@@ -1,0 +1,4 @@
+Dhan answers HTTP 401 with: {"errorType": "Invalid_Authentication", "errorCode": "DH-901", "errorMessage": "Client ID or user generated access token is invalid or expired."}
+Caught: DhanAPIException
+code: Invalid_Authentication
+message: Client ID or user generated access token is invalid or expired.

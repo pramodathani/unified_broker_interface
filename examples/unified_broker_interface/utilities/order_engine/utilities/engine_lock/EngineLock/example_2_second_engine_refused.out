@@ -1,0 +1,11 @@
+First engine takes the lock: True
+Second engine tries to take it:
+  ERROR Another order engine holds unified:orders:engine:lock (pid 4101). Two engines would place every order twice, so this one is stopping.
+  Answer: False
+The first engine stalls and its key expires; the second takes it
+  Second engine takes the lock: True
+The first engine wakes and refreshes:
+  ERROR unified:orders:engine:lock is now held by pid 4102 rather than 4101, so this engine is stopping rather than placing orders beside another one.
+  Answer: False
+After the first engine releases, the key names: 4102
+Second engine refreshes: True

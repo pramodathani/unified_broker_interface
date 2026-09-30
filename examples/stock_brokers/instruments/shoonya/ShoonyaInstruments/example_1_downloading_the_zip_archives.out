@@ -1,0 +1,18 @@
+Archives asked for:
+    https://api.shoonya.com/NSE_symbols.txt.zip
+    https://api.shoonya.com/NFO_symbols.txt.zip
+    https://api.shoonya.com/CDS_symbols.txt.zip
+    https://api.shoonya.com/MCX_symbols.txt.zip
+    https://api.shoonya.com/BSE_symbols.txt.zip
+    https://api.shoonya.com/BFO_symbols.txt.zip
+    https://api.shoonya.com/NCX_symbols.txt.zip
+Rows: 7
+Columns: ['Exchange', 'Token', 'LotSize', 'Symbol', 'TradingSymbol', 'Instrument', 'TickSize', 'Unnamed: 7', 'source_zip_url', 'source_file_name', 'Expiry', 'OptionType', 'StrikePrice', 'Unnamed: 10', 'GNGD', 'Unnamed: 11']
+  Exchange    Token    TradingSymbol Instrument source_file_name
+0      NSE     1594          INFY-EQ         EQ  NSE_symbols.txt
+1      NSE    11536           TCS-EQ         EQ  NSE_symbols.txt
+2      NFO    52175    NIFTY27OCT26F     FUTIDX  NFO_symbols.txt
+3      CDS     1201   USDINR29OCT26F     FUTCUR  CDS_symbols.txt
+4      MCX   451669  CRUDEOIL19OCT26     FUTCOM  MCX_symbols.txt
+5      BSE   500209             INFY          A  BSE_symbols.txt
+6      BFO  1135463   SENSEX30OCT26F     FUTIDX  BFO_symbols.txt

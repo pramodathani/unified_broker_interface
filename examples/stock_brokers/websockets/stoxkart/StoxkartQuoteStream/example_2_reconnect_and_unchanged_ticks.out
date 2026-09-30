@@ -1,0 +1,20 @@
+Connecting to wss://broadcasting-v2.stoxkart.com/
+Sent binary request with code 10 and 83 bytes
+Sent binary request with code 12 and 129 bytes
+Sent binary request with code 23 and 129 bytes
+INFO Connected to wss://broadcasting-v2.stoxkart.com/ and subscribed 1 instrument(s).
+Tick NSE:1594 (NSE:1594): last_price=1500.25 volume=88000 change=None
+  ohlc={'open': None, 'high': None, 'low': None, 'close': None} buy_quantity=None sell_quantity=None
+  last_trade_time=1790311528 exchange_timestamp=1790311529
+WARNING Stoxkart asked for a reconnect.
+The stream waits 1 second(s) here; this program skips the wait.
+Connecting to wss://broadcasting-v2.stoxkart.com/
+Sent binary request with code 10 and 83 bytes
+Sent binary request with code 12 and 129 bytes
+Sent binary request with code 23 and 129 bytes
+INFO Connected to wss://broadcasting-v2.stoxkart.com/ and subscribed 1 instrument(s).
+Tick NSE:1594 (NSE:1594): last_price=1500.75 volume=88100 change=None
+  ohlc={'open': None, 'high': None, 'low': None, 'close': None} buy_quantity=None sell_quantity=None
+  last_trade_time=1790311528 exchange_timestamp=1790311529
+INFO Stopped
+run returned 0

@@ -1,0 +1,13 @@
+an engine holds its lock, so the order can be handed over
+intents on the stream: 1
+written synthetic_type: simple
+written instrument_id: 11111111-1111-5111-8111-000000000001
+written reply_key is the intent's own list: True
+written body: {'exchange': 'NSE', 'segment': 'NSE_EQ', 'symbol': 'INFY', 'transaction_type': 'BUY', 'quantity': 10, 'product': 'CNC', 'order_type': 'LIMIT', 'price': 1415.5, 'tag': 'swing01'}
+status: 200
+broker: zerodha, outcome: accepted, order_id: 250930000000001, tag: swing01
+answer carries the written intent_id: True
+engine preparation replaced: True
+broker time kept: 41.7
+stored answer: status 200, order_id 250930000000001, key unified:orders:intents:answer:<intent_id>
+stored answer for an intent nobody wrote: None

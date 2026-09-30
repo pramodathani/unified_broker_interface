@@ -1,0 +1,43 @@
+Requests sent: [('https://e21.kotaksecurities.com/script-details/1.0/quotes/neosymbol/nse_cm|2885/all', ['Auth', 'Authorization', 'Sid', 'neo-fin-key'])]
+{
+    "id": "nse_cm|2885",
+    "broker": "kotak",
+    "instrument_token": "nse_cm|2885",
+    "exchange": "nse",
+    "mode": "full",
+    "last_price": 1381.2,
+    "last_quantity": 14,
+    "average_price": 1379.64,
+    "volume": 2183977,
+    "buy_quantity": 412776,
+    "sell_quantity": 598340,
+    "ohlc": {
+        "open": 1375.0,
+        "high": 1384.9,
+        "low": 1372.5,
+        "close": 1374.1000000000001
+    },
+    "change": null,
+    "oi": 0,
+    "oi_day_high": null,
+    "oi_day_low": null,
+    "last_trade_time": null,
+    "exchange_timestamp": null,
+    "depth": {
+        "buy": [
+            {
+                "quantity": 311,
+                "price": 1381.1,
+                "orders": 6
+            }
+        ],
+        "sell": [
+            {
+                "quantity": 87,
+                "price": 1381.2,
+                "orders": 3
+            }
+        ]
+    },
+    "received_at": 1789446605.0
+}

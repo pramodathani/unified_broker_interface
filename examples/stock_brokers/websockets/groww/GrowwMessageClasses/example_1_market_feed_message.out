@@ -1,0 +1,19 @@
+Class: stocksData.response.StocksSocketResponseProtoDto
+Serialized to 41 bytes
+symbol=RELIANCE segment=CASH exchange=NSE
+  avgPrice: 0.0
+  bidQty: 0.0
+  close: 291000.0
+  high: 0.0
+  highPriceRange: 0.0
+  highTradeRange: 0.0
+  low: 0.0
+  lowPriceRange: 0.0
+  lowTradeRange: 0.0
+  ltp: 295050.0
+  offerQty: 0.0
+  open: 0.0
+  openInterest: 0.0
+  tsInMillis: 0.0
+  value: 0.0
+  volume: 1204500.0

@@ -1,0 +1,9 @@
+First request carried: morning-token
+Another process logged in again at 12:30:41 and wrote its login to Redis.
+Second request carried: noon-token
+Request: GET https://trade.wisdomcapital.in/interactive/user/balance?clientID=WC0001
+Status: success, HTTP code: 200
+Data:
+{
+    "BalanceList": []
+}

@@ -1,0 +1,7 @@
+Run at 13:00: HTTP 200, outcome accepted, at 15:00 the rest is made market
+Tick at 15:00:00: acted True
+Tick at 15:00:01: acted False
+make_marketable again by hand: False
+Sent to the broker: ['place SELL 200 LIMIT at 412.00 -> 260930000001', 'modify 260930000001 price 409.70']
+The broker reports it filled: parent completed
+at_expiry hold: HTTP 400, at_expiry must be one of cancel, market, not 'hold'

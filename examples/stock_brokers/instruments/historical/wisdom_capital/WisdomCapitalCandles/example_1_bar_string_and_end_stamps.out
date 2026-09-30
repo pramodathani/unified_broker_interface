@@ -1,0 +1,7 @@
+Requested https://trade.wisdomcapital.in/apimarketdata/instruments/ohlc
+  headers: {'authorization': 'market-data-token-1'}
+  parameters: {'exchangeSegment': '1', 'exchangeInstrumentID': '2885', 'startTime': 'Sep 10 2026 000000', 'endTime': 'Sep 11 2026 000000', 'compressionValue': '60'}
+  answer: 1789031759|1279.5|1285.3|1279.5|1283.2|149743|0|,1789031819|1283.2|1284.0|1282.0|1283.0|51743|0|
+  2026-09-10T09:15:00+05:30 open 1279.5 high 1285.3 low 1279.5 close 1283.2 volume 149743 oi 0
+  2026-09-10T09:16:00+05:30 open 1283.2 high 1284.0 low 1282.0 close 1283.0 volume 51743 oi 0
+The first stamp read as a five minute bar opens at 2026-09-10T09:11:00+05:30

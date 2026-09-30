@@ -1,0 +1,4 @@
+Good: 200 [{"order_id": "1001", "status": "OPEN"}]
+Bad: 400 {"error": "limit must be a whole number, not 'all'"}
+OrderBookFilterError is a ValueError: True
+Caught as ValueError: OrderBookFilterError: limit must be a whole number, not 'all'

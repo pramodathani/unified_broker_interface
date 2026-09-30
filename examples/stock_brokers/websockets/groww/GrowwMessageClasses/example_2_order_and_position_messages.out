@@ -1,0 +1,3 @@
+Classes: OrderDetailsBroadCastDto and groww.protobuf.fno.dto.fnoData.PositionDetailProto
+Order GMK2609250001: status=EXECUTED side=B filled=10 price='150000'
+Position NIFTY26SEP25000CE: type=OPTION NSE={'creditQty': 75.0, 'creditPrice': 0.0, 'debitQty': 0.0, 'debitPrice': 0.0}

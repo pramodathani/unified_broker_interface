@@ -1,0 +1,13 @@
+Broker: dhan
+'5:565899' -> broker_token='565899' order_symbol=None segments=16 starting with mcx_fixed_income_futures
+'MCX_COMM:565899' -> broker_token='565899' order_symbol=None segments=16 starting with mcx_fixed_income_futures
+'1:2885' -> broker_token='2885' order_symbol=None segments=6 starting with nse_equities
+'2:2885' -> broker_token='2885' order_symbol=None segments=16 starting with nse_fixed_income_futures
+'0:13' -> broker_token='13' order_symbol=None segments=8 starting with nse_equity_indices
+'6:100' -> None
+'NSE_EQ' -> None
+Subscription tokens as ticks spell them:
+'MCX_COMM:565899' -> '5:565899'
+'NSE_EQ:2885' -> '1:2885'
+'5:565899' -> '5:565899'
+'XYZ:1' -> None

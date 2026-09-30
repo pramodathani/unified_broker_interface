@@ -1,0 +1,9 @@
+first read: mcx_commodity_futures, trusted units per lot 100, round trips 2
+  quote last_price 5987.0, positions [{'instrument_id': 'a4c8e2f0-1b3d-5e7f-8091-a2b3c4d5e6f7', 'broker': 'zerodha', 'product': 'NRML', 'quantity': 300}]
+second read, quote only: positions None, round trips 2
+25 Infosys shares at zerodha: 25
+300 barrels of crude oil at zerodha: 3 lots
+250 units: 400 250 is not a whole number of lots of 100
+100 units: 503 the contract size of this mcx_commodity_options instrument is not trusted today, so its quantity cannot be converted
+attributes of Infosys: {'zerodha': {'freeze_quantity': None}, 'dhan': {'freeze_quantity': '100000'}}
+attributes of crude oil: {}

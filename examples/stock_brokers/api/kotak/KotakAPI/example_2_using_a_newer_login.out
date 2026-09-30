@@ -1,0 +1,7 @@
+First request carried: Auth=morning-token Sid=morning-sid
+Another process logged in again at 12:30:41 and wrote its login to Redis.
+Second request carried: Auth=noon-token Sid=noon-sid
+Request: GET https://e21.kotaksecurities.com/quick/user/positions
+Status: success, HTTP code: 200
+Data:
+[]

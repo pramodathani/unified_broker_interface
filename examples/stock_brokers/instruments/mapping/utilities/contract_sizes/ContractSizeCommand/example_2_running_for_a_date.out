@@ -1,0 +1,7 @@
+contract sizes for 2026-09-28
+  segment                          status         tradeable  contracts
+  bse_currency_futures             single_source  True               1
+  mcx_commodity_futures            confirmed      True               2
+  mcx_commodity_futures            sibling_confirmed True               1
+Exit code: 0
+Rows written: 4

@@ -1,0 +1,4 @@
+Session uses our adapter: True
+Adapter: idle limit 300.0 s, 10 connections, oldest first False
+Retries: 0
+Pool for api.kite.trade: IdleLimitedHTTPSConnectionPool, idle limit 300.0 s, keeps 10

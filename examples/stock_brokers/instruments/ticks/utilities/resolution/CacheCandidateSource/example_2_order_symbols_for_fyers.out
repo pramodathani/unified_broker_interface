@@ -1,0 +1,5 @@
+Order symbols on 2026-09-15: {'NSE:SBIN-EQ': '3045', 'NSE:RELIANCE-EQ': '2885'}
+Order symbols on 2026-09-01: {}
+Queries sent: 1
+  SELECT order_symbol, broker_token FROM unified.broker_mappings WHERE broker = :broker AND mapping_date = :mapping_date AND order_symbol IS NOT NULL
+  {'broker': 'fyers', 'mapping_date': datetime.date(2026, 9, 15)}

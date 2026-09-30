@@ -1,0 +1,7 @@
+Redis settings hash after construction: {'paper': '{"broker_name": "paper", "client_id": "PAPER01"}'}
+Redis last_login hash after construction: None
+post: status=success token=paper-token watchlists={'banks': {'name': 'Banks', 'symbols': ['NSE:HDFCBANK']}}
+get: status=success token=paper-token watchlists={'banks': {'name': 'Banks', 'symbols': ['NSE:HDFCBANK']}}
+put: status=success token=paper-token watchlists={'banks': {'name': 'Banks', 'symbols': ['NSE:HDFCBANK', 'NSE:ICICIBANK']}}
+patch: status=success token=paper-token watchlists={'banks': {'name': 'Private banks', 'symbols': ['NSE:HDFCBANK', 'NSE:ICICIBANK']}}
+delete: status=success token=paper-token watchlists={}

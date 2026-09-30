@@ -1,0 +1,13 @@
+dhan: 2/3 raw row(s) classified, 1 uncategorised, 3 segment membership(s), 3 distinct instrument(s), 0 error(s).
+BSE exchange traded funds confirmed by other brokers: ['GOLDBEES']
+Cross-broker queries that found nothing: 10
+Summary: matched 2, uncategorised 1, errors []
+DELETE FROM unified.broker_mappings
+INSERT INTO unified.instruments
+  bse_uncategorised: HDFCSTARMF
+  nse_equities: RELIANCE
+  bse_exchange_traded_funds: GOLDBEES
+INSERT INTO unified.broker_mappings
+  token 176234: tick size 5.0, attributes {"isin": "INF179K01XZ4", "display_name": "HDFCSTARMF", "instrument_type": "MF", "series": "A"}
+  token 2885: tick size 0.05, attributes {"isin": "INE002A01018", "display_name": "RELIANCE", "instrument_type": "ES", "series": "EQ"}
+  token 590095: tick size 0.05, attributes {"isin": "INF204KB17J3", "display_name": "GOLDBEES", "instrument_type": "ETF", "series": "A"}

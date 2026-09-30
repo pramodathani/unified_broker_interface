@@ -1,0 +1,44 @@
+Broker: shoonya
+Requests sent: [('https://api.shoonya.com/NorenWClientAPI/GetQuotes', {'exch': 'MCX', 'token': '467013'})]
+{
+    "id": "MCX|467013",
+    "broker": "shoonya",
+    "instrument_token": "MCX|467013",
+    "exchange": "mcx",
+    "mode": "full",
+    "last_price": 5725.0,
+    "last_quantity": 1,
+    "average_price": 5719.42,
+    "volume": 70691,
+    "buy_quantity": 1843,
+    "sell_quantity": 2011,
+    "ohlc": {
+        "open": 5702.0,
+        "high": 5741.0,
+        "low": 5698.0,
+        "close": 5722.0
+    },
+    "change": 0.052429220552254456,
+    "oi": 17552,
+    "oi_day_high": null,
+    "oi_day_low": null,
+    "last_trade_time": 1789446602,
+    "exchange_timestamp": 1789446603,
+    "depth": {
+        "buy": [
+            {
+                "quantity": 12,
+                "price": 5724.0,
+                "orders": 7
+            }
+        ],
+        "sell": [
+            {
+                "quantity": 9,
+                "price": 5725.0,
+                "orders": 5
+            }
+        ]
+    },
+    "received_at": 1789446605.0
+}

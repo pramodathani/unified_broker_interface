@@ -1,0 +1,4 @@
+Raised HTTPError: 404 Client Error: Not Found for url: https://api.shoonya.com/MCX_symbols.txt.zip
+Archives asked for: 4
+Raised ValueError: Shoonya's archives downloaded but held no readable instrument data.
+Archives asked for: 7

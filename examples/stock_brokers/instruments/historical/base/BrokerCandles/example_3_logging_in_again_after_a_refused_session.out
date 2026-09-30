@@ -1,0 +1,26 @@
+Built with market-data-for-token-from-yesterday
+Visiting one window with yesterday's token:
+  broker asked with token-from-yesterday
+WARNING candles.example_broker: example_broker refused the session (TokenException: Incorrect `api_key` or `access_token`.). Logging in once before continuing.
+  renewed the market data token: market-data-for-token-from-login-1
+INFO candles.example_broker: example_broker logged in again. Continuing.
+  broker asked with token-from-login-1
+Bars stored: 2, logins made: 1
+Progress updates: [('738561', 'day', 'stored')]
+Logging in again by hand:
+  renewed the market data token: market-data-for-token-from-login-2
+INFO candles.example_broker: example_broker logged in again. Continuing.
+Renewing the market data token by hand, without a login:
+  renewed the market data token: market-data-for-token-from-login-2
+Logging in again when the login itself fails:
+  CandleAuthenticationError: logging in again did not produce a working session: RuntimeError: the example_broker login page did not accept the TOTP
+Running a queue of two series against a broker that refuses every session:
+  broker asked with token-from-login-2
+WARNING candles.example_broker: example_broker refused the session (TokenException: Incorrect `api_key` or `access_token`.). Logging in once before continuing.
+  renewed the market data token: market-data-for-token-from-login-3
+INFO candles.example_broker: example_broker logged in again. Continuing.
+  broker asked with token-from-login-3
+ERROR candles.example_broker: Stopping: CandleAuthenticationError: TokenException: Incorrect `api_key` or `access_token`.
+INFO candles.example_broker: Finished: 0 windows, 0 bars.
+Windows visited: 0, bars stored: 0, series left in the queue: 1
+Progress updates: []

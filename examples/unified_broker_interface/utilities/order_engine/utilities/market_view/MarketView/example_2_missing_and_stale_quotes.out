@@ -1,0 +1,26 @@
+no quote:
+  readable False, stale False
+  last None, bid None, offer None, mid None
+  a buy joins None and fills at None
+  250.33 rounded: 250.35
+  250.35 moved one tick towards the market for a sell: 250.30
+tick size unknown:
+  readable False, stale False
+  last None, bid None, offer None, mid None
+  a buy joins None and fills at None
+  250.33 rounded: None
+  250.35 moved one tick towards the market for a sell: None
+stale quote:
+  readable True, stale True
+  last 250.35, bid 250.30, offer 250.40, mid 250.35
+  a buy joins 250.30 and fills at 250.40
+  250.33 rounded: 250.35
+  250.35 moved one tick towards the market for a sell: 250.30
+bids only, last price zero:
+  readable True, stale False
+  last None, bid 88.15, offer None, mid None
+  a buy joins 88.15 and fills at None
+  250.33 rounded: 250.35
+  250.35 moved one tick towards the market for a sell: 250.30
+Unparseable price: None
+Negative price: None

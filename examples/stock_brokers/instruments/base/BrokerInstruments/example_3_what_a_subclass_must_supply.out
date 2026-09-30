@@ -1,0 +1,3 @@
+Building NamelessInstruments: NamelessInstruments must set BROKER_NAME
+Built UndownloadableInstruments for table demo.instruments
+Calling download: UndownloadableInstruments must implement download()

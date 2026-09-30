@@ -1,0 +1,7 @@
+Stand-in login number 1
+User FA12345 was refused with shoonya-token-1
+WARNING Logging in to Shoonya again.
+Stand-in login number 2
+Credentials now: ('FA12345', 'shoonya-token-2')
+Credentials after the second request: ('FA12345', 'shoonya-token-2')
+Logins made: 2

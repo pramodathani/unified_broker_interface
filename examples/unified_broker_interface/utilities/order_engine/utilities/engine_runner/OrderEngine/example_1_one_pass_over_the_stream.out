@@ -1,0 +1,11 @@
+Streams read: ['unified:orders:intents:stream']
+[info] Created consumer group engine on unified:orders:intents:stream.
+Consumer groups: ['engine']
+[info] Stopped. Placed 1, refused 1, expired 1, repeated 0, order updates followed 0.
+Exit code: 0
+Sent to the broker: [('zerodha', 'BUY', 10)]
+buy: 200 {'broker': 'zerodha', 'outcome': 'accepted', 'order_id': '260930000001', 'status_message': None, 'parent_id': '<parent id>'}
+late: 409 {'error': 'the order engine read this order after the caller had stopped waiting for it, so it was not placed', 'intent_id': 'late', 'expired_seconds': 570}
+unknown_type: 400 {'error': "the order engine does not run 'teleport' orders; it runs ...", 'intent_id': 'unknown_type'}
+Unacknowledged entries: []
+Warnings: 1, errors: 1

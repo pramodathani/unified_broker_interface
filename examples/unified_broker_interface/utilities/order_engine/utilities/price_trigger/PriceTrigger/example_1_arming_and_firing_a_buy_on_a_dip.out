@@ -1,0 +1,15 @@
+Answer 202: outcome=armed level=995 direction=at_or_below
+  the order is recorded and will be placed when the price falls to the level
+Parent state received, tick size kept 0.05, sent so far 0
+Anything left resting while armed: None
+Tick at last price 1000.1: fired=False has_fired=False state=received
+Tick at last price 994.9: fired=True has_fired=True state=working
+Tick at last price 993.0: fired=False has_fired=True state=working
+Requests sent: [{'transaction_type': 'BUY', 'order_type': 'LIMIT', 'quantity': 10, 'price': '994.95'}]
+Triggered at 1759204801.0 on price 994.90
+  event 1: parent_received parent_state=received leg_state=None
+  event 2: leg_requested parent_state=received leg_state=sending
+  event 3: leg_answered parent_state=received leg_state=acknowledged
+  event 4: parent_state_changed parent_state=working leg_state=None
+What it would send at a 990.05 offer: LIMIT BUY 10 at 990.05
+The same order priced as a sell: LIMIT SELL 10 at 990.05

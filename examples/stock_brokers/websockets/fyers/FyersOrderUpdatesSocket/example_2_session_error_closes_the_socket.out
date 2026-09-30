@@ -1,0 +1,22 @@
+Stand-in login number 1
+Profile served for login 1
+Handshake header names: ['authorization']
+Connecting to wss://socket.fyers.in/trade/v3
+Sent: {"T": "SUB_ORD", "SLIST": ["orders", "positions"], "SUB_T": 1}
+INFO Order updates socket opened and subscribed to orders, positions.
+ERROR Fyers reported an error: Token is invalid or expired
+Order 26092500012345 status 6: 0 of 10 NSE:SBIN-EQ
+INFO Order updates socket closed with status 1000: normal closure
+WARNING Logging in to Fyers again.
+Stand-in login number 2
+Profile served for login 2
+WARNING Order updates socket disconnected. Reconnecting in 0 seconds.
+Handshake header names: ['authorization']
+Connecting to wss://socket.fyers.in/trade/v3
+Sent: {"T": "SUB_ORD", "SLIST": ["orders", "positions"], "SUB_T": 1}
+INFO Order updates socket opened and subscribed to orders, positions.
+Order 26092500012345 status 2: 10 of 10 NSE:SBIN-EQ
+INFO Order updates socket closed with status 1000: normal closure
+INFO Order updates socket stopped.
+Gave up: False
+Logins made: 2

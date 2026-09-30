@@ -1,0 +1,9 @@
+niftyfpi-future-oct: resolved, underlying nifty-fpi-150-index, codes {"fyers": "26074"}
+infy-option-1600-ce: resolved, underlying infy-share, codes {"dhan": "1594", "groww": "1594"}
+gold-option-120000-ce: resolved, underlying gold-future-dec, codes {"dhan": "454818"}
+reliance-future-oct: no_code, underlying None, codes {}
+Rows written: 4, after deleting 1 earlier set for the date
+  mcx_commodity_options resolved: 1
+  nse_equity_futures no_code: 1
+  nse_equity_index_futures resolved: 1
+  nse_equity_options resolved: 1

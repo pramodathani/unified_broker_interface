@@ -1,0 +1,9 @@
+First try: wait 0 microseconds
+Second try must wait: True
+Paused 0.12 seconds, stopping: False
+Retry: wait 0 microseconds
+Counts: {'waited': 1, 'refused': 0}
+Next try must wait: True
+Stop event set, pause answers stopping: True
+take with the stop event set: allowed False
+Counts: {'waited': 1, 'refused': 2}

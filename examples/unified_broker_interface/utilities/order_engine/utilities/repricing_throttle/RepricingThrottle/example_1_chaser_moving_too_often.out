@@ -1,0 +1,6 @@
+0.0s: move sent
+0.1s: too soon, move suppressed
+0.3s: too soon, move suppressed
+0.6s: move sent
+1.3s: move sent
+Counts: {'minimum_seconds': 0.5, 'allowed': 3, 'suppressed': 2}

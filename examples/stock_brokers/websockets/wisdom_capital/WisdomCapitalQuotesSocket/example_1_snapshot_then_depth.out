@@ -1,0 +1,20 @@
+Stand-in login number 1
+HTTPS GET /apimarketdata/socket.io/: HTTP 200
+Connecting to wss://trade.wisdomcapital.in/apimarketdata/socket.io/ with Engine.IO session engine-session-1
+Sent: 2probe
+Sent: 5
+HTTPS POST /apimarketdata/instruments/subscription for message code 1501: HTTP 200
+HTTPS POST /apimarketdata/instruments/subscription for message code 1502: HTTP 200
+Tick NSE:RELIANCE (1:2885) on NSECM in full mode
+  last_price=2950.5 last_quantity=25 volume=1204500 change=1.3918
+  last_trade_time=1790311528 exchange_timestamp=1790311529
+  best bid={'quantity': 100, 'price': 2950.0, 'orders': 3} best offer={'quantity': 120, 'price': 2950.5, 'orders': 4} levels=1
+INFO socket_0 subscribed to 1 instrument(s).
+Sent: 3
+Tick NSE:RELIANCE (1:2885) on NSECM in full mode
+  last_price=2951.0 last_quantity=25 volume=1204500 change=1.4089
+  last_trade_time=1790311528 exchange_timestamp=1790311529
+  best bid={'quantity': 100, 'price': 2950.0, 'orders': 3} best offer={'quantity': 200, 'price': 2951.0, 'orders': 4} levels=5
+INFO socket_0 closed with status 1000: normal closure
+INFO socket_0 stopped.
+Gave up: False

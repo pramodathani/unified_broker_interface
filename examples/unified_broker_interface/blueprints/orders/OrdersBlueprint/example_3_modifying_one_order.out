@@ -1,0 +1,14 @@
+modify, a dry run: 200 {"broker": "zerodha", "dry_run": true, "instrument_id": "11111111-1111-5111-8111-000000000001", "order_id": "250915000000011", "request": {"form": {"order_type": "LIMIT", "price": "2501", "quantity": 20}, "method": "PUT", "url": "https://api.kite.trade/orders/amo/250915000000011"}, "status_before_modify": "OPEN"}
+modify_order: 200 {"broker": "zerodha", "broker_response": {"data": {"order_id": "250915000000011"}, "status": "success"}, "instrument_id": "11111111-1111-5111-8111-000000000001", "order_id": "250915000000011", "outcome": "accepted", "status_before_modify": "OPEN", "status_message": null}
+  sent to the broker: PUT https://api.kite.trade/orders/amo/250915000000011 {'order_type': 'LIMIT', 'price': '2502.5'}
+read_order_state: mapping date 2026-09-15, warm warm-one, 10 order book entries read
+find_stored_order: zerodha holds it, status OPEN
+resolve_order_instrument: 11111111-1111-5111-8111-000000000001
+convert_modified_quantities: quantity 20, disclosed 0
+prepare_modification: PreparedModification for zerodha, engine command None
+take_rate_room: room taken for zerodha
+send_change: 200 outcome accepted
+owning_parent before the engine owns it: None
+owning_parent once the engine owns it: P-7
+engine_modification: {"broker": "zerodha", "order_id": "250915000000011", "parent_id": "P-7", "price": null, "quantity": 20, "quantity_units": 20, "trigger_price": null}
+refuse_engine_unsupported_change: 409 this order belongs to an order the engine manages, which can only have its price, trigger_price or quantity changed, not order_type

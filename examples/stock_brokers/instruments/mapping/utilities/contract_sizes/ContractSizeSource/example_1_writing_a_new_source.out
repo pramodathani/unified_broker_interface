@@ -1,0 +1,7 @@
+Name: dhan_lot_size
+Broker: dhan
+Trusted exchange labels: ['MCX']
+Numeric guard on multiplier: (CASE WHEN raw."multiplier"::text ~ '^-?[0-9]+(\.[0-9]+)?$' THEN raw."multiplier"::text::numeric END)
+Size expression: (CASE WHEN raw."lot_size"::text ~ '^-?[0-9]+(\.[0-9]+)?$' THEN raw."lot_size"::text::numeric END)
+Query:
+SELECT m.instrument_id::text AS instrument_id, (CASE WHEN raw."lot_size"::text ~ '^-?[0-9]+(\.[0-9]+)?$' THEN raw."lot_size"::text::numeric END) AS units FROM unified.broker_mappings m JOIN unified.instruments i ON i.instrument_id = m.instrument_id JOIN dhan.instruments raw ON raw."security_id"::text = m.broker_token AND raw.download_date = m.mapping_date WHERE m.broker = :broker AND m.mapping_date = :mapping_date AND i.segment = ANY(:segments) AND (i.expiry_date IS NULL OR i.expiry_date >= :mapping_date) AND raw."exch_id"::text = ANY(:exchanges)

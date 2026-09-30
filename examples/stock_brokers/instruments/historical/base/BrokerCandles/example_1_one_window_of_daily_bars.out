@@ -1,0 +1,21 @@
+Series context for 738561: SeriesContext(broker_token='738561', exchange=None, segments=None, match_on='broker_token', exchange_token=None, symbol=None)
+Priority of each series (lower is worked first):
+  738561 EQ expiry None day: 10
+  738561 EQ expiry None 5minute: 25
+  13368834 FUT expiry 2099-12-31 day: 30
+  13368834 FUT expiry 2099-12-31 5minute: 45
+  13368835 CE expiry 2020-01-30 day: 90
+  13368835 CE expiry 2020-01-30 5minute: 105
+Series added by the first seed: 6
+Series added by a second seed: 0
+Claimed: 738561 day, oldest requested 2026-03-01
+Next window: 2025-03-01 to 2026-02-28, walking backward
+Parsed 3 bars; the first is 2026-02-25T00:00:00+05:30 close 1398.4
+Bars stored by visit: 3
+  wrote 2026-02-25T00:00:00+05:30 738561 day close 1398.4 volume 6123450
+  wrote 2026-02-26T00:00:00+05:30 738561 day close 1405.9 volume 5870012
+  wrote 2026-02-27T00:00:00+05:30 738561 day close 1384.3 volume 7211904
+Progress updates: [('738561', 'day', 'stored')]
+Requests sent to the broker: 2
+Summary: {'series': 6, 'retired': 0, 'with_bars': 1, 'bars': 3, 'stuck': 0}
+Connection closed: True

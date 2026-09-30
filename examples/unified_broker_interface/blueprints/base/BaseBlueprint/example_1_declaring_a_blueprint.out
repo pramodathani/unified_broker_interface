@@ -1,0 +1,5 @@
+Blueprint name: holidays
+Rule: /api/holidays/details -> holidays.get_holidays ['GET', 'HEAD', 'OPTIONS']
+With the Redis copy: [{'date': '2026-10-02', 'description': 'Gandhi Jayanti'}, {'date': '2026-10-20', 'description': 'Diwali'}]
+Without it, from MongoDB: [{'date': '2026-12-25', 'description': 'Christmas'}]
+list_collection: 200 [{"date": "2026-12-25", "description": "Christmas"}]

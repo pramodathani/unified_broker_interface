@@ -1,0 +1,20 @@
+Stand-in login number 1
+Connecting to wss://api.shoonya.com/NorenWSTP/
+Sent: {"t": "a", "uid": "FA12345", "actid": "FA12345", "source": "API", "accesstoken": "shoonya-token-1"}
+INFO socket_0 opened. Authenticating.
+Sent: {"t": "d", "k": "NSE|2885"}
+INFO socket_0 authenticated and subscribed to 1 instrument(s).
+Name learned: NSE|2885 is NSE:RELIANCE-EQ
+Tick NSE:RELIANCE-EQ (NSE|2885) in full mode
+  last_price=2950.5 volume=1204500 change=1.39
+  ohlc={'open': 2930.0, 'high': 2960.0, 'low': 2925.0, 'close': 2910.0}
+  last_trade_time=1790311528 exchange_timestamp=1790311529
+  best bid={'quantity': 100, 'price': 2950.0, 'orders': 3} best offer={'quantity': 120, 'price': 2950.5, 'orders': 4}
+Tick NSE:RELIANCE-EQ (NSE|2885) in full mode
+  last_price=2951.0 volume=1204500 change=1.41
+  ohlc={'open': 2930.0, 'high': 2960.0, 'low': 2925.0, 'close': 2910.0}
+  last_trade_time=1790311528 exchange_timestamp=1790311530
+  best bid={'quantity': 80, 'price': 2950.5, 'orders': 3} best offer={'quantity': 120, 'price': 2950.5, 'orders': 4}
+INFO socket_0 closed with status 1000: normal closure
+INFO socket_0 stopped.
+Gave up: False

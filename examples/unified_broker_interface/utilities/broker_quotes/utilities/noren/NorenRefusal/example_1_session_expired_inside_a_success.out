@@ -1,0 +1,4 @@
+Caught: NorenRefusal
+Message: flattrade refused the session: Session Expired :  Invalid Session Key
+Arguments: ('flattrade refused the session: Session Expired :  Invalid Session Key',)
+Log in again: True

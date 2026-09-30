@@ -1,0 +1,12 @@
+Pending after the first tick: ['parent-1']
+Work waiting on the worker after two more tries: 2
+Pending once the worker is free: []
+Ticks: 2, acted in total: 1
+Acted in total after running a handed-over tick here: 2
+run_one acts: True
+Quotes with Redis down: {}
+parent-1 saw 5873.0 on order-engine-dhan-1
+parent-1 saw 5873.0 on MainThread
+parent-1 saw 5873.0 on MainThread
+ERROR The live quotes could not be read: Error 111 connecting to localhost:6379. Connection refused.
+Every worker stopped: True

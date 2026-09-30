@@ -1,0 +1,19 @@
+place: 200 {"broker": "zerodha", "broker_response": {"data": {"order_id": "250915000000011"}, "status": "success"}, "instrument_id": "11111111-1111-5111-8111-000000000001", "intent_id": "00000000000040008000000000000001", "order_id": "250915000000011", "outcome": "accepted", "parent_id": "00000000-0000-4000-8000-000000000002", "skipped": [], "status_message": null, "tag": null}
+  sent to the broker: POST https://api.kite.trade/orders/regular
+intent 00000000000040008000000000000001: 200 status 200, outcome accepted
+place_order, a dry run named by symbol: 200 broker zerodha, request {"form": {"disclosed_quantity": 0, "exchange": "NSE", "order_type": "LIMIT", "price": "2500", "product": "MIS", "quantity": 10, "tradingsymbol": "RELIANCE-zerodha", "transaction_type": "BUY", "trigger_price": "0", "validity": "DAY"}, "method": "POST", "url": "https://api.kite.trade/orders/regular"}
+place_order_list: 200
+  request 0: 200 accepted at zerodha, order id 250915000000011
+  request 1: 400 dry_run applies to the whole list, so give it beside orders rather than inside an order
+  request 2: 404 the instrument is not mapped
+  request 3: 400 quantity must be a whole number of at least 1
+list_wait_seconds for 3 orders: 5.3
+list_wait_seconds for 400 orders: 25.0
+catalogue_key_prefix: unified:catalogue:2026-09-15:
+catalogue_key_prefix before any mapping: 503 {'error': 'no instruments have been mapped yet'}
+find_instrument_id RELIANCE: 11111111-1111-5111-8111-000000000001
+resolve_instrument_id RELIANCE: 11111111-1111-5111-8111-000000000001, Redis round trips 0
+resolve_instrument_id TWIN: 400 {'error': 'the identity fields match more than one instrument, so give instrument_id'}
+check_access_token with the right token: accepted
+check_access_token with a guessed token: 401 {'error': 'Invalid access token'}
+check_token with a guessed token: 401 {'error': 'Invalid access token'}

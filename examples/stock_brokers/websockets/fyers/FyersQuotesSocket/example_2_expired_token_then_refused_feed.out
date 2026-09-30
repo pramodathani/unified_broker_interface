@@ -1,0 +1,17 @@
+Stand-in login number 1
+Profile served for login 1
+WARNING socket_0: the Fyers access token has expired or carries no hsm_key.
+WARNING Logging in to Fyers again.
+Stand-in login number 2
+Profile served for login 2
+WARNING socket_0 disconnected. Reconnecting in 0 seconds.
+Symbol lookup for ['NSE:SBIN-EQ']
+Connecting to wss://socket.fyers.in/hsm/v1-5/prod
+Sent binary frame: 0028010401000968736d2d6b65792d32020001500300010104000f507974686f6e53444b2d332e302e39
+INFO socket_0 opened. Authenticating.
+WARNING socket_0: Fyers refused the feed authentication.
+INFO socket_0 closed with status 1000: normal closure
+ERROR socket_0 still cannot connect after logging in again. Giving up.
+INFO socket_0 stopped.
+Gave up: True
+Logins made: 2

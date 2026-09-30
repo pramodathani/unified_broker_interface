@@ -1,0 +1,7 @@
+Dry run: False
+0: BUY 10; engine body {'instrument_id': '11111111-1111-5111-8111-000000000001', 'transaction_type': 'BUY', 'product': 'MIS', 'order_type': 'MARKET', 'quantity': 10}
+1: HTTP 400 dry_run applies to the whole list, so give it beside orders rather than inside an order; engine body None
+2: HTTP 400 each entry of orders must be an object; engine body None
+3: HTTP 400 refused by the caller before validation; engine body None
+Whole list refused: a list may hold at most 3 orders, not 4
+Whole list refused: a list takes only orders and dry_run, so give broker inside each order

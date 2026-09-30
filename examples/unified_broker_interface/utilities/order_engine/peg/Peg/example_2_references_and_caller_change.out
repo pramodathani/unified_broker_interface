@@ -1,0 +1,8 @@
+own_touch     : reference_price 1500.50, wanted_price 1500.50
+mid           : reference_price 1500.25, wanted_price 1500.4
+opposite_touch: reference_price 1500.00, wanted_price 1500.4
+capped(1500.10, SELL) at 1500.40: 1500.4
+The mid peg rests at 1500.25 with offset 0
+The caller moved it to 1500.6: offset_ticks is now 7, and wanted_price stays 1500.60
+priced: SELL 50 LIMIT at 1500.60
+Reference vwap: HTTP 400, reference must be one of own_touch, mid, opposite_touch, not 'vwap'

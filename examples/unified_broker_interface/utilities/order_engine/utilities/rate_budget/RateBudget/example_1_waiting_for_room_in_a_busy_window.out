@@ -1,0 +1,11 @@
+Default limit and overrides: (4.0, {'zerodha': 2.0})
+zerodha limit per window: 2.0
+  Message 1: allowed True
+  Message 2: allowed True
+  Message 3: allowed True
+  Counts so far: {'waited': 1, 'refused': 0}
+dhan limit per window: 4.0
+  Message 1: allowed True
+  Message 2: allowed True
+  Message 3: allowed True
+  Counts so far: {'waited': 1, 'refused': 0}

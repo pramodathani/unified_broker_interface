@@ -1,0 +1,8 @@
+Broker: flattrade
+Host: https://piconnect.flattrade.in/PiConnectAPI
+Requests a second: 10.0
+Earliest date: 2019-01-01
+Requested https://piconnect.flattrade.in/PiConnectAPI/TPSeries
+  body: {'exch': 'NSE', 'token': '2885', 'st': '1789065000', 'et': '1789151400', 'intrv': '1'}
+  2026-09-11T09:15:00+05:30 open 1266.4 high 1267.4 low 1261.5 close 1262.7 volume 188567 oi 0
+  2026-09-11T09:16:00+05:30 open 1262.7 high 1263.9 low 1262.1 close 1263.4 volume 64210 oi 0

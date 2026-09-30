@@ -1,0 +1,9 @@
+Run: HTTP 200, outcome accepted, parent working
+The stop trades BUY, starting at trigger 830.1 limit 831.1
+Last 810.0: moved True, stop trigger 820.0 limit 821.0
+Last 795.0: moved True, stop trigger 805.0 limit 806.0
+Last 801.0: moved False, stop trigger 805.0 limit 806.0
+Sent to the broker:
+  place BUY 25 SL at 831.10 trigger 830.10 -> 260930000001
+  modify 260930000001 price 821.00 trigger 820.00
+  modify 260930000001 price 806.00 trigger 805.00

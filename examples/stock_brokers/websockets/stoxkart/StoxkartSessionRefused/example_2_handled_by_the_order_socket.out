@@ -1,0 +1,13 @@
+Stand-in login number 1
+Authenticating with stoxkart-token-1
+WARNING Stoxkart session expired, logging in again: Invalid access token
+Stand-in login number 2
+Authenticating with stoxkart-token-2
+Connecting to wss://openapi-v2.stoxkart.com/websocket/v2/connect?x-client-id=SK12345&x-platform=api&RequestId=request-2
+INFO Connected to wss://openapi-v2.stoxkart.com/websocket/v2/connect.
+Sent: {"type": "heartbeat"}
+INFO Order socket message: {"order_id": "SK2609250002", "status": "OPEN"}
+Callback received 1 message(s)
+INFO Stopped
+run returned 0
+Logins made: 2

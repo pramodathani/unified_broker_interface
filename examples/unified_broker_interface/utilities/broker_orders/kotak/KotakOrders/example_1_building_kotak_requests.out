@@ -1,0 +1,30 @@
+Base URL from the login: https://mis.kotaksecurities.com
+Base URL when the login names none: https://gw-napi.kotaksecurities.com
+Place skip reason with a sid: None
+Place skip reason without a sid: its login in Redis carries no sid
+Cancel problem without a sid: kotak has no sid in its login in Redis
+Session headers: {'neo-fin-key': 'neotradeapi', 'Auth': 'example-kotak-token', 'Sid': 'example-sid'}
+Place:
+{
+  "form": {
+    "jData": "{\"es\": \"nse_cm\", \"ts\": \"RELIANCE-EQ\", \"qt\": \"10\", \"pr\": \"2500.05\", \"tp\": \"0\", \"dq\": \"0\", \"pc\": \"MIS\", \"tt\": \"B\", \"pt\": \"L\", \"rt\": \"DAY\", \"mp\": \"0\", \"pf\": \"N\", \"am\": \"NO\", \"rm\": \"kotak01\"}"
+  },
+  "method": "POST",
+  "url": "https://mis.kotaksecurities.com/quick/order/rule/ms/place"
+}
+Cancel an after-market order:
+{
+  "form": {
+    "jData": "{\"on\": \"260915000204304\", \"am\": \"YES\"}"
+  },
+  "method": "POST",
+  "url": "https://mis.kotaksecurities.com/quick/order/cancel"
+}
+Modify the price:
+{
+  "form": {
+    "jData": "{\"no\": \"260915000204304\", \"tk\": \"2885\", \"es\": \"nse_cm\", \"ts\": \"RELIANCE-EQ\", \"tt\": \"B\", \"pc\": \"MIS\", \"pt\": \"L\", \"qt\": \"10\", \"pr\": \"2499\", \"tp\": \"0\", \"dq\": \"0\", \"vd\": \"DAY\", \"dd\": \"NA\", \"mp\": \"0\"}"
+  },
+  "method": "POST",
+  "url": "https://mis.kotaksecurities.com/quick/order/vr/modify"
+}

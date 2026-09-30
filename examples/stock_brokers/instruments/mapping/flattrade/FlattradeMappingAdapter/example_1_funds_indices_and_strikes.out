@@ -1,0 +1,14 @@
+NSE INFY-EQ -> nse_equities
+    identity {'symbol': 'INFY'}
+NSE NIFTYBEES-EQ -> nse_exchange_traded_funds
+    identity {'symbol': 'NIFTYBEES'}
+NSE LIQUIDCASE-BE -> no segment, filed under nse_uncategorised
+NSE Nifty Bank -> nse_equity_indices
+    identity {'symbol': 'NIFTY BANK'}
+NSE NIFTY SMLCAP 100 -> nse_equity_indices
+    identity {'symbol': 'NIFTY SMALLCAP 100'}
+NSE Nifty GS 10Yr -> no segment, filed under nse_uncategorised
+BFO IRFC26OCT102.5CE -> bse_equity_options
+    identity {'underlying_symbol': 'IRFC', 'expiry_date': datetime.date(2026, 10, 27), 'strike_price': 102.5, 'option_type': 'CE'}
+(blank) RELIANCE -> bse_equities
+    identity {'symbol': 'RELIANCE'}

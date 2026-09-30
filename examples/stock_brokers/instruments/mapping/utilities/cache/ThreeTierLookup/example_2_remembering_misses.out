@@ -1,0 +1,9 @@
+Base resolve of no keys: {}
+Base empty_entry: None
+Base resolve of a key: NotImplementedError: ThreeTierLookup must implement read_from_redis()
+Base read_from_redis: NotImplementedError: ThreeTierLookup must implement read_from_redis()
+Base read_from_postgres: NotImplementedError: ThreeTierLookup must implement read_from_postgres()
+Base write_to_redis: NotImplementedError: ThreeTierLookup must implement write_to_redis()
+ForgettingLookup: answers [{}, {}, {}], Postgres read 3 times, remembered: False
+RememberingLookup: answers [{'999999': []}, {'999999': []}, {'999999': []}], Postgres read 1 times, remembered: True
+Counters: {'process_hits': 2, 'redis_hits': 0, 'postgres_hits': 0, 'misses': 4}

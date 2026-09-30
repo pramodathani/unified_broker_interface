@@ -1,0 +1,38 @@
+Request: POST https://api.shoonya.com/NorenWClientAPI/UserDetails
+Body sent: jData={"uid": "FA00001"}&jKey=morning-token
+Status: success
+HTTP code: 200
+Data:
+{
+    "request_time": "09:15:02 30-09-2026",
+    "prarr": [
+        {
+            "prd": "C",
+            "s_prdt_ali": "CNC",
+            "exch": [
+                "NSE",
+                "BSE"
+            ]
+        },
+        {
+            "prd": "I",
+            "s_prdt_ali": "MIS",
+            "exch": [
+                "NSE",
+                "BSE",
+                "NFO"
+            ]
+        }
+    ],
+    "brkname": "FINVASIA",
+    "exarr": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "MCX"
+    ],
+    "uname": "DEMO USER",
+    "actid": "FA00001",
+    "uprev": "INVESTOR",
+    "stat": "Ok"
+}

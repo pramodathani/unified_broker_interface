@@ -1,0 +1,10 @@
+Due at 2026-10-01T06:00:01+05:30: True
+First attempt:
+  ERROR The day rolled over and the parent caches could not be rebuilt, so this will be tried again: ConnectionError: the database system is starting up
+  Result: -1
+Still due at 2026-10-01T06:00:02+05:30: True
+Second attempt:
+  INFO The day rolled over. Rebuilt 1 parents, 1 of them still open.
+  Result: 1
+Due afterwards: False
+Rolls: 1

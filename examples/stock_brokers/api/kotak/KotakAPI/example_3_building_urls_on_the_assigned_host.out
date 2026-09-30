@@ -1,0 +1,15 @@
+host stored in full:
+    /quick/user/limits -> https://e21.kotaksecurities.com/quick/user/limits
+    portfolio/v1/holdings -> https://e21.kotaksecurities.com/portfolio/v1/holdings
+host without a scheme, with a trailing slash:
+    /quick/user/limits -> https://e43.kotaksecurities.com/quick/user/limits
+    portfolio/v1/holdings -> https://e43.kotaksecurities.com/portfolio/v1/holdings
+host padded with spaces:
+    /quick/user/limits -> https://e22.kotaksecurities.com/quick/user/limits
+    portfolio/v1/holdings -> https://e22.kotaksecurities.com/portfolio/v1/holdings
+a failed login that stored "None":
+    /quick/user/limits -> https://gw-napi.kotaksecurities.com/quick/user/limits
+    portfolio/v1/holdings -> https://gw-napi.kotaksecurities.com/portfolio/v1/holdings
+an account that has never logged in:
+    /quick/user/limits -> https://gw-napi.kotaksecurities.com/quick/user/limits
+    portfolio/v1/holdings -> https://gw-napi.kotaksecurities.com/portfolio/v1/holdings

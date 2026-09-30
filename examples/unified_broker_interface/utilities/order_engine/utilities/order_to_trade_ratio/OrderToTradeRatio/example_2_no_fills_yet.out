@@ -1,0 +1,5 @@
+Fyers before any fill: None
+Summary: {'fyers': {'sent': 2, 'traded': 0, 'ratio': None}}
+Fyers after one fill: 2.0
+Summary: {'fyers': {'sent': 2, 'traded': 1, 'ratio': 2.0}}
+Kotak, never used: None

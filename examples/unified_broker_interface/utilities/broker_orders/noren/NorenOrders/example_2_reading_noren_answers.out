@@ -1,0 +1,11 @@
+read_order_id of a placement: 26091500000021
+read_order_id of a modification: 26091500000021
+read_refusal of an accepted answer: None
+read_refusal of a refusal: Rejected : ORA:Order not found to cancel
+read_refusal of a refusal with no message: the broker refused the request
+Not_Ok settles a refusal: True
+An empty code settles a refusal: False
+Modify, accepted: accepted (HTTP 200), message None
+Modify, refused inside a success: rejected (HTTP 422), message Rejected : ORA:Order not found to cancel
+Modify, server error: unknown (HTTP 504), message Server busy
+Requests the stand-in received: ['POST https://api.example-noren.in/NorenWClientTP/ModifyOrder', 'POST https://api.example-noren.in/NorenWClientTP/ModifyOrder', 'POST https://api.example-noren.in/NorenWClientTP/ModifyOrder']

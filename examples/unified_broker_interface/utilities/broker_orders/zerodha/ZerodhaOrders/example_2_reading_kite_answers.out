@@ -1,0 +1,13 @@
+Place, accepted: accepted (HTTP 200), order id 250915000000011, message None
+Place, refusal inside a success: unknown (HTTP 504), order id None, message the broker answered without an order id: {'status': 'error', 'message': 'Markets are closed right now.'}
+Place, settled server error: rejected (HTTP 422), order id None, message Order could not be placed
+Place, network exception: unknown (HTTP 504), order id None, message Gateway timed out
+Cancel, accepted: accepted (HTTP 200), order id None, message None
+Cancel, client error: rejected (HTTP 422), order id None, message Order cannot be cancelled as it is being processed.
+Requests the stand-in received: ['POST https://api.kite.trade/orders/regular', 'POST https://api.kite.trade/orders/regular', 'POST https://api.kite.trade/orders/regular', 'POST https://api.kite.trade/orders/regular', 'DELETE https://api.kite.trade/orders/regular/250915000000011', 'DELETE https://api.kite.trade/orders/regular/250915000000011']
+read_order_id of the accepted body: 250915000000011
+read_order_id of a body without data: None
+InputException settles a refusal: True
+TokenException settles a refusal: True
+NetworkException settles a refusal: False
+DataException settles a refusal: False

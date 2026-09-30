@@ -1,0 +1,23 @@
+Stand-in login number 1
+Connecting to wss://mlhsm.kotaksecurities.com
+Sent binary frame of type 1: 0029010301000d6b6f74616b2d746f6b656e2d3102000b6b6f74616b2d7369642d310300064a535f415049
+INFO socket_0 opened. Authenticating.
+ERROR socket_0: Kotak refused the session (status 'N').
+INFO socket_0 closed with status 1000: normal closure
+WARNING Logging in to Kotak again.
+Stand-in login number 2
+WARNING socket_0 disconnected. Reconnecting in 0 seconds.
+Connecting to wss://mlhsm.kotaksecurities.com
+Sent binary frame of type 1: 0029010301000d6b6f74616b2d746f6b656e2d3202000b6b6f74616b2d7369642d320300064a535f415049
+INFO socket_0 opened. Authenticating.
+Sent binary frame of type 4: 001a040201001100010e73667c6e73655f636d7c3238383502000101
+Sent binary frame of type 4: 001a040201001100010e64707c6e73655f636d7c3238383502000101
+INFO socket_0 authenticated and subscribed to 1 instrument(s) with depth, acknowledging every 0 data frame(s).
+Tick RELIANCE-EQ (nse_cm|2885) in quote mode
+  last_price=2950.5 volume=1204500 change=1.3918
+  ohlc={'open': 2930.0, 'high': 2960.0, 'low': 2925.0, 'close': 2910.0}
+WARNING socket_0 skipped the rest of a truncated frame of type 6: frame of 151 bytes ended reading 4 at 150
+INFO socket_0 closed with status 1000: normal closure
+INFO socket_0 stopped.
+Gave up: False
+Logins made: 2

@@ -1,0 +1,43 @@
+Requests sent: [('https://noren.example/NorenWClientAPI/GetQuotes', {'exch': 'NFO', 'token': '35001'})]
+{
+    "id": "NFO|35001",
+    "broker": "example_noren",
+    "instrument_token": "NFO|35001",
+    "exchange": "nse",
+    "mode": "full",
+    "last_price": 25150.5,
+    "last_quantity": 75,
+    "average_price": 25141.37,
+    "volume": 1873500,
+    "buy_quantity": 262500,
+    "sell_quantity": 301875,
+    "ohlc": {
+        "open": 25110.0,
+        "high": 25188.0,
+        "low": 25090.2,
+        "close": 25100.0
+    },
+    "change": 0.20119521912350596,
+    "oi": 12345000,
+    "oi_day_high": null,
+    "oi_day_low": null,
+    "last_trade_time": 1789446601,
+    "exchange_timestamp": 1789446603,
+    "depth": {
+        "buy": [
+            {
+                "quantity": 75,
+                "price": 25150.0,
+                "orders": 3
+            }
+        ],
+        "sell": [
+            {
+                "quantity": 150,
+                "price": 25151.0,
+                "orders": 4
+            }
+        ]
+    },
+    "received_at": 1789446605.0
+}

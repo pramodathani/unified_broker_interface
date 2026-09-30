@@ -1,0 +1,10 @@
+Attempt 1 answered: ['bse:RELIANCE']
+  counters: {'process_hits': 0, 'redis_hits': 0, 'postgres_hits': 1, 'misses': 1}
+Attempt 2 answered: ['bse:RELIANCE']
+  counters: {'process_hits': 1, 'redis_hits': 0, 'postgres_hits': 1, 'misses': 2}
+Mistyped id remembered: False
+empty_entry: None
+Postgres was asked for: ['9e8d7c6b-5a49-4382-a1b0-c9d8e7f6a5b4', '9e8d7c6b-5a49-4382-a1b0-c9d8e7f6a5b5']
+Postgres was asked for: ['9e8d7c6b-5a49-4382-a1b0-c9d8e7f6a5b5']
+read_from_redis with Redis down: {}
+write_to_redis with Redis down: False

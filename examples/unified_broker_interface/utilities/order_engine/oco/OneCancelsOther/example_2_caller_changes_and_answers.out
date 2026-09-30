@@ -1,0 +1,13 @@
+Raise the stop to 100: an exit of a linked pair can only be reduced, and 100 is more than its 80
+Reduce the stop to 50: None
+After the caller reduced the stop: stop 50, target 50
+After the stop filled 20, rebalance: target 30
+finish_if_done with legs still live: parent protecting
+Sent to the broker:
+  place BUY 80 SL at 4060 trigger 4050 -> 260930000001
+  place BUY 80 LIMIT at 3950 -> 260930000002
+  modify 260930000002 quantity 50
+  modify 260930000002 quantity 30
+settle and answer: parent protecting, HTTP 207, outcome partial
+  stop: accepted, None
+  target: rejected, RMS: order price is outside the circuit limit

@@ -1,0 +1,8 @@
+Run at 10:00: HTTP 200, outcome accepted, closes at 10:20
+Tick at 10:19: acted False, parent working
+Tick at 10:20: acted True, parent completed
+Tick at 10:21: acted False, parent completed
+Sent to the broker, in order:
+  place BUY 50 LIMIT at 152.50 -> 260930000001
+  cancel 260930000001
+  place SELL 30 MARKET -> 260930000002

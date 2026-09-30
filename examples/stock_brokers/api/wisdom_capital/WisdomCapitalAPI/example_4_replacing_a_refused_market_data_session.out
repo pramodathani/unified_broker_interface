@@ -1,0 +1,9 @@
+Path 1: another process has already replaced the refused token.
+    Session in force: {'access_token': 'market-data-token-morning', 'user_id': 'WC0001'}
+    Replacement returned: {'access_token': 'market-data-token-noon', 'user_id': 'WC0001'}
+    Locks taken: []
+Path 2: nobody has replaced it, and the settings lack the market data key pair.
+    Raised: WisdomCapitalAPIException code=500
+    message: wisdom_capital has no price_api_key or price_api_secret in its settings, so the market data session cannot be established.
+    Locks taken: ['wisdom_capital:session:marketdata:lock']
+    Lock still held: False

@@ -1,0 +1,9 @@
+Accepted response: (True, 50)
+Refused response: (False, 0)
+Truncated response: (False, 0)
+Divisor before any snapshot: 100
+Divisor for a currency snapshot: 10000
+dp|nse_cm|3045 with 32 values: 32 fields starting ['bid_price1', 'bid_price2', 'bid_price3']
+if|nse_cm|Nifty 50 with 8 values: 8 fields starting ['ltp', 'prev_close_price', 'exch_feed_time']
+sf|nse_cm|3045 with 3 values: 3 fields starting ['ltp', 'symbol', 'type']
+sf|nse_cm|3045 with 23 values: 23 fields starting ['ltp', 'vol_traded_today', 'last_traded_time']

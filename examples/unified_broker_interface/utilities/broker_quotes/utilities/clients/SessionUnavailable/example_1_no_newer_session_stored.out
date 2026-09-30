@@ -1,0 +1,4 @@
+Request sent with session: ('token-issued-at-seven', '2026-09-15 07:00:04')
+Caught: SessionUnavailable
+Message: paper_broker refused the session; its login has been started, so try again shortly
+Arguments: ('paper_broker refused the session; its login has been started, so try again shortly',)

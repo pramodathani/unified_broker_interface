@@ -1,0 +1,20 @@
+NSE RELIANCE INDUSTRIES LTD -> nse_equities
+    identity {'symbol': 'RELIANCE'}
+    lot size 1.0, tick size 0.05
+NSE NIPPON INDIA ETF NIFTY 50 BEES -> nse_exchange_traded_funds
+    identity {'symbol': 'NIFTYBEES'}
+    lot size 1.0, tick size 0.05
+NSE Nifty Bank -> nse_equity_indices
+    identity {'symbol': 'BANKNIFTY'}
+    lot size 1.0, tick size None
+BSE GOI 7.62% 2036 -> bse_fixed_income
+    identity {'symbol': 'IN0020160019'}
+    lot size 1.0, tick size 0.05
+NFO NIFTY26OCTFUT -> nse_equity_index_futures
+    identity {'underlying_symbol': 'NIFTY', 'expiry_date': datetime.date(2026, 10, 27)}
+    lot size 1.0, tick size 0.05
+NFO SP-NIFTY26OCT26NOVFUT -> no segment, filed under nse_uncategorised
+NFO NIFTY26OCT25000CE -> nse_equity_index_options
+    identity {'underlying_symbol': 'NIFTY', 'expiry_date': datetime.date(2026, 10, 27), 'strike_price': 25000.0, 'option_type': 'CE'}
+    lot size 1.0, tick size 0.05
+NCDEX GUARSEED10NOVDEC2026 -> no segment, filed under ncdex_uncategorised

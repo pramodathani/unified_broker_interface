@@ -1,0 +1,10 @@
+Open intraday position: INFY 50
+Open intraday position: TCS -75
+Resting orders: [('dhan', '52250930456'), ('zerodha', '250930000123')]
+Cancels accepted: 2, sent: ['dhan 52250930456', 'zerodha 250930000123']
+Recorded outside_cancel_requested for zerodha 250930000123: None
+Recorded outside_cancelled for zerodha 250930000123: accepted
+Recorded outside_cancel_requested for dhan 52250930456: None
+Recorded outside_cancelled for dhan 52250930456: accepted
+Close INFY: SELL 50 MIS LIMIT at 1502.30
+Close TCS: BUY 75 MIS LIMIT at 3411.45

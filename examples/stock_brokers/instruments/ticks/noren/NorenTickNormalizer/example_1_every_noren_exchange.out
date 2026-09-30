@@ -1,0 +1,14 @@
+Broker name on the shared class: None
+'NSE|2885' -> broker_token='2885' segments=10 starting with nse_equities
+'BSE|500325' -> broker_token='500325' segments=10 starting with bse_equities
+'NFO|35003' -> broker_token='35003' segments=16 starting with nse_fixed_income_futures
+'CDS|1573' -> broker_token='1573' segments=16 starting with nse_fixed_income_futures
+'NCO|2003' -> broker_token='2003' segments=16 starting with nse_fixed_income_futures
+'BFO|1135101' -> broker_token='1135101' segments=16 starting with bse_fixed_income_futures
+'BCD|8001' -> broker_token='8001' segments=16 starting with bse_fixed_income_futures
+'MCX|440001' -> broker_token='440001' segments=16 starting with mcx_fixed_income_futures
+'NCX|12345' -> broker_token='12345' segments=16 starting with ncdex_fixed_income_futures
+'NCDEX|12345' -> broker_token='12345' segments=16 starting with ncdex_fixed_income_futures
+' mcx | 440001 ' -> broker_token='440001' segments=16 starting with mcx_fixed_income_futures
+'LME|1' -> None
+'NSE|' -> None

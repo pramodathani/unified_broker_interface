@@ -83,7 +83,7 @@ The table below counts what the repository holds today, so you can judge the siz
 | Endpoint groups (blueprints) | 7 | session, users, brokers, exchanges, instruments, portfolio, orders |
 | Synthetic order types in the order engine | 53 | `unified_broker_interface/utilities/order_engine/` |
 | Data stores | 3 | Redis, MongoDB, TimescaleDB |
-| Offline test suites | 18 | `test_runs/` |
+| Offline test suites | 19 | `test_runs/` |
 
 ## What one API call replaces
 

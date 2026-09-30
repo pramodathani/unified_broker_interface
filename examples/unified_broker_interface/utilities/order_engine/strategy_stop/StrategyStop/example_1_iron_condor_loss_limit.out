@@ -1,0 +1,14 @@
+Run: HTTP 200, outcome accepted, limits -3000 and None
+Tick 1: total -1537.50, every leg marked True, closed False
+Tick 2: total -1762.50, every leg marked False, closed False
+Tick 3: total -3067.50, every leg marked True, closed True
+Parent: completed, the strategy is down -3067.50, past its limit of -3000
+Sent to the broker, in order:
+  place BUY 75 LIMIT at 18.5 -> 260930000001
+  place BUY 75 LIMIT at 21.0 -> 260930000002
+  place SELL 75 LIMIT at 64.0 -> 260930000003
+  place SELL 75 LIMIT at 71.5 -> 260930000004
+  place BUY 75 LIMIT at 45.25 -> 260930000005
+  place BUY 75 LIMIT at 140.15 -> 260930000006
+  place SELL 75 LIMIT at 12.05 -> 260930000007
+  place SELL 75 LIMIT at 35.85 -> 260930000008

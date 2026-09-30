@@ -1,0 +1,8 @@
+Place, accepted: accepted (HTTP 200), order id SX0001, message None
+Place, refusal inside a success: unknown (HTTP 504), order id None, message the broker answered without an order id: {'status': 'error', 'message': 'MARKET IS CLOSE YOU CANNOT PLACE AN ORDER NOW'}
+Place, server error: unknown (HTTP 504), order id None, message upstream failure
+Cancel, accepted: accepted (HTTP 200), order id None, message None
+Cancel, refusal inside a success: accepted (HTTP 200), order id None, message None
+Requests the stand-in received: ['POST https://openapi.stoxkart.com/orders/normal', 'POST https://openapi.stoxkart.com/orders/normal', 'POST https://openapi.stoxkart.com/orders/normal', 'DELETE https://openapi.stoxkart.com/orders/normal/SX0001', 'DELETE https://openapi.stoxkart.com/orders/normal/SX0001']
+read_order_id of the accepted body: SX0001
+read_order_id of a body with no data: SX0002

@@ -1,0 +1,15 @@
+--- no engine running
+503: the order engine is not running, so the order was not placed; start unified-orders@order_engine.service
+--- Redis fails while the list is written
+[0] 504 unknown: the requests could not all be written for the order engine (Connection closed by server.), so this one may or may not have been made
+    intent_id is the intent's own: True, timings: ['preparation']
+[1] 504 unknown: the requests could not all be written for the order engine (Connection closed by server.), so this one may or may not have been made
+    intent_id is the intent's own: True, timings: ['preparation']
+--- the engine answers with something unreadable
+504: the order engine answered with something that could not be read, so the outcome of this order is unknown
+refusal names the intent: True
+--- unknown_answer on its own
+504 outcome=unknown broker=None tag=exit02 skipped=[]
+--- correct_preparation
+placed answer: preparation replaced True, broker kept 38.2
+refusal left as it was: {'error': 'no broker can take this order'}

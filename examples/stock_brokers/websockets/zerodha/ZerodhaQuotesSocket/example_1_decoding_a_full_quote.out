@@ -1,0 +1,16 @@
+Connecting to wss://ws.kite.trade/?api_key=kite-api-key&access_token=kite-access-token with {'ping_interval': 30, 'ping_timeout': 10}
+Sent: {"a": "subscribe", "v": [738561, 408065]}
+Sent: {"a": "mode", "v": ["full", [738561, 408065]]}
+INFO socket_0 opened and subscribed to 2 instrument(s).
+Tick NSE:RELIANCE on nse in full mode
+  last_price=2950.5 volume=1204500 change=1.3918
+  ohlc={'open': 2930.0, 'high': 2960.0, 'low': 2925.0, 'close': 2910.0}
+  oi=0 last_trade_time=1790311528
+  best bid={'quantity': 100, 'price': 2950.0, 'orders': 3} best offer={'quantity': 105, 'price': 2950.25, 'orders': 8}
+Tick NSE:INFY on nse in ltp mode
+  last_price=1500.25 volume=None change=None
+  ohlc={'open': None, 'high': None, 'low': None, 'close': None}
+  oi=None last_trade_time=None
+INFO socket_0 closed with status 1000: normal closure
+INFO socket_0 stopped.
+Gave up: False

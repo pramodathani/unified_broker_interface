@@ -1,0 +1,22 @@
+Token 'MCX|440001': broker_token='440001' order_symbol=None
+Volume on mcx is reported in lots, multiplier 1250
+Close policy on mcx: before
+Normalized, received before the close:
+  last_price: 268.4
+  last_quantity: 1250
+  average_price: 267.9
+  volume: 110267500
+  buy_quantity: 1900000
+  sell_quantity: 2166250
+  open: 265.1
+  high: 270.2
+  low: 264.8
+  reported_close: 266.3
+  oi: 26800000
+  oi_day_high: 27512500
+  oi_day_low: 26231250
+  last_trade_time: 1789487998.0
+  exchange_time: 1789487999.0
+  bids: [(268.3, 5000, 3), (268.2, 11250, 5)]
+  asks: [(268.4, 2500, 1), (268.5, 8750, 4)]
+reported_close when received after the close: None

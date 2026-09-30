@@ -1,0 +1,7 @@
+Broker HTTP status: 502
+Body kept as text: <html><body>502 Bad Gateway</body></html>
+Body fields: {}
+Broker took 2500.0 ms
+Outcome accepted is answered with HTTP 200
+Outcome rejected is answered with HTTP 422
+Outcome unknown is answered with HTTP 504

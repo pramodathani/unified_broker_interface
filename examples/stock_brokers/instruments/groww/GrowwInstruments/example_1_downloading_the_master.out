@@ -1,0 +1,10 @@
+Files read:
+    https://growwapi-assets.groww.in/instruments/instrument.csv
+Rows: 4
+Columns: ['exchange', 'exchange_token', 'trading_symbol', 'groww_symbol', 'name', 'instrument_type', 'segment', 'series', 'isin', 'underlying_symbol', 'underlying_exchange_token', 'expiry_date', 'strike_price', 'lot_size', 'tick_size', 'freeze_quantity', 'is_reserved', 'buy_allowed', 'sell_allowed', 'internal_trading_symbol', 'is_intraday']
+First six columns:
+  exchange exchange_token trading_symbol           groww_symbol                       name instrument_type
+0      NSE           1594           INFY               NSE-INFY                    Infosys              EQ
+1      BSE         500209           INFY               BSE-INFY                    Infosys              EQ
+2      NSE          11536            TCS                NSE-TCS  Tata Consultancy Services              EQ
+3      NSE          52175  NIFTY26OCTFUT  NSE-NIFTY-27Oct26-FUT                      NIFTY             FUT

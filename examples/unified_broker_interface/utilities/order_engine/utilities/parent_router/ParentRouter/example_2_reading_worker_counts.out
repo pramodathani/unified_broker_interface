@@ -1,0 +1,6 @@
+Counts from "2, zerodha=4": {'zerodha': 4, 'dhan': 2, 'fyers': 2}
+Workers per lane: {'zerodha': 4, 'dhan': 2, 'fyers': 2, 'unassigned': 1}
+The count "3" reads as 3
+"2,upstox=3" is refused: the worker count 'upstox=3' names no broker; brokers are zerodha, dhan, fyers
+"two" is refused: the worker count 'two' is not a whole number
+"2,dhan=0" is refused: the worker count 'dhan=0' is below one

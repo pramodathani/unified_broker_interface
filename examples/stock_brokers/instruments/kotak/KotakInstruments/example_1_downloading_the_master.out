@@ -1,0 +1,19 @@
+Files read:
+    ... transformed/cde_fo.csv
+    ... transformed/mcx_fo.csv
+    ... transformed/nse_fo.csv
+    ... transformed/bse_fo.csv
+    ... transformed/nse_com.csv
+    ... transformed-v1/bse_cm-v1.csv
+    ... transformed-v1/nse_cm-v1.csv
+Rows: 7
+Columns: ['pSymbol', 'pGroup', 'pExchSeg', 'pInstType', 'pSymbolName', 'pTrdSymbol', 'pOptionType', 'pISIN', 'dTickSize', 'lLotSize', 'lExpiryDate', 'dStrikePrice;', 'pExchange']
+First six columns:
+   pSymbol pGroup pExchSeg pInstType pSymbolName        pTrdSymbol
+0     1201    NaN   cde_fo    FUTCUR      USDINR    USDINR26OCTFUT
+1   451669    NaN   mcx_fo    FUTCOM    CRUDEOIL  CRUDEOIL26OCTFUT
+2    52175    NaN   nse_fo    FUTIDX       NIFTY     NIFTY26OCTFUT
+3  1135463    NaN   bse_fo    FUTIDX      SENSEX    SENSEX26OCTFUT
+4   500209      A   bse_cm       NaN        INFY              INFY
+5     1594     EQ   nse_cm       NaN        INFY           INFY-EQ
+6    11536     EQ   nse_cm       NaN         TCS            TCS-EQ

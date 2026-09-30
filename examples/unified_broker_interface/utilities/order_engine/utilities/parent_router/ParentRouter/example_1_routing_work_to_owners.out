@@ -1,0 +1,12 @@
+Workers per lane: {'zerodha': 2, 'dhan': 1, 'unassigned': 1}
+parent-1 is owned by zerodha-1
+parent-2 was recovered with legs at dhan, so its lane is dhan
+parent-3 has no broker (None), so its lane is unassigned
+Every worker idle: True
+Load across every lane: 0
+parent-1 clock tick on order-engine-zerodha-1
+parent-1 fill on order-engine-zerodha-1
+parent-2 price tick on order-engine-dhan-1
+parent-3 expiry on order-engine-unassigned-1
+Owners after the day roll: 0
+Every worker stopped: True

@@ -1,0 +1,6 @@
+slice_weights: [1.0, 1.0, 1.0, 1.0], slice_quantities: [251, 250, 250, 250]
+The caller cut slice 1 from 251 to 151: carried 100
+slice_order for slice 2: SELL 350, carried now 0
+One slice: HTTP 400, a twap needs slices between 2 and 60
+No over_minutes: HTTP 400, a twap needs over_minutes above zero, the time to spread the order across
+Five slices of three units: HTTP 400, a twap of 5 slices needs a quantity of at least 5, not 3

@@ -1,0 +1,14 @@
+Rows downloaded: 9
+Key columns: ['symbol_ticker'], sorted first on: None
+Columns after normalize_columns: ['fytoken', 'symbol_details', 'exchange_instrument_type', 'minimum_lot_size', 'tick_size', 'isin', 'trading_session', 'last_update_date', 'expiry_date', 'symbol_ticker', 'exchange', 'segment', 'scrip_code', 'underlying_symbol', 'underlying_scrip_code', 'strike_price', 'option_type', 'underlying_fytoken', 'reserved_column1', 'reserved_column2', 'reserved_column3']
+fyers: dropped 1 duplicate row(s) on ['symbol_ticker'].
+Rows to store: 8
+            fytoken         symbol_ticker exchange segment minimum_lot_size tick_size
+0   101126102901201    NSE:USDINR26OCTFUT       10      12                1    0.0025
+1   101126102752175     NSE:NIFTY26OCTFUT       10      11               75       0.1
+2   101126102835001  NSE:CRUDEOIL26OCTFUT       10      17                1       1.0
+3    10100000001594           NSE:INFY-EQ       10      10                1       0.1
+4    10100000011536            NSE:TCS-EQ       10      10                1       0.1
+5  1210000000500209            BSE:INFY-A       12      10                1      0.05
+6  1211261030873765    BSE:SENSEX26OCTFUT       12      11               20      0.05
+7  1120261019451669  MCX:CRUDEOIL26OCTFUT       11      20                1       1.0

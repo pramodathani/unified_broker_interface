@@ -1,0 +1,14 @@
+INFY instrument id: f310e1b0-e082-5b16-808a-25f741abb9de
+2026-09-30 resolves to 2026-09-28
+2026-08-20 resolves to 2026-08-14
+Today: mapping of 2026-09-28, 1 database queries
+  dhan: token 1594, order symbol None, lot 1, tick 0.05
+  fyers: token 10100000001594, order symbol NSE:INFY-EQ, lot 1, tick 0.05
+  zerodha: token 408065, order symbol INFY, lot 1, tick 0.05
+On 2026-08-20: mapping of 2026-08-14, 2 database queries
+  dhan: token 1594, order symbol None, lot 1, tick 0.05
+  zerodha: token 408065, order symbol INFY, lot 1, tick 0.05
+Brokers mapped on 2026-08-14 exactly: 2
+Zerodha 408065 today: INFY, cache look-ups 1, database queries 0
+Zerodha 408065 on 2026-08-20: INFY from the mapping of 2026-08-14
+No tokens asked for: {}

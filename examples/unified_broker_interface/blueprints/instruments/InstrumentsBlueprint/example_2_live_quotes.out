@@ -1,0 +1,10 @@
+ltp INFY: 200 1521.4 from cache
+  brokers asked: []
+ohlc RELIANCE: 200 last 2876.5 from broker, ohlc {"high": 2881.5, "low": 2851.5, "open": 2856.5}, previous close 2866.5
+  brokers asked: ['zerodha']
+quote of a list: 200
+  request 0: 200 22222222-2222-5222-8222-000000000001 last 1521.4 from cache, depth {"buy": [], "sell": []}
+  request 1: 200 22222222-2222-5222-8222-000000000004 last 2876.5 from broker, depth {"buy": [], "sell": []}
+  request 2: 503 no recent quote is cached, and no broker that serves quotes carries this instrument
+  request 3: 404 no instrument 22222222-2222-5222-8222-000000000099 is mapped on 2026-09-15
+  brokers asked: ['zerodha']

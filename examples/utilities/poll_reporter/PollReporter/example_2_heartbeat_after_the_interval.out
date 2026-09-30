@@ -1,0 +1,7 @@
+First group
+  logged INFO: Positions unchanged
+  logged WARNING: Dhan answered slowly
+Second group, after 0.6 seconds
+  logged INFO: Positions unchanged
+  logged WARNING: Dhan answered slowly
+Levels remembered: ['INFO', 'WARNING']

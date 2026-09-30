@@ -1,0 +1,7 @@
+eurinr-option: ['1000']
+jpyinr-future-oct: ['100000']
+usdinr-future-oct: ['1000']
+Broker queried: shoonya
+Mapping date: 2026-09-28
+Segments: ['nse_currency_futures', 'nse_currency_options']
+Exchange labels: ['CDS']

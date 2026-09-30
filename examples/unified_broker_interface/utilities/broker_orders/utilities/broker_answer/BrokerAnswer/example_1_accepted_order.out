@@ -1,0 +1,7 @@
+Before the reply: outcome=unknown, HTTP status for the caller=504
+Body fields before the reply: {}
+Broker HTTP status: 200
+Body fields: {'status': 'success', 'data': {'order_id': '250930000000001'}}
+Order id: 250930000000001
+Outcome: accepted, HTTP status for the caller: 200
+Broker took 42.5 ms

@@ -1,0 +1,15 @@
+entry_orders: entry BUY 30 SL at 1522 trigger 1520
+entry_orders: entry SELL 30 SL at 1478 trigger 1480
+answer: HTTP 200, outcome accepted, sides [{'transaction_type': 'BUY', 'order_id': '260930000001', 'outcome': 'accepted'}, {'transaction_type': 'SELL', 'order_id': '260930000002', 'outcome': 'accepted'}]
+After the sell side filled: parent protecting
+  stop   BUY 30 SL at 1502.0 trigger 1500.0
+  target BUY 30 LIMIT at 1450.0 trigger None
+Sent to the broker, in order:
+  place BUY 30 SL at 1522 trigger 1520 -> 260930000001
+  place SELL 30 SL at 1478 trigger 1480 -> 260930000002
+  cancel 260930000001
+  place BUY 30 SL at 1502 trigger 1500 -> 260930000003
+  place BUY 30 LIMIT at 1450 -> 260930000004
+on_entry_update for a side cancelled unfilled: orders sent 0, parent working
+Missing the limits: HTTP 400, a two_sided_breakout needs buy_trigger, buy_limit, sell_trigger and sell_limit: both sides are stop-limit orders and each needs its own two prices
+A range upside down: HTTP 400, sell_trigger must be below buy_trigger; they are the two sides of a range and a range has a top and a bottom

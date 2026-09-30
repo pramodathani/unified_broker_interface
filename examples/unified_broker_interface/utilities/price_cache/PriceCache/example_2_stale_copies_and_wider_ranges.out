@@ -1,0 +1,10 @@
+Stored copy under unified:prices:cache:22222222-2222-5222-8222-000000000002:day:adjusted:latest
+Same loader run: loaded True, holding 2 candles
+  covers 15 to 25 August: False
+  read instead: (datetime.date(2026, 8, 10), datetime.date(2026, 8, 25))
+  1 to 30 September with a 30 day limit reads: (datetime.date(2026, 9, 1), datetime.date(2026, 9, 30))
+Different columns: loaded False, holding 0 candles
+Loader ran again: loaded False, holding 0 candles
+  covers 10 to 20 August: False
+  log WARNING: the cached candles under unified:prices:cache:22222222-2222-5222-8222-000000000002:day:adjusted:latest could not be read: Error 111 connecting to 127.0.0.1:6379. Connection refused.
+Redis unreachable: loaded False, holding 0 candles

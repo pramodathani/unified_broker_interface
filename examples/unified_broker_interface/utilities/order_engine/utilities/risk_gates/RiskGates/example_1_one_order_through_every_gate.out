@@ -1,0 +1,12 @@
+Loss lockout: accepted
+Rate budget: token taken
+Daily count: place reserved, count 1
+After sending, count stays 1
+Reprice P1-L1 now: True
+Reprice P1-L1 again at once: False
+Counts:
+  rate: {'waited': 0, 'refused': 0}
+  locked_out: 0
+  order_to_trade: {'zerodha': {'sent': 1, 'traded': 1, 'ratio': 1.0}}
+  repricing: {'minimum_seconds': 30.0, 'allowed': 1, 'suppressed': 1}
+  daily_count: {'refused': 0, 'caps': {'zerodha': 3000}}

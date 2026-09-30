@@ -1,0 +1,18 @@
+Streams read: ['unified:orders:intents:stream', 'unified:order-updates:stream']
+After three updates, one for a known order and two for orders not known yet:
+  buy_now: working, leg partially_filled with 4 filled
+  early_answer: not saved
+  held: 2
+[log] The order update in stream entry 4-0 could not be applied; the broker book is read again at the next start.
+Unacknowledged update entries: []
+After the broker answered with order 260930000002:
+  early_answer: working, leg acknowledged with 0 filled
+  held: 1, replayed: 1
+Replaying again changes nothing: held 1, replayed 1
+After a held fill for buy_now is applied, replayed 2:
+  buy_now: completed, leg filled with 10 filled
+After the polled book showed a fill of 5 that no socket delivered:
+  missed_by_socket: completed, leg filled with 5 filled
+After the next pass found all 10 filled:
+  missed_by_socket: completed, leg filled with 10 filled
+Day rolls: 1

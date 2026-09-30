@@ -1,0 +1,11 @@
+First request carried: morning-token
+Another process logged in again at 12:30:41 and wrote its login to Redis.
+Second request carried: noon-token
+Request: GET https://openapi.stoxkart.com/funds
+Status: success, HTTP code: 200
+Data:
+{
+    "available_margin": 98440.0,
+    "utilised_margin": 15202.0,
+    "opening_balance": 113642.0
+}

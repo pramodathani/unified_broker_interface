@@ -1,0 +1,14 @@
+SyntheticOrder.run: NotImplementedError, SyntheticOrder does not implement run
+read_order: LIMIT 10, price None, price_reference {'kind': 'mid'}
+concrete_order: price 1000.10, price_reference None
+chosen_broker before any leg: None
+Run: HTTP 200, outcome accepted, order 260930000001, parent working, tick size kept 0.05
+chosen_broker after it: zerodha
+Events: ['parent_received', 'leg_requested', 'leg_answered', 'parent_state_changed']
+json_number(Decimal('1000.10')): 1000.1, json_number(None): None
+closes_position('entry'): False, closes_position('stop'): True
+now() is timezone-aware in UTC
+release_daily_place without gates: nothing to release
+record_and_send_leg: HTTP 200, accepted, leg 2 of the parent
+record: a fill written as the order update follower writes it leaves leg 2 filled with 10, sequence 7
+Sent to the broker: ['place BUY 10 LIMIT at 1000.10 -> 260930000001', 'place BUY 10 LIMIT at 1000.10 -> 260930000002']

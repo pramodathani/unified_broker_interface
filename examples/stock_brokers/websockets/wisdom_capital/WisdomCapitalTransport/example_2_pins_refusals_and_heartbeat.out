@@ -1,0 +1,8 @@
+Made-up certificate: 2CC853CECC8C4B03...
+Unreadable certificate: 1ACF7CA747F2D678...
+Refusal: True for {"code": "e-session-0001", "description": "Invalid Token"}
+Refusal: True for {"code": "e-session-0002", "description": "Instrument Already Subscribed !"}
+Refusal: False for {"type": "success"}
+HTTPS GET /interactive/socket.io/: HTTP 400
+Refused handshake: None, 400, {"type": "error", "code": "e-session-0001", "description": "Invalid Token"}
+Heartbeat sent: ['2']

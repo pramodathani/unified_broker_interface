@@ -1,0 +1,4 @@
+Wisdom Capital answers HTTP 400 with: {"type": "error", "code": "e-token-0002", "description": "Please Provide token to Authenticate"}
+Caught: WisdomCapitalAPIException
+code: e-token-0002
+message: Please Provide token to Authenticate

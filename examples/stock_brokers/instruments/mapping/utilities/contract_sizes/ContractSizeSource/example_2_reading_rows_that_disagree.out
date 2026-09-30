@@ -1,0 +1,5 @@
+eurinr-future: ['1000']
+usdinr-option: ['1000', '2000']
+Broker queried: stoxkart
+Exchange labels queried: ['NSECD', 'BSECD', 'NCDEX']
+The base class has no size expression of its own.

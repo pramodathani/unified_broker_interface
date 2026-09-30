@@ -1,0 +1,12 @@
+nse_commodity_futures unresolved: 1
+nse_currency_futures no_code: 1
+nse_equity_options ambiguous: 1
+Rows written by the dry run: 0
+Derivatives: {'crude-future-nse-oct': ('nse', 'nse_commodity_futures'), 'sbin-option-800-pe': ('nse', 'nse_equity_options'), 'usdinr-future-oct': ('nse', 'nse_currency_futures')}
+Codes: {'crude-future-nse-oct': {'dhan': '26000'}, 'sbin-option-800-pe': {'dhan': '3045', 'groww': '3045'}}
+Candidate ('nse', 'nse_equities', '3045'): ['sbin-share']
+Candidate ('nse', 'nse_equity_futures', '3045'): ['sbin-future-oct']
+Candidate ('nse', 'nse_equity_indices', '26000'): ['nifty-50-index']
+NSE commodity future with code 26000: unresolved, None
+NSE equity option with code 3045: ambiguous, None
+NSE currency future with no code: no_code, None

@@ -1,0 +1,26 @@
+read_raw_rows returned 4 rows with 17 columns
+
+dhan: 3/4 raw row(s) classified, 1 uncategorised, 3 segment membership(s), 3 distinct instrument(s), 1 error(s).
+
+broker: dhan
+mapping_date: 2026-09-28
+raw_rows: 4
+matched: 3
+uncategorised: 1
+memberships: 3
+instruments_upserted: 3
+errors: [('nse_equity_index_options', "could not convert string to float: 'not a number'")]
+
+Statements sent inside the write transaction:
+  DELETE FROM unified.broker_mappings WHERE broker = :b AND ma...
+    {'b': 'dhan', 'd': datetime.date(2026, 9, 28)}
+  INSERT INTO unified.instruments AS master (instrument_id, ex...
+    {'instrument_id': '8fdcd38e', 'exchange': 'unknown', 'segment': 'uncategorised', 'shape': 'security', 'symbol': '990001'}
+    {'instrument_id': 'f310e1b0', 'exchange': 'nse', 'segment': 'nse_equities', 'shape': 'security', 'symbol': 'INFY'}
+    {'instrument_id': 'fe85c704', 'exchange': 'nse', 'segment': 'nse_equity_index_options', 'shape': 'option', 'underlying_symbol': 'NIFTY', 'strike_price': 25000.0, 'option_type': 'CE'}
+  INSERT INTO unified.broker_mappings (instrument_id, broker, ...
+    {'instrument_id': '8fdcd38e', 'broker': 'dhan', 'broker_token': '990001', 'broker_symbol': 'TEST SPREAD', 'lot_size': 1.0, 'tick_size': 5.0, 'attributes': '{"display_name": "TEST SPREAD", "instrument_type": "SP"}'}
+    {'instrument_id': 'f310e1b0', 'broker': 'dhan', 'broker_token': '1594', 'broker_symbol': 'INFOSYS LIMITED', 'lot_size': 1.0, 'tick_size': 0.05, 'attributes': '{"display_name": "INFOSYS LIMITED", "instrument_type": "ES"}'}
+    {'instrument_id': 'fe85c704', 'broker': 'dhan', 'broker_token': '40215', 'broker_symbol': 'NIFTY-Oct2026-25000-CE', 'lot_size': 1.0, 'tick_size': 0.05, 'attributes': '{"display_name": "NIFTY-Oct2026-25000-CE", "instrument_type": "OP"}'}
+
+NotImplementedError: UnnamedAdapter must set BROKER_NAME

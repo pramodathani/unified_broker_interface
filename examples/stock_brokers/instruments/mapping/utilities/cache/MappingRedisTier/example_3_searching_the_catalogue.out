@@ -1,0 +1,17 @@
+write_members sent 8 members
+read_catalogue, the first four in order:
+  00000000-0000-4000-8000-000000000005 BANKNIFTY 2026-10-06 55000 PE
+  00000000-0000-4000-8000-000000000006 BANKNIFTY 2026-10-13 55000 CE
+  00000000-0000-4000-8000-000000000003 NIFTY 2026-10-06 900 CE
+  00000000-0000-4000-8000-000000000002 NIFTY 2026-10-06 900 PE
+read_catalogue_for_prefix NIFTY|2026-10-06|:
+  00000000-0000-4000-8000-000000000003 NIFTY 2026-10-06 900 CE
+  00000000-0000-4000-8000-000000000002 NIFTY 2026-10-06 900 PE
+  00000000-0000-4000-8000-000000000001 NIFTY 2026-10-06 1000 CE
+read_catalogue_for_prefixes: ['00000000-0000-4000-8000-000000000006', '00000000-0000-4000-8000-000000000003', None]
+read_names: ['BANKNIFTY', 'NIFTY']
+Keys before clear_other_dates: 4
+clear_other_dates deleted: 1
+  kept unified:catalogue:2026-09-30:catalogue:nse_equity_index_options
+  kept unified:catalogue:2026-09-30:names:nse_equity_index_options
+  kept unified:catalogue:current_date

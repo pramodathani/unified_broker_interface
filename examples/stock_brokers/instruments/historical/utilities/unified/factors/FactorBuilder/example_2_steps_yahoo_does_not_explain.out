@@ -1,0 +1,15 @@
+derive, for a demerger-shaped history:
+  2023-07-20 unclassified provisional from yahoo_close_ratio, price factor 0.923
+    evidence {'q_before': 0.923, 'q_after': 1.0, 'raw_close_before': 2600.0, 'raw_close_after': 2400.0, 'raw_move': 0.923077, 'raw_price_fell_alike': True}
+  2023-07-10 split rejected from yahoo_split_event, price factor 0.5
+    evidence {'note': "listed by Yahoo, but Yahoo's Close and the stored prices move together across it: either there was no action, or the stored prices already include it"}
+raw_gaps, for INDIAGLYCO:
+  2026-09-02 unclassified provisional from raw_gap, price factor 0.5
+    evidence {'raw_close_before': 485.0, 'raw_close_after': 242.5, 'move': 0.5, 'nearest_fraction': '1/2', 'token_changed': True, 'dhan_factor': 0.5}
+dhan_factor on 2026-09-01: 0.5
+Rows stored: 1, the manually decided 2023-07-10 left alone
+Yahoo tickers asked for: ['STUBCO.BO', '599999.BO', 'WRONGCO.NS']
+Fetch state for INDIAGLYCO-NSE: ticker None, status error, error Yahoo answered 404
+Fetch state for STUBCO-BSE: ticker None, status empty, error no ticker form covers the raw history
+Fetch state for WRONGCO-NSE: ticker WRONGCO.NS, status mismatch, error latest Yahoo/raw ratio 0.5000
+Counts: {'stale_deleted': 2, 'unclassified_provisional': 1, 'empty': 1, 'mismatch': 1, 'checked_by_hand': 1}

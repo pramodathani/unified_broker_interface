@@ -1,0 +1,6 @@
+Wrong secret: 401 {"error": "Invalid API key or secret"}
+Right key and secret: 200
+  The expired token was replaced: True
+  status with the new token: 200 connected
+  status with the old token: 401 Invalid access token
+Settings missing: 500 {"error": "unified_broker_interface settings are not configured"}

@@ -1,0 +1,23 @@
+volume 1000, bid at 98 1200, offer 98.1: changed=True ahead=1200 queue_filled=0 filled=0 remaining=500 touched_at=None
+volume 1700, bid at 98 900, offer 98.1: changed=True ahead=500 queue_filled=0 filled=0 remaining=500 touched_at=None
+volume 1900, bid at 98 500, offer 98.05: changed=True ahead=215 queue_filled=0 filled=0 remaining=500 touched_at=None
+volume 2300, bid at 98 300, offer 98.05: changed=True ahead=0 queue_filled=185 filled=185 remaining=315 touched_at=None
+volume 2300, bid at 98 300, offer 98.0: changed=True ahead=0 queue_filled=185 filled=500 remaining=315 touched_at=1759200004.0
+A stale quote changes it: False
+{
+  "parent_order_id": "parent-1",
+  "instrument_id": "NSE:INFY",
+  "side": "BUY",
+  "price": "98.0000",
+  "quantity": 500,
+  "ahead": 0,
+  "queue_filled": 185,
+  "filled": 500,
+  "remaining": 0,
+  "touched_at": 1759200004.0,
+  "last_volume": 2300,
+  "last_broker": "zerodha",
+  "last_visible": 300,
+  "updated_at": 1759200004.0,
+  "updates": 5
+}

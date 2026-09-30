@@ -1,0 +1,13 @@
+own_level before 2026-09-28: 500.0, last intraday before it: 1000.0
+intraday: NSE|40001|SOLOCO-EQ from 2026-09-28, multiplier 2.0 (2/1), by intraday, provisional
+  evidence {'intraday_over_daily_before': 2.0, 'intraday_over_daily_after': 1.0, 'daily_close_before': 500.0, 'last_intraday_close_before': 1000.0, 'newer_run': 2, 'dispersion': 0.0}
+split_events: [(datetime.date(2026, 9, 28), 0.5)]
+yahoo_events: NSE|40001|SOLOCO-EQ from 2026-09-28, multiplier 2.0 (2/1), by yahoo_event, provisional
+  evidence {'yahoo_ratio': 2.0, 'close_before': 500.0, 'close_after': 500.0, 'note': 'Yahoo lists a split here and the served series does not move: pre-adjusted, or a phantom event'}
+after merge: NSE|40001|SOLOCO-EQ from 2026-09-28, multiplier 2.0 (2/1), by intraday, provisional
+  evidence {'intraday_over_daily_before': 2.0, 'intraday_over_daily_after': 1.0, 'daily_close_before': 500.0, 'last_intraday_close_before': 1000.0, 'newer_run': 2, 'dispersion': 0.0, 'yahoo_event_multiplier': 2.0}
+cross_exchange for a pair that never settles near 1: []
+two methods disagreeing, merged: NSE|40001|SOLOCO-EQ from 2026-09-28, multiplier 2.0 (None), by cross_exchange, provisional
+  evidence {'intraday_multiplier': 2.5}
+Rows written by store: 1, follow-up statements ['delete from unified.price_history_corrections']
+Counts: {'pairs_not_anchored': 1, 'intraday_provisional': 1, 'checked_by_hand': 3}

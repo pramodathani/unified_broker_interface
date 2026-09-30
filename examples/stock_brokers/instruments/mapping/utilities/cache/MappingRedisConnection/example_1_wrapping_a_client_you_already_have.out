@@ -1,0 +1,8 @@
+First client: the caller pool client
+Same object both times: True
+Answers ping: True
+Failed connections so far: 0
+After forget(), a command failed and the client was dropped.
+Client straight after forget(): None
+Seconds before the next attempt: 60.0
+Failed connections so far: 0

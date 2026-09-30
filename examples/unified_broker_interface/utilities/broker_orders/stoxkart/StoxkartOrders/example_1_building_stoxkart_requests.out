@@ -1,0 +1,47 @@
+Algo-ID from the settings: '12345'
+Algo-ID when the settings have none: '99999'
+Session headers: {'X-Client-Id': 'SX00001', 'X-Platform': 'api', 'X-Api-Key': 'example-api-key', 'X-Access-Token': 'example-stoxkart-token', 'X-Algo-Id': '12345'}
+Stop-loss place:
+{
+  "json": {
+    "action": "SELL",
+    "algo_id": "12345",
+    "disclose_quantity": "0",
+    "exchange": "NSE",
+    "order_type": "STOPLOSS_LIMIT",
+    "price": "2450",
+    "product_type": "DELIVERY",
+    "quantity": "2",
+    "stop_loss_price": "2455",
+    "token": "2885",
+    "trailing_stop_loss": "0",
+    "trigger_price": "2455",
+    "validity": "DAY"
+  },
+  "method": "POST",
+  "url": "https://openapi.stoxkart.com/orders/normal"
+}
+Variety kept beside the order: amo
+Variety in the order itself: bo
+Variety when none is stored: normal
+Cancel the after-market order:
+{
+  "method": "DELETE",
+  "url": "https://openapi.stoxkart.com/orders/amo/SX0001"
+}
+Modify the price and disclosed quantity:
+{
+  "json": {
+    "disclose_quantity": "5",
+    "exchange": "NSE",
+    "order_type": "LIMIT",
+    "price": "2505",
+    "quantity": "10",
+    "stop_loss_price": "0",
+    "token": "2885",
+    "trigger_price": "0",
+    "validity": "DAY"
+  },
+  "method": "PUT",
+  "url": "https://openapi.stoxkart.com/orders/amo/SX0001"
+}

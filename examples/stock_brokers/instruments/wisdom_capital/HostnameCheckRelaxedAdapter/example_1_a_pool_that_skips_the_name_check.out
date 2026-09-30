@@ -1,0 +1,10 @@
+After construction:
+    certificate verification: CERT_REQUIRED
+    check_hostname: False
+    assert_hostname: False
+    maxsize: 10, block: False
+After init_poolmanager(4, 8, block=True):
+    certificate verification: CERT_REQUIRED
+    check_hostname: False
+    assert_hostname: False
+    maxsize: 8, block: True

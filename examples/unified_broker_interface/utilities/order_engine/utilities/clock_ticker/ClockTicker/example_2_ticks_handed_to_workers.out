@@ -1,0 +1,10 @@
+Pending after the first tick: ['parent-1']
+Work waiting on the worker after two more tries: 2
+Pending once the worker is free: []
+Ticks: 2, acted in total: 1
+Acted in total after running a handed-over tick here: 2
+run_one on a copy of the record acts: True
+parent-1 on order-engine-zerodha-1
+parent-1 on MainThread
+parent-1 on MainThread
+Every worker stopped: True

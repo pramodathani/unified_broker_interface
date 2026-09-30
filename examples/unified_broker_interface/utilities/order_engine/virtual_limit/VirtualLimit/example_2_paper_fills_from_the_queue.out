@@ -1,0 +1,10 @@
+Paper order: is_paper True
+After the estimate says 25: paper_filled 25, parent working
+Changing it to 20: HTTP 409, the paper order has already filled 25, so its quantity cannot become 20
+After the estimate says 60: paper_filled 60, parent completed, filled on paper: 60 at 1510.00
+Sent to the broker for the paper order: []
+watched_price: 1508.00, from a stale quote: None
+child_order: SELL 60 LIMIT at 1510.00
+estimate: {'queue_ahead': 120, 'queue_filled': 145, 'filled': 60}
+fire: sent ['place SELL 60 LIMIT at 1510.00 -> 260930000001'], missed_quantity 145
+A market order: HTTP 400, a virtual limit order is held at its own limit price, so it must be a LIMIT order with a price

@@ -1,0 +1,28 @@
+First tick written for 11111111-1111-5111-8111-000000000102, ownership changes []
+Quote: {"instrument_id":"11111111-1111-5111-8111-000000000102","broker":"zerodha","broker_token":"738561","exchange":"nse","segment":"nse_equities","shape":"security","symbol":"RELIANCE","underlying_symbol":null,"expiry_date":null,"strike_price":null,"option_type":null,"lot_size":1,"last_price":1262.7,"average_price":1263.84,"ohlc":{"open":1266.4,"high":1267.4,"low":1261.5},"previous_close":1274.0,"change_percent":-0.887,"last_quantity":15,"volume":1885670,"buy_quantity":null,"sell_quantity":null,"oi":null,"oi_day_high":null,"oi_day_low":null,"depth":{"buy":[{"price":1262.6,"quantity":120,"orders":4}],"sell":[{"price":1262.7,"quantity":95,"orders":3}]},"last_trade_time":1789446599.0,"exchange_time":1789446599.5,"received_at":1789446600.0,"unified_at":1789446600.25,"stale":false,"stale_since":null}
+Row, first twenty columns:
+  time: 1789446600.0
+  instrument_id: 11111111-1111-5111-8111-000000000102
+  broker: zerodha
+  exchange_time: 1789446599.5
+  last_trade_time: 1789446599.0
+  last_price: 1262.7
+  last_quantity: 15
+  average_price: 1263.84
+  volume: 1885670
+  buy_quantity: None
+  sell_quantity: None
+  open: 1266.4
+  high: 1267.4
+  low: 1261.5
+  previous_close: 1274.0
+  change_percent: -0.887
+  oi: None
+  oi_day_high: None
+  oi_day_low: None
+  lot_size: 1
+Same values a second later: None
+New price two seconds later: row last_price 1263.5, previous_close 1274.0, change_percent -0.8242
+Stale quote ends with: d_at":1789446600.25,"stale":true,"stale_since":1789446720.0}
+Stale quote for an instrument never written: None
+Counts: {'received': 3, 'written': 2, 'duplicate': 1}

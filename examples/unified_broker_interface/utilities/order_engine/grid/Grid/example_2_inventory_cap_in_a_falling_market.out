@@ -1,0 +1,14 @@
+Buy at 995.0 filled: inventory 10, past its cap False, adding side BUY
+Buy at 990.0 filled: inventory 20, past its cap True, adding side BUY
+Sent to the broker, in order:
+  place BUY 10 LIMIT at 995.00 -> 260930000001
+  place SELL 10 LIMIT at 1005.00 -> 260930000002
+  place BUY 10 LIMIT at 990.00 -> 260930000003
+  place SELL 10 LIMIT at 1010.00 -> 260930000004
+  place BUY 10 LIMIT at 985.00 -> 260930000005
+  place SELL 10 LIMIT at 1015.00 -> 260930000006
+  place SELL 10 LIMIT at 1000.0 -> 260930000007
+  place SELL 10 LIMIT at 995.0 -> 260930000008
+  cancel 260930000005
+The buy at 985 is confirmed cancelled; stop_adding again cancels 0
+A grid whose every rung was refused: HTTP 400, outcome rejected, parent rejected

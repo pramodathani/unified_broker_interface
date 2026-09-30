@@ -1,0 +1,22 @@
+Request: GET https://trade.wisdomcapital.in/interactive/user/balance?clientID=WC0001
+Headers sent:
+    Content-Type: application/json
+    authorization: morning-token
+Certificate checked: False
+Status: success
+HTTP code: 200
+Data:
+{
+    "BalanceList": [
+        {
+            "limitHeader": "ALL|ALL|ALL",
+            "limitObject": {
+                "RMSSubLimits": {
+                    "cashAvailable": "250000",
+                    "netMarginAvailable": "248500.5",
+                    "marginUtilized": "1499.5"
+                }
+            }
+        }
+    ]
+}

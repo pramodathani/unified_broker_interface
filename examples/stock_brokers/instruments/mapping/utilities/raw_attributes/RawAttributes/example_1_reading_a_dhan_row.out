@@ -1,0 +1,29 @@
+Dhan column map:
+  isin <- isin
+  display_name <- display_name
+  instrument_type <- instrument_type
+  series <- series
+  freeze_quantity <- sm_freeze_qty
+  price_band_high <- sm_upper_limit
+  price_band_low <- sm_lower_limit
+  underlying_token <- underlying_security_id
+  surveillance_category <- asm_gsm_category
+  margin_trading_leverage <- mtf_leverage
+Stored: {'isin': 'INE009A01021', 'display_name': 'Infosys', 'instrument_type': 'ES', 'series': 'EQ', 'price_band_high': '1709.60', 'price_band_low': '1398.80', 'surveillance_category': 'NA', 'margin_trading_leverage': '4.00'}
+Answered:
+  isin: INE009A01021
+  display_name: Infosys
+  instrument_type: ES
+  series: EQ
+  freeze_quantity: None
+  price_band_high: 1709.60
+  price_band_low: 1398.80
+  multiplier: None
+  underlying_token: None
+  surveillance_category: NA
+  permitted_to_trade: None
+  buy_allowed: None
+  sell_allowed: None
+  intraday_leverage: None
+  margin_trading_leverage: 4.00
+  pledge_eligible: None

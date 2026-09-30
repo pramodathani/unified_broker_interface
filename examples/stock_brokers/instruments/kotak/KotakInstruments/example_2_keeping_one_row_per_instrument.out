@@ -1,0 +1,13 @@
+Rows downloaded: 8
+Key columns: ['pexchseg', 'ptrdsymbol'], sorted first on: pinsttype
+Columns after normalize_columns: ['psymbol', 'pgroup', 'pexchseg', 'pinsttype', 'psymbolname', 'ptrdsymbol', 'poptiontype', 'pisin', 'dticksize', 'llotsize', 'lexpirydate', 'dstrikeprice', 'pexchange']
+kotak: dropped 1 duplicate row(s) on ['pexchseg', 'ptrdsymbol'].
+Rows to store: 7
+   psymbol pexchseg        ptrdsymbol pinsttype llotsize dstrikeprice
+0   451669   mcx_fo  CRUDEOIL26OCTFUT    FUTCOM        1    -1.000000
+1     1201   cde_fo    USDINR26OCTFUT    FUTCUR        1    -1.000000
+2    52175   nse_fo     NIFTY26OCTFUT    FUTIDX       75    -1.000000
+3  1135463   bse_fo    SENSEX26OCTFUT    FUTIDX       20    -1.000000
+4   500209   bse_cm              INFY       NaN        1          NaN
+5     1594   nse_cm           INFY-EQ       NaN        1          NaN
+6    11536   nse_cm            TCS-EQ       NaN        1          NaN

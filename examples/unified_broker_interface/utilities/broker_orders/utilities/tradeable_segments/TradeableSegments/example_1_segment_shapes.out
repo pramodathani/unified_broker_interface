@@ -1,0 +1,8 @@
+Exchanges: ['nse', 'bse', 'mcx', 'ncdex']
+equities: shape=security, asset class=securities
+equity_index_options: shape=option, asset class=securities
+currency_futures: shape=future, asset class=currency
+commodity_options: shape=option, asset class=commodity
+exchange_traded_funds: shape=security, asset class=securities
+indices: orders are not taken
+uncategorised: orders are not taken

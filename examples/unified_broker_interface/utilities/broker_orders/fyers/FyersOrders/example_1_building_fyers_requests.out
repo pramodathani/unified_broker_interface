@@ -1,0 +1,42 @@
+Session headers: {'Authorization': 'EXAMPLE-100:example-fyers-token'}
+Place:
+{
+  "json": {
+    "disclosedQty": 0,
+    "limitPrice": 120.05,
+    "offlineOrder": false,
+    "orderTag": "hedge01",
+    "productType": "MARGIN",
+    "qty": 75,
+    "side": -1,
+    "stopPrice": 0.0,
+    "symbol": "NSE:NIFTY26OCT25000CE",
+    "type": 1,
+    "validity": "DAY"
+  },
+  "method": "POST",
+  "url": "https://api-t1.fyers.in/api/v3/orders/sync"
+}
+Cancel:
+{
+  "json": {
+    "id": "26091500000013"
+  },
+  "method": "DELETE",
+  "url": "https://api-t1.fyers.in/api/v3/orders/sync"
+}
+Modify the quantity and price:
+{
+  "json": {
+    "id": "26091500000013",
+    "limitPrice": 121.0,
+    "qty": 150,
+    "type": 1
+  },
+  "method": "PATCH",
+  "url": "https://api-t1.fyers.in/api/v3/orders/sync"
+}
+Stored exchange 'NSE' matches the NSE option: True
+Stored exchange 'nse' matches the NSE option: True
+Stored exchange 'BSE' matches the NSE option: False
+Stored exchange None matches the NSE option: True

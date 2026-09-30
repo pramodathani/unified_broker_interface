@@ -1,0 +1,4 @@
+CandleThrottled: HTTP 429: {"s":"error","code":429,"message":"request limit reached"}; back off and carry on
+CandleBlocked: HTTP 429: the firewall has banned this address; stop this broker and send nothing more
+CandleBlocked is a CandleError: True
+CandleBlocked is a kind of throttle: False

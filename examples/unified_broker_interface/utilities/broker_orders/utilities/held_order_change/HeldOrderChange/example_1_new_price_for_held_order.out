@@ -1,0 +1,5 @@
+Parent: P-00000000000040008000000000000001
+Price: Decimal('2498.35')
+Quantity: 20
+Dry run: True
+modify_held arguments: {'parent_id': 'P-00000000000040008000000000000001', 'price': '2498.35', 'quantity': 20, 'dry_run': True}

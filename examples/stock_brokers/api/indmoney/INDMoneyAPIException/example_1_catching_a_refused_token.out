@@ -1,0 +1,4 @@
+IND Money answers HTTP 400 with: {"status": "error", "message": "Invalid access token", "error_type": "RequestValidationException"}
+Caught: INDMoneyAPIException
+code: RequestValidationException
+message: Invalid access token

@@ -1,0 +1,6 @@
+Run: HTTP 202, outcome armed, the order is recorded and will be placed when the watched instrument touches the level
+Watching 11111111-1111-5111-8111-000000000012 at_or_below 24800
+Option at 150.0, index at 24950.0: fired False
+Option at 152.4, index at 24790.0: fired True
+Sent to the broker: ['place SELL 75 LIMIT at 180.00 -> 260930000001']
+Parent: working, 24790.00 reached the trigger at 24800; accepted

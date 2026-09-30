@@ -1,0 +1,27 @@
+Before any fill:
+  no exits yet
+arm_exits for 20, parent protecting:
+  stop   BUY 20 SL at 1518.0 trigger 1515.0, acknowledged
+  target BUY 20 LIMIT at 1470.0 trigger None, acknowledged
+grow_exits to 35:
+  stop   BUY 35 SL at 1518.0 trigger 1515.0, acknowledged
+  target BUY 35 LIMIT at 1470.0 trigger None, acknowledged
+on_entry_update after 45 filled:
+  stop   BUY 45 SL at 1518.0 trigger 1515.0, acknowledged
+  target BUY 45 LIMIT at 1470.0 trigger None, acknowledged
+The stop filled 45; cancel_working_entry, the entry cancel confirmed, then on_exit_update:
+  stop   BUY 45 SL at 1518.0 trigger 1515.0, filled
+  target BUY 45 LIMIT at 1470.0 trigger None, acknowledged
+Parent: protecting
+Sent to the broker:
+  place SELL 50 LIMIT at 1500 -> 260930000001
+  place BUY 20 SL at 1518 trigger 1515 -> 260930000002
+  place BUY 20 LIMIT at 1470 -> 260930000003
+  modify 260930000002 quantity 35
+  modify 260930000003 quantity 35
+  modify 260930000002 quantity 45
+  modify 260930000003 quantity 45
+  cancel 260930000001
+  cancel 260930000003
+No stop_limit_price: HTTP 400, a stop needs stop_limit_price as well as stop_price: a stop-limit whose limit sits at its trigger will not fill when the price runs through it, which is what a stop is for
+Orders sent for it: 0

@@ -1,0 +1,10 @@
+Nothing configured, no table: None
+Caps read from text: {'zerodha': 3000, 'dhan': 1000}
+Configured caps: {'zerodha': 3000, 'dhan': 1000}
+Caps in force: {'zerodha': 2000, 'dhan': 1000}
+Zerodha cap: 2000, dhan cap: 1000, fyers cap: None
+Dhan after reserving a place: 1
+Dhan after the message was not sent: 0
+Keys in Redis after a message to fyers, which has no cap: ['unified:orders:daily_count:dhan']
+Bad caps text refused: A daily order cap must read broker=number: entry='zerodha:3000'
+Counts: {'refused': 0, 'caps': {'zerodha': 2000, 'dhan': 1000}}

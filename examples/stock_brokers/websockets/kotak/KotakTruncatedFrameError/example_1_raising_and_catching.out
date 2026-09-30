@@ -1,0 +1,2 @@
+Caught KotakTruncatedFrameError: frame of 5 bytes ended reading 12 at 1
+It is a ValueError: True

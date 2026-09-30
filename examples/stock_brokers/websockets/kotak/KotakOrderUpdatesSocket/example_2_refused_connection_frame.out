@@ -1,0 +1,18 @@
+Stand-in login number 1
+Connecting to wss://e21.kotaksecurities.com/realtime
+Sent: {type:cn,Authorization:kotak-token-1,Sid:kotak-sid-1,src:WEB}
+INFO Order updates socket opened. Waiting for Kotak's acknowledgement.
+ERROR Kotak refused the order update connection: Invalid session
+INFO Order updates socket closed with status 1000: normal closure
+WARNING Logging in to Kotak again.
+Stand-in login number 2
+WARNING Order updates socket disconnected. Reconnecting in 0 seconds.
+Connecting to wss://e21.kotaksecurities.com/realtime
+Sent: {type:cn,Authorization:kotak-token-2,Sid:kotak-sid-2,src:WEB}
+INFO Order updates socket opened. Waiting for Kotak's acknowledgement.
+INFO Order updates socket authenticated. Waiting for updates.
+Order 260925000012345 complete: B 10 of 10 INFY-EQ
+INFO Order updates socket closed with status 1000: normal closure
+INFO Order updates socket stopped.
+Gave up: False
+Logins made: 2

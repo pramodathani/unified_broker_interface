@@ -1,0 +1,5 @@
+Run: HTTP 200, outcome accepted, broker zerodha
+  freeze quantity 1800, slices 3, order ids ['260930000001', '260930000002', '260930000003']
+Sent to the broker: ['place BUY 1800 LIMIT at 84.50 -> 260930000001', 'place BUY 1800 LIMIT at 84.50 -> 260930000002', 'place BUY 1800 LIMIT at 84.50 -> 260930000003']
+Parent: working
+After every slice filled: completed, every order has finished, with 5400 traded

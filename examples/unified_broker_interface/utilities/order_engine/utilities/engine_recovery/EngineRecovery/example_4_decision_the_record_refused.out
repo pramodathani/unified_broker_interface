@@ -1,0 +1,6 @@
+[error] The decision about orphaned leg 99999999-8888-4777-8666-555555555555:1 could not be recorded, so the next start will decide it again.
+Writes tried: 1
+Leg: acknowledged, broker order id 26091500000021, parent sequence 3
+Now claimed: [('flattrade', '26091500000021')]
+Counts: {'parents': 1, 'open': 1, 'attributed': 1, 'abandoned': 0, 'missing': 0}
+Recorded on retry: orphan_attributed #3, leg acknowledged, order 26091500000021

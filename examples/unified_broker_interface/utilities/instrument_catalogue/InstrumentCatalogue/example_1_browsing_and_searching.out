@@ -1,0 +1,18 @@
+Mapping date 2026-09-30, counts from the cache: {'nse_equities': 2, 'nse_equity_index_futures': 1, 'nse_equity_index_options': 4}
+Exchanges: ['nse']
+  nse_equities: security, 2 instruments, identified by ['symbol']
+  nse_equity_index_futures: future, 1 instruments, identified by ['underlying_symbol', 'expiry_date']
+  nse_equity_index_options: option, 4 instruments, identified by ['underlying_symbol', 'expiry_date', 'strike_price', 'option_type']
+Every NSE instrument on 2026-09-30:
+  nse_equities INFY
+  nse_equities RELIANCE
+  nse_equity_index_futures NIFTY 2026-10-27
+  nse_equity_index_options BANKNIFTY 2026-10-27 55000.0 CE
+  nse_equity_index_options NIFTYNXT50 2026-10-27 70000.0 CE
+  nse_equity_index_options NIFTY 2026-10-27 25000.0 CE
+  nse_equity_index_options NIFTY 2026-10-27 25000.0 PE
+Search for nifty on 2026-09-30:
+  nse_equity_index_options NIFTY 2026-10-27 25000.0 CE
+  nse_equity_index_options NIFTY 2026-10-27 25000.0 PE
+  nse_equity_index_options NIFTYNXT50 2026-10-27 70000.0 CE
+  nse_equity_index_options BANKNIFTY 2026-10-27 55000.0 CE

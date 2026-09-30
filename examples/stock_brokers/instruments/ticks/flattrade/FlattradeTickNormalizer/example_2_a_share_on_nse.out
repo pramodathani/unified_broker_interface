@@ -1,0 +1,22 @@
+Token 'NSE|2885': broker_token='2885' order_symbol=None
+Volume on nse is reported in units, multiplier 1
+Close policy on nse: before
+Normalized, received before the close:
+  last_price: 1262.7
+  last_quantity: 15
+  average_price: 1263.84
+  volume: 1885670
+  buy_quantity: 402113
+  sell_quantity: 388921
+  open: 1266.4
+  high: 1267.4
+  low: 1261.5
+  reported_close: 1274.0
+  oi: None
+  oi_day_high: None
+  oi_day_low: None
+  last_trade_time: 1789450498.0
+  exchange_time: 1789450499.0
+  bids: [(1262.6, 120, 4), (1262.5, 340, 9)]
+  asks: [(1262.7, 95, 3), (1262.8, 210, 6)]
+reported_close when received after the close: None

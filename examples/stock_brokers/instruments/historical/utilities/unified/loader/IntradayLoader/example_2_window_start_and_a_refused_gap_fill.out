@@ -1,0 +1,12 @@
+window_start, one source grew forwards: 2026-09-22T15:15:00+05:30
+window_start, a new source: 1990-01-01T00:00:00+00:00
+window_start, a source grew backwards: 1990-01-01T00:00:00+00:00
+window_start, only a placeholder: 1990-01-01T00:00:00+00:00
+intraday_agreement with Wisdom Capital: 0.667 over 30 bars
+insert_bars by hand: insert from flattrade: start 2026-09-22T15:15:00+05:30, every 15 minutes, exchange bse, series ('BSE|500331|PIDILITIND', 51, 0, None, None)
+rebuild sent:
+  delete bars of PIDILITIND-BSE from 2026-09-22T15:15:00+05:30
+  insert from flattrade: start 2026-09-22T15:15:00+05:30, every 15 minutes, exchange bse, series ('BSE|500331|PIDILITIND', 51, 0, None, None)
+bars_deleted: 118
+bars_written: 125
+gap_fill_refused: 1

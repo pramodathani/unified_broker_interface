@@ -1,0 +1,8 @@
+Broker that refuses every token: False
+  refused (token expired refused); logging in once
+  375 candles for 738561
+  logins made: 1
+Broker that refuses every token: True
+  refused (token expired refused); logging in once
+  giving up and stopping the broker: token fresh-1 refused
+  logins made: 1

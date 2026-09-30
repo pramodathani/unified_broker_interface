@@ -1,0 +1,16 @@
+Request: GET https://api-t1.fyers.in/api/v3/profile
+Headers sent:
+    Content-Type: application/json
+    Authorization: XB1234ABCD-100:morning-token
+Status: success
+HTTP code: 200
+Data:
+{
+    "fy_id": "XD00001",
+    "name": "DEMO USER",
+    "email_id": "demo.user@example.com",
+    "totp": true,
+    "pwd_to_expire": 90,
+    "ddpi_enabled": false,
+    "mtf_enabled": false
+}

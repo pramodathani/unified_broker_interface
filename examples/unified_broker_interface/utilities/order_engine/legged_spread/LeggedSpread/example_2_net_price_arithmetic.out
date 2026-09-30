@@ -1,0 +1,6 @@
+signed(118.40, BUY): 118.40, signed(118.40, SELL): -118.40
+Net -30; with the sold leg at 118.40 the bought leg must be 88.40
+price_for after a fill at 118.40: 88.4
+price_for after a fill at 25.00: None
+No net_price: HTTP 400, a legged spread needs net_price, the net debit per unit it is aiming at
+Three candidates: HTTP 400, a legged spread has exactly two legs, the one to work first; 3 were given

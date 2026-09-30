@@ -1,0 +1,11 @@
+Run: HTTP 200, outcome accepted, resting at 999.95
+Following own_touch, 1 tick away, capped at 1001
+Bid 1000.2: moved True, resting at 1000.15
+Bid 1001.5: moved True, resting at 1001.0
+Bid 999.8: moved True, resting at 999.75
+Bid 999.8: moved False, resting at 999.75
+Sent to the broker:
+  place BUY 10 LIMIT at 999.95 -> 260930000001
+  modify 260930000001 price 1000.15
+  modify 260930000001 price 1001
+  modify 260930000001 price 999.75

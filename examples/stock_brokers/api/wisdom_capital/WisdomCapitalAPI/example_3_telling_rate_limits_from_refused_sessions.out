@@ -1,0 +1,12 @@
+HTTP 429 from the gateway:
+    rate limited=True session refused=False -> keep the token, it authenticated
+XTS rate limit code:
+    rate limited=True session refused=False -> keep the token, it authenticated
+XTS missing or expired token:
+    rate limited=False session refused=True -> log in again
+HTTP 401:
+    rate limited=False session refused=True -> log in again
+HTTP 502 gateway page:
+    rate limited=False session refused=False -> keep the token, the error says nothing about it
+dropped connection:
+    rate limited=False session refused=False -> keep the token, the error says nothing about it

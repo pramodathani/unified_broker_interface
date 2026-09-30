@@ -1,0 +1,14 @@
+Lookup for broker: dhan
+Token 1594: bse_equities GANESHHOU
+Token 1594: nse_equities INFY
+Token 11536: nse_equities TCS
+  counters: {'process_hits': 0, 'redis_hits': 0, 'postgres_hits': 2, 'misses': 0}
+Redis token hash: {'11536': '8f2b4d6a-0c1e-4a3b-8d5f-7a9c1e3b5d24', '1594': '6c4a2e08-1f3d-4b5a-9c7e-0d2f4a6c8e13,0a6e2d41-9c7f-4b58-8d13-6f2e4a9b7c05'}
+Identity lookup knows 0a6e2d41-9c7f-4b58-8d13-6f2e4a9b7c05: True
+Identity lookup knows 6c4a2e08-1f3d-4b5a-9c7e-0d2f4a6c8e13: True
+Identity lookup knows 8f2b4d6a-0c1e-4a3b-8d5f-7a9c1e3b5d24: True
+empty_entry: []
+read_from_postgres 11536: TCS
+write_to_redis: True
+read_from_redis 11536: TCS
+Postgres queries: 2

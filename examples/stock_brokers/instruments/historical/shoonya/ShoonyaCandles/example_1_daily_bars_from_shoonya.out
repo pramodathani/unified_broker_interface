@@ -1,0 +1,8 @@
+Broker: shoonya
+Host: https://api.shoonya.com/NorenWClientAPI
+Requests a second: 1.0
+Earliest date: 2021-01-01
+Requested https://api.shoonya.com/NorenWClientAPI/EODChartData
+  body: {'sym': 'NSE:RELIANCE-EQ', 'from': '1788719400', 'to': '1789151400'}
+  2026-09-10T00:00:00+05:30 open 1271.2 high 1276.0 low 1264.1 close 1267.0 volume 6120455 oi None
+  2026-09-11T00:00:00+05:30 open 1267.0 high 1267.4 low 1253.0 close 1257.5 volume 8777736 oi None

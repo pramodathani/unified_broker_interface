@@ -1,0 +1,11 @@
+zerodha limit per second: 1.0
+zerodha longer windows: [('unified:orders:rate:zerodha:minute', 60, 3)]
+fyers limit per second: 10
+fyers longer windows: []
+Sending two messages to zerodha:
+  First: allowed True
+  WARNING The order rate budget for zerodha was still full after 0.05 seconds, so a message was refused rather than sent late.
+  Second: allowed False
+Windows counted: ['unified:orders:rate:zerodha', 'unified:orders:rate:zerodha:minute']
+Counts: {'waited': 0, 'refused': 1}
+Misspelt setting refused: the rate limit 'zerodah=5' names no broker; brokers are dhan, zerodha

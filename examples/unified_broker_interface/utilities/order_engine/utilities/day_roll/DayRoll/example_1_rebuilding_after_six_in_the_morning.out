@@ -1,0 +1,9 @@
+Due at 2026-09-30T23:15:00+05:30: False
+Due at 2026-10-01T06:00:05+05:30: True
+Rolling:
+  Rebuilding P-20260928-0007 (armed)
+  Rebuilding P-20260930-0031 (filled)
+  INFO The day rolled over. Rebuilt 2 parents, 1 of them still open.
+Parents still open: 1
+Due again at 2026-10-01T06:00:05+05:30: False
+Rolls so far: 1

@@ -1,0 +1,45 @@
+Session headers: {'Accept': 'application/json', 'Authorization': 'Bearer example-groww-token', 'X-API-Version': '1.0'}
+Place:
+{
+  "json": {
+    "exchange": "NSE",
+    "order_reference_id": "breakou-<random>",
+    "order_type": "SL_M",
+    "price": 0.0,
+    "product": "CNC",
+    "quantity": 4,
+    "segment": "CASH",
+    "trading_symbol": "RELIANCE",
+    "transaction_type": "BUY",
+    "trigger_price": 2520.0,
+    "validity": "DAY"
+  },
+  "method": "POST",
+  "url": "https://api.groww.in/v1/order/create"
+}
+Tag answered to the caller: breakou-<random>, 20 characters
+Cancel:
+{
+  "json": {
+    "groww_order_id": "GMK39038RDVL",
+    "segment": "CASH"
+  },
+  "method": "POST",
+  "url": "https://api.groww.in/v1/order/cancel"
+}
+Modify LIMIT to MARKET:
+{
+  "json": {
+    "groww_order_id": "GMK39038RDVL",
+    "order_type": "MARKET",
+    "price": null,
+    "quantity": 10,
+    "segment": "CASH",
+    "trigger_price": null
+  },
+  "method": "POST",
+  "url": "https://api.groww.in/v1/order/modify"
+}
+Cancel with no stored segment: HTTP 503, Redis does not hold this Groww order's segment yet, so try again after Groww's next order book poll
+Stored exchange NSE matches: True
+Stored exchange BSE matches: False

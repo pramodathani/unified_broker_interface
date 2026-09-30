@@ -1,0 +1,10 @@
+MCX GOLD, three sources agree
+  market ('mcx', 'commodity'): size 100, confirmed, tradeable True
+NSE USDINR, one source disagrees
+  market ('nse', 'currency'): size None, conflict, tradeable False
+NSE USDINR, Stoxkart lists it twice
+  market ('nse', 'currency'): size None, conflict, tradeable False
+NCDEX DHANIYA, Stoxkart only
+  market ('ncdex', 'commodity'): size 5, single_source, tradeable True
+MCX ZINC, no source
+  market ('mcx', 'commodity'): size None, no_source, tradeable False

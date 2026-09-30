@@ -1,0 +1,16 @@
+place_many:
+  written: request_index=0 tag=held01 synthetic_type=virtual_limit
+  written: request_index=1 tag=now01 synthetic_type=simple
+  written: request_index=2 tag=slow01 synthetic_type=simple
+  [0] 200 accepted order_id=250930000000001 has intent_id=True
+  [1] 200 accepted order_id=250930000000002 has intent_id=True
+  [2] 504 unknown order_id=None has intent_id=True
+      the order engine did not answer within 5.0 seconds, so this may still happen; read its answer later by its intent_id
+command:
+  200 accepted zerodha 250930000000001 of parent 5b1f2c9e-3d4a-4e8b-9c1d-2a7f6e0b4c31
+  written: command=cancel_leg instrument_id=None synthetic_type=None
+command_many:
+  [0] 200 accepted order_id=250930000000002 has intent_id=True
+  [1] 200 accepted order_id=250930000000003 has intent_id=True
+collect_replies on a list filled by hand:
+  collected request indexes: [0, 1] of 3 owed

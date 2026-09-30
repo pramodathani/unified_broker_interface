@@ -1,0 +1,6 @@
+22222222-2222-5222-8222-000000000001: last price 1512.35, source cache
+22222222-2222-5222-8222-000000000002: last price 1381.2, source cache
+Redis round trips: 1
+Single quote for 22222222-2222-5222-8222-000000000002: last price 1381.2, source cache
+Redis round trips in all: 2
+Broker handles looked up: []

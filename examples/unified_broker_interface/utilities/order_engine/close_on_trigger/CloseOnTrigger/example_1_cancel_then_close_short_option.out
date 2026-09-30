@@ -1,0 +1,10 @@
+Run: HTTP 202, outcome armed, fires at_or_above 140
+Closes positions on the carry product
+Last 132.4: fired False
+Last 140.6: fired True
+Sent to the brokers, in order:
+  cancel 260930000501
+  cancel 52260930101
+  place BUY 150 LIMIT at 140.90 -> 260930000001
+Parent: working
+  140.60 reached the trigger at 140; 2 resting orders cancelled, then accepted closing 150

@@ -1,0 +1,16 @@
+Stand-in login number 1
+Connecting to wss://api-feed.dhan.co?version=2&token=dhan-token-1&clientId=1100012345&authType=2
+Sent: {"RequestCode": 21, "InstrumentCount": 2, "InstrumentList": [{"ExchangeSegment": "NSE_EQ", "SecurityId": "2885"}, {"ExchangeSegment": "NSE_EQ", "SecurityId": "1594"}]}
+INFO socket_0 opened and subscribed to 2 instrument(s).
+Tick NSE:RELIANCE (NSE_EQ:2885) on NSE_EQ in full mode
+  last_price=2950.5 last_trade_time=1790311528 volume=1204500
+  ohlc={'open': 2930.5, 'close': 2910.5, 'high': 2960.5, 'low': 2925.5} change=1.3743
+  oi=0
+  best bid={'quantity': 100, 'price': 2950.0, 'orders': 3} best offer={'quantity': 200, 'price': 2951.0, 'orders': 4}
+Tick NSE:INFY (NSE_EQ:1594) on NSE_EQ in ltp mode
+  last_price=1500.25 last_trade_time=1790311528 volume=None
+  ohlc={'open': None, 'high': None, 'low': None, 'close': None} change=None
+  oi=None
+INFO socket_0 closed with status 1000: normal closure
+INFO socket_0 stopped.
+Gave up: False

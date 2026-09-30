@@ -1,0 +1,8 @@
+Broker: fyers
+Orders per second: 8
+Orders per minute: 180
+Orders per hour: None
+Orders per day: 100000
+Brokerage for delivery: 0
+Brokerage for fno: 20
+Brokerage for intraday: 20

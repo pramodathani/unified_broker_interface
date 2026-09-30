@@ -1,0 +1,6 @@
+Markets where one source is enough: [('bse', 'currency'), ('ncdex', 'commodity')]
+Markets where siblings can confirm: [('mcx', 'commodity')]
+MCX NATURALGAS far-month option: single_source False -> sibling_confirmed True
+MCX index option after a lot revision: single_source False -> single_source False
+MCX option disagreeing with its siblings: single_source False -> single_source False
+NSE commodity future: single_source False -> single_source False

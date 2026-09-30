@@ -1,0 +1,3 @@
+Wrong token: 401 {"error": "Invalid access token"}
+No Redis copy: 200 [{"broker_name": "fyers", "sebi_registration": "INZ000000003"}]
+Nothing stored: 404 {"error": "Broker details not found"}

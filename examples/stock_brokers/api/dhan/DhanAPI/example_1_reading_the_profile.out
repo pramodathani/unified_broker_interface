@@ -1,0 +1,16 @@
+Request: GET https://api.dhan.co/v2/profile
+Headers sent:
+    Content-Type: application/json
+    access-token: morning-token
+Status: success
+HTTP code: 200
+Data:
+{
+    "dhanClientId": "1100000001",
+    "tokenValidity": "01/10/2026 07:00",
+    "activeSegment": "Equity, Derivative, Currency, Commodity",
+    "ddpi": "Active",
+    "mtf": "Active",
+    "dataPlan": "Active",
+    "dataValidity": "2026-10-15 23:59:59.0"
+}

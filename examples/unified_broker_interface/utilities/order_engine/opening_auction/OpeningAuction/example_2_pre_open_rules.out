@@ -1,0 +1,7 @@
+RELIANCE at 09:02: taken until 09:10:00, placed at 09:02:00
+Nifty future at 08:30: taken until 09:07:00, placed at 09:00:30
+Nifty option at 08:30: HTTP 400, nse_equity_index_options has no pre-open auction; a scheduled order at 09:15 is the nearest there is
+A stop-loss order: HTTP 400, the pre-open takes only LIMIT and MARKET orders, not SL
+An IOC order: HTTP 400, the pre-open does not take IOC orders
+RELIANCE at 09:12: HTTP 400, the pre-open stopped taking this order at 09:10:00, so it can no longer join today's opening auction; the next is on 2026-10-05
+at_time 09:12: HTTP 400, at_time must be from 09:00:00 and before 09:10:00, while the pre-open takes this order, not 09:12

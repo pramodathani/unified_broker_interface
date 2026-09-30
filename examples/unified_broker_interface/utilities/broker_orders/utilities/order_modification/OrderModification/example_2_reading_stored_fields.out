@@ -1,0 +1,11 @@
+After the change: order_type=SL, price=2500.0, trigger_price=2495, validity=None, product=None
+stored_text tradingsymbol: 'RELIANCE'
+stored_text price: None
+stored_optional_word product: None
+stored_word validity: UnmodifiableOrderError: the order has validity GTT, which the modify route does not handle
+stored_word product: OrderNotReadyError: Redis does not hold this order's product yet, so try again after the broker's next order book poll
+stored_quantity quantity: 10
+stored_quantity disclosed_quantity: 0
+merged_price trigger_price given by the caller: 2495
+merged_price price with nothing stored: OrderNotReadyError: Redis does not hold this SL order's price, so give price
+merged_price price for an order type that took none before: InvalidOrderError: a SL order needs a price

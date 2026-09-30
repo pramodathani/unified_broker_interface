@@ -1,0 +1,53 @@
+Requests sent: [{'symbol': 'NSE:SBIN-EQ', 'ohlcv_flag': '1'}]
+{
+    "id": "NSE:SBIN-EQ",
+    "broker": "fyers",
+    "instrument_token": "NSE:SBIN-EQ",
+    "exchange": "nse",
+    "mode": "full",
+    "last_price": 815.8,
+    "last_quantity": 25,
+    "average_price": 814.22,
+    "volume": 6021844,
+    "buy_quantity": 1204811,
+    "sell_quantity": 1739420,
+    "ohlc": {
+        "open": 812.0,
+        "high": 818.45,
+        "low": 809.1,
+        "close": 810.35
+    },
+    "change": 0.6725488986240429,
+    "oi": 0,
+    "oi_day_high": null,
+    "oi_day_low": null,
+    "last_trade_time": 1789446602,
+    "exchange_timestamp": null,
+    "depth": {
+        "buy": [
+            {
+                "price": 815.75,
+                "quantity": 412,
+                "orders": 9
+            },
+            {
+                "price": 815.7,
+                "quantity": 1880,
+                "orders": 21
+            }
+        ],
+        "sell": [
+            {
+                "price": 815.8,
+                "quantity": 95,
+                "orders": 2
+            },
+            {
+                "price": 815.85,
+                "quantity": 1310,
+                "orders": 17
+            }
+        ]
+    },
+    "received_at": 1789446605.0
+}

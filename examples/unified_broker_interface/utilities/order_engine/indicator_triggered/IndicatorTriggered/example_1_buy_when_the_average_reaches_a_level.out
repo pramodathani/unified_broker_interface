@@ -1,0 +1,6 @@
+Run: HTTP 202, outcome armed, the order is recorded and will be placed when the watched field crosses the level
+Watching average_price, resting at 3598.00 when it fires
+Last 3604.0, average 3591.2: fired False
+Last 3606.5, average 3600.4: fired True
+Sent to the broker: ['place BUY 30 LIMIT at 3598.00 -> 260930000001']
+Parent: working, 3600.40 reached the trigger at 3600; accepted

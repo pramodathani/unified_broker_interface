@@ -1,0 +1,17 @@
+Rows buffered per streaming read: 20000
+stream_identities: nse_equities INFY mapped on 2026-09-30
+stream_identities: nse_equity_index_futures NIFTY mapped on 2026-09-30
+stream_broker_tokens zerodha: 13238018 -> 7c1e9b20-4d3a-4f87-a6b5-0e2d9c8f1a44
+stream_broker_tokens zerodha: 408065 -> 0a6e2d41-9c7f-4b58-8d13-6f2e4a9b7c05
+stream_order_handles: 0a6e2d41-9c7f-4b58-8d13-6f2e4a9b7c05 dhan {'broker_token': '1594', 'order_symbol': None, 'lot_size': '1', 'tick_size': '0.10'}
+stream_order_handles: 0a6e2d41-9c7f-4b58-8d13-6f2e4a9b7c05 zerodha {'broker_token': '408065', 'order_symbol': 'INFY', 'lot_size': '1', 'tick_size': '0.10'}
+stream_order_handles: 7c1e9b20-4d3a-4f87-a6b5-0e2d9c8f1a44 zerodha {'broker_token': '13238018', 'order_symbol': 'NIFTY26OCTFUT', 'lot_size': '75', 'tick_size': '0.10'}
+stream_contract_sizes: 7c1e9b20-4d3a-4f87-a6b5-0e2d9c8f1a44 75 confirmed tradeable=True
+stream_underlyings: 7c1e9b20-4d3a-4f87-a6b5-0e2d9c8f1a44 is written on 2b9d4e6f-8a1c-4e35-b7d2-5f0a3c6e9b18
+stream_additional_attributes: 0a6e2d41-9c7f-4b58-8d13-6f2e4a9b7c05 dhan {'isin': 'INE009A01021', 'series': 'EQ'}
+stream_catalogue: 0a6e2d41-9c7f-4b58-8d13-6f2e4a9b7c05 seen 2024-01-02 to 2026-09-30
+stream_catalogue: 7c1e9b20-4d3a-4f87-a6b5-0e2d9c8f1a44 seen 2026-07-01 to 2026-09-30
+streaming_connection gives a StandInConnection
+Connections opened with streaming options: 8
+The options: {'stream_results': True, 'max_row_buffer': 20000}
+read_underlyings before the table exists: {}

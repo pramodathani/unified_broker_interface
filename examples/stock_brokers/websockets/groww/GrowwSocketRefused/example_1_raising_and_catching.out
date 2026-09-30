@@ -1,0 +1,2 @@
+Caught as a refused login: HTTP 403: {"message": "Forbidden"}
+Caught as GrowwSocketRefused, a subclass of Exception: True

@@ -1,0 +1,12 @@
+Run answered HTTP 200 accepted: parent working
+  entry BUY 60 LIMIT filled 0
+20 filled: parent protecting
+  entry BUY 60 LIMIT filled 20
+  stop  SELL 20 SL filled 0
+60 filled: parent protecting
+  entry BUY 60 LIMIT filled 60
+  stop  SELL 60 SL filled 0
+Sent to the broker:
+  place BUY 60 LIMIT at 820 -> 260930000001
+  place SELL 20 SL at 811 trigger 812 -> 260930000002
+  modify 260930000002 quantity 60

@@ -1,0 +1,15 @@
+Book read 90 seconds ago: abandoned, candidates=[]
+  the broker book was too old to attribute this order, so it may be live and unprotected
+Empty book: abandoned, candidates=[]
+  no order at the broker matches what was sent, so this order was probably never placed, but that is not certain
+Two identical orders: abandoned, candidates=['1102509300000001', '1102509300000002']
+  more than one order at the broker matches what was sent, so attributing one of them would be a guess
+Fresh after 60 seconds: True
+Fresh when never read: False
+Candidates with one claimed: ['1102509300000002']
+Abandoned by hand: {'outcome': 'abandoned', 'status_message': 'checked by a person', 'broker_order_id': None, 'candidates': []}
+moment of an IST time: 1790742900.0
+moment of rubbish: None
+text of an empty tag: None
+whole of "50": 50, of "fifty": None
+rounded of "801.50": 801.5, of None: None

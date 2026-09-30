@@ -1,0 +1,7 @@
+Stand-in login number 1
+Another process replaced shoonya-token-1.
+After log_in_again: shoonya-token-from-another-process
+WARNING Logging in to Shoonya again.
+Stand-in login number 2
+After log_in_again_without_checking: shoonya-token-2
+Logins made: 2

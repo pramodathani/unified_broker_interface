@@ -1,0 +1,14 @@
+indmoney: 2/3 raw row(s) classified, 1 uncategorised, 3 segment membership(s), 3 distinct instrument(s), 0 error(s).
+Security id to ISIN map: {'15542': 'IN0020160019', '26401': 'INF0R8F01034'}
+NSE exchange traded funds from other brokers: ['NIFTYBEES']
+Cross-broker queries that found nothing: 22
+Summary: matched 2, uncategorised 1, errors []
+DELETE FROM unified.broker_mappings
+INSERT INTO unified.instruments
+  nse_exchange_traded_funds: NIFTYBEES
+  nse_fixed_income: IN0020160019
+  nse_uncategorised: LIQUIDCASE
+INSERT INTO unified.broker_mappings
+  token 10576: NIFTYBEES, tick size 0.01
+  token 15542: 762GS2036, tick size 0.01
+  token 26401: LIQUIDCASE, tick size 1.0

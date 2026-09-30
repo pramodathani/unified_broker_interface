@@ -1,0 +1,16 @@
+Since 06:00 today:
+  2026-09-30T09:20:00+05:30 '9e07aa10-4c2b-4d1e-8f3a-7b6c5d4e3f21' #1 parent_received price=None
+  2026-09-30T09:21:00+05:30 '9e07aa10-4c2b-4d1e-8f3a-7b6c5d4e3f21' #2 leg_answered price=812.4
+  2026-09-30T09:30:00+05:30 'gtt-1' #2 parameters_changed price=None
+GTT orders since Monday:
+  2026-09-29T14:00:00+05:30 'gtt-1' #1 parent_received price=None
+  2026-09-30T09:30:00+05:30 'gtt-1' #2 parameters_changed price=None
+No types asked for: []
+json_ready(Decimal("1.2500")) = 1.25
+json_ready("text") = 'text'
+Write failed: server closed the connection unexpectedly
+Idle connections after the failure: 0
+Retried write committed, connections opened in all: 2
+Borrowed connection 2, idle left: 0
+Given back, idle now: 1
+Discarded connection 2: closed=True, idle now: 0

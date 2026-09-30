@@ -1,0 +1,4 @@
+/funds: 503 {"error": "Funds are not available: nothing is keeping unified:portfolio:funds"}
+/holdings: 503 {"as_of": "2026-09-14T15:30:00", "brokers": [{"broker": "zerodha", "status": "ok"}], "error": "Holdings are out of date: unified:portfolio:holdings was last written at 2026-09-14T15:30:00"}
+/positions: 502 {"brokers": [{"broker": "zerodha", "status": "missing"}, {"broker": "dhan", "status": "unreadable"}], "error": "Unable to retrieve positions information"}
+/funds without a token: 401 {"error": "Access token is required"}

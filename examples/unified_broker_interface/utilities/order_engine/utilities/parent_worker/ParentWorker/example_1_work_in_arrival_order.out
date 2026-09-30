@@ -1,0 +1,7 @@
+Worker: zerodha-1
+Load before starting: 3
+Stopped in time: True
+Load after stopping: 0
+parent-7: place the entry leg
+parent-7: apply the broker update
+parent-7: check the clock tick

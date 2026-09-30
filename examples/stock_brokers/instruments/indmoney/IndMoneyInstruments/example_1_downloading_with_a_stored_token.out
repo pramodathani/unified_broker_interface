@@ -1,0 +1,9 @@
+Requested source=equity with Authorization: indmoney-token-issued-today
+Requested source=fno with Authorization: indmoney-token-issued-today
+Requested source=index with Authorization: indmoney-token-issued-today
+Rows: 4
+  exch segment security_id instrument_name     trading_symbol lot_units tick_size series      symbol_name          isin
+0  NSE       E        1594          EQUITY               INFY         1       0.1     EQ  INFOSYS LIMITED  INE009A01021
+1  BSE       E      500209          EQUITY               INFY         1      0.05      A      INFOSYS LTD  INE009A01021
+2  NSE       D       52175          FUTIDX  NIFTY-Oct2026-FUT        75       0.1    NaN            NIFTY           NaN
+3  NSE       I          13           INDEX              NIFTY         1      0.05    NaN         NIFTY 50           NaN

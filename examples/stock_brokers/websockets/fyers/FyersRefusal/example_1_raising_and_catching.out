@@ -1,0 +1,3 @@
+Caught FyersRefusal(-16, 'Could not authenticate the user'): code=-16 message='Could not authenticate the user'
+Caught FyersRefusal(429, 'Too many requests'): code=429 message='Too many requests'
+Caught FyersRefusal(None, 'no symbol resolved to a topic'): code=None message='no symbol resolved to a topic'

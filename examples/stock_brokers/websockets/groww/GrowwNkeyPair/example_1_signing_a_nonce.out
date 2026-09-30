@@ -1,0 +1,4 @@
+Public key starts with U and has 56 characters
+Signature has 86 characters and no padding: True
+Verifies against the signed nonce: True
+Verifies against another nonce: False

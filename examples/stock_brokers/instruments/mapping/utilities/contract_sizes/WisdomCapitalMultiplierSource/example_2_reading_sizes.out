@@ -1,0 +1,8 @@
+crudeoil-future-oct: ['100']
+gold-future-dec: ['100']
+gold-future-oct: ['100']
+naturalgas-future-oct: ['1250']
+Broker queried: wisdom_capital
+Mapping date: 2026-09-28
+Segments: ['mcx_commodity_futures', 'mcx_commodity_options']
+Exchange labels: ['MCXFO', 'NSECO']

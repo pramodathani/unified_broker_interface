@@ -1,0 +1,9 @@
+Stand-in login number 1
+UserDetails called for flattrade-token-1: Ok
+User FT012345 was refused with flattrade-token-1
+WARNING Logging in to Flattrade again.
+Stand-in login number 2
+UserDetails called for flattrade-token-2: Ok
+Credentials now: ('FT012345', 'flattrade-token-2')
+Credentials after the second request: ('FT012345', 'flattrade-token-2')
+Logins made: 2

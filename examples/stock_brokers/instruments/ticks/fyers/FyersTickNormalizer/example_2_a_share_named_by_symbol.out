@@ -1,0 +1,22 @@
+Token 'NSE:SBIN-EQ': broker_token=None order_symbol='NSE:SBIN-EQ'
+Volume on nse is reported in units, multiplier 1
+Close policy on nse: always
+Normalized, received before the close:
+  last_price: 812.35
+  last_quantity: 40
+  average_price: 810.92
+  volume: 6320415
+  buy_quantity: 812640
+  sell_quantity: 790115
+  open: 806.0
+  high: 813.9
+  low: 805.2
+  reported_close: 804.55
+  oi: None
+  oi_day_high: None
+  oi_day_low: None
+  last_trade_time: 1789450498.0
+  exchange_time: 1789450499.0
+  bids: [(812.3, 1500, 12), (812.25, 820, 7), (812.2, 2300, 15), (812.15, 640, 5), (812.1, 1910, 11)]
+  asks: [(812.35, 700, 6), (812.4, 1340, 10), (812.45, 980, 8), (812.5, 4100, 21), (812.55, 560, 4)]
+reported_close when received after the close: 804.55

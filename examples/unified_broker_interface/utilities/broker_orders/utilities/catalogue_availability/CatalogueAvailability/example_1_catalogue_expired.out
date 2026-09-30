@@ -1,0 +1,6 @@
+Catalogue expired:
+  commands: ['GET unified:catalogue:current_date', 'EXISTS unified:catalogue:2026-09-29:identity']
+  HTTP 503: today's instrument catalogue is not published yet: the catalogue for 2026-09-29 has expired, and the daily mapping has not published a new one
+Catalogue present:
+  commands: ['GET unified:catalogue:current_date', 'EXISTS unified:catalogue:2026-09-30:identity']
+  HTTP 404: the instrument is not mapped

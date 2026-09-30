@@ -1,0 +1,12 @@
+Parsed from a request:
+  instrument_id 22222222-2222-5222-8222-00000000000a
+  exchange None, segment None, shape None
+  fields {}, name None
+Built by id:
+  instrument_id 22222222-2222-5222-8222-000000000001
+  exchange None, segment None, shape None
+  fields {}, name None
+Built by identity:
+  instrument_id None
+  exchange bse, segment bse_equities, shape security
+  fields {'symbol': 'RELIANCE'}, name RELIANCE

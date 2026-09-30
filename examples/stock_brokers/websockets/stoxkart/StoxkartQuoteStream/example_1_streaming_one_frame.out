@@ -1,0 +1,11 @@
+Connecting to wss://broadcasting-v2.stoxkart.com/
+Sent binary request with code 10 and 83 bytes
+Sent binary request with code 12 and 129 bytes
+Sent binary request with code 23 and 129 bytes
+INFO Connected to wss://broadcasting-v2.stoxkart.com/ and subscribed 1 instrument(s).
+Tick NSE:RELIANCE (NSE:2885): last_price=2950.5 volume=1204500 change=1.391753
+  ohlc={'open': 2930.0, 'high': 2960.0, 'low': 2925.0, 'close': 2910.0} buy_quantity=54000 sell_quantity=61000
+  last_trade_time=1790311528 exchange_timestamp=1790311529
+  best bid={'quantity': 100, 'price': 2950.0, 'orders': 3} best offer={'quantity': 200, 'price': 2950.5, 'orders': 4}
+INFO Stopped
+run returned 0

@@ -1,0 +1,7 @@
+changes: {'leg_state': 'cancelled'}
+after record: parent is cancelling, leg is cancelled, sequence 6
+after react with no placement: parent is cancelling
+after react with a placement: parent is cancelled
+saved copy: state cancelled, broker orders it owns {'kotak:260930000118742': '41d6b8a2-9e3f-4c75-a0b1-7f2e5d8c6a94'}
+event 6: leg_update leg_state=cancelled parent_state=cancelling status_message='Cancelled by user'
+event 7: parent_state_changed leg_state=None parent_state=cancelled status_message='every leg has now finished'

@@ -1,0 +1,10 @@
+Run: HTTP 200, outcome accepted, centred on 1000.00
+2 levels each side, 5 apart, at most 30 held
+  BUY  at 995.00: 260930000001 accepted
+  SELL at 1005.00: 260930000002 accepted
+  BUY  at 990.00: 260930000003 accepted
+  SELL at 1010.00: 260930000004 accepted
+level_order for a third sell: SELL 10 LIMIT at 1015.00
+BUY at 995.0 filled: inventory 10, placed place SELL 10 LIMIT at 1000.0 -> 260930000005
+SELL at 1000.0 filled: inventory 0, placed place BUY 10 LIMIT at 995.0 -> 260930000006
+Parent: working, rungs so far 6

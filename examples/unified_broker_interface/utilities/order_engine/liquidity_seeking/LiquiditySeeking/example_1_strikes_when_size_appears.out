@@ -1,0 +1,8 @@
+Run: HTTP 202, outcome armed, the order is recorded and will strike when 300 or more is showing at 52.00 or better
+Limit 52.00, strikes at 300 or more
+Book 1 [(51.8, 150), (52.5, 2000)]: struck False, placed so far 0
+Book 2 [(51.9, 200), (52.0, 250), (52.4, 500)]: struck True, placed so far 450
+Book 3 [(51.95, 700)]: struck True, placed so far 1000
+Book 4 [(51.9, 900)]: struck False, placed so far 1000
+Sent to the broker: ['place BUY 450 LIMIT at 52.00 -> 260930000001', 'place BUY 550 LIMIT at 52.00 -> 260930000002']
+Parent: working, 450 was showing at 52.00 or better, so 450 went for it

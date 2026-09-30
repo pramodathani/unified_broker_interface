@@ -1,0 +1,42 @@
+After-market place for M&M:
+{
+  "form": {
+    "actid": "FA00001",
+    "amo": "YES",
+    "dscqty": "0",
+    "exch": "NSE",
+    "ordersource": "API",
+    "prc": "0",
+    "prctyp": "MKT",
+    "prd": "C",
+    "qty": "7",
+    "ret": "DAY",
+    "trantype": "S",
+    "trgprc": "0",
+    "tsym": "M&M-EQ",
+    "uid": "FA00001"
+  },
+  "method": "POST",
+  "url": "https://api.shoonya.com/NorenWClientAPI/PlaceOrder"
+}
+Field problem for a new trigger: None
+Modify the stop-loss prices:
+{
+  "form": {
+    "actid": "FA00001",
+    "exch": "NSE",
+    "norenordno": "26091500099999",
+    "ordersource": "API",
+    "prc": "2488",
+    "prctyp": "SL-LMT",
+    "qty": "10",
+    "ret": "DAY",
+    "trgprc": "2493",
+    "tsym": "RELIANCE-EQ",
+    "uid": "FA00001"
+  },
+  "method": "POST",
+  "url": "https://api.shoonya.com/NorenWClientAPI/ModifyOrder"
+}
+Field problem for a change to MARKET: shoonya cannot change an order to MARKET
+Modify with no stored exchange: HTTP 503, Redis does not hold this order's exchange and trading symbol yet, so try again after the broker's next order book poll

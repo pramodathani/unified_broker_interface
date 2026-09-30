@@ -1,0 +1,4 @@
+warmers started for: ['zerodha']
+a ping reached the stand-in: True
+zerodha warmer running: True, failing: False
+zerodha warmer running after stop: False

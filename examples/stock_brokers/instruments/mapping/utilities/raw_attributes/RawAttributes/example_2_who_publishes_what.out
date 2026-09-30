@@ -1,0 +1,12 @@
+isin: ['dhan', 'kotak', 'groww', 'stoxkart', 'fyers', 'wisdom_capital', 'indmoney']
+freeze_quantity: ['dhan', 'kotak', 'groww', 'wisdom_capital', 'indmoney']
+buy_allowed: ['groww']
+clean(None) = None
+clean(<NA>) = None
+clean(nan) = None
+clean('   ') = None
+clean(' 1800 ') = '1800'
+clean(25) = '25'
+Columns for an unknown broker: {}
+Zerodha: {'display_name': 'INFOSYS', 'instrument_type': 'EQ'}
+Groww: {'isin': 'INE009A01021', 'display_name': 'Infosys', 'instrument_type': 'EQ', 'series': 'EQ', 'buy_allowed': '1', 'sell_allowed': '1'}

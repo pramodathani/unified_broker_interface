@@ -1,0 +1,11 @@
+Stand-in login number 1
+Connecting to wss://e21.kotaksecurities.com/realtime
+Sent: {type:cn,Authorization:kotak-token-1,Sid:kotak-sid-1,src:WEB}
+INFO Order updates socket opened. Waiting for Kotak's acknowledgement.
+INFO Order updates socket authenticated. Waiting for updates.
+Order 260925000012345 open: B 0 of 10 INFY-EQ
+Position INFY-EQ: bought 10 sold 0
+Order 260925000012345 complete: B 10 of 10 INFY-EQ
+INFO Order updates socket closed with status 1000: normal closure
+INFO Order updates socket stopped.
+Gave up: False

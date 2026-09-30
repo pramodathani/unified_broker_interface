@@ -1,0 +1,14 @@
+NSE|7001|INDIAGLYCO-BE: votes {'7001': {'INDIAGLYCO': 3}}
+  -> INDIAGLYCO active by exchange_token; exchange token 7001 mapped by 3 brokers
+NSE|10163|ORICONENT-BE: votes {'10163': {'ORICONENT-UNCATEGORISED': 1}}
+  -> ORICONENT active by raw_symbol; symbol ORICONENT
+NSE|20001|DUPL-BE: votes {}
+  -> None ambiguous by raw_symbol; symbol DUPL matches 2 instruments
+NSE|30001|GONE-BE: votes {}
+  -> None rejected by None; no mapping, exchange token or symbol match
+NFO|35003|NIFTY26SEPFUT: votes {}
+  -> None rejected by None; no mapping, exchange token or symbol match
+symbol_matches ORICONENT: ORICONENT in nse_equities
+symbol_matches ORICONENT: ORICONENT-UNCATEGORISED in nse_uncategorised
+instrument INDIAGLYCO: nse_equities seen 2026-08-12 to 2026-09-29
+resolution built by hand: INDIAGLYCO active by manual; set by hand

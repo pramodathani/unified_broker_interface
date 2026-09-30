@@ -1,0 +1,7 @@
+Stand-in login number 1
+Another process replaced kotak-sid-1.
+After log_in_again: ('kotak-token-1', 'kotak-sid-from-another-process')
+WARNING Logging in to Kotak again.
+Stand-in login number 2
+After log_in_again_without_checking: ('kotak-token-2', 'kotak-sid-2')
+Logins made: 2

@@ -1,0 +1,12 @@
+Place, accepted: accepted (HTTP 200), order id EQ-100072817, message None
+Place, refusal inside a success: rejected (HTTP 422), order id None, message insufficient margin
+Place, settled server error: rejected (HTTP 422), order id None, message invalid quantity
+Place, plain server error: unknown (HTTP 504), order id None, message something went wrong
+Cancel, accepted: accepted (HTTP 200), order id None, message None
+Cancel, refusal inside a success: rejected (HTTP 422), order id None, message order already executed
+Requests the stand-in received: ['POST https://api.indstocks.com/order', 'POST https://api.indstocks.com/order', 'POST https://api.indstocks.com/order', 'POST https://api.indstocks.com/order', 'POST https://api.indstocks.com/order/cancel', 'POST https://api.indstocks.com/order/cancel']
+read_order_id of the accepted body: EQ-100072817
+read_refusal of the refused body: insufficient margin
+read_refusal of a body with no status: None
+Insufficient_Funds settles a refusal: True
+internal_error settles a refusal: False

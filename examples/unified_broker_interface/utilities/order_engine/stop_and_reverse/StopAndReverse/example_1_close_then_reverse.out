@@ -1,0 +1,8 @@
+Run: HTTP 202, outcome armed, fires at_or_below 24900, method sequential
+Last 24950.0: fired False
+Last 24895.0: fired True
+The close filled: the close filled, so the reverse was accepted
+Sent to the broker, in order:
+  cancel 260930000901
+  place SELL 75 LIMIT at 24894.70 -> 260930000001
+  place SELL 75 LIMIT at 24894.70 -> 260930000002

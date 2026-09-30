@@ -1,0 +1,5 @@
+no candidates: refused with 400: this order type needs candidates, a list of the orders it is made of, each naming its instrument_id
+twenty-six candidates: refused with 400: this order type takes at most 25 candidates, not 26
+a candidate that is a string: refused with 400: candidate 1 must be an object, not str
+a candidate with no instrument: refused with 400: candidate 2 must name its instrument_id
+the same instrument twice: refused with 400: candidate 2 repeats instrument 11111111-1111-5111-8111-000000000001, and two orders on one instrument in the same group cannot be told apart afterwards

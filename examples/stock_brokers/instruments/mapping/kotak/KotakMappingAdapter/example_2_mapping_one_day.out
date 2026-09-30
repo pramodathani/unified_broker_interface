@@ -1,0 +1,13 @@
+kotak: 2/2 raw row(s) classified, 0 uncategorised, 3 segment membership(s), 3 distinct instrument(s), 0 error(s).
+BSE exchange traded funds from other brokers: ['DUALETF']
+Cross-broker queries that found nothing: 10
+Summary: raw rows 2, matched 2, memberships 3, instruments 3
+DELETE FROM unified.broker_mappings
+INSERT INTO unified.instruments
+  1ed7ce71 nse_equities: NBIFIN
+  7ce5b92e bse_exchange_traded_funds: DUALETF
+  b7ed1cc6 bse_equities: DUALETF
+INSERT INTO unified.broker_mappings
+  1ed7ce71 token 4749, tick size 0.01
+  7ce5b92e token 543999, tick size 0.01
+  b7ed1cc6 token 543999, tick size 0.01

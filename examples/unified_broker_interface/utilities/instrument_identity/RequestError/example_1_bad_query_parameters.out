@@ -1,0 +1,6 @@
+Nothing named: 400 give instrument_id, or exchange, segment and the identity fields
+Instrument id that is not a UUID: 400 instrument_id must be a UUID
+Unknown exchange: 400 exchange must be one of nse, bse, mcx, ncdex
+Option without a strike: 400 a option segment needs underlying_symbol, expiry_date, strike_price, option_type
+Option type that is not CE or PE: 400 option_type must be CE or PE
+Limit out of range: 400 limit must be between 1 and 200

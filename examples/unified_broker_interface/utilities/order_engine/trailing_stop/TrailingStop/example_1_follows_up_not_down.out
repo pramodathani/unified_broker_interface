@@ -1,0 +1,9 @@
+Run: HTTP 200, outcome accepted, parent protecting
+The stop trades SELL, starting at trigger 990.05 limit 988.05
+Last 1020.0: moved True, watermark 1020.00, stop trigger 1010.0 limit 1008.0
+Last 1040.0: moved True, watermark 1040.00, stop trigger 1030.0 limit 1028.0
+Last 1015.0: moved False, watermark 1040.00, stop trigger 1030.0 limit 1028.0
+Sent to the broker:
+  place SELL 10 SL at 988.05 trigger 990.05 -> 260930000001
+  modify 260930000001 price 1008.00 trigger 1010.00
+  modify 260930000001 price 1028.00 trigger 1030.00

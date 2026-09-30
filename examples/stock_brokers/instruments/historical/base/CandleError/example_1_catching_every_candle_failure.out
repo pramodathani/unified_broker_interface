@@ -1,0 +1,6 @@
+Caught CandleThrottled as CandleError: Too many requests
+Caught CandleAuthenticationError as CandleError: Incorrect `api_key` or `access_token`.
+Caught CandleBlocked as CandleError: error code: 1015
+Caught CandleInstrumentUnknown as CandleError: invalid token
+CandleError is an Exception: True
+Classes that inherit from CandleError directly: ['CandleThrottled', 'CandleAuthenticationError', 'CandleBlocked', 'CandleInstrumentUnknown']

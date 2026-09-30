@@ -1,0 +1,5 @@
+QuoteUnavailable: INDstocks has no quote segment for bse_equities
+QuoteUnavailable: INDstocks does not know scrip code NFO_99999999
+Requests sent: [{'scrip-codes': 'NFO_99999999'}]
+(403, 'The provided access_token is either incorrect, expired, or has been revoked. The user needs to re-authenticate.') -> log in again: True
+(500, 'Internal server error') -> log in again: False

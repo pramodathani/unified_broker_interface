@@ -1,0 +1,35 @@
+Session headers: {'X-Kite-Version': '3', 'Authorization': 'token example-api-key:example-zerodha-token'}
+After-market place:
+{
+  "form": {
+    "disclosed_quantity": 0,
+    "exchange": "NSE",
+    "market_protection": "-1",
+    "order_type": "MARKET",
+    "price": "0",
+    "product": "CNC",
+    "quantity": 5,
+    "tag": "longterm01",
+    "tradingsymbol": "RELIANCE",
+    "transaction_type": "BUY",
+    "trigger_price": "0",
+    "validity": "DAY"
+  },
+  "method": "POST",
+  "url": "https://api.kite.trade/orders/amo"
+}
+Cancel:
+{
+  "method": "DELETE",
+  "url": "https://api.kite.trade/orders/regular/MODSTOPLOSS"
+}
+Modify SL to SL-M:
+{
+  "form": {
+    "market_protection": "-1",
+    "order_type": "SL-M",
+    "trigger_price": "2495.0"
+  },
+  "method": "PUT",
+  "url": "https://api.kite.trade/orders/regular/MODSTOPLOSS"
+}

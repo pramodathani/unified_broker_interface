@@ -1,0 +1,6 @@
+Reduce-only asked for: True
+Held on MIS: 75
+Held on CNC: 20
+SELL 50: allowed
+SELL 100: refused with 409: the order is reduce-only, and 100 is more than the position of 75, so it would open the other way
+BUY 10: refused with 409: the order is reduce-only, and a BUY would add to the position of 75

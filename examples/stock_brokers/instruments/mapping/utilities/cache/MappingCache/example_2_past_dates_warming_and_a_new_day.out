@@ -1,0 +1,14 @@
+current_mapping_date with Redis never warmed: 2026-09-30
+resolves_to_current_date for 2026-09-23: None
+identities_for_tokens for 2026-09-23: ValueError: the cache covers only the current mapping date, not 2026-09-23
+warm loaded: {'instruments': 1, 'tokens': 2}
+  statistics after the warm: {'process_hits': 0, 'redis_hits': 0, 'postgres_hits': 3, 'misses': 0}
+Token 341249: HDFCBANK
+Token 408065: INFY
+Order handles for INFY: {'fyers': {'broker_token': 'NSE:INFY-EQ', 'order_symbol': 'NSE:INFY-EQ', 'lot_size': '1', 'tick_size': '0.10'}, 'zerodha': {'broker_token': '408065', 'order_symbol': 'INFY', 'lot_size': '1', 'tick_size': '0.10'}}
+  statistics after the look-ups: {'process_hits': 3, 'redis_hits': 0, 'postgres_hits': 3, 'misses': 0}
+  queries the look-ups sent: 0
+Before reset, still remembered: 2026-09-30
+statistics after reset: {'process_hits': 0, 'redis_hits': 0, 'postgres_hits': 0, 'misses': 0}
+After reset, read from Redis: 2026-10-01
+candidates_for_tokens for 2026-09-30: ValueError: the cache covers only the current mapping date, not 2026-09-30

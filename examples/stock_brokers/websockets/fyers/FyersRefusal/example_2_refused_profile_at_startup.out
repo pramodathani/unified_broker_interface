@@ -1,0 +1,4 @@
+Stand-in login number 1
+Profile refused for login 1
+The session could not start: code=-16
+Message: the profile was refused: {'s': 'error', 'code': -16, 'message': 'Could not authenticate the user'}

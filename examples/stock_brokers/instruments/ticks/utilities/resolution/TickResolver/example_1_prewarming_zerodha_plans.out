@@ -1,0 +1,11 @@
+LOG warning: zerodha token NSE:INFY did not resolve: unplaceable.
+LOG info: Mapping date is now 2026-09-15; instrument plans will be recompiled.
+LOG warning: zerodha 13238786 (nse_equity_index_futures): lot size 75 - brokers disagree: 75x2, 65x1.
+Prewarmed 3 of 4 subscribed tokens
+As of 2026-09-15, from mapping date 2026-09-15
+plan_for 738561: 11111111-1111-5111-8111-000000000102 nse_equities, session closes trading at 55800 seconds
+zerodha 738561: security on nse, lot 1, volume multiplier 1, close policy always
+zerodha 5720583: future on mcx, lot 100, volume multiplier 100, close policy always
+zerodha 13238786: future on nse, lot 75, volume multiplier 1, close policy always
+Notes: {('zerodha', 13238786): 'brokers disagree: 75x2, 65x1'}
+Unresolved: {('zerodha', 'NSE:INFY', 'unplaceable'): 1}

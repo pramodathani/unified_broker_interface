@@ -1,0 +1,13 @@
+shoonya: 2/3 raw row(s) classified, 1 uncategorised, 3 segment membership(s), 3 distinct instrument(s), 0 error(s).
+Token to ISIN map: {'15542': 'IN0020160019'}
+Cross-broker queries that found nothing: 34
+Summary: matched 2, uncategorised 1, errors []
+DELETE FROM unified.broker_mappings
+INSERT INTO unified.instruments
+  nse_equities: TCS
+  nse_fixed_income: IN0020160019
+  nse_uncategorised: 845NCD29-N1
+INSERT INTO unified.broker_mappings
+  token 11536: order symbol TCS-EQ
+  token 15542: order symbol 762GS2036-GS
+  token 19011: order symbol 845NCD29-N1

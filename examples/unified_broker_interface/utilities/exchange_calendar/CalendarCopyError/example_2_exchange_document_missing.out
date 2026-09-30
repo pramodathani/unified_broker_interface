@@ -1,0 +1,9 @@
+Exchanges with a document: ['nse', 'bse', 'mcx', 'ncdex']
+  nse    holidays: equity 20, currency 24, commodity 21; special sessions: 1
+  bse    holidays: equity 16, currency 20, commodity 17; special sessions: 1
+  mcx    holidays: commodity 16; special sessions: 1
+  ncdex  holidays: commodity 20; special sessions: 1
+  documents updated: ['nse', 'bse', 'mcx', 'ncdex']
+Exchanges with a document: ['nse', 'bse']
+  CalendarCopyError: exchange_details has no document for: mcx, ncdex; import the exports first
+  documents updated: []

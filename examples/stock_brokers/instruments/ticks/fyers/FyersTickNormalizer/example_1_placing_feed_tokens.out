@@ -1,0 +1,7 @@
+Broker: fyers
+'NSE:SBIN-EQ' -> broker_token=None order_symbol='NSE:SBIN-EQ' segments=6 starting with nse_equities
+'NSE:NIFTY50-INDEX' -> broker_token=None order_symbol='NSE:NIFTY50-INDEX' segments=4 starting with nse_equity_indices
+'NSE:NIFTY26SEPFUT' -> broker_token=None order_symbol='NSE:NIFTY26SEPFUT' segments=12 starting with nse_fixed_income_futures
+'MCX:CRUDEOIL26OCTFUT' -> broker_token=None order_symbol='MCX:CRUDEOIL26OCTFUT' segments=12 starting with mcx_fixed_income_futures
+'LSE:VOD' -> None
+'NSE:' -> None

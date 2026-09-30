@@ -1,0 +1,34 @@
+order: BUY 10 LIMIT at 1415.5, tag swing01
+mapping date 2026-09-30, warm warm-0930-a
+brokers with a login: ['dhan']
+instrument INFY on nse_equities, handles for ['dhan', 'zerodha'], selector replies [], round trips 1
+the same instrument again costs 0 round trips
+chosen: dhan
+skipped: [{'broker': 'zerodha', 'reason': 'has no login in Redis'}]
+dry run: 200 {
+  "method": "POST",
+  "url": "https://api.dhan.co/v2/orders",
+  "json": {
+    "dhanClientId": "1100000001",
+    "transactionType": "BUY",
+    "exchangeSegment": "NSE_EQ",
+    "productType": "CNC",
+    "orderType": "LIMIT",
+    "validity": "DAY",
+    "securityId": "1594",
+    "quantity": 10,
+    "disclosedQuantity": 0,
+    "price": 1415.5,
+    "triggerPrice": 0.0,
+    "afterMarketOrder": false,
+    "correlationId": "swing01"
+  }
+}
+requests sent by the dry run: 0
+sent: 200 outcome=accepted order_id=112509300004417 tag=swing01
+broker_response: {'orderId': '112509300004417', 'orderStatus': 'PENDING'}
+timing keys: ['broker', 'preparation']
+requests Dhan received: 1, POST https://api.dhan.co/v2/orders
+decode of an object: {'price': 1415.5}
+decode of a list: None
+decode of nothing: None

@@ -1,0 +1,23 @@
+A new intent:
+  zerodha-1 runs place_on_worker
+  answered 200, parents owned: ['zerodha-1']
+An intent whose caller stopped waiting:
+  answered 409 on intake, workers: ['zerodha']
+An intent handed straight to a worker in the Dhan lane:
+  answered 200, sent: [('zerodha', 'SELL', 3), ('dhan', 'SELL', 3)]
+  assignment afterwards: None
+Order updates:
+  routed for parent bracket-7 at zerodha:
+  zerodha-1 runs apply_update
+  bracket-7 is protecting; the stranger was acknowledged without a worker
+A held update whose order is now known:
+  routed for parent bracket-7 at zerodha:
+  zerodha-1 runs apply_replayed_update
+  replayed: 1
+A change found in the polled order book:
+  routed for parent bracket-7 at zerodha:
+  zerodha-1 runs apply_reconciled_update
+  bracket-7 is completed
+The day rolls over:
+  rolls 1, owners remembered: 0
+  with busy workers: rolls 1

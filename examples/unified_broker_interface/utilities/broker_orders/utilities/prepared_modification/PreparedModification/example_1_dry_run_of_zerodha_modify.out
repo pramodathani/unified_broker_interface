@@ -1,0 +1,18 @@
+HTTP 200
+{
+  "broker": "zerodha",
+  "dry_run": true,
+  "instrument_id": "11111111-1111-5111-8111-000000000001",
+  "order_id": "MODSTOPLOSS",
+  "request": {
+    "form": {
+      "order_type": "SL",
+      "price": "2490.0",
+      "trigger_price": "2492.5"
+    },
+    "method": "PUT",
+    "url": "https://api.kite.trade/orders/regular/MODSTOPLOSS"
+  },
+  "status_before_modify": "TRIGGER PENDING"
+}
+Timings reported: ['preparation']

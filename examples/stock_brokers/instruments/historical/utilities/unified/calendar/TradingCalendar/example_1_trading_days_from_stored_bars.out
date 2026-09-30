@@ -1,0 +1,8 @@
+NSE trading days: ['2026-01-27', '2026-01-28', '2026-01-29', '2026-01-30', '2026-02-01', '2026-02-02', '2026-02-03', '2026-02-04']
+Queries after the first read: 2, connection closed True
+2026-01-31 (Saturday): traded False
+2026-02-01 (Sunday): traded True
+2026-02-03 (Tuesday): traded True
+2026-02-05 (Thursday): traded False
+Queries after asking again: 2
+Calling load directly reads afresh: 8 days, queries now 4

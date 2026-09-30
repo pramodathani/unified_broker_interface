@@ -1,0 +1,23 @@
+Selector: lowest_cost
+Rotation: ['stoxkart', 'zerodha', 'groww', 'shoonya', 'flattrade', 'dhan']
+Delivery order in INFY: category delivery, 1 command queued reading 20 keys
+  zerodha: fee 0, saves 0 on other categories
+  dhan: fee 0, saves 0 on other categories
+  shoonya: fee 0, saves 30 on other categories
+  flattrade: fee 0, saves 40 on other categories
+  groww: fee 20, saves 0 on other categories
+  stoxkart: no row in the cost table
+Intraday order in INFY: category intraday, 1 command queued reading 20 keys
+  flattrade: fee 0, saves 40 on other categories
+  shoonya: fee 5, saves 35 on other categories
+  groww: fee 20, saves 0 on other categories
+  zerodha: fee 20, saves 20 on other categories
+  dhan: fee 20, saves 20 on other categories
+  stoxkart: no row in the cost table
+NIFTY option: category fno, 1 command queued reading 20 keys
+  flattrade: fee 0, saves 40 on other categories
+  shoonya: fee 5, saves 35 on other categories
+  groww: fee 20, saves 0 on other categories
+  zerodha: fee 20, saves 20 on other categories
+  dhan: fee 20, saves 20 on other categories
+  stoxkart: no row in the cost table

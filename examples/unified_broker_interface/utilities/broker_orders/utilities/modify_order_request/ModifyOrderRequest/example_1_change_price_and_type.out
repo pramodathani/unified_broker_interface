@@ -1,0 +1,10 @@
+Order 250930000000001, broker None, dry run True
+Changed fields: ['price', 'trigger_price', 'order_type']
+order_type=SL, price=2490, trigger_price=2495
+  changes quantity: False
+  changes disclosed_quantity: False
+  changes price: True
+  changes trigger_price: True
+  changes order_type: True
+  changes validity: False
+Empty validity reads as: None

@@ -1,0 +1,9 @@
+Rotation: ['dhan', 'groww', 'indmoney', 'kotak']
+Refusing: ['groww']
+Order 1: ranked ['groww', 'indmoney', 'kotak', 'dhan']
+  chosen indmoney after passing over 1; counter now 2
+Order 2: ranked ['kotak', 'dhan', 'groww', 'indmoney']
+  chosen kotak after passing over 0; counter now 3
+Order 3: ranked ['dhan', 'groww', 'indmoney', 'kotak']
+  chosen dhan after passing over 0; counter now 4
+INCRBY commands sent by record_passed_over: [('incrby', 'unified:orders:round_robin', 1)]

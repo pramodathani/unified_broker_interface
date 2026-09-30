@@ -1,0 +1,14 @@
+fyers: 3/3 raw row(s) classified, 0 uncategorised, 3 segment membership(s), 3 distinct instrument(s), 0 error(s).
+NSE investment trusts from other brokers: ['EMBASSY']
+Index name lookup: {'NIFTYIT': 'NIFTY IT'}
+Cross-broker queries that found nothing: 12
+Summary: matched 3, uncategorised 0, errors []
+DELETE FROM unified.broker_mappings
+INSERT INTO unified.instruments
+  nse_investment_trusts: EMBASSY
+  nse_equities: RELIANCE
+  nse_equity_indices: NIFTY IT
+INSERT INTO unified.broker_mappings
+  token 10100000009383: broker symbol 'EMBASSY OFFICE PARKS REIT', order symbol 'NSE:EMBASSY-RR'
+  token 10100000002885: broker symbol 'RELIANCE INDUSTRIES LTD', order symbol 'NSE:RELIANCE-EQ'
+  token 101000000026008: broker symbol 'NIFTY IT', order symbol 'NSE:NIFTYIT-INDEX'

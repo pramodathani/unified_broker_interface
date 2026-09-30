@@ -1,0 +1,9 @@
+Selector: alphabetical
+Brokers in the cost table: 0
+Redis commands queued: 0
+Rotation: ['zerodha', 'kotak', 'fyers', 'dhan']
+Ranked: ['dhan', 'fyers', 'kotak', 'zerodha']
+dhan refuses the order
+Chosen: fyers after passing over 1
+Commands on the pipeline: []
+Commands sent to Redis afterwards: []

@@ -1,0 +1,13 @@
+Stand-in login number 1
+UserDetails called for flattrade-token-1: Ok
+Connecting to wss://piconnect.flattrade.in/PiConnectWSTp/
+Sent: {"t": "a", "uid": "FT012345", "actid": "FT012345", "source": "API", "accesstoken": "flattrade-token-1"}
+INFO Order updates socket opened. Authenticating.
+Sent: {"t": "o", "actid": "FT012345"}
+INFO Authenticated and subscribed to order updates. Waiting for order updates.
+Callback received 2 update(s)
+  Order 26092500012345 OPEN: S 0 of 5 TCS-EQ
+  Order 26092500012345 COMPLETE: S 5 of 5 TCS-EQ
+INFO Order updates socket closed with status 1000: normal closure
+INFO Order updates socket stopped.
+Gave up: False

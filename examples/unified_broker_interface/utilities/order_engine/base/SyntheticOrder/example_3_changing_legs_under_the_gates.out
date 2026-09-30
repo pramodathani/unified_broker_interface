@@ -1,0 +1,19 @@
+moves_the_price to 1000.00: False, to 999.50: True
+reprice_leg to 999.50: True
+reprice_leg again at once: False; following the bid; not sent: this order was moved less than 2.0 seconds ago
+allowed_to_reprice for the stop: True
+has_room_today with the cap nearly used: entry False, stop True
+take_rate_token with the budget empty: False; reducing; not sent: the order rate budget for zerodha is full this second
+reduce_leg to 6: True, entry now 6
+release_daily_place: places given back 1
+outside_change_problem for the stop: None
+apply_outside_modification of the stop trigger to 992: accepted, trigger now 992.0
+record_parameters: parameters_changed with {'caller_note': 'stop tightened'}
+modify_held: HTTP 409, a simple order holds no order of its own to change; change its legs with broker and order_id
+Messages counted as sent by the gates: 2
+Sent to the broker, in order:
+  place BUY 10 LIMIT at 1000.00 -> 260930000001
+  place SELL 10 SL at 988.00 trigger 990.00 -> 260930000002
+  modify 260930000001 price 999.50
+  modify 260930000001 quantity 6
+  modify 260930000002 trigger 992.00

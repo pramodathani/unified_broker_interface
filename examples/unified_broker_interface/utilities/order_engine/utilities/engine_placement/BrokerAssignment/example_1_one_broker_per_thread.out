@@ -1,0 +1,3 @@
+worker for dhan: started with (None, []), read back dhan and skipped [{'broker': 'zerodha', 'reason': 'has no login in Redis'}]
+worker for zerodha: started with (None, []), read back zerodha and skipped []
+main thread still reads: fyers and skipped []

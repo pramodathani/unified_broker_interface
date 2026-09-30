@@ -1,0 +1,5 @@
+Saved: {"leg_id": "p-9e07:3", "role": "stop", "instrument_id": "NSE:SBIN", "state": "rejected", "broker": "dhan", "broker_order_id": null, "exchange_order_id": null, "tag_sent": null, "identifier_sent": null, "transaction_type": "SELL", "product": "INTRADAY", "order_type": "SL-M", "validity": "DAY", "quantity": 50, "filled_quantity": 0, "price": null, "trigger_price": 801.5, "average_price": null, "outcome": "rejected", "status_message": "Trigger price is above the last traded price", "requested_at": null, "answered_at": null}
+Rebuilt matches: True
+Rebuilt: role=stop state=rejected finished=True
+Older record: role=entry state=sent live=True
+Extra field kept: False

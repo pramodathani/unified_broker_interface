@@ -1,0 +1,21 @@
+write_identities: True
+write_token_candidates: True
+write_order_handles: True
+write_fields wrote 7 fields in all
+write_current_date: True
+A warm identifier was written: True
+read_current_date: datetime.date(2026, 9, 30)
+read_segment_counts: {'nse_equity_index_futures': 1, 'nse_equity_indices': 1}
+read_identities: nse_equity_index_futures NIFTY expiring 2026-10-27
+read_identities: nse_equity_indices NIFTY 50 expiring None
+read_token_identifiers: {'13238018': ['7c1e9b20-4d3a-4f87-a6b5-0e2d9c8f1a44']}
+read_order_handles for the future: {'zerodha': {'broker_token': '13238018', 'order_symbol': 'NIFTY26OCTFUT', 'lot_size': '75', 'tick_size': '0.1'}, 'dhan': {'broker_token': '52168', 'order_symbol': None, 'lot_size': '75', 'tick_size': '0.1'}}
+Instruments with order handles: 1
+read_seen: {'7c1e9b20-4d3a-4f87-a6b5-0e2d9c8f1a44': (datetime.date(2026, 7, 1), datetime.date(2026, 9, 30)), '2b9d4e6f-8a1c-4e35-b7d2-5f0a3c6e9b18': (datetime.date(2024, 1, 2), datetime.date(2026, 9, 30))}
+read_underlyings: {'7c1e9b20-4d3a-4f87-a6b5-0e2d9c8f1a44': '2b9d4e6f-8a1c-4e35-b7d2-5f0a3c6e9b18'}
+read_seen_and_underlyings: 2 seen, 1 underlying
+read_additional_attributes: {'7c1e9b20-4d3a-4f87-a6b5-0e2d9c8f1a44': {'dhan': {'freeze_quantity': '1800'}}}
+has_additional_attributes today: True
+has_additional_attributes yesterday: False
+read_segment_counts yesterday: None
+Expiry set on the seen hash: 3600 seconds

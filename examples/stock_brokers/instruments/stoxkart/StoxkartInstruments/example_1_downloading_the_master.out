@@ -1,0 +1,10 @@
+Files read:
+    https://openapi.stoxkart.com/scrip-master/csv
+Rows: 4
+Columns: ['Exchange', 'Market Segment Id', 'Token', 'Symbol', 'Symbol Description', 'Series', 'Instrument Type', 'Option Type', 'Expiry Date', 'Lot Size', 'Strike Price', 'ISIN Code', 'Tick Size']
+First six columns:
+  Exchange Market Segment Id   Token Symbol        Symbol Description Series
+0      NSE                 1    1594   INFY           INFOSYS LIMITED     EQ
+1      NSE                 1   11536    TCS  TATA CONSULTANCY SERV LT     EQ
+2      BSE                 3  500209   INFY               INFOSYS LTD      A
+3      NFO                 2   52175  NIFTY       NIFTY 27OCT2026 FUT    NaN

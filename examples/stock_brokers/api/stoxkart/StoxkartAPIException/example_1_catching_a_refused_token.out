@@ -1,0 +1,4 @@
+Stoxkart answers HTTP 401 with: {"code": "AuthorizationError", "message": "Invalid Session"}
+Caught: StoxkartAPIException
+code: AuthorizationError
+message: Invalid Session

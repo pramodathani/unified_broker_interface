@@ -1,0 +1,11 @@
+read_rows found: ['dhan', 'zerodha']; the table still holds 0 rows
+WARNING unified.broker_order_costs has no row for groww, so its configured rate limits apply and the lowest-cost selector offers it orders only after every broker that has a row.
+After start: ['dhan', 'zerodha'], reload thread running: True
+INFO Reloaded the broker cost table: 2 brokers.
+Reload with the database up: True
+ERROR The broker cost table could not be reloaded, so yesterday's costs and limits stay in use.
+Reload with the database down: False
+Rows kept: ['dhan', 'zerodha']
+Loading an empty table raised ValueError: unified.broker_order_costs is empty; apply the mapping DDL to seed it
+Reload thread running after stop: False
+reload_every_day returned at once, because stop is set

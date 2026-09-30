@@ -1,0 +1,7 @@
+Stand-in login number 1
+Market data session: {'access_token': 'market-data-token-1', 'user_id': 'WCMD01'}
+WARNING Replacing the Wisdom Capital market data token.
+Stand-in market data login issued market-data-token-2
+WARNING Replacing the Wisdom Capital market data token.
+The market data token was already replaced; no login.
+Market data session: {'access_token': 'market-data-token-2', 'user_id': 'WCMD01'}

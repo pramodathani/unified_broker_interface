@@ -1,0 +1,7 @@
+738561: exchange nse, 6 segments starting nse_equities, exchange token 2885
+256265: exchange None, 8 segments starting nse_equity_indices, exchange token None
+738560: exchange None, any segment, exchange token None
+Exchange token inside 738561: 2885
+Day bars read: 1 of 2
+Day bar time: 2026-09-11T00:00:00+05:30, close 1257.5, open interest None
+Refused as CandleInstrumentUnknown: ('InputException', 'invalid token')

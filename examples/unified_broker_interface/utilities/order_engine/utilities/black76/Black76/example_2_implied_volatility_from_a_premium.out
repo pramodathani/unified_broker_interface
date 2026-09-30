@@ -1,0 +1,6 @@
+Premium at 14.00% volatility: 897.75
+Implied volatility of that premium: 14.00%
+Implied volatility of a 812.40 premium: 12.36%
+Delta at that volatility: -0.5646
+Implied volatility of a 250.00 premium: None
+ValueError: Black-76 needs a forward, strike and time above zero, not forward=55200.0, strike=55500.0, years=0.0

@@ -1,0 +1,12 @@
+Key missing
+  broker_profiles(): None
+  200 {"broker_profiles": null, "user_details": [{"user_name": "Example Account Holder"}]}
+Key unreadable
+  broker_profiles(): None
+  200 {"broker_profiles": null, "user_details": [{"user_name": "Example Account Holder"}]}
+Key holds a list
+  broker_profiles(): None
+  200 {"broker_profiles": null, "user_details": [{"user_name": "Example Account Holder"}]}
+No documents and no broker profile
+  broker_profiles(): {'zerodha': None}
+  404 {"error": "User profile not found"}
