@@ -15,3 +15,9 @@ A dry run shows the plan as it would run. With only the `simple` preset there ar
 ## Stage 2a: trigger, side and pricing
 
 The part now holds a trigger, a side and a pricing rule. It builds its order from a copy of the body: the side is set first (`protect` flips the body's side), then the pricing sets the order type and prices, and only then is `concrete_order` called, so references in the body are still resolved. `start` from stage 1 became `place`, and `PlanOrder` decides when to place; the part answers `is_triggered` and never records its own state.
+
+## Stage 2b: parts under a join
+
+A part now has a lifecycle a join drives: `start` with a target, `send` when a waiting part's tick comes, `settle` to mark it done, `traded`, `set_target` to resize or cancel its resting order, and `cancel_rest`. A broker order's quantity is its total, filled part included, so `set_target` changes a resting order to its filled quantity plus what is still wanted. A leg the broker has not acknowledged has no `broker_order_id` and is left alone; the next settle tries again.
+
+`keeps_tag` is true only for the plan's main order, the root order or the first plan of a root Then join, followed down first children. Exits and children drop the caller's tag, as `ExitLegs.exit_order` and `OneTriggersOther.child_order` do today.

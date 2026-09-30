@@ -2538,7 +2538,7 @@ class OrderEngineSuite:
             self.plan_result(
                 'a_plan_with_a_join_is_refused_as_not_built_yet',
                 {
-                    'then': {},
+                    'together': {},
                 },
                 [],
                 accepted,
@@ -2602,6 +2602,7 @@ class OrderEngineSuite:
             answer,
             positions=positions,
             restart_between_ticks=restart_between_ticks,
+            book_every_order=True,
         )
         stored = self.fake_redis.hashes.get('unified:orders:parents', {})
         parts = []
@@ -2904,6 +2905,261 @@ class OrderEngineSuite:
                     {'quote': steady, 'at': 0},
                 ],
                 accepted,
+            ),
+        ]
+
+    def run_plan_join_checks(self):
+        """Runs plans that join orders with Then and Either, through fills and price ticks.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        numbered = dict(
+            self.scenarios.answers.json_answer(
+                200,
+                self.scenarios.answers.place_success('flattrade'),
+            ),
+            number_orders=True,
+        )
+        steady = self.book_at(1000.00, 1000.05)
+        touched = self.book_at(994.90, 994.95)
+        bracket = {
+            'bracket': {
+                'stop_price': 990,
+                'stop_limit_price': 988,
+                'target_price': 1010,
+            },
+        }
+        oco = {
+            'oco': {
+                'stop_price': 990,
+                'stop_limit_price': 988,
+                'target_price': 1010,
+            },
+        }
+        hidden_with_backstop = {
+            'hidden_stop': {
+                'trigger_price': 995,
+                'backstop_price': 980,
+                'backstop_limit_price': 978,
+            },
+        }
+        return [
+            self.plan_price_result(
+                'a_plan_bracket_grows_its_exits_and_takes_only_new_fills_off_the_stop',
+                {
+                    'order': {
+                        'presets': [
+                            bracket,
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'OPEN', 4)]},
+                    {'quote': steady, 'at': 2, 'updates': [self.update('26091500000101', 'COMPLETE', 10)]},
+                    {'quote': steady, 'at': 3, 'updates': [self.update('26091500000103', 'OPEN', 3)]},
+                    {'quote': steady, 'at': 4, 'updates': [self.update('26091500000103', 'OPEN', 7)]},
+                    {'quote': steady, 'at': 5, 'updates': [self.update('26091500000103', 'COMPLETE', 10)]},
+                    {'quote': steady, 'at': 6, 'updates': [self.update('26091500000102', 'CANCELLED', 0)]},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_bracket_behaves_the_same_with_a_restart_between_fills',
+                {
+                    'order': {
+                        'presets': [
+                            bracket,
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'OPEN', 4)]},
+                    {'quote': steady, 'at': 2, 'updates': [self.update('26091500000101', 'COMPLETE', 10)]},
+                    {'quote': steady, 'at': 3, 'updates': [self.update('26091500000103', 'OPEN', 3)]},
+                    {'quote': steady, 'at': 4, 'updates': [self.update('26091500000103', 'OPEN', 7)]},
+                    {'quote': steady, 'at': 5, 'updates': [self.update('26091500000103', 'COMPLETE', 10)]},
+                    {'quote': steady, 'at': 6, 'updates': [self.update('26091500000102', 'CANCELLED', 0)]},
+                ],
+                numbered,
+                restart_between_ticks=True,
+            ),
+            self.plan_price_result(
+                'a_plan_bracket_exit_filling_cancels_the_rest_of_the_entry',
+                {
+                    'order': {
+                        'presets': [
+                            bracket,
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'OPEN', 4)]},
+                    {'quote': steady, 'at': 2, 'updates': [self.update('26091500000103', 'OPEN', 2)]},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_oco_protects_a_held_position_and_reduces_the_sibling',
+                {
+                    'order': {
+                        'presets': [
+                            oco,
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000102', 'OPEN', 3)]},
+                    {'quote': steady, 'at': 2, 'updates': [self.update('26091500000102', 'OPEN', 7)]},
+                ],
+                numbered,
+                positions=10,
+            ),
+            self.plan_price_result(
+                'a_plan_oco_with_nothing_held_is_refused',
+                {
+                    'order': {
+                        'presets': [
+                            oco,
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_cover_places_its_stop_once_the_entry_fills',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'cover': {
+                                    'stop_price': 990,
+                                    'stop_limit_price': 988,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'COMPLETE', 10)]},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_oto_places_its_then_order_sized_to_the_fill',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'oto': {
+                                    'then': {
+                                        'transaction_type': 'SELL',
+                                        'price': 1010,
+                                    },
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'OPEN', 6)]},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_hidden_stop_cancels_its_backstop_before_it_exits',
+                {
+                    'order': {
+                        'presets': [
+                            hidden_with_backstop,
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': touched, 'at': 1},
+                ],
+                numbered,
+                positions=10,
+            ),
+            self.plan_price_result(
+                'a_plan_hidden_stop_whose_backstop_fills_stops_watching',
+                {
+                    'order': {
+                        'presets': [
+                            hidden_with_backstop,
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'COMPLETE', 10)]},
+                    {'quote': touched, 'at': 2},
+                ],
+                numbered,
+                positions=10,
+            ),
+            self.plan_price_result(
+                'a_plan_market_if_touched_entry_with_a_bracket_around_it',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'market_if_touched': {
+                                    'trigger_price': 995,
+                                },
+                            },
+                            bracket,
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': touched, 'at': 1},
+                    {'quote': touched, 'at': 2, 'updates': [self.update('26091500000101', 'COMPLETE', 10)]},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_reduce_join_over_a_join_and_two_join_presets_are_refused',
+                {
+                    'either': {
+                        'sibling_rule': 'reduce',
+                        'children': [
+                            {
+                                'order': {
+                                    'presets': [
+                                        bracket,
+                                        oco,
+                                    ],
+                                },
+                            },
+                            {
+                                'then': {
+                                    'first': {
+                                        'order': {},
+                                    },
+                                    'each_fill': {
+                                        'order': {},
+                                    },
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                numbered,
             ),
         ]
 
@@ -3582,6 +3838,7 @@ class OrderEngineSuite:
         daily_caps=None,
         daily_sent=None,
         resting=None,
+        book_every_order=False,
     ):
         """Places one watching order, then walks it through a sequence of quotes.
 
@@ -3600,6 +3857,7 @@ class OrderEngineSuite:
             daily_caps (dict | None): Each capped broker's daily cap, or None for no daily order count.
             daily_sent (dict | None): Each broker's order messages already sent today, written before the order is placed.
             resting (list | None): Flattrade order ids of open RELIANCE orders placed outside the engine, for a type that cancels what is resting.
+            book_every_order (bool): Whether every order placed on a tick is also put into the broker's book before the next tick, so the order type can change or cancel it, as it can in life.
 
         Returns:
             dict: The recorded result.
@@ -3707,6 +3965,15 @@ class OrderEngineSuite:
             step_at = started + step.get('at', 0)
             time.time = lambda: step_at
             try:
+                if book_every_order:
+                    for number in range(1, self.network.placed + 1):
+                        numbered = str(26091500000100 + number)
+                        if numbered not in book:
+                            book[numbered] = self.broker_book_entry(
+                                numbered,
+                                status='OPEN',
+                                **(book_overrides or {}),
+                            )
                 self.seed_quote(step.get('quote'))
                 self.seed_other_quotes(step)
                 if step.get('funds') is not None:
@@ -6474,6 +6741,7 @@ class OrderEngineSuite:
             results.extend(self.run_reaction_checks())
             results.extend(self.run_plan_checks())
             results.extend(self.run_plan_trigger_checks())
+            results.extend(self.run_plan_join_checks())
             results.extend(self.run_clock_checks())
             results.extend(self.run_price_checks())
             results.extend(self.run_wiring_checks())

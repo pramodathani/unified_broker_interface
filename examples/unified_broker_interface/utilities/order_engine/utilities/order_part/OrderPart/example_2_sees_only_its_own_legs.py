@@ -68,6 +68,18 @@ class StandInPlanOrder:
         """
         return MarketView(quotes.get(instrument_id or 'reliance'), decimal.Decimal('0.05'))
 
+    def part_record(self, path):
+        """The part's record, which is empty, since no join has set a target here.
+
+        Args:
+            path (str): The part's path.
+
+        Returns:
+            dict: An empty record.
+        """
+        del path
+        return {}
+
     def read_order(self, body):
         """Answers with the body itself, standing in for a validated order.
 

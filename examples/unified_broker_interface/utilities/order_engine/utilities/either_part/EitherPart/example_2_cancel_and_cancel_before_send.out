@@ -1,0 +1,5 @@
+Started before anything: False
+Target filled 4: requests [('cancel', 'root.children.0')], stop record {'state': 'done', 'reason': 'cancelled'}
+Started before anything: False
+Clearing the stop's siblings: True, requests [('cancel', 'root.children.1')]
+Stopping everything: True, requests [('cancel', 'root.children.1'), ('cancel', 'root.children.0')], done True

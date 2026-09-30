@@ -54,7 +54,7 @@ class SettingsAPresetDoesNotTakeExample:
         self.show('scheduled', {})
         self.show('market_if_touched', {'trigger_price': 995, 'trigger_on': 'close'})
         self.show('indicator_triggered', {'watch_field': 'vwap', 'trigger_price': 1000, 'limit_price': 1000})
-        self.show('hidden_stop', {'trigger_price': 990, 'backstop_price': 980})
+        self.show('hidden_stop', {'trigger_price': 990, 'trigger_on': 'bid'})
 
 
 if __name__ == '__main__':

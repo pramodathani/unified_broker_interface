@@ -1,0 +1,5 @@
+on_complete, entry 6 of 10: child started False
+on_complete, entry done: requests [('place', 'root.on_complete', 'SELL', 10, 'LIMIT', '1010')]
+on_complete, cancelled unfilled: requests [('change', 'root.first', 5), ('cancel', 'root.first')], done True
+cancel_first_on_child_fill: requests [('place', 'root.each_fill', 'SELL', 4, 'LIMIT', '1010'), ('cancel', 'root.first')]
+Messages: ["the plan's root.first part is working", "the plan's root.each_fill part is working"]

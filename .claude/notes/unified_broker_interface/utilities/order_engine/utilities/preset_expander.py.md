@@ -11,3 +11,7 @@ A caller moving from `{"type": "market_if_touched", "trigger_price": 995}` to a 
 ## Why the hidden stop's backstop is refused for now
 
 The backstop is a second order resting beside the engine-side stop, cancelled before the exit is sent. That needs the Either join with `cancel_before_send`, which is step 2b, so `backstop_price` is reported as a setting the preset does not take yet.
+
+## Stage 2b: presets that stand for joins
+
+`expand_join` returns a whole plan tree written as a caller would write it. Bracket and cover set `cancel_first_on_child_fill`, OCO is an Either that reduces with no main order, OTO maps its `then` body onto a child order's side and pricing (only `transaction_type`, `order_type`, `price` and `trigger_price` so far; other body fields are refused as `not_built`), and a hidden stop with a backstop is an Either that cancels, with `cancel_before_send`. The hidden stop's backstop was refused as an unknown setting in stage 2a and is now how the join is recognised.

@@ -33,7 +33,31 @@ PRESET_NAMES = (
     'indicator_triggered',
     'cross_instrument',
     'hidden_stop',
+    'oto',
+    'oco',
+    'bracket',
+    'cover',
 )
+JOIN_PRESET_NAMES = (
+    'oto',
+    'oco',
+    'bracket',
+    'cover',
+)
+BACKSTOP_SETTINGS = (
+    'backstop_price',
+    'backstop_limit_price',
+)
+OTO_SETTINGS = (
+    'transaction_type',
+    'order_type',
+    'price',
+    'trigger_price',
+)
+OTO_SIDES = {
+    'BUY': 'buy',
+    'SELL': 'sell',
+}
 
 
 class PresetExpander:
@@ -78,6 +102,311 @@ class PresetExpander:
         if name == 'cross_instrument':
             return self._cross_instrument(settings, path)
         return self._hidden_stop(settings, path)
+
+    def is_join(self, name, settings):
+        """Whether a preset stands for a join of several orders rather than for one order's slot values.
+
+        Args:
+            name (str): The preset's name.
+            settings (dict): The preset's settings.
+
+        Returns:
+            bool: True for `oto`, `oco`, `bracket`, `cover`, and a `hidden_stop` with a backstop.
+        """
+        if name in JOIN_PRESET_NAMES:
+            return True
+        if name == 'hidden_stop':
+            for setting in BACKSTOP_SETTINGS:
+                if setting in settings:
+                    return True
+        return False
+
+    def expand_join(self, name, settings, entry, path):
+        """The plan tree a join preset stands for, built around the rest of the order it was named in.
+
+        The rest of the order, its other presets and its own slot values, is the join's main order: the entry of a bracket, a cover or an OTO, and the engine-side stop of a hidden stop with a backstop. An OCO has no main order, so it cannot be named beside anything else.
+
+        Args:
+            name (str): The preset's name, for which `is_join` is True.
+            settings (dict): The preset's settings.
+            entry (dict): The order it was named in, without this preset.
+            path (str): The preset's path in the plan, for problems.
+
+        Returns:
+            dict: The plan node, as a caller would write it; empty when there are problems.
+        """
+        self.problems = []
+        if name == 'oto':
+            return self._oto(settings, entry, path)
+        if name == 'oco':
+            return self._oco(settings, entry, path)
+        if name == 'bracket':
+            return self._bracket(settings, entry, path)
+        if name == 'cover':
+            return self._cover(settings, entry, path)
+        return self._hidden_stop_with_backstop(settings, entry, path)
+
+    def _oto(self, settings, entry, path):
+        """Places the entry, and once it fills places the `then` order, sized to what filled and growing with it.
+
+        Args:
+            settings (dict): `then`, an order body without a quantity.
+            entry (dict): The order it was named in.
+            path (str): The preset's path.
+
+        Returns:
+            dict: A Then join.
+        """
+        self._refuse_unknown(settings, ('then',), path, 'oto')
+        described = settings.get('then')
+        if not isinstance(described, dict):
+            self._add_problem(
+                path,
+                'missing_setting',
+                'the oto preset needs then, the order to place once the first one fills',
+            )
+            return {}
+        child = {}
+        for setting in described:
+            if setting not in OTO_SETTINGS:
+                self._add_problem(
+                    path,
+                    'not_built',
+                    f'an oto preset\'s then takes {", ".join(OTO_SETTINGS)} so far, not {setting!r}',
+                )
+        side = described.get('transaction_type')
+        if side is not None:
+            if side not in OTO_SIDES:
+                self._add_problem(
+                    path,
+                    'bad_setting',
+                    f'then.transaction_type must be BUY or SELL, not {side!r}',
+                )
+            else:
+                child['side'] = OTO_SIDES[side]
+        order_type = described.get('order_type')
+        if order_type == 'SL':
+            child['pricing'] = [
+                {
+                    'native_stop': {
+                        'trigger_price': described.get('trigger_price'),
+                        'limit_price': described.get('price'),
+                    },
+                },
+            ]
+        elif order_type == 'MARKET':
+            child['pricing'] = [
+                {
+                    'fixed': {
+                        'order_type': 'MARKET',
+                    },
+                },
+            ]
+        elif 'price' in described:
+            child['pricing'] = [
+                {
+                    'fixed': {
+                        'price': described['price'],
+                    },
+                },
+            ]
+        return {
+            'then': {
+                'first': {
+                    'order': entry,
+                },
+                'each_fill': {
+                    'order': child,
+                },
+            },
+        }
+
+    def _oco(self, settings, entry, path):
+        """A stop and a target on a position already held, each shrinking as the other fills.
+
+        Args:
+            settings (dict): `stop_price` and `stop_limit_price`, `target_price`, or both.
+            entry (dict): The order it was named in, which must hold nothing else.
+            path (str): The preset's path.
+
+        Returns:
+            dict: The exits, as an Either join that reduces, or one order when only one exit is named.
+        """
+        self._refuse_unknown(settings, ('stop_price', 'stop_limit_price', 'target_price'), path, 'oco')
+        if entry:
+            self._add_problem(
+                path,
+                'nothing_to_merge_into',
+                'the oco preset protects a position already held, so it has no order of its own for other presets or slot values to change',
+            )
+        return self._exits(settings, path, 'oco')
+
+    def _bracket(self, settings, entry, path):
+        """The entry, and once it fills, a stop and a target sized to what filled, each shrinking as the other fills.
+
+        Args:
+            settings (dict): `stop_price` and `stop_limit_price`, `target_price`, or both.
+            entry (dict): The order it was named in.
+            path (str): The preset's path.
+
+        Returns:
+            dict: A Then join whose child is the exits.
+        """
+        self._refuse_unknown(settings, ('stop_price', 'stop_limit_price', 'target_price'), path, 'bracket')
+        exits = self._exits(settings, path, 'bracket')
+        return {
+            'then': {
+                'first': {
+                    'order': entry,
+                },
+                'each_fill': exits,
+                'cancel_first_on_child_fill': True,
+            },
+        }
+
+    def _cover(self, settings, entry, path):
+        """The entry, and once it fills, a stop sized to what filled.
+
+        Args:
+            settings (dict): `stop_price` and `stop_limit_price`, both required.
+            entry (dict): The order it was named in.
+            path (str): The preset's path.
+
+        Returns:
+            dict: A Then join whose child is the stop.
+        """
+        self._refuse_unknown(settings, ('stop_price', 'stop_limit_price'), path, 'cover')
+        if 'stop_price' not in settings:
+            self._add_problem(
+                path,
+                'missing_setting',
+                'the cover preset needs stop_price and stop_limit_price, because a cover order always carries a stop',
+            )
+        exits = self._exits(settings, path, 'cover')
+        return {
+            'then': {
+                'first': {
+                    'order': entry,
+                },
+                'each_fill': exits,
+                'cancel_first_on_child_fill': True,
+            },
+        }
+
+    def _hidden_stop_with_backstop(self, settings, entry, path):
+        """The engine-side stop with a native backstop resting further away, where whichever acts first stops the other.
+
+        Args:
+            settings (dict): The hidden stop's settings with `backstop_price` and `backstop_limit_price`.
+            entry (dict): The order it was named in.
+            path (str): The preset's path.
+
+        Returns:
+            dict: An Either join that cancels, whose engine-side stop cancels the backstop before it is sent.
+        """
+        for setting in BACKSTOP_SETTINGS:
+            if setting not in settings:
+                self._add_problem(
+                    path,
+                    'missing_setting',
+                    'a hidden stop\'s backstop needs both backstop_price and backstop_limit_price',
+                )
+                return {}
+        stop_settings = {}
+        for setting, value in settings.items():
+            if setting not in BACKSTOP_SETTINGS:
+                stop_settings[setting] = value
+        stop = dict(entry)
+        stop['presets'] = list(entry.get('presets') or []) + [
+            {
+                'hidden_stop': stop_settings,
+            },
+        ]
+        return {
+            'either': {
+                'sibling_rule': 'cancel',
+                'cancel_before_send': True,
+                'children': [
+                    {
+                        'order': stop,
+                    },
+                    {
+                        'order': {
+                            'side': 'protect',
+                            'pricing': [
+                                {
+                                    'native_stop': {
+                                        'trigger_price': settings['backstop_price'],
+                                        'limit_price': settings['backstop_limit_price'],
+                                    },
+                                },
+                            ],
+                        },
+                    },
+                ],
+            },
+        }
+
+    def _exits(self, settings, path, name):
+        """The stop and target a bracket, a cover or an OCO protects a position with.
+
+        Args:
+            settings (dict): `stop_price` and `stop_limit_price`, `target_price`, or both.
+            path (str): The preset's path.
+            name (str): The preset's name, for the message.
+
+        Returns:
+            dict: One order, or an Either join that reduces when there are two.
+        """
+        exits = []
+        if 'stop_price' in settings:
+            if 'stop_limit_price' not in settings:
+                self._add_problem(
+                    path,
+                    'missing_setting',
+                    'a stop needs stop_limit_price as well as stop_price: a stop-limit whose limit sits at its trigger will not fill when the price runs through it',
+                )
+            exits.append({
+                'order': {
+                    'side': 'protect',
+                    'pricing': [
+                        {
+                            'native_stop': {
+                                'trigger_price': settings['stop_price'],
+                                'limit_price': settings.get('stop_limit_price'),
+                            },
+                        },
+                    ],
+                },
+            })
+        if 'target_price' in settings:
+            exits.append({
+                'order': {
+                    'side': 'protect',
+                    'pricing': [
+                        {
+                            'fixed': {
+                                'price': settings['target_price'],
+                            },
+                        },
+                    ],
+                },
+            })
+        if not exits:
+            self._add_problem(
+                path,
+                'missing_setting',
+                f'the {name} preset needs a stop_price, a target_price, or both',
+            )
+            return {}
+        if len(exits) == 1:
+            return exits[0]
+        return {
+            'either': {
+                'sibling_rule': 'reduce',
+                'children': exits,
+            },
+        }
 
     def _simple(self, settings, path):
         """The simple preset, which has no slot values of its own.

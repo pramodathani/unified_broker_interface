@@ -149,7 +149,7 @@ The master table below lists every type registered in `SYNTHETIC_ORDER_CLASSES`,
 | `scale_with_profit_taker` | Plain and laddered | A ladder whose every filled rung gets its own profit-taker, and is placed again once that profit is taken. | `from_price`, `to_price`, `steps`, `profit_points`, `most_cycles` | 200 |
 | `two_sided_quote` | Plain and laddered | A bid and an offer kept around the fair price, leaning away from the inventory they build. | `half_spread_points`, `skew_ticks`, `most_inventory` | 200 |
 | `account_conditional` | Price triggers | Sends an order when free margin, the day's profit or the open position count reaches a level, or cancels it then. | `account_field`, `account_level`, `trigger_direction`, `action` | 202, or 200 with `action: cancel` |
-| `plan` | Plans | An order described as a plan of parts; so far one order that may wait for a trigger, protect a position and be priced by one pricing rule. | `plan` | 200, or 202 with a trigger |
+| `plan` | Plans | An order described as a plan of parts: orders that may wait for a trigger, protect a position and be priced by one pricing rule, joined with then and either. | `plan` | 200, or 202 when nothing is placed at once |
 
 The chart below counts how many of the 54 types fall into each family. The families are this page's own grouping, chosen to make the list easier to scan; the code does not group them.
 
@@ -1171,13 +1171,13 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
 === "Plans"
 
-    A plan describes an order as a tree of parts rather than naming one of the fixed types. It is the start of the composable synthetic orders, which will let any number of the other types be combined in one order. So far a plan holds one order, which can wait for a trigger, protect a position and be priced by one pricing rule, built from presets or written out as slot values. The joins, such as `then` and `either`, come in a later stage, and naming one is refused as not built yet.
+    A plan describes an order as a tree of parts rather than naming one of the fixed types. It is the start of the composable synthetic orders, which will let any number of the other types be combined in one order. A plan's orders can wait for a trigger, protect a position and be priced by one pricing rule, built from presets or written out as slot values, and they can be joined with `then` and `either`. The other joins in the design, `together`, `using`, `repeat` and `sequence`, come in later stages, and naming one is refused as not built yet.
 
     #### `plan`
 
     A plan order reads and checks the whole of `plan` before anything is recorded or sent. A plan with any problem is refused with <span class="status s4">400</span>, and the answer lists every problem found, not just the first, each with the `path` of the part it is in, the `rule` it breaks and a `message`. A dry run answers with the broker request the order would be sent as and the plan as it would run in `plan`, with every slot's value or default written out.
 
-    Each node of the plan is an object holding exactly one key, and `order` is the only node so far. The order itself is the rest of the body: its instrument, side, quantity, product and validity. An order in a plan takes these settings:
+    Each node of the plan is an object holding exactly one key: `order`, `then` or `either`. An order's instrument, side, quantity, product and validity are the rest of the body; an order inside a join is sized by the join. An order in a plan takes these settings:
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
@@ -1208,12 +1208,25 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | Preset | Stands for |
     |---|---|
     | `simple` | Nothing: the order as the body describes it. |
+    | `bracket` | A Then join: the order, then a `native_stop` stop and a `fixed` target that reduce each other, sized to each fill; an exit filling cancels the rest of the entry. Takes `stop_price`, `stop_limit_price` and `target_price`. |
+    | `cover` | A Then join: the order, then a `native_stop` stop sized to each fill. Takes `stop_price` and `stop_limit_price`, both required. |
+    | `oco` | An Either join that reduces: a stop and a target protecting a position already held. It has no order of its own, so it cannot be named beside other presets or slot values. |
+    | `oto` | A Then join: the order, then the `then` order sized to each fill. `then` takes `transaction_type`, `order_type` (`LIMIT`, `MARKET` or `SL`), `price` and `trigger_price` so far. |
     | `market_if_touched` | A `price_crosses` trigger at `trigger_price` and `marketable` pricing. Takes `trigger_price`, `trigger_direction`, `trigger_on`, `hold_seconds` and `buffer_ticks`. |
     | `limit_if_touched` | A `price_crosses` trigger and `fixed` pricing at `limit_price`. |
     | `scheduled` | A `time_at` trigger at `at_time`. |
     | `indicator_triggered` | A `price_crosses` trigger on the quote field `watch_field` and `fixed` pricing at `limit_price`. |
     | `cross_instrument` | A `price_crosses` trigger on `watch_instrument_id` and `fixed` pricing at `limit_price`. |
-    | `hidden_stop` | The `protect` side, a `price_crosses` trigger on the opposite touch and `marketable` pricing. The backstop is not built yet. |
+    | `hidden_stop` | The `protect` side, a `price_crosses` trigger on the opposite touch and `marketable` pricing. With `backstop_price` and `backstop_limit_price`, an Either join that cancels: the engine-side stop beside a native backstop, where the stop cancels the backstop before it is sent and a backstop fill stops the engine-side stop. |
+
+    The joins relate whole plans:
+
+    | Join | Settings | What it does |
+    |---|---|---|
+    | `then` | `first`, and exactly one of `each_fill` or `on_complete`; `cancel_first_on_child_fill`, default false | Starts the child once the first plan fills anything, sized to what has filled, and resizes it as more fills. With `on_complete`, waits until the first plan is done. With `cancel_first_on_child_fill`, a fill on the child cancels whatever of the first plan is still working. |
+    | `either` | `children`, two or more plans; `sibling_rule`, `cancel` or `reduce`; `cancel_before_send`, default false | Runs the children at once. With `cancel`, the first child to fill cancels the others. With `reduce`, the children share one quantity and each is kept at that quantity less what its siblings have filled, so each child must be a single order. With `cancel_before_send`, a child whose trigger holds cancels its siblings' resting orders before it is sent. |
+
+    A join preset stands for a whole join built around the rest of the order it is named in, so `[{"market_if_touched": {"trigger_price": 995}}, {"bracket": {...}}]` is a bracket whose entry waits for 995. An order can name only one join preset.
 
     Presets and the order's own slot values are merged in order, presets first. Triggers from several sources are joined with `all`, so naming `scheduled` and `market_if_touched` waits until after the time and until the price is touched. A later pricing rule replaces an earlier one, and the answer carries a `warnings` entry saying so. Two different sides are refused.
 
@@ -1221,9 +1234,9 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     {"type": "plan", "plan": {"order": {"presets": [{"scheduled": {"at_time": "10:00"}}, {"market_if_touched": {"trigger_price": 995}}]}}}
     ```
 
-    An order with a trigger answers <span class="status s2">202</span> with `outcome: armed` and places nothing. The engine checks it on every price tick and places the order once, on the first tick its trigger holds. An order that protects a position is refused with <span class="status s4">409</span> and the rule `protect_needs_position` when no position is held on the body's side, because it would open one.
+    A plan that places nothing at once answers <span class="status s2">202</span> with `outcome: armed`. A plan whose root is one order placed at once answers with that order's broker answer, and any other plan answers with `legs`, one entry per order placed, each with its `path`. The engine checks every waiting order on every price tick and places it once, on the first tick its trigger holds. After every order update the whole plan is settled: each join brings its children in line with the fills as they are now, which is what keeps a second partial fill from being taken off an exit twice. An order that protects a position on its own, rather than one a `then` join's first plan opened, is refused with <span class="status s4">409</span> and the rule `protect_needs_position` when no position is held on the body's side, because it would open one.
 
-    Each part of the plan has a path, starting at `root`. Every broker order a part places carries its path as its `leg_role`, and each part's state is kept in the parent's `parameters.parts` under its path: `state` (`waiting`, `working` or `done`), once done its `reason` (`filled`, `partly_filled`, `refused` or `cancelled`), `memory`, what its trigger remembers between ticks, and `fired_at`. The parent ends when the root part is done: `completed` when anything traded, `cancelled` when nothing did, and `rejected` when the broker refused the order. [`GET /api/orders/parents`](orders.md#the-engines-parents) shows the parts with the rest of the parent.
+    Each part of the plan has a path, starting at `root`: a `then` join's plans are at `root.first` and `root.each_fill`, and an `either` join's at `root.children.0` and so on. Every broker order a part places carries its path as its `leg_role`, and each part's state is kept in the parent's `parameters.parts` under its path: `state` (`pending`, `waiting`, `working` or `done`), once done its `reason` (`filled`, `partly_filled`, `refused` or `cancelled`), `target`, the quantity a join set, `memory`, what its trigger remembers between ticks, and `fired_at`. Only the plan's main order carries the caller's `tag`. The parent ends when every part is done: `completed` when anything traded, `rejected` when a broker refused an order and nothing traded, and `cancelled` otherwise. [`GET /api/orders/parents`](orders.md#the-engines-parents) shows the parts with the rest of the parent.
 
     A refused plan answers like this:
 

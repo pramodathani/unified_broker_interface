@@ -1,0 +1,9 @@
+Members ['root.children.0', 'root.children.1'], orders 2, standalone protecting ['root.children.0', 'root.children.1']
+Budget 10; placed [('place', 'root.children.0', 'SELL', 10, 'SL', '988'), ('place', 'root.children.1', 'SELL', 10, 'LIMIT', '1010')]
+The target is child 1
+Target filled 3: traded 3, requests so far [('change', 'root.children.0', 7)]
+Target filled 7: traded 7, requests so far [('change', 'root.children.0', 7), ('change', 'root.children.0', 3)]
+Target filled 10: traded 10, requests so far [('change', 'root.children.0', 7), ('change', 'root.children.0', 3), ('cancel', 'root.children.0')]
+Done: True
+A parent join could change the budget to 12
+As a dry run shows it: {'either': {'path': 'root', 'sibling_rule': 'reduce', 'cancel_before_send': False, 'children': [{'order': {'path': 'root.children.0', 'presets': [], 'slots': {'trigger': 'at_once', 'quantity': 'set by its join', 'side': 'protect', 'execution': ['all_at_once'], 'pricing': [{'native_stop': {'trigger_price': '990', 'limit_price': '988'}}], 'guards': [], 'venue': 'selector', 'lifetime': ["the body's validity"]}}}, {'order': {'path': 'root.children.1', 'presets': [], 'slots': {'trigger': 'at_once', 'quantity': 'set by its join', 'side': 'protect', 'execution': ['all_at_once'], 'pricing': [{'fixed': {'price': '1010', 'order_type': 'LIMIT'}}], 'guards': [], 'venue': 'selector', 'lifetime': ["the body's validity"]}}}]}}

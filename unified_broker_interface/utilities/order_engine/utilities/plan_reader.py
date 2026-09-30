@@ -5,6 +5,10 @@ import decimal
 from unified_broker_interface.utilities.order_engine.utilities.condition_group import (
     ConditionGroup,
 )
+from unified_broker_interface.utilities.order_engine.utilities.either_part import (
+    SIBLING_RULES,
+    EitherPart,
+)
 from unified_broker_interface.utilities.order_engine.utilities.fixed_pricing import (
     FixedPricing,
 )
@@ -27,6 +31,9 @@ from unified_broker_interface.utilities.order_engine.utilities.price_crosses_con
     FIELDS,
     PriceCrossesCondition,
 )
+from unified_broker_interface.utilities.order_engine.utilities.then_part import (
+    ThenPart,
+)
 from unified_broker_interface.utilities.order_engine.utilities.time_condition import (
     KINDS,
     TimeCondition,
@@ -39,6 +46,21 @@ JOIN_NAMES = (
     'using',
     'repeat',
     'sequence',
+)
+BUILT_JOIN_NAMES = (
+    'then',
+    'either',
+)
+THEN_SETTINGS = (
+    'first',
+    'each_fill',
+    'on_complete',
+    'cancel_first_on_child_fill',
+)
+EITHER_SETTINGS = (
+    'children',
+    'sibling_rule',
+    'cancel_before_send',
 )
 ORDER_SETTINGS = (
     'presets',
@@ -95,24 +117,25 @@ class PlanReader:
             plan (object): The `plan` object from the caller's `synthetic` object.
 
         Returns:
-            OrderPart | None: The root part, or None when the plan has any problem, which are then in `problems`.
+            object | None: The root part, an `OrderPart`, `ThenPart` or `EitherPart`, or None when the plan has any problem, which are then in `problems`.
         """
         self.problems = []
         self.warnings = []
-        root = self._read_node(plan, 'root')
+        root = self._read_node(plan, 'root', True)
         if self.problems:
             return None
         return root
 
-    def _read_node(self, node, path):
+    def _read_node(self, node, path, keeps_tag):
         """Reads one node of the tree.
 
         Args:
             node (object): The node as the caller wrote it.
             path (str): Where the node sits in the plan.
+            keeps_tag (bool): Whether the orders the node places first carry the caller's tag, which only the plan's main order does.
 
         Returns:
-            OrderPart | None: The part, or None when the node has a problem.
+            object | None: The part, or None when the node has a problem.
         """
         if not isinstance(node, dict) or len(node) != 1:
             self._add_problem(
@@ -123,12 +146,16 @@ class PlanReader:
             return None
         for kind, content in node.items():
             if kind == 'order':
-                return self._read_order(content, path)
+                return self._read_order(content, path, keeps_tag)
+            if kind == 'then':
+                return self._read_then(content, path, keeps_tag)
+            if kind == 'either':
+                return self._read_either(content, path, keeps_tag)
             if kind in JOIN_NAMES:
                 self._add_problem(
                     path,
                     'join_not_built',
-                    f'the {kind} join is part of the design but is not built yet, so a plan can only be a single order for now',
+                    f'the {kind} join is part of the design but is not built yet; the joins built so far are {", ".join(BUILT_JOIN_NAMES)}',
                 )
                 return None
             self._add_problem(
@@ -138,15 +165,129 @@ class PlanReader:
             )
         return None
 
-    def _read_order(self, order, path):
-        """Reads one order, merging its presets and its own slot values.
+    def _read_then(self, then, path, keeps_tag):
+        """Reads a Then join.
+
+        Args:
+            then (object): The join's content as the caller wrote it.
+            path (str): Where the join sits in the plan.
+            keeps_tag (bool): Whether the first plan's main order carries the caller's tag.
+
+        Returns:
+            ThenPart | None: The join, or None when it has a problem.
+        """
+        if not isinstance(then, dict):
+            self._add_problem(path, 'join_shape', 'then holds an object with first and each_fill or on_complete')
+            return None
+        problems_before = len(self.problems)
+        for setting in then:
+            if setting not in THEN_SETTINGS:
+                self._add_problem(
+                    path,
+                    'unknown_setting',
+                    f'then takes {", ".join(THEN_SETTINGS)}, not {setting!r}',
+                )
+        child_keys = []
+        for key in ('each_fill', 'on_complete'):
+            if key in then:
+                child_keys.append(key)
+        if 'first' not in then or len(child_keys) != 1:
+            self._add_problem(
+                path,
+                'join_shape',
+                'then needs first and exactly one of each_fill or on_complete',
+            )
+            return None
+        cancel_first = then.get('cancel_first_on_child_fill', False)
+        if not isinstance(cancel_first, bool):
+            self._add_problem(
+                path,
+                'bad_setting',
+                f'cancel_first_on_child_fill must be true or false, not {cancel_first!r}',
+            )
+        child_key = child_keys[0]
+        first = self._read_node(then['first'], f'{path}.first', keeps_tag)
+        child = self._read_node(then[child_key], f'{path}.{child_key}', False)
+        if len(self.problems) > problems_before:
+            return None
+        return ThenPart(path, first, child, child_key, cancel_first)
+
+    def _read_either(self, either, path, keeps_tag):
+        """Reads an Either join.
+
+        A `reduce` join's children share one quantity, which only makes sense when each child is one order, so any other child is refused.
+
+        Args:
+            either (object): The join's content as the caller wrote it.
+            path (str): Where the join sits in the plan.
+            keeps_tag (bool): Whether the first child's main order carries the caller's tag.
+
+        Returns:
+            EitherPart | None: The join, or None when it has a problem.
+        """
+        if not isinstance(either, dict):
+            self._add_problem(path, 'join_shape', 'either holds an object with children and sibling_rule')
+            return None
+        problems_before = len(self.problems)
+        for setting in either:
+            if setting not in EITHER_SETTINGS:
+                self._add_problem(
+                    path,
+                    'unknown_setting',
+                    f'either takes {", ".join(EITHER_SETTINGS)}, not {setting!r}',
+                )
+        sibling_rule = either.get('sibling_rule')
+        if sibling_rule not in SIBLING_RULES:
+            self._add_problem(
+                path,
+                'bad_setting',
+                f'sibling_rule must be one of {", ".join(SIBLING_RULES)}, not {sibling_rule!r}',
+            )
+        cancel_before_send = either.get('cancel_before_send', False)
+        if not isinstance(cancel_before_send, bool):
+            self._add_problem(
+                path,
+                'bad_setting',
+                f'cancel_before_send must be true or false, not {cancel_before_send!r}',
+            )
+        children = either.get('children')
+        if not isinstance(children, list) or len(children) < 2:
+            self._add_problem(
+                path,
+                'join_shape',
+                'either holds children, a list of two or more plans',
+            )
+            return None
+        read_children = []
+        for index, child in enumerate(children):
+            read_child = self._read_node(
+                child,
+                f'{path}.children.{index}',
+                keeps_tag and index == 0,
+            )
+            if read_child is None:
+                continue
+            if sibling_rule == 'reduce' and not isinstance(read_child, OrderPart):
+                self._add_problem(
+                    read_child.path,
+                    'reduce_needs_orders',
+                    'the children of a reduce join share one quantity, so each must be a single order',
+                )
+            read_children.append(read_child)
+        if len(self.problems) > problems_before:
+            return None
+        return EitherPart(path, read_children, sibling_rule, cancel_before_send)
+
+    def _read_order(self, order, path, keeps_tag):
+        """Reads one order, merging its presets and its own slot values, or the join a join preset in it stands for.
 
         Args:
             order (object): The order's content as the caller wrote it.
             path (str): Where the order sits in the plan.
+            keeps_tag (bool): Whether its orders carry the caller's tag.
 
         Returns:
-            OrderPart | None: The part, or None when the order has a problem.
+            object | None: The part, or None when the order has a problem.
         """
         if not isinstance(order, dict):
             self._add_problem(
@@ -155,6 +296,11 @@ class PlanReader:
                 'an order is an object',
             )
             return None
+        tree = self._join_preset_tree(order, path)
+        if tree is not None:
+            if not tree:
+                return None
+            return self._read_node(tree, path, keeps_tag)
         problems_before = len(self.problems)
         for setting in order:
             if setting not in ORDER_SETTINGS:
@@ -212,7 +358,48 @@ class PlanReader:
             trigger = ConditionGroup('all', conditions)
         if pricing is None:
             pricing = FixedPricing(None, None)
-        return OrderPart(path, preset_names, trigger, side, pricing)
+        return OrderPart(path, preset_names, trigger, side, pricing, keeps_tag)
+
+    def _join_preset_tree(self, order, path):
+        """The plan tree a join preset in an order stands for, or None when the order names none.
+
+        Args:
+            order (dict): The order as the caller wrote it.
+            path (str): Where the order sits in the plan.
+
+        Returns:
+            dict | None: The tree, as a caller would write it, or None when there is no join preset or it has problems.
+        """
+        presets = order.get('presets')
+        if not isinstance(presets, list):
+            return None
+        expander = PresetExpander()
+        found = []
+        for index, preset in enumerate(presets):
+            if not isinstance(preset, dict) or len(preset) != 1:
+                continue
+            for name, settings in preset.items():
+                if isinstance(settings, dict) and expander.is_join(name, settings):
+                    found.append((index, name, settings))
+        if not found:
+            return None
+        if len(found) > 1:
+            self._add_problem(
+                f'{path}.presets',
+                'two_join_presets',
+                'an order can name one preset that stands for a join, such as a bracket or an oco, not several',
+            )
+            return {}
+        index, name, settings = found[0]
+        entry = dict(order)
+        entry['presets'] = presets[:index] + presets[index + 1:]
+        if not entry['presets']:
+            entry.pop('presets')
+        tree = expander.expand_join(name, settings, entry, f'{path}.presets.{index}')
+        self.problems.extend(expander.problems)
+        if expander.problems:
+            return {}
+        return tree
 
     def _preset_sources(self, presets, path):
         """Expands each preset into its slot values.

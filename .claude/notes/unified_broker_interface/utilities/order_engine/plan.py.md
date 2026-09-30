@@ -33,3 +33,15 @@ The memory is deep-copied before a tick, because the trigger mutates nested dict
 A standalone `protect` order is refused with 409 and `protect_needs_position` when the unified positions document shows no position on the body's side, as the user decided on 2026-10-01. It reuses `ReduceOnlyCheck.held`. The reduce-only check itself is not applied to `protect` orders, because a protecting child of a Then join in step 2b will be placed the moment its parent fills, before the positions document has caught up.
 
 `closes_position` returns True for a leg of a `protect` part, so it may use the part of a broker's daily cap kept for exits. Instruments a trigger watches are listed in `parameters['watch_instrument_ids']`, which the price ticker reads.
+
+## Stage 2b: the Then and Either joins (2026-10-01)
+
+The plan is now a tree of `OrderPart`, `ThenPart` and `EitherPart`. When the plan is placed, every order part gets a `pending` record, with its trigger prepared, so a time already passed anywhere in the plan is refused at once. After every event the whole tree is settled and the parent ends when the root is done: `completed` when anything traded, `rejected` when a broker refused an order and nothing traded, `cancelled` otherwise.
+
+A tick checks every waiting order part in the tree, not only the root. `fired_at` is written before the order is sent, so the placement's recorded event carries it and a restart does not lose it; it is removed again if no price could be made.
+
+The answer is the single broker answer when the root is one order placed at once, as in stage 1; `202 armed` when nothing was placed; otherwise `legs`, one entry per order placed. `part_record`, `set_part_record` and `quotes_now` are public because the parts call them.
+
+A plan with an order that cannot be priced at once now waits for the next tick instead of being refused with 503, since a waiting order is retried on every tick.
+
+The offline scenario `a_plan_bracket_behaves_the_same_with_a_restart_between_fills` rebuilds the parent from its recorded events after every fill and sends the same eight requests as the run without restarts.

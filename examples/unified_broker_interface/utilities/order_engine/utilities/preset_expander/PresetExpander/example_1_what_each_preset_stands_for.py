@@ -1,6 +1,6 @@
-"""Expands each preset a plan can use into the slot values it stands for.
+"""Expands each preset that stands for one order into the slot values it stands for.
 
-A `PresetExpander` turns a preset, named after an existing synthetic type and taking that type's settings, into slot values written the way a caller would write them by hand, which the plan reader then checks. This program expands every preset available so far with typical settings and prints what each becomes, so the meaning of a preset can be read in one place.
+A `PresetExpander` turns a preset, named after an existing synthetic type and taking that type's settings, into slot values written the way a caller would write them by hand, which the plan reader then checks. This program expands every such preset with typical settings and prints what each becomes, so the meaning of a preset can be read in one place. The presets that stand for a join of several orders are shown in the third program.
 
 Nothing is read from Redis or sent anywhere.
 
@@ -10,6 +10,7 @@ Run it from the project root:
 """
 
 from unified_broker_interface.utilities.order_engine.utilities.preset_expander import (
+    JOIN_PRESET_NAMES,
     PRESET_NAMES,
     PresetExpander,
 )
@@ -68,6 +69,8 @@ class WhatEachPresetStandsForExample:
             },
         }
         for name in PRESET_NAMES:
+            if name in JOIN_PRESET_NAMES:
+                continue
             slots = self.expander.expand(name, settings[name], f'root.presets.{name}')
             print(f'{name}: {slots}')
             print(f'  problems: {self.expander.problems}')

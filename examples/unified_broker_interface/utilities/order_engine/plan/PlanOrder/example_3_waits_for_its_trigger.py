@@ -4,7 +4,7 @@ A `PlanOrder` whose order has a trigger answers `202 armed` and places nothing. 
 
 The engine's placement is a small stand-in that always chooses Zerodha and accepts every order, and the event log is the `RecordingEventLog` stand-in from the offline suites, so nothing leaves the machine. The ticks are quotes written out here, and RELIANCE's tick size is 0.10.
 
-`closes_position` says whether a leg may use the part of a broker's daily cap kept for exits; this plan's order opens a position, so it does not, while a plan whose order has the `protect` side, shown last, does.
+`quotes_now` reads the quote an order placed outside a tick is priced from, which the stand-in has none of, and `part_record` and `set_part_record` read and write one part's record, which the parts use to keep their state; a record written with no message is kept in the parameters without an event. `closes_position` says whether a leg may use the part of a broker's daily cap kept for exits; this plan's order opens a position, so it does not, while a plan whose order has the `protect` side, shown last, does.
 
 Run it from the project root:
 
@@ -325,12 +325,17 @@ class WaitsForItsTriggerExample:
         body, status = runner.run(intent, time.perf_counter())
         print(f"Answer: HTTP {status}, {body['outcome']}: {body['status_message']}")
         print(f"Parts: {runner.parent.parameters['parts']}")
+        print(f'Quotes it would price an order placed now from: {runner.quotes_now()}')
         for seconds, bid, offer in ((1, 1402.40, 1402.50), (2, 1399.90, 1400.00), (3, 1399.80, 1399.90)):
             quotes = {
                 INSTRUMENT_ID: self.quote(bid, offer),
             }
             acted = runner.on_price_tick(quotes, 1790000000.0 + seconds)
             print(f'tick {seconds}, offer {offer}: placed {acted}, sent so far {self.placement.sent}')
+        record = runner.part_record('root')
+        print(f'The root part\'s record: {record}')
+        record['note'] = 'kept only in the parameters'
+        runner.set_part_record('root', record, None)
         print(f"Parts: {runner.parent.parameters['parts']}")
         print(f'Parent: {runner.parent.state}')
         print(f"Its order closes a position: {runner.closes_position('root')}")

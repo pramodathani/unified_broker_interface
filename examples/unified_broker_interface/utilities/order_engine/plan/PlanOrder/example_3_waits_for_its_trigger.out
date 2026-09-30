@@ -1,9 +1,11 @@
-Answer: HTTP 202, armed: the plan is recorded and its order will be placed when its trigger holds
+Answer: HTTP 202, armed: the plan is recorded and its orders will be placed when their triggers hold
 Parts: {'root': {'state': 'waiting', 'memory': {'trigger': {}}}}
+Quotes it would price an order placed now from: {'11111111-1111-5111-8111-000000000001': None}
 tick 1, offer 1402.5: placed False, sent so far []
 tick 2, offer 1400.0: placed True, sent so far [('zerodha', 'BUY', 10, '1400.20')]
 tick 3, offer 1399.9: placed False, sent so far [('zerodha', 'BUY', 10, '1400.20')]
-Parts: {'root': {'state': 'working', 'memory': {'trigger': {}}, 'fired_at': 1790000002.0}}
+The root part's record: {'state': 'working', 'memory': {'trigger': {}}, 'fired_at': 1790000002.0}
+Parts: {'root': {'state': 'working', 'memory': {'trigger': {}}, 'fired_at': 1790000002.0, 'note': 'kept only in the parameters'}}
 Parent: working
 Its order closes a position: False
 A protecting plan's order closes a position: True

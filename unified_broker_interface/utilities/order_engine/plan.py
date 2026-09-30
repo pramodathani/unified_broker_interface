@@ -9,6 +9,9 @@ from unified_broker_interface.utilities.order_engine.base import (
     OUTCOME_PARENT_STATES,
     SyntheticOrder,
 )
+from unified_broker_interface.utilities.order_engine.utilities.either_part import (
+    EitherPart,
+)
 from unified_broker_interface.utilities.order_engine.utilities.plan_reader import (
     PlanReader,
 )
@@ -16,22 +19,15 @@ from unified_broker_interface.utilities.order_engine.utilities.reduce_only impor
     ReduceOnlyCheck,
 )
 
-PARENT_STATES_BY_REASON = {
-    'filled': 'completed',
-    'partly_filled': 'completed',
-    'cancelled': 'cancelled',
-    'refused': 'rejected',
-}
-
 
 class PlanOrder(SyntheticOrder):
     """An order whose `synthetic.plan` describes it as a tree of parts, rather than naming one of the fixed types.
 
-    This is the composable orders design as far as it is built: the plan is read and checked in full and every problem is answered at once, each part keeps its state under its own path in the parent's parameters, and the parent ends when the root part is done. A plan holds one order, which may wait for a trigger, protect a position, and be priced by one pricing rule, built from presets or written out as slot values; the joins come in the next stage.
+    This is the composable orders design as far as it is built. The plan is read and checked in full and every problem is answered at once. Its orders can wait for a trigger, protect a position and be priced by one pricing rule, and they can be joined: `then` starts a child from what a first plan filled, and `either` runs several plans at once, cancelling or reducing the others when one fills. Presets named after the existing types stand for slot values or, for bracket, cover, OCO, OTO and a hidden stop with a backstop, for whole joins.
 
-    The caller's plan stays in `parameters['plan']` exactly as it was sent. What the engine learns while running lives in `parameters['parts']`, one entry per part path holding its `state` (`waiting`, `working` or `done`), once done its `reason`, and `memory`, what its trigger has to remember between ticks. A change of state is recorded with `record_parameters`, so recovery replays it, and everything is visible through `GET /api/orders/parents`. A trigger's confirmation count is kept in Redis between ticks but not recorded, as today's price triggers keep theirs.
+    The caller's plan stays in `parameters['plan']` exactly as it was sent. What the engine learns while running lives in `parameters['parts']`, one record per part path: `state` (`pending`, `waiting`, `working` or `done`), once done its `reason`, a `target` quantity when a join set one, the trigger's `memory`, and `fired_at`. Changes of state are recorded with `record_parameters`, so recovery replays them, and everything is visible through `GET /api/orders/parents`.
 
-    Every plan parent is offered price ticks, because a trigger may need them, and a time condition is also checked on those ticks. A parent with nothing waiting answers a tick at once.
+    After every event the whole tree is settled: each join brings its children in line with the fills as they are now. Settling from the current fills rather than adding up changes is what keeps a repeated or late update from being counted twice. The parent ends when the root part is done: `completed` when anything traded, `rejected` when a broker refused an order and nothing traded, and `cancelled` otherwise.
     """
 
     SYNTHETIC_TYPE = 'plan'
@@ -41,7 +37,7 @@ class PlanOrder(SyntheticOrder):
         """Reads the caller's plan into its root part.
 
         Returns:
-            tuple: The root part (OrderPart) and the reader's warnings (list).
+            tuple: The root part and the reader's warnings (list).
 
         Raises:
             RefusedRequestError: With HTTP 400 and every problem in `problems` when the plan cannot run.
@@ -57,9 +53,9 @@ class PlanOrder(SyntheticOrder):
         return root, reader.warnings
 
     def run(self, intent, started_at):
-        """Checks the plan, then either places its order or arms it to wait for its trigger.
+        """Checks the plan, then starts it: orders without a trigger are placed now, and the rest wait.
 
-        A dry run is answered with the broker request the order would be sent as and the plan as it would run, with every default written out, and records nothing. A part that protects a position is refused when no position is held on the caller's side, because it would open one.
+        A dry run is answered with the broker request the caller's order would be sent as and the plan as it would run, with every default written out, and records nothing. An order that protects a position on its own is refused when no position is held on the caller's side, because it would open one.
 
         Args:
             intent (dict): The intent document.
@@ -85,28 +81,58 @@ class PlanOrder(SyntheticOrder):
                 body['warnings'] = warnings
             return body, status
 
-        if root.closes_position():
-            self._refuse_without_position(root, order)
-        memory = {}
-        root.prepare(self, memory)
-        if root.needs_prices():
+        protecting = root.standalone_protecting_parts()
+        if protecting:
+            self._refuse_without_position(protecting[0], order)
+        records = {}
+        needs_prices = False
+        watched = []
+        for part in root.order_parts():
+            record = {
+                'state': 'pending',
+            }
+            if part.trigger is not None:
+                memory = {}
+                part.prepare(self, memory)
+                record['memory'] = memory
+            records[part.path] = record
+            if part.needs_prices():
+                needs_prices = True
+            for instrument_id in part.instruments():
+                if instrument_id not in watched:
+                    watched.append(instrument_id)
+        if needs_prices:
             self.remember_tick_size(order)
-        watched = root.instruments()
+        self.parent.parameters = dict(self.parent.parameters)
+        self.parent.parameters['parts'] = records
         if watched:
-            self.parent.parameters = dict(self.parent.parameters)
             self.parent.parameters['watch_instrument_ids'] = watched
         self.record_received()
 
-        if root.trigger is not None:
-            self._set_part_record(
-                root.path,
-                {
-                    'state': 'waiting',
-                    'memory': memory,
-                },
-                f'the plan\'s {root.path} part is waiting for its trigger',
-            )
-            self.save()
+        quotes = {}
+        if needs_prices:
+            quotes = self.quotes_now()
+        placed = root.start(self, None, started_at, quotes)
+        placed = placed + root.settle(self)
+        self._after_placing(placed)
+        self._finish_if_done(root)
+        self.save()
+        return self._answer(root, placed, warnings)
+
+    def _answer(self, root, placed, warnings):
+        """The answer to the caller once the plan has started.
+
+        A plan that placed exactly one order at its root answers with that order's broker answer, as a plain order does. A plan that placed nothing answers `202 armed`. Any other answers with `legs`, one entry per order placed.
+
+        Args:
+            root (object): The root part.
+            placed (list): One `(path, answer, status)` per order placed.
+            warnings (list): The reader's warnings.
+
+        Returns:
+            tuple: The answer's body (dict) and its HTTP status (int).
+        """
+        if not placed:
             answer = {
                 'broker': None,
                 'instrument_id': self.parent.instrument_id,
@@ -114,39 +140,49 @@ class PlanOrder(SyntheticOrder):
                 'tag': self.parent.tag,
                 'outcome': 'armed',
                 'order_id': None,
-                'status_message': 'the plan is recorded and its order will be placed when its trigger holds',
+                'status_message': 'the plan is recorded and its orders will be placed when their triggers hold',
                 'skipped': [],
             }
-            if warnings:
-                answer['warnings'] = warnings
-            return answer, 202
-
-        self._set_part_record(
-            root.path,
-            {
-                'state': 'working',
-            },
-            f'the plan\'s {root.path} part is working',
-        )
-        self.save()
-        placed = root.place(self, started_at, self._quotes_now())
-        if placed is None:
-            raise RefusedRequestError.refusal(
-                'the plan\'s order could not be priced, because the book has no side to price against',
-                503,
-            )
-        body, status = placed
-        self._after_placing(root, body)
-        body['parent_id'] = self.parent.parent_order_id
+            status = 202
+        elif len(placed) == 1 and placed[0][0] == root.path:
+            answer = placed[0][1]
+            status = placed[0][2]
+        else:
+            legs = []
+            outcome = None
+            status = None
+            broker = None
+            for path, body, leg_status in placed:
+                legs.append({
+                    'path': path,
+                    'outcome': body.get('outcome'),
+                    'order_id': body.get('order_id'),
+                    'status_message': body.get('status_message'),
+                })
+                if broker is None:
+                    broker = body.get('broker')
+                if outcome != 'accepted':
+                    outcome = body.get('outcome')
+                    status = leg_status
+            answer = {
+                'broker': broker,
+                'instrument_id': self.parent.instrument_id,
+                'tag': self.parent.tag,
+                'outcome': outcome,
+                'legs': legs,
+                'status_message': None,
+                'skipped': [],
+            }
+        answer['parent_id'] = self.parent.parent_order_id
         if warnings:
-            body['warnings'] = warnings
-        return body, status
+            answer['warnings'] = warnings
+        return answer, status
 
-    def _refuse_without_position(self, root, order):
+    def _refuse_without_position(self, part, order):
         """Refuses a part that protects a position when none is held on the caller's side.
 
         Args:
-            root (OrderPart): The part.
+            part (OrderPart): The protecting part.
             order (PlaceOrderRequest): The caller's order, whose side opened the position.
 
         Returns:
@@ -168,14 +204,14 @@ class PlanOrder(SyntheticOrder):
             409,
             problems=[
                 {
-                    'path': root.path,
+                    'path': part.path,
                     'rule': 'protect_needs_position',
                     'message': f'this order protects a position opened with a {order.transaction_type}, and the position held is {held}',
                 },
             ],
         )
 
-    def _quotes_now(self):
+    def quotes_now(self):
         """This parent's instrument's quote as it is now, for pricing an order placed outside a tick.
 
         Returns:
@@ -190,70 +226,141 @@ class PlanOrder(SyntheticOrder):
             self.parent.instrument_id: quote,
         }
 
-    def _after_placing(self, root, body):
-        """Records what the parent became once the root part's order has been sent.
+    def _after_placing(self, placed):
+        """Moves the parent to `working` once any order is accepted, or records why none was.
 
         Args:
-            root (OrderPart): The root part.
-            body (dict): The broker's answer.
+            placed (list): One `(path, answer, status)` per order just placed.
 
         Returns:
             None: This method returns nothing.
         """
-        outcome = body.get('outcome')
-        if outcome == 'rejected':
-            self._set_part_record(
-                root.path,
-                {
-                    'state': 'done',
-                    'reason': 'refused',
-                },
-                f'the plan\'s {root.path} part is done: refused',
-            )
-        self.record_state(
-            OUTCOME_PARENT_STATES.get(outcome, 'failed'),
-            body.get('status_message'),
-        )
-        self.save()
+        if not placed:
+            return
+        outcomes = []
+        for _, body, _ in placed:
+            outcomes.append(body.get('outcome'))
+        if 'accepted' in outcomes:
+            state = 'working'
+            message = None
+        else:
+            state = OUTCOME_PARENT_STATES.get(outcomes[0], 'failed')
+            message = placed[0][1].get('status_message')
+        if self.parent.state != state and self.parent.can_change_to(state):
+            self.record_state(state, message)
+
+    def _finish_if_done(self, root):
+        """Ends the parent once the root part is done.
+
+        Args:
+            root (object): The root part.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        if self.parent.is_terminal() or not root.is_done(self):
+            return
+        traded = 0
+        rejected = False
+        for leg in self.parent.legs:
+            traded = traded + (leg.filled_quantity or 0)
+            if leg.state == 'rejected':
+                rejected = True
+        if traded > 0:
+            state = 'completed'
+        elif rejected:
+            state = 'rejected'
+        else:
+            state = 'cancelled'
+        if self.parent.can_change_to(state):
+            self.record_state(state, f'every part of the plan is done, with {traded} traded')
+
+    def _parent_join(self, root, path):
+        """The join that holds a part directly.
+
+        Args:
+            root (object): The root part.
+            path (str): The part's path.
+
+        Returns:
+            object | None: The join, or None for the root.
+        """
+        waiting = [
+            root,
+        ]
+        while waiting:
+            node = waiting.pop(0)
+            for member in node.members():
+                if member.path == path:
+                    return node
+                waiting.append(member)
+        return None
 
     def on_price_tick(self, quotes, now):
-        """Places the root part's order on the first tick its trigger holds.
+        """Places every waiting order whose trigger holds on this tick, then settles the plan.
+
+        An order whose join cancels before sending is sent only once every sibling's resting order has been cancelled; otherwise it tries again on the next tick.
 
         Args:
             quotes (dict): The quotes the tick carried.
             now (float): The Unix time of the tick.
 
         Returns:
-            bool: True when the order was placed on this tick.
+            bool: True when an order was placed on this tick.
         """
-        record = self._part_record('root')
-        if record.get('state') != 'waiting':
+        records = self.parent.parameters.get('parts') or {}
+        waiting_paths = []
+        for path, record in records.items():
+            if record.get('state') == 'waiting':
+                waiting_paths.append(path)
+        if not waiting_paths:
             return False
         root, _ = self._read_plan()
-        memory = copy.deepcopy(record.get('memory') or {})
-        triggered = root.is_triggered(self, memory, quotes, now)
-        if memory != (record.get('memory') or {}):
-            record['memory'] = memory
-            self._set_part_record(root.path, record, None)
-            self.save()
-        if not triggered:
+        placed = []
+        memory_changed = False
+        for part in root.order_parts():
+            if part.path not in waiting_paths:
+                continue
+            record = self.part_record(part.path)
+            if record.get('state') != 'waiting':
+                continue
+            memory = copy.deepcopy(record.get('memory') or {})
+            triggered = part.is_triggered(self, memory, quotes, now)
+            if memory != (record.get('memory') or {}):
+                record['memory'] = memory
+                self.set_part_record(part.path, record, None)
+                memory_changed = True
+            if not triggered:
+                continue
+            join = self._parent_join(root, part.path)
+            if isinstance(join, EitherPart) and join.cancel_before_send:
+                if not join.cancel_siblings(
+                    self,
+                    join.child_index(part.path),
+                    f'{part.path} is about to be sent, so its siblings are cancelled first',
+                ):
+                    continue
+            record = self.part_record(part.path)
+            record['fired_at'] = now
+            self.set_part_record(part.path, record, None)
+            sent = part.send(self, None, quotes)
+            if not sent:
+                record = self.part_record(part.path)
+                record.pop('fired_at', None)
+                self.set_part_record(part.path, record, None)
+            placed = placed + sent
+        if not placed:
+            if memory_changed:
+                self.save()
             return False
-        placed = root.place(self, None, quotes)
-        if placed is None:
-            return False
-        record['state'] = 'working'
-        record['fired_at'] = now
-        self._set_part_record(
-            root.path,
-            record,
-            f'the plan\'s {root.path} part\'s trigger held, so its order was placed',
-        )
-        body, _ = placed
-        self._after_placing(root, body)
+        placed = placed + root.settle(self)
+        self._after_placing(placed)
+        self._finish_if_done(root)
+        self.save()
         return True
 
     def closes_position(self, role):
-        """Whether a leg closes a position, which a leg of a `protect` part does.
+        """Whether a leg closes a position, which a leg of a `protect` order does.
 
         Args:
             role (str): The leg's role, which is its part's path.
@@ -264,10 +371,13 @@ class PlanOrder(SyntheticOrder):
         if super().closes_position(role):
             return True
         root, _ = self._read_plan()
-        return role == root.path and root.closes_position()
+        for part in root.order_parts():
+            if part.path == role:
+                return part.closes_position()
+        return False
 
     def on_leg_update(self, leg, changes):
-        """Ends the root part, and the parent with it, once all of the root part's broker orders have finished.
+        """Settles the plan after a broker order changed, which may start, resize or cancel other orders, and ends the parent once the plan is done.
 
         Args:
             leg (OrderLeg): The leg that changed.
@@ -277,29 +387,13 @@ class PlanOrder(SyntheticOrder):
             None: This method returns nothing.
         """
         root, _ = self._read_plan()
-        if leg.role != root.path:
-            return
-        reason = root.done_reason(self.parent)
-        if reason is None:
-            return
-        self._set_part_record(
-            root.path,
-            {
-                'state': 'done',
-                'reason': reason,
-            },
-            f'the plan\'s {root.path} part is done: {reason}',
-        )
-        state = PARENT_STATES_BY_REASON[reason]
-        if self.parent.can_change_to(state):
-            self.record_state(
-                state,
-                f'the plan\'s {root.path} order is done: {reason}',
-            )
+        placed = root.settle(self)
+        self._after_placing(placed)
+        self._finish_if_done(root)
         self.save()
 
     def finish_cancelling(self):
-        """Ends a parent the caller is cancelling, and marks the root part done once it has.
+        """Ends a parent the caller is cancelling, and marks every part not yet done as done.
 
         Returns:
             bool: True when the parent was ended on this call.
@@ -307,19 +401,21 @@ class PlanOrder(SyntheticOrder):
         ended = super().finish_cancelling()
         if ended:
             root, _ = self._read_plan()
-            reason = root.done_reason(self.parent) or 'cancelled'
-            self._set_part_record(
-                root.path,
-                {
-                    'state': 'done',
-                    'reason': reason,
-                },
-                f'the plan\'s {root.path} part is done: {reason}',
-            )
+            for part in root.order_parts():
+                record = self.part_record(part.path)
+                if record.get('state') == 'done':
+                    continue
+                record['state'] = 'done'
+                record['reason'] = part.done_reason(self.parent) or 'cancelled'
+                self.set_part_record(
+                    part.path,
+                    record,
+                    f'the plan\'s {part.path} part is done: {record["reason"]}',
+                )
             self.save()
         return ended
 
-    def _part_record(self, path):
+    def part_record(self, path):
         """A copy of one part's record.
 
         Args:
@@ -329,9 +425,9 @@ class PlanOrder(SyntheticOrder):
             dict: The record, empty when the part has none.
         """
         parts = self.parent.parameters.get('parts') or {}
-        return dict(parts.get(path) or {})
+        return copy.deepcopy(parts.get(path) or {})
 
-    def _set_part_record(self, path, record, message):
+    def set_part_record(self, path, record, message):
         """Writes one part's record into the parent's parameters, and records the change when there is a message.
 
         Args:
