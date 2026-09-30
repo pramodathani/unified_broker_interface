@@ -38,7 +38,6 @@ SEARCH_LIMIT_MAXIMUM = 200
 _IDENTITY_KEYS = ("instrument_id", "exchange", "segment", "shape", "symbol", "underlying_symbol", "expiry_date",
                   "strike_price", "option_type")
 _LTP_KEYS = _IDENTITY_KEYS + ("last_price", "last_trade_time", "received_at", "source")
-_OHLC_KEYS = _LTP_KEYS + ("ohlc", "previous_close", "change_percent")
 
 def answers_request_errors(handler):
     """
@@ -195,12 +194,12 @@ class InstrumentsBlueprint(BaseBlueprint):
         identity, mapping_date, _ = catalogue.resolve(parse_instrument(request.args))
         return quotes.quote(identity, mapping_date)
 
-    def _live_quotes_batch(self, keys):
+    def _live_quotes_batch(self, narrow):
         """
-        The quote of each instrument a posted list names, narrowed to some keys.
+        The quote of each instrument a posted list names, narrowed by a method of this blueprint.
 
         Args:
-            keys (tuple[str, ...] | None): The keys each quote is narrowed to, or None for the whole document.
+            narrow (Callable[[dict], dict] | None): The method that turns a whole quote document into the route's answer, or None for the whole document.
 
         Returns:
             tuple: The JSON response `{"results": [...]}` and the status 200.
@@ -226,8 +225,8 @@ class InstrumentsBlueprint(BaseBlueprint):
                 continue
             document = documents[document_position]
             document_position = document_position + 1
-            if keys is not None and not isinstance(document, RequestError):
-                document = {key: document.get(key) for key in keys}
+            if narrow is not None and not isinstance(document, RequestError):
+                document = narrow(document)
             answers.append(document)
         return jsonify({'results': batch.results(answers)}), 200
 
@@ -238,20 +237,53 @@ class InstrumentsBlueprint(BaseBlueprint):
         The last traded price.
         """
         if request.method == 'POST':
-            return self._live_quotes_batch(_LTP_KEYS)
-        document = self._live_quote()
-        return jsonify({key: document.get(key) for key in _LTP_KEYS}), 200
+            return self._live_quotes_batch(self._ltp_values)
+        return jsonify(self._ltp_values(self._live_quote())), 200
+
+    @staticmethod
+    def _ltp_values(document):
+        """
+        The identity, last price and timestamps of a quote document.
+
+        Args:
+            document (dict): A whole unified quote document.
+
+        Returns:
+            dict: The document narrowed to the keys in `_LTP_KEYS`.
+        """
+        return {key: document.get(key) for key in _LTP_KEYS}
 
     @authenticated
     @answers_request_errors
     def ohlc(self):
         """
-        The last price with the day's open, high and low, and the previous close.
+        The day's open, high, low, close and volume, and nothing else.
         """
         if request.method == 'POST':
-            return self._live_quotes_batch(_OHLC_KEYS)
-        document = self._live_quote()
-        return jsonify({key: document.get(key) for key in _OHLC_KEYS}), 200
+            return self._live_quotes_batch(self._ohlcv_values)
+        return jsonify(self._ohlcv_values(self._live_quote())), 200
+
+    @staticmethod
+    def _ohlcv_values(document):
+        """
+        The day's open, high, low, close and volume from a quote document.
+
+        The quote document has no close of its own, so `close` is the last traded price, which is the day's close once the market has shut.
+
+        Args:
+            document (dict): A whole unified quote document.
+
+        Returns:
+            dict: `open`, `high`, `low`, `close` and `volume`, each a number or None.
+        """
+        day_prices = document.get('ohlc') or {}
+        return {
+            'open': day_prices.get('open'),
+            'high': day_prices.get('high'),
+            'low': day_prices.get('low'),
+            'close': document.get('last_price'),
+            'volume': document.get('volume'),
+        }
 
     @authenticated
     @answers_request_errors

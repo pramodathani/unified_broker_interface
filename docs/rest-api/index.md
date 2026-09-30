@@ -26,7 +26,7 @@ The table below lists all 29 routes in 36 rows, because the seven instrument rou
 | <span class="method post">POST</span> | [`/api/instruments/additional_details`](instruments.md#additional-details-for-several-instruments) | The same for a list of instruments in one request | :material-lock: |
 | <span class="method get">GET</span> | [`/api/instruments/ltp`](market-quotes.md#ltp) | Last traded price | :material-lock: |
 | <span class="method post">POST</span> | [`/api/instruments/ltp`](market-quotes.md#ltp-for-several-instruments) | The same for a list of instruments in one request | :material-lock: |
-| <span class="method get">GET</span> | [`/api/instruments/ohlc`](market-quotes.md#ohlc) | Last price plus the day's open, high, low and close | :material-lock: |
+| <span class="method get">GET</span> | [`/api/instruments/ohlc`](market-quotes.md#ohlc) | The day's open, high, low, close and volume | :material-lock: |
 | <span class="method post">POST</span> | [`/api/instruments/ohlc`](market-quotes.md#ohlc-for-several-instruments) | The same for a list of instruments in one request | :material-lock: |
 | <span class="method get">GET</span> | [`/api/instruments/quote`](market-quotes.md#quote) | The full quote, including market depth | :material-lock: |
 | <span class="method post">POST</span> | [`/api/instruments/quote`](market-quotes.md#quote-for-several-instruments) | The same for a list of instruments in one request | :material-lock: |

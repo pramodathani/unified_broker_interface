@@ -8,7 +8,7 @@ The table below lists the three routes on this page. Each also takes a list of i
 |---|---|---|
 | <span class="method get">GET</span> | [`/api/instruments/ltp`](#ltp) | The last traded price, with the instrument's identity and when the price was received |
 | <span class="method post">POST</span> | [`/api/instruments/ltp`](#ltp-for-several-instruments) | The same for a list of instruments in one request |
-| <span class="method get">GET</span> | [`/api/instruments/ohlc`](#ohlc) | The last traded price plus the day's open, high and low, the previous close and the change |
+| <span class="method get">GET</span> | [`/api/instruments/ohlc`](#ohlc) | The day's open, high, low, close and volume, and nothing else |
 | <span class="method post">POST</span> | [`/api/instruments/ohlc`](#ohlc-for-several-instruments) | The same for a list of instruments in one request |
 | <span class="method get">GET</span> | [`/api/instruments/quote`](#quote) | The whole unified quote document, including volume, open interest and five levels of market depth |
 | <span class="method post">POST</span> | [`/api/instruments/quote`](#quote-for-several-instruments) | The same for a list of instruments in one request |
@@ -82,42 +82,42 @@ When more than one instrument needs a broker, up to four are fetched at the same
 
 ## The unified quote document
 
-All three routes answer from one document shape, which the `quote` route returns whole. The table below lists every field, in the order the document holds them. `ltp` and `ohlc` return a subset, marked in the last two columns.
+All three routes answer from one document shape, which the `quote` route returns whole. The table below lists every field, in the order the document holds them. `ltp` returns a subset, marked in the last column. `ohlc` returns its own five fields built from this document, described under [OHLC](#ohlc).
 
-| Field | Type | Description | `ltp` | `ohlc` |
-|---|---|---|:---:|:---:|
-| `instrument_id` | string | The instrument's UUID | :material-check: | :material-check: |
-| `broker` | string | The broker this quote came from | | |
-| `broker_token` | string | That broker's token for the instrument | | |
-| `exchange` | string | The exchange | :material-check: | :material-check: |
-| `segment` | string | The exchange-prefixed segment | :material-check: | :material-check: |
-| `shape` | string | `security`, `future` or `option` | :material-check: | :material-check: |
-| `symbol` | string or null | The symbol, for a security | :material-check: | :material-check: |
-| `underlying_symbol` | string or null | The underlying, for a derivative | :material-check: | :material-check: |
-| `expiry_date` | string or null | The expiry, `YYYY-MM-DD` | :material-check: | :material-check: |
-| `strike_price` | number or null | The strike, for an option | :material-check: | :material-check: |
-| `option_type` | string or null | `CE` or `PE` | :material-check: | :material-check: |
-| `lot_size` | integer or null | Units of the underlying in one lot | | |
-| `last_price` | number | The last traded price | :material-check: | :material-check: |
-| `average_price` | number or null | The day's volume-weighted average price, as the broker reports it | | |
-| `ohlc` | object | The day's `open`, `high` and `low`. There is no `close` in it. | | :material-check: |
-| `previous_close` | number or null | The previous session's close | | :material-check: |
-| `change_percent` | number or null | The change from `previous_close`, as a percentage rounded to four places, recomputed by the project rather than taken from the broker | | :material-check: |
-| `last_quantity` | integer or null | The size of the last trade, in units | | |
-| `volume` | integer or null | The day's traded volume, in units | | |
-| `buy_quantity` | integer or null | Total quantity bid, in units | | |
-| `sell_quantity` | integer or null | Total quantity offered, in units | | |
-| `oi` | integer or null | Open interest, for a derivative | | |
-| `oi_day_high` | integer or null | The day's highest open interest | | |
-| `oi_day_low` | integer or null | The day's lowest open interest | | |
-| `depth` | object | `buy` and `sell`, each a list of up to five levels of `price`, `quantity` and `orders`, with empty levels dropped | | |
-| `last_trade_time` | number or null | When the last trade happened, in epoch seconds | :material-check: | :material-check: |
-| `exchange_time` | number or null | The exchange's timestamp on the update, in epoch seconds | | |
-| `received_at` | number | When the project received the tick, in epoch seconds | :material-check: | :material-check: |
-| `unified_at` | number | When the quote document was built, in epoch seconds | | |
-| `stale` | boolean | `true` when the owning broker's feed went silent and no healthy backup took over | | |
-| `stale_since` | number or null | When the quote became stale, in epoch seconds | | |
-| `source` | string | `cache` or `broker`, added by the API | :material-check: | :material-check: |
+| Field | Type | Description | `ltp` |
+|---|---|---|:---:|
+| `instrument_id` | string | The instrument's UUID | :material-check: |
+| `broker` | string | The broker this quote came from | |
+| `broker_token` | string | That broker's token for the instrument | |
+| `exchange` | string | The exchange | :material-check: |
+| `segment` | string | The exchange-prefixed segment | :material-check: |
+| `shape` | string | `security`, `future` or `option` | :material-check: |
+| `symbol` | string or null | The symbol, for a security | :material-check: |
+| `underlying_symbol` | string or null | The underlying, for a derivative | :material-check: |
+| `expiry_date` | string or null | The expiry, `YYYY-MM-DD` | :material-check: |
+| `strike_price` | number or null | The strike, for an option | :material-check: |
+| `option_type` | string or null | `CE` or `PE` | :material-check: |
+| `lot_size` | integer or null | Units of the underlying in one lot | |
+| `last_price` | number | The last traded price | :material-check: |
+| `average_price` | number or null | The day's volume-weighted average price, as the broker reports it | |
+| `ohlc` | object | The day's `open`, `high` and `low`. There is no `close` in it. | |
+| `previous_close` | number or null | The previous session's close | |
+| `change_percent` | number or null | The change from `previous_close`, as a percentage rounded to four places, recomputed by the project rather than taken from the broker | |
+| `last_quantity` | integer or null | The size of the last trade, in units | |
+| `volume` | integer or null | The day's traded volume, in units | |
+| `buy_quantity` | integer or null | Total quantity bid, in units | |
+| `sell_quantity` | integer or null | Total quantity offered, in units | |
+| `oi` | integer or null | Open interest, for a derivative | |
+| `oi_day_high` | integer or null | The day's highest open interest | |
+| `oi_day_low` | integer or null | The day's lowest open interest | |
+| `depth` | object | `buy` and `sell`, each a list of up to five levels of `price`, `quantity` and `orders`, with empty levels dropped | |
+| `last_trade_time` | number or null | When the last trade happened, in epoch seconds | :material-check: |
+| `exchange_time` | number or null | The exchange's timestamp on the update, in epoch seconds | |
+| `received_at` | number | When the project received the tick, in epoch seconds | :material-check: |
+| `unified_at` | number | When the quote document was built, in epoch seconds | |
+| `stale` | boolean | `true` when the owning broker's feed went silent and no healthy backup took over | |
+| `stale_since` | number or null | When the quote became stale, in epoch seconds | |
+| `source` | string | `cache` or `broker`, added by the API | :material-check: |
 
 Quantities are always in units, not lots. A broker that reports quantities in lots has them multiplied up to units before they are stored. Prices are rounded to four decimal places for currency instruments and two for everything else.
 
@@ -282,7 +282,7 @@ A `POST` can take longer than a `GET` when several instruments need a broker, so
 
 <div class="endpoint" markdown><span class="method get">GET</span> `/api/instruments/ohlc`<span class="auth">access-token</span></div>
 
-This route returns everything `ltp` returns, plus the day's open, high and low, the previous session's close and the percentage change from it. The quote document has no field for the day's close, so `ohlc` holds only `open`, `high` and `low`.
+This route returns only the day's open, high, low, close and volume. It carries no identity, timestamps or source, so use [`quote`](#quote) when you need those. The quote document has no field for the day's close, so `close` is the last traded price, which becomes the day's close once the market has shut.
 
 #### Request parameters
 
@@ -318,8 +318,8 @@ This route returns everything `ltp` returns, plus the day's open, high and low, 
         },
         timeout=10,
     )
-    quote = response.json()
-    print(quote['ohlc'], quote['previous_close'], quote['change_percent'])
+    candle = response.json()
+    print(candle['open'], candle['high'], candle['low'], candle['close'], candle['volume'])
     ```
 
 #### Response
@@ -328,28 +328,23 @@ The id below is a placeholder, and the prices and times are illustrative.
 
 ```json
 {
-  "instrument_id": "11111111-1111-5111-8111-000000000002",
-  "exchange": "nse",
-  "segment": "nse_equities",
-  "shape": "security",
-  "symbol": "INFY",
-  "underlying_symbol": null,
-  "expiry_date": null,
-  "strike_price": null,
-  "option_type": null,
-  "last_price": 1521.4,
-  "last_trade_time": 1790410198.0,
-  "received_at": 1790410198.412,
-  "source": "cache",
-  "ohlc": {"open": 1510.0, "high": 1528.9, "low": 1505.2},
-  "previous_close": 1508.15,
-  "change_percent": 0.8786
+  "open": 1510.0,
+  "high": 1528.9,
+  "low": 1505.2,
+  "close": 1521.4,
+  "volume": 4812300
 }
 ```
 
 #### Response attributes
 
-Every field is described in [The unified quote document](#the-unified-quote-document). The route returns exactly the fields marked in its `ohlc` column.
+| Field | Type | Description |
+|---|---|---|
+| `open` | number or null | The day's open, from the quote document's `ohlc` |
+| `high` | number or null | The day's high, from the quote document's `ohlc` |
+| `low` | number or null | The day's low, from the quote document's `ohlc` |
+| `close` | number or null | The last traded price, from the quote document's `last_price` |
+| `volume` | integer or null | The day's traded volume in units, from the quote document's `volume` |
 
 #### Status codes
 
@@ -362,7 +357,7 @@ The status codes are the same as for [`ltp`](#ltp).
 The `POST` form takes a list of instruments in a JSON body and answers `{"results": [...]}`, with each answered entry's `data` exactly as above. It works exactly like [`ltp` for several instruments](#ltp-for-several-instruments), and [Several instruments at once](instruments.md#several-instruments-at-once) describes the body, the entries and the statuses.
 
 ??? note "Under the hood"
-    - Route: `InstrumentsBlueprint.ohlc`, which keeps only the keys in `_OHLC_KEYS`, the `ltp` keys plus `ohlc`, `previous_close` and `change_percent`.
+    - Route: `InstrumentsBlueprint.ohlc`, which builds its answer from the whole quote document with `_ohlcv_values`.
     - When a broker's own previous close is missing, a fetched quote keeps the previous close of the cached quote it replaces, as long as both are from the same India day.
 
 ## Quote
