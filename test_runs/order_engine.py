@@ -2437,6 +2437,140 @@ class OrderEngineSuite:
         document.update(overrides)
         return document
 
+    def plan_result(self, name, plan, updates, answer, dry_run=None):
+        """Places one `plan` order through the engine, feeds it order updates, and records what it did and the state of each of its parts.
+
+        Args:
+            name (str): The check's name.
+            plan (object): The `plan` object, as a caller would send it.
+            updates (list): One order update per step, applied in order.
+            answer (dict): The stubbed broker answer.
+            dry_run (bool | None): The body's `dry_run`.
+
+        Returns:
+            dict: The recorded result, with `parts`, each parent's `parts` parameter.
+        """
+        body = self.scenarios.bodies.market_order(
+            dry_run=dry_run,
+            order_type='LIMIT',
+            price=1000,
+            quantity=10,
+            synthetic={
+                'type': 'plan',
+                'plan': plan,
+            },
+        )
+        result = self.reaction_result(name, body, updates, answer)
+        stored = self.fake_redis.hashes.get('unified:orders:parents', {})
+        parts = []
+        for document in stored.values():
+            parameters = json.loads(document).get('parameters') or {}
+            parts.append(parameters.get('parts'))
+        result['parts'] = parts
+        return result
+
+    def run_plan_checks(self):
+        """Runs the `plan` type, the first stage of the composable orders, through placement, fills, refusals and a dry run.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        accepted = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        rejected = self.scenarios.answers.json_answer(
+            200,
+            {
+                'stat': 'Not_Ok',
+                'emsg': 'RMS:Margin Exceeds',
+            },
+        )
+        one_simple_order = {
+            'order': {
+                'presets': [
+                    {
+                        'simple': {},
+                    },
+                ],
+            },
+        }
+        return [
+            self.plan_result(
+                'a_plan_of_one_simple_order_completes_when_it_fills',
+                one_simple_order,
+                [
+                    self.update('26091500000021', 'OPEN', 4),
+                    self.update('26091500000021', 'COMPLETE', 10),
+                ],
+                accepted,
+            ),
+            self.plan_result(
+                'a_plan_order_cancelled_after_part_filled_completes_as_partly_filled',
+                one_simple_order,
+                [
+                    self.update('26091500000021', 'OPEN', 4),
+                    self.update('26091500000021', 'CANCELLED', 4),
+                ],
+                accepted,
+            ),
+            self.plan_result(
+                'a_plan_order_the_broker_rejects_is_done_as_refused',
+                one_simple_order,
+                [],
+                rejected,
+            ),
+            self.plan_result(
+                'a_plan_with_no_presets_runs_as_a_simple_order',
+                {
+                    'order': {},
+                },
+                [],
+                accepted,
+            ),
+            self.plan_result(
+                'a_plan_dry_run_answers_with_the_expanded_plan_and_records_nothing',
+                one_simple_order,
+                [],
+                accepted,
+                dry_run=True,
+            ),
+            self.plan_result(
+                'a_plan_with_a_join_is_refused_as_not_built_yet',
+                {
+                    'then': {},
+                },
+                [],
+                accepted,
+            ),
+            self.plan_result(
+                'a_plan_lists_every_problem_at_once',
+                {
+                    'order': {
+                        'side': 'buy',
+                        'presets': [
+                            {
+                                'peg': {},
+                            },
+                            {
+                                'simple': {
+                                    'broker': 'zerodha',
+                                },
+                            },
+                        ],
+                    },
+                },
+                [],
+                accepted,
+            ),
+            self.plan_result(
+                'a_plan_that_is_not_an_object_is_refused',
+                'buy 10',
+                [],
+                accepted,
+            ),
+        ]
+
     def run_reaction_checks(self):
         """Runs the linked order types through a fill, which is the only way they do anything.
 
@@ -6002,6 +6136,7 @@ class OrderEngineSuite:
             results.extend(self.run_recovery_checks())
             results.extend(self.run_follower_checks())
             results.extend(self.run_reaction_checks())
+            results.extend(self.run_plan_checks())
             results.extend(self.run_clock_checks())
             results.extend(self.run_price_checks())
             results.extend(self.run_wiring_checks())

@@ -1,0 +1,7 @@
+Resting, nothing filled: None
+Resting, 4 of 10 filled: None
+Filled: filled
+Cancelled after 4 filled: partly_filled
+Cancelled with nothing filled: cancelled
+Rejected by the broker: refused
+Outcome unknown: None

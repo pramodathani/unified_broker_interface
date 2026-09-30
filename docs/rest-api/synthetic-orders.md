@@ -2,7 +2,7 @@
 
 A synthetic order is an order that no Indian exchange offers, built by the order engine out of ordinary broker orders. You ask for one by adding a `synthetic` object to the body of [`POST /api/orders/place`](orders.md#place-an-order), and the engine places, watches, moves and cancels the real orders it is made of.
 
-This page is the glossary of all 53 types the engine runs. It lists every field each type reads from the `synthetic` object, with the defaults and limits taken from the code.
+This page is the glossary of all 54 types the engine runs. It lists every field each type reads from the `synthetic` object, with the defaults and limits taken from the code.
 
 !!! danger "Synthetic orders place real orders, sometimes long after you asked"
     A synthetic order can place, modify or cancel orders at a broker minutes, hours or even days after your request, with nobody watching. Triggers, trailing stops, grids and schedules all act on their own. Send `"dry_run": true` first, which builds the first broker request without recording or sending anything.
@@ -54,7 +54,7 @@ Two fields can appear in any `synthetic` object. The table below lists them.
 
 | Field | Type | Required | Meaning |
 |---|---|:---:|---|
-| `type` | string | Yes | One of the 53 names in the table below. A body with no `synthetic` object, or no `type`, runs as `simple`. An unknown name is refused with `400` and the message `the order engine does not run '<name>' orders; it runs <list>`. |
+| `type` | string | Yes | One of the 54 names in the table below. A body with no `synthetic` object, or no `type`, runs as `simple`. An unknown name is refused with `400` and the message `the order engine does not run '<name>' orders; it runs <list>`. |
 | `closes_position` | boolean | No | `true` says every leg of this order closes a position, so it may use the part of a broker's daily order cap kept for exits. Only the literal `true` counts. |
 
 The engine also writes its own working values into the parent's copy of the `synthetic` object, such as `tick_size`, `triggered_at`, `watermark`, `placed_quantity`, `started_at` and `expires_at`. These are internal, so do not send them.
@@ -90,7 +90,7 @@ Types that wait for a price or a time send nothing at first, and answer <span cl
 
 Keep the `parent_id`. It is the only handle on an order that has not reached a broker yet.
 
-## All 53 types
+## All 54 types
 
 The master table below lists every type registered in `SYNTHETIC_ORDER_CLASSES`, in the order the registry holds them. The "First answer" column says whether a broker order goes out when you ask (`200`, the broker's own answer) or whether the engine waits (`202`).
 
@@ -149,8 +149,9 @@ The master table below lists every type registered in `SYNTHETIC_ORDER_CLASSES`,
 | `scale_with_profit_taker` | Plain and laddered | A ladder whose every filled rung gets its own profit-taker, and is placed again once that profit is taken. | `from_price`, `to_price`, `steps`, `profit_points`, `most_cycles` | 200 |
 | `two_sided_quote` | Plain and laddered | A bid and an offer kept around the fair price, leaning away from the inventory they build. | `half_spread_points`, `skew_ticks`, `most_inventory` | 200 |
 | `account_conditional` | Price triggers | Sends an order when free margin, the day's profit or the open position count reaches a level, or cancels it then. | `account_field`, `account_level`, `trigger_direction`, `action` | 202, or 200 with `action: cancel` |
+| `plan` | Plans | An order described as a plan of parts; so far one order built from the `simple` preset. | `plan` | 200 |
 
-The chart below counts how many of the 53 types fall into each family. The families are this page's own grouping, chosen to make the list easier to scan; the code does not group them.
+The chart below counts how many of the 54 types fall into each family. The families are this page's own grouping, chosen to make the list easier to scan; the code does not group them.
 
 ```vegalite
 {
@@ -167,7 +168,8 @@ The chart below counts how many of the 53 types fall into each family. The famil
       {"family": "Price triggers", "types": 8},
       {"family": "Plain and laddered", "types": 6},
       {"family": "Time-based", "types": 5},
-      {"family": "Multi-instrument", "types": 4}
+      {"family": "Multi-instrument", "types": 4},
+      {"family": "Plans", "types": 1}
     ]
   },
   "mark": {"type": "bar", "cornerRadiusEnd": 3},
@@ -1165,6 +1167,38 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
       {"instrument_id": "11111111-1111-5111-8111-000000000007", "exposure_per_unit": 0.45},
       {"instrument_id": "11111111-1111-5111-8111-000000000008", "exposure_per_unit": -0.30}
     ]}
+    ```
+
+=== "Plans"
+
+    A plan describes an order as a tree of parts rather than naming one of the fixed types. It is the first stage of the composable synthetic orders, which will let any number of the other types be combined in one order. So far a plan can hold one order built from the `simple` preset; the joins, such as `then` and `either`, and the other presets come in later stages, and naming one is refused as not built yet.
+
+    #### `plan`
+
+    A plan order reads and checks the whole of `plan` before anything is recorded or sent. A plan with any problem is refused with <span class="status s4">400</span>, and the answer lists every problem found, not just the first, each with the `path` of the part it is in, the `rule` it breaks and a `message`. A dry run answers with the broker request that would be sent and the plan as it would run in `plan`, with every slot's default written out.
+
+    Each node of the plan is an object holding exactly one key. `order` is the only node so far, and it takes one setting, `presets`, a list of objects each holding one preset name and its settings. The only preset is `simple`, which takes no settings, and an order with no presets runs as `simple`. The order itself is the rest of the body: its instrument, side, quantity, price, product and validity.
+
+    | Field | Type | Required | Rules |
+    |---|---|:---:|---|
+    | `plan` | object | Yes | One node: `{"order": {"presets": [...]}}`. |
+
+    Each part of the plan has a path, starting at `root`. Every broker order a part places carries its path as its `leg_role`, and each part's state is kept in the parent's `parameters.parts` under its path, as `{"state": "working"}` and, once done, `{"state": "done", "reason": ...}`. The reason is `filled`, `partly_filled`, `refused` or `cancelled`. The parent ends when the root part is done: `completed` when anything traded, `cancelled` when nothing did, and `rejected` when the broker refused the order. [`GET /api/orders/parents`](orders.md#the-engines-parents) shows the parts with the rest of the parent.
+
+    ```json
+    {"type": "plan", "plan": {"order": {"presets": [{"simple": {}}]}}}
+    ```
+
+    A refused plan answers like this:
+
+    ```json
+    {
+      "error": "the plan cannot run; every problem found is listed in problems",
+      "problems": [
+        {"path": "root", "rule": "unknown_setting", "message": "an order in a plan takes only presets so far, not 'side'"},
+        {"path": "root.presets.0", "rule": "unknown_preset", "message": "'peg' is not a preset a plan can use yet; the presets available are simple"}
+      ]
+    }
     ```
 
 ## Snap and midprice orders

@@ -1,0 +1,19 @@
+HTTP status: 200
+Outcome: accepted, broker zerodha, order id 260930000001
+Broker order: role root, BUY 10, state acknowledged
+Parts after placing: {'root': {'state': 'working'}}
+Parent after placing: working
+Parts after the fill: {'root': {'state': 'done', 'reason': 'filled'}}
+Parent after the fill: completed
+Events recorded:
+  1. parent_received: None
+  2. parameters_changed: the plan's root part is working
+  3. leg_requested: None
+  4. leg_answered: None
+  5. parent_state_changed: None
+  6. leg_update: None
+  7. parameters_changed: the plan's root part is done: filled
+  8. parent_state_changed: the plan's root order is done: filled
+Second plan ended by finish_cancelling: True
+Second plan's parts: {'root': {'state': 'done', 'reason': 'cancelled'}}
+Second plan: cancelled
