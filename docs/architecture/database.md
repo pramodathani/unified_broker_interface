@@ -23,6 +23,7 @@ flowchart LR
         UC["contract_sizes"]
         UU["underlyings"]
         UBC["broker_order_costs"]
+        UMR["margin_rates"]
         UPH["price_history<br/>+ sources, factors,<br/>corrections, yahoo state"]
         UT["ticks"]
         UO["order_updates"]
@@ -67,7 +68,8 @@ The table below lists every table in the database. "Chunk" is the size of each T
 | `unified` | `broker_mappings` | 1 month, by `mapping_date` | not compressed | `bin/unified/instruments/map` | `…/mapping/utilities/sql/ddl/120_unified_broker_mappings.sql` |
 | `unified` | `contract_sizes` | 1 month, by `mapping_date` | not compressed | `bin/unified/instruments/map` | `…/mapping/utilities/sql/ddl/130_unified_contract_sizes.sql` |
 | `unified` | `underlyings` | 1 month, by `mapping_date` | not compressed | `bin/unified/instruments/map` | `…/mapping/utilities/sql/ddl/140_unified_underlyings.sql` |
-| `unified` | `broker_order_costs` | ordinary table | | by hand; seeded by its DDL file, and read by the REST API and the order engine at start-up and at 06:00 IST (see [Choosing a broker by cost](broker-selection.md)) | `…/mapping/utilities/sql/ddl/150_unified_broker_order_costs.sql` |
+| `unified` | `broker_order_costs` | ordinary table | | by hand, and its margin columns by `bin/unified/orders/margin_calibration`; seeded by its DDL file, and read by the REST API and the order engine at start-up and at 06:00 IST (see [Choosing a broker by cost](broker-selection.md)) | `…/mapping/utilities/sql/ddl/150_unified_broker_order_costs.sql` |
+| `unified` | `margin_rates` | ordinary table | | by hand; seeded by its DDL file with cautious rates, and read with `broker_order_costs` to estimate the margin an order needs (see [Choosing a broker by cost](broker-selection.md)) | `…/mapping/utilities/sql/ddl/160_unified_margin_rates.sql` |
 | `unified` | `price_history` | 1 month | 30 days | `bin/unified/instruments/price_history` | `…/historical/utilities/sql/ddl/200_unified_price_history.sql` |
 | `unified` | `price_history_sources` | ordinary table | | `bin/unified/instruments/price_history` | `…/historical/utilities/sql/ddl/210_unified_price_history_sources.sql` |
 | `unified` | `adjustment_factors` | ordinary table | | `bin/unified/instruments/price_history` | `…/historical/utilities/sql/ddl/220_unified_adjustment_factors.sql` |
@@ -281,7 +283,7 @@ On an empty database the directories must be applied in the order below, because
 
 ```mermaid
 flowchart TD
-    A["stock_brokers/instruments/sql/ddl<br/>000 broker schemas, 010–100 instruments"] --> B["mapping/utilities/sql/ddl<br/>100 unified schema, 110 instruments,<br/>120 broker_mappings, 130 contract_sizes,<br/>140 underlyings, 150 broker_order_costs"]
+    A["stock_brokers/instruments/sql/ddl<br/>000 broker schemas, 010–100 instruments"] --> B["mapping/utilities/sql/ddl<br/>100 unified schema, 110 instruments,<br/>120 broker_mappings, 130 contract_sizes,<br/>140 underlyings, 150 broker_order_costs,<br/>160 margin_rates"]
     B --> C["historical/utilities/sql/ddl<br/>000–060 broker price history,<br/>200–250 unified price history"]
     A --> D["ticks/utilities/sql/ddl 010–100<br/>applied by each broker's persisters"]
     B --> E["ticks/utilities/sql/ddl 300, 310, 320<br/>applied by the unified persisters"]
