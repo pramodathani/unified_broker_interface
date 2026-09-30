@@ -42,7 +42,7 @@ class PlanOrder(SyntheticOrder):
         Raises:
             RefusedRequestError: With HTTP 400 and every problem in `problems` when the plan cannot run.
         """
-        reader = PlanReader()
+        reader = PlanReader(self.parent.body.get('transaction_type'))
         root = reader.read(self.parent.parameters.get('plan'))
         if root is None:
             raise RefusedRequestError.refusal(
@@ -95,6 +95,8 @@ class PlanOrder(SyntheticOrder):
                 memory = {}
                 part.prepare(self, memory)
                 record['memory'] = memory
+            if part.pricing.moves():
+                record['moves'] = True
             records[part.path] = record
             if part.needs_prices():
                 needs_prices = True
@@ -299,21 +301,24 @@ class PlanOrder(SyntheticOrder):
     def on_price_tick(self, quotes, now):
         """Places every waiting order whose trigger holds on this tick, then settles the plan.
 
-        An order whose join cancels before sending is sent only once every sibling's resting order has been cancelled; otherwise it tries again on the next tick.
+        An order whose join cancels before sending is sent only once every sibling's resting order has been cancelled; otherwise it tries again on the next tick. A working order whose pricing moves, such as a trailing stop, is then moved if the tick calls for it.
 
         Args:
             quotes (dict): The quotes the tick carried.
             now (float): The Unix time of the tick.
 
         Returns:
-            bool: True when an order was placed on this tick.
+            bool: True when an order was placed or moved on this tick.
         """
         records = self.parent.parameters.get('parts') or {}
         waiting_paths = []
+        moving_paths = []
         for path, record in records.items():
             if record.get('state') == 'waiting':
                 waiting_paths.append(path)
-        if not waiting_paths:
+            if record.get('state') == 'working' and record.get('moves'):
+                moving_paths.append(path)
+        if not waiting_paths and not moving_paths:
             return False
         root, _ = self._read_plan()
         placed = []
@@ -349,8 +354,12 @@ class PlanOrder(SyntheticOrder):
                 record.pop('fired_at', None)
                 self.set_part_record(part.path, record, None)
             placed = placed + sent
-        if not placed:
-            if memory_changed:
+        moved = False
+        for part in root.order_parts():
+            if part.path in moving_paths and part.move(self, quotes):
+                moved = True
+        if not placed and not moved:
+            if memory_changed or moving_paths:
                 self.save()
             return False
         placed = placed + root.settle(self)

@@ -2571,7 +2571,7 @@ class OrderEngineSuite:
             ),
         ]
 
-    def plan_price_result(self, name, plan, steps, answer, positions=None, restart_between_ticks=False):
+    def plan_price_result(self, name, plan, steps, answer, positions=None, restart_between_ticks=False, book_overrides=None):
         """Places one `plan` order and walks it through price ticks, recording what it did and the state of each of its parts.
 
         Args:
@@ -2581,6 +2581,7 @@ class OrderEngineSuite:
             answer (dict): The stubbed broker answer.
             positions (float | None): A net RELIANCE position to seed, or None for none.
             restart_between_ticks (bool): Whether to rebuild every parent from its recorded events after each tick, as recovery does.
+            book_overrides (dict | None): Fields to put on every order in the broker's book, such as a stop's order type.
 
         Returns:
             dict: The recorded result, with `parts`, each parent's `parts` parameter.
@@ -2603,6 +2604,7 @@ class OrderEngineSuite:
             positions=positions,
             restart_between_ticks=restart_between_ticks,
             book_every_order=True,
+            book_overrides=book_overrides,
         )
         stored = self.fake_redis.hashes.get('unified:orders:parents', {})
         parts = []
@@ -3160,6 +3162,146 @@ class OrderEngineSuite:
                     {'quote': steady, 'at': 0},
                 ],
                 numbered,
+            ),
+        ]
+
+    def run_plan_trailing_checks(self):
+        """Runs plans whose orders trail the market, as a native stop that moves or as an engine-side trigger.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        numbered = dict(
+            self.scenarios.answers.json_answer(
+                200,
+                self.scenarios.answers.place_success('flattrade'),
+            ),
+            number_orders=True,
+        )
+        stop_in_the_book = {
+            'order_type': 'SL',
+            'trigger_price': 995.05,
+        }
+        trail_five = {
+            'trail_points': 5,
+            'stop_limit_offset': 1,
+        }
+        return [
+            self.plan_price_result(
+                'a_plan_trailing_stop_follows_a_rising_market_and_never_back',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'trailing_stop': trail_five,
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': self.book_at(1000.00, 1000.05), 'at': 0},
+                    {'quote': self.book_at(1002.95, 1003.00), 'at': 1},
+                    {'quote': self.book_at(1000.95, 1001.00), 'at': 2},
+                    {'quote': self.book_at(1005.95, 1006.00), 'at': 3},
+                ],
+                numbered,
+                positions=10,
+                book_overrides=stop_in_the_book,
+            ),
+            self.plan_price_result(
+                'a_plan_trailing_entry_follows_a_falling_market_down',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'trailing_entry': trail_five,
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': self.book_at(1000.00, 1000.05), 'at': 0},
+                    {'quote': self.book_at(996.95, 997.00), 'at': 1},
+                    {'quote': self.book_at(998.95, 999.00), 'at': 2},
+                ],
+                numbered,
+                book_overrides=stop_in_the_book,
+            ),
+            self.plan_price_result(
+                'a_plan_trailing_stop_waits_for_its_activation_level',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'trailing_stop': dict(trail_five, activate_at=1010),
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': self.book_at(1000.00, 1000.05), 'at': 0},
+                    {'quote': self.book_at(1005.00, 1005.05), 'at': 1},
+                    {'quote': self.book_at(1010.00, 1010.05), 'at': 2},
+                    {'quote': self.book_at(1012.00, 1012.05), 'at': 3},
+                ],
+                numbered,
+                positions=10,
+                book_overrides=stop_in_the_book,
+            ),
+            self.plan_price_result(
+                'a_plan_engine_side_trailing_exit_sells_past_the_bid_on_the_pullback',
+                {
+                    'order': {
+                        'side': 'protect',
+                        'trigger': {
+                            'trails': {
+                                'points': 5,
+                            },
+                        },
+                        'pricing': [
+                            {
+                                'marketable': {
+                                    'buffer_ticks': 2,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': self.book_at(1000.00, 1000.05), 'at': 0},
+                    {'quote': self.book_at(1005.95, 1006.00), 'at': 1},
+                    {'quote': self.book_at(1002.95, 1003.00), 'at': 2},
+                    {'quote': self.book_at(1000.90, 1000.95), 'at': 3},
+                ],
+                numbered,
+                positions=10,
+                book_overrides=stop_in_the_book,
+            ),
+            self.plan_price_result(
+                'a_plan_entry_then_a_trailing_stop_sized_to_its_fill',
+                {
+                    'then': {
+                        'first': {
+                            'order': {},
+                        },
+                        'each_fill': {
+                            'order': {
+                                'presets': [
+                                    {
+                                        'trailing_stop': trail_five,
+                                    },
+                                ],
+                            },
+                        },
+                    },
+                },
+                [
+                    {'quote': self.book_at(1000.00, 1000.05), 'at': 0},
+                    {'quote': self.book_at(1000.00, 1000.05), 'at': 1, 'updates': [self.update('26091500000101', 'COMPLETE', 10)]},
+                    {'quote': self.book_at(1003.95, 1004.00), 'at': 2},
+                ],
+                numbered,
+                book_overrides=stop_in_the_book,
             ),
         ]
 
@@ -6742,6 +6884,7 @@ class OrderEngineSuite:
             results.extend(self.run_plan_checks())
             results.extend(self.run_plan_trigger_checks())
             results.extend(self.run_plan_join_checks())
+            results.extend(self.run_plan_trailing_checks())
             results.extend(self.run_clock_checks())
             results.extend(self.run_price_checks())
             results.extend(self.run_wiring_checks())

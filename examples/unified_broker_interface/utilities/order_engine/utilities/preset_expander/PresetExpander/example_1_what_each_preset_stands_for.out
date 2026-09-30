@@ -12,3 +12,7 @@ cross_instrument: {'trigger': {'price_crosses': {'level': 1010, 'field': 'last',
   problems: []
 hidden_stop: {'side': 'protect', 'trigger': {'price_crosses': {'level': 990, 'field': 'opposite_touch'}}, 'pricing': [{'marketable': {'buffer_ticks': 3}}]}
   problems: []
+trailing_stop: {'pricing': [{'trail': {'limit_offset': 1, 'step_ticks': 1, 'points': 5}}], 'side': 'protect', 'trigger': {'price_crosses': {'level': 1010, 'direction': 'at_or_above'}}}
+  problems: []
+trailing_entry: {'pricing': [{'trail': {'limit_offset': 1, 'step_ticks': 1, 'percent': 0.5}}]}
+  problems: []

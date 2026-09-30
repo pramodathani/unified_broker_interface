@@ -45,3 +45,7 @@ The answer is the single broker answer when the root is one order placed at once
 A plan with an order that cannot be priced at once now waits for the next tick instead of being refused with 503, since a waiting order is retried on every tick.
 
 The offline scenario `a_plan_bracket_behaves_the_same_with_a_restart_between_fills` rebuilds the parent from its recorded events after every fill and sends the same eight requests as the run without restarts.
+
+## Stage 2c: trailing (2026-10-01)
+
+A working part whose pricing moves, marked `moves` in its record when the plan is placed, is offered every price tick and moved through `OrderPart.move`, which calls `reprice_leg`. `PlanReader` now gets the body's `transaction_type`, because a `trailing_stop` preset with `activate_at` has to know whether the position is long or short to know which way the activation level is reached.

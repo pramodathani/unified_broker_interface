@@ -21,3 +21,7 @@ The part now holds a trigger, a side and a pricing rule. It builds its order fro
 A part now has a lifecycle a join drives: `start` with a target, `send` when a waiting part's tick comes, `settle` to mark it done, `traded`, `set_target` to resize or cancel its resting order, and `cancel_rest`. A broker order's quantity is its total, filled part included, so `set_target` changes a resting order to its filled quantity plus what is still wanted. A leg the broker has not acknowledged has no `broker_order_id` and is left alone; the next settle tries again.
 
 `keeps_tag` is true only for the plan's main order, the root order or the first plan of a root Then join, followed down first children. Exits and children drop the caller's tag, as `ExitLegs.exit_order` and `OneTriggersOther.child_order` do today.
+
+## Stage 2c: pricing memory and moving
+
+A part now keeps `pricing_memory` in its record for a pricing that remembers something between ticks, and passes it to `priced_body` and `moved_prices`. `move` reprices the part's one resting order when its pricing moves.

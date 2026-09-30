@@ -1,0 +1,7 @@
+Reads quotes: True, watches: []
+last 1000.05: met False, memory {'best': '1000.05'}
+last 1006.0: met False, memory {'best': '1006.00'}
+last 1003.0: met False, memory {'best': '1006.00'}
+last 1001.05: met False, memory {'best': '1006.00'}
+last 1000.95: met True, memory {'best': '1006.00'}
+As a dry run shows it: {'trails': {'points': '5'}}

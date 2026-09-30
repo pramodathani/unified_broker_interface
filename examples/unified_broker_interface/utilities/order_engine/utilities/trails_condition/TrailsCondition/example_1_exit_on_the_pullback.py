@@ -1,12 +1,12 @@
-"""Prices a buy and a sell as marketable limits, two ticks past the touch they trade against.
+"""Walks an engine-side trailing condition for a long's exit through ticks, holding once the price falls five below its best.
 
-`MarketablePricing` sends a limit `buffer_ticks` past the opposite touch, read at the moment the order is sent: past the best offer for a buy, and below the best bid for a sell. That is how market-if-touched, the hidden stop and every closing order price themselves today, because a limit can never fill worse than the buffer allows, while being far enough through the touch to fill against what rests there.
+A `TrailsCondition` is a trailing stop kept in the engine. For an order sent as a sell, it remembers the highest last price seen and holds once the price has fallen `points` below it. Because nothing rests at the broker, the order it triggers can be priced any way, for example as a marketable limit, which a native trailing stop cannot be.
 
 A small stand-in plays the plan order, reading quotes with RELIANCE's tick size of 0.05. Nothing is read from Redis or sent anywhere.
 
 Run it from the project root:
 
-    python examples/unified_broker_interface/utilities/order_engine/utilities/marketable_pricing/MarketablePricing/example_1_past_the_opposite_touch.py
+    python examples/unified_broker_interface/utilities/order_engine/utilities/trails_condition/TrailsCondition/example_1_exit_on_the_pullback.py
 """
 
 import decimal
@@ -14,8 +14,8 @@ import decimal
 from unified_broker_interface.utilities.order_engine.utilities.market_view import (
     MarketView,
 )
-from unified_broker_interface.utilities.order_engine.utilities.marketable_pricing import (
-    MarketablePricing,
+from unified_broker_interface.utilities.order_engine.utilities.trails_condition import (
+    TrailsCondition,
 )
 
 INSTRUMENT_ID = '11111111-1111-5111-8111-000000000001'
@@ -124,37 +124,21 @@ class StandInPlanOrder:
         """
         return 'nse_equities'
 
-
-
-
-class PricingExampleBody:
-    """Builds the caller's order body the pricing examples price."""
-
-    def body(self, transaction_type):
-        """A limit order for ten RELIANCE shares at 1,000.
-
-        Args:
-            transaction_type (str): BUY or SELL.
+    def tick_size(self):
+        """RELIANCE's tick size.
 
         Returns:
-            dict: The body.
+            decimal.Decimal: 0.05.
         """
-        return {
-            'instrument_id': INSTRUMENT_ID,
-            'transaction_type': transaction_type,
-            'order_type': 'LIMIT',
-            'quantity': 10,
-            'price': '1000.00',
-        }
+        return decimal.Decimal('0.05')
 
 
-class PastTheOppositeTouchExample:
-    """Prices a buy and a sell against one book.
+class ExitOnThePullbackExample:
+    """Asks a five-point trailing condition for a sell on five ticks.
 
     Attributes:
         plan_order (StandInPlanOrder): The stand-in plan order.
-        quotes (QuoteBuilder): Builds the quote.
-        bodies (PricingExampleBody): Builds the bodies.
+        quotes (QuoteBuilder): Builds the ticks' quotes.
     """
 
     def __init__(self):
@@ -165,24 +149,25 @@ class PastTheOppositeTouchExample:
         """
         self.plan_order = StandInPlanOrder()
         self.quotes = QuoteBuilder()
-        self.bodies = PricingExampleBody()
 
     def run(self):
-        """Prints each priced body.
+        """Prints the condition's answer and memory on each tick.
 
         Returns:
             None: This method returns nothing.
         """
-        pricing = MarketablePricing(2)
-        quotes = {
-            INSTRUMENT_ID: self.quotes.book_at(994.90, 994.95),
-        }
-        print('Book: bid 994.90, offer 994.95')
-        for side in ('BUY', 'SELL'):
-            body = pricing.priced_body(self.plan_order, self.bodies.body(side), side, quotes, {})
-            print(f"{side}: {body['order_type']} at {body['price']}")
-        print(f'Reads quotes: {pricing.needs_prices()}; moves a resting order {pricing.moves()}; dry run shows {pricing.described()}')
+        condition = TrailsCondition(decimal.Decimal('5'), None)
+        memory = {}
+        condition.prepare(self.plan_order, memory)
+        print(f'Reads quotes: {condition.needs_prices()}, watches: {condition.instruments()}')
+        for index, last in enumerate((1000.05, 1006.00, 1003.00, 1001.05, 1000.95)):
+            quotes = {
+                INSTRUMENT_ID: self.quotes.book_at(last - 0.05, last),
+            }
+            met = condition.is_met(self.plan_order, memory, quotes, float(index), 'BUY', 'SELL')
+            print(f'last {last}: met {met}, memory {memory}')
+        print(f'As a dry run shows it: {condition.described()}')
 
 
 if __name__ == '__main__':
-    PastTheOppositeTouchExample().run()
+    ExitOnThePullbackExample().run()

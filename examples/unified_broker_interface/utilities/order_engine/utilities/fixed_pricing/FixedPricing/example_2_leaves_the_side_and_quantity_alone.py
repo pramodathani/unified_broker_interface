@@ -62,9 +62,9 @@ class LeavesTheSideAndQuantityAloneExample:
         """
         sell = self.bodies.body('SELL')
         print(f'Before: {sell}')
-        priced = FixedPricing(decimal.Decimal('1004.50'), 'LIMIT').priced_body(None, dict(sell), 'SELL', {})
+        priced = FixedPricing(decimal.Decimal('1004.50'), 'LIMIT').priced_body(None, dict(sell), 'SELL', {}, {})
         print(f'Limit at 1004.50: {priced}')
-        market = FixedPricing(decimal.Decimal('1004.50'), 'MARKET').priced_body(None, dict(sell), 'SELL', {})
+        market = FixedPricing(decimal.Decimal('1004.50'), 'MARKET').priced_body(None, dict(sell), 'SELL', {}, {})
         print(f'Market: {market}')
         print(f"Dry run of the market pricing: {FixedPricing(decimal.Decimal('1004.50'), 'MARKET').described()}")
         print(f'Reads quotes: {FixedPricing(None, None).needs_prices()}')

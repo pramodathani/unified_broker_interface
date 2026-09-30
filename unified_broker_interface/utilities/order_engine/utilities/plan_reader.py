@@ -38,6 +38,12 @@ from unified_broker_interface.utilities.order_engine.utilities.time_condition im
     KINDS,
     TimeCondition,
 )
+from unified_broker_interface.utilities.order_engine.utilities.trail_pricing import (
+    TrailPricing,
+)
+from unified_broker_interface.utilities.order_engine.utilities.trails_condition import (
+    TrailsCondition,
+)
 
 JOIN_NAMES = (
     'then',
@@ -97,16 +103,21 @@ class PlanReader:
     The joins are named in the design and recognised here, so a caller who writes one is told it is not built yet rather than that it is unknown.
 
     Attributes:
+        opening_side (str | None): BUY or SELL, the side of the caller's body, which some presets need; None when it is not known.
         problems (list): Every problem found by the last `read`, each a dictionary with `path`, `rule` and `message`.
         warnings (list): Every warning from the last `read`, in the same form.
     """
 
-    def __init__(self):
+    def __init__(self, opening_side=None):
         """Builds a reader that has found no problems.
+
+        Args:
+            opening_side (str | None): BUY or SELL, the side of the caller's body, or None when it is not known.
 
         Returns:
             None: This method returns nothing.
         """
+        self.opening_side = opening_side
         self.problems = []
         self.warnings = []
 
@@ -373,7 +384,7 @@ class PlanReader:
         presets = order.get('presets')
         if not isinstance(presets, list):
             return None
-        expander = PresetExpander()
+        expander = PresetExpander(self.opening_side)
         found = []
         for index, preset in enumerate(presets):
             if not isinstance(preset, dict) or len(preset) != 1:
@@ -419,7 +430,7 @@ class PlanReader:
             )
             return []
         sources = []
-        expander = PresetExpander()
+        expander = PresetExpander(self.opening_side)
         for index, preset in enumerate(presets):
             preset_path = f'{path}.presets.{index}'
             if not isinstance(preset, dict) or len(preset) != 1:
@@ -499,6 +510,8 @@ class PlanReader:
                 return self._read_condition_group(kind, content, path)
             if kind == 'price_crosses':
                 return self._read_price_crosses(content, f'{path}.price_crosses')
+            if kind == 'trails':
+                return self._read_trails(content, f'{path}.trails')
             if kind in KINDS:
                 if not isinstance(content, str):
                     self._add_problem(
@@ -511,7 +524,7 @@ class PlanReader:
             self._add_problem(
                 path,
                 'unknown_condition',
-                f'{kind!r} is not a trigger condition; the conditions are price_crosses, {", ".join(KINDS)}, all and any',
+                f'{kind!r} is not a trigger condition; the conditions are price_crosses, trails, {", ".join(KINDS)}, all and any',
             )
         return None
 
@@ -661,10 +674,12 @@ class PlanReader:
                 return self._read_marketable(settings, f'{entry_path}.marketable')
             if name == 'native_stop':
                 return self._read_native_stop(settings, f'{entry_path}.native_stop')
+            if name == 'trail':
+                return self._read_trail(settings, f'{entry_path}.trail')
             self._add_problem(
                 entry_path,
                 'unknown_pricing',
-                f'{name!r} is not a pricing a plan can use yet; the pricings available are fixed, marketable and native_stop',
+                f'{name!r} is not a pricing a plan can use yet; the pricings available are fixed, marketable, native_stop and trail',
             )
         return None
 
@@ -737,6 +752,86 @@ class PlanReader:
         if len(self.problems) > problems_before:
             return None
         return NativeStopPricing(trigger_price, limit_price)
+
+    def _read_distance(self, settings, path, name):
+        """Reads the trailing distance a `trail` pricing or a `trails` condition takes: `points` or `percent`, exactly one.
+
+        Args:
+            settings (dict): The settings.
+            path (str): Where they sit in the plan.
+            name (str): The pricing's or condition's name, for the message.
+
+        Returns:
+            tuple: `points` and `percent` (decimal.Decimal | None), one of them None.
+        """
+        has_points = 'points' in settings
+        has_percent = 'percent' in settings
+        if has_points == has_percent:
+            self._add_problem(
+                path,
+                'bad_setting',
+                f'{name} takes points or percent, exactly one, to say how far behind the market it follows',
+            )
+            return None, None
+        if 'points' in settings:
+            return self._price(settings['points'], path, 'points'), None
+        return None, self._price(settings['percent'], path, 'percent')
+
+    def _read_trails(self, settings, path):
+        """Reads a `trails` condition.
+
+        Args:
+            settings (object): `points` or `percent`.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            TrailsCondition | None: The condition, or None when it has a problem.
+        """
+        if not isinstance(settings, dict):
+            self._add_problem(path, 'trigger_shape', 'trails holds an object of settings')
+            return None
+        problems_before = len(self.problems)
+        for setting in settings:
+            if setting not in ('points', 'percent'):
+                self._add_problem(
+                    path,
+                    'unknown_setting',
+                    f'trails takes points or percent, not {setting!r}',
+                )
+        points, percent = self._read_distance(settings, path, 'trails')
+        if len(self.problems) > problems_before:
+            return None
+        return TrailsCondition(points, percent)
+
+    def _read_trail(self, settings, path):
+        """Reads `trail` pricing.
+
+        Args:
+            settings (dict): `points` or `percent`, `limit_offset`, and optionally `step_ticks`.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            TrailPricing | None: The pricing, or None when it has a problem.
+        """
+        problems_before = len(self.problems)
+        self._refuse_unknown(
+            settings,
+            ('points', 'percent', 'limit_offset', 'step_ticks'),
+            path,
+            'trail',
+        )
+        points, percent = self._read_distance(settings, path, 'trail')
+        limit_offset = self._price(settings.get('limit_offset'), path, 'limit_offset')
+        step_ticks = settings.get('step_ticks', 1)
+        if isinstance(step_ticks, bool) or not isinstance(step_ticks, int) or step_ticks < 1:
+            self._add_problem(
+                path,
+                'bad_setting',
+                f'step_ticks must be a whole number of ticks, at least one, not {step_ticks!r}',
+            )
+        if len(self.problems) > problems_before:
+            return None
+        return TrailPricing(points, percent, limit_offset, step_ticks)
 
     def _price(self, value, path, name):
         """Reads a number that must be above zero.

@@ -174,18 +174,18 @@ class NoBookNoPriceExample:
             None: This method returns nothing.
         """
         pricing = MarketablePricing(2)
-        print(f"No quote yet: {pricing.priced_body(self.plan_order, self.bodies.body('BUY'), 'BUY', {})}")
+        print(f"No quote yet: {pricing.priced_body(self.plan_order, self.bodies.body('BUY'), 'BUY', {}, {})}")
         empty_offer = self.quotes.book_at(994.90, 994.95)
         empty_offer['depth']['sell'] = []
         quotes = {
             INSTRUMENT_ID: empty_offer,
         }
-        print(f"No offers resting: {pricing.priced_body(self.plan_order, self.bodies.body('BUY'), 'BUY', quotes)}")
+        print(f"No offers resting: {pricing.priced_body(self.plan_order, self.bodies.body('BUY'), 'BUY', quotes, {})}")
         joining = MarketablePricing(0)
         quotes = {
             INSTRUMENT_ID: self.quotes.book_at(994.90, 994.95),
         }
-        body = joining.priced_body(self.plan_order, self.bodies.body('BUY'), 'BUY', quotes)
+        body = joining.priced_body(self.plan_order, self.bodies.body('BUY'), 'BUY', quotes, {})
         print(f"Zero buffer: {body['order_type']} at {body['price']}; dry run shows {joining.described()}")
         print(f'Reads quotes: {joining.needs_prices()}')
 

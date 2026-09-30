@@ -1,12 +1,12 @@
-"""Prices a buy and a sell as marketable limits, two ticks past the touch they trade against.
+"""Shows a trailing distance given as a percentage, and a buy stop that follows a falling market down.
 
-`MarketablePricing` sends a limit `buffer_ticks` past the opposite touch, read at the moment the order is sent: past the best offer for a buy, and below the best bid for a sell. That is how market-if-touched, the hidden stop and every closing order price themselves today, because a limit can never fill worse than the buffer allows, while being far enough through the touch to fill against what rests there.
+`TrailPricing` takes its distance as `points` or as `percent` of the best price seen, which widens as the trade goes the caller's way. A buy stop, as in a trailing entry or the protection of a short, sits above the market and follows the lowest price down. `improves` says whether a price is better than the best for a stop on a given side, and `prices_from` gives the trigger and limit for a best price, rounded onto the tick. With no last price yet, no stop can be priced.
 
-A small stand-in plays the plan order, reading quotes with RELIANCE's tick size of 0.05. Nothing is read from Redis or sent anywhere.
+A small stand-in plays the plan order. Nothing is read from Redis or sent anywhere.
 
 Run it from the project root:
 
-    python examples/unified_broker_interface/utilities/order_engine/utilities/marketable_pricing/MarketablePricing/example_1_past_the_opposite_touch.py
+    python examples/unified_broker_interface/utilities/order_engine/utilities/trail_pricing/TrailPricing/example_2_percent_and_a_buy_stop.py
 """
 
 import decimal
@@ -14,8 +14,11 @@ import decimal
 from unified_broker_interface.utilities.order_engine.utilities.market_view import (
     MarketView,
 )
-from unified_broker_interface.utilities.order_engine.utilities.marketable_pricing import (
-    MarketablePricing,
+from unified_broker_interface.utilities.order_engine.utilities.order_leg import (
+    OrderLeg,
+)
+from unified_broker_interface.utilities.order_engine.utilities.trail_pricing import (
+    TrailPricing,
 )
 
 INSTRUMENT_ID = '11111111-1111-5111-8111-000000000001'
@@ -124,37 +127,21 @@ class StandInPlanOrder:
         """
         return 'nse_equities'
 
-
-
-
-class PricingExampleBody:
-    """Builds the caller's order body the pricing examples price."""
-
-    def body(self, transaction_type):
-        """A limit order for ten RELIANCE shares at 1,000.
-
-        Args:
-            transaction_type (str): BUY or SELL.
+    def tick_size(self):
+        """RELIANCE's tick size.
 
         Returns:
-            dict: The body.
+            decimal.Decimal: 0.05.
         """
-        return {
-            'instrument_id': INSTRUMENT_ID,
-            'transaction_type': transaction_type,
-            'order_type': 'LIMIT',
-            'quantity': 10,
-            'price': '1000.00',
-        }
+        return decimal.Decimal('0.05')
 
 
-class PastTheOppositeTouchExample:
-    """Prices a buy and a sell against one book.
+class PercentAndABuyStopExample:
+    """Prices a one per cent trailing buy stop and moves it down.
 
     Attributes:
         plan_order (StandInPlanOrder): The stand-in plan order.
-        quotes (QuoteBuilder): Builds the quote.
-        bodies (PricingExampleBody): Builds the bodies.
+        quotes (QuoteBuilder): Builds the ticks' quotes.
     """
 
     def __init__(self):
@@ -165,24 +152,34 @@ class PastTheOppositeTouchExample:
         """
         self.plan_order = StandInPlanOrder()
         self.quotes = QuoteBuilder()
-        self.bodies = PricingExampleBody()
 
     def run(self):
-        """Prints each priced body.
+        """Prints the stop as placed and after two ticks.
 
         Returns:
             None: This method returns nothing.
         """
-        pricing = MarketablePricing(2)
+        pricing = TrailPricing(None, decimal.Decimal('1'), decimal.Decimal('2'), 2)
+        print(f'No quote yet: {pricing.priced_body(self.plan_order, {"transaction_type": "BUY", "quantity": 10}, "BUY", {}, {})}')
+        memory = {}
         quotes = {
-            INSTRUMENT_ID: self.quotes.book_at(994.90, 994.95),
+            INSTRUMENT_ID: self.quotes.book_at(1000.00, 1000.05),
         }
-        print('Book: bid 994.90, offer 994.95')
-        for side in ('BUY', 'SELL'):
-            body = pricing.priced_body(self.plan_order, self.bodies.body(side), side, quotes, {})
-            print(f"{side}: {body['order_type']} at {body['price']}")
-        print(f'Reads quotes: {pricing.needs_prices()}; moves a resting order {pricing.moves()}; dry run shows {pricing.described()}')
+        body = pricing.priced_body(self.plan_order, {'transaction_type': 'BUY', 'quantity': 10}, 'BUY', quotes, memory)
+        print(f"Buy stop at last 1000.05: trigger {body['trigger_price']}, limit {body['price']}")
+        print(f"990 improves on 1000 for a buy stop: {pricing.improves(decimal.Decimal('990'), decimal.Decimal('1000'), 'BUY')}; for a sell stop: {pricing.improves(decimal.Decimal('990'), decimal.Decimal('1000'), 'SELL')}")
+        view = self.plan_order.view(quotes)
+        print(f"Prices from a best of 990 for a buy stop: {pricing.prices_from(view, decimal.Decimal('990'), 'BUY')}")
+        leg = OrderLeg('parent-1:1', 'root')
+        leg.transaction_type = 'BUY'
+        leg.trigger_price = float(body['trigger_price'])
+        for last in (999.95, 990.00):
+            quotes = {
+                INSTRUMENT_ID: self.quotes.book_at(last - 0.05, last),
+            }
+            print(f'last {last}: move {pricing.moved_prices(self.plan_order, memory, leg, quotes)}')
+        print(f'As a dry run shows it: {pricing.described()}')
 
 
 if __name__ == '__main__':
-    PastTheOppositeTouchExample().run()
+    PercentAndABuyStopExample().run()

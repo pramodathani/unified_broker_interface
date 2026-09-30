@@ -26,12 +26,12 @@ class WhatEachPresetStandsForExample:
     """
 
     def __init__(self):
-        """Builds the expander.
+        """Builds the expander for an order opened with a buy, which a trailing stop's activation needs.
 
         Returns:
             None: This method returns nothing.
         """
-        self.expander = PresetExpander()
+        self.expander = PresetExpander('BUY')
 
     def run(self):
         """Prints each preset's slot values.
@@ -66,6 +66,15 @@ class WhatEachPresetStandsForExample:
             'hidden_stop': {
                 'trigger_price': 990,
                 'buffer_ticks': 3,
+            },
+            'trailing_stop': {
+                'trail_points': 5,
+                'stop_limit_offset': 1,
+                'activate_at': 1010,
+            },
+            'trailing_entry': {
+                'trail_percent': 0.5,
+                'stop_limit_offset': 1,
             },
         }
         for name in PRESET_NAMES:

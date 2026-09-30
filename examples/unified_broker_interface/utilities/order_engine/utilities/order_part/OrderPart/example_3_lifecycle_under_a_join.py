@@ -1,6 +1,6 @@
 """Walks one order part through the lifecycle a join drives: start, a fill, a new target, cancelling the rest, and done.
 
-An `OrderPart` placed under a join is told how much to trade with a target. `start` places it for that much, `traded` says what has filled, `set_target` changes its resting order to the filled part plus what is still wanted, or cancels it when nothing more is wanted, `cancel_rest` stops whatever is left, and `settle` marks it done once every broker order has finished. `send` is how a part left waiting, for its trigger or for a price, is placed when its tick comes. A part that has not been started yet only records a new target. This program also shows how the part describes its quantity, and what it holds as a member of a tree.
+An `OrderPart` placed under a join is told how much to trade with a target. `start` places it for that much, `traded` says what has filled, `set_target` changes its resting order to the filled part plus what is still wanted, or cancels it when nothing more is wanted, `cancel_rest` stops whatever is left, and `settle` marks it done once every broker order has finished. `send` is how a part left waiting, for its trigger or for a price, is placed when its tick comes, and `move` is how a working trailing stop follows the market on a tick. A part that has not been started yet only records a new target. This program also shows how the part describes its quantity, and what it holds as a member of a tree.
 
 A stand-in plays the plan order: it keeps the parts' records and turns every order into an acknowledged leg, so nothing leaves the machine.
 
@@ -15,6 +15,9 @@ import decimal
 from unified_broker_interface.utilities.order_engine.utilities.fixed_pricing import (
     FixedPricing,
 )
+from unified_broker_interface.utilities.order_engine.utilities.market_view import (
+    MarketView,
+)
 from unified_broker_interface.utilities.order_engine.utilities.native_stop_pricing import (
     NativeStopPricing,
 )
@@ -26,6 +29,9 @@ from unified_broker_interface.utilities.order_engine.utilities.order_part import
 )
 from unified_broker_interface.utilities.order_engine.utilities.parent_order import (
     ParentOrder,
+)
+from unified_broker_interface.utilities.order_engine.utilities.trail_pricing import (
+    TrailPricing,
 )
 
 
@@ -143,6 +149,7 @@ class StandInPlanOrder:
         leg.transaction_type = order['transaction_type']
         leg.quantity = order['quantity']
         leg.price = order.get('price')
+        leg.trigger_price = order.get('trigger_price')
         self.parent.legs.append(leg)
         self.requests.append(('place', role, leg.transaction_type, leg.quantity, order.get('order_type'), leg.price))
         return {
@@ -180,6 +187,45 @@ class StandInPlanOrder:
         del reason
         self.requests.append(('cancel', leg.role))
         leg.state = 'cancelled'
+        return True
+
+    def view(self, quotes, instrument_id=None):
+        """A quote as a market view, with RELIANCE's tick size of 0.05.
+
+        Args:
+            quotes (dict): Quotes by instrument id.
+            instrument_id (str | None): Unused, since there is one instrument.
+
+        Returns:
+            MarketView: The view.
+        """
+        del instrument_id
+        return MarketView(quotes.get('reliance'), decimal.Decimal('0.05'))
+
+    def tick_size(self):
+        """RELIANCE's tick size.
+
+        Returns:
+            decimal.Decimal: 0.05.
+        """
+        return decimal.Decimal('0.05')
+
+    def reprice_leg(self, leg, price, trigger_price, reason):
+        """Moves a leg's prices, as the broker would once it accepts the change.
+
+        Args:
+            leg (OrderLeg): The leg.
+            price (decimal.Decimal): Its new limit price.
+            trigger_price (decimal.Decimal): Its new trigger price.
+            reason (str): Unused.
+
+        Returns:
+            bool: True, since the change is accepted.
+        """
+        del reason
+        self.requests.append(('move', leg.role, str(trigger_price), str(price)))
+        leg.trigger_price = trigger_price
+        leg.price = price
         return True
 
     def fill(self, role, filled):
@@ -285,6 +331,11 @@ class LifecycleUnderAJoinExample:
         self.plan_order.set_part_record(waiting.path, {'state': 'waiting', 'target': 3}, None)
         sent = waiting.send(self.plan_order, None, {})
         print(f'A waiting target sent when its tick comes: {sent[0][1]["outcome"]} for {self.plan_order.requests[-1][3]}, record {self.plan_order.part_record(waiting.path)}')
+        trailing = OrderPart('root.children.3', [], None, 'protect', TrailPricing(decimal.Decimal('5'), None, decimal.Decimal('1'), 1), False)
+        self.plan_order.set_part_record(trailing.path, {'state': 'pending'}, None)
+        trailing.start(self.plan_order, 10, None, {'reliance': {'last_price': 1000.05}})
+        print(f"A trailing stop placed: {self.plan_order.requests[-1]}; moved at 1003: {trailing.move(self.plan_order, {'reliance': {'last_price': 1003.00}})}, at 1001: {trailing.move(self.plan_order, {'reliance': {'last_price': 1001.00}})}")
+        print(f'Last request: {self.plan_order.requests[-1]}; a stop that does not trail moves: {self.part.move(self.plan_order, {})}')
         print(f'Messages: {self.plan_order.messages}')
 
 

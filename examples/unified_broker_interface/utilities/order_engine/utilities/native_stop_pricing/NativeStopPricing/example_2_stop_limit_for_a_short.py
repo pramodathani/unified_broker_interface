@@ -63,7 +63,7 @@ class StopLimitForAShortExample:
         before = self.bodies.body('BUY')
         print(f'Before: {before}')
         pricing = NativeStopPricing(decimal.Decimal('1010'), decimal.Decimal('1012'))
-        print(f'After: {pricing.priced_body(None, dict(before), "BUY", {})}')
+        print(f'After: {pricing.priced_body(None, dict(before), "BUY", {}, {})}')
         print(f'Reads quotes: {pricing.needs_prices()}; dry run shows {pricing.described()}')
 
 

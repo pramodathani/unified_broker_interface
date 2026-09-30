@@ -65,9 +65,9 @@ class BodyPriceOrALimitExample:
             ('a limit at 996', FixedPricing(decimal.Decimal('996'), None)),
             ('a market order', FixedPricing(None, 'MARKET')),
         ):
-            body = pricing.priced_body(None, self.bodies.body('BUY'), 'BUY', {})
+            body = pricing.priced_body(None, self.bodies.body('BUY'), 'BUY', {}, {})
             print(f"{label}: {body['order_type']} at {body.get('price')}; reads quotes {pricing.needs_prices()}")
-            print(f'  dry run shows {pricing.described()}')
+            print(f'  dry run shows {pricing.described()}; moves a resting order {pricing.moves()}')
 
 
 if __name__ == '__main__':

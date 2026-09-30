@@ -32,7 +32,15 @@ class FixedPricing:
         """
         return False
 
-    def priced_body(self, plan_order, body, sending_side, quotes):
+    def moves(self):
+        """Whether this pricing moves a resting order on later ticks, which it does not.
+
+        Returns:
+            bool: False.
+        """
+        return False
+
+    def priced_body(self, plan_order, body, sending_side, quotes, memory):
         """The body with this pricing's order type and price.
 
         Args:
@@ -40,11 +48,12 @@ class FixedPricing:
             body (dict): A copy of the order's body, changed in place.
             sending_side (str): Unused.
             quotes (dict): Unused.
+            memory (dict): Unused, since this pricing remembers nothing.
 
         Returns:
             dict: The body.
         """
-        del plan_order, sending_side, quotes
+        del plan_order, sending_side, quotes, memory
         if self.price is not None:
             body['order_type'] = 'LIMIT'
             body['price'] = str(self.price)

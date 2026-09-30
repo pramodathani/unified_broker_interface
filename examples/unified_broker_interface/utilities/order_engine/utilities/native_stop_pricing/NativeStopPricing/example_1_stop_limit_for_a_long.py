@@ -61,9 +61,9 @@ class StopLimitForALongExample:
             None: This method returns nothing.
         """
         pricing = NativeStopPricing(decimal.Decimal('990'), decimal.Decimal('988'))
-        body = pricing.priced_body(None, self.bodies.body('SELL'), 'SELL', {})
+        body = pricing.priced_body(None, self.bodies.body('SELL'), 'SELL', {}, {})
         print(f"{body['transaction_type']} {body['quantity']}: {body['order_type']}, trigger {body['trigger_price']}, limit {body['price']}")
-        print(f'Reads quotes: {pricing.needs_prices()}; dry run shows {pricing.described()}')
+        print(f'Reads quotes: {pricing.needs_prices()}; moves a resting order {pricing.moves()}; dry run shows {pricing.described()}')
 
 
 if __name__ == '__main__':

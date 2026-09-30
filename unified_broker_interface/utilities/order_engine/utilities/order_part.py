@@ -1,5 +1,7 @@
 """One order in a plan: a leaf of the plan's tree, which places its own broker orders and says when it is done."""
 
+import copy
+
 OPPOSITE_SIDES = {
     'BUY': 'SELL',
     'SELL': 'BUY',
@@ -188,9 +190,14 @@ class OrderPart:
         if not self.keeps_tag:
             body.pop('tag', None)
         before = dict(body)
-        priced = self.pricing.priced_body(plan_order, body, sending_side, quotes)
+        record = plan_order.part_record(self.path)
+        memory = copy.deepcopy(record.get('pricing_memory') or {})
+        priced = self.pricing.priced_body(plan_order, body, sending_side, quotes, memory)
         if priced is None:
             return None
+        if memory != (record.get('pricing_memory') or {}):
+            record['pricing_memory'] = memory
+            plan_order.set_part_record(self.path, record, None)
         if priced.get('price') != before.get('price'):
             priced.pop('price_reference', None)
         return plan_order.concrete_order(plan_order.read_order(priced))
@@ -277,6 +284,35 @@ class OrderPart:
         return [
             (self.path, body, status),
         ]
+
+    def move(self, plan_order, quotes):
+        """Moves this order's resting broker order on a tick, for a pricing that moves, such as a trailing stop.
+
+        Args:
+            plan_order (PlanOrder): The plan order.
+            quotes (dict): The quotes the tick carried.
+
+        Returns:
+            bool: True when the order was moved.
+        """
+        if not self.pricing.moves():
+            return False
+        resting = None
+        for leg in self.own_legs(plan_order.parent):
+            if not leg.is_finished() and leg.broker_order_id:
+                resting = leg
+        if resting is None:
+            return False
+        record = plan_order.part_record(self.path)
+        memory = copy.deepcopy(record.get('pricing_memory') or {})
+        moved = self.pricing.moved_prices(plan_order, memory, resting, quotes)
+        if memory != (record.get('pricing_memory') or {}):
+            record['pricing_memory'] = memory
+            plan_order.set_part_record(self.path, record, None)
+        if moved is None:
+            return False
+        limit, trigger, reason = moved
+        return plan_order.reprice_leg(resting, limit, trigger, reason)
 
     def settle(self, plan_order):
         """Marks this order done once all of its broker orders have finished.

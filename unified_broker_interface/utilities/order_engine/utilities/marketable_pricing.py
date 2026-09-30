@@ -29,7 +29,15 @@ class MarketablePricing:
         """
         return True
 
-    def priced_body(self, plan_order, body, sending_side, quotes):
+    def moves(self):
+        """Whether this pricing moves a resting order on later ticks, which it does not.
+
+        Returns:
+            bool: False.
+        """
+        return False
+
+    def priced_body(self, plan_order, body, sending_side, quotes, memory):
         """The body as a limit past the opposite touch, or None when the book gives nothing to price against.
 
         Args:
@@ -37,10 +45,12 @@ class MarketablePricing:
             body (dict): A copy of the order's body, changed in place.
             sending_side (str): BUY or SELL, the side the order is sent on.
             quotes (dict): The quotes, by instrument id.
+            memory (dict): Unused, since this pricing remembers nothing.
 
         Returns:
             dict | None: The body, or None when no price can be made.
         """
+        del memory
         view = plan_order.view(quotes)
         touch = view.opposite_touch(sending_side)
         if touch is None:

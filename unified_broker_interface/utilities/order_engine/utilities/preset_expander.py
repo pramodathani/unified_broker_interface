@@ -33,10 +33,19 @@ PRESET_NAMES = (
     'indicator_triggered',
     'cross_instrument',
     'hidden_stop',
+    'trailing_stop',
+    'trailing_entry',
     'oto',
     'oco',
     'bracket',
     'cover',
+)
+TRAILING_SETTINGS = (
+    'trail_points',
+    'trail_percent',
+    'stop_limit_offset',
+    'step_ticks',
+    'activate_at',
 )
 JOIN_PRESET_NAMES = (
     'oto',
@@ -66,15 +75,20 @@ class PresetExpander:
     The slot values are written in the same form a caller would write them by hand, so the plan reader checks both the same way. Each preset has its own method, so what a preset means is read in one place. A setting a preset does not take is reported as a problem rather than ignored, and a preset's settings keep the names the existing type uses, so a caller moving from `market_if_touched` to a plan changes nothing but the wrapping.
 
     Attributes:
+        opening_side (str | None): BUY or SELL, the side of the caller's body, which a trailing stop's activation needs; None when it is not known.
         problems (list): The problems found by the last `expand`, each a dictionary with `path`, `rule` and `message`.
     """
 
-    def __init__(self):
+    def __init__(self, opening_side=None):
         """Builds an expander that has found no problems.
+
+        Args:
+            opening_side (str | None): BUY or SELL, the side of the caller's body, or None when it is not known.
 
         Returns:
             None: This method returns nothing.
         """
+        self.opening_side = opening_side
         self.problems = []
 
     def expand(self, name, settings, path):
@@ -101,6 +115,10 @@ class PresetExpander:
             return self._indicator_triggered(settings, path)
         if name == 'cross_instrument':
             return self._cross_instrument(settings, path)
+        if name == 'trailing_stop':
+            return self._trailing(settings, path, 'trailing_stop')
+        if name == 'trailing_entry':
+            return self._trailing(settings, path, 'trailing_entry')
         return self._hidden_stop(settings, path)
 
     def is_join(self, name, settings):
@@ -629,6 +647,58 @@ class PresetExpander:
                 },
             ],
         }
+
+    def _trailing(self, settings, path, name):
+        """A native stop-limit that trails the market: a trailing stop protecting a position, or a trailing entry opening one.
+
+        With `activate_at`, nothing rests until the price reaches that level, usually the target, and the stop trails from there. A trailing stop's stop sits on the side that closes the position, so it activates when the price rises to the level for a long and falls to it for a short, which needs the side of the caller's order. A trailing entry's stop sits on the caller's own side, so it activates the other way, which is the default direction.
+
+        Args:
+            settings (dict): `trail_points` or `trail_percent`, `stop_limit_offset`, and optionally `step_ticks` and `activate_at`.
+            path (str): The preset's path.
+            name (str): `trailing_stop` or `trailing_entry`.
+
+        Returns:
+            dict: `trail` pricing, the `protect` side for a trailing stop, and a `price_crosses` trigger when it activates at a level.
+        """
+        self._refuse_unknown(settings, TRAILING_SETTINGS, path, name)
+        trail = {
+            'limit_offset': settings.get('stop_limit_offset'),
+            'step_ticks': settings.get('step_ticks', 1),
+        }
+        if 'trail_points' in settings:
+            trail['points'] = settings['trail_points']
+        if 'trail_percent' in settings:
+            trail['percent'] = settings['trail_percent']
+        slots = {
+            'pricing': [
+                {
+                    'trail': trail,
+                },
+            ],
+        }
+        if name == 'trailing_stop':
+            slots['side'] = 'protect'
+        if 'activate_at' not in settings:
+            return slots
+        activation = {
+            'level': settings['activate_at'],
+        }
+        if name == 'trailing_stop':
+            if self.opening_side == 'BUY':
+                activation['direction'] = 'at_or_above'
+            elif self.opening_side == 'SELL':
+                activation['direction'] = 'at_or_below'
+            else:
+                self._add_problem(
+                    path,
+                    'needs_side',
+                    'a trailing stop that activates at a level needs to know the side of the order it protects',
+                )
+        slots['trigger'] = {
+            'price_crosses': activation,
+        }
+        return slots
 
     def _price_trigger(self, settings, path):
         """The `price_crosses` trigger the price-triggered presets share.

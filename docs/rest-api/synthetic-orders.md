@@ -149,7 +149,7 @@ The master table below lists every type registered in `SYNTHETIC_ORDER_CLASSES`,
 | `scale_with_profit_taker` | Plain and laddered | A ladder whose every filled rung gets its own profit-taker, and is placed again once that profit is taken. | `from_price`, `to_price`, `steps`, `profit_points`, `most_cycles` | 200 |
 | `two_sided_quote` | Plain and laddered | A bid and an offer kept around the fair price, leaning away from the inventory they build. | `half_spread_points`, `skew_ticks`, `most_inventory` | 200 |
 | `account_conditional` | Price triggers | Sends an order when free margin, the day's profit or the open position count reaches a level, or cancels it then. | `account_field`, `account_level`, `trigger_direction`, `action` | 202, or 200 with `action: cancel` |
-| `plan` | Plans | An order described as a plan of parts: orders that may wait for a trigger, protect a position and be priced by one pricing rule, joined with then and either. | `plan` | 200, or 202 when nothing is placed at once |
+| `plan` | Plans | An order described as a plan of parts: orders that may wait for a trigger, protect a position, trail the market and be priced by one pricing rule, joined with then and either. | `plan` | 200, or 202 when nothing is placed at once |
 
 The chart below counts how many of the 54 types fall into each family. The families are this page's own grouping, chosen to make the list easier to scan; the code does not group them.
 
@@ -1184,7 +1184,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | `presets` | list | No | Objects each holding one preset name and its settings, from the table below. An order with no presets and no slot values runs as `simple`. |
     | `trigger` | object | No | What the order waits for: one condition, or `all` or `any` with a list of them. With no trigger the order is placed at once. |
     | `side` | string | No | `buy`, `sell`, or `protect`, which trades against the position the body's side opened: a body `BUY` with `protect` sends a sell. Defaults to the body's side. |
-    | `pricing` | list | No | One pricing rule: `fixed`, `marketable` or `native_stop`. Defaults to `fixed` with the body's own order type and price. |
+    | `pricing` | list | No | One pricing rule: `fixed`, `marketable`, `native_stop` or `trail`. Defaults to `fixed` with the body's own order type and price. |
 
     The trigger conditions are these:
 
@@ -1193,6 +1193,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | `price_crosses` | `level` (required), `direction` (`at_or_above` or `at_or_below`), `field` (`last`, `bid`, `ask`, `mid`, `average_price`, `previous_close` or `opposite_touch`, default `last`), `instrument_id` (default the order's own), `confirm` (`none`, `double_last` or `held`, default `none`), `hold_seconds` (required for `held`) | The price reaches the level from the side that fires. With no direction, a body `BUY` waits for the price to fall to the level and a `SELL` for it to rise, which is market-if-touched's meaning for an entry and a stop's meaning for a protecting order. `opposite_touch` is the best offer for an order sent as a buy and the best bid for one sent as a sell. |
     | `time_at`, `time_after` | A time of day such as `"10:00"` | From that time on the instrument's next trading day. A time already passed on a trading day is refused. |
     | `time_before` | A time of day | Until that time, which keeps another condition to part of the day inside `all`. |
+    | `trails` | `points` or `percent`, exactly one | The last price has pulled back from its best by that distance: for an order sent as a sell, the best is the highest price seen and the pullback a fall; for a buy, the lowest and a rise. It is a trailing stop kept in the engine, so the order it triggers can be priced any way, but it does nothing while the engine is down. |
     | `all`, `any` | A list of conditions | Every condition holds, or any one does. |
 
     The pricing rules are these:
@@ -1202,12 +1203,15 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | `fixed` | `price` and `order_type` (`LIMIT` or `MARKET`), both optional | The body's order type and price, a limit at `price`, or a market order. |
     | `marketable` | `buffer_ticks`, default 2 | A limit that many ticks past the opposite touch, read when the order is sent. With no book to price against, the order waits for the next tick. |
     | `native_stop` | `trigger_price` and `limit_price` | A stop-limit (`SL`) resting at the broker. |
+    | `trail` | `points` or `percent`, exactly one; `limit_offset`, required; `step_ticks`, default 1 | A stop-limit resting at the broker, placed `points` (or `percent` of the price) behind the last price and moved after the best price seen, never back. A sell stop follows the highest price up and a buy stop the lowest price down. It moves only when it can move by at least `step_ticks`, and every move passes the repricing throttle and rate budget. |
 
     The presets stand for slot values and take the settings of the type they are named after:
 
     | Preset | Stands for |
     |---|---|
     | `simple` | Nothing: the order as the body describes it. |
+    | `trailing_stop` | The `protect` side and `trail` pricing. Takes `trail_points` or `trail_percent`, `stop_limit_offset`, `step_ticks` and `activate_at`; with `activate_at`, nothing rests until the price reaches that level from the side of the position's profit. |
+    | `trailing_entry` | `trail` pricing on the body's own side, so a buy stop follows a falling market down and fills on the first rebound. Takes the same settings as `trailing_stop`. |
     | `bracket` | A Then join: the order, then a `native_stop` stop and a `fixed` target that reduce each other, sized to each fill; an exit filling cancels the rest of the entry. Takes `stop_price`, `stop_limit_price` and `target_price`. |
     | `cover` | A Then join: the order, then a `native_stop` stop sized to each fill. Takes `stop_price` and `stop_limit_price`, both required. |
     | `oco` | An Either join that reduces: a stop and a target protecting a position already held. It has no order of its own, so it cannot be named beside other presets or slot values. |

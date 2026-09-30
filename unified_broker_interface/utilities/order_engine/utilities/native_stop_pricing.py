@@ -32,7 +32,15 @@ class NativeStopPricing:
         """
         return False
 
-    def priced_body(self, plan_order, body, sending_side, quotes):
+    def moves(self):
+        """Whether this pricing moves a resting order on later ticks, which it does not.
+
+        Returns:
+            bool: False.
+        """
+        return False
+
+    def priced_body(self, plan_order, body, sending_side, quotes, memory):
         """The body as a stop-limit order.
 
         Args:
@@ -40,11 +48,12 @@ class NativeStopPricing:
             body (dict): A copy of the order's body, changed in place.
             sending_side (str): Unused.
             quotes (dict): Unused.
+            memory (dict): Unused, since this pricing remembers nothing.
 
         Returns:
             dict: The body.
         """
-        del plan_order, sending_side, quotes
+        del plan_order, sending_side, quotes, memory
         body['order_type'] = 'SL'
         body['trigger_price'] = str(self.trigger_price)
         body['price'] = str(self.limit_price)

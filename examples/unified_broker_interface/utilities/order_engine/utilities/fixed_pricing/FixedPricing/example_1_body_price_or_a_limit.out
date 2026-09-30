@@ -1,6 +1,6 @@
 as the body says: LIMIT at 1000.00; reads quotes False
-  dry run shows {'fixed': {'price': "the body's price", 'order_type': "the body's order_type"}}
+  dry run shows {'fixed': {'price': "the body's price", 'order_type': "the body's order_type"}}; moves a resting order False
 a limit at 996: LIMIT at 996; reads quotes False
-  dry run shows {'fixed': {'price': '996', 'order_type': 'LIMIT'}}
+  dry run shows {'fixed': {'price': '996', 'order_type': 'LIMIT'}}; moves a resting order False
 a market order: MARKET at None; reads quotes False
-  dry run shows {'fixed': {'price': "the body's price", 'order_type': 'MARKET'}}
+  dry run shows {'fixed': {'price': "the body's price", 'order_type': 'MARKET'}}; moves a resting order False

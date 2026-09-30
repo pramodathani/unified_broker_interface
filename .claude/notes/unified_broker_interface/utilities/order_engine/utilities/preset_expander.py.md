@@ -15,3 +15,7 @@ The backstop is a second order resting beside the engine-side stop, cancelled be
 ## Stage 2b: presets that stand for joins
 
 `expand_join` returns a whole plan tree written as a caller would write it. Bracket and cover set `cancel_first_on_child_fill`, OCO is an Either that reduces with no main order, OTO maps its `then` body onto a child order's side and pricing (only `transaction_type`, `order_type`, `price` and `trigger_price` so far; other body fields are refused as `not_built`), and a hidden stop with a backstop is an Either that cancels, with `cancel_before_send`. The hidden stop's backstop was refused as an unknown setting in stage 2a and is now how the join is recognised.
+
+## Stage 2c: trailing presets
+
+`trailing_stop` is the `protect` side with `trail` pricing, and `trailing_entry` is `trail` pricing on the body's side, matching `TrailingStop` and `TrailingEntry`, which differ only in which side the stop is on. `activate_at` becomes a `price_crosses` trigger. For a trailing entry the default direction is the right one; for a trailing stop it is the opposite (a long's stop activates when the price rises to the level), so the expander needs the opening side, and reports `needs_side` when it was not given.
