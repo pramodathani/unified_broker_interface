@@ -4242,6 +4242,34 @@ class OrderEngineSuite:
                 positions=100,
             ),
             self.price_result(
+                'an_exposure_hedge_prices_a_hedge_in_another_instrument_from_that_instruments_quote',
+                dict(entry, synthetic={
+                    'type': 'exposure_hedge',
+                    'watched': [
+                        {
+                            'instrument_id': identifiers['reliance'],
+                            'exposure_per_unit': 1,
+                        },
+                    ],
+                    'hedge_instrument_id': identifiers['reliance_future'],
+                    'hedge_exposure_per_unit': 0.2,
+                    'lower_band': -10,
+                    'upper_band': 10,
+                }),
+                [
+                    {
+                        'quote': steady,
+                        'at': 0,
+                        'other_quotes': {
+                            'reliance_future': self.book_at(1004.10, 1004.30),
+                        },
+                    },
+                    {'quote': steady, 'at': 1},
+                ],
+                accepted,
+                positions=100,
+            ),
+            self.price_result(
                 'an_exposure_hedge_inside_its_band_does_nothing',
                 dict(entry, synthetic={
                     'type': 'exposure_hedge',

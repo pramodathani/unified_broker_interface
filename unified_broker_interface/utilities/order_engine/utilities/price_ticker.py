@@ -156,6 +156,9 @@ class PriceTicker:
         other = parameters.get('watch_instrument_id')
         if other and other not in watched:
             watched.append(other)
+        hedge = parameters.get('hedge_instrument_id')
+        if hedge and hedge not in watched:
+            watched.append(hedge)
         for leg in document.get('legs') or []:
             of_leg = leg.get('instrument_id')
             if of_leg and of_leg not in watched:
