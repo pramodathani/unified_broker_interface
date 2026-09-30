@@ -1,0 +1,3 @@
+OTP sent: carries on to the next check
+OTP refused by a ban: FyersBlockedError 429: Sending the login OTP was refused with HTTP 429, so Fyers or Cloudflare is limiting this a
+OTP refused for a wrong ID: carries on to the next check
