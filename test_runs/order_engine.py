@@ -2498,6 +2498,52 @@ class OrderEngineSuite:
                 accepted,
             ),
             self.reaction_result(
+                'an_oco_takes_only_the_new_part_of_a_second_fill_off_the_sibling',
+                self.scenarios.bodies.market_order(
+                    dry_run=None,
+                    order_type='LIMIT',
+                    price=1000,
+                    quantity=10,
+                    synthetic={
+                        'type': 'oco',
+                        'stop_price': 990,
+                        'stop_limit_price': 988,
+                        'target_price': 1010,
+                    },
+                ),
+                [
+                    self.update('26091500000101', 'OPEN', 0),
+                    self.update('26091500000102', 'OPEN', 3),
+                    self.update('26091500000102', 'OPEN', 7),
+                ],
+                dict(accepted, number_orders=True),
+            ),
+            self.reaction_result(
+                'a_scale_out_takes_only_the_new_part_of_a_targets_second_fill_off_the_stop',
+                self.scenarios.bodies.market_order(
+                    dry_run=None,
+                    order_type='LIMIT',
+                    price=1000,
+                    quantity=10,
+                    synthetic={
+                        'type': 'scale_out',
+                        'stop_price': 990,
+                        'stop_limit_price': 988,
+                        'target_prices': [
+                            1010,
+                            1020,
+                        ],
+                    },
+                ),
+                [
+                    self.update('26091500000101', 'COMPLETE', 10),
+                    self.update('26091500000102', 'OPEN', 0),
+                    self.update('26091500000103', 'OPEN', 2),
+                    self.update('26091500000103', 'OPEN', 4),
+                ],
+                dict(accepted, number_orders=True),
+            ),
+            self.reaction_result(
                 'the_rate_budget_now_covers_changes_not_only_placements',
                 bracket_body,
                 [
