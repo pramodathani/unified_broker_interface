@@ -1,0 +1,10 @@
+simple with {'broker': 'zerodha'}:
+  root.presets.0 [unknown_setting]: the simple preset takes no settings, not 'broker'
+scheduled with {}:
+  root.presets.0 [missing_setting]: the scheduled preset needs at_time, the time of day to place the order
+market_if_touched with {'trigger_price': 995, 'trigger_on': 'close'}:
+  root.presets.0 [bad_setting]: trigger_on must be one of last, bid, ask, mid, double_last, held, not 'close'
+indicator_triggered with {'watch_field': 'vwap', 'trigger_price': 1000, 'limit_price': 1000}:
+  root.presets.0 [bad_setting]: watch_field must be one of last_price, average_price, previous_close, best_bid, best_offer, mid, not 'vwap'
+hidden_stop with {'trigger_price': 990, 'backstop_price': 980}:
+  root.presets.0 [unknown_setting]: the hidden_stop preset takes trigger_price, trigger_direction, buffer_ticks, not 'backstop_price'

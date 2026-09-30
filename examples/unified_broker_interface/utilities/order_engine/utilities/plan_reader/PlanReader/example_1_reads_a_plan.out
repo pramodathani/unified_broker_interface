@@ -1,6 +1,6 @@
 One simple order:
   path root, presets ['simple'], problems []
-  slots {'trigger': 'at_once', 'quantity': "the body's quantity", 'side': "the body's transaction_type", 'execution': ['all_at_once'], 'pricing': ['fixed'], 'guards': [], 'venue': 'selector', 'lifetime': ["the body's validity"]}
+  slots {'trigger': 'at_once', 'quantity': "the body's quantity", 'side': "the body's transaction_type", 'execution': ['all_at_once'], 'pricing': [{'fixed': {'price': "the body's price", 'order_type': "the body's order_type"}}], 'guards': [], 'venue': 'selector', 'lifetime': ["the body's validity"]}
 An order with no presets:
   path root, presets [], problems []
-  slots {'trigger': 'at_once', 'quantity': "the body's quantity", 'side': "the body's transaction_type", 'execution': ['all_at_once'], 'pricing': ['fixed'], 'guards': [], 'venue': 'selector', 'lifetime': ["the body's validity"]}
+  slots {'trigger': 'at_once', 'quantity': "the body's quantity", 'side': "the body's transaction_type", 'execution': ['all_at_once'], 'pricing': [{'fixed': {'price': "the body's price", 'order_type': "the body's order_type"}}], 'guards': [], 'venue': 'selector', 'lifetime': ["the body's validity"]}

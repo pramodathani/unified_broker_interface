@@ -11,3 +11,7 @@ Every broker order the part places carries its path as its role, and `own_legs` 
 ## Why `expanded` writes the defaults out as words
 
 A dry run shows the plan as it would run. With only the `simple` preset there are no slot values yet, so each slot's default is described in words, such as "the body's quantity", until later stages give the slots real values that can be written out as data.
+
+## Stage 2a: trigger, side and pricing
+
+The part now holds a trigger, a side and a pricing rule. It builds its order from a copy of the body: the side is set first (`protect` flips the body's side), then the pricing sets the order type and prices, and only then is `concrete_order` called, so references in the body are still resolved. `start` from stage 1 became `place`, and `PlanOrder` decides when to place; the part answers `is_triggered` and never records its own state.

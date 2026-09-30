@@ -1,0 +1,7 @@
+Direction for a buy: at_or_below, for a sell: at_or_above
+Reads quotes: True, watches other instruments: []
+steady: last 1000.05 met False; offer 1000.05 met False
+last trade 994.90, offer 995.10: last 994.90 met True; offer 995.10 met False
+offer down to 994.95: last 994.95 met True; offer 994.95 met True
+back up: last 1001.05 met False; offer 1001.05 met False
+As a dry run shows them: {'price_crosses': {'level': '995', 'direction': 'from the opening side', 'field': 'last', 'confirm': 'none'}} and {'price_crosses': {'level': '995', 'direction': 'from the opening side', 'field': 'opposite_touch', 'confirm': 'none'}}

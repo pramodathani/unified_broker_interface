@@ -1,8 +1,8 @@
-"""Shows that an order part places its orders under its own path and only ever looks at the broker orders it placed itself.
+"""Shows that an order part places its orders under its own path, only ever looks at its own broker orders, and flips its side when it protects a position.
 
 Every broker order an `OrderPart` places carries the part's path as its role, and the part only looks at orders with that role. This is the rule that lets parts share one parent: today's order types each assume they own every leg, so a second type's leg would confuse them. This program builds a parent holding a filled order for the part `root` and a resting order for another part, `root.first`, and shows that `root` is done while `root.first` is not.
 
-It then starts a part through a small stand-in for the plan order, which records the role each broker order is placed with instead of sending it, and prints the part as a dry run would show it, from `expanded`.
+It then builds a part that protects the position the caller's buy opened, waiting for the last price to fall to 995 and resting a native stop, and walks it through a small stand-in for the plan order, which records each broker order instead of sending it: what it watches and whether it reads quotes, the side it sends, readying and asking its trigger, the order it builds, placing it, and the part as a dry run would show it, from `expanded`.
 
 Nothing is read from Redis or sent anywhere.
 
@@ -11,6 +11,14 @@ Run it from the project root:
     python examples/unified_broker_interface/utilities/order_engine/utilities/order_part/OrderPart/example_2_sees_only_its_own_legs.py
 """
 
+import decimal
+
+from unified_broker_interface.utilities.order_engine.utilities.market_view import (
+    MarketView,
+)
+from unified_broker_interface.utilities.order_engine.utilities.native_stop_pricing import (
+    NativeStopPricing,
+)
 from unified_broker_interface.utilities.order_engine.utilities.order_leg import (
     OrderLeg,
 )
@@ -20,14 +28,17 @@ from unified_broker_interface.utilities.order_engine.utilities.order_part import
 from unified_broker_interface.utilities.order_engine.utilities.parent_order import (
     ParentOrder,
 )
+from unified_broker_interface.utilities.order_engine.utilities.price_crosses_condition import (
+    PriceCrossesCondition,
+)
 
 
 class StandInPlanOrder:
-    """Stands in for the plan order a part is started through, recording each order instead of sending it.
+    """Stands in for the plan order a part is run through, recording each order instead of sending it.
 
     Attributes:
-        parent (ParentOrder): The parent, whose body is the caller's order.
-        placed (list): Each order placed, as `(role, broker)`.
+        parent (ParentOrder): The parent, whose body is the caller's buy of ten.
+        placed (list): Each order placed, as `(role, transaction_type, order_type, trigger_price, price)`.
     """
 
     def __init__(self):
@@ -39,9 +50,23 @@ class StandInPlanOrder:
         self.parent = ParentOrder('parent-2')
         self.parent.body = {
             'transaction_type': 'BUY',
+            'order_type': 'LIMIT',
             'quantity': 10,
+            'price': '1000.00',
         }
         self.placed = []
+
+    def view(self, quotes, instrument_id=None):
+        """The instrument's quote as a market view, with a tick size of 0.05.
+
+        Args:
+            quotes (dict): Quotes by instrument id.
+            instrument_id (str | None): The instrument, or None for the order's own.
+
+        Returns:
+            MarketView: The view.
+        """
+        return MarketView(quotes.get(instrument_id or 'reliance'), decimal.Decimal('0.05'))
 
     def read_order(self, body):
         """Answers with the body itself, standing in for a validated order.
@@ -65,20 +90,34 @@ class StandInPlanOrder:
         """
         return order
 
+    def chosen_broker(self):
+        """The broker earlier orders went to, which is none yet.
+
+        Returns:
+            None: No broker has been chosen.
+        """
+        return None
+
     def place_leg(self, role, order, started_at, broker_name):
-        """Records the role and broker an order is placed with, and answers that it was accepted.
+        """Records the order and answers that it was accepted.
 
         Args:
             role (str): The leg's role, which a part sets to its path.
             order (dict): The order.
             started_at (float | None): Unused.
-            broker_name (str | None): The broker the body names, or None.
+            broker_name (str | None): Unused.
 
         Returns:
             tuple: The answer (dict), its HTTP status (int) and the leg (None here).
         """
-        del order, started_at
-        self.placed.append((role, broker_name))
+        del started_at, broker_name
+        self.placed.append((
+            role,
+            order['transaction_type'],
+            order['order_type'],
+            order.get('trigger_price'),
+            order['price'],
+        ))
         return {
             'outcome': 'accepted',
         }, 200, None
@@ -122,6 +161,9 @@ class SeesOnlyItsOwnLegsExample:
             [
                 'simple',
             ],
+            None,
+            None,
+            NativeStopPricing(decimal.Decimal('990'), decimal.Decimal('988')),
         )
         own = []
         for leg in part.own_legs(self.parent):
@@ -141,13 +183,32 @@ class SeesOnlyItsOwnLegsExample:
         part = OrderPart(
             'root',
             [
-                'simple',
+                'hidden_stop',
             ],
+            PriceCrossesCondition(decimal.Decimal('995'), None, 'last', None, 'none', None),
+            'protect',
+            NativeStopPricing(decimal.Decimal('990'), decimal.Decimal('988')),
         )
-        body, status = part.start(plan_order, None)
-        print(f"Started root: HTTP {status}, {body['outcome']}, placed as {plan_order.placed}")
+        print(f'Protecting part: watches {part.instruments()}, reads quotes {part.needs_prices()}, closes a position {part.closes_position()}')
+        print(f"Sends {part.sending_side('BUY')} for a position opened with a BUY")
+        memory = {}
+        part.prepare(plan_order, memory)
+        steady = {
+            'reliance': {
+                'last_price': 1000.05,
+            },
+        }
+        fallen = {
+            'reliance': {
+                'last_price': 994.90,
+            },
+        }
+        print(f'Triggered at 1000.05: {part.is_triggered(plan_order, memory, steady, 0.0)}')
+        print(f'Triggered at 994.90: {part.is_triggered(plan_order, memory, fallen, 1.0)}')
+        print(f'Order it builds: {part.order(plan_order, fallen)}')
+        body, status = part.place(plan_order, None, fallen)
+        print(f"Placed: HTTP {status}, {body['outcome']}, as {plan_order.placed}")
         print(f'As a dry run shows it: {part.expanded()}')
-
 
 if __name__ == '__main__':
     SeesOnlyItsOwnLegsExample().run()

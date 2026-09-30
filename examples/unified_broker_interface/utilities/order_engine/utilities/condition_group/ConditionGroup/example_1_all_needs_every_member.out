@@ -1,0 +1,7 @@
+Reads quotes: True, watches: []
+Memory after preparing: ['0', '1']
+09:45, price steady: all False, any False
+09:50, price touched: all False, any True
+10:05, price steady: all False, any True
+10:10, price touched: all True, any True
+As a dry run shows it: {'all': [{'time_after': '10:00'}, {'price_crosses': {'level': '995', 'direction': 'from the opening side', 'field': 'last', 'confirm': 'none'}}]}

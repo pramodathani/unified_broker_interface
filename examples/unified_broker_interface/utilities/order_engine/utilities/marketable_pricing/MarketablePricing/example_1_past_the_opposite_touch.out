@@ -1,0 +1,4 @@
+Book: bid 994.90, offer 994.95
+BUY: LIMIT at 995.05
+SELL: LIMIT at 994.80
+Reads quotes: True; dry run shows {'marketable': {'buffer_ticks': 2}}

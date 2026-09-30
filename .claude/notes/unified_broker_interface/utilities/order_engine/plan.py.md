@@ -23,3 +23,13 @@ A runner object is built afresh for every event, as for every other type, so the
 ## What stage 1 deliberately leaves out
 
 The per-slot merge rules and the contradiction checks described in the design are not written yet, because stage 1 has no slot values for them to check; they arrive with the stages that add those values. A plan is one `order` node, and the only preset is `simple`. Joins are recognised by name and refused as not built yet.
+
+## Stage 2a: triggers, the protect side and pricing (2026-10-01)
+
+A plan's order can now wait for a trigger, protect a position and be priced by one pricing rule. `PlanOrder` sets `WANTS_PRICES`, answers `202 armed` for an order with a trigger, and on each tick asks the root part whether its trigger holds, placing the order once. The part's record gains `memory`, what the trigger remembers, and `fired_at`. Confirmation counts are written to Redis on each tick without a recorded event, as today's price triggers do; the change of state to `working` is recorded, and a restart between ticks was checked offline to still fire once.
+
+The memory is deep-copied before a tick, because the trigger mutates nested dictionaries in place; a shallow copy made the "did it change" comparison always false, so a `held` trigger never saved when the level was first reached. The offline scenario `a_plan_held_trigger_waits_until_the_level_has_held` caught it.
+
+A standalone `protect` order is refused with 409 and `protect_needs_position` when the unified positions document shows no position on the body's side, as the user decided on 2026-10-01. It reuses `ReduceOnlyCheck.held`. The reduce-only check itself is not applied to `protect` orders, because a protecting child of a Then join in step 2b will be placed the moment its parent fills, before the positions document has caught up.
+
+`closes_position` returns True for a leg of a `protect` part, so it may use the part of a broker's daily cap kept for exits. Instruments a trigger watches are listed in `parameters['watch_instrument_ids']`, which the price ticker reads.

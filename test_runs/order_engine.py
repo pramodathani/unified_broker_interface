@@ -2547,7 +2547,7 @@ class OrderEngineSuite:
                 'a_plan_lists_every_problem_at_once',
                 {
                     'order': {
-                        'side': 'buy',
+                        'side': 'long',
                         'presets': [
                             {
                                 'peg': {},
@@ -2567,6 +2567,342 @@ class OrderEngineSuite:
                 'a_plan_that_is_not_an_object_is_refused',
                 'buy 10',
                 [],
+                accepted,
+            ),
+        ]
+
+    def plan_price_result(self, name, plan, steps, answer, positions=None, restart_between_ticks=False):
+        """Places one `plan` order and walks it through price ticks, recording what it did and the state of each of its parts.
+
+        Args:
+            name (str): The check's name.
+            plan (object): The `plan` object, as a caller would send it.
+            steps (list): One tick per step, as `price_result` takes them.
+            answer (dict): The stubbed broker answer.
+            positions (float | None): A net RELIANCE position to seed, or None for none.
+            restart_between_ticks (bool): Whether to rebuild every parent from its recorded events after each tick, as recovery does.
+
+        Returns:
+            dict: The recorded result, with `parts`, each parent's `parts` parameter.
+        """
+        body = self.scenarios.bodies.market_order(
+            dry_run=None,
+            order_type='LIMIT',
+            price=1000,
+            quantity=10,
+            synthetic={
+                'type': 'plan',
+                'plan': plan,
+            },
+        )
+        result = self.price_result(
+            name,
+            body,
+            steps,
+            answer,
+            positions=positions,
+            restart_between_ticks=restart_between_ticks,
+        )
+        stored = self.fake_redis.hashes.get('unified:orders:parents', {})
+        parts = []
+        for document in stored.values():
+            parameters = json.loads(document).get('parameters') or {}
+            parts.append(parameters.get('parts'))
+        result['parts'] = parts
+        return result
+
+    def run_plan_trigger_checks(self):
+        """Runs plan orders that wait for a trigger, protect a position or are priced by a pricing rule, through price ticks.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        accepted = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        identifiers = order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS
+        steady = self.book_at(1000.00, 1000.05)
+        touched = self.book_at(994.90, 994.95)
+        return [
+            self.plan_price_result(
+                'a_plan_market_if_touched_waits_then_takes_the_offer',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'market_if_touched': {
+                                    'trigger_price': 995,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': touched, 'at': 1},
+                    {'quote': touched, 'at': 2},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_waiting_plan_survives_a_restart_and_fires_once',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'market_if_touched': {
+                                    'trigger_price': 995,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': touched, 'at': 1},
+                    {'quote': touched, 'at': 2},
+                ],
+                accepted,
+                restart_between_ticks=True,
+            ),
+            self.plan_price_result(
+                'a_plan_limit_if_touched_rests_its_limit_once_touched',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'limit_if_touched': {
+                                    'trigger_price': 995,
+                                    'limit_price': 996,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': touched, 'at': 1},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_scheduled_order_waits_for_its_time',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'scheduled': {
+                                    'at_time': '10:00:30',
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 10},
+                    {'quote': steady, 'at': 40},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_joins_a_time_and_a_price_trigger_so_both_must_hold',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'scheduled': {
+                                    'at_time': '10:00:30',
+                                },
+                            },
+                            {
+                                'market_if_touched': {
+                                    'trigger_price': 995,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': touched, 'at': 10},
+                    {'quote': steady, 'at': 40},
+                    {'quote': touched, 'at': 50},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_held_trigger_waits_until_the_level_has_held',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'market_if_touched': {
+                                    'trigger_price': 995,
+                                    'trigger_on': 'held',
+                                    'hold_seconds': 5,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': touched, 'at': 1},
+                    {'quote': touched, 'at': 3},
+                    {'quote': touched, 'at': 7},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_cross_instrument_watches_another_instruments_price',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'cross_instrument': {
+                                    'watch_instrument_id': identifiers['reliance_future'],
+                                    'trigger_price': 1010,
+                                    'trigger_direction': 'at_or_above',
+                                    'limit_price': 1000,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {
+                        'quote': steady,
+                        'at': 0,
+                        'other_quotes': {
+                            'reliance_future': self.book_at(1004.10, 1004.30),
+                        },
+                    },
+                    {
+                        'quote': steady,
+                        'at': 1,
+                        'other_quotes': {
+                            'reliance_future': self.book_at(1010.10, 1010.30),
+                        },
+                    },
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_hidden_stop_protects_a_long_and_sells_past_the_bid',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'hidden_stop': {
+                                    'trigger_price': 995,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': touched, 'at': 1},
+                ],
+                accepted,
+                positions=10,
+            ),
+            self.plan_price_result(
+                'a_plan_that_protects_with_no_position_held_is_refused',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'hidden_stop': {
+                                    'trigger_price': 995,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_with_a_native_stop_rests_it_at_once',
+                {
+                    'order': {
+                        'side': 'protect',
+                        'pricing': [
+                            {
+                                'native_stop': {
+                                    'trigger_price': 990,
+                                    'limit_price': 988,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+                positions=10,
+            ),
+            self.plan_price_result(
+                'a_plan_later_pricing_replaces_a_presets_with_a_warning',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'market_if_touched': {
+                                    'trigger_price': 995,
+                                },
+                            },
+                        ],
+                        'pricing': [
+                            {
+                                'fixed': {
+                                    'price': 994,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': touched, 'at': 1},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_with_two_sides_and_bad_trigger_settings_lists_them_all',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'hidden_stop': {
+                                    'trigger_price': -5,
+                                },
+                            },
+                        ],
+                        'side': 'buy',
+                        'trigger': {
+                            'all': [
+                                {
+                                    'time_after': 1000,
+                                },
+                                {
+                                    'price_crosses': {
+                                        'level': 990,
+                                        'confirm': 'held',
+                                    },
+                                },
+                            ],
+                        },
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                ],
                 accepted,
             ),
         ]
@@ -6137,6 +6473,7 @@ class OrderEngineSuite:
             results.extend(self.run_follower_checks())
             results.extend(self.run_reaction_checks())
             results.extend(self.run_plan_checks())
+            results.extend(self.run_plan_trigger_checks())
             results.extend(self.run_clock_checks())
             results.extend(self.run_price_checks())
             results.extend(self.run_wiring_checks())

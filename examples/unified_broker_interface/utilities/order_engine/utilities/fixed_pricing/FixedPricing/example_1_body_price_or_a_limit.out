@@ -1,0 +1,6 @@
+as the body says: LIMIT at 1000.00; reads quotes False
+  dry run shows {'fixed': {'price': "the body's price", 'order_type': "the body's order_type"}}
+a limit at 996: LIMIT at 996; reads quotes False
+  dry run shows {'fixed': {'price': '996', 'order_type': 'LIMIT'}}
+a market order: MARKET at None; reads quotes False
+  dry run shows {'fixed': {'price': "the body's price", 'order_type': 'MARKET'}}
