@@ -129,7 +129,11 @@ The example below shows one order and is shortened to two brokers in `brokers`. 
       "order_timestamp": "2026-09-15T09:20:04+05:30",
       "exchange_timestamp": "2026-09-15T09:20:04+05:30",
       "tag": null,
-      "instrument_id": "11111111-1111-5111-8111-000000000001"
+      "instrument_id": "11111111-1111-5111-8111-000000000001",
+      "engine_parent_id": null,
+      "synthetic_type": null,
+      "intent_id": null,
+      "leg_role": null
     }
   ],
   "summary": {
@@ -176,11 +180,12 @@ The document has four top-level keys. Each order in `orders` follows the order c
 
 ### Status codes
 
-The status codes below come from the token check and from the shared document reader in `unified_broker_interface/utilities/unified_documents.py`.
+The status codes below come from the token check, from the filter reader in `unified_broker_interface/utilities/order_book_filter.py`, and from the shared document reader in `unified_broker_interface/utilities/unified_documents.py`.
 
 | Status | When |
 |---|---|
 | <span class="status s2">200</span> | The document is fresh and at least one broker's data was read. |
+| <span class="status s4">400</span> | A paging parameter cannot be read: `limit must be a whole number, not '<text>'`, `limit must be from 1 to 10000, not <n>`, `cursor must be a whole number, not '<text>'` or `cursor must be at least 0, not <n>`. |
 | <span class="status s4">401</span> | `Access token is required`, `Invalid access token` or `Access token has expired`. |
 | <span class="status s5">502</span> | `Unable to retrieve orders information`: the document exists, but no broker is `ok` or `stale`. The body still lists `brokers`. |
 | <span class="status s5">503</span> | `Orders are not available: nothing is keeping unified:orders:orders`: the key is missing or unreadable, so the combining script is not running. |
@@ -257,7 +262,11 @@ The example below shows one trade, with `brokers` shortened to one entry. The ke
       "price": 2500.0,
       "value": 25000.0,
       "trade_timestamp": "2026-09-15 09:20:06",
-      "exchange_timestamp": "2026-09-15 09:20:06"
+      "exchange_timestamp": "2026-09-15 09:20:06",
+      "engine_parent_id": null,
+      "synthetic_type": null,
+      "intent_id": null,
+      "leg_role": null
     }
   ],
   "summary": {
@@ -299,6 +308,7 @@ The trade book shares the order book's rules.
 | Status | When |
 |---|---|
 | <span class="status s2">200</span> | The document is fresh and at least one broker's data was read. |
+| <span class="status s4">400</span> | A paging parameter cannot be read, with the same messages as the order book. |
 | <span class="status s4">401</span> | `Access token is required`, `Invalid access token` or `Access token has expired`. |
 | <span class="status s5">502</span> | `Unable to retrieve trades information`: no broker is `ok` or `stale`. |
 | <span class="status s5">503</span> | `Trades are not available: nothing is keeping unified:orders:trades`. |
@@ -439,6 +449,8 @@ The bodies below are real answers recorded by the offline suite `python -m test_
     {
       "broker": "zerodha",
       "instrument_id": "11111111-1111-5111-8111-000000000002",
+      "intent_id": "00000000000040008000000000000001",
+      "parent_id": "00000000-0000-4000-8000-000000000002",
       "tag": "abc123",
       "outcome": "accepted",
       "order_id": "250915000000011",
@@ -458,6 +470,7 @@ The bodies below are real answers recorded by the offline suite `python -m test_
     {
       "broker": "zerodha",
       "instrument_id": "11111111-1111-5111-8111-000000000002",
+      "intent_id": "00000000000040008000000000000001",
       "tag": "abc123",
       "dry_run": true,
       "request": {
@@ -488,6 +501,8 @@ The bodies below are real answers recorded by the offline suite `python -m test_
     {
       "broker": "zerodha",
       "instrument_id": "11111111-1111-5111-8111-000000000001",
+      "intent_id": "00000000000040008000000000000001",
+      "parent_id": "00000000-0000-4000-8000-000000000002",
       "tag": null,
       "outcome": "rejected",
       "order_id": null,
@@ -504,6 +519,7 @@ The bodies below are real answers recorded by the offline suite `python -m test_
     {
       "error": "no broker can take this order",
       "instrument_id": "11111111-1111-5111-8111-000000000001",
+      "intent_id": "00000000000040008000000000000001",
       "skipped": [
         {"broker": "dhan", "reason": "has no login in Redis"},
         {"broker": "flattrade", "reason": "has no login in Redis"},
@@ -522,6 +538,8 @@ A sent order and a dry run share most keys. Every answer also carries `intent_id
 |---|---|---|
 | `broker` | string | The broker the order went to, or would have gone to. |
 | `instrument_id` | string | The resolved instrument id. |
+| `intent_id` | string | The id the order was handed to the order engine under; [read its answer later](#read-an-answer-later) by it. |
+| `parent_id` | string | The order engine parent recorded for the order. Absent on a dry run and on a refusal. |
 | `tag` | string or null | The tag the broker request carried. |
 | `outcome` | string | `accepted`, `rejected` or `unknown`. Absent on a dry run. |
 | `order_id` | string or null | The broker's order id, for an accepted order. Keep it: `modify` and `cancel` take it. |
@@ -547,7 +565,7 @@ Every failure below is answered without calling a broker, except the three outco
 | <span class="status s4">401</span> | `Access token is required`, `Invalid access token` or `Access token has expired`. |
 | <span class="status s4">404</span> | `the instrument is not mapped`: no instrument matches the id or the identity fields today. |
 | <span class="status s4">422</span> | `outcome` is `rejected`: the broker refused the order, or the connection to it could not be opened, so nothing was sent. |
-| <span class="status s5">503</span> | `Redis could not be read: <error>`, `no instruments have been mapped yet`, `today's instrument catalogue is not published yet: the catalogue for <date> has expired, and the daily mapping has not published a new one`, `every broker is excluded from order placement`, `no broker can take this order` (with `skipped`), or `the contract size of this <segment> instrument is not trusted today (<status>), so no order is sent` (with `contract_size_status`). |
+| <span class="status s5">503</span> | `Redis could not be read: <error>`, `the order engine is not running, so the order was not placed; start unified-orders@order_engine.service`, `the order could not be written for the order engine: <error>`, `no instruments have been mapped yet`, `today's instrument catalogue is not published yet: the catalogue for <date> has expired, and the daily mapping has not published a new one`, `every broker is excluded from order placement`, `no broker can take this order` (with `skipped`), or `the contract size of this <segment> instrument is not trusted today (<status>), so no order is sent` (with `contract_size_status`). |
 | <span class="status s5">504</span> | `outcome` is `unknown`: the broker answered with a server error, answered success without an order id, or the network failed after the request left. **The order may exist.** |
 
 The engine adds <span class="status s2">202</span>, <span class="status s4">403</span>, <span class="status s4">409</span>, <span class="status s4">429</span> and more <span class="status s5">503</span> and <span class="status s5">504</span> cases; they are listed on the [Order engine](order-engine.md) page.
@@ -847,7 +865,7 @@ A body with an `orders` list changes each order in it. Each item carries what th
     ```
 
 ??? note "Under the hood"
-    - **Redis keys read:** `last_login`, `settings`, `unified:catalogue:current_date`, `unified:catalogue:warm_identifier`, every broker's `<broker>:orders:orders` (one `HGET` each), then `unified:catalogue:<date>:tokens:<broker>` and the candidates' `identity`, `order_handles` and `contract_sizes`.
+    - **Redis keys read:** `last_login`, `settings`, `unified:catalogue:current_date`, `unified:catalogue:warm_identifier`, every broker's `<broker>:orders:orders` (one `HGET` each), `unified:orders:children` (one `HMGET` per order, to see whether the engine owns it), then `unified:catalogue:<date>:tokens:<broker>` and the candidates' `identity`, `order_handles` and `contract_sizes`.
     - **A list:** `modify_order_list` reads every order's entries in the first pipeline, then `warm_order_instruments` reads every order's token candidates in one pipeline and their catalogue data in another, each skipped when this worker holds it. Each order is then prepared as a single one is, by `prepare_modification`, into a [`PreparedModification`][unified_broker_interface.utilities.broker_orders.utilities.prepared_modification.PreparedModification].
     - **How the instrument is found:** the stored order's broker token is looked up in `tokens:<broker>`. A candidate is kept only when it is tradeable, its market is one the broker takes, the broker's handle carries the same token, and its market matches the stored exchange code. Exactly one candidate must remain, because several brokers number tokens per exchange.
     - **Classes:** [`ModifyOrderRequest`][unified_broker_interface.utilities.broker_orders.utilities.modify_order_request.ModifyOrderRequest] validates the parameters and [`OrderModification`][unified_broker_interface.utilities.broker_orders.utilities.order_modification.OrderModification] lays the change over the stored order.
@@ -971,7 +989,7 @@ The cancel route has fewer failure modes than modify, because it needs no instru
 | <span class="status s5">503</span> | `Redis could not be read: <error>`, `<broker> has no login in Redis`, `<broker> has no <settings> in its Redis settings`, or a message saying Redis does not yet hold a value the broker's cancel needs. |
 | <span class="status s5">504</span> | `outcome` is `unknown`; the cancel may have been applied. |
 
-The sequence below shows a cancel from start to finish. Only one Redis round trip happens before the broker call.
+The sequence below shows a cancel from start to finish. Two Redis round trips happen before the broker call: one pipeline that reads everything, and one that takes room in the rate budget. A dry run needs only the first.
 
 ```mermaid
 sequenceDiagram
@@ -982,7 +1000,7 @@ sequenceDiagram
     participant B as Broker holding the order
     C->>A: DELETE /api/orders/cancel?order_id=...
     A->>A: header present? order_id valid?
-    A->>R: one pipeline: token, logins, settings,<br/>HGET <broker>:orders:orders for all ten
+    A->>R: one pipeline: token, logins, settings,<br/>HGET <broker>:orders:orders for all ten,<br/>HMGET unified:orders:children
     R-->>A: replies
     A->>A: check token
     A->>A: find_stored_order: exactly one broker?
@@ -994,6 +1012,7 @@ sequenceDiagram
         A-->>C: 409 the order is already COMPLETE
     else
         A->>A: login and settings present? build cancel
+        A->>R: take room in the rate budget
         A->>B: one HTTP request
         B-->>A: answer
         A-->>C: 200 / 422 / 504
@@ -1050,7 +1069,7 @@ A body with an `orders` list cancels each order in it. Each item carries `order_
     ```
 
 ??? note "Under the hood"
-    - **Redis keys read:** `last_login`, `settings`, and `<broker>:orders:orders` for every broker.
+    - **Redis keys read:** `last_login`, `settings`, `<broker>:orders:orders` for every broker, and `unified:orders:children`, which says whether the order engine owns the order.
     - **Why the stored order matters:** several brokers' cancel requests need values only their own order book carries, such as Zerodha's variety (the `amo` in the URL above comes from the stored order), Kotak's after-market flag or Wisdom Capital's identifier.
     - **Class:** [`CancelOrderRequest`][unified_broker_interface.utilities.broker_orders.utilities.cancel_order_request.CancelOrderRequest].
     - **A list:** `cancel_order_list` reads every order's entries in the same single pipeline, however many orders it has, and prepares each with `prepare_cancel` into a [`PreparedCancel`][unified_broker_interface.utilities.broker_orders.utilities.prepared_cancel.PreparedCancel].
@@ -1094,6 +1113,7 @@ An order placed a moment earlier may not have reached its broker's order book in
 | Status | Meaning |
 |---|---|
 | <span class="status s2">200</span> | The parent is cancelled; `cancelled_legs` says what each leg's cancel came back as. A list is answered with `results`, one entry per parent. |
+| <span class="status s2">207</span> | A leg's cancel was refused or its outcome is unknown, so the parent's `state` is `cancelling`. |
 | <span class="status s4">400</span> | `parent_id must name a parent`, `parents must be a non-empty list`, or, for one entry of a list, `each entry of parents must name a parent_id` |
 | <span class="status s4">404</span> | `the order engine holds no parent with this id` |
 | <span class="status s4">409</span> | `the parent is already <state>` |
@@ -1164,9 +1184,9 @@ The status of the whole response says only whether the list could be read. Check
 | Status | When |
 |---|---|
 | <span class="status s2">200</span> | The list was read and every order has an entry. |
-| <span class="status s4">400</span> | `orders must be a non-empty list`, `a list takes only orders and dry_run, so give <name> inside each order`, `a list takes only dry_run in the query string, so give <name> inside each order`, or `dry_run must be true or false`. |
+| <span class="status s4">400</span> | `orders must be a non-empty list`, `a list may hold at most <maximum> orders, not <n>` (for `place`), `a list takes only orders and dry_run, so give <name> inside each order`, `a list takes only dry_run in the query string, so give <name> inside each order`, or `dry_run must be true or false`. |
 | <span class="status s4">401</span> | `Access token is required`, `Invalid access token` or `Access token has expired`. |
-| <span class="status s5">503</span> | `Redis could not be read: <error>`. |
+| <span class="status s5">503</span> | `Redis could not be read: <error>`, and for `place` also `no instruments have been mapped yet` or `the order engine is not running, so the order was not placed; start unified-orders@order_engine.service`. |
 
 An entry gets any status the single form gives. Three refusals exist only in a list, each with <span class="status s4">400</span>: `each entry of orders must be an object`, `dry_run applies to the whole list, so give it beside orders rather than inside an order`, and `this order is already named at request_index <n>` for an item that names an order an earlier item already names. Two items name the same order when their `order_id` is the same and their `broker` is the same or either leaves it out, so the same id at two named brokers is two orders.
 
@@ -1178,10 +1198,10 @@ Every order sent counts towards its broker's [daily order cap](#daily-order-caps
 
 | List | Redis round trips before the broker calls |
 |---|---|
-| `DELETE /cancel` | 1, whatever the number of orders |
-| `PUT /modify` | 1 to 3, whatever the number of orders: the first pipeline, then every order's token candidates, then their catalogue data, each skipped when this worker already holds it |
+| `DELETE /cancel` | 1 whatever the number of orders, plus one per cancel sent, to take room in the rate budget |
+| `PUT /modify` | 1 to 3 whatever the number of orders: the first pipeline, then every order's token candidates, then their catalogue data, each skipped when this worker already holds it; plus one per change sent, to take room in the rate budget |
 
-These counts are recorded by `test_runs/order_change_lists.py`: a cancel list of 60 orders costs one round trip, and a modify list of one order at each of the ten brokers costs three.
+These counts are recorded by `test_runs/order_change_lists.py`: a cancel list of 60 orders that no broker holds costs one round trip, a dry-run modify list of one order at each of the ten brokers costs three, and the same modify list sent costs thirteen.
 
 
 ## How the broker is chosen
@@ -1333,9 +1353,9 @@ The order routes were written so that the API's own work adds as little as possi
 | `GET /api/orders/details`, `/trades` | token check, then 1 | The token check, then one `GET` of the document |
 | `POST /place` | 4 or 5 | The first pipeline, an optional lookup by fields, the engine lock's `EXISTS`, the `XADD` of the intent and the `BLPOP` for the answer; the engine's own reads are not counted here |
 | `PUT /modify` | 2 to 4 | The first pipeline with every broker's order book; the token candidates; their catalogue data, each skipped when held by this worker; one more for the rate budget before sending |
-| `PUT /modify`, a list | 2 to 4 | The same three, each read once for the whole list, plus one for the rate budget per change sent |
+| `PUT /modify`, a list | 1 to 3, plus one per change sent | The same three, each read once for the whole list, plus one for the rate budget per change sent |
 | `DELETE /cancel` | 2 | One pipeline with the token, logins, settings and every broker's order book, and one for the rate budget |
 | `DELETE /cancel`, a list | 1, plus one per cancel sent | The same pipeline, holding every order of the list, and one for the rate budget per cancel |
-| `POST /flatten` | 1, plus more | One read of everything; one for the rate budget per cancel; one re-read of the order books every 0.25 s while waiting for the cancels; an `HGET` per position closed, then the engine lock's `EXISTS`, one pipeline of `XADD`s and a `BLPOP` per answer; one re-read of the position books every 0.25 s while waiting for the closed positions to show zero |
+| `POST /flatten` | 1, plus more | One read of everything; the engine lock's `EXISTS`, an `XADD` and a `BLPOP` to halt every open parent; one for the rate budget per cancel; one re-read of the order books every 0.25 s while waiting for the cancels; an `HGET` per position closed, then the engine lock's `EXISTS`, one pipeline of `XADD`s and a `BLPOP` per answer; one re-read of the position books every 0.25 s while waiting for the closed positions to show zero |
 
 When a broker is capped by `ORDER_DAILY_CAPS`, each request sent to it costs one more pipeline afterwards, to increment the count.

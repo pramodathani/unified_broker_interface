@@ -102,6 +102,10 @@ The table below lists the routes the page does not call. Use `curl` or your own 
 | Route | Why it is not on the page |
 |---|---|
 | `GET /api/instruments/additional_details` | Not wired to a button |
+| The `POST` list forms of `details`, `additional_details`, `ltp`, `ohlc`, `quote`, `prices` and `ticks` | Not wired to a button; every instrument button sends a `GET` |
+| `GET /api/orders/intents/<intent_id>` | Not wired to a button |
+| `GET /api/orders/parents` | Not wired to a button |
+| `DELETE /api/orders/parents` | Cancels real orders |
 | `POST /api/orders/place` | Places a real order |
 | `PUT /api/orders/modify` | Changes a real order |
 | `DELETE /api/orders/cancel` | Cancels a real order |

@@ -26,7 +26,7 @@ The site is split into tabs along the top. Most readers want the first card.
 
     ---
 
-    All 26 routes of the UBI API, laid out one group per page with request parameters, `curl` examples, JSON responses and status codes.
+    All 29 routes of the UBI API, laid out one group per page with request parameters, `curl` examples, JSON responses and status codes.
 
     [:octicons-arrow-right-24: Go to the API reference](rest-api/index.md)
 
@@ -79,11 +79,11 @@ The table below counts what the repository holds today, so you can judge the siz
 | What | Count | Where |
 |---|---:|---|
 | Brokers | 10 | `stock_brokers/api/` |
-| REST API routes | 26 | `unified_broker_interface/blueprints/` |
+| REST API routes | 29 | `unified_broker_interface/blueprints/` |
 | Endpoint groups (blueprints) | 7 | session, users, brokers, exchanges, instruments, portfolio, orders |
 | Synthetic order types in the order engine | 53 | `unified_broker_interface/utilities/order_engine/` |
 | Data stores | 3 | Redis, MongoDB, TimescaleDB |
-| Offline test suites | 11 | `test_runs/` |
+| Offline test suites | 18 | `test_runs/` |
 
 ## What one API call replaces
 

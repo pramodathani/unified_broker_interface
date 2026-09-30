@@ -123,7 +123,7 @@ Adding a broker touches many registries (`INGESTERS`, `ADAPTERS`, `MAPPED_BROKER
 
 The cost table is held in memory by `BrokerCostTable` in `broker_selection/utilities/broker_cost_table.py`, and one instance per process is shared by the selector, `RateBudget` and `DailyOrderCount`. Building it reads nothing, because the orders blueprint is built when its module is imported; `api.py` and the order engine call its `start`, which reads the table once and reloads it every day at 06:00 IST on a background thread. The offline suites never call `start`, so for them the table is empty and every limit falls back to configuration, which is what keeps their recordings unchanged. Where the table gives a limit it replaces `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_PER_BROKER_PER_SECOND` and `UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_CAPS`; those settings now only cover a broker with no row or an empty cell. `docs/architecture/broker-selection.md` explains the ranking and the SQL to change a row.
 
-A selector reads Redis by queueing commands onto the pipeline the blueprint is already sending, through `queue_redis_commands`, instead of opening a round trip of its own. `docs/rest-api/orders.md` counts the round trips each one costs.
+A selector reads Redis by queueing commands onto the pipeline the order engine already sends to read the instrument (`read_instrument` in `order_engine/utilities/engine_placement.py`), through `queue_redis_commands`, instead of opening a round trip of its own. `docs/rest-api/orders.md` counts the round trips each one costs.
 
 ### Sessions and logins
 

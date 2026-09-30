@@ -1,6 +1,6 @@
 # Offline tests
 
-UBI has no pytest suite. Instead, `test_runs/` holds seventeen plain Python scripts, each of which checks one part of the system against scripted inputs. They are called "offline" because they need no network, no broker, no Redis and no database: every outside service is replaced by a stand-in that lives in memory. You run each one as a module from the project root.
+UBI has no pytest suite. Instead, `test_runs/` holds eighteen plain Python scripts, each of which checks one part of the system against scripted inputs. They are called "offline" because they need no network, no broker, no Redis and no database: every outside service is replaced by a stand-in that lives in memory. You run each one as a module from the project root.
 
 ```bash
 .venv/bin/python -m test_runs.order_routes
@@ -10,7 +10,7 @@ Because they are plain scripts, there is no way to run a single case other than 
 
 ## The suites
 
-The table below lists all seventeen. "Fixture" is the recording a suite compares against, if it has one, and "Runtime" is what one run took on this machine on 2026-09-27.
+The table below lists all eighteen. "Fixture" is the recording a suite compares against, if it has one, and "Runtime" is what one run took on this machine on 2026-09-27 (on 2026-09-30 for `broker_selection`).
 
 | Command | What it pins | Fixture | `--record` | Runtime |
 |---|---|---|---|---:|
@@ -23,6 +23,7 @@ The table below lists all seventeen. "Fixture" is the recording a suite compares
 | `python -m test_runs.order_change_lists` | The list form of `modify` and `cancel`: each entry's status and body, the broker requests (sorted, since a list sends on several threads) and the Redis round trips | `test_runs/fixtures/order_change_lists.jsonl` (24) | rewrites the whole file | 1.0 s |
 | `python -m test_runs.order_engine` | The order engine daemon against scripted intents and stubbed brokers: replies, broker requests, acknowledgements, counters | `test_runs/fixtures/order_engine.jsonl` (273) | rewrites the whole file | 1.0 s |
 | `python -m test_runs.order_engine_throughput` | The order engine's broker lanes against ten stub brokers that take 200 ms each: every order accepted, no broker sent more than 10 messages in any one second, and ten workers per broker at least 80 orders a second in total | none | no | 9.0 s |
+| `python -m test_runs.broker_selection` | The lowest-cost broker selector's rankings from the cost table, its pacing through the day, the rate budget and daily order count it shares, and how the table is loaded, against scripted table rows, scripted Redis counts and a stand-in database connection | none | no | 0.4 s |
 | `python -m test_runs.order_flatten` | The panic button, including that every cancel is sent and confirmed before any close, and that `flat` waits for the positions to show zero | `test_runs/fixtures/order_flatten.jsonl` (12) | rewrites the whole file | 3.5 s |
 | `python -m test_runs.instrument_routes` | `/details`, `/additional_details`, `/ltp`, `/ohlc`, `/quote`, `/prices` and `/ticks`, by `GET` for one instrument and by `POST` for a list: status, body, Redis round trips, the broker quotes asked for and the tick queries run | `test_runs/fixtures/instrument_routes.jsonl` (52) | rewrites the whole file | 1.3 s |
 | `python -m test_runs.leg_modifications` | That each order type carries on from a caller's change to one of its legs: a trailing stop's watermark, a peg's offset, a chaser's wait, a linked pair's other exit, and a slicer's remaining quantity, including after a replay | none | no | 0.4 s |
@@ -36,7 +37,7 @@ The table below lists all seventeen. "Fixture" is the recording a suite compares
 
 ## Running them all
 
-The output below is the last lines of each suite from one run on 2026-09-27.
+The output below is the last lines of each suite from one run on 2026-09-27, with `broker_selection` added from a run on 2026-09-30.
 
 ```text
 ===== candle_parse
@@ -57,6 +58,8 @@ The output below is the last lines of each suite from one run on 2026-09-27.
 273 of 273 scenarios match the recording, 0 differ
 ===== order_engine_throughput
 6/6 checks passed.
+===== broker_selection
+54/54 checks passed.
 ===== order_flatten
 12 of 12 scenarios match the recording, 0 differ
 ===== instrument_routes
@@ -77,7 +80,7 @@ The output below is the last lines of each suite from one run on 2026-09-27.
 
 ## How the recording suites work
 
-Seven suites (`order_routes`, `order_engine_routes`, `order_change_lists`, `order_engine`, `order_flatten`, `instrument_routes` and `websocket_feeds`) do not state their expected results in code. Instead they record everything the code under test did, and compare it with a recording made earlier from code that was known to be right. It works like a flight recorder: any change in behaviour, however small, shows up as a difference.
+Nine suites (`order_routes`, `order_engine_routes`, `order_place_lists`, `order_engine_changes`, `order_change_lists`, `order_engine`, `order_flatten`, `instrument_routes` and `websocket_feeds`) do not state their expected results in code. Instead they record everything the code under test did, and compare it with a recording made earlier from code that was known to be right. It works like a flight recorder: any change in behaviour, however small, shows up as a difference.
 
 The flowchart below shows one run of `order_routes`.
 
@@ -129,19 +132,21 @@ None of the suites connects to anything, but most of them import `utilities.conf
 
 | Loads `utilities.configurations` on import | Does not |
 |---|---|
-| `candle_parse`, `order_routes`, `order_engine_routes`, `order_change_lists`, `order_engine`, `order_flatten`, `instrument_routes`, `contract_sizes`, `price_cache`, `connection_warming` | `unified_ticks_sessions`, `virtual_queue`, `websocket_feeds` (the package itself) |
+| `candle_parse`, `order_routes`, `order_engine_routes`, `order_place_lists`, `order_engine_changes`, `order_change_lists`, `order_engine`, `order_engine_throughput`, `broker_selection`, `order_flatten`, `instrument_routes`, `leg_modifications`, `contract_sizes`, `price_cache`, `connection_warming` | `unified_ticks_sessions`, `virtual_queue`, `websocket_feeds` (the package itself) |
 
-Settings in `.env` can change what the API code does, as the `order_routes` warning above shows, so a failing suite is worth checking against `.env` before assuming the code is wrong.
+Settings in `.env` can change what the API code does, so a failing suite is worth checking against `.env` before assuming the code is wrong.
 
 ## Scripts in test_runs that are not offline
 
-Three files in `test_runs/` are not offline suites, and two of them reach the outside world.
+Five files in `test_runs/` are not offline suites, and two of them reach the outside world.
 
 | File | What it does | Offline? |
 |---|---|:-:|
 | `broker_login_test.py` | Builds broker API objects, which logs in to the live accounts; which brokers it logs in to depends on which lines are commented out | :material-close: |
 | `download_instruments.py` | Downloads each broker's instrument master and appends today's snapshot to `<broker>.instruments`; `--bootstrap` replaces today's snapshot | :material-close: |
 | `rest_api_app.py` | The Streamlit test page that `bin/rest-api-app` serves; it calls the local API | not a test |
+| `redis_stand_ins.py` | The in-memory Redis stand-in shared by the order suites, which counts round trips | a helper, not a test |
+| `engine_stand_ins.py` | Stand-ins for the order engine's event log, `uuid.uuid4` and stop event, and an engine that runs on the route's own thread | a helper, not a test |
 
 !!! danger "`broker_login_test.py` logs in to live broker accounts"
     Running `test_runs/broker_login_test.py` performs real logins, some through a headless Chrome and a TOTP, and at Zerodha a new login invalidates the token every running Zerodha script holds. `download_instruments.py` also contacts the brokers and writes to the database. Run neither without a reason.

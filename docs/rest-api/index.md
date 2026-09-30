@@ -6,7 +6,7 @@ This page is the map. It lists every route, explains the conventions that all of
 
 ## All endpoints
 
-The table below lists all 26 routes in 33 rows, because the seven instrument routes that also take a list of instruments by `POST` appear once for each method. The badge shows the HTTP method, and the lock column shows which routes need the `access-token` header.
+The table below lists all 29 routes in 36 rows, because the seven instrument routes that also take a list of instruments by `POST` appear once for each method. The badge shows the HTTP method, and the lock column shows which routes need the `access-token` header.
 
 | Method | Endpoint | What it does | Token |
 |---|---|---|:---:|

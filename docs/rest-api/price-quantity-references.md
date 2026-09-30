@@ -202,10 +202,10 @@ A reference is resolved only by the order types that ask for it. The table below
 
 | When it is resolved | Types |
 |---|---|
-| When the engine takes the order | `simple`, `freeze_slicer`, `oto`, `oco`, `bracket`, `cover`, `scale_out`, `time_stop`, `good_till_time`, `peg`, `chaser`, `post_only`, `discretionary`, `participation`, `liquidity_seeking`, `iceberg`, `trailing_stop`, `trailing_entry`, `atr_trail`, and the price-trigger types `market_if_touched`, `limit_if_touched`, `hidden_stop`, `candle_close_stop`, `cross_instrument`, `indicator_triggered`, `gtt` and `virtual_limit` |
-| When the engine takes the order, and again for each later order | `twap`, `vwap`, `implementation_shortfall`, `accumulation`, `grid` |
-| At the scheduled time, not before | `scheduled` |
-| Never | `ladder`, `two_sided_breakout`, `basket`, `oca`, `legged_spread`, `strategy_stop`, `exposure_hedge`, `square_off`, `daily_stop` |
+| When the engine takes the order | `simple`, `freeze_slicer`, `oto`, `oco`, `bracket`, `cover`, `scale_out`, `time_stop`, `good_till_time`, `peg`, `chaser`, `post_only`, `discretionary`, `participation`, `liquidity_seeking`, `iceberg`, `trailing_stop`, `trailing_entry`, `atr_trail`, `stepped_stop`, `attached_hedge`, `underlying_peg`, `volatility`, and the price-trigger types `market_if_touched`, `limit_if_touched`, `hidden_stop`, `candle_close_stop`, `cross_instrument`, `indicator_triggered`, `gtt`, `virtual_limit`, `close_on_trigger` and `stop_and_reverse` |
+| When the engine takes the order, and again for each later order | `twap`, `vwap`, `closing_price`, `implementation_shortfall`, `accumulation`, `grid`, `two_sided_quote`, `account_conditional` |
+| At the scheduled time, not before | `scheduled`, `opening_auction` |
+| Never | `ladder`, `scale_with_profit_taker`, `two_sided_breakout`, `basket`, `oca`, `legged_spread`, `strategy_stop`, `exposure_hedge`, `square_off`, `daily_stop` |
 
 The price-trigger types resolve the reference when the order is armed, not when it fires. The types in the last row never call the resolver, so give them real numbers. [Synthetic orders](synthetic-orders.md) describes every type.
 

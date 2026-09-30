@@ -50,7 +50,7 @@ The broker folders are not all identical. The table below lists the files that a
 | Kotak | `kotak-user@.service` | There is no `bin/kotak/user/` folder; a Kotak login refreshes `kotak:user:details` itself |
 | Stoxkart | `stoxkart-historical-prices.service` | Stoxkart has no candle endpoint |
 
-Fyers is different in one more way. Each of its template units has an extra `ExecStartPre=/bin/sh -c 'sleep $$(shuf -i 0-30 -n 1)'`, which waits a random 0 to 30 seconds before the script starts. The unit's comment explains why: Fyers refuses more than a handful of requests a second per app, and eleven Fyers scripts checking their session at the same moment would be refused.
+Fyers is different in one more way. Each of its template units, and `fyers-historical-prices.service`, has an extra `ExecStartPre=/bin/sh -c 'sleep $$(shuf -i 0-30 -n 1)'`, which waits a random 0 to 30 seconds before the script starts. The unit's comment explains why: Fyers refuses more than a handful of requests a second per app, and eleven Fyers scripts checking their session at the same moment would be refused.
 
 ## How a template unit works
 
@@ -73,7 +73,7 @@ Not every script in a folder is meant to run through its template. `daily_feed` 
 
 ## Targets
 
-A **target** is a unit that does nothing by itself and exists to group other units. Each folder has one: `zerodha.target`, `unified.target`, `databases.target` and so on. Every service and timer in the folder says `PartOf=<folder>.target`, so stopping the target stops all of them, and says `WantedBy=<folder>.target` (timers say `WantedBy=timers.target`), so enabling them ties them to it. Each target itself says `WantedBy=default.target`, which is the target the user manager starts at boot. The user manager has no `multi-user.target`, so that name is never used.
+A **target** is a unit that does nothing by itself and exists to group other units. Each folder has one: `zerodha.target`, `unified.target`, `databases.target` and so on. Every service and timer in the folder says `PartOf=<folder>.target`, so stopping the target stops all of them. Every long-running service also says `WantedBy=<folder>.target`, so enabling it ties it to the target, and every timer says `WantedBy=timers.target`. The jobs a timer starts (`<broker>-login.service`, `unified-mapping.service`, `unified-prices.service` and `databases.service`) have no `[Install]` section, because they are started by their timer rather than enabled. Each target itself says `WantedBy=default.target`, which is the target the user manager starts at boot. The user manager has no `multi-user.target`, so that name is never used.
 
 The flowchart below shows how the targets relate to the services they start. It shows Zerodha as the example broker.
 
@@ -98,7 +98,7 @@ flowchart TB
     Z --> ZU["zerodha-user@details"]
     Z --> ZH["zerodha-historical-prices"]
     U --> UI["unified-instruments@<br/>websocket_quotes, store_quotes_to_db"]
-    U --> UO["unified-orders@<br/>api_order_details, api_trade_details,<br/>websocket_order_details, store_orders_to_db"]
+    U --> UO["unified-orders@<br/>api_order_details, api_trade_details,<br/>websocket_order_details, store_orders_to_db,<br/>order_engine"]
     U --> UPF["unified-portfolio@<br/>positions, holdings, funds, store_positions_to_db"]
     U --> UU["unified-user@<br/>details, unified_details"]
     U --> UB["unified-brokers@ / unified-exchanges@<br/>unified_details"]
@@ -113,14 +113,14 @@ The long-running services and the daily jobs follow different restart rules, bec
 |---|---|---|---|
 | Broker templates (`<broker>-instruments@`, `-orders@`, `-portfolio@`, `-user@`) | `always` | `15` | `RestartPreventExitStatus=2`, `StartLimitIntervalSec=0`, `TimeoutStopSec=60` |
 | Unified templates (`unified-*@`) | `always` | `15` | `RestartPreventExitStatus=2`, `StartLimitIntervalSec=0`, `TimeoutStopSec=60` |
-| `<broker>-historical-prices.service` | `always` | `600` | No `RestartPreventExitStatus`; `ExecStartPre=bin/wait-for-redis`; `TimeoutStartSec=420`; `Nice=10`, `IOSchedulingClass=idle`, `CPUWeight=20` |
-| `unified-rest-api.service` | `always` | `5` | `RestartPreventExitStatus=2`, `TimeoutStopSec=60` |
+| `<broker>-historical-prices.service` | `always` | `600` | No `RestartPreventExitStatus`; `ExecStartPre=bin/wait-for-redis`; `StartLimitIntervalSec=0`, `TimeoutStartSec=420`, `TimeoutStopSec=120`; `Nice=10`, `IOSchedulingClass=idle`, `CPUWeight=20` |
+| `unified-rest-api.service` | `always` | `5` | `RestartPreventExitStatus=2`, `StartLimitIntervalSec=0`, `TimeoutStopSec=60` |
 | `<broker>-login.service` | `on-failure` | `2min` | `Type=oneshot`, `StartLimitIntervalSec=1h`, `StartLimitBurst=3`, `TimeoutStartSec=300` |
 | `unified-mapping.service` | none | | `Type=oneshot`, `TimeoutStartSec=3h`, low priority |
 | `unified-prices.service` | none | | `Type=oneshot`, `TimeoutStartSec=4h`, low priority, `After=unified-mapping.service` |
 | `databases.service` | none | | `Type=oneshot`, `TimeoutStartSec=180`, runs again from its timer |
 
-`StartLimitIntervalSec=0` on the long-running units means systemd never gives up restarting them. The unit comment gives the reason: a broker outage can outlast any start limit, and each script paces its own logins. Every one of these units also sets `Environment=PYTHONUNBUFFERED=1`, because Python holds back its output when it is not writing to a terminal, and without this setting the journal would stay empty.
+`StartLimitIntervalSec=0` on the long-running units means systemd never gives up restarting them. The unit comment gives the reason: a broker outage can outlast any start limit, and each script paces its own logins. Every one of these units except `databases.service`, which runs no Python, also sets `Environment=PYTHONUNBUFFERED=1`, because Python holds back its output when it is not writing to a terminal, and without this setting the journal would stay empty.
 
 ### Why exit code 2 stops the restarts
 
@@ -232,7 +232,7 @@ systemctl --user enable --now unified.target unified-mapping.timer unified-price
     unified-user@details.service unified-user@unified_details.service \
     unified-brokers@unified_details.service \
     unified-exchanges@unified_details.service \
-    unified-rest-api.service
+    unified-rest-api.service unified-orders@order_engine.service
 ```
 
 !!! note "Turn on linger"

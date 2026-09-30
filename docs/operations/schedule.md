@@ -80,6 +80,7 @@ The same facts are listed in the table below, with the file each one comes from.
 | Time (IST) | What happens | Days | Where it is set |
 |---|---|---|---|
 | 06:00 | Every broker's daily order count in Redis (`unified:orders:daily_count:<broker>`) expires | Every day | `RESET_HOUR = 6` in `unified_broker_interface/utilities/order_engine/utilities/parent_store.py`, used by `daily_order_count.py` |
+| 06:00 | The REST API and the order engine reload the broker cost table `unified.broker_order_costs` that the lowest-cost selector, the rate budget and the daily order count read | Every day | `BrokerCostTable` in `unified_broker_interface/utilities/broker_selection/utilities/broker_cost_table.py`, which uses the same `RESET_HOUR` |
 | 07:00 | The REST API stops reusing yesterday's access token; the next `connect` issues a new one | Every day | `DAILY_RENEWAL_TIME = time(7, 0)` in `unified_broker_interface/utilities/tokens.py` |
 | 07:00 to 07:30 | Each of the ten `<broker>-login.timer` units fires once, at a random moment in this half hour | Every day, weekends included | `OnCalendar=*-*-* 07:00 Asia/Kolkata`, `RandomizedDelaySec=1800` |
 | 07:45 | `unified-mapping.service` downloads ten instrument masters, then maps them | Every day, weekends included | `OnCalendar=*-*-* 07:45 Asia/Kolkata`, `Persistent=true` |

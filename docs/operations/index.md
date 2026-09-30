@@ -32,7 +32,7 @@ This tab is about running UBI day after day on one machine. Everything runs as s
 
     ---
 
-    The thirteen test suites in `test_runs/` that need no network, no broker and no database, how their recordings work, and the lint baseline.
+    The eighteen test suites in `test_runs/` that need no network, no broker and no database, how their recordings work, and the lint baseline.
 
     [:octicons-arrow-right-24: Offline tests](tests.md)
 

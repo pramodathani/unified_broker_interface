@@ -26,7 +26,7 @@ The order of the two halves is the whole point of this route. Suppose you hold a
 
 This route decides what to cancel and what to close from Redis alone. Open orders come from each broker's `<broker>:orders:orders` hash, and positions come from each broker's own `<broker>:portfolio:positions` hash rather than from the merged portfolio document, because a closing order has to go to the broker that actually holds the position.
 
-Each cancel takes room in the per-broker rate budget before it is sent, waiting up to `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_WAIT_SECONDS` when the broker has already been sent ten messages in the last second. A cancel that finds no room in time is reported as not sent, with the budget's message, and the route goes on to the rest.
+Each cancel takes room in the per-broker rate budget before it is sent, waiting up to `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_WAIT_SECONDS` when the broker has already been sent its per-second limit of messages: ten by default, five for Zerodha and INDmoney, or the broker's row in `unified.broker_order_costs` where that sets one. A cancel that finds no room in time is reported as not sent, with the budget's message, and the route goes on to the rest.
 
 ### Request parameters
 
@@ -63,7 +63,7 @@ The body is a JSON object with a confirmation word, so that a stray or mistyped 
     print(response.status_code, response.json())
     ```
 
-Give the client a generous timeout. The route sends its requests one after another, and it waits twice: up to `UNIFIED_BROKER_INTERFACE_API_ORDER_FLATTEN_WAIT_SECONDS` (5 seconds by default) for the cancels to be confirmed, and up to the same again for the closed positions to show zero.
+Give the client a generous timeout. The route sends its cancels one after another, and it waits twice: up to `UNIFIED_BROKER_INTERFACE_API_ORDER_FLATTEN_WAIT_SECONDS` (5 seconds by default) for the cancels to be confirmed, and up to the same again for the closed positions to show zero. Between those waits it also waits for the order engine's answers to the closes, for up to `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACE_LIST_WAIT_SECONDS` (25 seconds by default).
 
 ### Response
 
@@ -108,6 +108,7 @@ The bodies below are real answers recorded by the offline suite `python -m test_
           "status_message": null
         }
       ],
+      "halted": {"halted_parents": 0},
       "still_open_after_waiting": [],
       "closed": [
         {
@@ -147,6 +148,7 @@ The bodies below are real answers recorded by the offline suite `python -m test_
           "status_message": null
         }
       ],
+      "halted": {"halted_parents": 0},
       "still_open_after_waiting": ["flattrade:26091500000021"],
       "closed": [
         {
@@ -171,6 +173,7 @@ The bodies below are real answers recorded by the offline suite `python -m test_
     ```json
     {
       "cancelled": [],
+      "halted": {"halted_parents": 0},
       "still_open_after_waiting": [],
       "closed": [
         {
@@ -195,6 +198,7 @@ The bodies below are real answers recorded by the offline suite `python -m test_
     ```json
     {
       "cancelled": [],
+      "halted": {"halted_parents": 0},
       "still_open_after_waiting": [],
       "closed": [
         {
@@ -291,7 +295,11 @@ sequenceDiagram
     A->>R: one pipeline: token, logins, settings,<br/>HGETALL every order book and position book
     R-->>A: replies
     A->>A: check token<br/>KillSwitch: orders to cancel, positions to close
+    A->>R: EXISTS engine lock, XADD the halt command
+    E->>R: halt every open parent, RPUSH the count
+    R-->>A: halted_parents, through BLPOP
     loop every open order
+        A->>R: take room in the rate budget
         A->>B: cancel
         B-->>A: answer (reported, never retried)
     end

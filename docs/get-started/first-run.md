@@ -149,7 +149,7 @@ systemctl --user enable --now unified.target unified-mapping.timer unified-price
     unified-user@details.service unified-user@unified_details.service \
     unified-brokers@unified_details.service \
     unified-exchanges@unified_details.service \
-    unified-rest-api.service
+    unified-rest-api.service unified-orders@order_engine.service
 ```
 
 The order engine is in that list, because the REST API hands it every order to place. Exactly one copy may run.

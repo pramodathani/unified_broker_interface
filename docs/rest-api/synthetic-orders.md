@@ -220,11 +220,11 @@ The states mean the following.
 | `protecting` | A position exists and exit legs are guarding it, as in a bracket after its entry has filled. A hidden stop with a backstop is also here from the moment it is armed. |
 | `cancelling` | You cancelled the parent, but a broker refused the cancel of one of its legs, or its outcome is unknown, so that leg may still be live. The order type no longer acts on the parent. It becomes `cancelled` once every leg has finished, and cancelling it again retries the legs still resting. |
 | `completed` | The parent has nothing left to do. |
-
-A `simple`, `freeze_slicer`, `ladder`, `basket`, `oca` or `post_only` parent places everything at once and does nothing afterwards, so it finishes on its own once every order has: `completed` when any of them traded, `cancelled` when none did. That includes an order cancelled through `DELETE /api/orders/cancel`. Every other type decides for itself when it is done.
 | `cancelled` | The parent was called off, for example a `good_till_time` order whose time ran out. |
 | `rejected` | No request reached a broker, or the broker refused it. |
 | `failed` | The engine does not know what the broker has, so a person must look. The engine never retries out of this state and never arms protective legs for a parent in it. |
+
+A `simple`, `freeze_slicer`, `ladder`, `basket`, `oca` or `post_only` parent places everything at once and does nothing afterwards, so it finishes on its own once every order has: `completed` when any of them traded, `cancelled` when none did. That includes an order cancelled through `DELETE /api/orders/cancel`. Every other type decides for itself when it is done.
 
 `completed`, `cancelled`, `rejected` and `failed` are final. A leg has its own state as well: it starts as `sending` when the request is recorded and becomes `acknowledged`, `rejected` or `unknown` from the broker's answer.
 
@@ -516,7 +516,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | `double_last` | The last traded price | The second tick in a row that reaches the level; a tick that does not reach it starts the count again |
     | `held` | The last traded price | The first tick at least `hold_seconds` after the level was first reached, if every tick in between reached it too |
 
-    `hidden_stop`, `candle_close_stop`, `virtual_limit` and `indicator_triggered` already choose the price they watch, so they refuse `trigger_on` with `400`.
+    `hidden_stop`, `candle_close_stop`, `virtual_limit`, `indicator_triggered` and `account_conditional` already choose the price they watch, so they refuse `trigger_on` with `400`.
 
     ```json
     {"type": "market_if_touched", "trigger_price": 995, "trigger_on": "held", "hold_seconds": 5}
@@ -632,7 +632,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     - `place`, the default, sends nothing until then, which covers "send this once margin frees up" and "only once the book is flat". It answers `202 armed`.
     - `cancel` sends the order at once and cancels it then, such as pulling a resting bid when the day's loss reaches a limit. It answers with the broker's answer, and the parent becomes `cancelled`.
 
-    The figures are read about once a second. `trigger_direction` is required, because the side of the order says nothing about which way the account has to move, and `trigger_price` and `trigger_on` are not used.
+    The figures are read about once a second. `trigger_direction` is required, because the side of the order says nothing about which way the account has to move, `trigger_price` is not used, and `trigger_on` is refused with `400` when `action` is `place`.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|

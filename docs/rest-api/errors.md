@@ -92,8 +92,8 @@ The matrix below has one row for each of the 29 routes, plus a `POST` row for ea
 | `GET /api/portfolio/funds` | :material-check: | | | | :material-check: | | | | | | | | :material-check: | :material-check: | |
 | `GET /api/portfolio/holdings` | :material-check: | | | | :material-check: | | | | | | | | :material-check: | :material-check: | |
 | `GET /api/portfolio/positions` | :material-check: | | | | :material-check: | | | | | | | | :material-check: | :material-check: | |
-| `GET /api/orders/details` | :material-check: | | | | :material-check: | | | | | | | | :material-check: | :material-check: | |
-| `GET /api/orders/trades` | :material-check: | | | | :material-check: | | | | | | | | :material-check: | :material-check: | |
+| `GET /api/orders/details` | :material-check: | | | :material-check: | :material-check: | | | | | | | | :material-check: | :material-check: | |
+| `GET /api/orders/trades` | :material-check: | | | :material-check: | :material-check: | | | | | | | | :material-check: | :material-check: | |
 | `POST /api/orders/place` | :material-check: | :material-check: | | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | | | | :material-check: | :material-check: |
 | `GET /api/orders/intents/<intent_id>` | :material-check: | | | | :material-check: | | :material-check: | | | | | | | :material-check: | |
 | `GET /api/orders/parents` | :material-check: | | | | :material-check: | | :material-check: | | | | | | | :material-check: | |
@@ -106,7 +106,7 @@ The `POST` rows of the instrument routes describe the whole response. Inside a 2
 
 The `PUT /api/orders/modify` and `DELETE /api/orders/cancel` rows describe the single form. A list sent to either route answers the whole response with 200, 400, 401 or 503 only, and each order's entry inside a 200 carries one of the statuses in the route's row; [Several orders in one request](orders.md#several-orders-in-one-request) explains the split.
 
-Only `place` changes behavior between the two placement modes. `modify`, `cancel` and `flatten` always talk to the broker directly.
+There is only one placement mode: every order that `place` sends goes through the order engine (see [Order engine](order-engine.md#why-every-order-goes-through-the-engine)). `modify` and `cancel` hand the change to the engine when the order is a leg the engine placed, or, for `modify`, a held order named by `parent_id`, and send it straight to the broker otherwise. `flatten` asks the engine to halt every parent, cancels open orders at the brokers directly, and hands the closing orders to the engine.
 
 ## I got an error: what now?
 
@@ -171,6 +171,16 @@ The instrument routes check their query parameters before doing any work. The ta
 | `to must not be before from` | The date range is backwards |
 | `an intraday range may span at most 366 days` | An intraday `interval` was asked for over more than 366 days |
 | `end must be after start` | The `ticks` period is empty or backwards |
+
+### Reading the order and trade books
+
+`GET /api/orders/details` and `GET /api/orders/trades` check their paging parameters before filtering. The table below lists the messages.
+
+| Message | Cause |
+|---|---|
+| `limit must be a whole number, not {text!r}` | `limit` is not a whole number (the same message is used for `cursor`) |
+| `limit must be from 1 to 10000, not {number}` | `limit` is outside 1 to 10000 |
+| `cursor must be at least 0, not {number}` | `cursor` is negative |
 
 ### Placing an order
 

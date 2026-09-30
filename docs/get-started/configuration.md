@@ -51,7 +51,7 @@ The MongoDB and PostgreSQL connection strings are built from these values, as `m
 
 ## REST API variables
 
-Nineteen variables tune the REST API and the order engine. Unlike the store variables, every one of them has a default, so a script that never serves the API does not need them. They are read into `api_configuration` when `configurations.py` is imported.
+Twenty-seven variables tune the REST API, the order engine and the order-book pollers. Unlike the store variables, every one of them has a default, so a script that never serves the API does not need them. When `configurations.py` is imported, twenty-six of them are read into `api_configuration`, and `UNIFIED_BROKER_INTERFACE_BOOK_POLL_SECONDS` is read into `book_configuration`.
 
 A list variable is written as comma-separated names, such as `zerodha,dhan`. Spaces are removed and the names are lower-cased before use.
 
@@ -102,7 +102,7 @@ These variables tune the order engine, which places every order the REST API acc
 
 ### Daily caps and the panic button
 
-The last three variables apply to both placement modes.
+The variables below set the daily order caps and how long the panic button waits.
 
 | Variable | Default | Type | Effect | Read by |
 |---|---|---|---|---|

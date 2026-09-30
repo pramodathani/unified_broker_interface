@@ -125,8 +125,10 @@ Each broker has one YAML file in `stock_brokers/instruments/mapping/utilities/ru
 | `identity` | segment entry | Which raw column gives `symbol`, or `underlying_symbol`, `expiry_date`, `strike_price` and `option_type` |
 | `broker_fields` | segment entry | Which raw column gives the broker's `token`, `broker_symbol`, `order_symbol`, `lot_size` and `tick_size` |
 | `column`, `transform` | field | Used instead of a bare column name when a value needs converting |
+| `columns`, `transform` | field | Kotak only: several raw columns combined by one transform, used for the strike price |
+| `constant` | field | Kotak only: a fixed value where the raw file has no usable column, used as `null` for some lot and tick sizes |
 
-The eight named transforms are `divide_by_100`, `divide_by_10_thousand`, `divide_by_10_million`, `day_month_year_date`, `day_month_name_year_date`, `unix_epoch_date`, `kotak_expiry_epoch` and `strip_exchange_prefix`. The first segment of `dhan.yaml` shows the pattern: two rules pick NSE debt rows by instrument type or series, the identity is the ISIN, and the tick size is divided by 100.
+The base class knows eight named transforms: `divide_by_100`, `divide_by_10_thousand`, `divide_by_10_million`, `day_month_year_date`, `day_month_name_year_date`, `unix_epoch_date`, `kotak_expiry_epoch` and `strip_exchange_prefix`. Two adapters add transforms of their own. Kotak's adds `dynamic_precision_strike`, which divides the strike by ten raised to the row's own precision, and INDmoney's adds `underlying_before_first_hyphen` and `month_day_year_time`. The first segment of `dhan.yaml` shows the pattern: two rules pick NSE debt rows by instrument type or series, the identity is the ISIN, and the tick size is divided by 100.
 
 ```yaml
   - segment: nse_fixed_income

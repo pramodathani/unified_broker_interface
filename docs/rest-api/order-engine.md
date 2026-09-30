@@ -13,13 +13,13 @@ The API used to have a second mode, `direct`, in which the API worker sent a pla
 |---|---|
 | `synthetic` order types | All of them, as described in [Synthetic orders](synthetic-orders.md) |
 | `price_reference`, `quantity_reference` | Resolved from the live quote and the positions before the order is built |
-| Rate budget | At most 10 order messages a second to each broker, shared with the modify and cancel routes |
+| Rate budget | At most the order messages a second, minute and hour that `unified.broker_order_costs` gives each broker (10 a second by default where it gives none, 5 for Zerodha and INDmoney), shared with the modify and cancel routes |
 | Loss lockout | New orders refused once the day's loss passes the configured limit |
 | Daily order caps | Counted and enforced with <span class="status s4">429</span> |
 | Parallel placement | One lane of worker threads per broker, so a slow broker holds up only its own orders |
 | Extra keys in the answer | `intent_id`, and `parent_id` for an order the engine recorded |
 
-The cost is two extra Redis round trips per order, an `XADD` and a `BLPOP`, which the hand-over was measured to add about half a millisecond for. `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT` no longer exists and is ignored if it is still set. The API cannot place an order while the engine is not running; it answers <span class="status s5">503</span> `the order engine is not running, so the order was not placed; start unified-orders@order_engine.service`.
+The cost is three extra Redis round trips per order: an `EXISTS` on the engine's lock, an `XADD` and a `BLPOP`. The hand-over was measured to add about half a millisecond. `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACEMENT` no longer exists and is ignored if it is still set. The API cannot place an order while the engine is not running; it answers <span class="status s5">503</span> `the order engine is not running, so the order was not placed; start unified-orders@order_engine.service`.
 
 ## The life of an intent
 
@@ -58,9 +58,11 @@ The intent written to the stream carries these fields.
 | `deadline_at` | `created_at` plus the worker's wait, after which the worker has given up |
 | `reply_key` | `unified:orders:intents:result:<intent_id>` |
 | `api_worker` | The host and process id of the worker, for diagnosis |
-| `synthetic_type` | `synthetic.type` from the body, or `simple` when there is none |
+| `synthetic_type` | `synthetic.type` from the body; `virtual_limit` for a plain limit order that is [held](orders.md#limit-orders-are-held-until-they-can-fill) while `UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS` is on; otherwise `simple` |
 | `instrument_id` | The instrument the worker resolved, so the lookup rule lives in one place |
 | `body` | Your JSON body, exactly as it arrived |
+| `request_index` | Only for an order from an `orders` list: its place in the list, which matches its answer to it on the list's shared reply key |
+| `command` | Only for a change to a parent the engine owns, such as `cancel_leg`; see [Changing an order the engine owns](#changing-an-order-the-engine-owns) |
 
 The worker validates the body before writing the intent, so a malformed order is refused with <span class="status s4">400</span> without a queue hop. It does not check the synthetic type's own fields; the engine checks those when it builds the order, and answers with <span class="status s4">400</span> if they are wrong.
 
@@ -114,7 +116,7 @@ The table below lists every answer that comes from the engine or the hand-over r
 
 1. **It takes a lock.** `unified:orders:engine:lock` holds the engine's process id for 30 seconds and is refreshed every 10. A second engine cannot take it and exits with code 1, and an engine that finds the lock taken over by another process stops placing and exits 1.
 2. **It prepares the event table.** It applies the DDL for `unified.synthetic_order_events`, and exits 1 if it cannot.
-3. **It builds its placement code and its worker lanes, and reads the broker cost table.** A misspelt broker selector, an empty `unified.broker_order_costs`, unreadable daily caps or a misspelt `UNIFIED_BROKER_INTERFACE_API_ORDER_WORKERS_PER_BROKER` exit with code 2, which systemd does not restart. A cost table that cannot be read because PostgreSQL is down exits with code 1, which systemd restarts. The table is read again every day at 06:00 IST; see [Choosing a broker by cost](../architecture/broker-selection.md).
+3. **It builds its placement code and its worker lanes, and reads the broker cost table.** A misspelt broker selector, an empty `unified.broker_order_costs`, unreadable daily caps, an unreadable `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_PER_BROKER_PER_SECOND` or a misspelt `UNIFIED_BROKER_INTERFACE_API_ORDER_WORKERS_PER_BROKER` exit with code 2, which systemd does not restart. A cost table that cannot be read because PostgreSQL is down exits with code 1, which systemd restarts. The table is read again every day at 06:00 IST; see [Choosing a broker by cost](../architecture/broker-selection.md).
 4. **It recovers.** It replays today's events (and up to 30 days of events for the types that carry a parent overnight) through the same state machine the live path uses, rebuilds every parent that had not finished, and parks in `failed` any parent with a leg its broker's order book does not hold. What the brokers did with the other legs while the engine was down is applied by the first order book pass, described under [Changes no socket delivered](#changes-no-socket-delivered), which runs before the engine reads anything and records each change the way a socket's update is recorded. A failure here exits 1, because placing new orders without knowing what is already at a broker is worse than not starting.
 5. **It loops.** Its main thread reads both `unified:orders:intents:stream` and `unified:order-updates:stream` in one `XREADGROUP` call as the group `engine`, up to 100 entries at a time, blocking for one second, and hands the work to the worker lanes described below. After each read it hands a clock tick and a price tick to the parents of the types that asked for them, and rebuilds its caches when the day rolls over at 06:00 IST, once every worker is idle.
 
@@ -166,6 +168,7 @@ An order the engine placed is a leg of one of its parents, and the parent's orde
 | `cancel_leg` | `DELETE /api/orders/cancel` | Cancels the leg through `cancel_leg`, recording `leg_cancel_requested` and `leg_cancelled` |
 | `modify_leg` | `PUT /api/orders/modify` | Sends the change through `apply_outside_modification`, records it as a `leg_update`, and calls the type's `on_leg_modified` |
 | `cancel_parent` | `DELETE /api/orders/parents` | Cancels every resting leg and ends the parent as `cancelled` |
+| `modify_held` | `PUT /api/orders/modify` with `parent_id` | Changes the price or quantity of an order the engine is still holding, such as a `virtual_limit` order, without sending anything to a broker |
 | `halt` | `POST /api/orders/flatten` | Ends every open parent as `cancelled`, leaving its legs to flatten |
 
 ## Risk gates
@@ -248,7 +251,7 @@ A `virtual_limit` order is held by the engine instead of being sent, and a real 
 
 | Estimate field | Meaning |
 |---|---|
-| `parent_order_id`, `instrument_id`, `side`, `quantity` | Which held order this is |
+| `parent_order_id`, `instrument_id`, `side`, `price`, `quantity` | Which held order this is |
 | `ahead` | How much is queued ahead of the order at its price |
 | `queue_filled` | How much a resting order at that price would have filled |
 | `filled`, `remaining` | What the order itself would have filled, and what is left |
@@ -279,7 +282,7 @@ The table below lists every environment variable the engine reads, with its defa
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_CAPS` | empty | Daily message caps, as `broker=number,broker=number` |
 | `UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_CAP_EXIT_RESERVE` | `0.05` | The share of each cap kept for closing positions, from 0 up to but not including 1 |
 
-SEBI's retail algorithmic trading framework treats more than ten orders a second as an algorithm that needs registration. The limit is kept per broker, so the default of 10 messages a second applies to each broker separately, and adding brokers raises what the system can send in total. The budget counts a sliding window rather than refilling a token bucket, because a bucket that holds ten and earns ten a second can send nineteen within one second; the window never lets an eleventh message into any one-second span. The window counts when each message is given room, and the request leaves a few milliseconds later, so a broker counting arrivals can occasionally see eleven within one second when one request is delayed more than its neighbour: the load test below saw that in two runs of six. Setting `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_WINDOW_SECONDS` a little above 1, such as `1.05`, keeps a margin for that at about 9.5 messages a second.
+SEBI's retail algorithmic trading framework treats more than ten orders a second as an algorithm that needs registration. The limit is kept per broker, so the default of 10 messages a second (5 for Zerodha and INDmoney) applies to each broker separately, and adding brokers raises what the system can send in total. The budget counts a sliding window rather than refilling a token bucket, because a bucket that holds ten and earns ten a second can send nineteen within one second; the window never lets an eleventh message into any one-second span. The window counts when each message is given room, and the request leaves a few milliseconds later, so a broker counting arrivals can occasionally see eleven within one second when one request is delayed more than its neighbour: the load test below saw that in two runs of six. Setting `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_WINDOW_SECONDS` a little above 1, such as `1.05`, keeps a margin for that at about 9.5 messages a second.
 
 ??? note "Under the hood"
     - **Files:** `bin/unified/orders/order_engine`, `bin/unified/orders/virtual_book`, and `unified_broker_interface/utilities/order_engine/`, whose `utilities/` folder holds the runner, the handoff, the gates, the stores and the registry.
