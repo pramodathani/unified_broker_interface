@@ -1,0 +1,12 @@
+NIFTY at 22000: payoff    -13000
+NIFTY at 22400: payoff    -13000
+NIFTY at 22500: payoff     -6500
+NIFTY at 22600: payoff         0
+NIFTY at 22800: payoff         0
+NIFTY at 23000: payoff         0
+NIFTY at 23100: payoff     -6500
+NIFTY at 23400: payoff    -13000
+Turning points: [Decimal('0'), Decimal('22400'), Decimal('22600'), Decimal('23000'), Decimal('23200')]
+Slope above the highest strike: 0
+Maximum loss: 13000
+One unit of the sold 23000 call at 23100: 100

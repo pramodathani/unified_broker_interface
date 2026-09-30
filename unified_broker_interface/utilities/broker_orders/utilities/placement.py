@@ -25,6 +25,9 @@ from unified_broker_interface.utilities.broker_orders.utilities.registry import 
 from unified_broker_interface.utilities.broker_selection.utilities.broker_cost_table import (
     BrokerCostTable,
 )
+from unified_broker_interface.utilities.broker_selection.utilities.margin_rate_table import (
+    MarginRateTable,
+)
 from unified_broker_interface.utilities.broker_selection.utilities.registry import (
     BROKER_SELECTOR_CLASSES,
 )
@@ -41,6 +44,7 @@ class OrderPlacement:
         broker_orders (dict): Each broker's name to its order class instance, built once.
         broker_selector (BrokerSelector): The algorithm that orders the brokers an order is offered to, named by `UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_SELECTOR`.
         cost_table (BrokerCostTable): Each broker's brokerage and order-rate limits, shared with the selector, the rate budget and the daily order count. It is empty until the process calls its `start`, which the order engine and `api.py` do and the offline suites do not.
+        margin_rate_table (MarginRateTable): The exchange's margin rates, which the lowest-cost selector's funds check reads. Like the cost table, it is empty until the process calls its `start`, so the check is off in the offline suites.
         connection_warmers (list): One `ConnectionWarmer` per broker named in `UNIFIED_BROKER_INTERFACE_API_ORDER_WARM_BROKERS`, each running on its own daemon thread.
         logger (logging.Logger): The logger for failures that do not change an answer.
     """
@@ -60,6 +64,7 @@ class OrderPlacement:
         """
         self.logger = logger
         self.cost_table = BrokerCostTable(logger)
+        self.margin_rate_table = MarginRateTable(logger)
         self.broker_names = []
         self.broker_orders = {}
         warmed_names = self.warm_broker_names()
@@ -76,6 +81,7 @@ class OrderPlacement:
             )
         self.broker_selector = BROKER_SELECTOR_CLASSES[selector_name](
             self.cost_table,
+            self.margin_rate_table,
         )
         self.connection_warmers = []
 
@@ -211,6 +217,8 @@ class OrderPlacement:
     ):
         """Offers the order to the brokers in the selector's order, passing over every broker that cannot take it.
 
+        A broker is passed over when its own checks refuse the order, such as a market it does not trade or a missing login, and then when the selector rules it out, such as the lowest-cost selector finding it cannot afford the order.
+
         Args:
             order (PlaceOrderRequest): The validated order.
             instrument (Instrument): The tradeable instrument.
@@ -240,6 +248,8 @@ class OrderPlacement:
                 broker_orders.decode_login(login_texts[position]),
                 broker_orders.decode_settings(settings_texts[position]),
             )
+            if reason is None:
+                reason = self.broker_selector.passed_over_reason(broker_name)
             if reason is None:
                 return broker_orders, skipped
             skipped.append({

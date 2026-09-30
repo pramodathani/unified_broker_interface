@@ -18,7 +18,11 @@ SELECT
     orders_per_day,
     brokerage_for_delivery,
     brokerage_for_fno,
-    brokerage_for_intraday
+    brokerage_for_intraday,
+    margin_multiplier_intraday,
+    margin_multiplier_fno,
+    margin_multiplier_commodity,
+    gives_hedge_benefit
 FROM unified.broker_order_costs
 ORDER BY broker
 """
@@ -34,6 +38,8 @@ class BrokerCosts:
         orders_per_hour (int | None): Order messages allowed in any one hour, or None for no limit.
         orders_per_day (int | None): Order messages allowed in one trading day, or None for no limit.
         fees (dict): The brokerage for one order (decimal.Decimal), by category: `delivery`, `fno` and `intraday`.
+        margin_multipliers (dict): How much more than the exchange's margin the broker charges (decimal.Decimal, or None when not measured), by margin category: `intraday`, `fno` and `commodity`.
+        gives_hedge_benefit (bool | None): Whether the broker prices several legs together for less than their sum, or None when not known.
     """
 
     def __init__(
@@ -44,6 +50,8 @@ class BrokerCosts:
         orders_per_hour,
         orders_per_day,
         fees,
+        margin_multipliers=None,
+        gives_hedge_benefit=None,
     ):
         """Builds one row.
 
@@ -54,6 +62,8 @@ class BrokerCosts:
             orders_per_hour (int | None): The per-hour limit, or None.
             orders_per_day (int | None): The per-day limit, or None.
             fees (dict): The brokerage (decimal.Decimal) by category.
+            margin_multipliers (dict | None): The margin multipliers (decimal.Decimal or None) by margin category, or None when none are known.
+            gives_hedge_benefit (bool | None): Whether the broker gives hedge benefit, or None when not known.
 
         Returns:
             None: This method returns nothing.
@@ -64,6 +74,8 @@ class BrokerCosts:
         self.orders_per_hour = orders_per_hour
         self.orders_per_day = orders_per_day
         self.fees = fees
+        self.margin_multipliers = dict(margin_multipliers or {})
+        self.gives_hedge_benefit = gives_hedge_benefit
 
     def fee(self, category):
         """The brokerage for one order of a category.
@@ -75,6 +87,19 @@ class BrokerCosts:
             decimal.Decimal: The brokerage.
         """
         return self.fees[category]
+
+    def margin_multiplier(self, margin_category):
+        """How much more than the exchange's margin the broker charges for a category, when that has been measured.
+
+        Args:
+            margin_category (str): `delivery`, `intraday`, `fno` or `commodity`. A delivery order is paid in full, so it has no multiplier.
+
+        Returns:
+            decimal.Decimal | int | None: The multiplier, 1 for `delivery`, or None when it has not been measured.
+        """
+        if margin_category == 'delivery':
+            return 1
+        return self.margin_multipliers.get(margin_category)
 
 
 class BrokerCostTable:
@@ -152,6 +177,11 @@ class BrokerCostTable:
                 'fno': fetched_row[6],
                 'intraday': fetched_row[7],
             }
+            margin_multipliers = {
+                'intraday': self.optional_column(fetched_row, 8),
+                'fno': self.optional_column(fetched_row, 9),
+                'commodity': self.optional_column(fetched_row, 10),
+            }
             rows[broker_name] = BrokerCosts(
                 broker_name,
                 fetched_row[1],
@@ -159,8 +189,27 @@ class BrokerCostTable:
                 fetched_row[3],
                 fetched_row[4],
                 fees,
+                margin_multipliers,
+                self.optional_column(fetched_row, 11),
             )
         return rows
+
+    @staticmethod
+    def optional_column(fetched_row, position):
+        """One column of a fetched row, or None when the row is shorter than that.
+
+        A row read before the margin columns were added, or from a caller that builds rows by hand, has only the first eight columns.
+
+        Args:
+            fetched_row (tuple): The row.
+            position (int): The column's position.
+
+        Returns:
+            object: The value, or None.
+        """
+        if len(fetched_row) <= position:
+            return None
+        return fetched_row[position]
 
     def costs(self, broker_name):
         """One broker's row.

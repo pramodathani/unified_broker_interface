@@ -78,8 +78,10 @@ to look at rather than guessing. Recovery reads Redis only for the brokers' orde
 what it found, so a flushed Redis costs a slower start rather than a lost position.
 
 Exits 0 when stopped with Ctrl+C or SIGTERM after finishing the intent in hand; 1 when another engine holds the lock or
-takes it while this one runs, when the event table cannot be prepared, or when its own state cannot be recovered; 2 for
-a bad argument or configuration. Redis that cannot be reached while running is retried with backoff.
+takes it while this one runs, when the event table cannot be prepared, when `unified.broker_order_costs` or
+`unified.margin_rates` cannot be read, or when its own state cannot be recovered; 2 for a bad argument or
+configuration. An empty `unified.margin_rates` is not an error: it only leaves the lowest-cost selector's funds check
+off, and a warning says so. Redis that cannot be reached while running is retried with backoff.
 """
 
 import os
@@ -163,6 +165,13 @@ def main():
         return 2
     except psycopg2.Error as error:
         logger.error(f"Could not read unified.broker_order_costs: {type(error).__name__}: {error}")
+        lock.release()
+        return 1
+
+    try:
+        placement.order_placement.margin_rate_table.start()
+    except psycopg2.Error as error:
+        logger.error(f"Could not read unified.margin_rates: {type(error).__name__}: {error}")
         lock.release()
         return 1
 

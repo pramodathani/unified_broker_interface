@@ -4,7 +4,7 @@ A `LowestCostSelector` reads each broker's brokerage from the broker cost table 
 
 This program builds the cost table from rows in memory, taken from the table of 2026-09-29, so it needs no database. It queues the selector's Redis command on a stand-in pipeline that only records it, and answers it with every count at zero, as on a quiet morning, so no budget or pacing changes the ranking. The order and the instrument are small stand-ins carrying only the product and the kind of instrument the selector reads.
 
-Notice that for the delivery order Flattrade, which charges nothing for anything, comes after the brokers that are free only for delivery orders, and Zerodha comes before Dhan only because it is earlier in the rotation. For the other two orders Groww comes before Zerodha and Dhan, which charge the same, because Groww saves nothing on other kinds of order. Stoxkart, which has no row, is last every time.
+Notice that for the delivery order Flattrade, which charges nothing for anything, comes after the brokers that are free only for delivery orders, and Zerodha comes before Dhan only because it is earlier in the rotation. For the other two orders Groww comes before Zerodha and Dhan, which charge the same, because Groww saves nothing on other kinds of order. Stoxkart, which has no row, is last every time. The selector is built without a margin rate table, so its funds check is off and `passed_over_reason` rules no broker out.
 
 Run it from the project root:
 
@@ -196,6 +196,7 @@ class RankingByBrokerageExample:
         self.rank('Delivery order in INFY', StandInOrder('CNC'), StandInInstrument('equity'))
         self.rank('Intraday order in INFY', StandInOrder('MIS'), StandInInstrument('equity'))
         self.rank('NIFTY option', StandInOrder('NRML'), StandInInstrument('derivative'))
+        print(f'Reason to pass over zerodha for funds: {self.selector.passed_over_reason("zerodha")}')
 
 
 if __name__ == '__main__':

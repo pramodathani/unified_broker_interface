@@ -4,6 +4,8 @@ A process calls `start` once it is running. That reads `unified.broker_order_cos
 
 This program must not touch a real database, so it replaces `configurations.get_postgres` with a small stand-in whose connection answers fixed rows, or refuses to connect when told to. A stand-in logger prints each message on one line instead of writing a traceback. The reload thread would wait until the next 06:00, so the program sets the table's `stop` event and waits for the thread to finish; calling `reload_every_day` once `stop` is set returns at once, which is how the thread ends.
 
+The rows here have only the first eight columns, as a table read before the margin columns existed would, and `optional_column` reads a missing column as None rather than failing.
+
 Notice the warning about Groww, which has no row; that the failed reload returns False and leaves both rows in place; and that an empty table is refused.
 
 Run it from the project root:
@@ -233,6 +235,8 @@ class LoadingAndReloadingExample:
         """
         read = self.table.read_rows()
         print(f'read_rows found: {sorted(read)}; the table still holds {len(self.table.rows)} rows')
+        print(f'Zerodha\'s F&O margin multiplier from an eight-column row: {read["zerodha"].margin_multiplier("fno")}')
+        print(f'Column 11 of an eight-column row: {BrokerCostTable.optional_column(self.database.rows[0], 11)}')
         broker_names = [
             'dhan',
             'groww',

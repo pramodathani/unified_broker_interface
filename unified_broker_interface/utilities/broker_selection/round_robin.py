@@ -17,19 +17,21 @@ class RoundRobinSelector(BrokerSelector):
     NAME = 'round_robin'
     COUNTER_KEY = 'unified:orders:round_robin'
 
-    def queue_redis_commands(self, pipeline, order, instrument_id):
+    def queue_redis_commands(self, pipeline, order, instrument_id, legs=None):
         """Queues the increment of the turn counter.
 
         Args:
             pipeline (redis.client.Pipeline): The pipeline to queue the command on.
             order (PlaceOrderRequest): The validated order.
             instrument_id (str): The instrument's id.
+            legs (OrderLegs | None): Every leg of a strategy, which this selector does not use.
 
         Returns:
             int: 1, for the one command queued.
         """
         del order
         del instrument_id
+        del legs
         pipeline.incr(self.COUNTER_KEY)
         return 1
 

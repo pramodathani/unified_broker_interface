@@ -71,7 +71,12 @@ api_configuration = {
     'order_reprice_minimum_seconds': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_REPRICE_MINIMUM_SECONDS', '1')),
     'order_daily_caps': os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_CAPS', ''),
     'order_daily_cap_exit_reserve': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_CAP_EXIT_RESERVE', '0.05')),
-    'order_flatten_wait_seconds': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_FLATTEN_WAIT_SECONDS', '5'))
+    'order_flatten_wait_seconds': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_FLATTEN_WAIT_SECONDS', '5')),
+    'order_funds_check': os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_FUNDS_CHECK', 'true').strip().lower() in ('true', '1', 'yes'),
+    'order_margin_cushion': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_MARGIN_CUSHION', '0.05')),
+    'order_margin_default_multiplier': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_MARGIN_DEFAULT_MULTIPLIER', '1.15')),
+    'order_funds_maximum_age_seconds': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_FUNDS_MAXIMUM_AGE_SECONDS', '5')),
+    'order_funds_settle_seconds': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_FUNDS_SETTLE_SECONDS', '2'))
 }
 
 book_configuration = {

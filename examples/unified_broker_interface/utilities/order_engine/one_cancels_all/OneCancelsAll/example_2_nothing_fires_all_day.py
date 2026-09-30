@@ -218,17 +218,19 @@ class StandInPlacement:
         del instrument_id
         return self.attributes
 
-    def prepare(self, order, instrument_id, broker_name=None):
+    def prepare(self, order, instrument_id, broker_name=None, legs=None):
         """Chooses a broker and builds the request, without sending it.
 
         Args:
             order (PlaceOrderRequest): The validated order.
             instrument_id (str): The instrument.
             broker_name (str | None): The broker the order must go to, or None for Zerodha.
+            legs (OrderLegs | None): Every leg of the basket, which this stand-in does not check.
 
         Returns:
             StandInPreparedPlacement: The prepared order.
         """
+        del legs
         body = {
             'transaction_type': order.transaction_type,
             'order_type': order.order_type,

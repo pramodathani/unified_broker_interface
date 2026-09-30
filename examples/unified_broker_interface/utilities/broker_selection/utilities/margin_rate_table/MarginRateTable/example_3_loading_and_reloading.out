@@ -1,0 +1,11 @@
+read_rows found: [('nse_equity_index_futures', ''), ('nse_equity_index_futures', 'NIFTY')]; the table still holds 0 rows
+After start: [('nse_equity_index_futures', ''), ('nse_equity_index_futures', 'NIFTY')], reload thread running: True
+INFO Reloaded the margin rate table: 2 rows.
+Reload with the database up: True
+ERROR The margin rate table could not be reloaded, so yesterday's rates stay in use.
+Reload with the database down: False
+Rows kept: 2
+Reload thread running after stop: False
+reload_every_day returned at once, because stop is set
+An empty table loads without error; loaded: False
+WARNING unified.margin_rates is empty, so the lowest-cost selector does not check that a broker can afford an order; apply the mapping DDL to seed it.

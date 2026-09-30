@@ -21,3 +21,4 @@ NIFTY option: category fno, 1 command queued reading 20 keys
   zerodha: fee 20, saves 20 on other categories
   dhan: fee 20, saves 20 on other categories
   stoxkart: no row in the cost table
+Reason to pass over zerodha for funds: None

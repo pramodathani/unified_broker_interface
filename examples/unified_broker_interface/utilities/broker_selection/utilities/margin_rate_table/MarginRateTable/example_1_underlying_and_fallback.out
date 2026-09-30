@@ -1,0 +1,4 @@
+Loaded: True
+nse_equity_index_futures NIFTY: 0.1126 from the row for NIFTY
+nse_equity_index_futures BANKNIFTY: 0.15 from the row for every underlying
+nse_mutual_funds None: no rate

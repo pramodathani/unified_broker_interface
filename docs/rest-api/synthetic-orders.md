@@ -1100,12 +1100,15 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     A basket places each candidate in the order given and reports every leg's outcome. It is not all-or-nothing. The parent goes to `failed` when any leg's outcome is unknown.
 
+    Every leg goes to the broker the first leg chooses, and the lowest-cost selector only chooses a broker that can afford the whole basket, at the highest point its margin reaches as the legs go out in the given order. With `hedge_benefit`, options and futures on one underlying and expiry are priced together as one position, at the brokers known to allow that; an iron condor then needs about a quarter of its legs added up. Put the legs you buy first: the sold legs sent first need the full naked margin until the protection arrives. [Choosing a broker by cost](../architecture/broker-selection.md#strategies-and-hedge-benefit) shows the numbers.
+
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
     | `candidates` | list of objects | Yes | From 1 to 25. |
+    | `hedge_benefit` | boolean | No | `true` to price hedged legs together when checking that the broker can afford them. Anything else, or leaving it out, adds every leg up. |
 
     ```json
-    {"type": "basket", "candidates": [
+    {"type": "basket", "hedge_benefit": true, "candidates": [
       {"instrument_id": "11111111-1111-5111-8111-000000000003", "transaction_type": "BUY", "quantity": 75},
       {"instrument_id": "11111111-1111-5111-8111-000000000004", "transaction_type": "SELL", "quantity": 75}
     ]}
@@ -1134,6 +1137,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
     | `candidates` | list of objects | Yes | As for `basket`. |
+    | `hedge_benefit` | boolean | No | As for `basket`. |
     | `loss_limit` | number | One of the two | In rupees for the whole strategy. Below zero. |
     | `profit_target` | number | One of the two | In rupees for the whole strategy. Above zero. |
 

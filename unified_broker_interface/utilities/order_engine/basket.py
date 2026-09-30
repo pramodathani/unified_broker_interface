@@ -1,5 +1,8 @@
 """Several orders on several instruments, sent together and reported together."""
 
+from unified_broker_interface.utilities.broker_selection.utilities.order_legs import (
+    OrderLegs,
+)
 from unified_broker_interface.utilities.order_engine.base import SyntheticOrder
 from unified_broker_interface.utilities.order_engine.utilities.candidate_legs import (
     CandidateLegs,
@@ -18,6 +21,8 @@ class Basket(SyntheticOrder):
     Legs go out in the order they were given, and that order is the caller's to choose. It matters for Indian futures and options margin: buying the hedge before selling the short leg gets the spread's margin benefit, where the other order briefly demands the full margin for a naked short and can be rejected for it.
 
     **Every leg goes to the broker the first one chose**, rather than being spread across brokers as separate orders would be. Margin offsets exist inside one account and nowhere else, so an iron condor with two legs at one broker and two at another is charged as four naked positions rather than as a defined-risk strategy, and may simply be refused for want of margin. Spreading the legs would use the rate budget better and would be wrong for the reason people send baskets in the first place.
+
+    Because the first leg chooses for all of them, it hands the whole list to the placement, so the lowest-cost selector checks that the broker it picks can afford the whole basket, at the highest point it reaches as the legs go out in the given order. With `"hedge_benefit": true` in the `synthetic` object, options and futures on one underlying and expiry are priced as a hedged whole at the brokers known to allow that, which for a defined-risk strategy such as an iron condor is often less than half of the legs added up.
     """
 
     SYNTHETIC_TYPE = 'basket'
@@ -45,9 +50,18 @@ class Basket(SyntheticOrder):
             (instrument_id, self.read_order(body))
             for instrument_id, body in candidates
         ]
+        legs = OrderLegs(
+            orders,
+            self.parent.parameters.get('hedge_benefit') is True,
+        )
 
         if order.dry_run:
-            prepared = self.placement.prepare(orders[0][1], orders[0][0])
+            prepared = self.placement.prepare(
+                orders[0][1],
+                orders[0][0],
+                None,
+                legs,
+            )
             return self.placement.dry_run_answer(prepared, started_at)
 
         self.record_received()
@@ -55,12 +69,17 @@ class Basket(SyntheticOrder):
 
         answers = []
         for instrument_id, candidate_order in orders:
+            broker_name = self.chosen_broker()
+            leg_group = None
+            if broker_name is None:
+                leg_group = legs
             body, status, _ = self.place_leg(
                 'basket',
                 candidate_order,
                 started_at,
-                self.chosen_broker(),
+                broker_name,
                 instrument_id,
+                leg_group,
             )
             answers.append((instrument_id, body, status))
         return self.settle(answers)

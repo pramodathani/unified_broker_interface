@@ -6,3 +6,8 @@ Orders per day: 100000
 Brokerage for delivery: 0
 Brokerage for fno: 20
 Brokerage for intraday: 20
+Margin multiplier for delivery: 1
+Margin multiplier for intraday: 1.005
+Margin multiplier for fno: 1.001
+Margin multiplier for commodity: 1.000
+Gives hedge benefit: False

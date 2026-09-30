@@ -171,7 +171,7 @@ The combiners rewrite each document every half second, except where noted.
 | `unified:positions_updates` | hash | `bin/unified/orders/websocket_order_details` | People | Latest streamed position, keyed `broker:position_key`; expires at the next 06:00 IST |
 | `unified:portfolio:positions` | string | `bin/unified/portfolio/positions` | `GET /api/portfolio/positions`; the order engine | Every broker's positions |
 | `unified:portfolio:holdings` | string | `bin/unified/portfolio/holdings` | `GET /api/portfolio/holdings` | Holdings, combined and priced; rewritten every minute |
-| `unified:portfolio:funds` | string | `bin/unified/portfolio/funds` | `GET /api/portfolio/funds`; the engine's daily loss check and its `account_conditional` orders | Every figure summed across brokers |
+| `unified:portfolio:funds` | string | `bin/unified/portfolio/funds` | `GET /api/portfolio/funds`; the engine's daily loss check and its `account_conditional` orders; the lowest-cost selector's funds check, on every placement | Every figure summed across brokers, plus each broker's own `available_balance` and `pools` |
 
 ### Details, profiles and the session
 
