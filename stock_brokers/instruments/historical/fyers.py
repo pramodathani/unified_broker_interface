@@ -26,12 +26,14 @@ day, five and a half hours apart - which is why day, week and month bars go thro
 """
 
 import datetime
+import time
 
 from stock_brokers.instruments.historical.base import (BrokerCandles,
                                                        CandleAuthenticationError,
                                                        CandleBlocked,
                                                        CandleInstrumentUnknown,
                                                        CandleThrottled,
+                                                       INDIA_TIMEZONE,
                                                        SeriesContext,
                                                        daily_bar_time,
                                                        is_intraday)
@@ -104,10 +106,14 @@ class FyersCandles(BrokerCandles):
         "month": 366,
     }
 
-    # Every Fyers request, history included, counts toward the app's 200 a minute, shared with the pollers and the order connection warmers.
-    # At 3 a second the total passed 200 and Cloudflare banned the address from 2026-09-27, so this is 2 a second, 120 a minute.
     REQUESTS_PER_SECOND = 2.0
-    REQUESTS_PER_DAY = None
+    REQUESTS_PER_DAY = 45000
+    WEEKEND_REQUESTS_PER_DAY = 100000
+
+    TRADING_DAYS = (0, 1, 2, 3, 4)
+    TRADING_OPENS = datetime.time(9, 0)
+    TRADING_CLOSES = datetime.time(23, 55)
+    PAUSE_CHECK_SECONDS = 60
 
     EARLIEST_AVAILABLE_DATE = datetime.date(2000, 1, 1)
 
@@ -115,6 +121,66 @@ class FyersCandles(BrokerCandles):
     TYPE_COLUMN = "exchange_instrument_type"
     EXPIRY_COLUMN = "expiry_date"
 
+
+    def run(self, stop_event=None, deadline_seconds=None):
+        """
+        Work the queue as the base class does, remembering the stop event so the trading-hours pause can end at once when the process is asked to stop.
+
+        - `stop_event` is a `threading.Event` that ends the loop when set.
+        - `deadline_seconds` ends the loop after this long.
+        """
+        self._stop_event = stop_event
+        return super().run(stop_event=stop_event, deadline_seconds=deadline_seconds)
+
+    def seconds_until_trading_ends(self, now=None):
+        """
+        How long until the markets stop trading, or zero outside trading hours.
+
+        Trading hours are 09:00 to 23:55 India time, Monday to Friday: from the equity pre-open to the latest close of MCX's evening session. The download stays out of them so its requests never compete with the pollers and orders for Fyers' 200 a minute. Exchange holidays are treated as trading days.
+
+        - `now` is the moment to reckon from, or None for now in India.
+        """
+        now = now or datetime.datetime.now(INDIA_TIMEZONE)
+        if now.weekday() not in self.TRADING_DAYS:
+            return 0
+        opens = now.replace(hour=self.TRADING_OPENS.hour, minute=self.TRADING_OPENS.minute, second=0, microsecond=0)
+        closes = now.replace(hour=self.TRADING_CLOSES.hour, minute=self.TRADING_CLOSES.minute, second=0, microsecond=0)
+        if now < opens or now >= closes:
+            return 0
+        return (closes - now).total_seconds()
+
+    def daily_cap(self, now=None):
+        """
+        The daily request cap for a day: `REQUESTS_PER_DAY` on a trading day, and `WEEKEND_REQUESTS_PER_DAY` at the weekend, when the download runs all day, as the user asked on 2026-09-30.
+
+        - `now` is the moment to reckon from, or None for now in India.
+        """
+        now = now or datetime.datetime.now(INDIA_TIMEZONE)
+        if now.weekday() in self.TRADING_DAYS:
+            return self.REQUESTS_PER_DAY
+        return self.WEEKEND_REQUESTS_PER_DAY
+
+    def claim(self):
+        """
+        Claim the next series, first waiting out trading hours without holding any series, and apply the day's cap.
+
+        Returns None, which ends the run, when the process is asked to stop during the wait.
+        """
+        waiting = self.seconds_until_trading_ends()
+        if waiting > 0:
+            self._logger.info(f"Trading hours: pausing the download for {waiting / 3600:.1f} hours, until "
+                              f"{self.TRADING_CLOSES.strftime('%H:%M')} IST.")
+        while waiting > 0:
+            stop_event = getattr(self, "_stop_event", None)
+            pause = min(waiting, self.PAUSE_CHECK_SECONDS)
+            if stop_event is not None:
+                if stop_event.wait(pause):
+                    return None
+            else:
+                time.sleep(pause)
+            waiting = self.seconds_until_trading_ends()
+        self._limiter.set_requests_per_day(self.daily_cap())
+        return super().claim()
     def __init__(self, api=None):
         """
         Fyers candle downloader.

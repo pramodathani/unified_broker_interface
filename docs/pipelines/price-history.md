@@ -52,7 +52,7 @@ The table below lists each downloader's limits, read from its class attributes. 
 |---|---|---:|---:|---|---:|
 | Zerodha | `ZerodhaCandles` | 3 | no limit set | 2005-01-01 | 8 |
 | Dhan | `DhanCandles` | 3 | 100,000 | 2000-01-01 | 6 |
-| Fyers | `FyersCandles` | 2 | no limit set | 2000-01-01 | 16 |
+| Fyers | `FyersCandles` | 2 | 45,000 on weekdays, 100,000 at weekends; paused 09:00 to 23:55 IST on weekdays | 2000-01-01 | 16 |
 | INDmoney | `IndMoneyCandles` | 3 | 100,000 | 2013-01-01 | 14 |
 | Flattrade | `FlattradeCandles` | 10 | no limit set | 2019-01-01 | 11 |
 | Shoonya | `ShoonyaCandles` | 1 | no limit set | 2021-01-01 | 11 |

@@ -1,0 +1,10 @@
+Wednesday 08:59: pause for 0.00 hours
+Wednesday 09:00: pause for 14.92 hours
+Wednesday 15:30: pause for 8.42 hours
+Wednesday 23:55: pause for 0.00 hours
+Saturday 12:00: pause for 0.00 hours
+Sunday 20:00: pause for 0.00 hours
+Daily cap on Wednesday 15:30: 45000
+Daily cap on Saturday 12:00: 100000
+A run asked to stop before it starts: 0 windows, 0 bars
+A claim at noon, stopped after 0.2 s: None, back within a second: True
