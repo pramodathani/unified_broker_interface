@@ -1,0 +1,44 @@
+POST https://piconnect.flattrade.in/PiConnectAPI/GetBasketMargin
+{
+  "uid": "STANDIN1",
+  "actid": "STANDIN1",
+  "exch": "NFO",
+  "tsym": "NIFTY06OCT26C23200",
+  "qty": "65",
+  "prc": "19.0",
+  "prd": "M",
+  "trantype": "B",
+  "prctyp": "LMT",
+  "basketlists": [
+    {
+      "exch": "NFO",
+      "tsym": "NIFTY06OCT26P22400",
+      "qty": "65",
+      "prc": "38.1",
+      "prd": "M",
+      "trantype": "B",
+      "prctyp": "LMT"
+    },
+    {
+      "exch": "NFO",
+      "tsym": "NIFTY06OCT26C23000",
+      "qty": "65",
+      "prc": "51.6",
+      "prd": "M",
+      "trantype": "S",
+      "prctyp": "LMT"
+    },
+    {
+      "exch": "NFO",
+      "tsym": "NIFTY06OCT26P22600",
+      "qty": "65",
+      "prc": "82.0",
+      "prd": "M",
+      "trantype": "S",
+      "prctyp": "LMT"
+    }
+  ]
+}
+jKey: stand-in-token
+One order alone goes to https://piconnect.flattrade.in/PiConnectAPI/GetOrderMargin
+noren_request encodes its fields as jData={"uid": "STANDIN1"}&jKey=stand-in-token

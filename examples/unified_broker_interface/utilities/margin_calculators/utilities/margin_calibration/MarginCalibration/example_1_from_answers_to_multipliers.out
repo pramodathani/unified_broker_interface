@@ -1,0 +1,13 @@
+Exchange margin for intraday: 204.55
+Exchange margin for fno: 167171.41
+Exchange margin for commodity: 271088.125
+zerodha: {'intraday': Decimal('1.000'), 'fno': Decimal('1.000'), 'commodity': Decimal('1.000')}
+dhan: {'intraday': Decimal('1.000'), 'fno': Decimal('1.000'), 'commodity': Decimal('1.000')}
+fyers: {'intraday': Decimal('1.000'), 'fno': Decimal('1.000'), 'commodity': Decimal('1.000')}
+groww: {'intraday': Decimal('1.000'), 'fno': Decimal('1.000'), 'commodity': None}
+indmoney: {'intraday': Decimal('1.007'), 'fno': Decimal('1.004'), 'commodity': None}
+kotak: {'intraday': Decimal('1.000'), 'fno': Decimal('1.000'), 'commodity': Decimal('1.000')}
+flattrade: {'intraday': Decimal('1.095'), 'fno': Decimal('1.111'), 'commodity': Decimal('1.110')}
+shoonya: {'intraday': Decimal('1.047'), 'fno': Decimal('1.054'), 'commodity': Decimal('1.050')}
+wisdom_capital: {'intraday': Decimal('1.368'), 'fno': Decimal('1.100'), 'commodity': None}
+With only two brokers: {'intraday': None, 'fno': None, 'commodity': None}

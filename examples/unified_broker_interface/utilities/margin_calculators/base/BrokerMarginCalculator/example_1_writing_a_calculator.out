@@ -1,0 +1,9 @@
+Takes the leg: True
+Order margin: 167109.41
+Basket margin: None
+Sent POST https://margin.example/orders {'symbol': 'NIFTY26OCTFUT', 'side': 'SELL', 'quantity': 65}
+Quantity in the broker's terms: 65
+send_once answered HTTP 200
+field result.required: '167109.41'
+amount of it: Decimal('167109.41')
+read_order_margin: 167109.41

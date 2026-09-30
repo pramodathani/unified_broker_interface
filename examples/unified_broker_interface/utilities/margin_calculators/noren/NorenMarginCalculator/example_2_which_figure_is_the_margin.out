@@ -1,0 +1,4 @@
+Account fields: {'uid': 'STANDIN1', 'actid': 'STANDIN1'}
+Order fields: {'exch': 'NFO', 'tsym': 'NIFTY27OCT26F', 'qty': '65', 'prc': '22833.7', 'prd': 'M', 'trantype': 'S', 'prctyp': 'LMT'}
+marginused: 171296.19, but the margin read is 176246.49
+Iron condor once every leg has traded: 75406.56

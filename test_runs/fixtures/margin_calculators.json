@@ -1,0 +1,1139 @@
+{
+ "zerodha": {
+  "order_request": [
+   {
+    "exchange": "NFO",
+    "tradingsymbol": "NIFTY26OCTFUT",
+    "transaction_type": "SELL",
+    "variety": "regular",
+    "product": "NRML",
+    "order_type": "LIMIT",
+    "quantity": 65,
+    "price": 22833.7,
+    "trigger_price": 0
+   }
+  ],
+  "order_answer": {
+   "status": "success",
+   "data": [
+    {
+     "type": "equity",
+     "tradingsymbol": "NIFTY26OCTFUT",
+     "exchange": "NFO",
+     "span": 137425.59999999998,
+     "exposure": 29683.81,
+     "option_premium": 0,
+     "additional": 0,
+     "bo": 0,
+     "cash": 0,
+     "var": 0,
+     "mtf": 0,
+     "pnl": {
+      "realised": 0,
+      "unrealised": 0
+     },
+     "leverage": 1,
+     "charges": {
+      "transaction_tax": 742.09525,
+      "transaction_tax_type": "stt",
+      "exchange_turnover_charge": 27.16068615,
+      "sebi_turnover_charge": 1.4841905,
+      "brokerage": 20,
+      "stamp_duty": 0,
+      "gst": {
+       "igst": 8.756077796999998,
+       "cgst": 0,
+       "sgst": 0,
+       "total": 8.756077796999998
+      },
+      "total": 799.496204447
+     },
+     "total": 167109.40999999997
+    }
+   ]
+  },
+  "basket_request": [
+   {
+    "exchange": "NFO",
+    "tradingsymbol": "NIFTY26O0623200CE",
+    "transaction_type": "BUY",
+    "variety": "regular",
+    "product": "NRML",
+    "order_type": "LIMIT",
+    "quantity": 65,
+    "price": 19.0,
+    "trigger_price": 0
+   },
+   {
+    "exchange": "NFO",
+    "tradingsymbol": "NIFTY26O0622400PE",
+    "transaction_type": "BUY",
+    "variety": "regular",
+    "product": "NRML",
+    "order_type": "LIMIT",
+    "quantity": 65,
+    "price": 38.1,
+    "trigger_price": 0
+   },
+   {
+    "exchange": "NFO",
+    "tradingsymbol": "NIFTY26O0623000CE",
+    "transaction_type": "SELL",
+    "variety": "regular",
+    "product": "NRML",
+    "order_type": "LIMIT",
+    "quantity": 65,
+    "price": 51.6,
+    "trigger_price": 0
+   },
+   {
+    "exchange": "NFO",
+    "tradingsymbol": "NIFTY26O0622600PE",
+    "transaction_type": "SELL",
+    "variety": "regular",
+    "product": "NRML",
+    "order_type": "LIMIT",
+    "quantity": 65,
+    "price": 82.0,
+    "trigger_price": 0
+   }
+  ],
+  "basket_answer": {
+   "status": "success",
+   "data": {
+    "initial": {
+     "type": "",
+     "tradingsymbol": "",
+     "exchange": "",
+     "charges": {
+      "transaction_tax": 0,
+      "transaction_tax_type": "",
+      "exchange_turnover_charge": 0,
+      "sebi_turnover_charge": 0,
+      "brokerage": 0,
+      "stamp_duty": 0,
+      "gst": {
+       "igst": 0,
+       "cgst": 0,
+       "sgst": 0,
+       "total": 0
+      },
+      "total": 0
+     },
+     "total": 75476.37
+    },
+    "final": {
+     "type": "",
+     "tradingsymbol": "",
+     "exchange": "",
+     "charges": {
+      "transaction_tax": 0,
+      "transaction_tax_type": "",
+      "exchange_turnover_charge": 0,
+      "sebi_turnover_charge": 0,
+      "brokerage": 0,
+      "stamp_duty": 0,
+      "gst": {
+       "igst": 0,
+       "cgst": 0,
+       "sgst": 0,
+       "total": 0
+      },
+      "total": 0
+     },
+     "total": 66753.37
+    },
+    "orders": [
+     {
+      "type": "equity",
+      "tradingsymbol": "NIFTY26O0623200CE",
+      "exchange": "NFO",
+      "charges": {
+       "transaction_tax": 0,
+       "transaction_tax_type": "stt",
+       "exchange_turnover_charge": 0.4387955,
+       "sebi_turnover_charge": 0.001235,
+       "brokerage": 20,
+       "stamp_duty": 0,
+       "gst": {
+        "igst": 3.6792054899999997,
+        "cgst": 0,
+        "sgst": 0,
+        "total": 3.6792054899999997
+       },
+       "total": 24.119235990000004
+      },
+      "total": 1235
+     },
+     {
+      "type": "equity",
+      "tradingsymbol": "NIFTY26O0622400PE",
+      "exchange": "NFO",
+      "charges": {
+       "transaction_tax": 0,
+       "transaction_tax_type": "stt",
+       "exchange_turnover_charge": 0.8544965,
+       "sebi_turnover_charge": 0.002405,
+       "brokerage": 20,
+       "stamp_duty": 0,
+       "gst": {
+        "igst": 3.7542422699999998,
+        "cgst": 0,
+        "sgst": 0,
+        "total": 3.7542422699999998
+       },
+       "total": 24.611143769999998
+      },
+      "total": 2405
+     },
+     {
+      "type": "equity",
+      "tradingsymbol": "NIFTY26O0623000CE",
+      "exchange": "NFO",
+      "charges": {
+       "transaction_tax": 5.0895,
+       "transaction_tax_type": "stt",
+       "exchange_turnover_charge": 1.2055329,
+       "sebi_turnover_charge": 0.0033929999999999997,
+       "brokerage": 20,
+       "stamp_duty": 0,
+       "gst": {
+        "igst": 3.8176066619999993,
+        "cgst": 0,
+        "sgst": 0,
+        "total": 3.8176066619999993
+       },
+       "total": 30.116032562
+      },
+      "total": 42298.81
+     },
+     {
+      "type": "equity",
+      "tradingsymbol": "NIFTY26O0622600PE",
+      "exchange": "NFO",
+      "charges": {
+       "transaction_tax": 7.995,
+       "transaction_tax_type": "stt",
+       "exchange_turnover_charge": 1.8937490000000001,
+       "sebi_turnover_charge": 0.00533,
+       "brokerage": 20,
+       "stamp_duty": 0,
+       "gst": {
+        "igst": 3.94183422,
+        "cgst": 0,
+        "sgst": 0,
+        "total": 3.94183422
+       },
+       "total": 33.83591322
+      },
+      "total": 29537.56
+     }
+    ],
+    "charges": {
+     "transaction_tax": 0,
+     "transaction_tax_type": "",
+     "exchange_turnover_charge": 0,
+     "sebi_turnover_charge": 0.012362999999999999,
+     "brokerage": 80,
+     "stamp_duty": 0,
+     "gst": {
+      "igst": 0,
+      "cgst": 0,
+      "sgst": 0,
+      "total": 0
+     },
+     "total": 0
+    }
+   }
+  }
+ },
+ "dhan": {
+  "order_request": {
+   "dhanClientId": "1000000001",
+   "exchangeSegment": "NSE_FNO",
+   "transactionType": "SELL",
+   "quantity": 65,
+   "productType": "MARGIN",
+   "securityId": "48704",
+   "price": 22833.7,
+   "triggerPrice": 0
+  },
+  "order_answer": {
+   "totalMargin": 167109.4,
+   "spanMargin": 0.0,
+   "exposureMargin": 0.0,
+   "availableBalance": 9891.75,
+   "variableMargin": 0.0,
+   "insufficientBalance": 157217.66,
+   "brokerage": 0.0,
+   "leverage": "8.88X"
+  },
+  "basket_request": {
+   "dhanClientId": "1000000001",
+   "includePosition": false,
+   "includeOrder": false,
+   "scripList": [
+    {
+     "dhanClientId": "1000000001",
+     "exchangeSegment": "NSE_FNO",
+     "transactionType": "BUY",
+     "quantity": 65,
+     "productType": "MARGIN",
+     "securityId": "40745",
+     "price": 19.0,
+     "triggerPrice": 0
+    },
+    {
+     "dhanClientId": "1000000001",
+     "exchangeSegment": "NSE_FNO",
+     "transactionType": "BUY",
+     "quantity": 65,
+     "productType": "MARGIN",
+     "securityId": "40688",
+     "price": 38.1,
+     "triggerPrice": 0
+    },
+    {
+     "dhanClientId": "1000000001",
+     "exchangeSegment": "NSE_FNO",
+     "transactionType": "SELL",
+     "quantity": 65,
+     "productType": "MARGIN",
+     "securityId": "40731",
+     "price": 51.6,
+     "triggerPrice": 0
+    },
+    {
+     "dhanClientId": "1000000001",
+     "exchangeSegment": "NSE_FNO",
+     "transactionType": "SELL",
+     "quantity": 65,
+     "productType": "MARGIN",
+     "securityId": "40703",
+     "price": 82.0,
+     "triggerPrice": 0
+    }
+   ]
+  },
+  "basket_answer": {
+   "totalMargin": 75923.77,
+   "spanMargin": 12761.45,
+   "exposure": 59450.82,
+   "equityMargin": 0.0,
+   "foMargin": 75923.77,
+   "commodity": 0.0,
+   "currency": 0.0,
+   "hedgeBenefit": 0.0,
+   "userFundLimit": 0.0,
+   "insufficientFund": 0.0
+  }
+ },
+ "fyers": {
+  "order_request": {
+   "data": [
+    {
+     "symbol": "NSE:NIFTY26OCTFUT",
+     "qty": 65,
+     "side": -1,
+     "type": 1,
+     "productType": "MARGIN",
+     "limitPrice": 22833.7,
+     "stopLoss": 0,
+     "stopPrice": 0,
+     "takeProfit": 0
+    }
+   ]
+  },
+  "order_answer": {
+   "code": 200,
+   "message": "",
+   "data": {
+    "margin_avail": 9916.1,
+    "margin_total": 167171.41,
+    "margin_new_order": 167171.41,
+    "prevMargin": 0
+   },
+   "s": "ok"
+  },
+  "basket_request": {
+   "data": [
+    {
+     "symbol": "NSE:NIFTY26O0623200CE",
+     "qty": 65,
+     "side": 1,
+     "type": 1,
+     "productType": "MARGIN",
+     "limitPrice": 19.0,
+     "stopLoss": 0,
+     "stopPrice": 0,
+     "takeProfit": 0
+    },
+    {
+     "symbol": "NSE:NIFTY26O0622400PE",
+     "qty": 65,
+     "side": 1,
+     "type": 1,
+     "productType": "MARGIN",
+     "limitPrice": 38.1,
+     "stopLoss": 0,
+     "stopPrice": 0,
+     "takeProfit": 0
+    },
+    {
+     "symbol": "NSE:NIFTY26O0623000CE",
+     "qty": 65,
+     "side": -1,
+     "type": 1,
+     "productType": "MARGIN",
+     "limitPrice": 51.6,
+     "stopLoss": 0,
+     "stopPrice": 0,
+     "takeProfit": 0
+    },
+    {
+     "symbol": "NSE:NIFTY26O0622600PE",
+     "qty": 65,
+     "side": -1,
+     "type": 1,
+     "productType": "MARGIN",
+     "limitPrice": 82.0,
+     "stopLoss": 0,
+     "stopPrice": 0,
+     "takeProfit": 0
+    }
+   ]
+  },
+  "basket_answer": {
+   "code": 200,
+   "message": "",
+   "data": {
+    "margin_avail": 9916.1,
+    "margin_total": 187749.87,
+    "margin_new_order": 187749.87,
+    "prevMargin": 0
+   },
+   "s": "ok"
+  }
+ },
+ "groww": {
+  "order_request": [
+   {
+    "trading_symbol": "NIFTY26OCTFUT",
+    "transaction_type": "SELL",
+    "quantity": 65,
+    "price": 22833.7,
+    "order_type": "LIMIT",
+    "product": "NRML",
+    "exchange": "NSE"
+   }
+  ],
+  "order_answer": {
+   "status": "SUCCESS",
+   "payload": {
+    "exposure_required": 29679.13,
+    "span_required": 137426.0,
+    "option_buy_premium": 0.0,
+    "brokerage_and_charges": 1058.91,
+    "total_requirement": 168164.04,
+    "cash_cnc_margin_required": null,
+    "cash_mis_margin_required": null,
+    "physical_delivery_margin_requirement": 0.0
+   }
+  },
+  "basket_request": [
+   {
+    "trading_symbol": "NIFTY26O0623200CE",
+    "transaction_type": "BUY",
+    "quantity": 65,
+    "price": 19.0,
+    "order_type": "LIMIT",
+    "product": "NRML",
+    "exchange": "NSE"
+   },
+   {
+    "trading_symbol": "NIFTY26O0622400PE",
+    "transaction_type": "BUY",
+    "quantity": 65,
+    "price": 38.1,
+    "order_type": "LIMIT",
+    "product": "NRML",
+    "exchange": "NSE"
+   },
+   {
+    "trading_symbol": "NIFTY26O0623000CE",
+    "transaction_type": "SELL",
+    "quantity": 65,
+    "price": 51.6,
+    "order_type": "LIMIT",
+    "product": "NRML",
+    "exchange": "NSE"
+   },
+   {
+    "trading_symbol": "NIFTY26O0622600PE",
+    "transaction_type": "SELL",
+    "quantity": 65,
+    "price": 82.0,
+    "order_type": "LIMIT",
+    "product": "NRML",
+    "exchange": "NSE"
+   }
+  ],
+  "basket_answer": {
+   "status": "SUCCESS",
+   "payload": {
+    "exposure_required": 59059.65,
+    "span_required": 12761.25,
+    "option_buy_premium": 3705.0,
+    "brokerage_and_charges": 88.65,
+    "total_requirement": 75614.55,
+    "cash_cnc_margin_required": null,
+    "cash_mis_margin_required": null,
+    "physical_delivery_margin_requirement": 0.0
+   }
+  }
+ },
+ "indmoney": {
+  "order_request": {
+   "segment": "DERIVATIVE",
+   "exchange": "NSE",
+   "securityID": "48704",
+   "txnType": "SELL",
+   "quantity": "65",
+   "price": "22833.7",
+   "product": "MARGIN"
+  },
+  "order_answer": {
+   "status": "success",
+   "data": {
+    "total_margin": 167789.13,
+    "span_margin": 138112.73,
+    "ha": false,
+    "hedge_benefit": 0,
+    "exposure_margin": 29676.4,
+    "available_balance": 0,
+    "var_margin": 0,
+    "insufficient_balance": 0,
+    "delivery_margin": 0,
+    "brokerage": 0,
+    "charges": {
+     "stt": 0,
+     "exchange_charges": 0,
+     "stamp_duty": 0,
+     "sebi_turn_over_charges": 1.47,
+     "brokerage": 5,
+     "gst": 1.16,
+     "IPFTCharges": 0,
+     "total_charges": 7.63
+    }
+   }
+  }
+ },
+ "kotak": {
+  "order_request": {
+   "exSeg": "nse_fo",
+   "prc": "22833.7",
+   "prcTp": "L",
+   "prod": "NRML",
+   "qty": "65",
+   "tok": "48704",
+   "trnsTp": "S",
+   "trgPrc": "0",
+   "brkName": "KOTAK",
+   "brnchId": "ONLINE"
+  },
+  "order_answer": {
+   "avlCash": "4954.190000",
+   "totMrgnUsd": "167151.411000",
+   "mrgnUsd": "0.000000",
+   "ordMrgn": "167151.411000",
+   "rmsVldtd": "NOT_OK",
+   "reqdMrgn": "167151.411000",
+   "avlMrgn": "4954.190000",
+   "insufFund": "162197.221000",
+   "stat": "Ok",
+   "stCode": 200
+  }
+ },
+ "flattrade": {
+  "order_request": {
+   "uid": "STANDIN1",
+   "actid": "STANDIN1",
+   "exch": "NFO",
+   "tsym": "NIFTY27OCT26F",
+   "qty": "65",
+   "prc": "22833.7",
+   "prd": "M",
+   "trantype": "S",
+   "prctyp": "LMT"
+  },
+  "order_answer": {
+   "request_time": "10:41:36 30-09-2026",
+   "stat": "Ok",
+   "cash": "12675.96",
+   "marginused": "172995.69",
+   "remarks": "Insufficient Balance",
+   "marginusedprev": "0.00",
+   "ordermargin": "185671.65"
+  },
+  "basket_request": {
+   "uid": "STANDIN1",
+   "actid": "STANDIN1",
+   "exch": "NFO",
+   "tsym": "NIFTY06OCT26C23200",
+   "qty": "65",
+   "prc": "19.00",
+   "prd": "M",
+   "trantype": "B",
+   "prctyp": "LMT",
+   "basketlists": [
+    {
+     "exch": "NFO",
+     "tsym": "NIFTY06OCT26P22400",
+     "qty": "65",
+     "prc": "38.1",
+     "prd": "M",
+     "trantype": "B",
+     "prctyp": "LMT"
+    },
+    {
+     "exch": "NFO",
+     "tsym": "NIFTY06OCT26C23000",
+     "qty": "65",
+     "prc": "51.6",
+     "prd": "M",
+     "trantype": "S",
+     "prctyp": "LMT"
+    },
+    {
+     "exch": "NFO",
+     "tsym": "NIFTY06OCT26P22600",
+     "qty": "65",
+     "prc": "82",
+     "prd": "M",
+     "trantype": "S",
+     "prctyp": "LMT"
+    }
+   ]
+  },
+  "basket_answer": {
+   "request_time": "10:41:36 30-09-2026",
+   "stat": "Ok",
+   "marginused": "207953.01",
+   "marginusedtrade": "79724.16",
+   "marginusedprev": "0.00",
+   "remarks": ""
+  }
+ },
+ "shoonya": {
+  "order_request": {
+   "uid": "STANDIN1",
+   "actid": "STANDIN1",
+   "exch": "NFO",
+   "tsym": "NIFTY27OCT26F",
+   "qty": "65",
+   "prc": "22833.7",
+   "prd": "M",
+   "trantype": "S",
+   "prctyp": "LMT"
+  },
+  "order_answer": {
+   "request_time": "10:41:39 30-09-2026",
+   "stat": "Ok",
+   "cash": "4950.30",
+   "marginused": "171296.19",
+   "remarks": "Insufficient Balance",
+   "marginusedprev": "0.00",
+   "ordermargin": "176246.49"
+  },
+  "basket_request": {
+   "uid": "STANDIN1",
+   "actid": "STANDIN1",
+   "exch": "NFO",
+   "tsym": "NIFTY06OCT26C23200",
+   "qty": "65",
+   "prc": "19.00",
+   "prd": "M",
+   "trantype": "B",
+   "prctyp": "LMT",
+   "basketlists": [
+    {
+     "exch": "NFO",
+     "tsym": "NIFTY06OCT26P22400",
+     "qty": "65",
+     "prc": "38.10",
+     "prd": "M",
+     "trantype": "B",
+     "prctyp": "LMT"
+    },
+    {
+     "exch": "NFO",
+     "tsym": "NIFTY06OCT26C23000",
+     "qty": "65",
+     "prc": "51.60",
+     "prd": "M",
+     "trantype": "S",
+     "prctyp": "LMT"
+    },
+    {
+     "exch": "NFO",
+     "tsym": "NIFTY06OCT26P22600",
+     "qty": "65",
+     "prc": "82.00",
+     "prd": "M",
+     "trantype": "S",
+     "prctyp": "LMT"
+    }
+   ]
+  },
+  "basket_answer": {
+   "request_time": "10:41:39 30-09-2026",
+   "stat": "Ok",
+   "marginused": "196915.48",
+   "marginusedtrade": "75406.56",
+   "marginusedprev": "0.00",
+   "remarks": ""
+  }
+ },
+ "wisdom_capital": {
+  "order_request": {
+   "clientID": "STANDIN1",
+   "portfolio": [
+    {
+     "exchange": 2,
+     "exchangeInstrumentId": 48704,
+     "productType": "NRML",
+     "orderType": "LIMIT",
+     "orderSide": "SELL",
+     "quantity": 65,
+     "price": 22833.7,
+     "stopPrice": 0,
+     "userID": "STANDIN1",
+     "orderSessionType": 1
+    }
+   ]
+  },
+  "order_answer": {
+   "type": "success",
+   "code": "s-calculatemargin-0001",
+   "description": "calculate Margin Data",
+   "result": {
+    "brokerageDeatils": {
+     "IsValid": true,
+     "MarginRequired": 183820.35099999997,
+     "MarginAvailable": 4915.8,
+     "MarginShortfall": 178904.55099999998,
+     "ErrorMessage": ""
+    }
+   }
+  },
+  "basket_request": {
+   "clientID": "STANDIN1",
+   "portfolio": [
+    {
+     "exchange": 2,
+     "exchangeInstrumentId": 40745,
+     "productType": "NRML",
+     "orderType": "LIMIT",
+     "orderSide": "BUY",
+     "quantity": 65,
+     "price": 19.0,
+     "stopPrice": 0,
+     "userID": "STANDIN1",
+     "orderSessionType": 1
+    },
+    {
+     "exchange": 2,
+     "exchangeInstrumentId": 40688,
+     "productType": "NRML",
+     "orderType": "LIMIT",
+     "orderSide": "BUY",
+     "quantity": 65,
+     "price": 38.1,
+     "stopPrice": 0,
+     "userID": "STANDIN1",
+     "orderSessionType": 1
+    },
+    {
+     "exchange": 2,
+     "exchangeInstrumentId": 40731,
+     "productType": "NRML",
+     "orderType": "LIMIT",
+     "orderSide": "SELL",
+     "quantity": 65,
+     "price": 51.6,
+     "stopPrice": 0,
+     "userID": "STANDIN1",
+     "orderSessionType": 1
+    },
+    {
+     "exchange": 2,
+     "exchangeInstrumentId": 40703,
+     "productType": "NRML",
+     "orderType": "LIMIT",
+     "orderSide": "SELL",
+     "quantity": 65,
+     "price": 82.0,
+     "stopPrice": 0,
+     "userID": "STANDIN1",
+     "orderSessionType": 1
+    }
+   ]
+  },
+  "basket_answer": {
+   "type": "success",
+   "code": "s-calculatemargin-0001",
+   "description": "calculate Margin Data",
+   "result": {
+    "brokerageDeatils": {
+     "IsValid": true,
+     "MarginRequired": 82847.42700000001,
+     "MarginAvailable": 0,
+     "MarginShortfall": 82847.42700000001,
+     "ErrorMessage": ""
+    }
+   }
+  }
+ },
+ "instruments": {
+  "NIFTYFUT": {
+   "instrument_id": "28312010-2d68-5c8d-8b42-a66bc13a7816",
+   "segment": "nse_equity_index_futures",
+   "shape": "future",
+   "price": "22833.7",
+   "handles": {
+    "dhan": {
+     "broker_token": "48704",
+     "order_symbol": null,
+     "lot_size": "65.0",
+     "tick_size": "0.1"
+    },
+    "flattrade": {
+     "broker_token": "48704",
+     "order_symbol": "NIFTY27OCT26F",
+     "lot_size": "65.0",
+     "tick_size": null
+    },
+    "fyers": {
+     "broker_token": "101126102748704",
+     "order_symbol": "NSE:NIFTY26OCTFUT",
+     "lot_size": "65.0",
+     "tick_size": "0.1"
+    },
+    "groww": {
+     "broker_token": "48704",
+     "order_symbol": "NIFTY26OCTFUT",
+     "lot_size": "65.0",
+     "tick_size": "0.1"
+    },
+    "indmoney": {
+     "broker_token": "48704",
+     "order_symbol": null,
+     "lot_size": "65.0",
+     "tick_size": "0.1"
+    },
+    "kotak": {
+     "broker_token": "48704",
+     "order_symbol": "NIFTY26OCTFUT",
+     "lot_size": "65.0",
+     "tick_size": "0.1"
+    },
+    "shoonya": {
+     "broker_token": "48704",
+     "order_symbol": "NIFTY27OCT26F",
+     "lot_size": "65.0",
+     "tick_size": "0.1"
+    },
+    "stoxkart": {
+     "broker_token": "48704",
+     "order_symbol": null,
+     "lot_size": "65.0",
+     "tick_size": "0.1"
+    },
+    "wisdom_capital": {
+     "broker_token": "48704",
+     "order_symbol": null,
+     "lot_size": "65.0",
+     "tick_size": "0.1"
+    },
+    "zerodha": {
+     "broker_token": "12468226",
+     "order_symbol": "NIFTY26OCTFUT",
+     "lot_size": "65.0",
+     "tick_size": "0.1"
+    }
+   }
+  },
+  "NIFTY23200CE": {
+   "instrument_id": "6a7ba4d9-4e1c-5a69-8df0-fe9141d9063e",
+   "segment": "nse_equity_index_options",
+   "shape": "option",
+   "price": "19.0",
+   "handles": {
+    "dhan": {
+     "broker_token": "40745",
+     "order_symbol": null,
+     "lot_size": "65.0",
+     "tick_size": "0.05"
+    },
+    "flattrade": {
+     "broker_token": "40745",
+     "order_symbol": "NIFTY06OCT26C23200",
+     "lot_size": "65.0",
+     "tick_size": null
+    },
+    "fyers": {
+     "broker_token": "101126100640745",
+     "order_symbol": "NSE:NIFTY26O0623200CE",
+     "lot_size": "65.0",
+     "tick_size": "0.05"
+    },
+    "groww": {
+     "broker_token": "40745",
+     "order_symbol": "NIFTY26O0623200CE",
+     "lot_size": "65.0",
+     "tick_size": "0.05"
+    },
+    "indmoney": {
+     "broker_token": "40745",
+     "order_symbol": null,
+     "lot_size": "65.0",
+     "tick_size": "0.05"
+    },
+    "kotak": {
+     "broker_token": "40745",
+     "order_symbol": "NIFTY26O0623200CE",
+     "lot_size": "65.0",
+     "tick_size": "0.05"
+    },
+    "shoonya": {
+     "broker_token": "40745",
+     "order_symbol": "NIFTY06OCT26C23200",
+     "lot_size": "65.0",
+     "tick_size": "0.05"
+    },
+    "stoxkart": {
+     "broker_token": "40745",
+     "order_symbol": null,
+     "lot_size": "65.0",
+     "tick_size": "0.05"
+    },
+    "wisdom_capital": {
+     "broker_token": "40745",
+     "order_symbol": null,
+     "lot_size": "65.0",
+     "tick_size": "0.05"
+    },
+    "zerodha": {
+     "broker_token": "10430722",
+     "order_symbol": "NIFTY26O0623200CE",
+     "lot_size": "65.0",
+     "tick_size": "0.05"
+    }
+   }
+  },
+  "NIFTY22400PE": {
+   "instrument_id": "16fb6213-ca7d-553e-b0f0-08810d267ac5",
+   "segment": "nse_equity_index_options",
+   "shape": "option",
+   "price": "38.1",
+   "handles": {
+    "dhan": {
+     "broker_token": "40688",
+     "order_symbol": null,
+     "lot_size": "65.0",
+     "tick_size": "0.05"
+    },
+    "flattrade": {
+     "broker_token": "40688",
+     "order_symbol": "NIFTY06OCT26P22400",
+     "lot_size": "65.0",
+     "tick_size": null
+    },
+    "fyers": {
+     "broker_token": "101126100640688",
+     "order_symbol": "NSE:NIFTY26O0622400PE",
+     "lot_size": "65.0",
+     "tick_size": "0.05"
+    },
+    "groww": {
+     "broker_token": "40688",
+     "order_symbol": "NIFTY26O0622400PE",
+     "lot_size": "65.0",
+     "tick_size": "0.05"
+    },
+    "indmoney": {
+     "broker_token": "40688",
+     "order_symbol": null,
+     "lot_size": "65.0",
+     "tick_size": "0.05"
+    },
+    "kotak": {
+     "broker_token": "40688",
+     "order_symbol": "NIFTY26O0622400PE",
+     "lot_size": "65.0",
+     "tick_size": "0.05"
+    },
+    "shoonya": {
+     "broker_token": "40688",
+     "order_symbol": "NIFTY06OCT26P22400",
+     "lot_size": "65.0",
+     "tick_size": "0.05"
+    },
+    "stoxkart": {
+     "broker_token": "40688",
+     "order_symbol": null,
+     "lot_size": "65.0",
+     "tick_size": "0.05"
+    },
+    "wisdom_capital": {
+     "broker_token": "40688",
+     "order_symbol": null,
+     "lot_size": "65.0",
+     "tick_size": "0.05"
+    },
+    "zerodha": {
+     "broker_token": "10416130",
+     "order_symbol": "NIFTY26O0622400PE",
+     "lot_size": "65.0",
+     "tick_size": "0.05"
+    }
+   }
+  },
+  "NIFTY23000CE": {
+   "instrument_id": "3e2e0f7b-8358-5346-a9b0-3692f85a19ff",
+   "segment": "nse_equity_index_options",
+   "shape": "option",
+   "price": "51.6",
+   "handles": {
+    "dhan": {
+     "broker_token": "40731",
+     "order_symbol": null,
+     "lot_size": "65.0",
+     "tick_size": "0.05"
+    },
+    "flattrade": {
+     "broker_token": "40731",
+     "order_symbol": "NIFTY06OCT26C23000",
+     "lot_size": "65.0",
+     "tick_size": null
+    },
+    "fyers": {
+     "broker_token": "101126100640731",
+     "order_symbol": "NSE:NIFTY26O0623000CE",
+     "lot_size": "65.0",
+     "tick_size": "0.05"
+    },
+    "groww": {
+     "broker_token": "40731",
+     "order_symbol": "NIFTY26O0623000CE",
+     "lot_size": "65.0",
+     "tick_size": "0.05"
+    },
+    "indmoney": {
+     "broker_token": "40731",
+     "order_symbol": null,
+     "lot_size": "65.0",
+     "tick_size": "0.05"
+    },
+    "kotak": {
+     "broker_token": "40731",
+     "order_symbol": "NIFTY26O0623000CE",
+     "lot_size": "65.0",
+     "tick_size": "0.05"
+    },
+    "shoonya": {
+     "broker_token": "40731",
+     "order_symbol": "NIFTY06OCT26C23000",
+     "lot_size": "65.0",
+     "tick_size": "0.05"
+    },
+    "stoxkart": {
+     "broker_token": "40731",
+     "order_symbol": null,
+     "lot_size": "65.0",
+     "tick_size": "0.05"
+    },
+    "wisdom_capital": {
+     "broker_token": "40731",
+     "order_symbol": null,
+     "lot_size": "65.0",
+     "tick_size": "0.05"
+    },
+    "zerodha": {
+     "broker_token": "10427138",
+     "order_symbol": "NIFTY26O0623000CE",
+     "lot_size": "65.0",
+     "tick_size": "0.05"
+    }
+   }
+  },
+  "NIFTY22600PE": {
+   "instrument_id": "e8b858f3-3f8a-5bb6-8a02-26c21a149b0f",
+   "segment": "nse_equity_index_options",
+   "shape": "option",
+   "price": "82.0",
+   "handles": {
+    "dhan": {
+     "broker_token": "40703",
+     "order_symbol": null,
+     "lot_size": "65.0",
+     "tick_size": "0.05"
+    },
+    "flattrade": {
+     "broker_token": "40703",
+     "order_symbol": "NIFTY06OCT26P22600",
+     "lot_size": "65.0",
+     "tick_size": null
+    },
+    "fyers": {
+     "broker_token": "101126100640703",
+     "order_symbol": "NSE:NIFTY26O0622600PE",
+     "lot_size": "65.0",
+     "tick_size": "0.05"
+    },
+    "groww": {
+     "broker_token": "40703",
+     "order_symbol": "NIFTY26O0622600PE",
+     "lot_size": "65.0",
+     "tick_size": "0.05"
+    },
+    "indmoney": {
+     "broker_token": "40703",
+     "order_symbol": null,
+     "lot_size": "65.0",
+     "tick_size": "0.05"
+    },
+    "kotak": {
+     "broker_token": "40703",
+     "order_symbol": "NIFTY26O0622600PE",
+     "lot_size": "65.0",
+     "tick_size": "0.05"
+    },
+    "shoonya": {
+     "broker_token": "40703",
+     "order_symbol": "NIFTY06OCT26P22600",
+     "lot_size": "65.0",
+     "tick_size": "0.05"
+    },
+    "stoxkart": {
+     "broker_token": "40703",
+     "order_symbol": null,
+     "lot_size": "65.0",
+     "tick_size": "0.05"
+    },
+    "wisdom_capital": {
+     "broker_token": "40703",
+     "order_symbol": null,
+     "lot_size": "65.0",
+     "tick_size": "0.05"
+    },
+    "zerodha": {
+     "broker_token": "10419970",
+     "order_symbol": "NIFTY26O0622600PE",
+     "lot_size": "65.0",
+     "tick_size": "0.05"
+    }
+   }
+  }
+ }
+}

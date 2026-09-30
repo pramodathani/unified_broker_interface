@@ -1,0 +1,8 @@
+429 then 200: answer {'ok': True} after 2 requests
+429 three times: MarginCalculatorError after 3 requests: zerodha answered HTTP 429: slow down
+HTTP 500: MarginCalculatorError after 1 requests: zerodha answered HTTP 500: server error
+not JSON: MarginCalculatorError after 1 requests: zerodha answered with a body that is not JSON: <html>
+build_order_request is left to each broker: NotImplementedError
+read_order_margin is left to each broker: NotImplementedError
+build_basket_request is left to each broker: NotImplementedError
+read_basket_margin is left to each broker: NotImplementedError

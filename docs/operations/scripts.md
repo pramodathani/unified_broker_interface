@@ -19,7 +19,7 @@ bin/
     ├── user/                  details  unified_details
     ├── brokers/               unified_details
     ├── exchanges/             unified_details
-    ├── orders/                api_order_details  api_trade_details  websocket_order_details  store_orders_to_db  order_engine  virtual_book
+    ├── orders/                api_order_details  api_trade_details  websocket_order_details  store_orders_to_db  order_engine  virtual_book  margin_calibration
     ├── portfolio/             positions  holdings  funds  store_positions_to_db
     └── instruments/           map  price_history  websocket_quotes  store_quotes_to_db
 ```
@@ -215,11 +215,22 @@ The three `unified_details` scripts take `--once` to copy once and exit, and the
 | `store_orders_to_db` | Drains the unified order update stream | `unified:order-updates:stream` | TimescaleDB `unified.order_updates` |
 | `order_engine` | Places every order the REST API accepts, and runs the synthetic order types | stream `unified:orders:intents:stream`, `unified:order-updates:stream` | the broker, and a reply on `unified:orders:intents:result:<intent_id>` |
 | `virtual_book` | Keeps a queue estimate for every held `virtual_limit` order | stream `unified:quotes:stream`, the engine's parent cache | Redis hash `unified:orders:virtual_queue` |
+| `margin_calibration` | Asks every broker's own margin calculator about the same reference orders, once, and works out each broker's margin surcharge and hedge benefit | today's catalogue and `unified:quotes:live`; the brokers' margin calculators | TimescaleDB `unified.broker_order_costs`, the `margin_multiplier_*`, `gives_hedge_benefit` and `margin_calibrated_at` columns |
 
 !!! danger "`bin/unified/orders/order_engine` places live orders"
     The order engine sends real orders to real broker accounts. It places every order the REST API accepts, and only one may run: it holds the lock in `unified:orders:engine:lock`, and a second engine exits 1. It exits 2 for a bad argument or configuration.
 
 `virtual_book` never calls a broker or places an order. It only estimates, from the quote stream, how an order resting at the exchange would have fared.
+
+`margin_calibration` calls the brokers' margin calculators, which price an order and place nothing, with the logins already in Redis; it never logs in. It runs from `unified-margin-calibration.timer` at 09:30 IST on weekdays and takes about half a minute, most of it waiting out Wisdom Capital's rate limit. Stoxkart has no margin calculator and is not asked. [Choosing a broker by cost](../architecture/broker-selection.md#brokers-surcharges) explains what the figures are for.
+
+```bash
+bin/unified/orders/margin_calibration                     # measure every broker and write the results
+bin/unified/orders/margin_calibration --dry-run           # print the figures without writing them
+bin/unified/orders/margin_calibration --brokers zerodha dhan
+```
+
+It exits 0 when at least one broker was measured, 1 when none could be, today's catalogue is not published, or the database cannot be written, and 2 for a bad argument.
 
 ### portfolio
 

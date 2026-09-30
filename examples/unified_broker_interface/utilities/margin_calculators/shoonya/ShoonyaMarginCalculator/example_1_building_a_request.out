@@ -1,0 +1,7 @@
+POST https://api.shoonya.com/NorenWClientAPI/GetOrderMargin
+Form body: jData={"uid": "STANDIN1", "actid": "STANDIN1", "exch": "NFO", "tsym": "NIFTY27OCT26F", "qty": "65", "prc": "22833.7", "prd": "M", "trantype": "S", "prctyp": "LMT"}&jKey=stand-in-token
+Takes the NIFTY future: True, quantity 65
+Takes crude oil: True
+Crude oil quantity for 100 barrels: 100
+Prices baskets: True
+A basket of two goes to https://api.shoonya.com/NorenWClientAPI/GetBasketMargin

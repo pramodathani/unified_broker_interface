@@ -1,0 +1,18 @@
+POST https://api.groww.in/v1/margins/detail/orders
+Query: {'segment': 'FNO'}
+JSON body: [
+  {
+    "trading_symbol": "NIFTY26OCTFUT",
+    "transaction_type": "SELL",
+    "quantity": 65,
+    "price": 22833.7,
+    "order_type": "LIMIT",
+    "product": "NRML",
+    "exchange": "NSE"
+  }
+]
+Takes the NIFTY future: True, quantity 65
+Takes crude oil: False
+Prices baskets: True
+A basket of two goes to https://api.groww.in/v1/margins/detail/orders
+groww_order names the instrument trading_symbol = 'NIFTY26OCTFUT'

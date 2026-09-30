@@ -1,0 +1,2 @@
+MarginCalculatorError: dhan could not be reached: connection refused by https://api.dhan.co/v2/margincalculator
+Caused by ConnectionError

@@ -1,0 +1,24 @@
+POST https://trade.wisdomcapital.in/interactive/orders/margindetails
+JSON body: {
+  "clientID": "STANDIN1",
+  "portfolio": [
+    {
+      "exchange": 2,
+      "exchangeInstrumentId": 48704,
+      "productType": "NRML",
+      "orderType": "LIMIT",
+      "orderSide": "SELL",
+      "quantity": 65,
+      "price": 22833.7,
+      "stopPrice": 0,
+      "userID": "STANDIN1",
+      "orderSessionType": 1
+    }
+  ]
+}
+Takes the NIFTY future: True, quantity 65
+Takes crude oil: True
+Crude oil quantity for 100 barrels: 1
+Prices baskets: True
+A basket of two goes to https://trade.wisdomcapital.in/interactive/orders/margindetails
+xts_order names the instrument exchange = 2

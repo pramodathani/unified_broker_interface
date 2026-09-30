@@ -1,0 +1,18 @@
+POST https://api.dhan.co/v2/margincalculator
+JSON body: {
+  "dhanClientId": "1000000001",
+  "exchangeSegment": "NSE_FNO",
+  "transactionType": "SELL",
+  "quantity": 65,
+  "productType": "MARGIN",
+  "securityId": "48704",
+  "price": 22833.7,
+  "triggerPrice": 0
+}
+Takes the NIFTY future: True, quantity 65
+Takes crude oil: True
+Crude oil quantity for 100 barrels: 1
+Prices baskets: True
+A basket of two goes to https://api.dhan.co/v2/margincalculator/multi
+dhan_order names the instrument exchangeSegment = 'NSE_FNO'
+Header names from headers: ['Content-Type', 'access-token']

@@ -1,0 +1,163 @@
+#!/usr/bin/env python3
+"""
+Measure how much more than the exchange's margin each broker charges, and whether it gives hedge benefit, by asking
+every broker's own margin calculator about the same reference orders, and write the results to
+`unified.broker_order_costs`.
+
+    bin/unified/orders/margin_calibration
+    bin/unified/orders/margin_calibration --dry-run
+    bin/unified/orders/margin_calibration --brokers zerodha dhan
+
+**Why.** The lowest-cost broker selector passes over a broker that cannot afford an order, and it estimates the margin
+itself rather than asking the broker, because each margin calculator costs a network round trip of 75 to 100 ms. Its
+estimate is the exchange's margin times the broker's `margin_multiplier_*` columns. This script keeps those columns
+true: Flattrade, Shoonya and Wisdom Capital charge 5% to 37% more than the exchange, and a broker can change that.
+
+**The reference orders**, built from today's catalogue and `unified:quotes:live` at their last traded prices: buy 1
+INFY share intraday (`intraday`), sell 1 lot of the nearest NIFTY future (`fno`), buy 1 lot of the nearest crude oil
+future (`commodity`), and a NIFTY iron condor on the nearest weekly expiry after today, priced as a basket and leg by
+leg, to test hedge benefit.
+
+**The arithmetic.** The exchange's margin for an order is the median of every broker's answer, because most brokers
+charge exactly that. A broker's multiplier is its answer divided by the median, rounded to a thousandth and never
+below 1; a category with fewer than three answers is skipped, and a multiplier above 3 is dropped as a misread. A
+broker gives hedge benefit when its basket answer is under 40% of its legs added up (22% to 25% at the brokers that
+give it on 2026-09-30, 59% at Fyers, which does not). Only measured figures are
+written, with `margin_calibrated_at`; anything that could not be asked keeps its value.
+
+**What it touches.** Only the margin calculators, which price an order and place nothing, using the logins in Redis;
+it never logs in. Stoxkart has no margin calculator and is not asked. Wisdom Capital's calculator allows about one
+request a second, so its requests are three seconds apart and a whole run takes about half a minute. Run it while
+the markets are open, so the quotes are live; its timer runs it at 09:30 IST on weekdays.
+
+Exits 0 when at least one broker was measured, 1 when none could be, today's catalogue is not published, or the
+database cannot be written, and 2 for a bad argument.
+"""
+
+import sys
+import argparse
+from pathlib import Path
+
+# Run under the project's virtual environment, and put the project on sys.path. See
+# utilities/bootstrap.py for why the check is sys.prefix rather than the interpreter path.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+import psycopg2  # noqa: E402
+
+from utilities.configurations import get_cache, get_logger  # noqa: E402
+from unified_broker_interface.utilities.margin_calculators.utilities.margin_calibration import (  # noqa: E402
+    CATEGORIES,
+    MarginCalibration,
+)
+from unified_broker_interface.utilities.margin_calculators.utilities.registry import (  # noqa: E402
+    MARGIN_CALCULATOR_CLASSES,
+)
+
+
+class MarginCalibrationScript:
+    """The script: reads the arguments, measures the brokers, prints a table, and writes the results.
+
+    Attributes:
+        logger (logging.Logger): The logger.
+    """
+
+    def __init__(self):
+        """Builds the script.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.logger = get_logger("unified.margin_calibration")
+
+    def arguments(self):
+        """Reads the command line.
+
+        Returns:
+            argparse.Namespace: `brokers` (list) and `dry_run` (bool).
+        """
+        known_names = []
+        for calculator_class in MARGIN_CALCULATOR_CLASSES:
+            known_names.append(calculator_class.BROKER_NAME)
+        parser = argparse.ArgumentParser(description="Measure each broker's margin surcharge with its own margin calculator.")
+        parser.add_argument("--brokers", nargs="+", choices=known_names, help="Only these brokers; every broker with a calculator when omitted.")
+        parser.add_argument("--dry-run", action="store_true", help="Print the results without writing them to unified.broker_order_costs.")
+        return parser.parse_args()
+
+    def chosen_classes(self, broker_names):
+        """The calculator classes for the brokers named, or every one.
+
+        Args:
+            broker_names (list | None): The brokers named on the command line.
+
+        Returns:
+            list: The `BrokerMarginCalculator` classes.
+        """
+        if not broker_names:
+            return list(MARGIN_CALCULATOR_CLASSES)
+        chosen = []
+        for calculator_class in MARGIN_CALCULATOR_CLASSES:
+            if calculator_class.BROKER_NAME in broker_names:
+                chosen.append(calculator_class)
+        return chosen
+
+    def show(self, calibration, measurements, exchange):
+        """Prints each broker's answers, multipliers and hedge result.
+
+        Args:
+            calibration (MarginCalibration): The calibration.
+            measurements (list): The `BrokerMeasurement` results.
+            exchange (dict): The exchange's margin by category.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        for category in CATEGORIES:
+            print(f"Exchange margin for {category}: {exchange[category]}")
+        print(f"{'broker':<15} {'intraday':>10} {'fno':>8} {'commodity':>10} {'condor basket':>14} {'condor legs':>12} hedge")
+        for measurement in measurements:
+            multipliers = calibration.multipliers(measurement, exchange)
+            cells = []
+            for category in CATEGORIES:
+                cells.append(str(multipliers[category]))
+            print(f"{measurement.broker_name:<15} {cells[0]:>10} {cells[1]:>8} {cells[2]:>10} "
+                  f"{str(measurement.basket_margin):>14} {str(measurement.legs_margin):>12} {measurement.gives_hedge_benefit()}")
+
+    def run(self):
+        """Measures, prints and writes.
+
+        Returns:
+            int: The exit code.
+        """
+        arguments = self.arguments()
+        calibration = MarginCalibration(get_cache(), self.logger, self.chosen_classes(arguments.brokers))
+        try:
+            measurements = calibration.measure()
+        except ValueError as error:
+            self.logger.error(f"No calibration: {error}")
+            return 1
+        exchange = calibration.exchange_margins(measurements)
+        self.show(calibration, measurements, exchange)
+        measured = []
+        for measurement in measurements:
+            if measurement.measured_anything():
+                measured.append(measurement)
+        if not measured:
+            self.logger.error("No broker's margin calculator could be read.")
+            return 1
+        if arguments.dry_run:
+            self.logger.info("Dry run: nothing written.")
+            return 0
+        try:
+            updated = calibration.write(measurements, exchange)
+        except psycopg2.Error as error:
+            self.logger.error(f"Could not write unified.broker_order_costs: {type(error).__name__}: {error}")
+            return 1
+        self.logger.info(f"Wrote the margin columns of {updated} brokers to unified.broker_order_costs.")
+        return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(MarginCalibrationScript().run())

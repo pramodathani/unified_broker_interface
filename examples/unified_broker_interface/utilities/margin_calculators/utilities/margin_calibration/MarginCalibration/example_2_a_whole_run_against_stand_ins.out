@@ -1,0 +1,11 @@
+WARNING delta has no login or settings in Redis, so its margin calculator is not asked.
+A calculator for delta: None
+Reference orders: ['commodity', 'fno', 'intraday'], condor legs: 4
+alpha alone: {'intraday': Decimal('203.48'), 'fno': Decimal('167109.41'), 'commodity': Decimal('271072.50')}, basket 75614.55, legs 303711.50
+WARNING delta has no login or settings in Redis, so its margin calculator is not asked.
+Exchange margins: {'intraday': Decimal('203.48'), 'fno': Decimal('167109.41'), 'commodity': Decimal('271072.50')}
+UPDATE alpha: intraday 1.000, fno 1.000, commodity 1.000, hedge True
+UPDATE beta: intraday 1.000, fno 1.000, commodity 1.000, hedge True
+UPDATE gamma: intraday 1.100, fno 1.100, commodity 1.100, hedge None
+COMMIT
+Rows updated: 3

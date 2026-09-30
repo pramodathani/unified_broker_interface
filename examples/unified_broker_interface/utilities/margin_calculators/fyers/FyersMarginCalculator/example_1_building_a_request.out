@@ -1,0 +1,22 @@
+POST https://api-t1.fyers.in/api/v3/multiorder/margin
+JSON body: {
+  "data": [
+    {
+      "symbol": "NSE:NIFTY26OCTFUT",
+      "qty": 65,
+      "side": -1,
+      "type": 1,
+      "productType": "MARGIN",
+      "limitPrice": 22833.7,
+      "stopLoss": 0,
+      "stopPrice": 0,
+      "takeProfit": 0
+    }
+  ]
+}
+Takes the NIFTY future: True, quantity 65
+Takes crude oil: True
+Crude oil quantity for 100 barrels: 1
+Prices baskets: True
+A basket of two goes to https://api-t1.fyers.in/api/v3/multiorder/margin
+fyers_order names the instrument symbol = 'NSE:NIFTY26OCTFUT'
