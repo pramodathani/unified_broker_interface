@@ -1,0 +1,8 @@
+Nothing filled by 15:10: parent cancelled, the time ran out before anything filled
+  sent ['place SELL 40 LIMIT at 412.00 -> 260930000001', 'cancel 260930000001']
+close_at: Thu 01 Oct 15:10
+entry_leg: entry SELL filled 25; closing_leg before closing: None
+place_closing_leg: BUY 25 MARKET, parent completed
+  sent place BUY 25 MARKET -> 260930000003
+Neither until_time nor minutes: HTTP 400, a time_stop needs until_time, a time of day, or minutes, a number of minutes from now
+Minutes on a holiday: HTTP 400, minutes are counted from now and today is not a trading day for this instrument; give until_time instead

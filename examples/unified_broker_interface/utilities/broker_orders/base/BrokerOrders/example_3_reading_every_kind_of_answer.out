@@ -1,0 +1,18 @@
+Place, Accepted: accepted (HTTP 200), order id 250915000000011, message None
+Place, Refusal inside a success: rejected (HTTP 422), order id None, message Markets are closed right now.
+Place, Success without an order id: unknown (HTTP 504), order id None, message the broker answered without an order id: {}
+Place, Client error: rejected (HTTP 422), order id None, message bad request
+Place, Settled server error: rejected (HTTP 422), order id None, message Order could not be placed
+Place, Plain server error: unknown (HTTP 504), order id None, message Service Unavailable
+Place, Connect timeout: rejected (HTTP 422), order id None, message could not connect to the broker, so nothing was sent: connect timed out
+Place, Read timeout: unknown (HTTP 504), order id None, message ReadTimeout: read timed out
+Error code of the settled answer: OrderException
+Nested error: code GA001, message nested failure
+Order id read from a body: 250915000000011
+Refusal read from a body: Markets are closed right now.
+OrderException settles a refusal: True
+Cancel, success: accepted (HTTP 200), order id None, message None
+Modify, server error: unknown (HTTP 504), order id None, message internal error
+send alone leaves the outcome unknown with HTTP 404
+After decide_instruction_outcome: rejected (HTTP 422), order id None, message order not found
+count_message counted nothing, as no daily count is attached

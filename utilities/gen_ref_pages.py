@@ -26,7 +26,7 @@ PACKAGES = ("stock_brokers", "unified_broker_interface", "utilities")
 # Generated protocol buffer modules are thousands of lines of machine output with no docstrings,
 # and mkdocstrings on them produces pages nobody reads. This module is excluded too: it is part
 # of the documentation build rather than part of the project being documented.
-EXCLUDED_PARTS = ("__pycache__", "proto", "gen_ref_pages")
+EXCLUDED_PARTS = ("__pycache__", "proto", "gen_ref_pages", "docs_examples")
 
 navigation = mkdocs_gen_files.Nav()
 root = Path(__file__).parent.parent

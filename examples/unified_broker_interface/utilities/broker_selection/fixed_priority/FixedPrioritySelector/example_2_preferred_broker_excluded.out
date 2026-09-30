@@ -1,0 +1,6 @@
+Preference: ['zerodha', 'dhan', 'fyers']
+Rotation without zerodha: ['kotak', 'fyers', 'dhan', 'groww']
+Ranked: ['dhan', 'fyers', 'kotak', 'groww']
+dhan refuses the order
+Chosen: fyers after passing over 1
+Redis commands sent by the selector: []

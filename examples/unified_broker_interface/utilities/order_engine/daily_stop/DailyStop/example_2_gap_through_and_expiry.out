@@ -1,0 +1,11 @@
+Valid for 5 days
+Recorded Thu 01 Oct 08:00: first placed on Thu 01 Oct
+Recorded Thu 01 Oct 14:00: first placed on Mon 05 Oct
+Recorded Sat 03 Oct 12:00: first placed on Mon 05 Oct
+Last 3921.50: the BUY stop at 3950 has been gapped through: False
+Last 3987.00: the BUY stop at 3950 has been gapped through: True
+exit_now: sent ['place BUY 30 LIMIT at 3987.60 -> 260930000001'], parent completed
+  the market opened at 3987.00, already past the stop at 3950, so the position was closed rather than a stop placed
+arm_stop: sent ['place BUY 30 SL at 3960 trigger 3950 -> 260930000001'], parent protecting
+Tick after expiry: acted True, parent completed, the stop was re-armed for 5 days and has now finished
+Only stop_price: HTTP 400, a daily stop needs stop_price and stop_limit_price: a stop-limit whose limit sits at its trigger will not fill when the price runs through it, which is what a stop is for

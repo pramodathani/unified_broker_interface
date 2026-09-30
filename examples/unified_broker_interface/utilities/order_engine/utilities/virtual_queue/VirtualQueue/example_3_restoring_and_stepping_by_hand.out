@@ -1,0 +1,8 @@
+Rebuilt: ahead=600 queue_filled=0 remaining=150 needs_baseline=True
+Baseline taken with 1000 visible: ahead=600 queue_filled=0 remaining=150 needs_baseline=False
+300 left the level without trading: ahead=420 queue_filled=0 remaining=150 needs_baseline=False
+500 traded at 24810.50: ahead=0 queue_filled=80 remaining=70 needs_baseline=False
+A trade printed at 24810.00: ahead=0 queue_filled=150 remaining=0 needs_baseline=False
+Stored again: filled=150 updates=42
+Refused: Not a stored virtual queue: KeyError('price')
+Refused: A virtual queue needs a side of BUY or SELL: side='HOLD'

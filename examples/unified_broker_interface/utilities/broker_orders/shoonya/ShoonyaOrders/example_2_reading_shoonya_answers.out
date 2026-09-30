@@ -1,0 +1,7 @@
+Place, accepted: accepted (HTTP 200), order id 26091500000022, message None
+Place, refusal inside a success: rejected (HTTP 422), order id None, message Invalid Trading Symbol
+Place, text server error: unknown (HTTP 504), order id None, message Service Unavailable
+Cancel, accepted: accepted (HTTP 200), order id None, message None
+Cancel, refusal inside a success: rejected (HTTP 422), order id None, message Rejected : ORA:Order not found to cancel
+Requests the stand-in received: ['POST https://api.shoonya.com/NorenWClientAPI/PlaceOrder', 'POST https://api.shoonya.com/NorenWClientAPI/PlaceOrder', 'POST https://api.shoonya.com/NorenWClientAPI/PlaceOrder', 'POST https://api.shoonya.com/NorenWClientAPI/CancelOrder', 'POST https://api.shoonya.com/NorenWClientAPI/CancelOrder']
+Account setting: ucc_code, base URL: https://api.shoonya.com/NorenWClientAPI

@@ -317,10 +317,10 @@ class BrokerMappingAdapter:
 
         Args:
             raw_row (dict): One raw row from the broker's instrument table.
-            specification: Either a bare column name, or a dict with "column" and optionally "transform" keys.
+            specification (str | dict): Either a bare column name, or a dict with "column" and optionally "transform" keys.
 
         Returns:
-            The column value, transformed if requested.
+            Any: The column value, transformed if requested.
         """
         if isinstance(specification, dict):
             value = raw_row.get(specification["column"])

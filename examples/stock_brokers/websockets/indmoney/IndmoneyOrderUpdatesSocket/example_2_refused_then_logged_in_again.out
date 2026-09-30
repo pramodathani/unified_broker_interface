@@ -1,0 +1,17 @@
+Stand-in login number 1
+Handshake headers: {'Authorization': 'indmoney-token-1', 'x-api-key': 'ind-client-7'}
+Connecting to wss://ws-order-updates.indstocks.com/api/v1/ws/trades
+WARNING Order updates handshake refused with HTTP 401, taken as a dead session.
+INFO Order updates socket closed with status None: None
+WARNING Logging in to INDmoney again.
+Stand-in login number 2
+WARNING Order updates socket disconnected. Reconnecting in 0 seconds.
+Handshake headers: {'Authorization': 'indmoney-token-2', 'x-api-key': 'ind-client-7'}
+Connecting to wss://ws-order-updates.indstocks.com/api/v1/ws/trades
+Sent: {"action": "subscribe", "mode": "order_update"}
+INFO Order updates socket opened and subscribed. Waiting for order updates.
+Order IND2609250001 COMPLETE: SELL 5 of 5 TCS
+INFO Order updates socket closed with status 1000: normal closure
+INFO Order updates socket stopped.
+Gave up: False
+Logins made: 2

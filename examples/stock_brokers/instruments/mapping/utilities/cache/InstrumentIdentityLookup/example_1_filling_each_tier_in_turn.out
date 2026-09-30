@@ -1,0 +1,12 @@
+First resolve: nse_equities INFY None None None
+First resolve: nse_equity_index_options NIFTY datetime.date(2026, 10, 6) Decimal('25000.00') CE
+  counters: {'process_hits': 0, 'redis_hits': 0, 'postgres_hits': 2, 'misses': 0}
+  identities now in Redis: 2
+Second resolve counters: {'process_hits': 2, 'redis_hits': 0, 'postgres_hits': 2, 'misses': 0}
+Second process: nse_equity_index_options NIFTY datetime.date(2026, 10, 6) Decimal('25000.00') CE
+  counters: {'process_hits': 2, 'redis_hits': 2, 'postgres_hits': 2, 'misses': 0}
+Postgres queries so far: 1
+read_from_redis finds: ['5f0c7a8e-3b1d-4c62-9e4a-2d8b7f1c0a31']
+read_from_postgres finds: ['5f0c7a8e-3b1d-4c62-9e4a-2d8b7f1c0a31']
+write_to_redis: True
+Postgres queries so far: 2

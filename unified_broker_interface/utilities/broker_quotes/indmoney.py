@@ -89,6 +89,24 @@ class IndmoneyQuoteSource(BrokerQuoteSource):
     BROKER_NAME = "indmoney"
 
     def fetch(self, client, handle, identity, received_at):
+        """
+        One instrument's INDstocks quote as a contract tick.
+
+        The quote is requested from INDstocks' full quote endpoint by a scrip code made of the REST prefix and the token, and the tick's `instrument_token` is spelled `<feed segment>:<token>`, as INDmoney's market feed spells it. The previous close is `prev_close`, and the change is worked out from it and the last price. The order book levels carry no order counts, so `orders` is None.
+
+        Args:
+            client (INDMoneyAPI): INDmoney's API client, whose `get` carries the session.
+            handle (dict): INDmoney's order handle for the instrument; its `broker_token` is the token.
+            identity (dict): The instrument's identity.
+            received_at (float): The instant to stamp on the tick, in epoch seconds.
+
+        Returns:
+            dict: The contract tick.
+
+        Raises:
+            QuoteUnavailable: INDstocks has no trustworthy quote segment for the instrument, does not know the scrip code, or answered with no quote for it.
+            INDMoneyAPIException: The API client refused the request for any other reason, which this method lets through.
+        """
         codes = indmoney_codes(identity)
         if codes is None:
             raise QuoteUnavailable(f"INDstocks has no quote segment for {identity['segment']}")
@@ -127,5 +145,16 @@ class IndmoneyQuoteSource(BrokerQuoteSource):
         return tick
 
     def is_authentication_error(self, exception):
+        """
+        Whether an exception from `fetch` means INDstocks no longer accepts the session.
+
+        The exception's text is searched for what INDstocks says about a dead token: that the access token is incorrect, expired or revoked, that the user needs to re-authenticate, or that the request is unauthorized.
+
+        Args:
+            exception (Exception): What `fetch` raised.
+
+        Returns:
+            bool: True when logging in again is the remedy.
+        """
         text = str(exception).lower()
         return any(marker in text for marker in _AUTHENTICATION_MARKERS)

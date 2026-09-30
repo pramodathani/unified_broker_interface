@@ -1,0 +1,10 @@
+Run: HTTP 200, outcome accepted, bid showing at 100.0
+Discretion 0.25, so it will pay up to 100.25
+Offer at 100.5: acted False
+Offer at 100.25: acted True
+The broker confirms the bid is cancelled; still resting: None
+Offer at 100.2: acted False
+Sent to the broker, in order:
+  place BUY 500 LIMIT at 100.00 -> 260930000001
+  cancel 260930000001
+  place BUY 500 LIMIT at 100.25 -> 260930000002

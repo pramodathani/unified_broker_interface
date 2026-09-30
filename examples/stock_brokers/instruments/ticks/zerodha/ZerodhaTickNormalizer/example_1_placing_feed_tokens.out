@@ -1,0 +1,11 @@
+Broker: zerodha
+738561 -> broker_token='738561' order_symbol=None segments=6 starting with nse_equities
+256265 -> broker_token='256265' order_symbol=None segments=8 starting with nse_equity_indices
+5720583 -> broker_token='5720583' order_symbol=None segments=16 starting with mcx_fixed_income_futures
+'408065' -> broker_token='408065' order_symbol=None segments=6 starting with nse_equities
+'NSE:INFY' -> None
+264 -> None
+Subscription tokens as ticks spell them:
+'738561' -> 738561
+'256265' -> 256265
+'NSE:INFY' -> None

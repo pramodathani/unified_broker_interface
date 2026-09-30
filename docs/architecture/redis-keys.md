@@ -38,7 +38,7 @@ flowchart LR
     UOS -->|persist| UOP["unified store_orders_to_db"]
     UOS -->|engine| OE["order_engine"]
     UPS -->|persist| UPP["unified store_positions_to_db"]
-    API["REST API workers<br/>placement = engine"] --> IS[["unified:orders:intents:stream"]]
+    API["REST API workers"] --> IS[["unified:orders:intents:stream"]]
     IS -->|engine| OE
 ```
 
@@ -100,6 +100,8 @@ Two hashes hold one field per broker and are read by every layer. They carry cre
 |---|---|---|---|
 | `last_login` | hash, one field per `broker_name` | Every broker login, after it writes MongoDB; the REST API's connect and disconnect; `bin/unified/session/*`. `BrokerAPI._current_login` fills an empty field from MongoDB with `HSETNX`, so it can never overwrite a newer login. | `BrokerAPI._current_login` on every broker request; the REST API's token check and order routes; the order engine |
 | `settings` | hash, one field per `broker_name` | `BrokerAPI.__init__`, which copies the broker's MongoDB `settings` document every time a broker class is constructed | The REST API's order routes and the order engine, which need each broker's keys to build an order request |
+
+One more key without a prefix is shared by every broker. Each broker class's `_request` appends a line to the list `broker_api_calls` with `RPUSH` whenever it is called with `verbose=True`, recording the request it is about to send, headers included. Nothing reads the list, it has no cap and no expiry, and because the headers carry access tokens it holds secrets too.
 
 ## Login lock keys
 
@@ -169,7 +171,7 @@ The combiners rewrite each document every half second, except where noted.
 | `unified:positions_updates` | hash | `bin/unified/orders/websocket_order_details` | People | Latest streamed position, keyed `broker:position_key`; expires at the next 06:00 IST |
 | `unified:portfolio:positions` | string | `bin/unified/portfolio/positions` | `GET /api/portfolio/positions`; the order engine | Every broker's positions |
 | `unified:portfolio:holdings` | string | `bin/unified/portfolio/holdings` | `GET /api/portfolio/holdings` | Holdings, combined and priced; rewritten every minute |
-| `unified:portfolio:funds` | string | `bin/unified/portfolio/funds` | `GET /api/portfolio/funds`; the engine's daily loss check | Every figure summed across brokers |
+| `unified:portfolio:funds` | string | `bin/unified/portfolio/funds` | `GET /api/portfolio/funds`; the engine's daily loss check and its `account_conditional` orders | Every figure summed across brokers |
 
 ### Details, profiles and the session
 
@@ -199,9 +201,9 @@ The order engine and the REST API's order routes share the keys below. The engin
 | `unified:orders:intents:reply:<request_id>` | list | The order engine, with `RPUSH`, one answer per order of a listed placement, each naming its `request_index` | The waiting API worker, with `BLPOP` until every order is answered | `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_RESULT_TTL_SECONDS` |
 | `unified:orders:intents:answer:<intent_id>` | string | The order engine, with `SET NX` as it answers each intent | `GET /api/orders/intents/<intent_id>` | `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_RESULT_TTL_SECONDS` |
 | `unified:orders:intents:result:<intent_id>` | list | The order engine, with `RPUSH` | The waiting API worker, with `BLPOP` | `UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_RESULT_TTL_SECONDS`, 300 by default |
-| `unified:orders:parents` | hash | The order engine | The engine and `bin/unified/orders/virtual_book` | Every parent order, by id; expires at the next 06:00 IST |
-| `unified:orders:parents:open` | set | The order engine | The engine and `virtual_book` | The ids of parents not yet finished; expires at the next 06:00 IST |
-| `unified:orders:children` | hash | The order engine | The engine | `broker:broker_order_id` to its parent; expires at the next 06:00 IST |
+| `unified:orders:parents` | hash | The order engine | The engine; `bin/unified/orders/virtual_book`; `GET /api/orders/parents`; `bin/unified/orders/api_order_details` and `api_trade_details`, which join each order and trade to its parent | Every parent order, by id; expires at the next 06:00 IST |
+| `unified:orders:parents:open` | set | The order engine | The engine, `virtual_book` and `GET /api/orders/parents` | The ids of parents not yet finished; expires at the next 06:00 IST |
+| `unified:orders:children` | hash | The order engine | The engine; the REST API's modify and cancel routes; `bin/unified/orders/api_order_details` and `api_trade_details` | `broker:broker_order_id` to its parent; expires at the next 06:00 IST |
 | `unified:orders:parents:intents` | hash | The order engine | The engine, before placing an intent | Intent id to the parent it started; expires at the next 06:00 IST |
 | `unified:orders:virtual_queue` | hash | `bin/unified/orders/virtual_book` | The engine's `virtual_limit` orders | One queue estimate per held order, by parent id; removed when the parent is no longer open |
 

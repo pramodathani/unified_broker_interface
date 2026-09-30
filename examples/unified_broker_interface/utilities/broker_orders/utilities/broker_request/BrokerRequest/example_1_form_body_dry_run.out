@@ -1,0 +1,24 @@
+Method: POST
+Checks the certificate: True
+Headers kept for sending: ['Content-Type']
+What a dry run shows:
+{
+  "form": {
+    "actid": "FT000001",
+    "amo": "NO",
+    "dscqty": "0",
+    "exch": "NSE",
+    "ordersource": "API",
+    "prc": "0",
+    "prctyp": "MKT",
+    "prd": "I",
+    "qty": "10",
+    "ret": "DAY",
+    "trantype": "B",
+    "trgprc": "0",
+    "tsym": "RELIANCE-EQ",
+    "uid": "FT000001"
+  },
+  "method": "POST",
+  "url": "https://piconnect.flattrade.in/PiConnectAPI/PlaceOrder"
+}

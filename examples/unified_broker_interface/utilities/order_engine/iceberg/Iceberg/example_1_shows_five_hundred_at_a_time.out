@@ -1,0 +1,10 @@
+Run: HTTP 200, outcome accepted, hidden 700
+Showing 500 at a time, varied by 0.0 per cent
+Slice 1 of 500 fills; next_size then says 500
+Slice 2 of 500 fills; next_size then says 200
+Slice 3 of 200 fills; next_size then says 0
+Sent to the broker:
+  place BUY 500 LIMIT at 820.00 -> 260930000001
+  place BUY 500 LIMIT at 820.00 -> 260930000002
+  place BUY 200 LIMIT at 820.00 -> 260930000003
+Parent: completed, every slice has been filled

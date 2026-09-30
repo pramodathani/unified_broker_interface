@@ -1,0 +1,53 @@
+Requests sent: [('https://api.kite.trade/quote', {'i': '111477767'})]
+{
+    "id": "111477767",
+    "broker": "zerodha",
+    "instrument_token": 111477767,
+    "exchange": "mcx",
+    "mode": "full",
+    "last_price": 5725.0,
+    "last_quantity": 1,
+    "average_price": 5719.42,
+    "volume": 70691,
+    "buy_quantity": 1843,
+    "sell_quantity": 2011,
+    "ohlc": {
+        "open": 5702.0,
+        "high": 5741.0,
+        "low": 5698.0,
+        "close": 5722.0
+    },
+    "change": null,
+    "oi": 17552,
+    "oi_day_high": 17901,
+    "oi_day_low": 17410,
+    "last_trade_time": 1789446602.0,
+    "exchange_timestamp": 1789446603.0,
+    "depth": {
+        "buy": [
+            {
+                "price": 5724.0,
+                "quantity": 12,
+                "orders": 7
+            },
+            {
+                "price": 5723.0,
+                "quantity": 31,
+                "orders": 14
+            }
+        ],
+        "sell": [
+            {
+                "price": 5725.0,
+                "quantity": 9,
+                "orders": 5
+            },
+            {
+                "price": 5726.0,
+                "quantity": 22,
+                "orders": 11
+            }
+        ]
+    },
+    "received_at": 1789446605.0
+}

@@ -1,0 +1,21 @@
+after parent_received      state=received   legs=0 filled=0
+after parent_state_changed state=working    legs=0 filled=0
+after leg_requested        state=working    legs=1 filled=0
+after leg_answered         state=working    legs=1 filled=0
+after leg_update           state=working    legs=1 filled=4
+after leg_update           state=working    legs=1 filled=10
+after parent_state_changed state=protecting legs=1 filled=10
+after leg_answered         state=protecting legs=2 filled=10
+after leg_answered         state=protecting legs=3 filled=10
+Tag for invented legs: 3c9d2e710b4f4a8e
+Caller tag: swing42, parameters: {'stop_loss': 1505.0, 'target': 1550.0}
+Broker order 250930000123999 is leg 3c9d2e71-0b4f-4a8e-9c61-5f0e2d7a1b88:2 (stop)
+Same id at Dhan: None
+Entry requested at 2026-09-30T09:20:00.020+05:30, answered at 2026-09-30T09:20:00.180+05:30
+Live legs: ['stop', 'target']
+Legs in state sent: 1
+Terminal: False
+May become completed: True
+May go back to working: False
+Next leg id: 3c9d2e71-0b4f-4a8e-9c61-5f0e2d7a1b88:4
+Next sequence: 10

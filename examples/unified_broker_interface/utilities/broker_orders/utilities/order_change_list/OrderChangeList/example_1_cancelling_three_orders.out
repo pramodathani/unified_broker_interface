@@ -1,0 +1,31 @@
+Dry run: True
+Cancel 250915000000011 at zerodha
+Cancel 112509150000012 at None
+Refused: {'error': 'this order is already named at request_index 0', 'order_id': '250915000000011'}
+Order ids to look up: ['250915000000011', '112509150000012']
+[
+  {
+    "request_index": 0,
+    "status": 200,
+    "response": {
+      "order_id": "250915000000011",
+      "dry_run": true
+    }
+  },
+  {
+    "request_index": 1,
+    "status": 200,
+    "response": {
+      "order_id": "112509150000012",
+      "dry_run": true
+    }
+  },
+  {
+    "request_index": 2,
+    "status": 400,
+    "response": {
+      "error": "this order is already named at request_index 0",
+      "order_id": "250915000000011"
+    }
+  }
+]

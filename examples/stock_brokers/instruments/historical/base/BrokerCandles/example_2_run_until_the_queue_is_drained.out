@@ -1,0 +1,19 @@
+INFO candles.example_broker: 500325 day: backfill complete (3 empty windows walking back from 2017-12-31).
+WARNING candles.example_broker: 884737 day: StandInBrokerError: GeneralException: Something went wrong, please try again
+WARNING candles.example_broker: 341249 day: throttled: NetworkException: Too many requests
+INFO candles.example_broker: Nothing due. The queue is drained or backing off.
+INFO candles.example_broker: Finished: 7 windows, 2 bars.
+Windows visited: 7, bars stored: 2
+Tokens requested from the broker: ['738561', '500325', '13368834', '884737', '341249']
+Outcome recorded for each series:
+  738561 day: stored
+  500325 day: backfilled
+  13368834 5minute: retired
+  256265 day: up to date
+  408065 day: retired
+  884737 day: failed
+  341249 day: throttled
+Summary: {'series': 7, 'retired': 2, 'with_bars': 1, 'bars': 2, 'stuck': 0}
+INFO candles.example_broker: Stopping: asked to.
+INFO candles.example_broker: Finished: 0 windows, 0 bars.
+A run asked to stop before it starts: (0, 0)

@@ -1,0 +1,30 @@
+refresh_sources: NEWCO-NSE from flattrade NSE|9999|NEWCO-EQ, source 31, changed True
+refresh_sources: OLDCO-NSE from None None, source None, changed True
+Superseded source rows: [7]; unresolved: [('flattrade', 'NSE|8888|MYSTERY-EQ', 'rejected', 'no mapping, exchange token or symbol match')]
+upsert_source returns id 31
+read_series PIDILITIND 2025-09-22: close 3038.10, high 3058.10, volume 250000
+read_series PIDILITIND 2025-09-23: close 1523.00, high 1533.00, volume 250000
+valid, an ordinary bar: True
+valid, a zero close: False
+valid, on a Sunday: False
+valid, stamped 09:15: False
+valid, high below the close: False
+stitch Zerodha: 22 bars
+agreement with Dhan: (1.0, 22)
+agreement with Flattrade: (0.0, 22)
+rebuild wrote 23 bars; filled from another broker: ['2026-09-10 from source 22']
+bars_corrected: 1
+bars_deleted: 0
+bars_gap_filled: 1
+bars_kept: 23
+bars_written: 23
+filtered_bad_range: 1
+filtered_missing_price: 1
+filtered_non_trading_day: 1
+filtered_off_grid: 1
+gap_fill_refused: 1
+series_dhan: 0
+series_flattrade: 2
+series_zerodha: 0
+sources_superseded: 1
+unresolved_flattrade: 1

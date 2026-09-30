@@ -1,0 +1,25 @@
+Rules file: dhan.instruments, 32 segments
+nse_equities is a security on nse with 2 rules
+Unconfigured segment: None
+
+Row 1594 (INFOSYS LIMITED)
+  Segment: nse_equities (security)
+  Extra segments: []
+  Identity: {'symbol': 'INFY'}
+  Broker fields: {'broker_token': '1594', 'broker_symbol': 'Infosys', 'order_symbol': None, 'lot_size': 1.0, 'tick_size': 0.1}
+  Instrument id: f310e1b0-e082-5b16-808a-25f741abb9de
+
+Row 40215 (NIFTY-Oct2026-25000-CE)
+  Segment: nse_equity_index_options (option)
+  Extra segments: []
+  Identity: {'underlying_symbol': 'NIFTY', 'expiry_date': datetime.date(2026, 10, 27), 'strike_price': 25000.0, 'option_type': 'CE'}
+  Broker fields: {'broker_token': '40215', 'broker_symbol': 'NIFTY-Oct2026-25000-CE', 'order_symbol': None, 'lot_size': 75.0, 'tick_size': 0.05}
+  Instrument id: fe85c704-ce49-5190-b068-d4d3646ed162
+
+Row 990001 (TEST SPREAD)
+  No rule matched, and the base class finds no exchange: None
+  Segment: uncategorised (security)
+  Extra segments: []
+  Identity: {'symbol': ''}
+  Broker fields: {'broker_token': '990001', 'broker_symbol': 'Test spread', 'order_symbol': None, 'lot_size': 1.0, 'tick_size': None}
+  Instrument id: 55a8952d-9071-5670-a4fe-a5384d3876bd

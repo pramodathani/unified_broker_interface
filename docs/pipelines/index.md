@@ -45,7 +45,7 @@ flowchart TB
     end
 ```
 
-The instrument pipeline feeds every other one: the unified scripts in the other four columns all resolve a broker's token to a unified `instrument_id` through the cache that `bin/unified/instruments/map` writes.
+The instrument pipeline feeds every other one: the unified scripts that resolve a broker's token to a unified `instrument_id` all depend on what `bin/unified/instruments/map` writes. The market data, orders, holdings and positions combiners read its Redis cache, and the unified price history job reads its tables, `unified.instruments` and `unified.broker_mappings`. The funds combiner is the one unified script that resolves no instrument.
 
 ## Summary
 

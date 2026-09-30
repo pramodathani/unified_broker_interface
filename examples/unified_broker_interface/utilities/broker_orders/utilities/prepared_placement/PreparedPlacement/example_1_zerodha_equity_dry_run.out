@@ -1,0 +1,24 @@
+{
+  "broker": "zerodha",
+  "dry_run": true,
+  "instrument_id": "11111111-1111-5111-8111-000000000001",
+  "request": {
+    "form": {
+      "disclosed_quantity": 0,
+      "exchange": "NSE",
+      "market_protection": "-1",
+      "order_type": "MARKET",
+      "price": "0",
+      "product": "MIS",
+      "quantity": 10,
+      "tradingsymbol": "RELIANCE",
+      "transaction_type": "BUY",
+      "trigger_price": "0",
+      "validity": "DAY"
+    },
+    "method": "POST",
+    "url": "https://api.kite.trade/orders/regular"
+  },
+  "skipped": []
+}
+Identifier sent: RELIANCE, quantity sent: 10

@@ -1,0 +1,8 @@
+Expired market data token:
+  the fiftieth window returned normally
+  chart requests: 52
+  market data tokens issued: 2, stale tokens handed back: [None, 'market-data-token-1']
+Platform answering nothing:
+  CandleAuthenticationError: wisdom_capital answers every window empty, including one for an instrument that always has bars, and a fresh market data login did not change it. Stopping rather than retiring series that may be perfectly good.
+  chart requests: 52
+  market data tokens issued: 2, stale tokens handed back: [None, 'market-data-token-1']

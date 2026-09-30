@@ -1,0 +1,5 @@
+{} -> HTTP 400: order_id is required
+{'order_id': 'ORDER 1; DROP'} -> HTTP 400: order_id must be 1 to 64 letters, digits, hyphens or underscores
+{'order_id': '250930000000001', 'broker': 'robinhood'} -> HTTP 400: broker must be one of dhan, zerodha
+{'order_id': '250930000000001', 'dry_run': 'maybe'} -> HTTP 400: dry_run must be true or false
+['250930000000001'] -> HTTP 400: the request body must be a JSON object

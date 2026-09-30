@@ -1,0 +1,3 @@
+order type ICEBERG: 409 UnmodifiableOrderError: the order has order_type ICEBERG, which the modify route does not handle
+order type not stored yet: 503 OrderNotReadyError: Redis does not hold this order's order_type yet, so try again after the broker's next order book poll
+MARKET order given a price: 400 InvalidOrderError: a MARKET order takes no price

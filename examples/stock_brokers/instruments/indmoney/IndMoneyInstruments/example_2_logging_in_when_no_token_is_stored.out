@@ -1,0 +1,5 @@
+Token kept at construction: None
+Token after establish_session: indmoney-token-from-login
+Logins made: 1
+Download requests carried: ['indmoney-token-from-login', 'indmoney-token-from-login', 'indmoney-token-from-login']
+Rows: 3

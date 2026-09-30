@@ -1,0 +1,7 @@
+planned           filled= 0 live=False finished=False
+sending           filled= 0 live=False finished=False
+sent              filled= 0 live=True finished=False
+acknowledged      filled= 0 live=True finished=False
+partially_filled  filled= 4 live=True finished=False
+filled            filled=10 live=False finished=True
+a stop leg whose answer was lost: live=False finished=False

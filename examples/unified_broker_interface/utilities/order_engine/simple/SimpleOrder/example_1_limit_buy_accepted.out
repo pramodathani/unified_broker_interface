@@ -1,0 +1,11 @@
+HTTP status: 200
+Outcome: accepted, broker zerodha, order id 260930000001
+Answer names this parent: True
+Sent to the broker: [('zerodha', 'BUY', 10, '1402.50')]
+Events recorded:
+  1. parent_received (parent received)
+  2. leg_requested (parent received)
+  3. leg_answered (parent received)
+  4. parent_state_changed (parent working)
+Parent state: working
+Leg: entry BUY 10 at 1402.5, state acknowledged, tag sent morningbuy

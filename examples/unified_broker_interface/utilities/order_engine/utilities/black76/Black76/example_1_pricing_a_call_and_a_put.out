@@ -1,0 +1,10 @@
+d1 = 0.285278, d2 = 0.267968
+N(d1) = 0.612285
+N(0) = 0.500000
+Call premium: 239.34
+Put premium: 119.49
+Call delta: 0.6115
+Put delta: -0.3872
+Call delta minus put delta: 0.998754
+Discount factor: 0.998754
+Call minus put premium: 119.85, discounted forward minus strike: 119.85

@@ -1,0 +1,9 @@
+security named INFY
+  exchange nse, segment nse_equities, instrument_id None
+  fields {'symbol': 'INFY'}
+future named NIFTY
+  exchange nse, segment nse_equity_index_futures, instrument_id None
+  fields {'underlying_symbol': 'NIFTY', 'expiry_date': datetime.date(2026, 10, 27)}
+option named NIFTY
+  exchange nse, segment nse_equity_index_options, instrument_id None
+  fields {'underlying_symbol': 'NIFTY', 'expiry_date': datetime.date(2026, 10, 27), 'strike_price': Decimal('25000'), 'option_type': 'CE'}

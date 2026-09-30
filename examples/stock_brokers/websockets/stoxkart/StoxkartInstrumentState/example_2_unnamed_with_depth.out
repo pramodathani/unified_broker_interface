@@ -1,0 +1,3 @@
+Tick MCX:565899 in full mode: last_price=6120.0 change=None close=None
+Book: {'buy': [{'quantity': 3, 'price': 6119.0, 'orders': 2}], 'sell': [{'quantity': 5, 'price': 6121.0, 'orders': 1}]}
+Book after the state's buy side was cleared: {'buy': [{'quantity': 3, 'price': 6119.0, 'orders': 2}], 'sell': [{'quantity': 5, 'price': 6121.0, 'orders': 1}]}

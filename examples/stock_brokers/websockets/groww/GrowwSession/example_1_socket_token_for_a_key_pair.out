@@ -1,0 +1,8 @@
+Stand-in login number 1
+Access token: groww-token-1
+Socket token request with Bearer groww-token-1 for a key starting U: HTTP 200
+Socket token payload: {'token': 'socket-jwt', 'subscriptionId': 'subscription-77'}
+WARNING Logging in to Groww again.
+Stand-in login number 2
+Access token: groww-token-2
+Logins made: 2

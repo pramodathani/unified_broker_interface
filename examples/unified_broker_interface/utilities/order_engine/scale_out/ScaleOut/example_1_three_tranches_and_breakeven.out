@@ -1,0 +1,27 @@
+Entry filled 90 at 999.80: parent protecting
+  entry  BUY 90 at 1000.0 trigger None, filled 90
+  stop   SELL 90 at 983.0 trigger 985.0, filled 0
+  target SELL 30 at 1010.0 trigger None, filled 0
+  target SELL 30 at 1020.0 trigger None, filled 0
+  target SELL 30 at 1030.0 trigger None, filled 0
+Target at 1010 filled: parent protecting
+  entry  BUY 90 at 1000.0 trigger None, filled 90
+  stop   SELL 60 at 999.8 trigger 999.8, filled 0
+  target SELL 30 at 1010.0 trigger None, filled 30
+  target SELL 30 at 1020.0 trigger None, filled 0
+  target SELL 30 at 1030.0 trigger None, filled 0
+Target at 1020 filled: parent protecting
+  entry  BUY 90 at 1000.0 trigger None, filled 90
+  stop   SELL 30 at 999.8 trigger 999.8, filled 0
+  target SELL 30 at 1010.0 trigger None, filled 30
+  target SELL 30 at 1020.0 trigger None, filled 30
+  target SELL 30 at 1030.0 trigger None, filled 0
+Sent to the broker:
+  place BUY 90 LIMIT at 1000 -> 260930000001
+  place SELL 90 SL at 983 trigger 985 -> 260930000002
+  place SELL 30 LIMIT at 1010 -> 260930000003
+  place SELL 30 LIMIT at 1020 -> 260930000004
+  place SELL 30 LIMIT at 1030 -> 260930000005
+  modify 260930000002 quantity 60
+  modify 260930000002 price 999.8 trigger 999.8
+  modify 260930000002 quantity 30

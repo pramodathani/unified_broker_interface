@@ -1,0 +1,10 @@
+code: 'TokenException'
+message: 'Incorrect `api_key` or `access_token`.'
+args: ('TokenException', 'Incorrect `api_key` or `access_token`.')
+text: ('TokenException', 'Incorrect `api_key` or `access_token`.')
+
+code: None
+message: None
+args: (None, None)
+text: (None, None)
+

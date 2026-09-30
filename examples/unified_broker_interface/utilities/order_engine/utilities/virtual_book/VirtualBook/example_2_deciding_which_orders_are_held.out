@@ -1,0 +1,16 @@
+held: held=True terms=(98, 500)
+fired: held=False terms=(98, 500)
+touched: held=False terms=(98, 500)
+changed: held=True terms=(100.5, 300)
+no_side: held=True terms=(98, 500)
+Stored estimate for changed: price 101.0000, ahead 2500, rebased on next quote True
+Its terms have changed since: True
+A fresh estimate: SELL 300 at 100.5000, ahead None
+WARNING Parent no_side is a virtual limit order whose queue cannot be followed: A virtual queue needs a side of BUY or SELL: side=None
+No side gives: None
+Nothing stored for held: None
+WARNING Parent no_side is a virtual limit order whose queue cannot be followed: A virtual queue needs a side of BUY or SELL: side=None
+Followed after refresh: ['changed', 'held']
+Waiting to be written: ['changed', 'held']
+Stored estimates left in Redis: ['changed']
+After the changed order closes: []

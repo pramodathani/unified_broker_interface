@@ -1,0 +1,31 @@
+Requests sent: [('https://piconnect.flattrade.in/PiConnectAPI/GetQuotes', {'exch': 'BFO', 'token': '1133467'})]
+{
+    "id": "BFO|1133467",
+    "broker": "flattrade",
+    "instrument_token": "BFO|1133467",
+    "exchange": "bse",
+    "mode": "quote",
+    "last_price": 12.4,
+    "last_quantity": 0,
+    "average_price": null,
+    "volume": 0,
+    "buy_quantity": null,
+    "sell_quantity": null,
+    "ohlc": {
+        "open": 0.0,
+        "high": null,
+        "low": null,
+        "close": 12.4
+    },
+    "change": 0.0,
+    "oi": 1180,
+    "oi_day_high": null,
+    "oi_day_low": null,
+    "last_trade_time": null,
+    "exchange_timestamp": 1789446590,
+    "depth": {
+        "buy": [],
+        "sell": []
+    },
+    "received_at": 1789446605.0
+}

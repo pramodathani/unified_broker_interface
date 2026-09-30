@@ -1,0 +1,8 @@
+Instruments to build: [('RELIANCE-NSE', 'nse', 'RELIANCE', None, False)]
+Raw closes: 34 days from 2024-10-01 to 2024-11-15, 2700.0 on the first, 1353.25 on the last, source 501
+Build summary: {'stale_deleted': 0, 'split_confirmed': 1, 'ok': 1}
+Yahoo tickers asked for: ['RELIANCE.NS']
+Stored: 2024-10-28 split 2:1 price factor 0.5 volume factor 2.0 confirmed from yahoo_split_event
+  evidence {"q_before": 0.5, "q_after": 1.0, "raw_close_before": 2713.0, "raw_close_after": 1359.75, "residual": 1.0}
+Fetch state: ticker RELIANCE.NS (ticker), status ok, Yahoo history 2024-10-01 to 2024-11-15, last event 2024-10-28
+Commits: 2

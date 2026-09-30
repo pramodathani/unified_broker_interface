@@ -1,0 +1,14 @@
+groww: 3/3 raw row(s) classified, 0 uncategorised, 3 segment membership(s), 3 distinct instrument(s), 0 error(s).
+BSE exchange traded funds from other brokers: ['SETFGOLD']
+Index name lookup: {'NIFTYIT': 'Nifty IT'}
+Cross-broker queries that found nothing: 10
+Summary: matched 3, uncategorised 0, errors []
+DELETE FROM unified.broker_mappings
+INSERT INTO unified.instruments
+  nse_equities: TCS
+  bse_exchange_traded_funds: SETFGOLD
+  nse_equity_indices: Nifty IT
+INSERT INTO unified.broker_mappings
+  token 11536: order symbol 'TCS', attributes {"isin": "INE467B01029", "display_name": "Tata Consultancy Services", "instrument_type": "EQ", "series": "EQ"}
+  token 590098: order symbol 'SETFGOLD', attributes {"isin": "INF200KA16D8", "display_name": "SBI Gold ETF", "instrument_type": "EQ", "series": "A"}
+  token NIFTY IT: order symbol 'NIFTYIT', attributes {"display_name": "NIFTY IT", "instrument_type": "IDX"}

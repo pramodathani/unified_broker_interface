@@ -1,0 +1,21 @@
+Stand-in login number 1
+Socket token request with Bearer groww-token-1 for a key starting U: HTTP 200
+Connecting to wss://socket-api.groww.in
+INFO socket_0 opened. Waiting for the NATS INFO frame.
+Sent: CONNECT {"jwt": "socket-jwt", "sig": "<86 character signature>", "verbose": false, "pedantic": false, "tls_required": false, "lang": "python", "version": "1.0.0", "protocol": 1, "headers": true, "no_responders": false}
+Sent: PING
+Sent: SUB /ld/eq/nse/price_detailed.2885 1
+Sent: SUB /ld/eq/nse/book.2885 2
+INFO socket_0 subscribed to 2 subject(s) for 1 instrument(s).
+Tick NSE:RELIANCE (NSE|CASH|2885) in quote mode
+  last_price=2950.5 volume=1204500 change=1.3918 exchange_timestamp=1790311529
+  ohlc={'open': 2930.0, 'high': 2960.0, 'low': 2925.0, 'close': 2910.0}
+  depth={'buy': [], 'sell': []}
+Tick NSE:RELIANCE (NSE|CASH|2885) in full mode
+  last_price=2950.5 volume=1204500 change=1.3918 exchange_timestamp=1790311529
+  ohlc={'open': 2930.0, 'high': 2960.0, 'low': 2925.0, 'close': 2910.0}
+  depth={'buy': [{'quantity': 100, 'price': 2950.0, 'orders': None}], 'sell': [{'quantity': 120, 'price': 2951.0, 'orders': None}]}
+INFO socket_0 closed with status 1000: normal closure
+INFO socket_0 stopped.
+Names learned: {'NSE|CASH|2885': 'NSE:RELIANCE'}
+Gave up: False

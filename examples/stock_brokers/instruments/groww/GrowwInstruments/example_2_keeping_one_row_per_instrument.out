@@ -1,0 +1,10 @@
+Rows downloaded: 5
+Key columns: ['exchange', 'segment', 'trading_symbol'], sorted first on: series
+Columns after normalize_columns: ['exchange', 'exchange_token', 'trading_symbol', 'groww_symbol', 'name', 'instrument_type', 'segment', 'series', 'isin', 'underlying_symbol', 'underlying_exchange_token', 'expiry_date', 'strike_price', 'lot_size', 'tick_size', 'freeze_quantity', 'is_reserved', 'buy_allowed', 'sell_allowed', 'internal_trading_symbol', 'is_intraday']
+groww: dropped 1 duplicate row(s) on ['exchange', 'segment', 'trading_symbol'].
+Rows to store: 4
+  exchange segment trading_symbol           groww_symbol series lot_size
+0      BSE    CASH           INFY               BSE-INFY      A        1
+1      NSE    CASH           INFY               NSE-INFY     EQ        1
+2      NSE    CASH            TCS                NSE-TCS     EQ        1
+3      NSE     FNO  NIFTY26OCTFUT  NSE-NIFTY-27Oct26-FUT    NaN       75

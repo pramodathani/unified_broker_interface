@@ -1,0 +1,9 @@
+Connect timeout: 0.5 seconds
+Command timeout: 1.0 seconds
+Retry window: 60.0 seconds
+First attempt: None
+Failed connections: 1
+Second attempt inside the retry window: None
+Failed connections: 1
+After forget(): None
+Failed connections: 1

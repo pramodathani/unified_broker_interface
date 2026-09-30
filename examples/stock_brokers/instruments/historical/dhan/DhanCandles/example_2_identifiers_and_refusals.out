@@ -1,0 +1,7 @@
+Instruments to download: 3 of 4 rows
+2885|NSE_EQ|EQUITY: security id 2885 in NSE_EQ, exchange nse, 6 segments to search, expiry None
+13|IDX_I|INDEX: security id 13 in IDX_I, exchange None, 8 segments to search, expiry None
+565899|MCX_COMM|FUTCOM: security id 565899 in MCX_COMM, exchange mcx, 16 segments to search, expiry 2026-10-19
+Data_Error: empty window, 0 bars
+Input_Exception: CandleInstrumentUnknown
+Invalid_Authentication: CandleAuthenticationError

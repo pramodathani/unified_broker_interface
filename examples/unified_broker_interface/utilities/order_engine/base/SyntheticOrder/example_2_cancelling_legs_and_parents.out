@@ -1,0 +1,21 @@
+cancel_leg: accepted True
+cancel_leg_answered: rejected, the cancel was not sent: the order is being modified at the exchange and cannot be cancelled yet, None
+cancel_by_caller: 260930000003 accepted
+cancel_by_caller: 260930000004 rejected
+  parent cancelling; finish_cancelling now: False
+  both legs reported cancelled; finish_cancelling: True, parent cancelled
+stop_acting: True, parent cancelled, again False
+cancel_outside_order: accepted True
+abandon after recording: parent rejected, the instrument has no agreed tick size
+abandon with nothing recorded: parent received, events 0
+Sent to the brokers, in order:
+  place BUY 10 LIMIT at 1000.00 -> 260930000001
+  place BUY 10 LIMIT at 1000.00 -> 260930000002
+  cancel 260930000001
+  cancel 260930000002 -> refused
+  place BUY 10 LIMIT at 1000.00 -> 260930000003
+  place BUY 10 LIMIT at 1000.00 -> 260930000004
+  cancel 260930000003
+  cancel 260930000004 -> refused
+  place BUY 10 LIMIT at 1000.00 -> 260930000005
+  cancel 52260930111

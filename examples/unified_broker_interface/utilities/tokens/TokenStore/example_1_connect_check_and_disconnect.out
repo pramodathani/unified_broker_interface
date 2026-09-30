@@ -1,0 +1,11 @@
+First connect minted a new token: True; replaced the old one: True
+  token is a UUID: True
+  accepted for 3600.0 seconds
+  Redis copy matches MongoDB: True
+Second connect minted a new token: False; same token: True
+Request with the token: accepted True, error None
+Request with the January token: accepted False, error Invalid access token
+Token in force per current(): same token True
+After revoke, token in force: None
+Request with the revoked token: accepted False, error Invalid access token
+issue() after revoke gives a new token: True

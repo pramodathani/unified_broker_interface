@@ -1,0 +1,11 @@
+Redis holds, in the old shape: {"shoonya": "3045", "zerodha": "779521"}
+read_from_redis finds: {}
+SBIN handles: {'shoonya': {'broker_token': '3045', 'order_symbol': 'SBIN-EQ', 'lot_size': '1', 'tick_size': '0.05'}, 'zerodha': {'broker_token': '779521', 'order_symbol': 'SBIN', 'lot_size': '1', 'tick_size': '0.05'}}
+Expired future: {}
+  counters: {'process_hits': 0, 'redis_hits': 0, 'postgres_hits': 1, 'misses': 1}
+Redis now holds: {"shoonya": {"broker_token": "3045", "order_symbol": "SBIN-EQ", "lot_size": "1", "tick_size": "0.05"}, "zerodha": {"broker_token": "779521", "order_symbol": "SBIN", "lot_size": "1", "tick_size": "0.05"}}
+Second round counters: {'process_hits': 2, 'redis_hits': 0, 'postgres_hits': 1, 'misses': 1}
+Postgres queries: 1
+empty_entry: {}
+read_from_postgres finds: ['1d3f5b7d-9f1b-4d3f-a5b7-d9f1b3d5f746']
+write_to_redis: True

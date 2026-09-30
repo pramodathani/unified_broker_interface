@@ -1,0 +1,7 @@
+Stand-in login number 1
+Stored login: {'access_token': 'kotak-token-1', 'sid': 'kotak-sid-1', 'base_url': 'https://e21.kotaksecurities.com/'}
+Refused with kotak-token-1 and kotak-sid-1
+WARNING Logging in to Kotak again.
+Stand-in login number 2
+Credentials now: ('kotak-token-2', 'kotak-sid-2')
+Logins made: 2

@@ -1,0 +1,25 @@
+First request carried: XB1234ABCD-100:morning-token
+Another process logged in again at 12:30:41 and wrote its login to Redis.
+Second request carried: XB1234ABCD-100:noon-token
+Request: GET https://api-t1.fyers.in/api/v3/funds
+Status: success, HTTP code: 200
+Data:
+{
+    "s": "ok",
+    "code": 200,
+    "message": "",
+    "fund_limit": [
+        {
+            "id": 1,
+            "title": "Total Balance",
+            "equityAmount": 125000.0,
+            "commodityAmount": 0.0
+        },
+        {
+            "id": 10,
+            "title": "Available Balance",
+            "equityAmount": 118250.5,
+            "commodityAmount": 0.0
+        }
+    ]
+}

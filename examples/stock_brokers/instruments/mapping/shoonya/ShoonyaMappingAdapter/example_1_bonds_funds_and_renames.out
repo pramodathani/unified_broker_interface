@@ -1,0 +1,14 @@
+NSE RELIANCE-EQ (symbol RELIANCE, instrument EQ) -> nse_equities
+    identity {'symbol': 'RELIANCE'}
+NSE NIFTYBEES-EQ (symbol NIFTYBEES, instrument EQ) -> nse_exchange_traded_funds
+    identity {'symbol': 'NIFTYBEES'}
+NSE 762GS2036-GS (symbol 762GS2036, instrument GS) -> nse_fixed_income
+    identity {'symbol': 'IN0020160019'}
+NSE 845NCD29-N1 (symbol 845NCD29, instrument N1) -> no segment, filed under nse_uncategorised
+BSE GOLDBEES (symbol GOLDBEES, instrument E) -> bse_exchange_traded_funds
+    identity {'symbol': 'GOLDBEES'}
+BFO ETERNAL26OCTFUT (symbol ZOMATO, instrument FUTSTK) -> bse_equity_futures
+    identity {'underlying_symbol': 'ETERNAL', 'expiry_date': datetime.date(2026, 10, 27)}
+NSE Nifty Bank (symbol NIFTY BANK, instrument INDEX) -> nse_equity_indices
+    identity {'symbol': 'BANKNIFTY'}
+NCX GUARSEED1026OCTSPD (symbol GUARSEED10, instrument FUTSPD) -> no segment, filed under ncdex_uncategorised

@@ -1,0 +1,6 @@
+{'parent_id': 'P-1', 'trigger_price': 2400} -> HTTP 400: an order named by parent_id is still held, so only its price and quantity can change, not trigger_price
+{'parent_id': 'P-1', 'broker': 'zerodha', 'price': 2400} -> HTTP 400: an order named by parent_id is still held, so only its price and quantity can change, not broker
+{'price': 2400} -> HTTP 400: parent_id must name a parent
+{'parent_id': 'P-1'} -> HTTP 400: give price or quantity to change
+['not', 'an object'] -> HTTP 400: the request body must be a JSON object
+{'parent_id': 'P-1', 'quantity': '5'} -> {'parent_id': 'P-1', 'price': None, 'quantity': 5, 'dry_run': False}

@@ -1,0 +1,18 @@
+Level: 1520, watching instrument 9b8a7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d
+Default direction for a BUY: at_or_below, for a SELL: at_or_above
+This sell fires at_or_above
+trigger_on=last: watches 1519.50, reached=False
+trigger_on=bid: watches 1519.40, reached=False
+trigger_on=ask: watches 1520.60, reached=True
+trigger_on=mid: watches 1520.00, reached=True
+Named direction at_or_below: 1519.50 reaches 1520 True
+double_last, one tick at a time:
+  reached=True: confirmed=False, count kept=1
+  reached=False: confirmed=False, count kept=None
+  reached=True: confirmed=False, count kept=1
+  reached=True: confirmed=True, count kept=1
+held needs 10 seconds:
+  reached at 1759205000.0: confirmed=False, reached since 1759205000.0
+  reached at 1759205004.0: confirmed=False, reached since 1759205000.0
+  reached at 1759205010.0: confirmed=True, reached since 1759205000.0
+Saves of the parent while counting: 4

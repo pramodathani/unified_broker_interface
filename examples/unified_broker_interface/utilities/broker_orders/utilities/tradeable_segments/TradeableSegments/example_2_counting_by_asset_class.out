@@ -1,0 +1,4 @@
+commodity: {'security': 1, 'future': 2, 'option': 2}
+currency: {'security': 1, 'future': 2, 'option': 2}
+securities: {'security': 5, 'future': 4, 'option': 4}
+Segments in all: 23

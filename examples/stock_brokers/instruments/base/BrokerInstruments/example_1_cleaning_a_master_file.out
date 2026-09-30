@@ -1,0 +1,47 @@
+Table: demo.instruments
+Downloaded columns: [' Exchange ', 'Trading Symbol', 'Series', 'Lot Size', 'Unnamed: 4']
+After normalize_columns:
+  exchange trading_symbol series lot_size unnamed_4
+0      NSE          INFY      EQ        1       NaN
+1      NSE           INFY     BE        1       NaN
+2      NSE        NSETEST     EQ        1       NaN
+3      BSE           INFY      A        1       NaN
+4      NSE           TCS      EQ        1       NaN
+
+Trading symbols after strip_whitespace: [' INFY ', 'INFY', 'NSETEST', 'INFY', 'TCS ']
+
+demo: dropped empty artifact column 'unnamed_4'.
+After drop_unnamed_columns:
+  exchange trading_symbol series lot_size
+0      NSE          INFY      EQ        1
+1      NSE           INFY     BE        1
+2      NSE        NSETEST     EQ        1
+3      BSE           INFY      A        1
+4      NSE           TCS      EQ        1
+
+After drop_garbage_rows:
+  exchange trading_symbol series lot_size
+0      NSE          INFY      EQ        1
+1      NSE           INFY     BE        1
+2      NSE        NSETEST     EQ        1
+3      BSE           INFY      A        1
+4      NSE           TCS      EQ        1
+
+After dedupe:
+  exchange trading_symbol series lot_size
+0      BSE           INFY      A        1
+1      NSE           INFY     BE        1
+2      NSE          INFY      EQ        1
+3      NSE        NSETEST     EQ        1
+4      NSE           TCS      EQ        1
+
+The same steps on a copy with object columns:
+demo: dropped empty artifact column 'unnamed_4'.
+demo: dropped 1 placeholder row(s) matching ['NSETEST'].
+demo: dropped 1 duplicate row(s) on ['exchange', 'trading_symbol'].
+After all five steps:
+  exchange trading_symbol series lot_size
+0      BSE           INFY      A        1
+1      NSE           INFY     BE        1
+2      NSE            TCS     EQ        1
+

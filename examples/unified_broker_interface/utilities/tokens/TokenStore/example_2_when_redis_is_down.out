@@ -1,0 +1,11 @@
+No header: accepted False, error Access token is required, Redis commands []
+Wrong token, Redis empty: accepted False, error Invalid access token, Redis commands ['HGET', 'HSETNX']
+Right token, read from Redis: accepted True, error None, Redis commands ['HGET']
+Right token again: accepted True, error None, Redis commands ['HGET']
+  log WARNING: could not read the access token from Redis: Error 111 connecting to 127.0.0.1:6379. Connection refused.
+Right token, Redis failing: accepted True, error None, Redis commands ['HGET', 'HSETNX']
+Expired token: accepted False, error Access token has expired, Redis commands ['HGET', 'HSETNX']
+Token with no expiry: accepted False, error Access token has expired, Redis commands ['HGET', 'HSETNX']
+  log WARNING: could not write the access token to Redis, clearing its copy: Error 111 connecting to 127.0.0.1:6379. Connection refused.
+Revoke while Redis fails: Redis commands ['HSET', 'HDEL'], copy left {}
+MongoDB now holds token None

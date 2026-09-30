@@ -1,0 +1,11 @@
+First request carried: morning-token
+Another process logged in again at 12:30:41 and wrote its login to Redis.
+Second request carried: noon-token
+Request: GET https://api.indstocks.com/funds
+Status: success, HTTP code: 200
+Data:
+{
+    "sod_balance": 113642.0,
+    "withdrawal_balance": 98310.0,
+    "pledge_received": 0.0
+}

@@ -1,0 +1,36 @@
+Selector: fixed_priority
+Rotation: ['dhan', 'flattrade', 'fyers', 'groww', 'indmoney', 'kotak', 'shoonya', 'stoxkart', 'zerodha']
+Contract size check: an equity needs none
+choose_broker picked zerodha, after passing over 1 brokers:
+  dhan: has no client_id in its Redis settings
+Dry run answered with HTTP 200:
+{
+  "broker": "zerodha",
+  "dry_run": true,
+  "instrument_id": "11111111-1111-5111-8111-000000000001",
+  "request": {
+    "form": {
+      "disclosed_quantity": 0,
+      "exchange": "NSE",
+      "order_type": "LIMIT",
+      "price": "2500.10",
+      "product": "MIS",
+      "quantity": 10,
+      "tag": "swing01",
+      "tradingsymbol": "RELIANCE",
+      "transaction_type": "BUY",
+      "trigger_price": "0",
+      "validity": "DAY"
+    },
+    "method": "POST",
+    "url": "https://api.kite.trade/orders/regular"
+  },
+  "skipped": [
+    {
+      "broker": "dhan",
+      "reason": "has no client_id in its Redis settings"
+    }
+  ],
+  "tag": "swing01"
+}
+Timings reported: ['preparation']

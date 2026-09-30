@@ -1,0 +1,11 @@
+Configured: True
+Realized -1200.0, unrealized 300.0
+  Day profit: -900.0
+  Refusal: None
+Realized -1500.0, unrealized -3500.0
+  Day profit: -5000.0
+  Refusal: the day is down 5000.00, which is past the 5000.00 limit, so no new order is being placed
+Realized -4000.0, unrealized -2250.5
+  Day profit: -6250.5
+  Refusal: the day is down 6250.50, which is past the 5000.00 limit, so no new order is being placed
+Orders locked out: 2

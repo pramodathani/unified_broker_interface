@@ -1,0 +1,7 @@
+Run: HTTP 202, outcome armed, watching 14
+Index at 56010.0: fired False, ticks at the level so far 1
+Index at 55980.0: fired False, ticks at the level so far None
+Index at 56020.0: fired False, ticks at the level so far 1
+Index at 56045.0: fired True, ticks at the level so far 1
+Sent to the broker: ['place BUY 40 LIMIT at 1712.00 -> 260930000001']
+Without watch_instrument_id: HTTP 400, a cross-instrument order is triggered by another instrument's price, so it needs watch_instrument_id

@@ -1,0 +1,22 @@
+First request carried: morning-token
+Another process logged in again at 12:30:41 and wrote its login to Redis.
+Second request carried: noon-token
+Body sent: jData={"exch": "NSE", "stext": "M\u0026M", "uid": "FT012345"}&jKey=noon-token
+Request: POST https://piconnect.flattrade.in/PiConnectAPI/SearchScrip
+Status: success, HTTP code: 200
+Data:
+{
+    "stat": "Ok",
+    "values": [
+        {
+            "exch": "NSE",
+            "token": "2031",
+            "tsym": "M&M-EQ",
+            "cname": "MAHINDRA & MAHINDRA LTD",
+            "instname": "EQ",
+            "pp": "2",
+            "ls": "1",
+            "ti": "0.10"
+        }
+    ]
+}

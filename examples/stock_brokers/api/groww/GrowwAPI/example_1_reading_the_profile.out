@@ -1,0 +1,19 @@
+Request: GET https://api.groww.in/v1/user/detail
+Headers sent:
+    Accept: application/json
+    Authorization: Bearer morning-token
+    X-API-Version: 1.0
+Status: success
+HTTP code: 200
+Data:
+{
+    "vendor_user_id": "b6a4c2de-0000-4000-8000-000000000001",
+    "ucc": "1234567890",
+    "nse_enabled": true,
+    "bse_enabled": true,
+    "ddpi_enabled": false,
+    "active_segments": [
+        "CASH",
+        "FNO"
+    ]
+}

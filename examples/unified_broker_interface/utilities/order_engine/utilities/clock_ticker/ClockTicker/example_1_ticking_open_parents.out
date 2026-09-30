@@ -1,0 +1,8 @@
+example_exit_at_time wants the clock: True
+simple wants the clock: False
+Due half a second after the last tick: False
+Due a second after the last tick: True
+parent-1 exits its position at 15:10
+Parents that acted: 1
+Ticks so far: 1, acted in total: 1
+EXCEPTION Parent parent-3 failed on a clock tick.

@@ -1,0 +1,5 @@
+{'kind': 'bid_level', 'level': 3} SELL: refused with 503: a bid_level price reference needs 3 level(s) on the buy side of the book and the quote carries 1
+{'kind': 'vwap'} BUY: refused with 503: a vwap price reference needs average_price in the quote and it is None
+{'kind': 'last'} BUY: refused with 503: a last price reference needs a live quote for this instrument and there is none
+{'kind': 'absolute', 'price': Decimal('0.10'), 'offset_ticks': 5} SELL: refused with 400: the absolute price reference worked out at -0.15, which is not a price an order can carry
+{'kind': 'marketable'} SELL: 42.30

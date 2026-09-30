@@ -1,0 +1,3 @@
+Caught as InvalidOrderError: quantity must be a whole number of at least 1
+Caught as ValueError: InvalidOrderError: quantity must be a whole number of at least 1
+Valid quantity passes: 10

@@ -1,0 +1,29 @@
+Stand-in login number 1
+Socket token request with Bearer groww-token-1 for a key starting U: HTTP 200
+Connecting to wss://socket-api.groww.in
+INFO Order updates socket opened. Waiting for the NATS INFO frame.
+Sent: CONNECT {"jwt": "socket-jwt", "sig": "<86 character signature>", "verbose": false, "pedantic": false, "tls_required": false, "lang": "python", "version": "1.0.0", "protocol": 1, "headers": true, "no_responders": false}
+Sent: PING
+Sent: SUB stocks/order/updates.apex.subscription-77 1
+Sent: SUB stocks_fo/order/updates.apex.subscription-77 2
+Sent: SUB stocks_fo/position/updates.apex.subscription-77 3
+INFO Authenticated and subscribed to 3 subject(s). Waiting for updates.
+ERROR NATS error: -ERR 'Authorization Violation'
+INFO Order updates socket closed with status 1000: normal closure
+WARNING Logging in to Groww again.
+Stand-in login number 2
+WARNING Order updates socket disconnected. Reconnecting in 0 seconds.
+Socket token request with Bearer groww-token-2 for a key starting U: HTTP 200
+Connecting to wss://socket-api.groww.in
+INFO Order updates socket opened. Waiting for the NATS INFO frame.
+Sent: CONNECT {"jwt": "socket-jwt", "sig": "<86 character signature>", "verbose": false, "pedantic": false, "tls_required": false, "lang": "python", "version": "1.0.0", "protocol": 1, "headers": true, "no_responders": false}
+Sent: PING
+Sent: SUB stocks/order/updates.apex.subscription-77 1
+Sent: SUB stocks_fo/order/updates.apex.subscription-77 2
+Sent: SUB stocks_fo/position/updates.apex.subscription-77 3
+INFO Authenticated and subscribed to 3 subject(s). Waiting for updates.
+Order GMK2609250001 ACKED: B 0 of 10 on NSE at 150000
+INFO Order updates socket closed with status 1000: normal closure
+INFO Order updates socket stopped.
+Gave up: False
+Logins made: 2

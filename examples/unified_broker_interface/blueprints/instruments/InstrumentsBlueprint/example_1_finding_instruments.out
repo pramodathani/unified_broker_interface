@@ -1,0 +1,15 @@
+segments: 200, mapped on 2026-09-15
+  nse_equities: 3 instruments named by ['symbol']
+  nse_equity_index_futures: 1 instruments named by ['underlying_symbol', 'expiry_date']
+  nse_equity_index_options: 1 instruments named by ['underlying_symbol', 'expiry_date', 'strike_price', 'option_type']
+master nse equities: 200 ['INFY', 'QUIETCO', 'RELIANCE']
+search "in": 200 ['INFY']
+details INFY: 200 first seen 2024-01-02, last seen 2026-09-15, lot 1, tick 0.05
+  dhan: token 1594, order symbol 1594-dhan
+  zerodha: token 1594, order symbol 1594-zerodha
+additional_details INFY: 200
+  dhan: isin INE009A01021, display_name None, series EQ
+  zerodha: isin INE009A01021, display_name INFOSYS, series None
+details of a list: 200
+  request 0: 200 NIFTY future expiring 2026-10-27
+  request 1: 404 {"error": "no instrument nse_equities NOSUCHSTOCK is mapped on 2026-09-15", "request_index": 1, "status": 404}

@@ -1,0 +1,11 @@
+Run: HTTP 200, outcome accepted, purchases planned 3
+Every 30.0 minutes, 3 purchases
+Tick at 29 minutes, bid 1478.3: acted False, purchases made 1
+Tick at 30 minutes, bid 1471.1: acted True, purchases made 2
+Tick at 60 minutes, bid 1465.85: acted True, purchases made 3
+Tick at 90 minutes, bid 1460.0: acted False, purchases made 3
+Sent to the broker:
+  place BUY 5 LIMIT at 1478.30 -> 260930000001
+  place BUY 5 LIMIT at 1471.10 -> 260930000002
+  place BUY 5 LIMIT at 1465.85 -> 260930000003
+Parent: working, every purchase has been made

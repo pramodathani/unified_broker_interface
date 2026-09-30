@@ -70,6 +70,11 @@ class InstrumentsBlueprint(BaseBlueprint):
     ]
 
     def __init__(self):
+        """
+        Build the blueprint and its routes, leaving the mapping cache, catalogue and quote service to be built on first use.
+
+        The three services start as None and are built by `_services` under a lock, so importing the module does not touch PostgreSQL.
+        """
         super().__init__()
         self._services_lock = threading.Lock()
         self._mapping_cache = None

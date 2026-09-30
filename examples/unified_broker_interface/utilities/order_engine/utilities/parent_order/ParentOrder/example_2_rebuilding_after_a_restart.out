@@ -1,0 +1,8 @@
+Events read: 6, last sequence applied: 5
+Replayed: state=completed legs=1 filled=50 terminal=True
+Created at 2026-09-30T10:02:00+05:30, updated at 2026-09-30T10:04:10.005+05:30
+Tag from id: 9e07aa104c2b4d1e
+Intent id as text: 'b7e2d4', missing value as text: None
+Document is 1021 characters of JSON
+Rebuilt from document matches: True
+Nothing to replay: None

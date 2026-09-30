@@ -1,0 +1,17 @@
+Rows as read_raw_rows returns them:
+  (blank) RELIANCE: recovered BSE equity True
+  NSE LIQUIDCASE-BE: recovered BSE equity False
+  NSE INFY-BE: recovered BSE equity False
+  NSE INFY-EQ: recovered BSE equity False
+flattrade: 4/4 raw row(s) classified, 0 uncategorised, 4 segment membership(s), 3 distinct instrument(s), 0 error(s).
+Cross-broker queries that found nothing: 31
+Summary: matched 4, uncategorised 0, memberships 4, instruments 3
+DELETE FROM unified.broker_mappings
+INSERT INTO unified.instruments
+  nse_equities: LIQUIDCASE
+  bse_equities: RELIANCE
+  nse_equities: INFY
+INSERT INTO unified.broker_mappings
+  token 26401: LIQUIDCASE-BE
+  token 500325: RELIANCE
+  token 1594: INFY-EQ

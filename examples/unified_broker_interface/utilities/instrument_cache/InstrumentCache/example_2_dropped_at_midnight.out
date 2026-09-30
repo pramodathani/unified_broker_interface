@@ -1,0 +1,7 @@
+Kept at 2026-09-30 23:50:00; valid until 2026-10-01 00:00:00
+Read at 2026-09-30 23:59:00: ('{"segment": "nse_equity_index_futures", "underlying_symbol": "NIFTY"}', '{"zerodha": {"broker_token": "35001", "lot_size": "75"}}', '{"units_per_lot": 75, "status": "agreed", "tradeable": true}'); valid until 2026-10-01 00:00:00
+Read at 2026-10-01 00:01:00: None; valid until 2026-10-02 00:00:00
+current_marker with the same marker: True, marker ('2026-09-30', '5d41402abc4b2a76b9719d911017c592')
+current_marker with no warm identifier: False, marker None
+After drop_everything: marker None, valid until None
+Midnight that ends 2026-12-31 18:30:00: 2027-01-01 00:00:00

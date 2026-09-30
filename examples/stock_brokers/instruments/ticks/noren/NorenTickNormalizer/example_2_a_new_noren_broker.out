@@ -1,0 +1,7 @@
+Broker: imaginary_noren
+Token 'NCX|12345': broker_token '12345', 16 segments starting with ncdex_fixed_income_futures
+NCDEX volume is reported in lots
+NCDEX close policy: before
+last_price 5412.0, last_quantity 10, volume 15600, oi 74400
+reported_close before the close 5377.0, after it None
+Received inside the NCDEX window: True

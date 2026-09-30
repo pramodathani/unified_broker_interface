@@ -1,0 +1,7 @@
+Instruments to download: 3 of 4 rows
+1|2885: segment 1, instrument 2885, EQ, expiry None, exchange nse, 6 segments to search
+11|500325: segment 11, instrument 500325, EQ, expiry None, exchange bse, 6 segments to search
+51|565899: segment 51, instrument 565899, FUT, expiry 2026-10-19T23:59:59, exchange mcx, 16 segments to search
+e-apirl-0004 "Rate limit exceeded": CandleThrottled
+e-session-0002 "Invalid Token": CandleAuthenticationError
+e-instrument-0001 "Instrument not found": CandleInstrumentUnknown

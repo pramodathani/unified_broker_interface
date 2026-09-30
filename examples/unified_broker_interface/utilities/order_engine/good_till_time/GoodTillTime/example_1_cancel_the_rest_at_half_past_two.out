@@ -1,0 +1,7 @@
+Run at 11:00: HTTP 200, outcome accepted, cancel at 14:30, when expired: cancel
+Forty filled: leg partially_filled, parent working
+Tick at 14:29: acted False, parent working
+Tick at 14:30: acted True, parent cancelled
+Why: the time it was given ran out
+Sent to the broker: ['place BUY 100 LIMIT at 405.00 -> 260930000001', 'cancel 260930000001']
+Kept: 40 of 100

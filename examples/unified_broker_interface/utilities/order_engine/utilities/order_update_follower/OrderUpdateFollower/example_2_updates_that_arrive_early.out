@@ -1,0 +1,19 @@
+--- the first parent, through owning_parent and take_known_early_updates
+owning_parent: (None, 'fyers')
+owning_parent: (None, 'fyers')
+held so far: 2
+taken while the order is unknown: []
+taken once the parent is saved: 2
+  for parent 8c2d7e41-6a0b-4f3c-b5d2-91e4a7c0f615 at fyers: OPEN with 40 filled
+  leg is now acknowledged with 40 filled
+  for parent 8c2d7e41-6a0b-4f3c-b5d2-91e4a7c0f615 at fyers: COMPLETE with 75 filled
+  leg is now filled with 75 filled
+--- the second parent, through follow and replay_early_updates
+follow before the parent is saved: None
+replayed before the parent is saved: []
+replayed: parent e03a9b56-2c7d-4d18-8f6e-3b5a1c9d7e20 leg is filled at 24.85
+--- afterwards
+8c2d7e41-6a0b-4f3c-b5d2-91e4a7c0f615 event 1: leg_update leg_state=acknowledged filled_quantity=40
+8c2d7e41-6a0b-4f3c-b5d2-91e4a7c0f615 event 2: leg_update leg_state=filled filled_quantity=75
+e03a9b56-2c7d-4d18-8f6e-3b5a1c9d7e20 event 1: leg_update leg_state=filled filled_quantity=1
+followed=3 held=3 replayed=3 ignored=0

@@ -1,0 +1,5 @@
+After holding four with room for three: ['fyers:23093000002', 'fyers:23093000003', 'fyers:23093000004']
+  Dropped: 1
+After 0.3 seconds and one fresh update: ['kotak:250930000000777']
+  Dropped: 4
+Taking fyers:23093000004, which expired: []

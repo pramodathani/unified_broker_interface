@@ -1,0 +1,7 @@
+Broker: kotak
+'nse_cm|2885' -> broker_token='2885' order_symbol=None segments=10 starting with nse_equities
+'nse_fo|35003' -> broker_token='35003' order_symbol=None segments=16 starting with nse_fixed_income_futures
+'mcx_fo|440001' -> broker_token='440001' order_symbol=None segments=16 starting with mcx_fixed_income_futures
+'BSE_CM|500325' -> broker_token='500325' order_symbol=None segments=10 starting with bse_equities
+'nse_cm|' -> None
+'nyse|1' -> None

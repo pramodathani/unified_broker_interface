@@ -1,0 +1,7 @@
+Outcome: attributed
+Broker order id: 250930000123456
+Why: exactly one unclaimed order at the broker matches what was sent
+250930000123456: claimed=False instrument=True timing=True matches=True
+250930000123460: claimed=False instrument=False timing=True matches=False
+250930000120001: claimed=False instrument=True timing=False matches=False
+250930000123470: claimed=True instrument=True timing=True matches=True

@@ -1,0 +1,4 @@
+Idle limit: 0.05 seconds
+Took a new connection 1 to api.kite.trade
+Taken straight back: connection 1 to api.kite.trade, closed 0 times
+Taken after 0.1 seconds idle: connection 1 to api.kite.trade, closed 1 times, so the next request reconnects

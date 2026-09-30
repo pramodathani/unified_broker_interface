@@ -1,0 +1,7 @@
+Stand-in login number 1
+Handshake headers: {'Authorization': 'indmoney-token-1'}
+Another process replaced indmoney-token-1.
+WARNING Logging in to INDmoney again.
+Stand-in login number 2
+Credentials now: (None, 'indmoney-token-2')
+Logins made: 2

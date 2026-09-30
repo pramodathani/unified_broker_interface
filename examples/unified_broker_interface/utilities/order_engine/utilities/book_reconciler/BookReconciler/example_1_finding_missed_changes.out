@@ -1,0 +1,5 @@
+Open legs: ['parent-a/zerodha', 'parent-b/dhan', 'parent-c/fyers']
+Missed for parent-a at zerodha: {'update': '{"order_id": "250930000123456", "status": "COMPLETE", "quantity": 10, "filled_quantity": 10, "broker": "zerodha"}'}
+Missed for parent-b at dhan: {'update': '{"order_id": "1102509300004567", "status": "CANCELLED", "quantity": 10, "filled_quantity": 0, "broker": "dhan"}'}
+Passes: 1, changes found: 2
+A second pass finds: [('parent-a', 'zerodha', {'update': '{"order_id": "250930000123456", "status": "COMPLETE", "quantity": 10, "filled_quantity": 10, "broker": "zerodha"}'}), ('parent-b', 'dhan', {'update': '{"order_id": "1102509300004567", "status": "CANCELLED", "quantity": 10, "filled_quantity": 0, "broker": "dhan"}'})]

@@ -1,0 +1,17 @@
+Read entry 1-0 from unified:orders:intents:stream
+Intent 0a1b2c3d4e5f60718293a4b5c6d7e8f9 asks for a simple order
+Too old to place 30.0 seconds after its deadline
+Already started a parent: None
+Must be answered without placing: None
+Runner: SimpleOrder, parent received, legs 0
+Answer: 200 accepted at zerodha, order 260930000001
+Sent to the broker: [('zerodha', 'BUY', 25)]
+Pushed to the caller: 200 accepted
+Unacknowledged entries: []
+Had the engine stopped before acknowledging, it would read the intent again:
+Already started the parent it answered with: True
+Second answer: 409 the order engine had already started this order before it read it again, so it was not placed a second time; read the parent for its outcome
+Stored answer is still: 200 accepted
+Sent to the broker: [('zerodha', 'BUY', 25)]
+Placed 1, repeated 1
+Answer kept for 300 seconds; still in time: True

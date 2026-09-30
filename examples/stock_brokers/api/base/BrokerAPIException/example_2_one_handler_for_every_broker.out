@@ -1,0 +1,3 @@
+dhan: DhanAPIException code=Invalid_Authentication message=Client ID or user generated access token is invalid or expired.
+zerodha: ZerodhaAPIException code=TokenException message=Incorrect `api_key` or `access_token`.
+flattrade: FlattradeAPIException code=Not_Ok message=Session Expired :  Invalid Session Key

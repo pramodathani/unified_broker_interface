@@ -1,0 +1,10 @@
+credentials for zerodha: login has access_token True, settings ['api_key']
+stored order: OPEN, variety regular, quantity 20 at 1415.5
+modify: accepted, HTTP 200
+  sent {'method': 'PUT', 'url': 'https://api.kite.trade/orders/regular/250930000000417', 'form': {'order_type': 'LIMIT', 'quantity': 12, 'price': '1414.00'}}
+cancel: accepted, HTTP 200
+  sent {'method': 'DELETE', 'url': 'https://api.kite.trade/orders/regular/250930000000417', 'form': None}
+modify with nothing to change: 400 a modification has to change something
+cancel of an order the book lacks: 404 zerodha's order book still does not hold 250930000009999 after 0.2 seconds, so it cannot be changed yet
+credentials for an unknown broker: 503 sharekhan is not a broker this engine places orders at
+requests Zerodha received in all: 2

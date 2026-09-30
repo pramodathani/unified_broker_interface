@@ -1,0 +1,6 @@
+{"808": "Authentication Failed - Client ID or Token invalid"} -> log in again: True
+{"807": "Access token is expired"} -> log in again: True
+{"806": "Data APIs not subscribed"} -> log in again: False
+QuoteUnavailable: Dhan has no quote segment for nse_commodity_options
+    log in again: False
+Requests sent: []

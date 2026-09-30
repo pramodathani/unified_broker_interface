@@ -1,0 +1,4 @@
+First try refused: shoonya refused the session: Session Expired :  Invalid Session Key
+Logged in again
+Second try: NSE|1594 last price 1512.35, close 1498.8
+Session keys sent: ['stale-session-key', 'fresh-session-key']

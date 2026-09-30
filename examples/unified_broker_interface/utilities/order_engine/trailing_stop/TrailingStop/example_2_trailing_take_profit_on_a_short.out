@@ -1,0 +1,10 @@
+Run: HTTP 202, outcome armed, the order is recorded, and its trailing stop is placed when the price reaches 1440
+The stop will trade BUY
+Last 1460.0: acted False, stop none yet
+Last 1440.0: acted True, stop trigger 1454.4 limit 1457.4
+Last 1420.0: acted True, stop trigger 1434.2 limit 1437.2
+Last 1431.0: acted False, stop trigger 1434.2 limit 1437.2
+Sent to the broker:
+  place BUY 40 SL at 1457.40 trigger 1454.40 -> 260930000001
+  modify 260930000001 price 1437.20 trigger 1434.20
+Parent: protecting

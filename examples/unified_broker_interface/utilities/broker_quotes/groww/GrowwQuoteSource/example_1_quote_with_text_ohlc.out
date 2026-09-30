@@ -1,0 +1,53 @@
+Requests sent: [{'exchange': 'NSE', 'segment': 'CASH', 'trading_symbol': 'NHPC'}]
+{
+    "id": "NSE|CASH|17400",
+    "broker": "groww",
+    "instrument_token": "NSE|CASH|17400",
+    "exchange": "nse",
+    "mode": "full",
+    "last_price": 82.55,
+    "last_quantity": 150,
+    "average_price": 82.47,
+    "volume": 11872033,
+    "buy_quantity": 1843210,
+    "sell_quantity": 2290440,
+    "ohlc": {
+        "open": 82.1,
+        "high": 82.95,
+        "low": 81.85,
+        "close": 81.95
+    },
+    "change": 0.7321537522879735,
+    "oi": null,
+    "oi_day_high": null,
+    "oi_day_low": null,
+    "last_trade_time": 1789446602.0,
+    "exchange_timestamp": null,
+    "depth": {
+        "buy": [
+            {
+                "price": 82.5,
+                "quantity": 5120,
+                "orders": null
+            },
+            {
+                "price": 82.45,
+                "quantity": 18300,
+                "orders": null
+            }
+        ],
+        "sell": [
+            {
+                "price": 82.55,
+                "quantity": 9400,
+                "orders": null
+            },
+            {
+                "price": 82.6,
+                "quantity": 22710,
+                "orders": null
+            }
+        ]
+    },
+    "received_at": 1789446605.0
+}

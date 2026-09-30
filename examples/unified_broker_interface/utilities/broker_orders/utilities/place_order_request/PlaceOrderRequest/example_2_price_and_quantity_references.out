@@ -1,0 +1,19 @@
+Price reference: {'kind': 'offer_level', 'level': 2, 'buffer_percent': Decimal('0.1'), 'offset_ticks': -1}
+Quantity reference: {'kind': 'liquidate_position', 'product': 'mis'}
+Quantity until the engine resolves it: 0
+parse_price_reference mid: {'kind': 'mid', 'offset_percent': Decimal('-0.05')}
+parse_quantity_reference add: {'kind': 'add_to_position'}
+reference_kind: vwap
+parse_level with none given: 1
+parse_signed_number: Decimal('-0.25')
+parse_signed_whole_number: -3
+parse_tag: 'exit01'
+parse_quantities: quantity=40, disclosed=10
+check_prices_fit_the_order_type: a LIMIT order with a price reference passes
+Level 6: level must be a whole number from 1 to 5, which is as deep as the unified quote carries
+Kind unknown: price_reference kind must be one of absolute, last, mid, vwap, bid_level, offer_level, marketable
+Offset ticks 1.5: offset_ticks must be a whole number
+Buffer not a number: buffer_percent must be a number
+Tag with a space: tag must be 1 to 20 letters and digits
+Disclosed above quantity: disclosed_quantity cannot be more than quantity
+LIMIT without a price: a LIMIT order needs a price

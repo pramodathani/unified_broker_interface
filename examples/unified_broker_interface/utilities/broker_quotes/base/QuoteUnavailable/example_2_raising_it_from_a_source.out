@@ -1,0 +1,5 @@
+Caught: QuoteUnavailable
+Message: nse_only carries no quotes for bse_equities
+Arguments: ('nse_only carries no quotes for bse_equities',)
+Is an Exception: True
+Log in again: False

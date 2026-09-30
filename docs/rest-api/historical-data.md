@@ -246,7 +246,7 @@ The `POST` form reads the same interval and range for a list of instruments. The
 Each instrument's series is read on its own, from its own Redis copy or from the database, so this form saves request overhead but not database work.
 
 ??? note "Under the hood"
-    - Route: `InstrumentsBlueprint.prices` in `unified_broker_interface/blueprints/instruments.py`., or `InstrumentsBlueprint._prices_batch` for a `POST`, which checks the shared range once with `check_candle_range`.
+    - Route: `InstrumentsBlueprint.prices` in `unified_broker_interface/blueprints/instruments.py`, or `InstrumentsBlueprint._prices_batch` for a `POST`, which checks the shared range once with `check_candle_range`.
     - Candles: `candles` in `unified_broker_interface/utilities/instrument_history.py`. `MAX_INTRADAY_DAYS` is 366.
     - Cache: [`PriceCache`][unified_broker_interface.utilities.price_cache.PriceCache] in `unified_broker_interface/utilities/price_cache.py`. The key is `unified:prices:cache:<instrument id>:<interval>:<basis>:<known_as_of or latest>`.
     - Database: the function `unified.adjusted_bars(instrument_id, interval, from, to, known_as_of)` for `adjusted`, and the table `unified.price_history` otherwise.

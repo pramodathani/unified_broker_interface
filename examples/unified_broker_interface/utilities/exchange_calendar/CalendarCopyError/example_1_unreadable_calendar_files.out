@@ -1,0 +1,4 @@
+Missing folder: CalendarCopyError: no calendar files in examples/no_calendar_files_here
+  is an Exception: True
+Bad closure kind: CalendarCopyError: 2027.yaml: nse equity 2027-01-26 closed is 'afternoon'
+  is an Exception: True

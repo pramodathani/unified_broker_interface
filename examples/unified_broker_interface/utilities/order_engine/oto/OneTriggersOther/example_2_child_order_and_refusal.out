@@ -1,0 +1,6 @@
+child_order(50): BUY 50 SL at 1168.00 trigger 1165.00, product MIS, tag None
+child_order(20): BUY 20 SL at 1168.00 trigger 1165.00, product MIS, tag None
+Sent to the broker: ['place SELL 50 LIMIT at 1150.00 -> 260930000001', 'place BUY 50 SL at 1168.00 trigger 1165.00 -> 260930000002']
+Parent: protecting
+No then: HTTP 400, an oto order needs a then object describing the order to place once the first one fills
+Orders sent for it: 0

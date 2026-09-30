@@ -1,0 +1,16 @@
+Connecting to wss://ws.kite.trade/?api_key=kite-api-key&access_token=kite-token-1
+ERROR socket_0 error: Handshake status 403 Forbidden
+INFO socket_0 closed with status None: None
+WARNING Logging in to Zerodha again.
+WARNING socket_0 disconnected. Reconnecting in 0 seconds.
+Connecting to wss://ws.kite.trade/?api_key=kite-api-key&access_token=kite-token-2
+Sent: {"a": "subscribe", "v": [256265]}
+Sent: {"a": "mode", "v": ["full", [256265]]}
+INFO socket_0 opened and subscribed to 1 instrument(s).
+Tick NSE:NIFTY 50 on indices in quote mode
+  last_price=25150.65 volume=None change=1.0066
+  ohlc={'high': 25210.0, 'low': 24980.0, 'open': 25000.0, 'close': 24900.0}
+INFO socket_0 closed with status 1000: normal closure
+INFO socket_0 stopped.
+Gave up: False
+Logins made: 2

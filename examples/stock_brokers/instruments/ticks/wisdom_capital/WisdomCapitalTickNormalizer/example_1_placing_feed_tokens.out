@@ -1,0 +1,13 @@
+Broker: wisdom_capital
+'1:2885' -> broker_token='2885' order_symbol=None segments=10 starting with nse_equities
+'NSECM:2885' -> broker_token='2885' order_symbol=None segments=10 starting with nse_equities
+'2:35003' -> broker_token='35003' order_symbol=None segments=16 starting with nse_fixed_income_futures
+'51:440001' -> broker_token='440001' order_symbol=None segments=16 starting with mcx_fixed_income_futures
+'21:12345' -> broker_token='12345' order_symbol=None segments=16 starting with ncdex_fixed_income_futures
+'99:1' -> None
+'NSECM:' -> None
+Subscription tokens as ticks spell them:
+'NSECM:2885' -> '1:2885'
+'MCXFO:440001' -> '51:440001'
+'1:2885' -> '1:2885'
+'XYZ:1' -> None

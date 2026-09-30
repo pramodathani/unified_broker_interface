@@ -1,0 +1,7 @@
+most_cycles: None
+Rung at 1520.0 filled 15 of 20: orders sent so far 2
+Rung at 1520.0 filled 20: place BUY 20 LIMIT at 1508.00 -> 260930000003
+limit_order: BUY 5 LIMIT at 1498.00 on 02
+remember_leg: rung_of_leg now holds 4 legs, example-leg on rung 0
+No profit_points: HTTP 400, a scale with profit-taker needs profit_points, the distance above zero to take each rung's profit at, not None
+most_cycles 0: HTTP 400, most_cycles must be a whole number of at least 1, not 0

@@ -1,0 +1,22 @@
+Token 'NFO:35003': broker_token='35003' order_symbol=None
+Volume on nse is reported in units, multiplier 1
+Close policy on nse: never
+Normalized, received before the close:
+  last_price: 25110.5
+  last_quantity: 75
+  average_price: 25096.2
+  volume: 4533075
+  buy_quantity: 312450
+  sell_quantity: 298275
+  open: 25060.0
+  high: 25134.9
+  low: 25041.0
+  reported_close: None
+  oi: 14622300
+  oi_day_high: 14801250
+  oi_day_low: 14510025
+  last_trade_time: 1789450498.0
+  exchange_time: 1789450499.0
+  bids: [(25110.0, 225, 3), (25109.5, 450, 5)]
+  asks: [(25110.5, 150, 2), (25111.0, 375, 4)]
+reported_close when received after the close: None

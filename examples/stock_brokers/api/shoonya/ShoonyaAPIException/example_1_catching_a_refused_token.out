@@ -1,0 +1,4 @@
+Shoonya answers HTTP 400 with: {"stat": "Not_Ok", "emsg": "Session Expired :  Invalid Session Key"}
+Caught: ShoonyaAPIException
+code: 400
+message: Session Expired :  Invalid Session Key

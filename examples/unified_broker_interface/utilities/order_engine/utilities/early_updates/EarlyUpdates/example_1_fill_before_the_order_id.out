@@ -1,0 +1,7 @@
+Waiting orders: ['zerodha:250930000012345', 'dhan:5225093012345', 'zerodha:250930000012399']
+Still waiting after dropping expired ones: ['zerodha:250930000012345', 'dhan:5225093012345', 'zerodha:250930000012399']
+Taken for zerodha:250930000012345:
+  {'status': 'OPEN', 'filled_quantity': '0'}
+  {'status': 'COMPLETE', 'filled_quantity': '10'}
+Waiting orders: ['dhan:5225093012345', 'zerodha:250930000012399']
+Dropped: 0

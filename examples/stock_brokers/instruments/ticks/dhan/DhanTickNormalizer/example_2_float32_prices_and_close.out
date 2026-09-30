@@ -1,0 +1,22 @@
+Token '5:565899': broker_token='565899' order_symbol=None
+Volume on mcx is reported in lots, multiplier 100
+Close policy on mcx: before
+Normalized, received before the close:
+  last_price: 9731.4
+  last_quantity: 200
+  average_price: 9718.45
+  volume: 6795800
+  buy_quantity: 421000
+  sell_quantity: 398700
+  open: 9702.0
+  high: 9745.3
+  low: 9688.1
+  reported_close: 9722.0
+  oi: 1809500
+  oi_day_high: None
+  oi_day_low: None
+  last_trade_time: 1789492558.0
+  exchange_time: None
+  bids: [(9731.3, 300, 2), (9731.2, 1100, 4)]
+  asks: [(9731.5, 500, 2), (9731.6, 800, 3)]
+reported_close when received after the close: None

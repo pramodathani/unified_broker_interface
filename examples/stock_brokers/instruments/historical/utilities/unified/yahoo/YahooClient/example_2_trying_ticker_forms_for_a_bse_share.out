@@ -1,0 +1,6 @@
+Forms to try: [('RELIANCE.BO', 'ticker'), ('500325.BO', 'scrip_code'), ('RELIANCE.NS', 'nse_ticker')]
+RELIANCE.BO (ticker): 2 closes, coverage 0.2, events {datetime.date(2024, 10, 28): 2.0}
+500325.BO (scrip_code): 5 closes, coverage 1.0, events {datetime.date(2024, 10, 28): 2.0}
+Using 500325.BO
+A ticker Yahoo has nothing for: closes {}, events {}
+Requests sent: ['RELIANCE.BO', '500325.BO', 'NOSUCHSHARE.BO']

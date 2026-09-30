@@ -1,0 +1,11 @@
+Zerodha skip reason: None
+Dhan skip reason: has no mapping for the instrument
+choose_named_broker: zerodha, skipped []
+Sent: [{'method': 'POST', 'url': 'https://api.kite.trade/orders/regular', 'data': {'tradingsymbol': 'RELIANCE', 'exchange': 'NSE', 'transaction_type': 'SELL', 'order_type': 'SL-M', 'quantity': 10, 'product': 'MIS', 'validity': 'DAY', 'price': '0', 'trigger_price': '2480', 'disclosed_quantity': 0, 'market_protection': '-1'}}]
+HTTP 200: outcome accepted, order id 250915000000011, broker response {'status': 'success', 'data': {'order_id': '250915000000011'}}
+Timings reported: ['broker', 'preparation']
+Counted against daily caps: ['zerodha']
+record_outcome accepted a second outcome without complaint
+Named Dhan: HTTP 503, dhan cannot take this order: has no mapping for the instrument
+Untrusted contract: HTTP 503, the contract size of this mcx_commodity_futures instrument is not trusted today (conflict), so no order is sent
+Every broker excluded: HTTP 503, every broker is excluded from order placement

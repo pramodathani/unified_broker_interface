@@ -1,0 +1,7 @@
+1minute: https://noren.example.com/NorenWClientAPI/TPSeries
+  body: {'exch': 'NSE', 'token': '2885', 'st': '1789065000', 'et': '1789151400', 'intrv': '1'}
+  2026-09-11T09:15:00+05:30 open 1266.4 high 1267.4 low 1261.5 close 1262.7 volume 188567 oi 0
+  2026-09-11T15:29:00+05:30 open 1257.5 high 1257.5 low 1257.5 close 1257.5 volume 7938419 oi 0
+day: https://noren.example.com/NorenWClientAPI/EODChartData
+  body: {'sym': 'NSE:RELIANCE-EQ', 'from': '1789065000', 'to': '1789151400'}
+  2026-09-11T00:00:00+05:30 open 1267.0 high 1267.4 low 1253.0 close 1257.5 volume 8777736 oi None

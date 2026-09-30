@@ -1,0 +1,9 @@
+P7-L1 at 10.2s, just moved: False
+P7-L1 at 10.3s, after forget: True
+P8-L1 at 20.0s, broker refuses the move: True
+P8-L1 at 20.1s, trying again: True
+Working throttle counts: {'minimum_seconds': 1.0, 'allowed': 3, 'suppressed': 1}
+Switched off, P9-L1 at 0.0s: True
+Switched off, P9-L1 at 0.01s: True
+Switched off, P9-L1 at 0.02s: True
+Switched-off throttle counts: {'minimum_seconds': 0, 'allowed': 3, 'suppressed': 0}

@@ -1,0 +1,9 @@
+Loss lockout: 403 {'error': 'the day is down 7000.00, which is past the 5000.00 limit, so no new order is being placed', 'intent_id': 'b9f0c1d2-0000-4000-8000-000000000002'}
+Rate budget full: 503 {'error': 'the order rate budget is full, so this order was not sent; try again in a moment', 'broker': 'zerodha'}
+Rate budget unreadable: 503 {'error': 'the order rate budget could not be read (Connection reset by peer), so this order was not sent', 'broker': 'fyers'}
+Daily cap: 429 {'error': 'dhan has been sent 1 order messages today, and the last 1 of its daily cap of 2 are kept for closing positions, so this was not sent', 'broker': 'dhan'}
+Dhan count with an exit reserved: 2
+Dhan count after the exit was not sent: 1
+Counts: {'rate': {'waited': 0, 'refused': 1}, 'locked_out': 1, 'order_to_trade': {}, 'repricing': {'minimum_seconds': 0, 'allowed': 0, 'suppressed': 0}, 'daily_count': {'refused': 1, 'caps': {'dhan': 2}}}
+Without a throttle, reprice P2-L1 at once: True
+Counts without the optional gates: {'rate': {'waited': 0, 'refused': 0}, 'locked_out': 0, 'order_to_trade': {}, 'repricing': {'minimum_seconds': 0, 'allowed': 1, 'suppressed': 0}}

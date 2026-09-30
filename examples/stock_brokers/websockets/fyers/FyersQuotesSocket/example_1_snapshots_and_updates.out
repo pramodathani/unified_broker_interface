@@ -1,0 +1,25 @@
+Stand-in login number 1
+Profile served for login 1
+Symbol lookup for ['NSE:SBIN-EQ', 'NSE:NIFTY50-INDEX', 'NSE:NOSUCHSTOCK-EQ']
+WARNING socket_0: 1 symbol(s) did not resolve and are not subscribed: NSE:NOSUCHSTOCK-EQ
+Connecting to wss://socket.fyers.in/hsm/v1-5/prod
+Sent binary frame: 0028010401000968736d2d6b65792d31020001500300010104000f507974686f6e53444b2d332e302e39
+INFO socket_0 opened. Authenticating.
+Sent binary frame: 00000c02010008000000000000080002000146
+Sent binary frame: 0036040201002400020e73667c6e73655f636d7c333034351269667c6e73655f636d7c4e696674792035300200010b
+INFO socket_0 authenticated and subscribed to 2 instrument(s).
+Tick NSE:SBIN-EQ in full mode
+  last_price=820.5 volume=1204500 change=1.2963
+  ohlc={'open': 817.0, 'high': 825.0, 'low': 815.0, 'close': 810.0} exchange_timestamp=1790311529
+  best bid={'quantity': 500, 'price': 820.45, 'orders': None} best offer={'quantity': 700, 'price': 820.55, 'orders': None}
+Tick NSE:NIFTY50-INDEX in quote mode
+  last_price=25150.65 volume=None change=1.0066
+  ohlc={'open': 25000.0, 'high': 25210.0, 'low': 24980.0, 'close': 24900.0} exchange_timestamp=1790311529
+Sent binary frame: 0009030101000400000002
+Tick NSE:SBIN-EQ in full mode
+  last_price=821.0 volume=1205000 change=1.358
+  ohlc={'open': 817.0, 'high': 825.0, 'low': 815.0, 'close': 810.0} exchange_timestamp=1790311529
+  best bid={'quantity': 500, 'price': 820.45, 'orders': None} best offer={'quantity': 700, 'price': 820.55, 'orders': None}
+INFO socket_0 closed with status 1000: normal closure
+INFO socket_0 stopped.
+Gave up: False

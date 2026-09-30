@@ -1,0 +1,15 @@
+NSE NIFTYBEES (EQ, series EQ) -> nse_exchange_traded_funds
+    identity {'symbol': 'NIFTYBEES'}, broker symbol 'Nippon India ETF Nifty 50 BeES'
+NSE 762GS2036 (EQ, series GS) -> nse_fixed_income
+    identity {'symbol': 'IN0020160019'}, broker symbol None
+NSE HDFCNIFTY-MF (EQ, series MF) -> nse_mutual_funds
+    identity {'symbol': 'HDFCNIFTY'}, broker symbol 'HDFC Nifty 50 Index Fund'
+NSE NIFTYJR (IDX, series None) -> nse_equity_indices
+    identity {'symbol': 'NIFTYNXT50'}, broker symbol 'NIFTY NEXT 50'
+NSE NIFTY26OCTFUT (FUT, series None) -> nse_equity_index_futures
+    identity {'underlying_symbol': 'NIFTY', 'expiry_date': datetime.date(2026, 10, 27)}, broker symbol 'NIFTY26OCTFUT'
+MCX MCXBULLDEX26OCTFUT (FUT, series None) -> mcx_commodity_index_futures
+    identity {'underlying_symbol': 'MCXBULLDEX', 'expiry_date': datetime.date(2026, 10, 28)}, broker symbol 'MCXBULLDEX26OCTFUT'
+BSE 800IIFL28 (EQ, series F) -> bse_fixed_income
+    identity {'symbol': 'INE530B07393'}, broker symbol '800IIFL28'
+BSE LICMFGOLD (EQ, series B) -> no segment, filed under bse_uncategorised

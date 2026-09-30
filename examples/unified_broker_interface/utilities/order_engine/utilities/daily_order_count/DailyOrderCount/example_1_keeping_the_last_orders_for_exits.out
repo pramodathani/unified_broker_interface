@@ -1,0 +1,16 @@
+Count key: unified:orders:daily_count:zerodha
+Counts expire at: 2026-10-01T06:00:00+05:30
+Cap: 10, entries stop at: 8
+Message 1 (entry): sent, count now 1
+Message 2 (entry): sent, count now 2
+Message 3 (entry): sent, count now 3
+Message 4 (entry): sent, count now 4
+Message 5 (entry): sent, count now 5
+Message 6 (entry): sent, count now 6
+Message 7 (entry): sent, count now 7
+Message 8 (entry): sent, count now 8
+Message 9 (entry): refused with 429: zerodha has been sent 8 order messages today, and the last 2 of its daily cap of 10 are kept for closing positions, so this was not sent
+Message 10 (exit): sent, count now 9
+Message 11 (exit): sent, count now 10
+Message 12 (exit): refused with 429: zerodha has been sent 10 order messages today, which is its daily cap of 10, so this was not sent
+Counts: {'refused': 2, 'caps': {'zerodha': 10}}

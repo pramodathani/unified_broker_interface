@@ -1,0 +1,20 @@
+Stand-in login number 1
+Connecting to wss://mlhsm.kotaksecurities.com
+Sent binary frame of type 1: 0029010301000d6b6f74616b2d746f6b656e2d3102000b6b6f74616b2d7369642d310300064a535f415049
+INFO socket_0 opened. Authenticating.
+Sent binary frame of type 4: 001a040201001100010e73667c6e73655f636d7c3238383502000101
+Sent binary frame of type 4: 001a040201001100010e64707c6e73655f636d7c3238383502000101
+INFO socket_0 authenticated and subscribed to 1 instrument(s) with depth, acknowledging every 2 data frame(s).
+Name learned: nse_cm|2885 is RELIANCE-EQ
+Tick RELIANCE-EQ (nse_cm|2885) in full mode
+  last_price=2950.5 volume=1204500 change=1.3918
+  ohlc={'open': 2930.0, 'high': 2960.0, 'low': 2925.0, 'close': 2910.0}
+  best bid={'quantity': 100, 'price': 2950.0, 'orders': 3} best offer={'quantity': 200, 'price': 2951.0, 'orders': 4} levels=5
+Sent binary frame of type 3: 0009030101000400000002
+Tick RELIANCE-EQ (nse_cm|2885) in full mode
+  last_price=2951.0 volume=1205000 change=1.4089
+  ohlc={'open': 2930.0, 'high': 2960.0, 'low': 2925.0, 'close': 2910.0}
+  best bid={'quantity': 100, 'price': 2950.0, 'orders': 3} best offer={'quantity': 200, 'price': 2951.0, 'orders': 4} levels=5
+INFO socket_0 closed with status 1000: normal closure
+INFO socket_0 stopped.
+Gave up: False

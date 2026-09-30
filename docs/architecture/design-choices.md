@@ -38,7 +38,7 @@ flowchart LR
 
 **Why.** Each process can crash, restart or be stopped without taking anything else down, and each broker's scripts run without any other broker's. Almost every read route answers from memory in one Redis round trip, whatever the brokers are doing.
 
-**The cost.** The API serves documents that are only as fresh as the script that last wrote them. Every read route therefore has to check the age of what it serves, and it answers `503` naming the key when the writer has stopped. Two parts of the system still talk to brokers on purpose: the REST API's order routes and its quote fallback, and the order engine when placement is set to `engine`.
+**The cost.** The API serves documents that are only as fresh as the script that last wrote them. Every read route therefore has to check the age of what it serves, and it answers `503` naming the key when the writer has stopped. Two parts of the system still talk to brokers on purpose: the REST API's order routes and its quote fallback, and the order engine, which places every order the REST API accepts.
 
 **In the code.** `bin/unified/orders/api_order_details` and every other combiner say "Nothing here calls a broker" in their docstrings. `unified_broker_interface/utilities/unified_documents.py` decides when a document is too old to serve.
 
@@ -237,22 +237,22 @@ flowchart TD
 
 ## Broker selectors ride on the existing Redis round trip
 
-**The problem.** `POST /api/orders/place` names an instrument, not a broker, so something has to choose the broker. The round-robin selector needs a counter shared by every gunicorn worker, which lives in Redis. A separate Redis call for the counter would add a network round trip to every order.
+**The problem.** `POST /api/orders/place` names an instrument, not a broker, so something has to choose the broker. The API hands every order to the order engine, and the engine makes that choice. The lowest-cost selector needs every broker's message counts and the round-robin selector needs a counter, and both live in Redis so that they are shared between processes. A separate Redis call for them would add a network round trip to every order.
 
-**The choice.** A selector does not talk to Redis itself. It implements `queue_redis_commands`, which adds its commands to the pipeline the route is already sending to read the instrument's identity, order handles and contract size, and `ranked_brokers` receives the replies. The lowest-cost selector, the default, queues one `EVAL` of a script that returns every broker's message counts; the round-robin selector queues one `INCR unified:orders:round_robin`; the fixed-priority selector queues nothing.
+**The choice.** A selector does not talk to Redis itself. It implements `queue_redis_commands`, which adds its commands to the pipeline the order engine is already sending to read the instrument's identity, order handles and contract size, and `ranked_brokers` receives the replies. The lowest-cost selector, the default, queues one `EVAL` of a script that returns every broker's message counts; the round-robin selector queues one `INCR unified:orders:round_robin`; the fixed-priority selector queues nothing.
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant W as API worker
+    participant E as Order engine
     participant R as Redis
-    W->>R: pipeline 1: API token, mapping date, logins, settings, warm identifier
-    W->>R: pipeline 2: identity, order handles, contract size + selector's INCR
-    W->>W: ranked_brokers(order, instrument, rotation, replies)
+    E->>R: pipeline 1: mapping date, warm identifier, logins, settings
+    E->>R: pipeline 2: identity, order handles, contract size + selector's commands
+    E->>E: ranked_brokers(order, instrument, rotation, replies)
 ```
 
-**Why.** Choosing a broker adds no network round trip. When the worker already holds the instrument in its own memory and the selector queues nothing, the second round trip is skipped entirely.
+**Why.** Choosing a broker adds no network round trip. When the engine already holds the instrument in its own memory and the selector queues nothing, the second round trip is skipped entirely.
 
 **The cost.** A selector can only queue commands before it knows the instrument's details, and it cannot read something and then decide what to read next. With round robin, a turn is spent as soon as the order has been validated, even if the order is refused afterwards, and the broker after one that cannot take the order takes two turns in a row.
 
-**In the code.** `BrokerSelector` in `unified_broker_interface/utilities/broker_selection/base.py`, `LowestCostSelector`, `RoundRobinSelector` and `FixedPrioritySelector` beside it, and the two pipelines in the place route of `unified_broker_interface/blueprints/orders.py`.
+**In the code.** `BrokerSelector` in `unified_broker_interface/utilities/broker_selection/base.py`, `LowestCostSelector`, `RoundRobinSelector` and `FixedPrioritySelector` beside it, and the two pipelines, `read_credentials` and `read_instrument`, of `EnginePlacement` in `unified_broker_interface/utilities/order_engine/utilities/engine_placement.py`.

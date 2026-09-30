@@ -117,9 +117,30 @@ class GrowwQuoteSource(BrokerQuoteSource):
     BROKER_NAME = "groww"
 
     def __init__(self):
+        """
+        Start with no pause in force, so the first quote request is sent.
+        """
         self._pause = RefusalPause()
 
     def fetch(self, client, handle, identity, received_at):
+        """
+        One instrument's Groww quote as a contract tick.
+
+        The quote is requested from Groww's live data endpoint by exchange, Groww segment and trading symbol, and the tick's `instrument_token` is spelled `<exchange>|<segment>|<token>`, as Groww's market feed spells it. While a pause is in force nothing is sent. A refusal as forbidden, which means the account is not entitled to live data, pauses this source for 15 minutes, and a rate limit refusal pauses it for 60 seconds, before the exception is passed on. Quantities are made whole numbers, the last trade time is turned from milliseconds into seconds, and the order book keeps at most five levels a side.
+
+        Args:
+            client (GrowwAPI): Groww's API client, whose `get` carries the session.
+            handle (dict): Groww's order handle for the instrument; its `broker_token` and `order_symbol` are the token and trading symbol.
+            identity (dict): The instrument's identity.
+            received_at (float): The instant to stamp on the tick, in epoch seconds.
+
+        Returns:
+            dict: The contract tick, in `full` mode when it carries an order book and `quote` mode otherwise.
+
+        Raises:
+            QuoteUnavailable: The handle has no token or trading symbol, quotes are paused, or Groww's answer held no quote with a last price.
+            GrowwAPIException: The API client refused the request, which this method lets through.
+        """
         token = str(handle.get("broker_token") or "").strip()
         trading_symbol = str(handle.get("order_symbol") or "").strip()
         if not token or not trading_symbol:
@@ -166,6 +187,17 @@ class GrowwQuoteSource(BrokerQuoteSource):
         return tick
 
     def is_authentication_error(self, exception):
+        """
+        Whether an exception from `fetch` means Groww no longer accepts the session.
+
+        A refusal as forbidden or a rate limit is never an authentication error, because logging in again cannot fix either. Otherwise the exception counts when it carries HTTP status 401, or its text mentions an unauthorized request, failed authentication, an expired or invalid token, or a JWT.
+
+        Args:
+            exception (Exception): What `fetch` raised.
+
+        Returns:
+            bool: True when logging in again is the remedy.
+        """
         if _is_forbidden(exception) or _is_throttle(exception):
             return False
         if _status(exception) == "401":

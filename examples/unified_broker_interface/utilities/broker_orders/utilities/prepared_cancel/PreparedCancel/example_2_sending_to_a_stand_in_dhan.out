@@ -1,0 +1,10 @@
+Dhan accepts:
+  sent: [{'method': 'DELETE', 'url': 'https://api.dhan.co/v2/orders/112509150000012', 'headers': {'access-token': 'example-access-token'}}]
+  HTTP 200, outcome accepted, message None
+  broker response: {'orderId': '112509150000012', 'orderStatus': 'CANCELLED'}
+  timings reported: ['broker', 'preparation']
+Dhan refuses:
+  sent: [{'method': 'DELETE', 'url': 'https://api.dhan.co/v2/orders/112509150000012', 'headers': {'access-token': 'example-access-token'}}]
+  HTTP 422, outcome rejected, message Order already traded
+  broker response: {'errorType': 'Order_Error', 'errorCode': 'DH-906', 'errorMessage': 'Order already traded'}
+  timings reported: ['broker', 'preparation']

@@ -1,0 +1,13 @@
+NSE-2885: broker token 2885, 10 segments starting with nse_equities
+MCX-440001: broker token 440001, 16 segments starting with mcx_fixed_income_futures
+LSE-1: cannot be placed
+Tick spelling of 'NSE-2885': 'NSE-2885'
+nse last_quantity: units
+nse volume: units
+nse oi: units
+nse close policy: always
+mcx last_quantity: units
+mcx volume: lots
+mcx oi: lots
+mcx close policy: never
+The base class alone cannot place a token: feed_key raises NotImplementedError

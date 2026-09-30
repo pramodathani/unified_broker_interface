@@ -1,0 +1,14 @@
+The cache uses the engine it was given: True
+current_mapping_date: 2026-09-30
+resolves_to_current_date for 2026-10-02: 2026-09-30
+identities_for_tokens, any segment: bse_equities GANESHHOU
+identities_for_tokens, nse_equities only: nse_equities INFY
+candidates_for_tokens: bse_equities GANESHHOU
+candidates_for_tokens: nse_equities INFY
+identities_for_instruments: INFY
+order_handles_for_instruments, zerodha and kotak: {'zerodha': {'broker_token': '408065', 'order_symbol': 'INFY', 'lot_size': '1', 'tick_size': '0.10'}, 'kotak': {'broker_token': '1594', 'order_symbol': 'INFY-EQ', 'lot_size': '1', 'tick_size': '0.10'}}
+tokens_for_instruments, every broker: {'0a6e2d41-9c7f-4b58-8d13-6f2e4a9b7c05': {'dhan': '1594', 'kotak': '1594', 'zerodha': '408065'}}
+cache_statistics: {'process_hits': 4, 'redis_hits': 0, 'postgres_hits': 2, 'misses': 0}
+Postgres queries:
+  b.broker_token = ANY
+  SELECT instrument_id, broker, broker_token

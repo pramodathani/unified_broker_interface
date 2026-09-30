@@ -1,0 +1,6 @@
+15:00 asked on 2026-10-02: 2026-10-05T15:00:00+05:30
+Described: 15:00 on 2026-10-05
+time_today 15:10 at 16:00: refused with 400: square_off_at of 15:10 has already passed today, and an order is not held overnight on the strength of a time that has gone
+time_on_trading_day 15:10 at 16:00: refused with 400: square_off_at of 15:10 has already passed today, and an order is not held overnight on the strength of a time that has gone
+read_time of 3pm: refused with 400: square_off_at must be a time of day such as 15:10, not '3pm'
+minutes_from_now of -5: refused with 400: cancel_after_minutes must be a number of minutes above zero, not -5

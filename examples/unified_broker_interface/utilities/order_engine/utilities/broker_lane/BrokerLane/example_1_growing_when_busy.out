@@ -1,0 +1,11 @@
+Workers at the start: 1
+parent-1 goes to zerodha-1
+parent-2 goes to zerodha-2
+Workers now: 2
+Load across the lane: 1
+parent-3 goes to zerodha-2, since the lane is at its maximum of 2
+The next worker would be named zerodha-3
+Every worker stopped: True
+Load after stopping: 0
+parent-1 on zerodha-1
+parent-2 on zerodha-2

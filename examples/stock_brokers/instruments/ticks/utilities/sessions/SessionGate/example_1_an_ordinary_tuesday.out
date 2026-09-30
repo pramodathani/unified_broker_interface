@@ -1,0 +1,9 @@
+nse_equities at 08:55: kept False, before the close True
+nse_equities at 09:05: kept True, before the close True
+nse_equities at 15:45: kept True, before the close False
+nse_equities at 16:05: kept False, before the close False
+nse_currency_futures at 16:45: kept True, before the close True
+nse_currency_futures at 17:40: kept False, before the close False
+mcx_commodity_futures at 17:40: kept True, before the close True
+mcx_commodity_futures at 23:58: kept True, before the close False
+nse_equities on Sunday 2026-09-13 at 11:00: kept False

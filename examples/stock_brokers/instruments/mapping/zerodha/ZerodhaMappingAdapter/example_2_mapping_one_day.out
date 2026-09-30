@@ -1,0 +1,15 @@
+zerodha: 3/4 raw row(s) classified, 1 uncategorised, 5 segment membership(s), 4 distinct instrument(s), 0 error(s).
+Token to ISIN map: {'15542': 'IN0020160019'}
+Cross-broker queries that found nothing: 36
+Summary: raw rows 4, matched 3, uncategorised 1, memberships 5, instruments 4
+DELETE FROM unified.broker_mappings
+INSERT INTO unified.instruments
+  nse_uncategorised: 718GS2033-GS
+  nse_fixed_income: IN0020160019
+  bse_equities: RELIANCE
+  nse_equities: INFY
+INSERT INTO unified.broker_mappings
+  token 3982849: nan
+  token 3978753: 762GS2036-GS
+  token 128083204: RELIANCE INDUSTRIES
+  token 408065: INFOSYS

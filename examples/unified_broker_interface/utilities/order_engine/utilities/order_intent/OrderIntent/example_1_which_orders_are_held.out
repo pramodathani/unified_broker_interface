@@ -1,0 +1,6 @@
+day limit: type=virtual_limit holdable=True after_market=False
+market: type=simple holdable=False after_market=False
+IOC limit: type=simple holdable=False after_market=False
+after-market limit: type=simple holdable=False after_market=True
+named trailing stop: type=trailing_stop holdable=False after_market=False
+day limit without the virtual book: simple

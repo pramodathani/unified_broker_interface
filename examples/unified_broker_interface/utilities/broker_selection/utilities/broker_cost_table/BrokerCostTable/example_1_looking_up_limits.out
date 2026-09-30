@@ -1,0 +1,8 @@
+Categories: ['delivery', 'fno', 'intraday']
+dhan: has row True, per second 9, per day None
+fyers: has row True, per second 8, per day 100000
+groww: has row False, per second None, per day None
+zerodha: has row True, per second 9, per day 4500
+Day-capped brokers: {'fyers': 100000, 'zerodha': 4500}
+From 2026-09-30T05:30:00+05:30: next reload in 1800.0 seconds
+From 2026-09-30T06:00:00+05:30: next reload in 86400.0 seconds

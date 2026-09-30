@@ -1,0 +1,11 @@
+Dry run for the whole list: True
+0: modify 26091500000021 at flattrade, changing ['price']
+1: modify 26091500000021 at shoonya, changing ['price']
+2: refused with 400: this order is already named at request_index 1
+3: refused with 400: each entry of orders must be an object
+4: refused with 400: dry_run applies to the whole list, so give it beside orders rather than inside an order
+Order ids to look up: ['26091500000021']
+parse_item alone: refused with 400: order_type must be one of MARKET, LIMIT, SL, SL-M
+Added an item with no broker, then checked for repeats: refused with 400: this order is already named at request_index 0
+Whole list refused: orders must be a non-empty list
+Whole list refused: a list takes only orders and dry_run, so give broker inside each order

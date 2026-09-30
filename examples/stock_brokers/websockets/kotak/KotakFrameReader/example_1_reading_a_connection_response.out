@@ -1,0 +1,4 @@
+Frame: 000d01020100014b02000400000032
+length=13 type=1 fields=2 position=4
+field 1: status='K' position=8
+field 2: acknowledge every 50 data frames position=15

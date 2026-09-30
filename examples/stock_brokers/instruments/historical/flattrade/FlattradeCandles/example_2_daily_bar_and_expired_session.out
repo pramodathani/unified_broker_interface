@@ -1,0 +1,5 @@
+Requested https://piconnect.flattrade.in/PiConnectAPI/EODChartData
+  body: {'sym': 'NSE:RELIANCE-EQ', 'from': '1788719400', 'to': '1789151400'}
+  answer element: {"time": "11-SEP-2026", "into": "1267.00", "inth": "1267.40", "intl": "1253.00", "intc": "1257.50", "ssboe": "1789084800", "intv": "8777736.00"}
+  2026-09-11T00:00:00+05:30 open 1267.0 high 1267.4 low 1253.0 close 1257.5 volume 8777736 oi None
+Second window: CandleAuthenticationError: flattrade rejected the session key: Session Expired :  Invalid Session Key

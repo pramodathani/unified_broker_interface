@@ -1,0 +1,2 @@
+Another process logged in: send again with ('token-issued-at-noon', '2026-09-15 12:00:31')
+Nobody logged in since: fall through to the next broker (paper_broker refused the session; its login has been started, so try again shortly)

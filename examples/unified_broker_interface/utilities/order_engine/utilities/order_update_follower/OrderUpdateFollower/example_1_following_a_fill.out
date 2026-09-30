@@ -1,0 +1,25 @@
+--- open
+decoded: zerodha order 250930000000417 is OPEN
+would change: {'leg_state': 'acknowledged', 'exchange_order_id': '1100000047381925'}
+follow: parent is working, leg is acknowledged with 0 filled at None
+--- open again
+decoded: zerodha order 250930000000417 is OPEN
+would change: {}
+follow: nothing the engine owns changed
+--- filled
+decoded: zerodha order 250930000000417 is COMPLETE
+would change: {'leg_state': 'filled', 'filled_quantity': 10, 'average_price': 1415.35}
+follow: parent is completed, leg is filled with 10 filled at 1415.35
+--- someone else
+decoded: dhan order 112509300000981 is OPEN
+no leg of this parent is that order
+follow: nothing the engine owns changed
+--- not json
+decoded: nothing readable
+follow: nothing the engine owns changed
+--- afterwards
+event 4: leg_update leg_state=acknowledged parent_state=working
+event 5: leg_update leg_state=filled parent_state=working
+event 6: parent_state_changed leg_state=None parent_state=completed
+trades counted by the gates: ['zerodha']
+followed=2 ignored=2 held=1 reacted=2

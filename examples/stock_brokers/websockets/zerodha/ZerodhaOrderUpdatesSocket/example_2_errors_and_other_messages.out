@@ -1,0 +1,12 @@
+Connecting to wss://ws.kite.trade/?api_key=kite-api-key&access_token=kite-access-token
+INFO Order updates socket opened. Waiting for order updates.
+ERROR Kite reported an error: Too many requests
+INFO Ignoring a message of type 'message': {"type": "message", "data": "Welcome"}
+Callback received 1 order(s)
+Order 260925000000002 OPEN: SELL 0 TCS at 4120.0
+DEBUG Ignoring a frame that is not JSON: not json
+Callback received 1 order(s)
+Order 260925000000002 COMPLETE: SELL 5 TCS at 4120.0
+INFO Order updates socket closed with status 1000: normal closure
+INFO Order updates socket stopped.
+Gave up: False

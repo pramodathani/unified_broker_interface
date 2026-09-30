@@ -1,0 +1,8 @@
+Name: kotak_contract_size
+Broker: kotak
+Token column: psymbol
+Exchange column: pexchseg
+Trusted exchange labels: ['mcx_fo', 'nse_com', 'cde_fo']
+Size expression: ((CASE WHEN raw."llotsize"::text ~ '^-?[0-9]+(\.[0-9]+)?$' THEN raw."llotsize"::text::numeric END) * (CASE WHEN (CASE WHEN raw."lmultiplier"::text ~ '^-?[0-9]+(\.[0-9]+)?$' THEN raw."lmultiplier"::text::numeric END) > 0 THEN (CASE WHEN raw."lmultiplier"::text ~ '^-?[0-9]+(\.[0-9]+)?$' THEN raw."lmultiplier"::text::numeric END) ELSE 1 END) * (CASE WHEN raw."dgennum"::text ~ '^-?[0-9]+(\.[0-9]+)?$' THEN raw."dgennum"::text::numeric END) / NULLIF((CASE WHEN raw."dgenden"::text ~ '^-?[0-9]+(\.[0-9]+)?$' THEN raw."dgenden"::text::numeric END), 0))
+Query:
+SELECT m.instrument_id::text AS instrument_id, ((CASE WHEN raw."llotsize"::text ~ '^-?[0-9]+(\.[0-9]+)?$' THEN raw."llotsize"::text::numeric END) * (CASE WHEN (CASE WHEN raw."lmultiplier"::text ~ '^-?[0-9]+(\.[0-9]+)?$' THEN raw."lmultiplier"::text::numeric END) > 0 THEN (CASE WHEN raw."lmultiplier"::text ~ '^-?[0-9]+(\.[0-9]+)?$' THEN raw."lmultiplier"::text::numeric END) ELSE 1 END) * (CASE WHEN raw."dgennum"::text ~ '^-?[0-9]+(\.[0-9]+)?$' THEN raw."dgennum"::text::numeric END) / NULLIF((CASE WHEN raw."dgenden"::text ~ '^-?[0-9]+(\.[0-9]+)?$' THEN raw."dgenden"::text::numeric END), 0)) AS units FROM unified.broker_mappings m JOIN unified.instruments i ON i.instrument_id = m.instrument_id JOIN kotak.instruments raw ON raw."psymbol"::text = m.broker_token AND raw.download_date = m.mapping_date WHERE m.broker = :broker AND m.mapping_date = :mapping_date AND i.segment = ANY(:segments) AND (i.expiry_date IS NULL OR i.expiry_date >= :mapping_date) AND raw."pexchseg"::text = ANY(:exchanges)

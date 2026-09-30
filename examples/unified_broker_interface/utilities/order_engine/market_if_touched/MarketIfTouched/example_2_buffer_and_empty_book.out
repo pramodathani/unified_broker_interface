@@ -1,0 +1,8 @@
+0 ticks past a bid of 4001.00: SELL 20 LIMIT at 4001.00
+2 ticks past a bid of 4001.00: SELL 20 LIMIT at 4000.90
+5 ticks past a bid of 4001.00: SELL 20 LIMIT at 4000.75
+child_order against an empty bid side: None
+Tick at 4001.50 with no bids: fired False
+Tick at 4001.50 with a bid of 4001.00: fired True
+Sent to the broker: ['place SELL 20 LIMIT at 4000.90 -> 260930000001']
+A buffer of -1: HTTP 400, buffer_ticks cannot be negative, not -1

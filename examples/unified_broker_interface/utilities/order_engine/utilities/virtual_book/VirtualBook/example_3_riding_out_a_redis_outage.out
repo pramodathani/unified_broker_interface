@@ -1,0 +1,9 @@
+After rebase_everything, the estimate takes a new baseline: True
+ERROR Redis could not be used (Connection refused); trying again in 1 seconds.
+  (waits 1 seconds)
+ERROR Redis could not be used (Connection refused); trying again in 2 seconds.
+  (waits 2 seconds)
+INFO Stopped after reading 3 quotes, 3 of them for a held order.
+Exit code: 0
+XREAD asked to read after: ['$', '1-0', '$', '$', '4-0']
+Estimate: ahead=11000 last_volume=105000 updates=3

@@ -1,0 +1,15 @@
+NSE|2885|RELIANCE-EQ
+  -> RELIANCE active by broker_mapping, from None to None; None
+NSE|10576|NIFTYBEES-EQ
+  -> NIFTYBEES active by broker_mapping, from None to None; 1 transient mapping(s) ignored
+NSE|17207|ITETFADD-EQ
+  -> ITADD active by broker_mapping, from None to None; chosen by 4 other brokers over 0
+NSE|4617|MANBRO-EQ
+  -> MANBRO active by broker_mapping, from None to 2026-09-03T00:00:00+05:30; split across 2 sequential instruments
+  -> KDGREEN active by broker_mapping, from 2026-09-03T00:00:00+05:30 to None; split across 2 sequential instruments
+NSE|9999|TWINS-EQ
+  -> None ambiguous by broker_mapping, from None to None; token mapped to 2 instruments at once: nse_equities:TWINSA, nse_equities:TWINSB
+NSE|7001|INDIAGLYCO-BE
+  -> INDIAGLYCO active by exchange_token, from None to None; exchange token 7001 mapped by 3 brokers
+choose between TWINSA and TWINSB with one broker behind TWINSA:
+  -> None ambiguous by broker_mapping, from None to None; token mapped to 2 instruments at once: nse_equities:TWINSA, nse_equities:TWINSB

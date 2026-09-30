@@ -1,0 +1,23 @@
+Files read:
+    https://flattrade.s3.ap-south-1.amazonaws.com/scripmaster/NSE_Equity.csv
+    https://flattrade.s3.ap-south-1.amazonaws.com/scripmaster/Nfo_Equity_Derivatives.csv
+    https://flattrade.s3.ap-south-1.amazonaws.com/scripmaster/Nfo_Index_Derivatives.csv
+    https://flattrade.s3.ap-south-1.amazonaws.com/scripmaster/Currency_Derivatives.csv
+    https://flattrade.s3.ap-south-1.amazonaws.com/scripmaster/Commodity.csv
+    https://flattrade.s3.ap-south-1.amazonaws.com/scripmaster/BSE_Equity.csv
+    https://flattrade.s3.ap-south-1.amazonaws.com/scripmaster/Bfo_Index_Derivatives.csv
+    https://flattrade.s3.ap-south-1.amazonaws.com/scripmaster/Bfo_Equity_Derivatives.csv
+Rows: 10
+Columns: ['Exchange', 'Token', 'Lotsize', 'Symbol', 'Tradingsymbol', 'Instrument', 'Expiry', 'Strike', 'Optiontype']
+First six columns:
+  Exchange    Token Lotsize    Symbol    Tradingsymbol Instrument
+0      NSE     1594       1      INFY          INFY-EQ         EQ
+1      NSE    11536       1       TCS           TCS-EQ         EQ
+2      NFO    52210     400      INFY     INFY27OCT26F     FUTSTK
+3      NFO    52175      75     NIFTY    NIFTY27OCT26F     FUTIDX
+4      CDS     1201       1    USDINR   USDINR29OCT26F     FUTCUR
+5      MCX   451669       1  CRUDEOIL  CRUDEOIL19OCT26     FUTCOM
+6      BSE   500209       1      INFY             INFY          A
+7               NaN     NaN       NaN                            
+8               NaN     NaN       NaN                            
+9      BFO  1135463      20    SENSEX   SENSEX30OCT26F     FUTIDX

@@ -1,0 +1,3 @@
+Another refusal: HTTP 503, unchanged=True, commands=[]
+No mapping date: HTTP 404, unchanged=True, commands=['GET unified:catalogue:current_date']
+Redis failing: HTTP 404, unchanged=True, commands=['GET unified:catalogue:current_date']

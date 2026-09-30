@@ -1,0 +1,17 @@
+Stand-in login number 1
+Connecting to wss://api-order-update.dhan.co
+Sent: {"LoginReq": {"MsgCode": 42, "ClientId": "1100012345", "Token": "dhan-token-1"}, "UserType": "SELF"}
+INFO Order updates socket opened and logged in. Waiting for order updates.
+WARNING Dhan sent a binary frame, taken as a refused login: b'\x00\x002\x03invalid token'
+INFO Order updates socket closed with status 1000: normal closure
+WARNING Logging in to Dhan again.
+Stand-in login number 2
+WARNING Order updates socket disconnected. Reconnecting in 0 seconds.
+Connecting to wss://api-order-update.dhan.co
+Sent: {"LoginReq": {"MsgCode": 42, "ClientId": "1100012345", "Token": "dhan-token-2"}, "UserType": "SELF"}
+INFO Order updates socket opened and logged in. Waiting for order updates.
+Order 1122092500001 Traded: B 10 of 10 INFY at 1499.5
+INFO Order updates socket closed with status 1000: normal closure
+INFO Order updates socket stopped.
+Gave up: False
+Logins made: 2

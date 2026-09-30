@@ -1,0 +1,31 @@
+Request: GET https://api.kite.trade/user/profile
+Headers sent:
+    X-Kite-Version: 3
+    User-Agent: Kiteconnect-python/4.1.0
+    Authorization: token kite-api-key:morning-token
+Status: success
+HTTP code: 200
+Data:
+{
+    "user_id": "AB1234",
+    "user_type": "individual",
+    "user_name": "Demo User",
+    "broker": "ZERODHA",
+    "exchanges": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "MCX"
+    ],
+    "products": [
+        "CNC",
+        "NRML",
+        "MIS"
+    ],
+    "order_types": [
+        "MARKET",
+        "LIMIT",
+        "SL",
+        "SL-M"
+    ]
+}

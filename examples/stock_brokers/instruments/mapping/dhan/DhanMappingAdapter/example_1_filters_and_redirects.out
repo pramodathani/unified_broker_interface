@@ -1,0 +1,7 @@
+NSE INFY (ES, series EQ) -> nse_equities as {'symbol': 'INFY'}
+NSE NIFTYBEES (ETF, series EQ) -> nse_exchange_traded_funds as {'symbol': 'NIFTYBEES'}
+NSE Nifty GS 10Yr (INDEX, series None) -> no segment after the rules and filters, filed under nse_uncategorised
+NSE 762GS2036 (GB, series GB) -> no segment after the rules and filters, filed under nse_uncategorised
+BSE GOLDBEES (ETF, series X) -> bse_exchange_traded_funds as {'symbol': 'GOLDBEES'}
+BSE HDFCSTARMF (MF, series X) -> no segment after the rules and filters, filed under bse_uncategorised
+MCX GOLDM (SP, series None) -> no segment after the rules and filters, filed under mcx_uncategorised

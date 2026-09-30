@@ -112,9 +112,30 @@ class FyersQuoteSource(BrokerQuoteSource):
     BROKER_NAME = "fyers"
 
     def __init__(self):
+        """
+        Start with no pause in force, so the first quote request is sent.
+        """
         self._pause = RefusalPause()
 
     def fetch(self, client, handle, identity, received_at):
+        """
+        One instrument's Fyers quote as a contract tick.
+
+        The quote is requested from Fyers' depth endpoint by the instrument's Fyers symbol, and the tick's `instrument_token` is that symbol, as Fyers' market feed spells it. Currency derivatives are refused before any request, because the Fyers tick normalizer excludes them. While a pause is in force nothing is sent. A Cloudflare block page pauses this source for 30 minutes and a rate limit refusal for 5 minutes before the exception is passed on. A refusal inside a successful HTTP response is raised the way the API client would raise it, so its session codes are seen. The previous close is taken from `c` unless it disagrees with the last price less the change, and the order book keeps at most five levels a side.
+
+        Args:
+            client (FyersAPI): Fyers' API client, whose `get` carries the session.
+            handle (dict): Fyers' order handle for the instrument; its `order_symbol` is the Fyers symbol, such as "NSE:SBIN-EQ".
+            identity (dict): The instrument's identity.
+            received_at (float): The instant to stamp on the tick, in epoch seconds.
+
+        Returns:
+            dict: The contract tick, in `full` mode when it carries an order book and `quote` mode otherwise.
+
+        Raises:
+            QuoteUnavailable: The handle has no Fyers symbol, the instrument is a currency derivative, quotes are paused, Fyers does not know the symbol, or its answer held no quote.
+            FyersAPIException: Fyers refused the request for any other reason, whether the API client raised it or Fyers refused inside a successful response.
+        """
         symbol = str(handle.get("order_symbol") or "").strip()
         if ":" not in symbol:
             raise QuoteUnavailable(f"Fyers has no symbol for broker token {handle.get('broker_token')}")
@@ -168,6 +189,17 @@ class FyersQuoteSource(BrokerQuoteSource):
         return tick
 
     def is_authentication_error(self, exception):
+        """
+        Whether an exception from `fetch` means Fyers no longer accepts the session.
+
+        A Cloudflare block or a rate limit is never an authentication error, because logging in again only adds requests. Otherwise the exception counts when its code is one of Fyers' authentication error codes, or its text says the token could not be authenticated, has expired, is invalid or is unauthorized.
+
+        Args:
+            exception (Exception): What `fetch` raised.
+
+        Returns:
+            bool: True when logging in again is the remedy.
+        """
         if _is_block(exception) or _is_throttle(exception):
             return False
         if _code(exception) in AUTHENTICATION_ERROR_CODES:

@@ -1,0 +1,20 @@
+no trigger_price: 400 this order type waits for a price, so it needs trigger_price
+trigger_price of zero: 400 trigger_price must be above zero, not 0
+trigger_price of "soon": 400 trigger_price must be a price, not 'soon'
+an unknown direction: 400 trigger_direction must be one of at_or_above, at_or_below, not 'sideways'
+an unknown trigger_on: 400 trigger_on must be one of last, bid, ask, mid, double_last, held, not 'vwap'
+held without hold_seconds: 400 trigger_on held needs hold_seconds, a number of seconds above zero, not None
+trigger_on for a type that chooses its own price: 400 a own_price order chooses the price it watches itself, so it does not take trigger_on
+hold_seconds of -3 read on its own: 400 trigger_on held needs hold_seconds, a number of seconds above zero, not '-3'
+Dry run 200: {'broker': 'fyers', 'outcome': 'dry_run', 'request': {'side': 'BUY', 'type': 'MARKET', 'qty': 100, 'limitPrice': 'None'}}; events recorded 0
+fire returned True; parent is now rejected
+  why: 811.90 reached the trigger at 812; RMS: insufficient margin
+  has_fired from its entry leg: True
+state_after_firing('accepted') from received: working
+state_after_firing('rejected') from received: rejected
+state_after_firing('unknown') from received: failed
+state_after_firing(None) from received: failed
+state_after_firing('accepted') from protecting: protecting
+exit_side of BUY: SELL, of SELL: BUY
+Rebuilt parent with only a backstop leg has fired: False
+Rebuilt parent with an entry leg too has fired: True

@@ -39,6 +39,11 @@ class FyersTickNormalizer(TickNormalizer):
     CLOSE_POLICY = {"nse": CLOSE_ALWAYS, "bse": CLOSE_ALWAYS, "mcx": CLOSE_ALWAYS}
 
     def __init__(self):
+        """
+        Build the lookup from each Fyers exchange prefix and instrument family to the canonical segments it can hold.
+
+        Every prefix in `EXCHANGES` gets an entry for the cash, index and derivative families. Currency derivative segments are left out of the derivative entry, because the market feed does not yet scale Fyers currency prices correctly, so those instruments are refused rather than resolved.
+        """
         self._segments = {}
         for prefix, exchange in self.EXCHANGES.items():
             for family in ("cash", "index", "derivative"):

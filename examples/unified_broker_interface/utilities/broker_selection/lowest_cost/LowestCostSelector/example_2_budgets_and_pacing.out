@@ -1,0 +1,12 @@
+Script reads 20 keys; Kotak in Redis: {'second': 0, 'minute': 0, 'hour': 0, 'day': 0}
+Kotak chosen by this process: {'second': 3, 'minute': 3, 'hour': 3}
+Ranked for an intraday order: ['kotak', 'zerodha', 'fyers', 'dhan', 'shoonya']
+  kotak: fee 20, minute 3, blocked False, pressure 0.333
+  zerodha: fee 20, minute 0, blocked False, pressure 0.000
+  fyers: fee 20, minute 36, blocked False, pressure 0.200
+  dhan: fee 20, minute 240, blocked False, pressure 0.500
+  shoonya: fee 5, minute 540, blocked True, pressure 1.000
+At 09:00:00: 0.000 of the session passed, Zerodha pressure 4.444
+At 10:00:00: 0.120 of the session passed, Zerodha pressure 2.020
+At 15:00:00: 0.920 of the session passed, Zerodha pressure 0.444
+Zerodha blocked at 4300 of 4500 today: True

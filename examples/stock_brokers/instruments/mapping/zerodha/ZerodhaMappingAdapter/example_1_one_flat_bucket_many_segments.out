@@ -1,0 +1,15 @@
+NSE INFY (name INFOSYS) -> nse_equities, also []
+    identity {'symbol': 'INFY'}, broker symbol 'INFOSYS'
+NSE IDEA-BE (name VODAFONE IDEA) -> nse_equities, also []
+    identity {'symbol': 'IDEA'}, broker symbol 'VODAFONE IDEA'
+NSE 762GS2036-GS (name None) -> nse_fixed_income, also []
+    identity {'symbol': 'IN0020160019'}, broker symbol '762GS2036-GS'
+NSE 718GS2033-GS (name None) -> no segment, filed under nse_uncategorised
+NSE EMBASSY-RR (name EMBASSY OFFICE PARKS REIT) -> nse_investment_trusts, also []
+    identity {'symbol': 'EMBASSY'}, broker symbol 'EMBASSY OFFICE PARKS REIT'
+NSE NIFTY BANK (name NIFTY BANK) -> nse_equity_indices, also []
+    identity {'symbol': 'BANKNIFTY'}, broker symbol 'NIFTY BANK'
+NFO NIFTY26OCT25000CE (name NIFTY) -> nse_equity_index_options, also []
+    identity {'underlying_symbol': 'NIFTY', 'expiry_date': datetime.date(2026, 10, 27), 'strike_price': 25000.0, 'option_type': 'CE'}, broker symbol 'NIFTY26OCT25000CE'
+BSE 800IIFL28 (name 800IIFL28) -> bse_fixed_income, also ['bse_equities']
+    identity {'symbol': 'INE530B07393'}, broker symbol '800IIFL28'

@@ -1,0 +1,8 @@
+BSE trading days: ['2020-03-02', '2020-03-03', '2026-09-10', '2026-09-11', '2026-09-14', '2026-09-15']
+Query parameters: [('265',), ('BSE|%',)]
+2020-03-03 (Tuesday): traded True
+2020-03-07 (Saturday): traded False
+2026-09-12 (Saturday): traded False
+2026-09-15 (Tuesday): traded True
+2026-09-14 (Monday): traded True
+Queries sent in all: 2

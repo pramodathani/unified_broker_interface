@@ -1,0 +1,4 @@
+As of 2026-09-27: {'instrument_token': '408065', 'exchange_token': '1594', 'tradingsymbol': 'INFY', 'name': 'INFOSYS', 'last_price': '1532.4', 'tick_size': '0.1', 'lot_size': '1', 'exchange': 'NSE', 'download_date': '2026-09-27'}
+As of 2026-09-30: last price 1547.9 from 2026-09-28
+Unknown token: None
+ValueError: 'upstox' is not one of the mapped brokers: ['dhan', 'kotak', 'groww', 'stoxkart', 'fyers', 'wisdom_capital', 'indmoney', 'flattrade', 'shoonya', 'zerodha']

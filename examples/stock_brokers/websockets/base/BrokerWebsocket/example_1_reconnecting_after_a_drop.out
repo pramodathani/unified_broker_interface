@@ -1,0 +1,9 @@
+Connection opened.
+Connection ended.
+WARNING Scripted feed disconnected. Reconnecting in 0 seconds.
+ERROR Scripted feed connection failed: ConnectionError: network unreachable
+WARNING Scripted feed disconnected. Reconnecting in 0 seconds.
+Connection opened.
+Connection ended.
+INFO Scripted feed stopped.
+Gave up: False

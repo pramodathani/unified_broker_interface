@@ -1,0 +1,5 @@
+order_type=LIMIT, validity=DAY, quantity=25, price=Decimal('2500.50')
+dry_run=True, order_id=250930000000001, broker=zerodha
+Refused: quantity must be a whole number of at least 1
+Refused: price must be a number of at least 0
+Refused: after_market must be true or false

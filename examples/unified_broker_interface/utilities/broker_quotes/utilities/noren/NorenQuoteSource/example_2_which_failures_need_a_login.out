@@ -1,0 +1,12 @@
+NorenRefusal: flattrade refused the session: Session Expired :  Invalid Session Key
+    log in again: True
+ShoonyaAPIException: ('Not_Ok', 'Session Expired :  Invalid Session Key')
+    log in again: True
+FlattradeAPIException: ('Not_Ok', 'Invalid Input : jData is not valid json object')
+    log in again: False
+QuoteUnavailable: flattrade returned no quote for NSE|2885: Error Occurred : 5 "no data"
+    log in again: False
+ConnectionError: Connection aborted.
+    log in again: False
+QuoteUnavailable: flattrade has no Noren exchange for segment nse_equities
+Requests sent: []

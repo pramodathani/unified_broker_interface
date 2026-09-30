@@ -1,0 +1,12 @@
+Row for parent_received:
+  time = datetime.datetime(2026, 9, 30, 9, 20, tzinfo=datetime.timezone(datetime.timedelta(seconds=19800)))
+  parent_order_id = '3c9d2e71-0b4f-4a8e-9c61-5f0e2d7a1b88'
+  sequence = 1
+  event = 'parent_received'
+  synthetic_type = 'simple'
+  parent_state = 'received'
+  engine_instance = 'engine-host:4242'
+  detail = '{"body": {"quantity": 10}}'
+Statements run: ['connection 1: -- Every', 'connection 2: insert into', 'connection 2: insert into']
+Connections opened: 2, idle now: 1
+Rows committed: 3

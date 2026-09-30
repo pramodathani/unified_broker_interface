@@ -1,0 +1,13 @@
+stoxkart: 3/6 raw row(s) classified, 3 uncategorised, 6 segment membership(s), 6 distinct instrument(s), 0 error(s).
+NSE equity winners: ['2885']
+BSE fixed income winners: ['950001']
+MCX option winners: ['440107']
+BSE exchange traded funds from other brokers: []
+Cross-broker queries that found nothing: 12
+Summary: matched 3, uncategorised 3, errors []
+  token 950002 -> bse_uncategorised
+  token 2885 -> nse_equities
+  token 440001 -> mcx_uncategorised
+  token 440107 -> mcx_commodity_options
+  token 950001 -> bse_fixed_income
+  token 12885 -> nse_uncategorised

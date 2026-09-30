@@ -1,0 +1,5 @@
+738561: 250 candles
+12094466: retired
+13368834: 250 candles
+Retired series and why: {'12094466': 'invalid token: 12094466'}
+CandleInstrumentUnknown is a CandleError: True

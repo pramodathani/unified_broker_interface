@@ -1,0 +1,3 @@
+From the modification: Redis does not hold this order's quantity as a whole number, so try again after the broker's next order book poll
+Raised by hand: Redis does not hold this order yet
+Is an Exception: True

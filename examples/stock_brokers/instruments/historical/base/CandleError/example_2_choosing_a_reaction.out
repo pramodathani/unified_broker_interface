@@ -1,0 +1,6 @@
+CandleThrottled (Too many requests): back off and retry the same window later
+CandleAuthenticationError (Session Expired): stop this broker
+CandleBlocked (error code: 1015): stop this broker
+CandleInstrumentUnknown (invalid token): retire the series
+CandleError (the broker answered in a shape no parser knows): record a candle failure against the series
+ValueError (could not convert string to float): record an unexpected failure against the series

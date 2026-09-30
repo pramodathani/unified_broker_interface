@@ -1,0 +1,21 @@
+bars_deleted: 1
+bars_kept: 6
+bars_written: 6
+filtered_bad_range: 1
+filtered_non_trading_day: 1
+filtered_off_grid: 1
+instruments_rebuilt: 1
+series_dhan: 0
+series_flattrade: 2
+series_zerodha: 0
+sources_superseded: 0
+Rows written (time, close, source id):
+  2026-08-27 480.00 11
+  2026-08-28 482.50 11
+  2026-08-31 485.00 11
+  2026-09-01 484.20 12
+  2026-09-02 242.50 12
+  2026-09-03 244.00 12
+Deleted: ['2026-08-21']
+Source 11 owns 2026-08-27 to 2026-08-31
+Source 12 owns 2026-09-01 to 2026-09-03

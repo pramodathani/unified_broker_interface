@@ -704,9 +704,6 @@ class BrokerCandles:
 
         Returns:
             int | float | None: The value unchanged when it fits in a BIGINT or is not a number, and None when it does not fit.
-
-        Raises:
-            This method raises no exceptions.
         """
         if not isinstance(value, (int, float)):
             return value

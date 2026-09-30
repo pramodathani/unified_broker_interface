@@ -1,0 +1,5 @@
+Stand-in login number 1
+Client code: SK12345
+Headers: {'x-client-id': 'SK12345', 'x-access-token': 'stoxkart-token-1', 'x-platform': 'api', 'x-api-key': 'stoxkart-api-key'}
+Headers after another process logged in: {'x-client-id': 'SK12345', 'x-access-token': 'stoxkart-token-from-another-process', 'x-platform': 'api', 'x-api-key': 'stoxkart-api-key'}
+Logins made: 1

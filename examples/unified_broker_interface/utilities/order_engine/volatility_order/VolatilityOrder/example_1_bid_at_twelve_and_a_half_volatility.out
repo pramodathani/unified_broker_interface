@@ -1,0 +1,7 @@
+Run: HTTP 200, outcome accepted, priced at 394.85
+Index 25080.0: moved True, bid 420.0
+Index 24950.0: moved True, bid 367.35
+Sent to the broker:
+  place BUY 75 LIMIT at 394.85 -> 260930000001
+  modify 260930000001 price 420.00
+  modify 260930000001 price 367.35

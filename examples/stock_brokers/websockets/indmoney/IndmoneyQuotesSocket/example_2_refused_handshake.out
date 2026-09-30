@@ -1,0 +1,22 @@
+Stand-in login number 1
+Handshake headers: {'Authorization': 'indmoney-token-1', 'x-api-key': 'ind-client-7'}
+Connecting to wss://ws-prices.indstocks.com/api/v1/ws/prices
+WARNING socket_0 handshake refused with HTTP 513, taken as a dead session.
+INFO socket_0 closed with status None: None
+WARNING Logging in to INDmoney again.
+Stand-in login number 2
+WARNING socket_0 disconnected. Reconnecting in 0 seconds.
+Handshake headers: {'Authorization': 'indmoney-token-2', 'x-api-key': 'ind-client-7'}
+Connecting to wss://ws-prices.indstocks.com/api/v1/ws/prices
+Sent: {"action": "subscribe", "mode": "full", "instruments": ["BSE:500325"]}
+INFO socket_0 opened and subscribed to 1 instrument(s) in full mode.
+INFO socket_0 message without instrument data: {"status": "subscribed", "mode": "full"}
+Tick BSE:RELIANCE (BSE:500325) on BSE
+  last_price=2951.0 volume=88000 buy_quantity=None sell_quantity=None
+  ohlc={'open': None, 'high': None, 'low': None, 'close': None}
+  last_trade_time=None exchange_timestamp=1790311529
+  depth={'buy': [], 'sell': []}
+INFO socket_0 closed with status 1000: normal closure
+INFO socket_0 stopped.
+Gave up: False
+Logins made: 2

@@ -1,0 +1,7 @@
+Raw files searched: ['dhan', 'kotak', 'groww', 'stoxkart', 'fyers', 'wisdom_capital', 'indmoney']
+  INE009A01021 -> nse INFY, found through dhan token 1594
+  INE009A01021 -> bse INFY, found through dhan token 500209
+Ticker INFY: 1 match in nse_equities
+Ticker TCS: 1 match in nse_equities
+Flattrade 1594 meant INFY from 2025-01-02 to 2026-09-28 on 431 dates
+ValueError: cannot match broker_mappings on 'isin'

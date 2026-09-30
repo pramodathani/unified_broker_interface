@@ -89,7 +89,7 @@ The table below shows what each runner creates.
 | Runner | Directory | Creates |
 |---|---|---|
 | `stock_brokers.instruments.sql.apply_ddl` | `stock_brokers/instruments/sql/ddl/` | The ten broker schemas and each broker's `instruments` table |
-| `stock_brokers.instruments.mapping.utilities.sql.apply_ddl` | `stock_brokers/instruments/mapping/utilities/sql/ddl/` | The `unified` schema, `unified.instruments`, `unified.broker_mappings` and `unified.contract_sizes` |
+| `stock_brokers.instruments.mapping.utilities.sql.apply_ddl` | `stock_brokers/instruments/mapping/utilities/sql/ddl/` | The `unified` schema, `unified.instruments`, `unified.broker_mappings`, `unified.contract_sizes`, `unified.underlyings` and `unified.broker_order_costs` |
 | `stock_brokers.instruments.historical.utilities.sql.apply_ddl` | `stock_brokers/instruments/historical/utilities/sql/ddl/` | Seven brokers' `price_history` and `price_history_progress`, the unified price history tables, its views and the function `unified.adjusted_bars()` |
 
 The live stream tables have no runner. Each `store_*_to_db` script applies its own file from `stock_brokers/instruments/ticks/utilities/sql/ddl/` when it starts, and so do two other scripts. The table below lists who applies which of those files.

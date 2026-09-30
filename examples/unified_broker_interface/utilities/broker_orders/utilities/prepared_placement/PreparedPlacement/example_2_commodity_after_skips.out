@@ -1,0 +1,5 @@
+Broker: zerodha
+Skipped: [{'broker': 'kotak', 'reason': 'has no login in Redis'}]
+Caller asked for 200 barrels; request carries quantity 2
+Identifier sent: CRUDEOIL26OCTFUT
+Request: {'method': 'POST', 'url': 'https://api.kite.trade/orders/regular', 'form': {'tradingsymbol': 'CRUDEOIL26OCTFUT', 'exchange': 'MCX', 'transaction_type': 'SELL', 'order_type': 'LIMIT', 'quantity': 2, 'product': 'NRML', 'validity': 'DAY', 'price': '6000', 'trigger_price': '0', 'disclosed_quantity': 0}}

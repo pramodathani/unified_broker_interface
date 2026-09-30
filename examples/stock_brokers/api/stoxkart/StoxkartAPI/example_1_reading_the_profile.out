@@ -1,0 +1,23 @@
+Request: GET https://openapi.stoxkart.com/reports/user-details
+Headers sent:
+    X-Client-Id: SK00001
+    X-Platform: api
+    X-Api-Key: stoxkart-app-key
+    X-Access-Token: morning-token
+Status: success
+HTTP code: 200
+Data:
+{
+    "client_id": "SK00001",
+    "client_name": "DEMO USER",
+    "exchanges": [
+        "NSE",
+        "BSE",
+        "NFO"
+    ],
+    "products": [
+        "CNC",
+        "MIS",
+        "NRML"
+    ]
+}

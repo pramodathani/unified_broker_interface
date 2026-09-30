@@ -1,0 +1,43 @@
+Session headers: {'access-token': 'example-dhan-token'}
+After-market stop-loss place:
+{
+  "json": {
+    "afterMarketOrder": true,
+    "amoTime": "OPEN",
+    "correlationId": "stop01",
+    "dhanClientId": "1000000001",
+    "disclosedQuantity": 0,
+    "exchangeSegment": "NSE_EQ",
+    "orderType": "STOP_LOSS",
+    "price": 2480.0,
+    "productType": "INTRADAY",
+    "quantity": 10,
+    "securityId": "2885",
+    "transactionType": "SELL",
+    "triggerPrice": 2485.0,
+    "validity": "DAY"
+  },
+  "method": "POST",
+  "url": "https://api.dhan.co/v2/orders"
+}
+Tag the request carries: stop01
+Cancel:
+{
+  "method": "DELETE",
+  "url": "https://api.dhan.co/v2/orders/112509150000012"
+}
+Modify the price:
+{
+  "json": {
+    "dhanClientId": "1000000001",
+    "disclosedQuantity": 0,
+    "orderId": "112509150000012",
+    "orderType": "LIMIT",
+    "price": 2502.5,
+    "quantity": 10,
+    "triggerPrice": 0.0,
+    "validity": "DAY"
+  },
+  "method": "PUT",
+  "url": "https://api.dhan.co/v2/orders/112509150000012"
+}

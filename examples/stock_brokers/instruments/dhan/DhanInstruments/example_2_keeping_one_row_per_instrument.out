@@ -1,0 +1,11 @@
+Rows downloaded: 5
+Key columns: ['exch_id', 'segment', 'security_id'], sorted first on: series
+Columns after normalize_columns: ['exch_id', 'segment', 'security_id', 'isin', 'instrument', 'underlying_security_id', 'underlying_symbol', 'symbol_name', 'display_name', 'instrument_type', 'series', 'lot_size', 'sm_expiry_date', 'strike_price', 'option_type', 'tick_size', 'unnamed_16']
+dhan: dropped empty artifact column 'unnamed_16'.
+dhan: dropped 1 duplicate row(s) on ['exch_id', 'segment', 'security_id'].
+Rows to store: 4
+  exch_id segment security_id               symbol_name instrument series lot_size
+0     BSE       E      500209               INFOSYS LTD     EQUITY      A      1.0
+1     NSE       E        1594           INFOSYS LIMITED     EQUITY     EQ      1.0
+2     NSE       E       11536  TATA CONSULTANCY SERV LT     EQUITY     EQ      1.0
+3     NSE       D       52175         NIFTY-Oct2026-FUT     FUTIDX    NaN     75.0

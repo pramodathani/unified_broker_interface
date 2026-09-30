@@ -1,0 +1,12 @@
+Summary:
+  mcx_commodity_futures confirmed tradeable=True: 2
+  mcx_commodity_futures no_source tradeable=False: 1
+  mcx_commodity_futures sibling_confirmed tradeable=True: 1
+  ncdex_commodity_futures single_source tradeable=True: 1
+Decisions deleted first for: 2026-09-28
+Rows written:
+  gold-2026-10: 100 confirmed tradeable=True sources={"groww_lot_size": "100", "kotak_contract_size": "100", "wisdom_capital_multiplier": "100"}
+  gold-2026-12: 100 confirmed tradeable=True sources={"groww_lot_size": "100", "wisdom_capital_multiplier": "100"}
+  gold-2027-02: 100 sibling_confirmed tradeable=True sources={"groww_lot_size": "100"}
+  dhaniya-2026-11: 5 single_source tradeable=True sources={"stoxkart_lot_size": "5"}
+  zinc-2026-10: none no_source tradeable=False sources={}

@@ -1,0 +1,6 @@
+Requested: https://api.kite.trade/instruments/historical/13368834/5minute
+Parameters: {'from': '2026-09-11', 'to': '2026-09-11', 'oi': 1}
+Candles in the payload: 2
+2026-09-11T09:15:00+05:30 open 1285.0 high 1291.0 low 1283.6 close 1290.5 volume 225000 oi 128846500
+2026-09-11T09:20:00+05:30 open 1290.5 high 1292.2 low 1288.1 close 1289.0 volume 98500 oi 128901000
+Kite name for 1minute: minute

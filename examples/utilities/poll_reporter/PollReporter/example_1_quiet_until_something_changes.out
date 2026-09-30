@@ -1,0 +1,16 @@
+Repeat interval: 60 seconds
+cycle 1: info Merged 0 of 0 order(s)
+  logged INFO: Merged 0 of 0 order(s)
+cycle 2: info Merged 0 of 0 order(s)
+cycle 3: info Merged 0 of 0 order(s)
+cycle 4: info Merged 2 of 2 order(s)
+  logged INFO: Merged 2 of 2 order(s)
+cycle 5: error Orders poll failed: 503 Service Unavailable
+  logged ERROR: Orders poll failed: 503 Service Unavailable
+cycle 6: error Orders poll failed: 503 Service Unavailable
+cycle 7: error Orders poll failed: read timed out
+  logged ERROR: Orders poll failed: read timed out
+cycle 8: info Merged 0 of 2 order(s)
+  logged INFO: Merged 0 of 2 order(s)
+cycle 9: info Merged 0 of 2 order(s)
+cycle 10: info Merged 0 of 2 order(s)

@@ -1,0 +1,15 @@
+Modify answered 200: accepted for zerodha 250930000101 of parent-1
+The stored leg now has the price 1499.5
+Cancel answered 200: accepted, broker said {'status': 'success', 'data': {'order_id': '250930000101'}}
+Cancel parent answered 200: state cancelled, 1 leg cancelled
+Sent to the broker:
+  modify zerodha 250930000101 quantity=None price=1499.50 trigger_price=None
+  cancel zerodha 250930000101
+  cancel zerodha 250930000102
+Recorded:
+  parent-1 leg_update accepted
+  parent-1 leg_cancel_requested working
+  parent-1 leg_cancelled accepted
+  parent-2 leg_cancel_requested working
+  parent-2 leg_cancelled accepted
+  parent-2 parent_state_changed cancelled

@@ -1,0 +1,16 @@
+First request carried: token kite-api-key:morning-token
+Another process logged in again at 12:30:41 and wrote its login to Redis.
+Second request carried: token kite-api-key:noon-token
+Request: GET https://api.kite.trade/user/margins
+Status: success, HTTP code: 200
+Data:
+{
+    "equity": {
+        "enabled": true,
+        "net": 98440.25,
+        "available": {
+            "cash": 113642.5,
+            "live_balance": 98440.25
+        }
+    }
+}

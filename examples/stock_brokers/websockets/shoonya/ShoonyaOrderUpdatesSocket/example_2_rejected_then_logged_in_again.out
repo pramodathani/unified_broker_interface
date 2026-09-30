@@ -1,0 +1,20 @@
+Stand-in login number 1
+Connecting to wss://api.shoonya.com/NorenWSTP/
+Sent: {"t": "a", "uid": "FA12345", "actid": "FA12345", "source": "API", "accesstoken": "shoonya-token-1"}
+INFO Order updates socket opened. Authenticating.
+ERROR Authentication refused: {'t': 'ak', 's': 'NOT_OK'}
+INFO Order updates socket closed with status 1000: normal closure
+WARNING Logging in to Shoonya again.
+Stand-in login number 2
+WARNING Order updates socket disconnected. Reconnecting in 0 seconds.
+Connecting to wss://api.shoonya.com/NorenWSTP/
+Sent: {"t": "a", "uid": "FA12345", "actid": "FA12345", "source": "API", "accesstoken": "shoonya-token-2"}
+INFO Order updates socket opened. Authenticating.
+Sent: {"t": "o", "actid": "FA12345"}
+INFO Authenticated and subscribed. Waiting for order updates.
+Callback received 1 update(s)
+  Order 26092500012345 COMPLETE: S 5 of 5 TCS-EQ
+INFO Order updates socket closed with status 1000: normal closure
+INFO Order updates socket stopped.
+Gave up: False
+Logins made: 2

@@ -1,0 +1,3 @@
+Read packet type 83 for topic id 7
+Caught as ValueError: KotakTruncatedFrameError: frame of 12 bytes ended reading 14 at 6
+Is a KotakTruncatedFrameError: True

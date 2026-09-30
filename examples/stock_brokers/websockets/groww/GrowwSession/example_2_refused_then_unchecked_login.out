@@ -1,0 +1,8 @@
+Stand-in login number 1
+Socket token request with Bearer groww-token-1 for a key starting U: HTTP 401
+Refused: HTTP 401: {"message": "Unauthorized"}
+WARNING Logging in to Groww again.
+Stand-in login number 2
+Socket token request with Bearer groww-token-2 for a key starting U: HTTP 200
+Socket token payload: {'token': 'socket-jwt', 'subscriptionId': 'subscription-77'}
+Logins made: 2

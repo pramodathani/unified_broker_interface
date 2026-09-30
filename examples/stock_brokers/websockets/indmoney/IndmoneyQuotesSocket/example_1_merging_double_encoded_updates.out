@@ -1,0 +1,13 @@
+Stand-in login number 1
+Handshake headers: {'Authorization': 'indmoney-token-1', 'x-api-key': 'ind-client-7'}
+Connecting to wss://ws-prices.indstocks.com/api/v1/ws/prices
+Sent: {"action": "subscribe", "mode": "full", "instruments": ["NSE:2885"]}
+INFO socket_0 opened and subscribed to 1 instrument(s) in full mode.
+Tick NSE:RELIANCE (NSE:2885) on NSE
+  last_price=2950.5 volume=1204500 buy_quantity=54000 sell_quantity=61000
+  ohlc={'open': 2930.0, 'high': 2960.0, 'low': 2925.0, 'close': 2950.0}
+  last_trade_time=1790311528 exchange_timestamp=1790311529
+  depth={'buy': [{'quantity': None, 'price': 2950.0, 'orders': None}], 'sell': [{'quantity': None, 'price': 2950.5, 'orders': None}]}
+INFO socket_0 closed with status 1000: normal closure
+INFO socket_0 stopped.
+Gave up: False

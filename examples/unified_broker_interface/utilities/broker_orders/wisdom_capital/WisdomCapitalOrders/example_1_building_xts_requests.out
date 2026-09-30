@@ -1,0 +1,53 @@
+Handle with instrument id 2885: None
+Handle with instrument id ABC: its mapping carries no numeric instrument id
+Application order id 1234567890: 1234567890
+Application order id W-ABC: 'W-ABC'
+Session headers: {'authorization': 'example-xts-token'}
+Place (certificate checked: False):
+{
+  "json": {
+    "clientID": "WC00001",
+    "disclosedQuantity": 0,
+    "exchangeInstrumentID": 2885,
+    "exchangeSegment": "NSECM",
+    "limitPrice": 2500.0,
+    "orderQuantity": 10,
+    "orderSide": "BUY",
+    "orderType": "LIMIT",
+    "orderUniqueIdentifier": "T1",
+    "productType": "MIS",
+    "stopPrice": 0.0,
+    "timeInForce": "DAY"
+  },
+  "method": "POST",
+  "url": "https://trade.wisdomcapital.in/interactive/orders"
+}
+Unique identifier stored on the order: T1
+Unique identifier when none is stored: ubi
+Cancel (certificate checked: False):
+{
+  "method": "DELETE",
+  "params": {
+    "appOrderID": 1234567890,
+    "clientID": "WC00001",
+    "orderUniqueIdentifier": "T1"
+  },
+  "url": "https://trade.wisdomcapital.in/interactive/orders"
+}
+Modify LIMIT to SL (certificate checked: False):
+{
+  "json": {
+    "appOrderID": 1234567890,
+    "clientID": "WC00001",
+    "modifiedDisclosedQuantity": 0,
+    "modifiedLimitPrice": 2500.0,
+    "modifiedOrderQuantity": 10,
+    "modifiedOrderType": "STOPLIMIT",
+    "modifiedProductType": "MIS",
+    "modifiedStopPrice": 2495.0,
+    "modifiedTimeInForce": "DAY",
+    "orderUniqueIdentifier": "T1"
+  },
+  "method": "PUT",
+  "url": "https://trade.wisdomcapital.in/interactive/orders"
+}

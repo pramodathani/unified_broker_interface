@@ -92,11 +92,11 @@ The checklist below names every file to add or edit. The paths are relative to t
 
 Each script in `bin/unified/` keeps its own tuple of broker names, and some keep a reader function per broker.
 
-- [ ] `bin/unified/instruments/websocket_quotes`: `BROKERS`, its own copy of `DEFAULT_PRIORITY`, and a normalizer class for the broker in the script's own table of normalizers (Stoxkart's is `StoxkartNormalizer`).
+- [ ] `bin/unified/instruments/websocket_quotes`: `BROKERS`, its own copies of `DEFAULT_PRIORITY` and (where it applies) `EXCHANGE_PRIORITY`, and a normalizer class for the broker in the script's own table of normalizers (Stoxkart's is `StoxkartNormalizer`).
 - [ ] `bin/unified/orders/api_order_details`: `BROKERS`.
 - [ ] `bin/unified/orders/api_trade_details`: `BROKERS`, and a reader for the broker's trade book.
 - [ ] `bin/unified/orders/websocket_order_details`: `ORDER_BROKERS`, `POSITION_BROKERS` if it streams positions, and the broker's normalization.
-- [ ] `bin/unified/portfolio/positions`, `holdings` and `funds`: `BROKERS`, and a reader for the broker's stored shape (for example `stoxkart_funds` in `funds`).
+- [ ] `bin/unified/portfolio/positions`, `holdings` and `funds`: `BROKERS`, and a reader for the broker's stored shape (for example `stoxkart_funds` in `funds`). In `positions`, also add the broker to `BASIS_BROKERS` if its hash fields carry a `NET:` or `DAY:` prefix.
 - [ ] `bin/unified/user/details`: `BROKERS`.
 
 ### 8. REST API
@@ -118,6 +118,7 @@ Each script in `bin/unified/` keeps its own tuple of broker names, and some keep
 - [ ] Write `test_runs/websocket_feeds/newbroker.py` with a `NewbrokerFeedCases` class, add it to `BROKER_CASES` in `test_runs/websocket_feeds/__main__.py`, and record only its lines with `python -m test_runs.websocket_feeds newbroker --record`.
 - [ ] Add the broker to `test_runs/order_routes.py` (its broker list, the logins, the settings and the instrument handles in `OrderRoutesState`), check the `NEW` and `CHANGED` lines, then re-record with `--record`.
 - [ ] If step 3 added a contract size source, add checks to `test_runs/contract_sizes.py`.
+- [ ] If step 6 added a candle downloader, add its parser to `test_runs/candle_parse.py`, with a payload recorded from the live API.
 - [ ] Run every suite in [Offline tests](../operations/tests.md) and `ruff check .`.
 - [ ] Update [Brokers](../brokers/index.md) and any page that lists what each broker supports.
 

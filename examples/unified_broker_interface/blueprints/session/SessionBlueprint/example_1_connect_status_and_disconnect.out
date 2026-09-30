@@ -1,0 +1,5 @@
+connect: 200 {"access-token": "token-issued-this-morning", "expires_at": "2099-01-01 00:00:00.000000"}
+status: 200 {"expires_at": "2099-01-01 00:00:00.000000", "status": "connected"}
+disconnect: 200 {"status": "disconnected"}
+status after disconnect: 401 {"error": "Invalid access token"}
+Stored access_token after disconnect: None

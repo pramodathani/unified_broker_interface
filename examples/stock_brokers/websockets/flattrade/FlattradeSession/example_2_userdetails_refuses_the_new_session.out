@@ -1,0 +1,7 @@
+Stand-in login number 1
+UserDetails called for flattrade-token-1: Ok
+WARNING Logging in to Flattrade again.
+Stand-in login number 2
+UserDetails called for flattrade-token-2: Not_Ok
+RuntimeError: UserDetails refused the session: {'stat': 'Not_Ok', 'uname': 'EXAMPLE USER'}
+Logins made: 2

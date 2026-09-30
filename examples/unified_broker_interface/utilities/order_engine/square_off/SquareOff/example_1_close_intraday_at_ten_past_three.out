@@ -1,0 +1,9 @@
+Run at 14:00: HTTP 202, outcome scheduled, intraday positions will be closed at 15:10
+Closes the intraday product, instruments limited to None
+Tick at 15:10: acted True, parent working
+Tick at 15:11: acted False, parent working
+Why: 1 resting orders cancelled, 2 of 2 positions closed
+Sent to the broker, in order:
+  cancel 260930000701
+  place SELL 20 LIMIT at 1401.85 -> 260930000001
+  place BUY 15 LIMIT at 1488.15 -> 260930000002

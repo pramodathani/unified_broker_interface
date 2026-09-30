@@ -1,0 +1,11 @@
+details: 200 ['250915000000011', '250915000000012', '112509150000012']
+details of zerodha's open orders: 200 [{"broker": "zerodha", "order_id": "250915000000011", "status": "OPEN", "tradingsymbol": "RELIANCE"}]
+trades: 200 [{"broker": "zerodha", "order_id": "250915000000012", "price": 1521.4, "quantity": 5, "trade_id": "T-1"}]
+filtered to REJECTED: 200 {"orders": [{"broker": "dhan", "order_id": "2", "status": "REJECTED"}], "page": {"cursor": 0, "matched": 1, "next_cursor": null, "returned": 1}}
+filtered with an unreadable limit: 400 {"error": "limit must be a whole number, not 'lots'"}
+parents: 200 {"parents": [{"parent_id": "P-1", "state": "working", "type": "bracket"}, {"parent_id": "P-2", "state": "armed", "type": "trigger"}]}
+parent P-2: 200 {"parent_id": "P-2", "state": "armed", "type": "trigger"}
+parent P-9: 404 {"error": "the order engine holds no parent with this id", "parent_id": "P-9"}
+intent not-an-intent: 404 {"error": "no answer is stored for this intent: the order engine has not answered it yet, the id is not one, or its answer has expired", "intent_id": "not-an-intent"}
+refuse: 409 {"broker": "zerodha", "error": "the order is already COMPLETE", "order_id": "250915000000012"}
+redis_unreadable: 503 {"error": "Redis could not be read: Connection refused"}

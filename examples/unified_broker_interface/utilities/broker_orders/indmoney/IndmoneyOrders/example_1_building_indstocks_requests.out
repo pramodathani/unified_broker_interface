@@ -1,0 +1,45 @@
+Session headers: {'Authorization': 'example-indmoney-token'}
+Place on the BSE:
+{
+  "json": {
+    "algo_id": "9999999999999999",
+    "exchange": "BSE",
+    "is_amo": false,
+    "limit_price": 2499.95,
+    "order_type": "LIMIT",
+    "product": "CNC",
+    "qty": 3,
+    "remarks": "sip01",
+    "security_id": "500325",
+    "segment": "EQUITY",
+    "txn_type": "BUY",
+    "validity": "DAY"
+  },
+  "method": "POST",
+  "url": "https://api.indstocks.com/order"
+}
+Cancel:
+{
+  "json": {
+    "order_id": "EQ-100072817",
+    "segment": "EQUITY"
+  },
+  "method": "POST",
+  "url": "https://api.indstocks.com/order/cancel"
+}
+Modify the price:
+{
+  "json": {
+    "limit_price": 2498.0,
+    "order_id": "EQ-100072817",
+    "qty": 3,
+    "segment": "EQUITY"
+  },
+  "method": "POST",
+  "url": "https://api.indstocks.com/order/modify"
+}
+Segment of EQ-100072817 with none stored: EQUITY
+Segment of DRV-200000001 with none stored: DERIVATIVE
+Segment of X-1 with DERIVATIVE stored: DERIVATIVE
+Stored exchange bse matches: True
+Stored exchange NSE matches: False

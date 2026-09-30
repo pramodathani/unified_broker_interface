@@ -1,0 +1,4 @@
+Decided: market=('mcx', 'commodity', 'derivative'), securities=False, units per lot=100, status=confirmed
+Disputed: market=('mcx', 'commodity', 'derivative'), securities=False, units per lot=None, status=conflict
+NIFTY 50 index tradeable: False
+Missing instrument: HTTP 404, {'error': 'the instrument is not mapped'}

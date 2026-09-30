@@ -1,0 +1,7 @@
+Run: HTTP 202, outcome armed, band -25 to 25
+Exposure before any hedge: 150.0
+Tick 1: acted True, exposure now reads 0.0, of which -150 is in flight
+Tick 2, nothing has moved: acted False, exposure now reads 0.0, of which -150 is in flight
+Tick 3, the put delta is -0.50: acted True, exposure now reads 0.0, of which -105 is in flight
+Sent to the broker: ['place SELL 150 LIMIT at 25009.40 -> 260930000001', 'place BUY 45 LIMIT at 25010.60 -> 260930000002']
+Parent: working, the exposure reached 150.0, so a hedge went out

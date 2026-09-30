@@ -1,0 +1,20 @@
+Request: GET https://e21.kotaksecurities.com/quick/user/positions
+Headers sent:
+    neo-fin-key: neotradeapi
+    Auth: morning-token
+    Sid: morning-sid
+Status: success
+HTTP code: 200
+Data:
+[
+    {
+        "exSeg": "nse_cm",
+        "trdSym": "INFY-EQ",
+        "tok": "1594",
+        "prod": "MIS",
+        "flBuyQty": "10",
+        "flSellQty": "0",
+        "buyAmt": "15432.50",
+        "sellAmt": "0.00"
+    }
+]

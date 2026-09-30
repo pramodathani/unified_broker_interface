@@ -1,0 +1,10 @@
+Rows downloaded: 5
+Key columns: ['instrument_token'], sorted first on: None
+Columns after normalize_columns: ['instrument_token', 'exchange_token', 'tradingsymbol', 'name', 'last_price', 'expiry', 'strike', 'tick_size', 'lot_size', 'instrument_type', 'segment', 'exchange']
+zerodha: dropped 1 duplicate row(s) on ['instrument_token'].
+Rows to store: 4
+  instrument_token  tradingsymbol instrument_type  segment exchange lot_size
+0           408065           INFY              EQ      NSE      NSE        1
+1          2953217            TCS              EQ      NSE      NSE        1
+2           256265       NIFTY 50              EQ  INDICES      NSE        0
+3         13874690  NIFTY26OCTFUT             FUT  NFO-FUT      NFO       75

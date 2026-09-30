@@ -192,7 +192,7 @@ The scripts under `bin/unified/` read only Redis, MongoDB and the database, and 
 | `connect` | Logs in to UBI with its API key and secret, issues an access token | MongoDB `settings` | MongoDB and Redis `last_login`; Redis `unified:session:status` |
 | `disconnect` | Revokes the access token in force | MongoDB `settings` | the stored token; Redis `unified:session:status` |
 
-Both ask for the key and secret, or read `UNIFIED_BROKER_INTERFACE_API_KEY` and `UNIFIED_BROKER_INTERFACE_API_SECRET`; `connect` also takes `--api-key`. They exit 1 for wrong credentials, a missing settings document or a failed write, and 2 when no key or secret was given.
+Both ask for the key and secret, or read `UNIFIED_BROKER_INTERFACE_API_KEY` and `UNIFIED_BROKER_INTERFACE_API_SECRET`, and both take `--api-key` to give the key on the command line. They exit 1 for wrong credentials, a missing settings document or a failed write, and 2 when no key or secret was given.
 
 ### user, brokers and exchanges
 

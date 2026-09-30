@@ -1,0 +1,9 @@
+Take: True
+  Key held by this engine: True, expiry 30s
+Twenty seconds pass, 12s left on the key
+Refresh: True
+  Key held by this engine: True, expiry 30s
+Take again while already holding it: True
+  Key held by this engine: True, expiry 30s
+Released
+  Key absent

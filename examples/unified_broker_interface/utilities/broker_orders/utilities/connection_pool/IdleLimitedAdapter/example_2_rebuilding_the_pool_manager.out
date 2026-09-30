@@ -1,0 +1,2 @@
+https://api.dhan.co/: IdleLimitedHTTPSConnectionPool, idle limit 180.0 s, keeps 3, queue Queue
+http://127.0.0.1:8765/: IdleLimitedHTTPConnectionPool, idle limit 180.0 s, keeps 3, queue Queue

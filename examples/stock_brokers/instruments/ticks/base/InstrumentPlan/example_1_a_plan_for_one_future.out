@@ -1,0 +1,18 @@
+instrument_id: 11111111-1111-5111-8111-000000000101
+broker: zerodha
+broker_token: 5720583
+exchange: mcx
+segment: mcx_commodity_futures
+shape: future
+session: Session(calendar='commodity', opens=32400, evening_opens=61200, trading_close=86100, window_close=86399)
+lot_size: 100
+multipliers: {'last_quantity': 100, 'volume': 100, 'buy_quantity': 100, 'sell_quantity': 100, 'depth_quantity': 100, 'oi': 100, 'oi_day_high': 100, 'oi_day_low': 100}
+price_decimals: 2
+negative_prices: True
+close_policy: always
+has_open_interest: True
+trusts_last_trade_time: True
+trusts_exchange_time: True
+identity_json: "instrument_id":"11111111-1111-5111-8111-000000000101","broker":"zerodha","broker_token":"5720583","exchange":"mcx","segment":"mcx_commodity_futures","shape":"future","symbol":"CRUDEOIL26OCTFUT","underlying_symbol":"CRUDEOIL","expiry_date":"2026-10-19","strike_price":null,"option_type":null,"lot_size":100
+A tick normalized with this plan:
+  last_price 9731.0, last_quantity 200, volume 6795800, oi 1809500, reported_close 9722.0

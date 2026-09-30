@@ -1,0 +1,13 @@
+Redis holds tokens: ['11536', '1594']
+Redis holds identities for: ['0a6e2d41-9c7f-4b58-8d13-6f2e4a9b7c05']
+read_from_redis returns only complete tokens: ['1594']
+Token 1594: ['INFY']
+Token 11536: ['TCS']
+Token 999999: []
+  counters: {'process_hits': 0, 'redis_hits': 1, 'postgres_hits': 1, 'misses': 1}
+  Postgres was asked for tokens: ['11536', '999999']
+Second round counters: {'process_hits': 3, 'redis_hits': 1, 'postgres_hits': 1, 'misses': 1}
+Unknown token remembered: True as []
+A fresh empty_entry is a new list: True
+read_from_postgres finds tokens: ['11536', '1594']
+write_to_redis: True

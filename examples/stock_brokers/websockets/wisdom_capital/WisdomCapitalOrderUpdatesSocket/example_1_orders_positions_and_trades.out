@@ -1,0 +1,13 @@
+Stand-in login number 1
+HTTPS GET /interactive/socket.io/: HTTP 200
+Connecting to wss://trade.wisdomcapital.in/interactive/socket.io/ with Engine.IO session engine-session-1
+Sent: 2probe
+Sent: 5
+INFO Joined the interactive namespace. Waiting for order and position updates.
+Order 1100012345 New: BUY 0 of 10 INFY
+Position INFY: net quantity 10
+Sent: 3
+Order 1100012345 Filled: BUY 10 of 10 INFY
+INFO Order updates socket closed with status 1000: normal closure
+INFO Order updates socket stopped.
+Gave up: False

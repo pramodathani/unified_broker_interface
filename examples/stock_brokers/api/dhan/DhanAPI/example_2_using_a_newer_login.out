@@ -1,0 +1,16 @@
+First request carried: morning-token
+Another process logged in again at 12:30:41 and wrote its login to Redis.
+Second request carried: noon-token
+Request: GET https://api.dhan.co/v2/fundlimit
+Status: success, HTTP code: 200
+Data:
+{
+    "dhanClientId": "1100000001",
+    "availabelBalance": 98440.0,
+    "sodLimit": 113642.0,
+    "collateralAmount": 0.0,
+    "receiveableAmount": 0.0,
+    "utilizedAmount": 15202.0,
+    "blockedPayoutAmount": 0.0,
+    "withdrawableBalance": 98310.0
+}

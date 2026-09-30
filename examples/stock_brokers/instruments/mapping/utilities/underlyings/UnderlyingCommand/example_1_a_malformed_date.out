@@ -1,0 +1,2 @@
+--date needs a date as YYYY-MM-DD, not '28-09-2026'.
+Exit code: 2

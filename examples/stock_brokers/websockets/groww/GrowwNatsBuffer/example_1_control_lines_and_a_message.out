@@ -1,0 +1,3 @@
+('info', {'nonce': 'example-nonce', 'headers': True})
+('ping',)
+('message', '/ld/eq/nse/book.2885', b'ab\r\ncde')

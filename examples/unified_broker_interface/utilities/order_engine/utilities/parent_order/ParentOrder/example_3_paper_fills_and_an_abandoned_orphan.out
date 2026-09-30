@@ -1,0 +1,8 @@
+Paper after one fill: {'fill_at': 'touch', 'paper_filled': 75}
+An event with no quantity changes nothing: {'fill_at': 'touch', 'paper_filled': 75}
+Paper after parameters changed: {'fill_at': 'mid', 'paper_filled': 150}
+Paper state: completed, tag: paper0001
+Crashed leg before recovery: sending
+Crashed leg after recovery: unknown, parent: failed
+Last error: No order in the Kotak book matched the leg
+Synthetic type defaulted to: simple

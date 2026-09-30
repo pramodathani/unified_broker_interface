@@ -1,0 +1,7 @@
+gold-future-oct: ['100']
+silver-future-dec: ['30']
+usdinr-future-oct: ['1000']
+Broker queried: kotak
+Mapping date: 2026-09-28
+Segments: ['mcx_commodity_futures', 'nse_currency_futures']
+Exchange labels: ['mcx_fo', 'nse_com', 'cde_fo']

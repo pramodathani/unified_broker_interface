@@ -1,0 +1,19 @@
+Stand-in login number 1
+HTTPS GET /interactive/socket.io/: HTTP 200
+Connecting to wss://trade.wisdomcapital.in/interactive/socket.io/ with Engine.IO session engine-session-1
+Sent: 2probe
+Sent: 5
+INFO Joined the interactive namespace. Waiting for order and position updates.
+WARNING Wisdom Capital logged this socket out: {"message": "Logged in from another device"}. Reconnecting with the login now in force.
+INFO Order updates socket closed with status 1000: normal closure
+WARNING Order updates socket disconnected. Reconnecting in 0 seconds.
+HTTPS GET /interactive/socket.io/: HTTP 200
+Connecting to wss://trade.wisdomcapital.in/interactive/socket.io/ with Engine.IO session engine-session-2
+Sent: 2probe
+Sent: 5
+INFO Joined the interactive namespace. Waiting for order and position updates.
+Order 1100012345 Filled: BUY 10 of 10 INFY
+INFO Order updates socket closed with status 1000: normal closure
+INFO Order updates socket stopped.
+Gave up: False
+Logins made: 1

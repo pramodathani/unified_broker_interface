@@ -1,0 +1,7 @@
+Instruments to download: 3 of 4 rows
+NSE_2885: prefix NSE, security id 2885, EQUITY, expiry None, exchange nse, 10 segments to search
+BSE_500325: prefix BSE, security id 500325, EQUITY, expiry None, exchange bse, 10 segments to search
+NFO_52175: prefix NFO, security id 52175, FUTSTK, expiry 2026-09-29, exchange nse, 16 segments to search
+400 "Invalid scrip codes: NSE_99999999": CandleInstrumentUnknown
+429 "Rate limit exceeded": CandleThrottled
+401 "Unauthorized": CandleAuthenticationError

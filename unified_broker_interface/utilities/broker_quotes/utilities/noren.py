@@ -150,6 +150,25 @@ class NorenQuoteSource(BrokerQuoteSource):
     QUOTE_URL = None
 
     def fetch(self, client, handle, identity, received_at):
+        """
+        One instrument's quote from this Noren deployment as a contract tick.
+
+        The quote is requested from the deployment's `GetQuotes` endpoint by Noren exchange and token, and the tick's `instrument_token` is spelled `<exchange>|<token>`, as the Noren market feed spells it. Noren can refuse inside a successful HTTP response, so the body's `stat` is checked as well. Up to five order book levels a side are read, the change is Noren's own percentage or, when it is missing, worked out from the last price and the close, and the last update time becomes the exchange timestamp.
+
+        Args:
+            client (BrokerAPI): The broker's Noren API client, whose `post` carries the session.
+            handle (dict): The broker's order handle for the instrument; its `broker_token` is the Noren token.
+            identity (dict): The instrument's identity.
+            received_at (float): The instant to stamp on the tick, in epoch seconds.
+
+        Returns:
+            dict: The contract tick, in `full` mode when it carries an order book and `quote` mode otherwise.
+
+        Raises:
+            QuoteUnavailable: The instrument has no Noren exchange or no token, or the answer held no quote.
+            NorenRefusal: Noren refused the session inside a successful HTTP response.
+            BrokerAPIException: The API client refused the request, such as a FlattradeAPIException or ShoonyaAPIException, which this method lets through.
+        """
         token = str(handle["broker_token"]).strip()
         exchange = noren_exchange(identity)
         if exchange is None or not token:
@@ -205,6 +224,17 @@ class NorenQuoteSource(BrokerQuoteSource):
         return tick
 
     def is_authentication_error(self, exception):
+        """
+        Whether an exception from `fetch` means this Noren deployment no longer accepts the session.
+
+        A `NorenRefusal` always counts, because `fetch` raises it only for a refused session. Any other exception counts when its text says the session has expired or its session key is invalid.
+
+        Args:
+            exception (Exception): What `fetch` raised.
+
+        Returns:
+            bool: True when logging in again is the remedy.
+        """
         if isinstance(exception, NorenRefusal):
             return True
         text = str(exception).lower()

@@ -1,0 +1,14 @@
+No receipt time: dropped
+Unknown token: dropped
+Sunday replay: dropped
+Zerodha, not the owner: dropped
+Groww, zero price: not written, ownership changes [{'instrument_id': '11111111-1111-5111-8111-000000000102', 'owner': 'groww'}]
+Groww, no close yet: written, last_price 1262.7, previous_close None, change_percent None, ownership changes []
+Groww, after seeding Monday close: written, last_price 1262.9, previous_close None, change_percent None, ownership changes []
+Groww, after seeding it for today: written, last_price 1263.1, previous_close 1257.5, change_percent 0.4453, ownership changes []
+no_price: 1
+not_owner: 1
+out_of_session: 1
+received: 8
+unresolved: 2
+written: 3

@@ -1,0 +1,10 @@
+Rows downloaded: 5
+Key columns: ['exchange', 'token'], sorted first on: series
+Columns after normalize_columns: ['exchange', 'market_segment_id', 'token', 'symbol', 'symbol_description', 'series', 'instrument_type', 'option_type', 'expiry_date', 'lot_size', 'strike_price', 'isin_code', 'tick_size']
+stoxkart: dropped 1 duplicate row(s) on ['exchange', 'token'].
+Rows to store: 4
+  exchange   token symbol series instrument_type lot_size
+0      BSE  500209   INFY      A             NaN        1
+1      NSE    1594   INFY     EQ             NaN        1
+2      NSE   11536    TCS     EQ             NaN        1
+3      NFO   52175  NIFTY    NaN          FUTIDX       75

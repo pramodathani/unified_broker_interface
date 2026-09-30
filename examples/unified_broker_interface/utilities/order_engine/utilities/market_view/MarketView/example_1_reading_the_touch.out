@@ -1,0 +1,15 @@
+Readable: True, stale: False
+Raw offer 1000.0999999999999 read as: 1000.10
+Last traded price: 1000.10
+Best bid: 1000.05
+Best offer: 1000.10
+Third level of the offers: 1000.20
+Fourth level of the offers: None
+Midpoint: 1000.075
+Midpoint rounded for a buyer: 1000.05
+Midpoint rounded for a seller: 1000.10
+Midpoint rounded to the nearest tick: 1000.10
+BUY: joins 1000.05, fills now at 1000.10
+BUY: two ticks towards the market 1000.15, two ticks away 999.95
+SELL: joins 1000.10, fills now at 1000.05
+SELL: two ticks towards the market 1000.00, two ticks away 1000.20

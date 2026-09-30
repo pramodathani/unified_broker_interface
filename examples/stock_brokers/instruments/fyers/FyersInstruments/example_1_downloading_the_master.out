@@ -1,0 +1,20 @@
+Files read:
+    https://public.fyers.in/sym_details/NSE_CD.csv
+    https://public.fyers.in/sym_details/NSE_FO.csv
+    https://public.fyers.in/sym_details/NSE_COM.csv
+    https://public.fyers.in/sym_details/NSE_CM.csv
+    https://public.fyers.in/sym_details/BSE_CM.csv
+    https://public.fyers.in/sym_details/BSE_FO.csv
+    https://public.fyers.in/sym_details/MCX_COM.csv
+Rows: 8
+Columns: ['fytoken', 'symbol_details', 'exchange_instrument_type', 'minimum_lot_size', 'tick_size', 'isin', 'trading_session', 'last_update_date', 'expiry_date', 'symbol_ticker', 'exchange', 'segment', 'scrip_code', 'underlying_symbol', 'underlying_scrip_code', 'strike_price', 'option_type', 'underlying_fytoken', 'reserved_column1', 'reserved_column2', 'reserved_column3']
+First six columns:
+            fytoken            symbol_details exchange_instrument_type minimum_lot_size tick_size          isin
+0   101126102901201      USDINR 26 Oct 29 FUT                       11                1    0.0025           NaN
+1   101126102752175       NIFTY 26 Oct 27 FUT                       11               75       0.1           NaN
+2   101126102835001    CRUDEOIL 26 Oct 28 FUT                       30                1       1.0           NaN
+3    10100000001594           INFOSYS LIMITED                        0                1       0.1  INE009A01021
+4    10100000011536  TATA CONSULTANCY SERV LT                        0                1       0.1  INE467B01029
+5  1210000000500209              INFOSYS LTD.                        0                1      0.05  INE009A01021
+6  1211261030873765      SENSEX 26 Oct 30 FUT                       11               20      0.05           NaN
+7  1120261019451669    CRUDEOIL 26 Oct 19 FUT                       30                1       1.0           NaN

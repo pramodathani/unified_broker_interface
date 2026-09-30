@@ -1,0 +1,12 @@
+Stand-in login number 1
+Handshake headers: {'Authorization': 'indmoney-token-1', 'x-api-key': 'ind-client-7'}
+Connecting to wss://ws-order-updates.indstocks.com/api/v1/ws/trades
+Sent: {"action": "subscribe", "mode": "order_update"}
+INFO Order updates socket opened and subscribed. Waiting for order updates.
+INFO Order subscription acknowledged.
+INFO Ignoring a message of type 'heartbeat': {"type": "heartbeat"}
+Order type=None IND2609250001 OPEN: SELL 0 of 5 TCS
+Order type=order IND2609250001 COMPLETE: SELL 5 of 5 TCS
+INFO Order updates socket closed with status 1000: normal closure
+INFO Order updates socket stopped.
+Gave up: False

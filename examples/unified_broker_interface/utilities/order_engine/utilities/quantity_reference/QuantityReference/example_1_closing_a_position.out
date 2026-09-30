@@ -1,0 +1,9 @@
+{'kind': 'liquidate_position'}, asked BUY 0: send SELL 150
+{'kind': 'liquidate_position', 'product': 'delivery'}, asked SELL 0: send BUY 100
+{'kind': 'reduce_position', 'product': 'intraday'}, asked BUY 100: send SELL 100
+{'kind': 'reduce_position', 'product': 'intraday'}, asked BUY 1000: send SELL 250
+{'kind': 'absolute'}, asked BUY 75: send BUY 75
+Net RELIANCE across products: 150
+whole of "-100": -100
+whole of None: 0
+whole of "lots": 0

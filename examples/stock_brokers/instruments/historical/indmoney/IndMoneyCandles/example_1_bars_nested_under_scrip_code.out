@@ -1,0 +1,8 @@
+Requested https://api.indstocks.com/market/historical/5minute
+  parameters: {'scrip-codes': 'NSE_2885', 'start_time': '1788805800000', 'end_time': '1788892200000'}
+  bars: 2
+  2026-09-08T09:15:00+05:30 open 1306.8 high 1306.8 low 1300.0 close 1303.1 volume 174555 oi None
+  2026-09-08T09:20:00+05:30 open 1303.1 high 1304.0 low 1301.0 close 1302.0 volume 98434 oi None
+Requested https://api.indstocks.com/market/historical/5minute
+  parameters: {'scrip-codes': 'NFO_52175', 'start_time': '1788805800000', 'end_time': '1788892200000'}
+  bars: 0

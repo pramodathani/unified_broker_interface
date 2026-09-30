@@ -1,0 +1,16 @@
+States changed: 1, the first being NSE:2885
+  average_price: 2949.0
+  buy_quantity: 54000
+  exchange_timestamp: 1790311529
+  high: 2960.0
+  last_price: 2950.5
+  last_quantity: 25
+  last_trade_time: 1790311528
+  low: 2925.0
+  oi: 0
+  open: 2930.0
+  previous_close: 2910.0
+  sell_quantity: 61000
+  volume: 1204500
+  best bid: {'quantity': 100, 'price': 2950.0, 'orders': 3}
+  best offer: {'quantity': 200, 'price': 2950.5, 'orders': 4}

@@ -1,0 +1,6 @@
+Run: HTTP 200, outcome accepted, parent working
+03 cancelled at the close: parent working
+finish_if_done with the put still live: parent working
+15 cancelled at the close: parent completed
+Why: no candidate is still working
+Sent to the broker: ['place BUY 75 LIMIT at 95.00 -> 260930000001', 'place BUY 75 LIMIT at 88.00 -> 260930000002']

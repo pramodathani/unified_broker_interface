@@ -1,0 +1,13 @@
+Run: HTTP 200, outcome accepted, parent protecting
+Entry 1000, first stop 980, 3 rules
+Last 1012.0: moved False, stop trigger 980.0 limit 978.0, rules applied 0
+Last 1021.0: moved True, stop trigger 1000.0 limit 998.0, rules applied 1
+Last 1045.0: moved True, stop trigger 1015.0 limit 1013.0, rules applied 2
+Last 1062.0: moved True, stop trigger 1037.0 limit 1035.0, rules applied 3
+Last 1080.0: moved True, stop trigger 1055.0 limit 1053.0, rules applied 3
+Sent to the broker:
+  place SELL 10 SL at 978.00 trigger 980.00 -> 260930000001
+  modify 260930000001 price 998.00 trigger 1000.00
+  modify 260930000001 price 1013.00 trigger 1015.00
+  modify 260930000001 price 1035.00 trigger 1037.00
+  modify 260930000001 price 1053.00 trigger 1055.00

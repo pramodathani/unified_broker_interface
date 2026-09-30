@@ -1,0 +1,8 @@
+last_price None -> None
+last_price 0 -> None
+last_price -3.5 -> None
+Share: last_price 1262.7, volume 1885670, oi None
+Share: last_trade_time eight days old -> None, exchange_time a minute ahead -> None
+Share: bids [(1262.6, 120, 4), (1262.3, 50, None)], asks []
+Share: close policy never, reported_close None
+Future with an unknown lot: last_price -12.5, volume None, oi None

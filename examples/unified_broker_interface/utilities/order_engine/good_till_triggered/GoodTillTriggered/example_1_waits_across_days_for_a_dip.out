@@ -1,0 +1,7 @@
+Run: HTTP 202, outcome armed, valid for 60 days (60)
+  the order is recorded and will be placed when the price touches the level, on any day before it expires
+05 Oct at 2520.0: fired False
+20 Oct at 2431.0: fired False
+12 Nov at 2398.0: fired True
+Sent to the broker: ['place BUY 20 LIMIT at 2395.00 -> 260930000001']
+Parent: working, 2398.00 reached the trigger at 2400; accepted

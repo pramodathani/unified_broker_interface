@@ -1,0 +1,20 @@
+latest_mapping_date: datetime.date(2026, 9, 30)
+read_token_candidates 1594: nse_equities 0a6e2d41-9c7f-4b58-8d13-6f2e4a9b7c05
+read_token_candidates 1594: bse_equities 3d5f7a9c-1e2b-4d6f-8a0c-2e4f6a8c0e11
+read_identities: {'instrument_id': '7c1e9b20-4d3a-4f87-a6b5-0e2d9c8f1a44', 'exchange': 'nse', 'segment': 'nse_equity_index_futures', 'shape': 'future', 'symbol': None, 'underlying_symbol': 'NIFTY', 'expiry_date': datetime.date(2026, 10, 27), 'strike_price': None, 'option_type': None, 'mapping_date': datetime.date(2026, 9, 30)}
+read_order_handles dhan: {'broker_token': '52168', 'order_symbol': None, 'lot_size': '75', 'tick_size': '0.10'}
+read_order_handles zerodha: {'broker_token': '13238018', 'order_symbol': 'NIFTY26OCTFUT', 'lot_size': '75', 'tick_size': '0.10'}
+broker_tokens_on_date: ['1594', '13238018']
+read_underlyings: {'7c1e9b20-4d3a-4f87-a6b5-0e2d9c8f1a44': '2b9d4e6f-8a1c-4e35-b7d2-5f0a3c6e9b18'}
+read_underlyings of nothing: {}
+read_additional_attributes: {'0a6e2d41-9c7f-4b58-8d13-6f2e4a9b7c05': {'dhan': {'freeze_quantity': None, 'isin': 'INE009A01021'}, 'fyers': {'freeze_quantity': None, 'isin': 'INE009A01021'}}}
+handle_from_row with no tick size: {'broker_token': '35012', 'order_symbol': 'NIFTY26OCTFUT', 'lot_size': '75', 'tick_size': None}
+identity_from_row: {'instrument_id': '2b9d4e6f-8a1c-4e35-b7d2-5f0a3c6e9b18', 'exchange': 'nse', 'segment': 'nse_equity_indices', 'shape': 'security', 'symbol': 'NIFTY 50', 'underlying_symbol': None, 'expiry_date': None, 'strike_price': None, 'option_type': None, 'mapping_date': datetime.date(2026, 9, 30)}
+Statements sent, with their parameters:
+  max(mapping_date): None
+  b.broker_token = ANY: {'broker': 'dhan', 'mapping_date': datetime.date(2026, 9, 30), 'tokens': ['1594']}
+  SELECT instrument_id, exchange: {'instrument_identifiers': ['7c1e9b20-4d3a-4f87-a6b5-0e2d9c8f1a44']}
+  SELECT instrument_id, broker, broker_token: {'instrument_identifiers': ['7c1e9b20-4d3a-4f87-a6b5-0e2d9c8f1a44'], 'mapping_date': datetime.date(2026, 9, 30)}
+  SELECT DISTINCT broker_token: {'broker': 'zerodha', 'mapping_date': datetime.date(2026, 9, 30)}
+  FROM unified.underlyings: {'mapping_date': datetime.date(2026, 9, 30), 'instrument_ids': ['7c1e9b20-4d3a-4f87-a6b5-0e2d9c8f1a44']}
+  SELECT instrument_id, broker, attributes: {'mapping_date': datetime.date(2026, 9, 30), 'instrument_identifiers': ['0a6e2d41-9c7f-4b58-8d13-6f2e4a9b7c05']}

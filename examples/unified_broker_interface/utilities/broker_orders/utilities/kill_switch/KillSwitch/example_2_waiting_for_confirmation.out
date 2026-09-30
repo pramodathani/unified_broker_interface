@@ -1,0 +1,8 @@
+Asked to cancel: 3 orders; still open: [('zerodha', 'A2')]
+Asked to close: 2 positions; still held: [('zerodha', 'TCS')]
+is_finished(EXPIRED): True
+is_finished(OPEN): False
+whole('-75'): -75
+whole(12.0): 12
+whole(None): 0
+whole('lots'): 0

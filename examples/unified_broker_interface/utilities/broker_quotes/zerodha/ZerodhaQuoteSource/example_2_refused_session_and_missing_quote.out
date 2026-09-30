@@ -1,0 +1,4 @@
+refused session: ZerodhaAPIException: ('TokenException', 'Incorrect `api_key` or `access_token`.')
+    log in again: True
+expired contract: QuoteUnavailable: Kite returned no quote for instrument token 12345678
+    log in again: False

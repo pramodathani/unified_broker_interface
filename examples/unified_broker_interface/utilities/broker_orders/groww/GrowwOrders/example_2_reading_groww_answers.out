@@ -1,0 +1,12 @@
+Place, accepted: accepted (HTTP 200), order id GMK39038RDVL, message None
+Place, refusal inside a success: rejected (HTTP 422), order id None, message Insufficient funds
+Place, settled server error: rejected (HTTP 422), order id None, message Order rejected
+Place, text server error: unknown (HTTP 504), order id None, message Service Unavailable
+Cancel, accepted: accepted (HTTP 200), order id None, message None
+Cancel, refusal inside a success: rejected (HTTP 422), order id None, message Order already cancelled
+Requests the stand-in received: ['POST https://api.groww.in/v1/order/create', 'POST https://api.groww.in/v1/order/create', 'POST https://api.groww.in/v1/order/create', 'POST https://api.groww.in/v1/order/create', 'POST https://api.groww.in/v1/order/cancel', 'POST https://api.groww.in/v1/order/cancel']
+read_order_id of the accepted body: GMK39038RDVL
+read_refusal of the refused body: Insufficient funds
+read_refusal of a failure with no message: status FAILURE
+ga001 settles a refusal: True
+GA003 settles a refusal: False

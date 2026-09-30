@@ -1,0 +1,9 @@
+status open, limit 2, cursor 0, active True
+  orders: ['260930000002 OPEN', '260930000003 TRIGGER PENDING']
+  page: {'matched': 5, 'returned': 2, 'cursor': 0, 'next_cursor': 2}; summary kept: {'orders': 7}
+status open, limit 2, cursor 2, active True
+  orders: ['260930000005 OPEN', '260930000006 OPEN']
+  page: {'matched': 5, 'returned': 2, 'cursor': 2, 'next_cursor': 4}; summary kept: {'orders': 7}
+status open, limit 2, cursor 4, active True
+  orders: ['260930000007 open']
+  page: {'matched': 5, 'returned': 1, 'cursor': 4, 'next_cursor': None}; summary kept: {'orders': 7}

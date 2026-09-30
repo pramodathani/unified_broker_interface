@@ -1,0 +1,6 @@
+URL before any order: https://api.example-broker.in/
+Quiet server: kept; connection closed False, handed back True
+URL after an order: https://api-2.example-broker.in/
+Server talks after answering: discarded; connection closed True, handed back True
+Pings sent: ['HEAD https://api.example-broker.in/', 'HEAD https://api-2.example-broker.in/']
+A broker with no WARM_URL and no orders yet: skipped

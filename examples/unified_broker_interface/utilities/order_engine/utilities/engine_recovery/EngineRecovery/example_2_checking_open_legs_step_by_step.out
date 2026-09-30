@@ -1,0 +1,13 @@
+Replayed 11111111-0000-4000-8000-000000000001: parent received, leg at zerodha acknowledged
+Replayed 22222222-0000-4000-8000-000000000002: parent received, leg at flattrade sending
+Orders in each book: zerodha ['26091500000099'], flattrade []
+Zerodha polled at: 1790000000.5
+Stored time as a number: 1790000000.5
+Unreadable stored time: None
+Claimed orders: [('zerodha', '26091500000031')]
+Missing leg: unknown, parent failed
+Why: leg 11111111-0000-4000-8000-000000000001:1 is not in zerodha's order book, so its outcome is unknown
+Orphan leg: unknown, parent failed
+Why: the broker book was too old to attribute this order, so it may be live and unprotected
+Counts: {'parents': 2, 'open': 2, 'attributed': 0, 'abandoned': 1, 'missing': 1}
+Recorded: orphan_abandoned for leg 22222222-0000-4000-8000-000000000002:1, parent now failed

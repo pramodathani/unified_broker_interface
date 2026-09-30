@@ -1,0 +1,4 @@
+first parent found None, assigned zerodha and did not clear it
+second parent found zerodha with skipped [{'broker': 'dhan', 'reason': 'takes no SL-M orders'}], then cleared it
+third parent found None with skipped []
+the main thread never had one: None

@@ -1,0 +1,7 @@
+No stop_price:
+  refused with HTTP 400: a cover order is an entry and a compulsory stop, so it needs stop_price; without one it is a plain order
+A target as well:
+  refused with HTTP 400: a cover order has no target; an entry with both a stop and a target is a bracket, so ask for one of those instead
+A correct cover order the broker refuses:
+  HTTP 400, outcome rejected, parent rejected
+Orders that reached the broker: ['place SELL 25 LIMIT at 3900 -> refused']

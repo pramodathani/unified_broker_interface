@@ -1,0 +1,13 @@
+Largest store size: 10000
+The clock answers a datetime
+Kept under ('2026-09-30', '5d41402abc4b2a76b9719d911017c592')
+Read under the same marker:
+  instrument: ('{"segment": "nse_equities", "symbol": "INFY"}', '{"zerodha": {"broker_token": "408065", "lot_size": "1"}}', None)
+  lookup of INFY: 22222222-2222-5222-8222-000000000001
+  zerodha token 408065: 22222222-2222-5222-8222-000000000001
+Read after the catalogue was warmed again:
+  instrument: None
+  lookup of INFY: None
+  zerodha token 408065: None
+Instruments kept now: 0, marker ('2026-09-30', '7d793037a0760186574b0282f2f435e7')
+After keeping with no warm identifier: 0 kept, marker None

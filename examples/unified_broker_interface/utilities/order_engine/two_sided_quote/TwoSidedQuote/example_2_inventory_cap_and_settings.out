@@ -1,0 +1,14 @@
+half_spread_points 1, skew_ticks 0, fair price last
+wanted_prices: {'bid': Decimal('1499.00'), 'ask': Decimal('1501.00')}
+The ask filled: inventory -20, past its cap True
+A stale tick: acted False
+Last 1498: acted True, bid 1497.0, ask None
+Sent to the broker:
+  place BUY 20 LIMIT at 1499.00 -> 260930000001
+  place SELL 20 LIMIT at 1501.00 -> 260930000002
+  modify 260930000001 price 1497.00
+No half spread: HTTP 400, a two-sided quote needs half_spread_points as a number above zero, not None
+A step of zero ticks: HTTP 400, step_ticks must be a whole number of at least 1, not 0
+A fair price of vwap: HTTP 400, fair_price must be one of mid, last, not 'vwap'
+read_positive for a setting not given and not required: None
+Tick size used: 0.05

@@ -1,0 +1,14 @@
+Identities: 3
+Zerodha tokens: 3
+Kotak tokens: 0
+Order handles: 2
+  contract sizes could not be read, so none were warmed: relation "unified.contract_sizes" does not exist
+Contract sizes: 0
+  underlyings could not be read, so none were warmed: relation "unified.underlyings" does not exist
+Underlyings: 0
+Additional attributes: 1
+Catalogued: 3
+Zerodha token 123456 points at: 6a4f0d0e-1c55-5b8e-9e3a-0b7c0f1d2a31
+Keys of other dates cleared: 2
+SystemExit: nothing has been mapped, so there is nothing to warm.
+SystemExit: redis could not be reached, so the cache was not warmed.

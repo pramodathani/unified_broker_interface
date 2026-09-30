@@ -1,0 +1,48 @@
+Crude oil place:
+{
+  "form": {
+    "actid": "FT000001",
+    "amo": "NO",
+    "dscqty": "0",
+    "exch": "MCX",
+    "ordersource": "API",
+    "prc": "6000",
+    "prctyp": "LMT",
+    "prd": "M",
+    "qty": "2",
+    "ret": "DAY",
+    "trantype": "B",
+    "trgprc": "0",
+    "tsym": "CRUDEOIL19OCT26",
+    "uid": "FT000001"
+  },
+  "method": "POST",
+  "url": "https://piconnect.flattrade.in/PiConnectAPI/PlaceOrder"
+}
+Encoded body starts: jData={"uid": "FT000001"
+Cancel:
+{
+  "form": {
+    "norenordno": "26091500000021",
+    "uid": "FT000001"
+  },
+  "method": "POST",
+  "url": "https://piconnect.flattrade.in/PiConnectAPI/CancelOrder"
+}
+Modify the price:
+{
+  "form": {
+    "actid": "FT000001",
+    "exch": "NSE",
+    "norenordno": "26091500000021",
+    "ordersource": "API",
+    "prc": "2501.5",
+    "prctyp": "LMT",
+    "qty": "10",
+    "ret": "DAY",
+    "tsym": "RELIANCE-EQ",
+    "uid": "FT000001"
+  },
+  "method": "POST",
+  "url": "https://piconnect.flattrade.in/PiConnectAPI/ModifyOrder"
+}

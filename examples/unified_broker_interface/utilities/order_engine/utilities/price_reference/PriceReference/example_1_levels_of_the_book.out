@@ -1,0 +1,13 @@
+{'kind': 'absolute', 'price': Decimal('998.50')}: BUY 998.50, SELL 998.50
+{'kind': 'last'}: BUY 1000.10, SELL 1000.10
+{'kind': 'vwap'}: BUY 999.85, SELL 999.85
+{'kind': 'mid'}: BUY 1000.05, SELL 1000.10
+{'kind': 'bid_level', 'level': 2}: BUY 1000.00, SELL 1000.00
+{'kind': 'offer_level', 'level': 2, 'buffer_percent': Decimal('0.1')}: BUY 1001.15, SELL 999.15
+{'kind': 'marketable', 'offset_ticks': 2}: BUY 1000.20, SELL 999.95
+passive_side for a mid buy: BUY
+passive_side for a marketable buy: SELL
+from_quote mid before rounding: 1000.075
+level_price of the second offer: 1000.15
+number of 1000.0999999999999: 1000.10
+with_offsets of 1000.15 plus 0.1% for a buy: 1001.15015

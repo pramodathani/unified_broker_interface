@@ -48,6 +48,13 @@ class RequestError(Exception):
     """
 
     def __init__(self, message, status=400):
+        """
+        Record what was wrong with the request and the status to answer it with.
+
+        Args:
+            message (str): What was wrong, returned to the caller.
+            status (int): The HTTP status to answer with, 400 unless given.
+        """
         super().__init__(message)
         self.message = message
         self.status = status
@@ -65,6 +72,16 @@ class InstrumentQuery:
     """
 
     def __init__(self, instrument_id=None, exchange=None, segment=None, shape=None, fields=None):
+        """
+        Record how a request named an instrument.
+
+        Args:
+            instrument_id (str | None): The instrument id, when the request gave one.
+            exchange (str | None): The exchange, when the request named the instrument by identity.
+            segment (str | None): The exchange-prefixed segment.
+            shape (str | None): The segment's shape.
+            fields (dict | None): The identity fields, or None for none, which is stored as an empty dictionary.
+        """
         self.instrument_id = instrument_id
         self.exchange = exchange
         self.segment = segment

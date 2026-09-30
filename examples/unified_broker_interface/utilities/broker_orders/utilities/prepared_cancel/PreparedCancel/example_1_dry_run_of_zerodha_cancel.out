@@ -1,0 +1,13 @@
+HTTP 200
+{
+  "broker": "zerodha",
+  "dry_run": true,
+  "order_id": "250915000000011",
+  "request": {
+    "method": "DELETE",
+    "url": "https://api.kite.trade/orders/amo/250915000000011"
+  },
+  "status_before_cancel": "OPEN"
+}
+Timings reported: ['preparation']
+Engine command: None

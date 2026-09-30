@@ -100,6 +100,15 @@ class InstrumentPlan:
                  "has_open_interest", "trusts_last_trade_time", "trusts_exchange_time", "identity_json")
 
     def __init__(self, **values):
+        """
+        Build a plan from every attribute given by name.
+
+        Args:
+            **values (dict): One keyword argument per name in `__slots__`, each holding the value that attribute takes, as described in the class's `Attributes:` section.
+
+        Raises:
+            KeyError: A name in `__slots__` was not given.
+        """
         for name in self.__slots__:
             setattr(self, name, values[name])
 

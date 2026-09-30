@@ -1,0 +1,7 @@
+Pool class: IdleLimitedHTTPConnectionPool
+Is an IdleLimitedHTTPConnectionPool: True
+Host: 127.0.0.1:8765
+Idle limit: 30.0 seconds
+Connections kept: 4
+Hands out the oldest first: True
+Connections remembered as returned: 0

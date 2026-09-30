@@ -42,6 +42,11 @@ class BaseBlueprint:
     routes = []
 
     def __init__(self):
+        """
+        Open the store connections and register every route in `routes` on a new Flask blueprint.
+
+        The blueprint is named after `name`. Each route's handler is the method of this instance named in its `routes` entry, and the MongoDB database, the Redis client and the token store built from them are shared by every request this instance handles.
+        """
         self.blueprint = Blueprint(self.name, __name__)
         self.mongo_db = get_mongo_db()
         self.cache = get_cache()

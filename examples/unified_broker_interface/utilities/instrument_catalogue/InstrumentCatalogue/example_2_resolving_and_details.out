@@ -1,0 +1,20 @@
+resolve: 22222222-2222-5222-8222-000000000005 on 2026-09-30, from the cache True
+resolve_many: 22222222-2222-5222-8222-000000000001, from the cache True
+resolve_many: 404 no instrument nse_equities NOSUCHCO is mapped on 2026-09-30
+resolve_many: 22222222-2222-5222-8222-000000000003, from the cache True
+details of the option:
+  nse_equity_index_options NIFTY: lot 75, tick 0.05, seen 2024-01-02 to 2026-09-30
+    underlying 22222222-2222-5222-8222-000000000003; carried by dhan 41234, zerodha 12345678
+details_many:
+  nse_equities INFY: lot 1, tick None, seen 2024-01-02 to 2026-09-30
+    underlying None; carried by dhan 1594, zerodha 408065
+  404 no instrument nse_equities NOSUCHCO is mapped on 2026-09-30
+  nse_equity_index_futures NIFTY: lot 75, tick 0.1, seen 2024-01-02 to 2026-09-30
+    underlying None; carried by zerodha 35001
+additional_details of INFY: 16 attribute names
+  dhan: isin INE009A01021, series EQ, display_name None
+  zerodha: isin INE009A01021, series None, display_name INFOSYS
+additional_details_many: 22222222-2222-5222-8222-000000000001 with 2 brokers
+additional_details_many: 404
+additional_details_many: 22222222-2222-5222-8222-000000000003 with 0 brokers
+agreed_tick_size of 0.05, 0.05, 0.10: 0.05

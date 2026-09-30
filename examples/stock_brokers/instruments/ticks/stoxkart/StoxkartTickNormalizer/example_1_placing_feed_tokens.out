@@ -1,0 +1,7 @@
+Broker: stoxkart
+'NSE:2885' -> broker_token='2885' order_symbol=None segments=10 starting with nse_equities
+'NFO:35003' -> broker_token='35003' order_symbol=None segments=16 starting with nse_fixed_income_futures
+'MCX:440001' -> broker_token='440001' order_symbol=None segments=16 starting with mcx_fixed_income_futures
+'NCDEX:12345' -> broker_token='12345' order_symbol=None segments=16 starting with ncdex_fixed_income_futures
+'NSE' -> None
+'LSE:1' -> None

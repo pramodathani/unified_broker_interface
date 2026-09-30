@@ -1,0 +1,26 @@
+Stand-in login number 1
+UserDetails called for flattrade-token-1: Ok
+Connecting to wss://piconnect.flattrade.in/PiConnectWSTp/
+Sent: {"t": "a", "uid": "FT012345", "actid": "FT012345", "source": "API", "accesstoken": "flattrade-token-1"}
+INFO socket_0 opened. Authenticating.
+ERROR socket_0 authentication rejected: {'t': 'ak', 's': 'NOT_OK', 'emsg': 'Session Expired :  Invalid Session Key'}
+INFO socket_0 closed with status 1000: normal closure
+WARNING Logging in to Flattrade again.
+Stand-in login number 2
+UserDetails called for flattrade-token-2: Ok
+WARNING socket_0 disconnected. Reconnecting in 0 seconds.
+Connecting to wss://piconnect.flattrade.in/PiConnectWSTp/
+Sent: {"t": "a", "uid": "FT012345", "actid": "FT012345", "source": "API", "accesstoken": "flattrade-token-2"}
+INFO socket_0 opened. Authenticating.
+Sent: {"t": "d", "k": "MCX|565899#MCX|565900"}
+INFO socket_0 authenticated and subscribed to 2 instrument(s).
+Names learned: {'MCX|565899': 'MCX:CRUDEOIL19OCT26'}
+Tick MCX:CRUDEOIL19OCT26 (MCX|565899) in quote mode
+  last_price=6120.0 volume=8450 change=0.3279
+  ohlc={'open': None, 'high': None, 'low': None, 'close': 6100.0}
+  last_trade_time=1790311528 exchange_timestamp=1790311529
+Names learned: {'MCX|565900': 'MCX:CRUDEOIL19NOV26'}
+INFO socket_0 closed with status 1000: normal closure
+INFO socket_0 stopped.
+Gave up: False
+Logins made: 2

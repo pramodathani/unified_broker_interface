@@ -1,0 +1,6 @@
+PIDILITIND on bse: 19 served closes, 3038.0 on 2025-09-22, 1523.0 on 2025-09-23
+PIDILITIND on nse: 19 served closes, 1519.0 on 2025-09-22, 1523.0 on 2025-09-23
+Build summary: {'pairs': 1, 'cross_exchange_confirmed': 1, 'instruments_changed': 1}
+Stored: NSE|10575|PIDILITIND-EQ from 2025-09-23, multiplier 2.0 (2/1), by cross_exchange, confirmed
+  evidence {"ratio_before": 2.0, "ratio_after": 1.0, "last_day_before": "2025-09-22", "first_day_after": "2025-09-23", "nse_change": 1.0, "bse_change": 0.5, "newer_run": 9, "dispersion": 0.0, "yahoo_event": ["2025-09-23", 0.5], "corrected": "nse", "decided_by": "yahoo event", "intraday_multiplier": 2.001052}
+Follow-up statements: ['delete from unified.price_history_corrections', 'delete from unified.price_history_corrections', 'update unified.price_history_sources set', 'delete from unified.adjustment_factors', 'update unified.yahoo_fetch_state set']

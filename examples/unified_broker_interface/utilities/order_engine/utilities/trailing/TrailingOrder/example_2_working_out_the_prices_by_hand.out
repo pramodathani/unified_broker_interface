@@ -1,0 +1,21 @@
+Caller is short, so the stop trades: BUY
+Trail at 1% of 2400.00: 24.00
+Limit offset: 1.50, step: 4 ticks
+Trigger from 2400.00: 2424.00, limit: 2425.50
+Stop order: BUY SL 40 trigger 2424.00 limit 2425.50
+Resting stop before placing: None
+  sent to kotak: {'transaction_type': 'BUY', 'order_type': 'SL', 'price': '2425.50', 'trigger_price': '2424.00'}
+Placed: 200 accepted; leg 7c1d2e3f-0000-4000-8000-000000000011:1 BUY trigger 2424.0 limit 2425.5; watermark 2400.00
+Does 2395.00 improve the watermark of a buy stop? True
+Does 2402.00 improve the watermark of a buy stop? False
+Is moving the trigger to 2420.00 worth it with a 4 tick step? True
+Is moving the trigger to 2423.90 worth it with a 4 tick step? False
+Caller moved the trigger to 2410.0; watermark is now 2386.138613861386138613861386
+  recorded: the caller moved the trigger to 2410.0, so the trail continues from a watermark of 2386.138613861386138613861386
+Watermark for a 2410 trigger, worked out directly: 2386.138613861386138613861386
+positive("2.5", "trail_points"): 2.5
+Refusals:
+  {'trail_points': 5, 'trail_percent': 1}: 400 a trailing order takes trail_points or trail_percent, not both
+  {}: 400 a trailing order needs trail_points or trail_percent to say how far behind the market its stop follows
+  {'trail_points': '-5'}: 400 trail_points must be above zero, not -5
+  {'step_ticks': 0}: 400 step_ticks must be at least one tick, not 0

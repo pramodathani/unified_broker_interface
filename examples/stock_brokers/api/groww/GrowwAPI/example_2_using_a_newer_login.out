@@ -1,0 +1,12 @@
+First request carried: Bearer morning-token
+Another process logged in again at 12:30:41 and wrote its login to Redis.
+Second request carried: Bearer noon-token
+Request: GET https://api.groww.in/v1/margins/detail/user
+Status: success, HTTP code: 200
+Data:
+{
+    "clear_cash": 98440.0,
+    "net_margin_used": 15202.0,
+    "brokerage_and_charges": 41.3,
+    "collateral_available": 0.0
+}

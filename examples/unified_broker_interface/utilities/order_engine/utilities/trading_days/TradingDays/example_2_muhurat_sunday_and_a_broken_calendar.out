@@ -1,0 +1,9 @@
+2026-11-06 Fri: trades True
+2026-11-07 Sat: trades False
+2026-11-08 Sun: trades True
+2026-11-09 Mon: trades True
+2026-11-10 Tue: trades False
+Next trading day after 2026-11-07: 2026-11-08 Sun
+ValueError: no trading day was found for nse_equities in the 30 days after 2026-11-07
+Questions the stand-in gate was asked: 30
+First question: ('nse', 20765)

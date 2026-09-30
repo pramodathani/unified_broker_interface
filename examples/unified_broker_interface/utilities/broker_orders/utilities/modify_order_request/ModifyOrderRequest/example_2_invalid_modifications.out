@@ -1,0 +1,5 @@
+{'order_id': '250930000000001'} -> HTTP 400: give at least one of quantity, disclosed_quantity, price, trigger_price, order_type or validity to change
+{'order_id': '250930000000001', 'quantity': 5, 'disclosed_quantity': 10} -> HTTP 400: disclosed_quantity cannot be more than quantity
+{'order_id': '250930000000001', 'order_type': 'ICEBERG'} -> HTTP 400: order_type must be one of MARKET, LIMIT, SL, SL-M
+{'order_id': '250930000000001', 'quantity': '20'} -> changes ['quantity'], quantity 20, changes price: False
+validity GTC -> HTTP 400: validity must be one of DAY, IOC

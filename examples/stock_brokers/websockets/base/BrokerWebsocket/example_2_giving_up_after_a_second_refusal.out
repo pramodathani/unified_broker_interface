@@ -1,0 +1,9 @@
+Refused feed: connection 1 refused with HTTP 401.
+Refused feed: logged in again.
+WARNING Refused feed disconnected. Reconnecting in 0 seconds.
+Refused feed: connection 2 refused with HTTP 401.
+ERROR Refused feed still cannot connect after logging in again. Giving up.
+INFO Refused feed stopped.
+Refused feed gave up: True after 2 connections and 1 login
+INFO Closed feed stopped.
+Closed feed gave up: False after 0 connections

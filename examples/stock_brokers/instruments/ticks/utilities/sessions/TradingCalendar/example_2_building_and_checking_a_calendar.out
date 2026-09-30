@@ -1,0 +1,5 @@
+Empty calendar: closure None, special session None, years []
+Built calendar: nse equity on 2027-01-26 closed all
+Built calendar: nse currency on 2027-01-26 closed None
+Built calendar: special session on 2027-10-31 (64800, 69300)
+Loading the misspelt file refused: 2027.yaml: nse equity 2027-01-26 closed is 'allday'

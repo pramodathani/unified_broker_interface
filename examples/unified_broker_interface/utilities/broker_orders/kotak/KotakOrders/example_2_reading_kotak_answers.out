@@ -1,0 +1,10 @@
+Place, accepted: accepted (HTTP 200), order id 260915000204304, message None
+Place, refusal inside a success: rejected (HTTP 422), order id None, message unauthorized
+Place, server error: unknown (HTTP 504), order id None, message gateway error
+Cancel, accepted: accepted (HTTP 200), order id None, message None
+Cancel, refusal inside a success: rejected (HTTP 422), order id None, message Order not found
+Requests the stand-in received: ['POST https://mis.kotaksecurities.com/quick/order/rule/ms/place', 'POST https://mis.kotaksecurities.com/quick/order/rule/ms/place', 'POST https://mis.kotaksecurities.com/quick/order/rule/ms/place', 'POST https://mis.kotaksecurities.com/quick/order/cancel', 'POST https://mis.kotaksecurities.com/quick/order/cancel']
+read_order_id of the accepted body: 260915000204304
+read_refusal of the accepted body: None
+read_refusal of a body with only errMsg: Session expired
+read_refusal of a body with only stat: the broker refused the request

@@ -1,0 +1,9 @@
+Run: HTTP 202, outcome armed
+child_order: BUY 40 LIMIT at 1248.00
+At  0 s, last 1249.5: fired False
+At 10 s, last 1251.0: fired False
+At 20 s, last 1249.9: fired False
+At 35 s, last 1248.6: fired False
+At 51 s, last 1249.0: fired True
+Sent to the broker: ['place BUY 40 LIMIT at 1248.00 -> 260930000001']
+No limit_price: HTTP 400, a limit-if-touched order rests at a price of its own, so it needs limit_price as well as trigger_price

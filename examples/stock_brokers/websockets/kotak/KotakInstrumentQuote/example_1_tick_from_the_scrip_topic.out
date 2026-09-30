@@ -1,0 +1,6 @@
+No tick yet
+Tick RELIANCE-EQ in quote mode: last_price=2950.5 change=1.3918 ohlc={'open': 2930.0, 'high': 2960.0, 'low': 2925.0, 'close': 2910.0}
+  last_trade_time=1790311528 exchange_timestamp=1790311529 depth={'buy': [], 'sell': []}
+Tick nse_cm|2885 in quote mode: last_price=2950.5 change=1.3918 ohlc={'open': 2930.0, 'high': 2960.0, 'low': 2925.0, 'close': 2910.0}
+  last_trade_time=1790311528 exchange_timestamp=1790311529 depth={'buy': [], 'sell': []}
+Instrument nse_cm|2885 has depth: False

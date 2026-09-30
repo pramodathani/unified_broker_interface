@@ -1,0 +1,9 @@
+1. Redis is empty, so the login is read from MongoDB and cached:
+    sent morning-token (logged in at 2026-09-30 07:00:05)
+    Redis last_login now: {"broker_name": "clocked", "access_token": "morning-token", "last_login": "2026-09-30 07:00:05"}
+2. Another process logged in at 12:30:41 and wrote Redis:
+    sent noon-token (logged in at 2026-09-30 12:30:41)
+    Redis last_login now: {"broker_name": "clocked", "access_token": "noon-token", "last_login": "2026-09-30 12:30:41"}
+3. This object logged in at 18:02:10 but could not write Redis:
+    sent evening-token (logged in at 2026-09-30 18:02:10)
+    Redis last_login now: {"broker_name": "clocked", "access_token": "noon-token", "last_login": "2026-09-30 12:30:41"}

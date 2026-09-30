@@ -1,0 +1,12 @@
+Place, accepted: accepted (HTTP 200), order id 112509150000012, message None
+Place, order id 0 inside a success: unknown (HTTP 504), order id None, message the broker answered without an order id: {'orderId': '0', 'orderStatus': 'REJECTED'}
+Place, settled server error: rejected (HTTP 422), order id None, message Incorrect order request
+Place, plain server error: unknown (HTTP 504), order id None, message Internal server error
+Cancel, accepted: accepted (HTTP 200), order id None, message None
+Cancel, client error: rejected (HTTP 422), order id None, message Order already traded
+Requests the stand-in received: ['POST https://api.dhan.co/v2/orders', 'POST https://api.dhan.co/v2/orders', 'POST https://api.dhan.co/v2/orders', 'POST https://api.dhan.co/v2/orders', 'DELETE https://api.dhan.co/v2/orders/112509150000012', 'DELETE https://api.dhan.co/v2/orders/112509150000012']
+read_order_id of the accepted body: 112509150000012
+Order_Error settles a refusal: True
+Rate_Limit_Error settles a refusal: True
+Invalid_Authentication settles a refusal: False
+Internal_Server_Error settles a refusal: False

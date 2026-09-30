@@ -1,0 +1,9 @@
+Open parents: 2
+cancel_parent: 200 {'parent_id': 'first', 'synthetic_type': 'simple', 'state': 'cancelled', 'cancelled_legs': [{'leg_id': 'first:1', 'broker': 'zerodha', 'order_id': '260930000001', 'outcome': 'accepted', 'status_message': None}]}
+Cancels sent: [('zerodha', '260930000001')]
+pause: 400 {'error': "the order engine does not run the command 'pause'"}
+halt: 200 {'halted_parents': 1}
+first is now cancelled: cancelled through DELETE /api/orders/parents
+second is now cancelled: halted by POST /api/orders/flatten
+halt again: 200 {'halted_parents': 0}
+Unacknowledged entries: []

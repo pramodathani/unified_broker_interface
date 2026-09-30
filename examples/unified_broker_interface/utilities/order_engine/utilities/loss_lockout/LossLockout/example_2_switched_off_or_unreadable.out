@@ -1,0 +1,13 @@
+Limit of zero on a 90,000 loss:
+  Configured: False
+  Refusal: None
+Redis unreachable:
+  WARNING unified:portfolio:funds could not be read (Connection refused), so the daily loss lockout is not being applied to this order.
+  Day profit: None
+  WARNING unified:portfolio:funds could not be read (Connection refused), so the daily loss lockout is not being applied to this order.
+  Refusal: None
+Funds key missing:
+  Day profit: None
+Funds text is not JSON:
+  Day profit: None
+  Refusal: None

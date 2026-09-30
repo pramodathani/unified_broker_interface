@@ -1,0 +1,8 @@
+Stand-in login number 1
+Profile served for login 1
+WARNING Logging in to Fyers again.
+Stand-in login number 2
+Profile refused for login 2
+FyersRefusal: code=-16 message=the profile was refused: {'s': 'error', 'code': -16, 'message': 'Could not authenticate the user'}
+Claims of a malformed token: {}
+Logins made: 2

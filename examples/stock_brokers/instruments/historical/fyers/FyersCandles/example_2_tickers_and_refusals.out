@@ -1,0 +1,9 @@
+NSE:RELIANCE-EQ: kind EQ, expiry None, matched on order_symbol, exchange nse, 6 segments to search
+NSE:NIFTY50-INDEX: kind EQ, expiry None, matched on order_symbol, exchange nse, 4 segments to search
+NSE:RELIANCE26SEPFUT: kind FUT, expiry 2026-09-29, matched on order_symbol, exchange nse, 16 segments to search
+NSE:NIFTY25D3026000CE: kind OPT, expiry 2025-12-30, matched on order_symbol, exchange nse, 16 segments to search
+-300 "Invalid symbol provided": CandleInstrumentUnknown
+-16 "Could not authenticate the user": CandleAuthenticationError
+429 "error code: 1015 - the owner of this website has banned you temporarily": CandleBlocked
+429 "request limit reached": CandleThrottled
+-50 "Date range cannot exceed 366 days for 1D, 1W and 1M": left as FyersAPIException

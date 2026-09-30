@@ -348,7 +348,7 @@ class ZerodhaMappingAdapter(BrokerMappingAdapter):
         Args:
             raw_row (dict): One raw row from zerodha.instruments.
             trading_symbol (str): The row's trading symbol.
-            name: The row's name column.
+            name (str | None): The row's name column.
             name_is_blank (bool): Whether the name is absent.
 
         Returns:

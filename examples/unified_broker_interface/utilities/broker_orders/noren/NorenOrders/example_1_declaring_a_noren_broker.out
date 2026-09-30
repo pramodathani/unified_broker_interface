@@ -1,0 +1,51 @@
+Encoded body: jData={"uid": "EN00001", "tsym": "M\u0026M-EQ"}&jKey=example-session-token
+Stop-loss place:
+{
+  "form": {
+    "actid": "EN00001",
+    "amo": "NO",
+    "dscqty": "0",
+    "exch": "NSE",
+    "ordersource": "API",
+    "prc": "0",
+    "prctyp": "SL-MKT",
+    "prd": "I",
+    "qty": "5",
+    "remarks": "mm01",
+    "ret": "IOC",
+    "trantype": "B",
+    "trgprc": "3010",
+    "tsym": "M&M-EQ",
+    "uid": "EN00001"
+  },
+  "method": "POST",
+  "url": "https://api.example-noren.in/NorenWClientTP/PlaceOrder"
+}
+Cancel:
+{
+  "form": {
+    "norenordno": "26091500000031",
+    "uid": "EN00001"
+  },
+  "method": "POST",
+  "url": "https://api.example-noren.in/NorenWClientTP/CancelOrder"
+}
+Modify LIMIT to SL with a disclosed quantity:
+{
+  "form": {
+    "actid": "EN00001",
+    "dscqty": "1",
+    "exch": "NSE",
+    "norenordno": "26091500000031",
+    "ordersource": "API",
+    "prc": "3000.0",
+    "prctyp": "SL-LMT",
+    "qty": "5",
+    "ret": "DAY",
+    "trgprc": "2995",
+    "tsym": "M&M-EQ",
+    "uid": "EN00001"
+  },
+  "method": "POST",
+  "url": "https://api.example-noren.in/NorenWClientTP/ModifyOrder"
+}

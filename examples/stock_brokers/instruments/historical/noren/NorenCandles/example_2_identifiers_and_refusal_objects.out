@@ -1,0 +1,12 @@
+NSE|2885|RELIANCE-EQ: EQ, expiry None
+NFO|2885|RELIANCE27OCT26F: FUTSTK, expiry 2026-10-27
+MCX|565899|CRUDEOIL19OCT26: FUTCOM, expiry 2026-10-19
+NSE|26000|Nifty 50: INDEX, expiry None
+  NSE 2885 RELIANCE-EQ: exchange nse, 10 segments, symbol RELIANCE
+  NFO 2885 RELIANCE27OCT26F: exchange nse, 16 segments, symbol None
+  MCX 565899 CRUDEOIL19OCT26: exchange mcx, 16 segments, symbol None
+  NSE 26000 Nifty 50: exchange nse, 10 segments, symbol Nifty 50
+  XYZ 123 UNKNOWN: exchange None, any segment, symbol None
+"Error Occurred : 5 "no data"": 0 bars
+"Rate_Limited: too many requests": CandleThrottled: shoonya refused the request for rate: Rate_Limited: too many requests
+"Session Expired :  Invalid Session Key": CandleAuthenticationError: shoonya rejected the session key: Session Expired :  Invalid Session Key

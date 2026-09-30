@@ -1,0 +1,5 @@
+NSE:RELIANCE-EQ: 75 candles stored
+NSE:SBIN-EQ: throttled (request limit reached), left claimable for later
+NSE:TCS-EQ: 75 candles stored
+NSE:INFY-EQ: blocked (error code: 1015), stopping the broker
+Requests sent: 4 of 5

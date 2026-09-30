@@ -1,0 +1,20 @@
+Market order for RELIANCE: can take it
+Stop-loss order: takes no SL-M orders
+Currency future: does not take nse currency derivative orders
+No login in Redis: has no login in Redis
+Login is not JSON: has no login in Redis
+Settings are a list: has no client_code in its Redis settings
+Missing settings when client_code and api_secret are needed: ['api_secret']
+Crude oil future: can take it
+Crude quantities in the broker terms: (3, 1)
+One quantity of 500 barrels: 5 lots
+Equity quantity is unchanged: 10
+Broker lot size from the crude handle: 100
+Broker lot size of 0.5: None
+Quantity conversion problem for crude: None
+Handle check beyond the identifier: None
+Login check beyond the access token: None
+Takes only securities: False
+Stored exchange NSE_CASH matches RELIANCE: True
+Stored exchange BSE_CASH matches RELIANCE: False
+Request built: {'method': 'POST', 'url': 'https://api.example-broker.in/orders', 'json': {'client': 'C1001', 'segment': 'NSE_CASH', 'token': '2885', 'side': 'BUY', 'quantity': 10}}

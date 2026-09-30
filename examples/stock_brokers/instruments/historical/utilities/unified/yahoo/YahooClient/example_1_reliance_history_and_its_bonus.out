@@ -1,0 +1,8 @@
+last_request before any request: 0.0
+last_request moved on after pace: True
+Requests sent: ['RELIANCE.NS period=max auto_adjust=False actions=True']
+  2024-10-23 close 1370.35
+  2024-10-24 close 1360.9
+  2024-10-25 close 1331.4
+  2024-10-28 close 1333.3
+Listed event: 2024-10-28 ratio 2.0

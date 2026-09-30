@@ -1,0 +1,14 @@
+Unknown command: 400 the order engine does not run the command 'split_leg'
+Unknown parent: 404 the order engine holds no parent with this id
+Filled leg: 409 the order is already filled
+Held change: 409 a simple order holds no order of its own to change; change its legs with broker and order_id
+Finished parent: 409 the parent is already cancelled
+Cancel parent with a refused leg answered 207: state cancelling
+  zerodha 250930000203: rejected, Order cannot be cancelled as it is being processed. Try later.
+parent-open after halting: cancelled
+Halting a missing parent changed nothing: True
+Sent to the broker: ['cancel zerodha 250930000203']
+runner_for gives a SimpleOrder holding parent-filled
+leg_to_change refuses: {'error': 'the order is already filled', 'broker': 'zerodha', 'order_id': '250930000201'}
+An unknown outcome is answered 504: the broker did not answer in time
+Prices read as decimals: 1497.55 and None

@@ -1,0 +1,7 @@
+bse-usdinr-future-oct: ['1000']
+ncdex-dhaniya-future-nov: ['5']
+ncdex-jeera-future-nov: ['3']
+Broker queried: stoxkart
+Mapping date: 2026-09-28
+Segments: ['bse_currency_futures', 'ncdex_commodity_futures']
+Exchange labels: ['NSECD', 'BSECD', 'NCDEX']

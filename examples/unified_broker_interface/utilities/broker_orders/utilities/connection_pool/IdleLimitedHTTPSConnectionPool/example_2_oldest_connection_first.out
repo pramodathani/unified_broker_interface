@@ -1,0 +1,3 @@
+Returned in the order [1, 2, 3]
+Default pool hands out: [3, 2, 1]
+oldest_first pool hands out: [1, 2, 3]

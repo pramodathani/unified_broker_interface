@@ -1,0 +1,11 @@
+32 segments are read, starting with ['nse_currency_futures', 'bse_currency_futures', 'mcx_currency_futures', 'ncdex_currency_futures']
+Live: usdinr-option-83 in nse_currency_options on USDINR
+Live: silvermic-2026-11 in mcx_commodity_futures on SILVERMIC
+Live: silvermic-2027-02 in mcx_commodity_futures on SILVERMIC
+Live: silvermic-2027-04 in mcx_commodity_futures on SILVERMIC
+Rows written before writing: 0
+  usdinr-option-83: conflict tradeable=False sources={"kotak_contract_size": "1000", "shoonya_lot_size_times_multiplier": "1000", "stoxkart_lot_size": "1000|2000"}
+  silvermic-2026-11: confirmed tradeable=True sources={"groww_lot_size": "1", "kotak_contract_size": "1"}
+  silvermic-2027-02: confirmed tradeable=True sources={"groww_lot_size": "5", "kotak_contract_size": "5"}
+  silvermic-2027-04: single_source tradeable=False sources={"groww_lot_size": "5"}
+Rows written: 4

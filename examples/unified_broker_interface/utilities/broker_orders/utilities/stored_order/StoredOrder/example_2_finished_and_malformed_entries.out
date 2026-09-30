@@ -1,0 +1,7 @@
+OPEN: finished=False
+TRIGGER PENDING: finished=False
+COMPLETE: finished=True
+CANCELLED: finished=True
+REJECTED: finished=True
+EXPIRED: finished=True
+Malformed entry: order={}, data={}, status=None, finished=False

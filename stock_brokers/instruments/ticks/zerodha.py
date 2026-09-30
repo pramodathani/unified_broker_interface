@@ -47,6 +47,11 @@ class ZerodhaTickNormalizer(TickNormalizer):
     CLOSE_POLICY = {"nse": CLOSE_ALWAYS, "bse": CLOSE_ALWAYS, "mcx": CLOSE_ALWAYS}
 
     def __init__(self):
+        """
+        Build the lookup from each Zerodha segment code to the canonical segments it can hold.
+
+        A segment code is the low byte of a Kite instrument token. The table is worked out once here from `SEGMENT_CODES`, so `feed_key` only has to look a tick's segment code up rather than recompute its segments on every call.
+        """
         self._segments = {code: family_segments(exchanges, family)
                           for code, (exchanges, family) in self.SEGMENT_CODES.items()}
 

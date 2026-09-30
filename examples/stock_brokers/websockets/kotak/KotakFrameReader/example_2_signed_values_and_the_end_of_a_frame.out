@@ -1,0 +1,5 @@
+Read 295050
+Read -1250
+Read -2147483648
+KotakTruncatedFrameError: frame of 14 bytes ended reading 4 at 12
+Position after the failed read: 12

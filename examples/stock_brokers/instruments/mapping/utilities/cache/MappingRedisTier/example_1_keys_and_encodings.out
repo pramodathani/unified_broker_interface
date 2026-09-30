@@ -1,0 +1,35 @@
+Key prefix: unified:catalogue:
+current_date_key: unified:catalogue:current_date
+warm_identifier_key: unified:catalogue:warm_identifier
+identity_key: unified:catalogue:2026-09-30:identity
+tokens_key: unified:catalogue:2026-09-30:tokens:zerodha
+order_handles_key: unified:catalogue:2026-09-30:order_handles
+contract_sizes_key: unified:catalogue:2026-09-30:contract_sizes
+underlyings_key: unified:catalogue:2026-09-30:underlyings
+additional_attributes_key: unified:catalogue:2026-09-30:additional_attributes
+segments_key: unified:catalogue:2026-09-30:segments
+catalogue_key: unified:catalogue:2026-09-30:catalogue:nse_equities
+names_key: unified:catalogue:2026-09-30:names:nse_equity_index_options
+seen_key: unified:catalogue:2026-09-30:seen
+Catalogue name of the equity: INFY
+Catalogue name of the option: NIFTY
+Equity member: INFY||||0a6e2d41-9c7f-4b58-8d13-6f2e4a9b7c05
+Option member: NIFTY|2026-10-06|00000025000.0000|CE|5f0c7a8e-3b1d-4c62-9e4a-2d8b7f1c0a31
+Instrument id read back from the option member: 5f0c7a8e-3b1d-4c62-9e4a-2d8b7f1c0a31
+Prefix for a name alone: NIFTY|
+Prefix for a name and an expiry: NIFTY|2026-10-06|
+Prefix for a whole option: NIFTY|2026-10-06|00000025000.0000|CE|
+The option member starts with it: True
+Encoded identity: {"instrument_id": "5f0c7a8e-3b1d-4c62-9e4a-2d8b7f1c0a31", "exchange": "nse", "segment": "nse_equity_index_options", "shape": "option", "symbol": null, "underlying_symbol": "NIFTY", "expiry_date": "2026-10-06", "strike_price": "25000", "option_type": "CE", "mapping_date": "2026-09-30"}
+Decoded expiry and strike: datetime.date(2026, 10, 6) Decimal('25000')
+Decoding text that is not JSON: None
+Encoded order handles: {"zerodha": {"broker_token": "12053250", "order_symbol": "NIFTY26O0625000CE", "lot_size": "75", "tick_size": "0.05"}}
+Decoded order handles: {'zerodha': {'broker_token': '12053250', 'order_symbol': 'NIFTY26O0625000CE', 'lot_size': '75', 'tick_size': '0.05'}}
+Decoding a bare token in the older shape: None
+Encoded additional attributes: {"dhan": {"freeze_quantity": "1800", "isin": null}}
+Decoded additional attributes: {'dhan': {'freeze_quantity': '1800', 'isin': None}}
+Decoding a list: None
+Encoded contract size: {"units_per_lot": "1000", "status": "confirmed", "tradeable": true}
+Encoded contract size with no source: {"units_per_lot": null, "status": "no_source", "tradeable": false}
+Encoded seen dates: 2024-01-02|2026-09-30
+Keys live at least a minute: True

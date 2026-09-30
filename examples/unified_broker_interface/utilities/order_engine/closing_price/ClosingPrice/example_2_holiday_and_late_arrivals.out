@@ -1,0 +1,11 @@
+On Fri 02 Oct 10:00 the window is reckoned from Mon 05 Oct 00:00
+Its window opens at Mon 05 Oct 15:00
+moment_today(15:30) from then: Mon 05 Oct 15:30
+Arriving on the holiday:
+  HTTP 202, outcome scheduled, first slice at 15:00:00 on 2026-10-05, orders sent 0
+Arriving at 15:10 on Thursday with window_start 15:20:
+  HTTP 202, outcome scheduled, first slice at 15:20:00, orders sent 0
+Arriving at 15:40 on Thursday:
+  refused with HTTP 400: the closing price window ended at 15:30:00 today
+Asking for over_minutes:
+  refused with HTTP 400: a closing_price order works out its own duration from the window, so it does not take over_minutes

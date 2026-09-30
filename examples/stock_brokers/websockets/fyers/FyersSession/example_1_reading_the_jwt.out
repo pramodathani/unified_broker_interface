@@ -1,0 +1,9 @@
+Stand-in login number 1
+Profile served for login 1
+App id: XY1234-100
+Claims: {'exp': 4102444800, 'hsm_key': 'hsm-key-1'}
+WARNING Logging in to Fyers again.
+Stand-in login number 2
+Profile served for login 2
+Claims: {'exp': 4102444800, 'hsm_key': 'hsm-key-2'}
+Logins made: 2

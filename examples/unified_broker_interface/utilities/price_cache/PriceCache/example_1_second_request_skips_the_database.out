@@ -1,0 +1,22 @@
+Request for 2026-09-01 to 2026-09-10:
+  loaded a copy: False, covering None to None
+  read 8 candles for 2026-09-01 to 2026-09-10 and stored them
+  2026-09-01 close 1501.0
+  2026-09-02 close 1502.0
+  2026-09-03 close 1503.0
+  2026-09-04 close 1504.0
+  2026-09-07 close 1507.0
+  2026-09-08 close 1508.0
+  2026-09-09 close 1509.0
+  2026-09-10 close 1510.0
+Request for 2026-09-03 to 2026-09-05:
+  loaded a copy: True, covering 2026-09-01 to 2026-09-10
+  2026-09-03 close 1503.0
+  2026-09-04 close 1504.0
+Database reads: 1
+Redis commands:
+  GET unified:prices:cache:22222222-2222-5222-8222-000000000001:day:adjusted:latest
+  GET unified:prices:last_run
+  SET unified:prices:cache:22222222-2222-5222-8222-000000000001:day:adjusted:latest EX 86400
+  GET unified:prices:cache:22222222-2222-5222-8222-000000000001:day:adjusted:latest
+  GET unified:prices:last_run

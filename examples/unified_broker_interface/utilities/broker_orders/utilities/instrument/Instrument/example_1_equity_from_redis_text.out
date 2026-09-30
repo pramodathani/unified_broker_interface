@@ -1,0 +1,9 @@
+Instrument: 11111111-1111-5111-8111-000000000001
+Segment: nse_equities (exchange nse, bare segment equities)
+Tradeable: True
+Kind: cash
+Securities market: True
+Market key: ('nse', 'securities', 'cash')
+Trusted units per lot: None
+Contract size status: undecided
+Brokers with a handle: ['dhan', 'zerodha']

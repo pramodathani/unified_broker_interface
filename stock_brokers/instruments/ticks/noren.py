@@ -45,6 +45,11 @@ class NorenTickNormalizer(TickNormalizer):
     CLOSE_POLICY = {exchange: CLOSE_BEFORE_SESSION_END for exchange in ("nse", "bse", "mcx", "ncdex")}
 
     def __init__(self):
+        """
+        Build the lookup from each Noren exchange name to the canonical segments it can hold.
+
+        The table is worked out once here from `EXCHANGES`, so `feed_key` only has to look a tick's exchange name up rather than recompute its segments on every call.
+        """
         self._segments = {name: family_segments(exchanges, family)
                           for name, (exchanges, family) in self.EXCHANGES.items()}
 

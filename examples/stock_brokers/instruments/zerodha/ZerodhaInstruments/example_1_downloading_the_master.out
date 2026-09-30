@@ -1,0 +1,10 @@
+Files read:
+    https://api.kite.trade/instruments
+Rows: 4
+Columns: ['instrument_token', 'exchange_token', 'tradingsymbol', 'name', 'last_price', 'expiry', 'strike', 'tick_size', 'lot_size', 'instrument_type', 'segment', 'exchange']
+First six columns:
+  instrument_token exchange_token  tradingsymbol                      name last_price      expiry
+0           408065           1594           INFY                   INFOSYS          0         NaN
+1          2953217          11536            TCS  TATA CONSULTANCY SERV LT          0         NaN
+2           256265           1001       NIFTY 50                       NaN          0         NaN
+3         13874690          54198  NIFTY26OCTFUT                     NIFTY          0  2026-10-27

@@ -1,0 +1,6 @@
+No token: 401 {"error": "Access token is required"}
+Wrong token: 401 {"error": "Invalid access token"}
+Redis copy is not JSON: 200 [{"note": "Kotak login needs a new TOTP secret"}]
+Redis copy is not an array: 200 [{"note": "Kotak login needs a new TOTP secret"}]
+collection_documents with nothing stored: []
+Nothing stored: 404 {"error": "Notes not found"}

@@ -1,0 +1,5 @@
+Default status: 400; text: interval must be one of minute, day
+'INFY': 200 {"instrument_id": "22222222-2222-5222-8222-000000000001"}
+'TCS': 404 {"error": "no instrument nse_equities TCS is mapped on 2026-09-30"}
+'': 400 {"error": "symbol is required"}
+'INFY': 503 {"error": "no instruments have been mapped yet"}

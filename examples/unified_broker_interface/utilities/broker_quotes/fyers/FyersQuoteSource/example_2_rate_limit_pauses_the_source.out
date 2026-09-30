@@ -1,0 +1,8 @@
+first request: FyersAPIException (429, 'request limit reached')
+    log in again: False
+second request: QuoteUnavailable: Fyers quotes are paused for 300s more: rate limited: (429, 'request limit reached')
+Requests that reached Fyers: 1
+(-16, 'Could not authenticate the user') -> log in again: True
+(-99, 'Token expired, generate a new access token') -> log in again: True
+(429, 'error code: 1015 You are being rate limited, Cloudflare') -> log in again: False
+(-300, 'Please provide a valid symbol') -> log in again: False

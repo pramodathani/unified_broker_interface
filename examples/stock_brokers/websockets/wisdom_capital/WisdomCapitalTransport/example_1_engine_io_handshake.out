@@ -1,0 +1,9 @@
+HTTPS GET /apimarketdata/socket.io/: HTTP 200
+Handshake 200: {'sid': 'engine-session-1', 'upgrades': ['websocket'], 'pingInterval': 25000, 'pingTimeout': 20000}
+Heartbeat every 10.0 seconds
+Heartbeat without limits from the server: 25.0 seconds
+Websocket URL: wss://trade.wisdomcapital.in/apimarketdata/socket.io/?EIO=3&transport=websocket&sid=engine-session-1&token=market-data-token-1&userID=WCMD01&publishFormat=JSON&broadcastMode=Full
+check_hostname=False verify_mode=True
+HTTPS PUT /apimarketdata/instruments/subscription for message code 1501: HTTP 200
+Request answered 200: {"type": "success"}
+First JSON object in a body without one: None

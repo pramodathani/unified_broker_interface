@@ -1,0 +1,7 @@
+Mapping date for 2026-09-15: 2026-09-15
+Mapping date for 2026-09-08: None
+Tokens ['738561', '5720583', '999'] among NSE cash segments:
+  738561 -> RELIANCE (nse_equities) 11111111-1111-5111-8111-000000000102
+The same tokens among MCX commodity futures: ['5720583']
+Handle for 11111111-1111-5111-8111-000000000102 at zerodha: token 738561, lot 1, tick 0.1
+Handle for 11111111-1111-5111-8111-000000000102 at dhan: token 2885, lot 1, tick 0.1

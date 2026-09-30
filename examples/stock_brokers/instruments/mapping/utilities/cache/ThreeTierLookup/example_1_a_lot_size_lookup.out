@@ -1,0 +1,17 @@
+First resolve: {'nifty-future': {'lot_size': '75'}, 'banknifty-future': {'lot_size': '35'}}
+  counters: {'process_hits': 0, 'redis_hits': 0, 'postgres_hits': 2, 'misses': 0}
+Second resolve: {'nifty-future': {'lot_size': '75'}, 'banknifty-future': {'lot_size': '35'}}
+  counters: {'process_hits': 2, 'redis_hits': 0, 'postgres_hits': 2, 'misses': 0}
+Redis now holds: {'nifty-future': '75', 'banknifty-future': '35'}
+Second process resolves: {'nifty-future': {'lot_size': '75'}, 'banknifty-future': {'lot_size': '35'}}
+  counters: {'process_hits': 2, 'redis_hits': 2, 'postgres_hits': 2, 'misses': 0}
+Postgres was read 1 time
+Known before remember: False
+Known after remember: True
+Entry held for it: {'lot_size': '100'}
+Entry for a key never seen: None
+What a miss is remembered as: None
+Reading Redis directly: {}
+Reading Postgres directly: {'crudeoil-future': {'lot_size': '100'}}
+Writing Redis directly: True
+Known after reset: False

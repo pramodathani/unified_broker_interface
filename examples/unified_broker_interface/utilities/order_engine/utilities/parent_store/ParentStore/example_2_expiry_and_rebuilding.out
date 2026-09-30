@@ -1,0 +1,8 @@
+At 2026-09-30T05:59:00+05:30: latest reset 2026-09-29T06:00:00+05:30, next reset 2026-09-30T06:00:00+05:30
+At 2026-09-30T09:15:00+05:30: latest reset 2026-09-30T06:00:00+05:30, next reset 2026-10-01T06:00:00+05:30
+Open before rebuilding: ['ghost']
+Open after rebuilding: ['parent-c']
+Ghost document after rebuilding: None
+Unreadable record: None
+Read together, skipping the unreadable one: 1 document, state cancelled
+Nothing asked for: []

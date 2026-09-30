@@ -34,18 +34,20 @@ unified_broker_interface/                     the repository root
 │       ├── broker_orders/                    placing, modifying, cancelling (BrokerOrders)
 │       ├── broker_quotes/                    REST quote fallback (BrokerQuoteSource)
 │       ├── broker_selection/                 which broker takes an order (BrokerSelector)
-│       ├── order_engine/                     the 42 synthetic order types (SyntheticOrder)
+│       ├── order_engine/                     the 53 synthetic order types (SyntheticOrder)
 │       └── tokens.py, price_cache.py, …      shared helpers for the routes
 ├── utilities/                                shared by everything above
 │   ├── bootstrap.py                          switches bin/ scripts into .venv
 │   ├── configurations.py                     reads .env; the one place that opens Redis, MongoDB, PostgreSQL
 │   ├── poll_reporter.py                      quiet logging for half-second polling loops
-│   └── gen_ref_pages.py                      builds this site's code reference
+│   ├── gen_ref_pages.py                      builds this site's code reference
+│   └── docs_examples.py                      adds the example programs to that reference
 ├── services/                                 systemd user units
 │   ├── <broker>/  unified/  databases/
 ├── test_runs/                                offline suites and a few live helpers
 │   ├── fixtures/                             recordings the suites compare against
 │   └── websocket_feeds/                      one case file per broker, plus harness.py
+├── examples/                                 two or more runnable programs per class, shown in the code reference
 ├── docs/                                     this site's hand-written pages
 ├── docker-compose.yml                        Redis, MongoDB and TimescaleDB containers
 ├── mkdocs.yml                                this site's configuration

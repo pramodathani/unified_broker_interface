@@ -1,0 +1,2 @@
+Throttled: Too many requests; backing off and asking again for the same window
+Received 1 candle after 2 requests: ['2026-09-29T00:00:00+0530', 1391.0, 1402.5, 1385.2, 1398.4, 6123450]

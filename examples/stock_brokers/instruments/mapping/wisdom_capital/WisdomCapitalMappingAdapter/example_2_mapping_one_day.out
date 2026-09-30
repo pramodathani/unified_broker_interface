@@ -1,0 +1,18 @@
+Rows as read_raw_rows returns them:
+  BSECM INDIGRID series IF, token 543245
+  BSECM RELIANCE series A, token 500325
+  NSECM TCS series T0, token 1511536
+  NSECM TCS series EQ, token 11536
+wisdom_capital: 4/4 raw row(s) classified, 0 uncategorised, 4 segment membership(s), 3 distinct instrument(s), 0 error(s).
+BSE investment trusts from other brokers: ['INDIGRID']
+Cross-broker queries that found nothing: 11
+Summary: matched 4, memberships 4, instruments 3
+DELETE FROM unified.broker_mappings
+INSERT INTO unified.instruments
+  nse_equities: TCS
+  bse_equities: RELIANCE
+  bse_investment_trusts: INDIGRID
+INSERT INTO unified.broker_mappings
+  token 11536: TCS-EQ
+  token 500325: RELIANCE
+  token 543245: INDIGRID-IF

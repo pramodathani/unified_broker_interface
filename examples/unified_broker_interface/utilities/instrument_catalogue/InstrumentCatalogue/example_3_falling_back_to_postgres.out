@@ -1,0 +1,16 @@
+Nothing mapped anywhere:
+  Postgres query: SELECT max(mapping_date) FROM unified.broker_mappings ...
+  503 no instruments have been mapped yet
+Search as of 2026-09-01:
+  Postgres query: SELECT max(mapping_date) FROM unified.broker_mappings ...
+  log INFO: answering for past date 2026-09-01 (mapping date 2026-08-31) from Postgres
+  Postgres query: SELECT m.instrument_id, m.exchange, m.segment, ...
+  found INFY on mapping date 2026-08-31
+Listing as of 2020-01-01:
+  Postgres query: SELECT max(mapping_date) FROM unified.broker_mappings ...
+  404 nothing had been mapped on or before 2020-01-01
+Cold cache:
+  log WARNING: the instrument catalogue for 2026-09-30 is not in Redis; reading Postgres
+  Postgres query: SELECT m.segment, count(*) AS ...
+  nse_equities: 2412 instruments
+  nse_equity_index_futures: 12 instruments

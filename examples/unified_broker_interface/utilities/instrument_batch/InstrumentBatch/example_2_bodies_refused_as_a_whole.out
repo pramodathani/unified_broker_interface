@@ -1,0 +1,13 @@
+Not JSON at all: refused with 400: the body must be a JSON object with an instruments list
+A JSON list: refused with 400: the body must be a JSON object with an instruments list
+An empty instruments list: refused with 400: instruments must be a non-empty list
+A shared parameter that is a list: refused with 400: date must be text, a number or true or false
+An item that is a string: accepted, answer entries [{'request_index': 0, 'status': 400, 'error': 'each entry of instruments must be an object'}]
+as_text(None) = None
+as_text(True) = 'true'
+as_text(7) = '7'
+as_text(2.5) = '2.5'
+as_text('day') = 'day'
+parse_item found instrument_id 22222222-2222-5222-8222-000000000001
+entry for an answer: {'request_index': 0, 'status': 200, 'data': {'last_price': 1521.4}}
+entry for an error: {'request_index': 1, 'status': 404, 'error': 'no instrument'}

@@ -1,0 +1,10 @@
+Requested https://api-t1.fyers.in/data/history
+  parameters: {'symbol': 'NSE:RELIANCE-EQ', 'resolution': '1D', 'date_format': '1', 'range_from': '2026-08-01', 'range_to': '2026-08-04', 'cont_flag': '1', 'oi_flag': '1'}
+  status: ok
+  bars: 2
+  sent 2026-08-03T00:00:00+00:00, stored 2026-08-03T00:00:00+05:30: open 1391.0 high 1399.9 low 1386.2 close 1394.4 volume 6412337 oi None
+  sent 2026-08-04T00:00:00+00:00, stored 2026-08-04T00:00:00+05:30: open 1394.4 high 1402.0 low 1388.0 close 1398.1 volume 5530124 oi None
+Requested https://api-t1.fyers.in/data/history
+  parameters: {'symbol': 'NSE:RELIANCE-EQ', 'resolution': '1D', 'date_format': '1', 'range_from': '1995-01-01', 'range_to': '1995-12-31', 'cont_flag': '1', 'oi_flag': '1'}
+  status: no_data
+  bars: 0

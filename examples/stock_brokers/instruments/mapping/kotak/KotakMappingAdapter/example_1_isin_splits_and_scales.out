@@ -1,0 +1,22 @@
+nse_cm NBIFIN-EQ -> nse_equities, also []
+    identity {'symbol': 'NBIFIN'}
+    lot size 1.0, tick size 0.05
+nse_cm NIFTYBEES-EQ -> nse_exchange_traded_funds, also []
+    identity {'symbol': 'NIFTYBEES'}
+    lot size 1.0, tick size 0.05
+nse_cm 762GS2036-GS -> nse_fixed_income, also []
+    identity {'symbol': 'IN0020160019'}
+    lot size 1.0, tick size 0.05
+bse_cm INAVGOLD -> no segment, filed under bse_uncategorised
+bse_cm DUALETF -> bse_exchange_traded_funds, also ['bse_equities']
+    identity {'symbol': 'DUALETF'}
+    lot size 1.0, tick size 0.05
+nse_fo NIFTY26OCT25000CE -> nse_equity_index_options, also []
+    identity {'underlying_symbol': 'NIFTY', 'expiry_date': datetime.date(2026, 10, 27), 'strike_price': 25000.0, 'option_type': 'CE'}
+    lot size 1.0, tick size 0.05
+bse_fo IRFC26OCT102.5CE -> bse_equity_options, also []
+    identity {'underlying_symbol': 'IRFC', 'expiry_date': datetime.date(2026, 10, 29), 'strike_price': 102.5, 'option_type': 'CE'}
+    lot size 1.0, tick size 0.05
+cde_fo USDINR -> nse_currencies, also []
+    identity {'symbol': 'USDINR'}
+    lot size None, tick size None

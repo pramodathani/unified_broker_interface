@@ -1,0 +1,8 @@
+Request 1 may be sent
+Request 2 may be sent
+Request 3 may be sent
+Request 4 may be sent
+Four requests were held at least three gaps apart: True
+The broker said no, so the limiter backs off by 0.2 seconds
+Request 5 may be sent
+Request 5 waited at least the back-off: True

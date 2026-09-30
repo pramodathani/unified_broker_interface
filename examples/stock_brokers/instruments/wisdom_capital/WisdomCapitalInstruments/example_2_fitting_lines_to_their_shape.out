@@ -1,0 +1,19 @@
+Equity shape: 22 fields
+a line of the right length: 22 fields in, 22 out
+    Description: 'M&M-EQ'
+    Series: 'EQ'
+    ISIN: 'INE101A01026'
+    CautionIndicator: '-1'
+    GSMIndicator: '-1'
+a line missing its last two indicators: 20 fields in, 22 out
+    Description: 'M&M-EQ'
+    Series: 'EQ'
+    ISIN: 'INE101A01026'
+    CautionIndicator: ''
+    GSMIndicator: ''
+a line whose description contains a pipe: 23 fields in, 22 out
+    Description: 'MAHINDRA'
+    Series: 'MAHINDRA-EQ'
+    ISIN: 'M&M'
+    CautionIndicator: '0'
+    GSMIndicator: '-1|-1'

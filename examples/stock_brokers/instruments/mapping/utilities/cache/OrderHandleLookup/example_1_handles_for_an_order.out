@@ -1,0 +1,11 @@
+dhan: {'broker_token': '467013', 'order_symbol': None, 'lot_size': '100', 'tick_size': '1'}
+zerodha: {'broker_token': '118235911', 'order_symbol': 'CRUDEOIL26OCTFUT', 'lot_size': '100', 'tick_size': '1'}
+  counters: {'process_hits': 0, 'redis_hits': 0, 'postgres_hits': 1, 'misses': 0}
+Same process again: {'process_hits': 1, 'redis_hits': 0, 'postgres_hits': 1, 'misses': 0}
+Another worker: {'process_hits': 1, 'redis_hits': 1, 'postgres_hits': 1, 'misses': 0}
+Postgres queries: 1
+Stored in Redis: {"dhan": {"broker_token": "467013", "order_symbol": null, "lot_size": "100", "tick_size": "1"}, "zerodha": {"broker_token": "118235911", "order_symbol": "CRUDEOIL26OCTFUT", "lot_size": "100", "tick_size": "1"}}
+empty_entry: {}
+read_from_redis brokers: ['dhan', 'zerodha']
+read_from_postgres brokers: ['dhan', 'zerodha']
+write_to_redis: True

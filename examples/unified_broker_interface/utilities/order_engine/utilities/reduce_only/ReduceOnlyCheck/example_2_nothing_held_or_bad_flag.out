@@ -1,0 +1,7 @@
+{}: False
+{'reduce_only': False}: False
+{'reduce_only': 'yes'}: refused with 400: reduce_only must be true or false, not 'yes'
+Held in the short instrument on NRML: -40
+BUY 40 against the short of 40: allowed
+SELL 5 with nothing held: refused with 409
+  Body: {'error': 'the order is reduce-only and no position is held in this instrument on MIS', 'instrument_id': '11111111-1111-5111-8111-000000000002'}

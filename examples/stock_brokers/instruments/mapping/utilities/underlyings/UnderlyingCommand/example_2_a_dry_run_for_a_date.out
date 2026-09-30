@@ -1,0 +1,7 @@
+underlyings for 2026-09-28, not written, a dry run
+  segment                          status       derivatives
+  bse_equity_index_futures         resolved               1
+  nse_equity_futures               no_code                1
+  nse_equity_index_options         resolved               1
+Exit code: 0
+Rows written: 0

@@ -1,0 +1,7 @@
+Broker: indmoney
+'NSE:2885' -> broker_token='2885' order_symbol=None segments=6 starting with nse_equities
+'BSE:500325' -> broker_token='500325' order_symbol=None segments=6 starting with bse_equities
+'NFO:35003' -> broker_token='35003' order_symbol=None segments=16 starting with nse_fixed_income_futures
+'NIDX:13' -> broker_token='13' order_symbol=None segments=4 starting with nse_equity_indices
+'2885' -> None
+'MCX:440001' -> None

@@ -1,0 +1,11 @@
+cancel: 200 {"broker": "zerodha", "broker_response": {"s": "ok", "stat": "Ok", "status": "success", "type": "success"}, "order_id": "250915000000011", "outcome": "accepted", "status_before_cancel": "OPEN", "status_message": null}
+  sent to the broker: DELETE https://api.kite.trade/orders/amo/250915000000011
+cancel_order, a dry run named in the query string: 200 {"broker": "flattrade", "dry_run": true, "order_id": "26091500000021", "request": {"form": {"norenordno": "26091500000021", "uid": "FT000001"}, "method": "POST", "url": "https://piconnect.flattrade.in/PiConnectAPI/CancelOrder"}, "status_before_cancel": "OPEN"}
+cancel_order_list: 200
+  request 0: 200 flattrade accepted
+  request 1: 409 the order is already COMPLETE
+  request 2: 404 no broker order book in Redis holds this order_id
+prepare_cancel of an order the engine placed: zerodha, engine command cancel_leg {"broker": "zerodha", "order_id": "250915000000011", "parent_id": "P-7"}
+cancel_parents, one the engine does not hold: 404 {"error": "the order engine holds no parent with this id", "intent_id": "00000000000040008000000000000002", "parent_id": "P-9"}
+cancel_parents without a parent_id: 400 {"error": "parent_id must name a parent"}
+cancel_parent_list: 200 {"results": [{"request_index": 0, "response": {"error": "the order engine holds no parent with this id", "intent_id": "00000000000040008000000000000004", "parent_id": "P-9"}, "status": 404}, {"request_index": 1, "response": {"error": "each entry of parents must name a parent_id"}, "status": 400}]}

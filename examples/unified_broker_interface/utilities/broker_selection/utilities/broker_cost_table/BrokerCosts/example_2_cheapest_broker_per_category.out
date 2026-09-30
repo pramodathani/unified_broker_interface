@@ -1,0 +1,4 @@
+delivery: dhan 0, shoonya 0, zerodha 0, groww 20
+fno: shoonya 5, dhan 20, groww 20, zerodha 20
+intraday: shoonya 5, dhan 20, groww 20, zerodha 20
+fee("commodity") raised KeyError for 'commodity'

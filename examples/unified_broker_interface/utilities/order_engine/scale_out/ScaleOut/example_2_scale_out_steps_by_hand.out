@@ -1,0 +1,18 @@
+target_prices: [Decimal('3960'), Decimal('3920'), Decimal('3880')], tranches of 100: [34, 33, 33]
+arm_exits for 2:
+  stop   BUY 2 at 4050.0, filled 0
+  target BUY 2 at 3880.0, filled 0
+grow_exits to 100:
+  stop   BUY 100 at 4050.0, filled 0
+  target BUY 2 at 3880.0, filled 0
+rebalance after the target filled 2:
+  stop   BUY 98 at 4050.0, filled 0
+  target BUY 2 at 3880.0, filled 2
+filled_targets 1, stop at breakeven None, live_stop at 4050.0
+Sent to the broker:
+  place SELL 100 LIMIT at 4000 -> 260930000001
+  place BUY 2 SL at 4050 trigger 4040 -> 260930000002
+  place BUY 2 LIMIT at 3880 -> 260930000003
+  modify 260930000002 quantity 100
+  modify 260930000002 quantity 98
+One target: HTTP 400, a scale_out needs target_prices, a list of at least two prices to take the position off at

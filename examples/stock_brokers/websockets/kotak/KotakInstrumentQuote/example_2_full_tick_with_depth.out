@@ -1,0 +1,2 @@
+Tick RELIANCE-EQ in full mode: last_price=2950.5 change=1.3918 ohlc={'open': 2930.0, 'high': 2960.0, 'low': 2925.0, 'close': 2910.0}
+  last_trade_time=1790311528 exchange_timestamp=1790311529 depth={'buy': [{'quantity': 100, 'price': 2950.0, 'orders': 3}, {'quantity': 101, 'price': 2949.95, 'orders': 4}, {'quantity': 102, 'price': 2949.9, 'orders': 5}], 'sell': [{'quantity': 200, 'price': 2951.0, 'orders': 4}, {'quantity': 201, 'price': 2951.05, 'orders': 5}]}

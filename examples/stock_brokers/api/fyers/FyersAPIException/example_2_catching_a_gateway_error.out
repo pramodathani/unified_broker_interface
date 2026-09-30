@@ -1,0 +1,4 @@
+Caught as BrokerAPIException: FyersAPIException
+Is an instance of FyersAPIException: True
+code: 502
+message: <html><head><title>502 Bad Gateway</title></head><body><center><h1>502 Bad Gateway</h1></center></body></html>

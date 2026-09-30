@@ -1,0 +1,12 @@
+example_price_watcher wants prices: True
+Due a second after the last tick: True
+parent-2 watches ['nifty-2026-10-06-25000-ce', 'nifty-50-index']
+parent-3 watches ['nifty-2026-10-06-25000-ce', 'nifty-2026-10-06-24500-pe']
+Watching parents: 3, instruments: ['nifty-2026-10-06-24500-pe', 'nifty-2026-10-06-25000-ce', 'nifty-50-index']
+parent-1 sees nifty-2026-10-06-25000-ce=132.4
+parent-2 sees nifty-2026-10-06-25000-ce=132.4, nifty-50-index=None
+parent-3 sees nifty-2026-10-06-25000-ce=132.4, nifty-2026-10-06-24500-pe=None
+Parents that acted: 1
+HMGET calls: 1, instruments in the call: ['nifty-2026-10-06-24500-pe', 'nifty-2026-10-06-25000-ce', 'nifty-50-index']
+Quotes read so far: 3
+Reading no instruments sends nothing: {}

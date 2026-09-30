@@ -1,0 +1,8 @@
+intake chose dhan, passing over [{'broker': 'zerodha', 'reason': 'has no login in Redis'}]
+worker holds assignment: dhan
+worker leg goes to dhan, skipped [{'broker': 'zerodha', 'reason': 'has no login in Redis'}]
+worker assignment after clearing: None
+main thread holds assignment: None
+a body that names its broker: ('kotak', [])
+a body that does not validate: (None, [])
+assigned kotak, which has no mapping for Infosys, so the leg goes to dhan

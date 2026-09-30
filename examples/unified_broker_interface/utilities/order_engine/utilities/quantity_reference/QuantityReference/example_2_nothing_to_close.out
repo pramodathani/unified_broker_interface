@@ -1,0 +1,4 @@
+liquidate a flat position: refused with 409: {'error': 'a liquidate_position quantity_reference found no open position in this instrument, so there is nothing to close', 'instrument_id': '11111111-1111-5111-8111-000000000001'}
+reduce with no positions document: refused with 503: {'error': 'a reduce_position quantity_reference needs the unified positions and they could not be read'}
+liquidate with no net rows: refused with 503: {'error': 'a liquidate_position quantity_reference needs the unified positions and they carry no net rows'}
+absolute quantity of zero: refused with 400: {'error': 'a absolute quantity_reference needs a quantity of at least 1'}

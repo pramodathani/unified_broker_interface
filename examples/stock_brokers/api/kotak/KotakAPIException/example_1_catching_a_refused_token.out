@@ -1,0 +1,4 @@
+Kotak answers HTTP 401 with: {"errorCode": "900901", "message": "Invalid Credentials"}
+Caught: KotakAPIException
+code: 900901
+message: Invalid Credentials

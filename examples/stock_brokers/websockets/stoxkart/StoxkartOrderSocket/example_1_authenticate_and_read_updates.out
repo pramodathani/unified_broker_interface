@@ -1,0 +1,11 @@
+Stand-in login number 1
+Authenticating with stoxkart-token-1
+Connecting to wss://openapi-v2.stoxkart.com/websocket/v2/connect?x-client-id=SK12345&x-platform=api&RequestId=request-1
+INFO Connected to wss://openapi-v2.stoxkart.com/websocket/v2/connect.
+Sent: {"type": "heartbeat"}
+INFO Order socket message: {"order_id": "SK2609250001", "status": "OPEN", "symbol": "INFY"}
+INFO Order socket message: {"order_id": "SK2609250001", "status": "COMPLETE", "symbol": "INFY"}
+Callback received 2 message(s)
+INFO Ignoring a frame that is not JSON: connected
+INFO Stopped
+run returned 0

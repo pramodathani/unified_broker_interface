@@ -1,0 +1,8 @@
+first request: GrowwAPIException ('403', 'Access forbidden for this request.')
+    log in again: False
+second request: QuoteUnavailable: Groww quotes are paused for 900s more: refused as forbidden, so not entitled to live data: Access forbidden for this request.
+Requests that reached Groww: 1
+('401', 'Unauthorized') -> log in again: True
+('GA005', 'JWT token expired') -> log in again: True
+('429', 'Too many requests') -> log in again: False
+('GA001', 'Invalid trading symbol') -> log in again: False

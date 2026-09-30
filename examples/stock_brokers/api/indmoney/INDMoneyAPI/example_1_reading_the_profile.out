@@ -1,0 +1,15 @@
+Request: GET https://api.indstocks.com/user/profile
+Headers sent:
+    Content-Type: application/json
+    Authorization: morning-token
+Status: success
+HTTP code: 200
+Data:
+{
+    "user_id": "IND0000001",
+    "name": "DEMO USER",
+    "segments": [
+        "EQUITY",
+        "DERIVATIVE"
+    ]
+}

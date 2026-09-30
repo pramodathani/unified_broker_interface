@@ -1,0 +1,10 @@
+Round trips: 2
+Open parents: ['parent-a']
+zerodha 250930000123456 belongs to: parent-a
+zerodha 999 belongs to: None
+Owners of three broker orders: ['parent-b', 'parent-a', None]
+intent-b started: parent-b
+parent-a: state=working legs=1 instrument=NSE:INFY
+missing parent: None
+Read together: ['parent-b=completed', 'parent-a=working']
+Keys with an expiry: ['unified:orders:children', 'unified:orders:parents', 'unified:orders:parents:intents', 'unified:orders:parents:open']

@@ -127,7 +127,7 @@ Most downloaders log in through the shared cross-process lock `ensure_session` i
 
 ## Part 2: unified price history
 
-`bin/unified/instruments/price_history` turns the seven brokers' tables into one history per unified instrument, in `unified.price_history`. It never downloads from a broker; it reads `<broker>.price_history` and resolves each broker series to its instrument through `unified.instruments` and `unified.broker_mappings`, which the [instrument mapping](instrument-masters.md) keeps. Every run first applies the mapping DDL and the price history DDL, both safe to run again.
+`bin/unified/instruments/price_history` turns the seven brokers' tables into one history per unified instrument, in `unified.price_history`. It never downloads from a broker; it reads `<broker>.price_history` and resolves each broker series to its instrument through `unified.instruments` and `unified.broker_mappings`, which the [instrument mapping](instrument-masters.md) keeps. Every run first applies the mapping DDL and the price history DDL, both safe to run again. It then applies `300_unified_ticks.sql` and `330_unified_ticks_adjusted.sql` from `stock_brokers/instruments/ticks/utilities/sql/ddl`, because the view `unified.ticks_adjusted` reads the adjustment ranges that the price history DDL creates.
 
 ### Subcommands
 
@@ -194,6 +194,7 @@ Equities, ETFs and investment trusts are stored unadjusted, and everything else 
 | `unified.correction_ranges` | View | The combined correction multiplier for each span of a broker series between consecutive confirmed ex-dates, in the same shape as `unified.adjustment_ranges` |
 | `unified.price_history_adjusted` | View | Every bar, adjusted with everything known today |
 | `unified.adjusted_bars(instrument_id, interval, from, to, known_as_of)` | Function | One instrument's bars over a range, adjusted as they would have been on `known_as_of` |
+| `unified.ticks_adjusted` | View | Every row of `unified.ticks`, adjusted the same way; open interest is left alone |
 
 A bar is multiplied by every confirmed factor whose ex-date falls after the bar's trading day. The `known_as_of` argument is what makes backtests honest: without it, a backtest of 2023 would see prices already halved for a bonus that went ex in 2024. The function is a single SQL `SELECT` marked `STABLE`, so PostgreSQL inlines it and the time conditions reach the hypertable's chunk exclusion.
 

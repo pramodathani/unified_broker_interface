@@ -1,0 +1,19 @@
+Columns of demo.instruments: ['exchange', 'trading_symbol', 'series', 'lot_size', 'download_date']
+Stored for 2026-09-30 before: False
+demo: downloading instruments for 2026-09-30 ...
+demo: ingested 3 row(s) for 2026-09-30.
+First ingest returned 3
+Stored for 2026-09-30 after: True
+demo: already ingested for 2026-09-30, skipping.
+Second ingest returned 0
+demo: downloading instruments for 2026-09-30 ...
+demo: removed 3 existing row(s) for 2026-09-30 before re-ingesting.
+demo: ingested 3 row(s) for 2026-09-30.
+Bootstrap ingest returned 3
+
+ALARM: demo: 3 row(s) for 2026-09-30, average 4 over 2 earlier day(s), deviation -33.33%, allowed range [4, 5].
+Alarm at 10%: True
+OK: demo: 3 row(s) for 2026-09-30, average 4 over 2 earlier day(s), deviation -33.33%, allowed range [2, 7].
+Alarm at 50%: False
+INFO: demo: no rows stored for 2026-10-01, nothing to check.
+Alarm for a date with no rows: False

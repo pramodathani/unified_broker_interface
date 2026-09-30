@@ -1,0 +1,3 @@
+Wrong token: 401 {"error": "Invalid access token"}
+No Redis copy: 200 [{"exchange": "bse", "name": "BSE"}]
+Nothing stored: 404 {"error": "Exchange details not found"}
