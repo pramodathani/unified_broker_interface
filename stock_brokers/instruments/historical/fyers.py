@@ -104,9 +104,9 @@ class FyersCandles(BrokerCandles):
         "month": 366,
     }
 
-    # Fyers documents no rate for the history endpoint, so this is a conservative figure rather
-    # than a published one. Raise it only after measuring.
-    REQUESTS_PER_SECOND = 3.0
+    # Every Fyers request, history included, counts toward the app's 200 a minute, shared with the pollers and the order connection warmers.
+    # At 3 a second the total passed 200 and Cloudflare banned the address from 2026-09-27, so this is 2 a second, 120 a minute.
+    REQUESTS_PER_SECOND = 2.0
     REQUESTS_PER_DAY = None
 
     EARLIEST_AVAILABLE_DATE = datetime.date(2000, 1, 1)

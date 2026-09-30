@@ -52,7 +52,7 @@ The table below lists each downloader's limits, read from its class attributes. 
 |---|---|---:|---:|---|---:|
 | Zerodha | `ZerodhaCandles` | 3 | no limit set | 2005-01-01 | 8 |
 | Dhan | `DhanCandles` | 3 | 100,000 | 2000-01-01 | 6 |
-| Fyers | `FyersCandles` | 3 | no limit set | 2000-01-01 | 16 |
+| Fyers | `FyersCandles` | 2 | no limit set | 2000-01-01 | 16 |
 | INDmoney | `IndMoneyCandles` | 3 | 100,000 | 2013-01-01 | 14 |
 | Flattrade | `FlattradeCandles` | 10 | no limit set | 2019-01-01 | 11 |
 | Shoonya | `ShoonyaCandles` | 1 | no limit set | 2021-01-01 | 11 |
@@ -70,7 +70,7 @@ The chart below shows the request rates from the same table, which is the main r
     {"broker": "Flattrade", "rate": 10},
     {"broker": "Zerodha", "rate": 3},
     {"broker": "Dhan", "rate": 3},
-    {"broker": "Fyers", "rate": 3},
+    {"broker": "Fyers", "rate": 2},
     {"broker": "INDmoney", "rate": 3},
     {"broker": "Shoonya", "rate": 1},
     {"broker": "Wisdom Capital", "rate": 1}
