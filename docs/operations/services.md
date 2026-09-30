@@ -124,7 +124,7 @@ The long-running services and the daily jobs follow different restart rules, bec
 
 ### Why exit code 2 stops the restarts
 
-Every script in `bin/` uses exit code 2 for a bad argument or a bad configuration, for example a quote feed that has nothing to subscribe to. Restarting the script would only fail the same way again, so the templates set `RestartPreventExitStatus=2`, and systemd leaves the service stopped for you to look at. Any other non-zero exit, such as a failed login, is restarted after 15 seconds.
+Every script in `bin/` uses exit code 2 for a bad argument or a bad configuration, for example a quote feed that has nothing to subscribe to. Restarting the script would only fail the same way again, so the templates set `RestartPreventExitStatus=2`, and systemd leaves the service stopped for you to look at. Any other non-zero exit, such as a failed login, is restarted after 15 seconds, or after 60 seconds for Fyers' portfolio, orders and user templates, because a quick restart loop into a Cloudflare ban kept Fyers blocking the address all day on 2026-09-29.
 
 The seven `<broker>-historical-prices.service` units are the exception, and they restart on every exit, exit 2 included. Their exit 2 means "the first login failed", and after a reboot that usually happens because Redis was still loading its data from disk when the worker started. These units therefore retry every ten minutes. The unit comment explains the trade-off: ten minutes is slow enough that a real misconfiguration shows up as an obvious slow loop in the journal, and a login that failed only because a store was not ready gets another chance.
 

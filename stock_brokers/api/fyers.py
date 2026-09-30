@@ -12,6 +12,11 @@ from stock_brokers.api.base import BrokerAPI, BrokerAPIException
 class FyersAPIException(BrokerAPIException):
     """Raised for Fyers broker API errors."""
 
+class FyersBlockedError(FyersAPIException):
+    """Fyers, or Cloudflare in front of it, refused a request with HTTP 429: a rate limit or a ban on this address."""
+
+DEAD_SESSION_CODES = {-8, -15, -16, -17, 401}
+
 class FyersAPI(BrokerAPI):
     """
     Fyers API class
@@ -25,83 +30,127 @@ class FyersAPI(BrokerAPI):
 
         try:
             self.get(url="https://api-t1.fyers.in/api/v3/profile")
-        except Exception as e:
-            app_id = self._settings["app_id"]
-            app_name, app_type = app_id.split("-") if "-" in app_id else (app_id, "100")
-            fy_id = self._settings["fy_id"]
-            redirect_uri = self._settings.get("redirect_uri", "https://localhost")
-            vagator_headers = {"Accept": "application/json", "Content-Type": "text/plain"}
+        except FyersBlockedError:
+            raise
+        except FyersAPIException as exception:
+            if not self._is_dead_session(exception):
+                raise
+            self._log_in()
+        except (KeyError, TypeError):
+            self._log_in()
 
-            # Step 1: request a login OTP for the Fyers ID.
-            response = requests.post(url="https://api-t2.fyers.in/vagator/v2/send_login_otp_v2", json={"fy_id": base64.b64encode(fy_id.encode()).decode(), "app_id": "2"}, headers=vagator_headers)
-            if response.status_code != 200 or response.json().get("request_key") is None:
-                raise FyersAPIException(code=response.status_code, message=f"Cannot send login OTP to Fyers trading platform: {response.text}")
-            request_key = response.json()["request_key"]
+    def _is_dead_session(self, exception):
+        """
+        Whether a refused profile request means the stored token no longer works, which a login fixes.
 
-            # Step 2: verify the OTP using the account's TOTP secret. Fyers returns
-            # -2 when the code is verified too close to the 30-second boundary, so
-            # pause past the boundary if needed before generating the TOTP.
-            seconds_until_boundary = 30 - (datetime.now().second % 30)
-            if seconds_until_boundary <= 3:
-                time.sleep(seconds_until_boundary + 1)
-            response = requests.post(url="https://api-t2.fyers.in/vagator/v2/verify_otp", json={"otp": pyotp.TOTP(self._settings["totp_secret"]).now(), "request_key": request_key}, headers=vagator_headers)
-            if response.status_code != 200 or response.json().get("request_key") is None:
-                raise FyersAPIException(code=response.status_code, message=f"Cannot verify OTP on Fyers trading platform: {response.text}")
-            request_key = response.json()["request_key"]
+        Only Fyers' own session codes and HTTP 401 count.
+        A ban, a rate limit or a server error is not fixed by logging in, and a login sent while Cloudflare is blocking this address only renews the block.
 
-            # Step 3: verify the login PIN.
-            response = requests.post(url="https://api-t2.fyers.in/vagator/v2/verify_pin_v2", json={"identifier": base64.b64encode(self._settings["pin"].encode()).decode(), "identity_type": "pin", "request_key": request_key}, headers=vagator_headers)
-            if response.status_code != 200 or response.json().get("data", {}).get("access_token") is None:
-                raise FyersAPIException(code=response.status_code, message=f"Cannot verify PIN on Fyers trading platform: {response.text}")
-            session_token = response.json()["data"]["access_token"]
+        - `exception`: (FyersAPIException) the refusal.
+        """
+        try:
+            code = int(exception.args[0])
+        except (IndexError, TypeError, ValueError):
+            return False
+        return code in DEAD_SESSION_CODES
 
-            # Step 4: authorize the OAuth auth code. Fyers returns it either as a
-            # 308 redirect with the auth code in the redirect URL's query string,
-            # or directly in the response body as data.auth.
-            vagator_headers["Authorization"] = f"Bearer {session_token}"
-            response = requests.post(url="https://api-t1.fyers.in/api/v3/token", json={
-                "fyers_id": fy_id,
-                "app_id": app_name,
-                "redirect_uri": redirect_uri,
-                "appType": app_type,
-                "code_challenge": "",
-                "state": "None",
-                "scope": "",
-                "nonce": "",
-                "response_type": "code",
-                "create_cookie": True
-            }, headers=vagator_headers)
-            content = response.json() if response.content else {}
-            auth_code = None
-            if response.status_code in (200, 308):
-                data = content.get("data") if isinstance(content, dict) else None
-                if isinstance(data, dict):
-                    auth_code = data.get("auth")
-                if auth_code is None:
-                    auth_code = parse_qs(urlparse(content.get("Url", "")).query).get("auth_code", [None])[0]
+    def _refuse_if_blocked(self, response, step):
+        """
+        Raise FyersBlockedError when a login step was refused with HTTP 429, so the caller waits instead of trying again at once.
+
+        - `response`: (requests.Response) the step's response.
+        - `step`: (str) what the step was doing, for the message.
+        """
+        if response.status_code == 429:
+            raise FyersBlockedError(code=429, message=f"{step} was refused with HTTP 429, so Fyers or Cloudflare is limiting this address: {response.text[:300]}")
+
+    def _log_in(self):
+        """
+        Log in to Fyers with the OTP, TOTP and PIN flow, and store the day's access token in MongoDB and Redis.
+
+        Raises FyersBlockedError when a step is refused with HTTP 429, and FyersAPIException when a step fails any other way.
+        """
+        app_id = self._settings["app_id"]
+        app_name, app_type = app_id.split("-") if "-" in app_id else (app_id, "100")
+        fy_id = self._settings["fy_id"]
+        redirect_uri = self._settings.get("redirect_uri", "https://localhost")
+        vagator_headers = {"Accept": "application/json", "Content-Type": "text/plain"}
+
+        # Step 1: request a login OTP for the Fyers ID.
+        response = requests.post(url="https://api-t2.fyers.in/vagator/v2/send_login_otp_v2", json={"fy_id": base64.b64encode(fy_id.encode()).decode(), "app_id": "2"}, headers=vagator_headers)
+        self._refuse_if_blocked(response, "Sending the login OTP")
+        if response.status_code != 200 or response.json().get("request_key") is None:
+            raise FyersAPIException(code=response.status_code, message=f"Cannot send login OTP to Fyers trading platform: {response.text}")
+        request_key = response.json()["request_key"]
+
+        # Step 2: verify the OTP using the account's TOTP secret. Fyers returns
+        # -2 when the code is verified too close to the 30-second boundary, so
+        # pause past the boundary if needed before generating the TOTP.
+        seconds_until_boundary = 30 - (datetime.now().second % 30)
+        if seconds_until_boundary <= 3:
+            time.sleep(seconds_until_boundary + 1)
+        response = requests.post(url="https://api-t2.fyers.in/vagator/v2/verify_otp", json={"otp": pyotp.TOTP(self._settings["totp_secret"]).now(), "request_key": request_key}, headers=vagator_headers)
+        self._refuse_if_blocked(response, "Verifying the OTP")
+        if response.status_code != 200 or response.json().get("request_key") is None:
+            raise FyersAPIException(code=response.status_code, message=f"Cannot verify OTP on Fyers trading platform: {response.text}")
+        request_key = response.json()["request_key"]
+
+        # Step 3: verify the login PIN.
+        response = requests.post(url="https://api-t2.fyers.in/vagator/v2/verify_pin_v2", json={"identifier": base64.b64encode(self._settings["pin"].encode()).decode(), "identity_type": "pin", "request_key": request_key}, headers=vagator_headers)
+        self._refuse_if_blocked(response, "Verifying the PIN")
+        if response.status_code != 200 or response.json().get("data", {}).get("access_token") is None:
+            raise FyersAPIException(code=response.status_code, message=f"Cannot verify PIN on Fyers trading platform: {response.text}")
+        session_token = response.json()["data"]["access_token"]
+
+        # Step 4: authorize the OAuth auth code. Fyers returns it either as a
+        # 308 redirect with the auth code in the redirect URL's query string,
+        # or directly in the response body as data.auth.
+        vagator_headers["Authorization"] = f"Bearer {session_token}"
+        response = requests.post(url="https://api-t1.fyers.in/api/v3/token", json={
+            "fyers_id": fy_id,
+            "app_id": app_name,
+            "redirect_uri": redirect_uri,
+            "appType": app_type,
+            "code_challenge": "",
+            "state": "None",
+            "scope": "",
+            "nonce": "",
+            "response_type": "code",
+            "create_cookie": True
+        }, headers=vagator_headers)
+        self._refuse_if_blocked(response, "Getting the auth code")
+        content = response.json() if response.content else {}
+        auth_code = None
+        if response.status_code in (200, 308):
+            data = content.get("data") if isinstance(content, dict) else None
+            if isinstance(data, dict):
+                auth_code = data.get("auth")
             if auth_code is None:
-                raise FyersAPIException(code=response.status_code, message=f"Cannot get auth code from Fyers trading platform: {response.text}")
+                auth_code = parse_qs(urlparse(content.get("Url", "")).query).get("auth_code", [None])[0]
+        if auth_code is None:
+            raise FyersAPIException(code=response.status_code, message=f"Cannot get auth code from Fyers trading platform: {response.text}")
 
-            # Step 5: exchange the auth code for the day's access token.
-            response = requests.post(url="https://api-t1.fyers.in/api/v3/validate-authcode", json={
-                "grant_type": "authorization_code",
-                "appIdHash": hashlib.sha256(f"{app_id}:{self._settings['secret_key']}".encode()).hexdigest(),
-                "code": auth_code
-            }, headers=vagator_headers)
-            if response.status_code != 200:
-                raise FyersAPIException(code=response.status_code, message=f"Cannot validate auth code on Fyers trading platform: {response.text}")
-            access_token = response.json().get("access_token")
-            if access_token is None:
-                raise FyersAPIException(code="500", message=f"No access_token in Fyers validate-authcode response: {response.text}")
+        # Step 5: exchange the auth code for the day's access token.
+        response = requests.post(url="https://api-t1.fyers.in/api/v3/validate-authcode", json={
+            "grant_type": "authorization_code",
+            "appIdHash": hashlib.sha256(f"{app_id}:{self._settings['secret_key']}".encode()).hexdigest(),
+            "code": auth_code
+        }, headers=vagator_headers)
+        self._refuse_if_blocked(response, "Validating the auth code")
+        if response.status_code != 200:
+            raise FyersAPIException(code=response.status_code, message=f"Cannot validate auth code on Fyers trading platform: {response.text}")
+        access_token = response.json().get("access_token")
+        if access_token is None:
+            raise FyersAPIException(code="500", message=f"No access_token in Fyers validate-authcode response: {response.text}")
 
-            last_login = {
-                "broker_name": "fyers",
-                "access_token": access_token,
-                "last_login": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            }
-            self._mongo_db["last_login"].replace_one({"broker_name": "fyers"}, last_login, upsert=True)
-            self._cache.hset("last_login", "fyers", json_lib.dumps(last_login))
-            self._last_login = last_login
+        last_login = {
+            "broker_name": "fyers",
+            "access_token": access_token,
+            "last_login": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        self._mongo_db["last_login"].replace_one({"broker_name": "fyers"}, last_login, upsert=True)
+        self._cache.hset("last_login", "fyers", json_lib.dumps(last_login))
+        self._last_login = last_login
 
     def _request(self, method, url, params=None, data=None, headers=None, cookies=None, files=None, auth=None, timeout=None, allow_redirects=None, proxies=None, hooks=None, stream=None, verify=None, cert=None, json=None, verbose=False):
         """
@@ -165,6 +214,8 @@ class FyersAPI(BrokerAPI):
                 content["data"] = response.content.decode("utf-8").strip()
             return content
         else:
+            if response.status_code == 429:
+                raise FyersBlockedError(code=429, message=response.content.decode("utf-8", errors="replace").strip())
             if "json" in response.headers["Content-Type"]:
                 json_content = response.json()
                 if "message" in json_content and "code" in json_content:

@@ -18,8 +18,9 @@ logs in when its probe raises and a refusal inside a 200 does not. A Cloudflare 
 pauses polling for thirty minutes and a rate limit for five, rather than logging in, since every refused
 request extends a ban. Any other failed poll is logged and leaves `fyers:portfolio:funds` unchanged.
 
-Runs until Ctrl+C. Exits 1 when the session does not work at startup, or after a login following a dead
-session. Reads only - it places no orders.
+Runs until Ctrl+C. A Cloudflare ban or a rate limit at startup, or while logging in again, is waited out rather than
+ended with an exit, because systemd would only start the script again into the same refusal. Exits 1 when the
+session does not work at startup for any other reason, or after a login following a dead session. Reads only - it places no orders.
 """
 
 import sys
@@ -101,9 +102,34 @@ def is_authentication_error(exception):
         return False
     return refusal_code(exception) in AUTHENTICATION_ERROR_CODES
 
+def start_session(logger):
+    """
+    A confirmed Fyers session, waiting out a Cloudflare ban or a rate limit instead of failing.
+
+    Exiting would only have systemd start this script again into the same refusal, and each start used to send a login that renewed the ban.
+    Any other failure is raised for the caller.
+    """
+    from stock_brokers.api.fyers import FyersAPI
+
+    while True:
+        try:
+            fyers = FyersAPI()
+            confirm_session(fyers)
+            return fyers
+        except Exception as exception:
+            if is_block(exception):
+                logger.error(f"Cloudflare is blocking Fyers requests from this address, pausing "
+                             f"{BLOCK_PAUSE_SECONDS}s before connecting: {str(exception)[:160]}")
+                time.sleep(BLOCK_PAUSE_SECONDS)
+            elif is_throttle(exception):
+                logger.warning(f"Fyers rate limited the request, pausing {THROTTLE_PAUSE_SECONDS}s before connecting: "
+                               f"{str(exception)[:160]}")
+                time.sleep(THROTTLE_PAUSE_SECONDS)
+            else:
+                raise
+
 def main():
     """Fetch the funds and write them to fyers:portfolio:funds every thirty seconds, until interrupted."""
-    from stock_brokers.api.fyers import FyersAPI
     from utilities.configurations import get_cache, get_logger
     from utilities.poll_reporter import PollReporter
 
@@ -111,8 +137,7 @@ def main():
     report = PollReporter(logger)
     cache = get_cache()
     try:
-        fyers = FyersAPI()
-        confirm_session(fyers)
+        fyers = start_session(logger)
     except Exception as exception:
         logger.error(f"Could not log in to Fyers: {type(exception).__name__}: {exception}")
         return 1
@@ -138,8 +163,7 @@ def main():
                 elif is_authentication_error(exception):
                     # A dead session: log in again before sending anything more.
                     logger.warning(f"Fyers session expired, logging in again: {exception}")
-                    fyers = FyersAPI()
-                    confirm_session(fyers)
+                    fyers = start_session(logger)
                 else:
                     report.error(f"Funds poll failed: {type(exception).__name__}: {exception}")
             time.sleep(DELAY_SECONDS)
