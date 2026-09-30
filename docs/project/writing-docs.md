@@ -72,7 +72,44 @@ The theme is `mkdocs-material==9.6.9`, with deep orange as its primary and accen
 4. It records an edit link back to the source file, and adds the page to the navigation.
 5. At the end it writes `reference/SUMMARY.md`, which literate-nav reads. That is why the nav in `mkdocs.yml` says only `- Code reference: reference/`.
 
-A new module therefore appears in the reference with no edits anywhere. The mkdocstrings options in `mkdocs.yml` matter when you write docstrings: `filters: ["!^_[^_]"]` hides every name that starts with one underscore, and `show_if_no_docstring: false` hides anything without a docstring.
+A new module therefore appears in the reference with no edits anywhere. The mkdocstrings options in `mkdocs.yml` decide what each page shows, and they matter when you write docstrings.
+
+| Option | Value | Effect |
+| --- | --- | --- |
+| `filters` | `[]` | Nothing is filtered out, so methods whose names start with an underscore, such as `_request` and `_connect`, are documented alongside the public ones. |
+| `show_if_no_docstring` | `false` | Anything without a docstring is left out, so every function, method and class needs one to appear. |
+| `members_order` | `source` | Classes, methods and attributes are listed in the order they appear in the file. |
+| `inherited_members` | `true` | A subclass page also lists the methods it inherits, after its own. |
+| `summary` | `true` | Each module page opens with a table of its classes, functions and attributes. |
+| `heading_level` | `1` | The module is the page's level-1 heading, each class is level 2 and each method level 3. The right-hand menu shows three levels (`toc_depth: 3`), so it lists every class with its methods nested under it. |
+
+### Example programs
+
+Every class in the code reference has at least two example programs, shown as tabs on its page after the constructor's parameters, with what each program prints below it. Under each method, the reference also shows the lines of those programs that call it, so every method has example usage taken from a program that is known to run.
+
+The programs live in `examples/`, in a folder that mirrors the module path and ends with the class's name. The tree below shows where the two programs for `FixedPrioritySelector` live.
+
+```text
+examples/unified_broker_interface/utilities/broker_selection/fixed_priority/
+└── FixedPrioritySelector/
+    ├── example_1_preferred_brokers_first.py      the program
+    ├── example_1_preferred_brokers_first.out     what it prints, written by --record
+    ├── example_2_preferred_broker_excluded.py
+    └── example_2_preferred_broker_excluded.out
+```
+
+The tab label comes from the file name, so `example_2_preferred_broker_excluded.py` is labelled "Preferred broker excluded". A program explains itself in its module docstring and has no comments, and it follows the same style rules as the rest of the code.
+
+Nothing in `mkdocs.yml` lists the programs. The griffe extension `utilities/docs_examples.py`, loaded through the `extensions` option of mkdocstrings, finds each class's folder while the reference is built and adds the programs to the class's docstring. It then looks through the programs for calls to each method the class defines, leaving out calls on `self` and anything under the main guard, and adds up to three of them to that method's docstring. The extension reads files and imports nothing from the project, so the CI build still needs only the documentation packages.
+
+`python -m test_runs.examples` runs every program and compares what it prints with its `.out` file, so a code change that breaks an example fails there before the docs go stale. The programs run offline: the suite points Redis, MongoDB and PostgreSQL at a closed port and sends all HTTP through a proxy on that port, so a program that tried to reach a real store or broker would fail instead. Programs therefore use small stand-ins for Redis, databases, HTTP sessions and broker logins, and each one says so in its docstring.
+
+To add examples for a new class, follow these steps.
+
+1. Create the class's folder and write two or more programs in it, copying the shape of the `FixedPrioritySelector` programs.
+2. Run `python -m test_runs.examples --record <the folder>` to write the `.out` files, and read them to check that the output shows what the docstring says.
+3. Run `python -m test_runs.examples <the folder>` twice, to prove the output is the same every time.
+4. Run `python -m test_runs.examples --coverage`, which lists every class with fewer than two programs and every public method that no program of its class calls.
 
 ## Adding a page
 
@@ -86,7 +123,7 @@ Links to other pages use relative `.md` paths, which MkDocs checks at build time
 See [Services](../operations/services.md#installing-the-units).
 ```
 
-Links to code use mkdocstrings cross-references, which point into the generated reference. The dotted path must be importable, the object must have a docstring, and its name must be public (no leading underscore), or the strict build fails. This page links to [`BrokerOrders`][unified_broker_interface.utilities.broker_orders.base.BrokerOrders] with this markup:
+Links to code use mkdocstrings cross-references, which point into the generated reference. The dotted path must be importable and the object must have a docstring, or the strict build fails. This page links to [`BrokerOrders`][unified_broker_interface.utilities.broker_orders.base.BrokerOrders] with this markup:
 
 ```markdown
 [`BrokerOrders`][unified_broker_interface.utilities.broker_orders.base.BrokerOrders]

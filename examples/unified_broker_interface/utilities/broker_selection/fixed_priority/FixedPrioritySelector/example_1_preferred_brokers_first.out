@@ -1,0 +1,5 @@
+Selector: fixed_priority
+Preference: ['dhan', 'zerodha']
+Rotation: ['fyers', 'zerodha', 'kotak', 'dhan', 'shoonya']
+Redis commands queued: 0
+Ranked: ['dhan', 'zerodha', 'fyers', 'kotak', 'shoonya']
