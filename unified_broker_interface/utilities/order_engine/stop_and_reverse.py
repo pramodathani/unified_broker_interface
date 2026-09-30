@@ -96,32 +96,45 @@ class StopAndReverse(CloseOnTrigger):
             )
             self.save()
             return True
-        instrument_id, quantity = positions[0]
         method = self.read_method()
         if method == 'double':
             role = 'reverse'
-            order = closer.closing_order(instrument_id, quantity * 2)
         else:
             role = 'close'
-            order = closer.closing_order(instrument_id, quantity)
-        if order is None:
-            self.record_state(
-                'failed',
-                f'{price} reached the trigger at {level}, but the book gave '
-                'no price to trade at',
-            )
+        reverse_from = {}
+        outcome = None
+        messages = []
+        for broker_name, instrument_id, quantity in positions:
+            if method == 'double':
+                order = closer.closing_order(instrument_id, quantity * 2)
+            else:
+                order = closer.closing_order(instrument_id, quantity)
+            if order is None:
+                messages.append(
+                    f'the book gave no price to trade {abs(quantity)} at {broker_name}'
+                )
+                continue
+            reverse_from[broker_name] = str(quantity)
+            self.parent.parameters = dict(self.parent.parameters)
+            self.parent.parameters['reverse_from'] = dict(reverse_from)
             self.save()
-            return True
-        self.parent.parameters = dict(self.parent.parameters)
-        self.parent.parameters['reverse_from'] = str(quantity)
-        self.save()
-        body, _, _ = self.place_leg(role, order, None, self.chosen_broker())
-        outcome = body.get('outcome')
+            body, _, _ = self.place_leg(
+                role,
+                order,
+                None,
+                broker_name,
+                instrument_id,
+            )
+            if outcome != 'accepted':
+                outcome = body.get('outcome')
+            messages.append(
+                f'the {role} order at {broker_name} was '
+                f'{body.get("status_message") or body.get("outcome")}'
+            )
         self.record_state(
             self.state_after_firing(outcome),
             f'{price} reached the trigger at {level}; {cancelled} resting '
-            f'orders cancelled, then the {role} order was '
-            f'{body.get("status_message") or outcome}',
+            f'orders cancelled, then {"; ".join(messages)}',
         )
         self.save()
         return True
@@ -139,9 +152,9 @@ class StopAndReverse(CloseOnTrigger):
         if leg.role != 'close' or leg.state != 'filled':
             return
         for other in self.parent.legs:
-            if other.role == 'reverse':
+            if other.role == 'reverse' and other.broker == leg.broker:
                 return
-        quantity = self.parent.parameters.get('reverse_from')
+        quantity = self.reverse_quantity(leg.broker)
         if quantity is None:
             return
         closer = PositionCloser(self)
@@ -156,7 +169,13 @@ class StopAndReverse(CloseOnTrigger):
             )
             self.save()
             return
-        body, _, _ = self.place_leg('reverse', order, None, leg.broker)
+        body, _, _ = self.place_leg(
+            'reverse',
+            order,
+            None,
+            leg.broker,
+            self.parent.instrument_id,
+        )
         self.record_state(
             self.state_after_firing(body.get('outcome')),
             f'the close filled, so the reverse was '
@@ -164,3 +183,18 @@ class StopAndReverse(CloseOnTrigger):
         )
         self.save()
 
+    def reverse_quantity(self, broker_name):
+        """The position, signed, that the close at one broker was sent for, which is what its reverse trades again.
+
+        A parent recorded before closes were sent per broker holds one quantity rather than one per broker, and that quantity is used for whichever broker's close fills.
+
+        Args:
+            broker_name (str | None): The broker whose close filled.
+
+        Returns:
+            str | None: The quantity as recorded, or None when nothing was recorded for that broker.
+        """
+        recorded = self.parent.parameters.get('reverse_from')
+        if isinstance(recorded, dict):
+            return recorded.get(broker_name)
+        return recorded

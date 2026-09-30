@@ -2437,6 +2437,49 @@ class OrderEngineSuite:
         document.update(overrides)
         return document
 
+    def seed_positions(self, quantity):
+        """Seeds a net intraday position in RELIANCE, held at Flattrade or split across brokers.
+
+        The unified positions document is what reduce-only orders and quantity references read, and it holds one row for the whole position, as the real document merges a position across brokers. The types that close positions read each broker's own hash instead, and find the instrument from the broker's token in `unified:broker_tokens`, so each broker's share is seeded there too.
+
+        Args:
+            quantity (float | dict): The net quantity, signed, held at Flattrade; or broker names to each one's signed quantity.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        if isinstance(quantity, dict):
+            held = quantity
+        else:
+            held = {
+                'flattrade': quantity,
+            }
+        total = 0
+        for broker_quantity in held.values():
+            total = total + broker_quantity
+        self.fake_redis.strings['unified:portfolio:positions'] = json.dumps(
+            self.scenarios.positions(total),
+        )
+        reliance = order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['reliance']
+        broker_tokens = {}
+        for broker_name, broker_quantity in held.items():
+            self.fake_redis.hashes[f'{broker_name}:portfolio:positions'] = {
+                'NET:NSE:2885:MIS': json.dumps({
+                    'position': {
+                        'instrument_token': '2885',
+                        'tradingsymbol': 'RELIANCE-EQ',
+                        'exchange': 'NSE',
+                        'product': 'MIS',
+                        'quantity': broker_quantity,
+                        'day_or_net': 'NET',
+                    },
+                }),
+            }
+            broker_tokens[f'{broker_name}:2885'] = json.dumps([
+                reliance,
+            ])
+        self.fake_redis.hashes['unified:broker_tokens'] = broker_tokens
+
     def run_reaction_checks(self):
         """Runs the linked order types through a fill, which is the only way they do anything.
 
@@ -2959,9 +3002,7 @@ class OrderEngineSuite:
         if quote is not None:
             self.seed_quote(quote)
         if positions is not None:
-            self.fake_redis.strings['unified:portfolio:positions'] = json.dumps(
-                self.scenarios.positions(positions),
-            )
+            self.seed_positions(positions)
         self.seed_resting(resting)
         self.network.reset(answer)
         self.counting_uuid.reset()
@@ -3195,9 +3236,7 @@ class OrderEngineSuite:
             self.seed_other_quotes(steps[0])
         self.seed_resting(resting)
         if positions is not None:
-            self.fake_redis.strings['unified:portfolio:positions'] = json.dumps(
-                self.scenarios.positions(positions),
-            )
+            self.seed_positions(positions)
         reply_keys = self.write_intents(scenario)
 
         logger = logging.getLogger('test_runs.order_engine')
@@ -3785,6 +3824,21 @@ class OrderEngineSuite:
                 resting=[
                     '26091500000077',
                 ],
+            ),
+            self.clock_result(
+                'a_square_off_closes_a_position_split_across_brokers_at_each_broker',
+                dict(entry, synthetic={
+                    'type': 'square_off',
+                    'at_time': '15:10',
+                }),
+                [],
+                frozen + 20000,
+                accepted,
+                quote=self.scenarios.quote(),
+                positions={
+                    'flattrade': 5,
+                    'zerodha': 3,
+                },
             ),
             self.clock_result(
                 'a_square_off_with_nothing_held_closes_nothing',
@@ -4807,6 +4861,22 @@ class OrderEngineSuite:
                 ],
             ),
             self.price_result(
+                'a_close_on_trigger_closes_a_position_split_across_brokers_at_each_broker',
+                dict(entry, synthetic={
+                    'type': 'close_on_trigger',
+                    'trigger_price': 995,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                ],
+                accepted,
+                positions={
+                    'flattrade': 50,
+                    'zerodha': 25,
+                },
+            ),
+            self.price_result(
                 'a_close_on_trigger_with_nothing_held_completes_without_an_order',
                 dict(entry, synthetic={
                     'type': 'close_on_trigger',
@@ -4866,6 +4936,23 @@ class OrderEngineSuite:
                 ],
                 accepted,
                 positions=75,
+            ),
+            self.price_result(
+                'a_doubled_stop_and_reverse_doubles_each_brokers_share_at_that_broker',
+                dict(entry, synthetic={
+                    'type': 'stop_and_reverse',
+                    'trigger_price': 995,
+                    'method': 'double',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                ],
+                accepted,
+                positions={
+                    'flattrade': 50,
+                    'zerodha': 25,
+                },
             ),
             self.price_result(
                 'a_stop_and_reverse_with_an_unknown_method_is_refused',
