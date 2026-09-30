@@ -79,6 +79,24 @@ class DhanQuoteSource(BrokerQuoteSource):
     BROKER_NAME = "dhan"
 
     def fetch(self, client, handle, identity, received_at):
+        """
+        One instrument's Dhan quote as a contract tick.
+
+        The quote is requested from Dhan's market feed quote endpoint under the instrument's Dhan exchange segment and security id, with the session's access token and client id as headers. The tick's `instrument_token` is spelled `<segment code>:<security id>`, as Dhan's market feed spells it. The change is worked out from the last price and the close, and the last trade time is turned from Dhan's India time text into epoch seconds.
+
+        Args:
+            client (DhanAPI): Dhan's API client, whose `post` carries the session.
+            handle (dict): Dhan's order handle for the instrument; its `broker_token` is the security id.
+            identity (dict): The instrument's identity.
+            received_at (float): The instant to stamp on the tick, in epoch seconds.
+
+        Returns:
+            dict: The contract tick.
+
+        Raises:
+            QuoteUnavailable: Dhan has no quote segment for the instrument's segment, or its answer held no quote for the security id.
+            DhanAPIException: The API client refused the request, which it raises and this method lets through.
+        """
         segment = dhan_segment(identity)
         if segment is None:
             raise QuoteUnavailable(f"Dhan has no quote segment for {identity['segment']}")
@@ -112,5 +130,16 @@ class DhanQuoteSource(BrokerQuoteSource):
         return tick
 
     def is_authentication_error(self, exception):
+        """
+        Whether an exception from `fetch` means Dhan no longer accepts the session.
+
+        The exception's text is searched for Dhan's authentication refusals, including the 807 and 808 codes for an expired or invalid token. Code 806, data APIs not subscribed, is not one of them, because logging in again cannot fix it.
+
+        Args:
+            exception (Exception): What `fetch` raised.
+
+        Returns:
+            bool: True when logging in again is the remedy.
+        """
         text = str(exception).lower()
         return any(marker in text for marker in _AUTHENTICATION_MARKERS)

@@ -56,6 +56,13 @@ class TokenStore:
     """
 
     def __init__(self, mongo_db, cache):
+        """
+        Keep the stores the login document is read from and written to.
+
+        Args:
+            mongo_db (pymongo.database.Database): The MongoDB database holding `settings` and `last_login`.
+            cache (redis.Redis): The Redis client holding the `last_login` hash.
+        """
         self._mongo_db = mongo_db
         self._cache = cache
 

@@ -392,6 +392,22 @@ class TickResolver:
         return {key: plan for key, plan in self._plans.items() if plan.__class__ is InstrumentPlan}
 
     def _compile_plan(self, normalizer, broker, token, broker_token, identity, handles_by_broker):
+        """
+        Compile the plan for one resolved token from its instrument's identity and every broker's handle.
+
+        The lot size is decided from the handles, and a note about it, such as brokers disagreeing, is recorded in `notes` and logged once. Each quantity field then gets the multiplier that turns this broker's figure into units: the lot size for a field reported in lots, the lot size divided by the broker's own lot size for a field reported in broker lots, None when either lot size is unknown, and 1 otherwise.
+
+        Args:
+            normalizer (TickNormalizer): The broker's normalizer, which says how it reports each quantity field and its close.
+            broker (str): The broker name.
+            token (int | str): The token as it is spelled on the broker's ticks.
+            broker_token (str): The token as stored in unified.broker_mappings.
+            identity (dict): The one instrument identity the token resolved to.
+            handles_by_broker (dict): Broker name to that broker's order handle for the instrument.
+
+        Returns:
+            InstrumentPlan: The compiled plan.
+        """
         exchange = identity["exchange"]
         segment = identity["segment"]
         shape = identity["shape"]
@@ -436,12 +452,33 @@ class TickResolver:
         )
 
     def _miss(self, broker, token, reason, retry_at, detail=None):
+        """
+        Record that a token did not resolve, and when it may be tried again.
+
+        The retry instant is filed in place of a plan, so `plan_for` returns None without searching again until then. The miss is counted in `unresolved` and logged once per broker, token and reason.
+
+        Args:
+            broker (str): The broker name.
+            token (int | str): The token as it is spelled on the broker's ticks.
+            reason (str): Why it did not resolve: no_normalizer, unplaceable, unmapped, ambiguous or no_mapping_date.
+            retry_at (float): The epoch instant before which the token is not searched for again.
+            detail (str | None): More about the miss for the log line, such as the candidates of an ambiguous token.
+        """
         self._plans[(broker, token)] = retry_at
         self.unresolved[(broker, str(token), reason)] += 1
         message = f"{broker} token {token} did not resolve: {reason}"
         self._log_once((broker, token, reason), message + (f" ({detail})." if detail else "."))
 
     def _log_once(self, key, message):
+        """
+        Log a warning the first time a key is seen since the plans were last dropped.
+
+        Nothing is logged when the resolver has no logger.
+
+        Args:
+            key (tuple): What identifies the message, so the same event is not logged twice.
+            message (str): The warning to log.
+        """
         if key in self._logged or self._logger is None:
             return
         self._logged.add(key)

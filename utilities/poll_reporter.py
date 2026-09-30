@@ -20,6 +20,13 @@ class PollReporter:
     """
 
     def __init__(self, logger, interval=60):
+        """
+        Start with no message logged at any level, so the first message at each level is always logged.
+
+        Args:
+            logger (logging.Logger): Where the messages go.
+            interval (float): How often an unchanged message is repeated, in seconds; 60 unless given.
+        """
         self.logger = logger
         self.interval = interval
         # The last message logged at each level, and when.

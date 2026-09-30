@@ -42,6 +42,24 @@ class ZerodhaQuoteSource(BrokerQuoteSource):
     BROKER_NAME = "zerodha"
 
     def fetch(self, client, handle, identity, received_at):
+        """
+        One instrument's Kite quote as a contract tick.
+
+        The quote is requested from Kite's quote endpoint by the instrument token, and the tick's `instrument_token` is that token as an integer, as Kite's market feed spells it. The quantities, prices and order book are copied as Kite sends them, and the last trade time and exchange timestamp are turned from Kite's India time text into epoch seconds.
+
+        Args:
+            client (ZerodhaAPI): Zerodha's API client, whose `get` carries the session.
+            handle (dict): Zerodha's order handle for the instrument; its `broker_token` is the Kite instrument token.
+            identity (dict): The instrument's identity.
+            received_at (float): The instant to stamp on the tick, in epoch seconds.
+
+        Returns:
+            dict: The contract tick.
+
+        Raises:
+            QuoteUnavailable: Kite's answer held no quote for the instrument token.
+            ZerodhaAPIException: The API client refused the request, which this method lets through.
+        """
         token = str(handle["broker_token"])
         response = client.get(url=QUOTE_URL, params={"i": token}, timeout=self.TIMEOUT_SECONDS)
         quote = (response.get("data") or {}).get(token)
@@ -60,5 +78,16 @@ class ZerodhaQuoteSource(BrokerQuoteSource):
         return tick
 
     def is_authentication_error(self, exception):
+        """
+        Whether an exception from `fetch` means Kite no longer accepts the session.
+
+        The exception's text is searched for Kite's `TokenException`, a mention of the access token, or an invalid or incorrect api key.
+
+        Args:
+            exception (Exception): What `fetch` raised.
+
+        Returns:
+            bool: True when logging in again is the remedy.
+        """
         text = str(exception).lower()
         return any(marker in text for marker in _AUTHENTICATION_MARKERS)

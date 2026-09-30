@@ -51,6 +51,11 @@ class KotakTickNormalizer(TickNormalizer):
     CLOSE_POLICY = {"nse": CLOSE_ALWAYS, "bse": CLOSE_ALWAYS, "mcx": CLOSE_ALWAYS}
 
     def __init__(self):
+        """
+        Build the lookup from each Kotak exchange segment to the canonical segments it can hold.
+
+        The table is worked out once here from `EXCHANGE_SEGMENTS`, so `feed_key` only has to look a tick's exchange segment up rather than recompute its segments on every call.
+        """
         self._segments = {name: family_segments(exchanges, family)
                           for name, (exchanges, family) in self.EXCHANGE_SEGMENTS.items()}
 

@@ -37,6 +37,11 @@ class GrowwTickNormalizer(TickNormalizer):
     TRUSTS_LAST_TRADE_TIME = False
 
     def __init__(self):
+        """
+        Build the lookup from each Groww exchange prefix and segment to the canonical segments it can hold.
+
+        Every exchange in `EXCHANGES` is paired with every segment in `SEGMENTS`, so `feed_key` only has to look a tick's exchange and segment up rather than recompute its segments on every call.
+        """
         self._segments = {(prefix, segment): family_segments([exchange], family)
                           for prefix, exchange in self.EXCHANGES.items()
                           for segment, family in self.SEGMENTS.items()}

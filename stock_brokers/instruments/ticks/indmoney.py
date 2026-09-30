@@ -42,6 +42,11 @@ class IndmoneyTickNormalizer(TickNormalizer):
     CLOSE_POLICY = {"nse": CLOSE_NEVER, "bse": CLOSE_NEVER}
 
     def __init__(self):
+        """
+        Build the lookup from each INDstocks segment name to the canonical segments it can hold.
+
+        The table is worked out once here from `SEGMENTS`, so `feed_key` only has to look a tick's segment name up rather than recompute its segments on every call.
+        """
         self._segments = {name: family_segments(exchanges, family)
                           for name, (exchanges, family) in self.SEGMENTS.items()}
 

@@ -102,10 +102,10 @@ class KotakMappingAdapter(BrokerMappingAdapter):
 
         Args:
             raw_row (dict): One raw row from kotak.instruments.
-            specification: A bare column name, a {column, transform} pair, a {constant} value, or a {columns, transform} pair.
+            specification (str | dict): A bare column name, a {column, transform} pair, a {constant} value, or a {columns, transform} pair.
 
         Returns:
-            The resolved value.
+            Any: The resolved value.
 
         Raises:
             ValueError: If a multi-column specification names a transform this adapter does not implement.

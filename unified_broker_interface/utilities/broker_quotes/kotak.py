@@ -121,6 +121,25 @@ class KotakQuoteSource(BrokerQuoteSource):
     BROKER_NAME = "kotak"
 
     def fetch(self, client, handle, identity, received_at):
+        """
+        One instrument's Kotak Neo quote as a contract tick.
+
+        The quote is requested from Kotak's quote endpoint by the instrument's Kotak exchange segment and token, sending the api key and the session's access token and session id as headers. An NSE index is asked for by the name Kotak's quote endpoint knows it by. The tick's `instrument_token` is spelled `<segment>|<token>`, as Kotak's market feed spells it. The close is rebuilt as the last price less Kotak's change. An index tick stops at the last price and the open, high, low and close, because Kotak's index quote carries only zeros for every quantity.
+
+        Args:
+            client (KotakAPI): Kotak's API client, which supplies the session, the settings and the host the current login was assigned.
+            handle (dict): Kotak's order handle for the instrument; its `broker_token` is the token.
+            identity (dict): The instrument's identity.
+            received_at (float): The instant to stamp on the tick, in epoch seconds.
+
+        Returns:
+            dict: The contract tick.
+
+        Raises:
+            QuoteUnavailable: Kotak has no exchange segment for the instrument, the index has no known quote name, Kotak does not recognise the symbol, or its answer held no quote for it.
+            KotakAPIException: Kotak answered with an HTTP status of 300 or above, or with a body that is not JSON.
+            requests.RequestException: The request could not be sent or timed out.
+        """
         token = str(handle["broker_token"])
         segment = kotak_segment(identity)
         if segment is None:
@@ -176,5 +195,16 @@ class KotakQuoteSource(BrokerQuoteSource):
         return tick
 
     def is_authentication_error(self, exception):
+        """
+        Whether an exception from `fetch` means Kotak no longer accepts the session.
+
+        The exception's text is searched for Kotak's refusal of a session it does not accept, and for code 200032 or an invalid URL, which mean the request went to a host other than the one the current login was assigned. A 424 for an invalid consumer key is not one of them, because the key comes from the settings and logging in again does not change it.
+
+        Args:
+            exception (Exception): What `fetch` raised.
+
+        Returns:
+            bool: True when logging in again is the remedy.
+        """
         text = str(exception).lower()
         return any(marker in text for marker in _AUTHENTICATION_MARKERS)

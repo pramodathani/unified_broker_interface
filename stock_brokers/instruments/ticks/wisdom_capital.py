@@ -49,6 +49,11 @@ class WisdomCapitalTickNormalizer(TickNormalizer):
     CLOSE_POLICY = {exchange: CLOSE_NEVER for exchange in ("nse", "bse", "mcx", "ncdex")}
 
     def __init__(self):
+        """
+        Build the lookup from each XTS exchange segment number to the canonical segments it can hold.
+
+        The table is worked out once here from `SEGMENT_NUMBERS`, so `feed_key` only has to look a tick's exchange segment number up rather than recompute its segments on every call.
+        """
         self._segments = {number: family_segments(exchanges, family)
                           for number, (exchanges, family) in self.SEGMENT_NUMBERS.items()}
 

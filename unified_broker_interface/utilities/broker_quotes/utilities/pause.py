@@ -17,6 +17,11 @@ class RefusalPause:
     """
 
     def __init__(self):
+        """
+        Start with no pause in force, so the endpoint may be called straight away.
+
+        The lock lets every thread in the worker share the pause safely.
+        """
         self._until = 0.0
         self._reason = None
         self._lock = threading.Lock()

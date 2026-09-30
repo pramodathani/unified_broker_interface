@@ -247,10 +247,10 @@ class IndMoneyMappingAdapter(BrokerMappingAdapter):
 
         Args:
             raw_row (dict): One raw row from indmoney.instruments.
-            specification: A bare column name, or a {column, transform} pair.
+            specification (str | dict): A bare column name, or a {column, transform} pair.
 
         Returns:
-            The resolved value.
+            Any: The resolved value.
         """
         if isinstance(specification, dict):
             transform = specification.get("transform")
