@@ -1,0 +1,3 @@
+flag left out: hedge benefit False, 0 legs
+flag set to True: hedge benefit True, 0 legs
+flag set to False: hedge benefit False, 0 legs

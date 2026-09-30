@@ -1,0 +1,8 @@
+Segment: nse_equity_index_futures
+Underlying: NIFTY
+SPAN rate: 0.0926
+Exposure rate: 0.02
+Total rate: 0.1126
+One lot is worth 1,484,190.50
+Estimated margin: 167,119.85
+The brokers answered: 167,109.41

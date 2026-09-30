@@ -1258,6 +1258,9 @@ Each broker's `place_skip_reason` answers "can you take this order?" before anyt
 | The settings the place request needs are present | `has no <fields> in its Redis settings` |
 | The broker takes `SL` and `SL-M` orders, when this is one | `takes no <type> orders` |
 | The broker takes after-market orders, when this is one | `takes no after-market orders` |
+| The broker has the free cash for the order, when the lowest-cost selector's funds check is on | `needs about <margin> of margin but has <cash> free`, `its funds are stale`, `its funds were read <n> seconds ago` or `has no funds in unified:portfolio:funds` |
+
+The last check comes from the selector rather than the broker: the lowest-cost selector estimates the margin the order needs at each broker and compares it with that broker's free cash, without calling the broker. It applies only when the selector chooses, so an order that names its broker is never checked. [Choosing a broker by cost](../architecture/broker-selection.md#checking-that-a-broker-can-afford-the-order) explains the estimate.
 
 The markets each broker takes are listed below, from the `MARKETS` table of each order class. A market is an exchange, an asset class and a kind of instrument.
 

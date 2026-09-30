@@ -1,0 +1,17 @@
+# When the daily margin calibration runs.
+#
+# 09:30 IST Monday to Friday: fifteen minutes into the equity session, so the reference orders are priced from live
+# quotes, and after the 07:45 instrument job has published the day's catalogue.
+
+[Unit]
+Description=Daily broker margin calibration
+PartOf=unified.target
+
+[Timer]
+OnCalendar=Mon..Fri 09:30 Asia/Kolkata
+AccuracySec=1min
+Persistent=true
+Unit=unified-margin-calibration.service
+
+[Install]
+WantedBy=timers.target

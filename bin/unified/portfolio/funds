@@ -33,8 +33,8 @@ as zero. A segment appears when any broker reports it.
 | dhan | one pool | `availabelBalance`, `collateralAmount`, `utilizedAmount`, `withdrawableBalance`; `receiveableAmount` uncleared, `blockedPayoutAmount` pending withdrawal | none |
 | flattrade, shoonya | Noren `Limits` | available is `cash + collateral (or brkcollamt) + daycash - marginused`; `span`, `expo`, `premium + varelm + marprt`, `rpnl`, `unmtom`, `payin`, `payout`, `unclearedcash` | from `span_{e,d,f,c}_{i,m,c}` and `expo_...`, when non-zero |
 | fyers | `fund_limit` rows by `title` | equity plus commodity amount of Available Balance, Clear Balance, Collaterals, Adhoc Limit, Utilized Amount, Realized Profit and Loss | `equity`, `commodity` |
-| groww | margin detail | available is `clear_cash + collateral_available + adhoc_margin - net_margin_used`; collateral used plus available; commodity M2M | `equity`, `derivatives`, `commodity` |
-| indmoney | funds | available is `sod_balance + pledge_received`; `withdrawal_balance`, P&L, funds added and withdrawn | from `detailed_avl_balance` |
+| groww | margin detail | available is `clear_cash + collateral_available + adhoc_margin - net_margin_used`; collateral used plus available; commodity M2M | `equity`, `derivatives`, `commodity`; a segment's available is the smallest of its products' figures |
+| indmoney | funds | available is `sod_balance + pledge_received`; `withdrawal_balance`, P&L, funds added and withdrawn | from `detailed_avl_balance`; a segment's available is the smallest of its products' figures |
 | kotak | limits | `Net`, `CollateralValue`, `AdhocMargin`, `MarginUsed`, span and exposure present, MTM present, RMS pay-in and pay-out | `derivatives`, `currency`, `commodity` span and exposure, Nrml plus Mis |
 | stoxkart | one pool of strings | `available_limit`, `cash`, `pledge_value` (or `collateral`), `adhoc_limit`, the absolute `utilized_limit`, `withdrawable_funds`; `realised_profit`, `payin_amount`, `payout_amount` | none |
 | wisdom_capital | XTS `BalanceList` | the first balance's `RMSSubLimits`, `marginAvailable` and `marginUtilized` | none |
@@ -44,6 +44,13 @@ script stored the funds: `ok`; `stale`, stored more than a minute ago - its scri
 in; `missing`, no key; or `unreadable`, a stored value that is not funds - a refusal Fyers, Noren or Kotak carried in a
 successful answer, or a body of the wrong shape - with an `error` saying why. A missing or unreadable broker adds
 nothing, and its status says so, so it is never mistaken for a broker holding no money.
+
+**Each broker's own figures.** An `ok` or `stale` broker's entry also carries its own `available_balance`, and `pools`:
+the segments whose free cash the broker reports separately, each with its available balance. Zerodha and Fyers
+report `equity` and `commodity`, Groww `equity` and `derivatives`, and INDmoney `equity`, `derivatives` and
+`commodity`; the others report one pool, so their `pools` is empty and `available_balance` is all there is. The
+lowest-cost broker selector reads these to decide whether a broker can afford an order, from this one key rather than
+from ten brokers' formats.
 
 Written with SET every half second, the per-broker funds scripts' cadence. Runs until Ctrl+C or SIGTERM; a Redis that
 cannot be reached is logged and tried again. Reads only - it places no orders.
@@ -106,6 +113,7 @@ def funds_record():
         "margin_breakdown": {"span_margin": 0.0, "exposure_margin": 0.0, "other_margin": 0.0},
         "cash_movement": {"pay_in_today": 0.0, "pay_out_today": 0.0, "uncleared_funds": 0.0, "pending_withdrawal": 0.0},
         "segments": {},
+        "pools": {},
     }
 
 def add(record, bucket, field, value):
@@ -118,6 +126,8 @@ def add_segment(record, name, **fields):
                                                    "span_margin": 0.0, "exposure_margin": 0.0})
     for field, value in fields.items():
         segment[field] += number(value)
+    if "available_balance" in fields:
+        record["pools"][name] = record["pools"].get(name, 0.0) + number(fields["available_balance"])
 
 def a_dict(broker, data):
     """The stored funds when they are an object, raising NotFunds when they are not."""
@@ -229,12 +239,13 @@ def groww_funds(data):
     add(record, "pnl", "realized", commodity.get("commodity_realised_m2m"))
     add(record, "pnl", "unrealized", commodity.get("commodity_unrealised_m2m"))
     add_segment(record, "equity",
-                available_balance=number(equity.get("cnc_balance_available")) + number(equity.get("mis_balance_available")),
+                available_balance=min(number(equity.get("cnc_balance_available")),
+                                      number(equity.get("mis_balance_available"))),
                 margin_utilized=equity.get("net_equity_margin_used"))
     add_segment(record, "derivatives",
-                available_balance=number(derivatives.get("future_balance_available"))
-                + number(derivatives.get("option_buy_balance_available"))
-                + number(derivatives.get("option_sell_balance_available")),
+                available_balance=min(number(derivatives.get("future_balance_available")),
+                                      number(derivatives.get("option_buy_balance_available")),
+                                      number(derivatives.get("option_sell_balance_available"))),
                 margin_utilized=derivatives.get("net_fno_margin_used"),
                 span_margin=derivatives.get("span_margin_used"),
                 exposure_margin=derivatives.get("exposure_margin_used"))
@@ -257,10 +268,11 @@ def indmoney_funds(data):
     add(record, "pnl", "unrealized", data.get("unrealized_pnl"))
     add(record, "cash_movement", "pay_in_today", data.get("funds_added"))
     add(record, "cash_movement", "pay_out_today", data.get("funds_withdrawn"))
-    add_segment(record, "equity", available_balance=number(detail.get("eq_cnc")) + number(detail.get("eq_mis"))
-                + number(detail.get("eq_mtf")))
-    add_segment(record, "derivatives", available_balance=number(detail.get("future")) + number(detail.get("option_buy"))
-                + number(detail.get("option_sell")))
+    add_segment(record, "equity", available_balance=min(number(detail.get("eq_cnc")), number(detail.get("eq_mis")),
+                                                        number(detail.get("eq_mtf"))))
+    add_segment(record, "derivatives", available_balance=min(number(detail.get("future")),
+                                                             number(detail.get("option_buy")),
+                                                             number(detail.get("option_sell"))))
     add_segment(record, "commodity", available_balance=detail.get("comm_option_buy"))
     return record
 
@@ -348,7 +360,7 @@ def combine(records):
     combined = funds_record()
     for record in records:
         for bucket, fields in record.items():
-            if bucket == "segments":
+            if bucket in ("segments", "pools"):
                 continue
             for field, value in fields.items():
                 combined[bucket][field] += value
@@ -388,7 +400,9 @@ def funds_document(cache, now):
         except (TypeError, ValueError):
             age = None
         statuses.append({"broker": broker, "status": "stale" if age is None or age > STALE_SECONDS else "ok",
-                         "as_of": stored_at})
+                         "as_of": stored_at,
+                         "available_balance": round(record["summary"]["available_balance"], 2),
+                         "pools": rounded(record["pools"])})
         records.append(record)
 
     combined = combine(records)

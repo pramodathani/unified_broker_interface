@@ -1,0 +1,4 @@
+unreachable: margins {'intraday': None, 'fno': None, 'commodity': None}, hedge None, written False, problems ['fno: unreachable could not be reached']
+indmoney: margins {'intraday': Decimal('205.96'), 'fno': Decimal('167789.13'), 'commodity': None}, hedge None, written True, problems []
+half_measured: margins {'intraday': None, 'fno': None, 'commodity': None}, hedge None, written False, problems []
+hedge_only: margins {'intraday': None, 'fno': None, 'commodity': None}, hedge True, written True, problems []

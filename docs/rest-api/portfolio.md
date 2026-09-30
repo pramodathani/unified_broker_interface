@@ -202,7 +202,8 @@ The example below is shortened to one segment and two brokers, and every amount 
     "equity": {"available_balance": 120000.0, "margin_utilized": 40000.0, "span_margin": 30000.0, "exposure_margin": 8000.0}
   },
   "brokers": [
-    {"broker": "dhan", "status": "ok", "as_of": "2026-09-26 11:02:12.841233"},
+    {"broker": "dhan", "status": "ok", "as_of": "2026-09-26 11:02:12.841233", "available_balance": 64000.0, "pools": {}},
+    {"broker": "zerodha", "status": "ok", "as_of": "2026-09-26 11:02:12.902114", "available_balance": 56000.0, "pools": {"equity": 56000.0, "commodity": 0.0}},
     {"broker": "wisdom_capital", "status": "unreadable", "as_of": "2026-09-26 11:02:12.101002", "error": "NotFunds: ..."}
   ],
   "as_of": "2026-09-26T11:02:13"
@@ -225,9 +226,15 @@ The example below is shortened to one segment and two brokers, and every amount 
 | `cash_movement` | object | `pay_in_today`, `pay_out_today`, `uncleared_funds` and `pending_withdrawal` |
 | `segments` | object | One entry per segment any broker reports, each with `available_balance`, `margin_utilized`, `span_margin` and `exposure_margin` |
 | `brokers` | array | Each broker's `broker`, `status` and `as_of` (when its script stored the funds, `YYYY-MM-DD HH:MM:SS.ffffff`), plus `error` when it is `unreadable` |
+| `brokers[].available_balance` | number | That broker's own free cash, present when its status is `ok` or `stale` |
+| `brokers[].pools` | object | The segments whose free cash that broker reports separately, each with its available balance: `equity` and `commodity` at Zerodha and Fyers, `equity` and `derivatives` at Groww, and those three at INDmoney. It is empty for a broker with one pool. |
 | `as_of` | string | When the document was written, `YYYY-MM-DDTHH:MM:SS` in the server's local time |
 
 A field a broker does not report adds nothing, and a missing, blank or non-numeric value, such as Wisdom Capital's `"NaN"`, is read as zero. A broker is marked `stale` when its funds were stored more than 60 seconds ago. A broker is `unreadable` when what is stored is not funds, for example a refusal that Fyers, the Noren brokers or Kotak carried inside a successful answer.
+
+Groww and INDmoney report their free cash once per product, such as delivery, intraday, futures, option buying and option selling. Those figures are the same money seen from different products, so a segment's `available_balance` is the smallest of them rather than their sum.
+
+The per-broker `available_balance` and `pools` are also what the lowest-cost broker selector reads to decide whether a broker can afford an order; see [Broker selection](../architecture/broker-selection.md).
 
 ??? note "Under the hood"
     - Route: `PortfolioBlueprint.funds` in `unified_broker_interface/blueprints/portfolio.py`, calling [`read_document`][unified_broker_interface.utilities.unified_documents.read_document] with a maximum age of 30 seconds.

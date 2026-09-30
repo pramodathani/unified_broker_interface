@@ -1,6 +1,6 @@
 """Shows that `BrokerSelector` itself cannot rank brokers, and what its default hooks do when a subclass leaves them alone.
 
-`BrokerSelector` is the interface every selection algorithm implements, so it has no name and no ranking of its own: `NAME` is None and `ranked_brokers` raises `NotImplementedError`. The API picks a selector by name from its registry, so a base-class instance is never used for real orders. This program builds one anyway, to show those two facts, and then calls the three reporting hooks, which the base class accepts and ignores.
+`BrokerSelector` is the interface every selection algorithm implements, so it has no name and no ranking of its own: `NAME` is None and `ranked_brokers` raises `NotImplementedError`. The API picks a selector by name from its registry, so a base-class instance is never used for real orders. This program builds one anyway, to show those two facts, and then calls the three reporting hooks, which the base class accepts and ignores, and `passed_over_reason`, which never rules a broker out.
 
 The selector is given an empty broker cost table and a stand-in Redis client that records any command it is sent. Nothing touches a data store.
 
@@ -91,6 +91,7 @@ class BaseClassCannotRankExample:
         self.selector.record_passed_over(self.cache, 1)
         self.selector.record_outcome('zerodha', None)
         print(f'Commands sent to Redis by the hooks: {self.cache.commands}')
+        print(f'Reason to pass over zerodha: {self.selector.passed_over_reason("zerodha")}')
 
 
 if __name__ == '__main__':

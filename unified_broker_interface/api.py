@@ -25,6 +25,7 @@ api.register_blueprint(instruments_bp, url_prefix='/api/instruments')
 api.register_blueprint(portfolio_bp, url_prefix='/api/portfolio')
 api.register_blueprint(orders_bp, url_prefix='/api/orders')
 orders_blueprint.order_placement.cost_table.start(orders_blueprint.broker_names)
+orders_blueprint.order_placement.margin_rate_table.start()
 
 @api.route('/api/', methods=['GET'])
 def home():

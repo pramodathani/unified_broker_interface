@@ -1,0 +1,8 @@
+Priced leg: future in mcx_commodity_futures at 8618, market commodity
+Exchange margin: 271,036.10
+text of b"8618": '8618', of None: ''
+read_time: 2026-09-30 10:39:59.500000, of nonsense: None
+Brokers in the funds document: ['dhan', 'zerodha']
+zerodha: multiplier 1, free cash 0.0, problem None
+dhan: multiplier 1, free cash 9891.75, problem None
+stoxkart: multiplier 1.15, free cash 0, problem has no funds in unified:portfolio:funds

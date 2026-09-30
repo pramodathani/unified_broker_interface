@@ -480,7 +480,7 @@ class EnginePlacement:
             return None
         return document
 
-    def prepare(self, order, instrument_id, broker_name=None):
+    def prepare(self, order, instrument_id, broker_name=None, legs=None):
         """Reads what the order needs, chooses its broker and builds the request, without sending anything.
 
         The seam between building and sending is where a synthetic order records that it is about to send, so that a crash mid-send leaves evidence of an order that may exist.
@@ -489,6 +489,7 @@ class EnginePlacement:
             order (PlaceOrderRequest): The validated order.
             instrument_id (str): The instrument the intent named.
             broker_name (str | None): The broker the order must go to, or None to let the selector choose.
+            legs (OrderLegs | None): Every leg of a strategy this order is the first of, so the selector can check that the broker it chooses can afford all of them; None for a single order.
 
         Returns:
             PreparedPlacement: The chosen broker and the request built for it.
@@ -525,6 +526,7 @@ class EnginePlacement:
             mapping_date_text,
             warm_identifier,
             not uses_assignment,
+            legs,
         )
         if uses_assignment:
             reason = self.order_placement.named_broker_skip_reason(
@@ -547,6 +549,7 @@ class EnginePlacement:
                     mapping_date_text,
                     warm_identifier,
                     True,
+                    legs,
                 )
         prepared = self.order_placement.prepare(
             order,
@@ -699,6 +702,7 @@ class EnginePlacement:
         mapping_date_text,
         warm_identifier,
         with_selector=True,
+        legs=None,
     ):
         """Reads the instrument's catalogue entry and the broker selector's own commands in one round trip.
 
@@ -710,6 +714,7 @@ class EnginePlacement:
             mapping_date_text (str): The mapping date as Redis holds it.
             warm_identifier (str | None): The current warm's identifier.
             with_selector (bool): Whether to queue the selector's commands; False when intake already chose the broker, so a round-robin turn is not taken twice for one order.
+            legs (OrderLegs | None): Every leg of a strategy this order is the first of, handed to the selector; None for a single order.
 
         Returns:
             tuple: The instrument (Instrument) and the selector's replies (list).
@@ -741,6 +746,7 @@ class EnginePlacement:
                     pipeline,
                     order,
                     instrument_id,
+                    legs,
                 )
             )
         replies = []

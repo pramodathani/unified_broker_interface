@@ -1,0 +1,8 @@
+limit at 1015: trade price 1015, market equity
+stop-market triggered at 1020: trade price 1020, market equity
+market, quote held: trade price 1017.7, market equity
+market, no quote: trade price None, market equity
+'22683.4' reads as 22683.4
+'' reads as None
+'NaN' reads as None
+'Infinity' reads as None

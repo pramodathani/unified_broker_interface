@@ -1,0 +1,7 @@
+Segment: nse_equity_index_options
+Shape: option, option True, future False
+Underlying: NIFTY expiring 2026-10-06
+Strike: 22800.0 CE
+Buys: False, direction -1, units 65
+Trade price: 122.5, underlying at 22721.25
+Market category: derivatives

@@ -18,6 +18,7 @@ The chart below shows one weekday from 06:00 to midnight IST. Blue bars and poin
       {"order": 3, "row": "Broker logins (ten timers)", "kind": "UBI job or cut-off", "start": "2026-09-28 07:00", "end": "2026-09-28 07:30", "source": "<broker>-login.timer, RandomizedDelaySec=1800"},
       {"order": 4, "row": "Instrument download and mapping", "kind": "UBI job or cut-off", "start": "2026-09-28 07:45", "end": "2026-09-28 08:30", "source": "unified-mapping.timer; about 45 minutes per the unit comment"},
       {"order": 5, "row": "Unified price history (Mon to Sat)", "kind": "UBI job or cut-off", "start": "2026-09-28 08:30", "end": null, "source": "unified-prices.timer"},
+      {"order": 5.5, "row": "Margin calibration (Mon to Fri)", "kind": "UBI job or cut-off", "start": "2026-09-28 09:30", "end": null, "source": "unified-margin-calibration.timer"},
       {"order": 6, "row": "NSE and BSE equity", "kind": "Trading session", "start": "2026-09-28 09:00", "end": "2026-09-28 09:15", "source": "Pre-open, sessions.py"},
       {"order": 6, "row": "NSE and BSE equity", "kind": "Trading session", "start": "2026-09-28 09:15", "end": "2026-09-28 15:30", "source": "Continuous session, sessions.py"},
       {"order": 7, "row": "Currency derivatives", "kind": "Trading session", "start": "2026-09-28 09:00", "end": "2026-09-28 17:00", "source": "sessions.py"},
@@ -86,6 +87,7 @@ The same facts are listed in the table below, with the file each one comes from.
 | 07:45 | `unified-mapping.service` downloads ten instrument masters, then maps them | Every day, weekends included | `OnCalendar=*-*-* 07:45 Asia/Kolkata`, `Persistent=true` |
 | 08:30 | `unified-prices.service` runs `bin/unified/instruments/price_history daily` | Monday to Saturday | `OnCalendar=Mon..Sat 08:30 Asia/Kolkata`, `Persistent=true` |
 | 09:00 to 09:15 | NSE and BSE equity pre-open | Trading days | `EQUITY_SESSION` in `stock_brokers/instruments/ticks/utilities/sessions.py` |
+| 09:30 | `unified-margin-calibration.service` asks every broker's margin calculator about the reference orders and writes each broker's margin surcharge to `unified.broker_order_costs` | Monday to Friday | `OnCalendar=Mon..Fri 09:30 Asia/Kolkata`, `Persistent=true` |
 | 09:15 to 15:30 | NSE and BSE cash, index and equity derivatives trade | Trading days | `EQUITY_SESSION` |
 | 09:00 to 17:00 | Currency derivatives trade | Trading days | `CURRENCY_SESSION` |
 | 09:00 to 17:00, 17:00 to 23:30 | Commodity derivatives on MCX (and the NSE and BSE commodity segments) trade a morning and an evening session; the evening runs to 23:55 while the United States is on standard time | Trading days | `COMMODITY_SESSION` |

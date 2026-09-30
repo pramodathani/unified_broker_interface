@@ -4,27 +4,30 @@
 class BrokerSelector:
     """Orders the brokers an order is offered to.
 
-    One instance is built per gunicorn worker, when the order blueprint is built, and one per order engine. A subclass sets `NAME`, implements `ranked_brokers`, and overrides `queue_redis_commands` when it needs Redis, `record_chosen` when it keeps track of its own choices and `record_outcome` when it learns from answers.
+    One instance is built per gunicorn worker, when the order blueprint is built, and one per order engine. A subclass sets `NAME`, implements `ranked_brokers`, and overrides `queue_redis_commands` when it needs Redis, `passed_over_reason` when it can rule a broker out, `record_chosen` when it keeps track of its own choices and `record_outcome` when it learns from answers.
 
     Attributes:
         NAME (str): The name `UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_SELECTOR` selects the algorithm by.
         cost_table (BrokerCostTable): Each broker's brokerage and order-rate limits, held in memory.
+        margin_rate_table (MarginRateTable | None): The exchange's margin rates, for a selector that checks funds, or None.
     """
 
     NAME = None
 
-    def __init__(self, cost_table):
+    def __init__(self, cost_table, margin_rate_table=None):
         """Builds the selector.
 
         Args:
             cost_table (BrokerCostTable): Each broker's brokerage and order-rate limits.
+            margin_rate_table (MarginRateTable | None): The exchange's margin rates, or None.
 
         Returns:
             None: This method returns nothing.
         """
         self.cost_table = cost_table
+        self.margin_rate_table = margin_rate_table
 
-    def queue_redis_commands(self, pipeline, order, instrument_id):
+    def queue_redis_commands(self, pipeline, order, instrument_id, legs=None):
         """Queues the Redis commands the selector needs on the pipeline that also reads the instrument.
 
         The commands run after the order has been validated and before the instrument is known, in the same round trip as the instrument's identity and order handles.
@@ -33,6 +36,7 @@ class BrokerSelector:
             pipeline (redis.client.Pipeline): The pipeline to queue commands on.
             order (PlaceOrderRequest): The validated order.
             instrument_id (str): The instrument's id.
+            legs (OrderLegs | None): Every leg of a strategy this order is the first of, or None for a single order.
 
         Returns:
             int: How many commands were queued, whose replies are handed to `ranked_brokers` in the same order.
@@ -40,6 +44,7 @@ class BrokerSelector:
         del pipeline
         del order
         del instrument_id
+        del legs
         return 0
 
     def ranked_brokers(self, order, instrument, rotation, redis_replies):
@@ -58,6 +63,20 @@ class BrokerSelector:
             NotImplementedError: Always, in the base class.
         """
         raise NotImplementedError
+
+    def passed_over_reason(self, broker_name):
+        """Why this selector rules a broker out for the order it last ranked on this thread, or None.
+
+        The placement asks this for each broker it is about to offer the order to, after the broker's own checks have passed.
+
+        Args:
+            broker_name (str): The broker.
+
+        Returns:
+            str | None: The reason, or None when the selector does not rule the broker out.
+        """
+        del broker_name
+        return None
 
     def record_passed_over(self, cache, passed_over):
         """Learns that the chosen broker came after some that could not take the order.

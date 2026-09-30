@@ -1,4 +1,6 @@
 read_rows found: ['dhan', 'zerodha']; the table still holds 0 rows
+Zerodha's F&O margin multiplier from an eight-column row: None
+Column 11 of an eight-column row: None
 WARNING unified.broker_order_costs has no row for groww, so its configured rate limits apply and the lowest-cost selector offers it orders only after every broker that has a row.
 After start: ['dhan', 'zerodha'], reload thread running: True
 INFO Reloaded the broker cost table: 2 brokers.

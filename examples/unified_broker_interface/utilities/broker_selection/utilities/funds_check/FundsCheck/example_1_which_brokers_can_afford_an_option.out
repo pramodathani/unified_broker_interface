@@ -1,0 +1,14 @@
+Active: True, commands queued: 2
+  GET unified:portfolio:funds
+  EVAL with keys ['unified:catalogue:current_date', 'unified:quotes:live'] and arguments ['nifty-2026-10-06-22800-ce']
+dhan: can afford it
+flattrade: can afford it
+fyers: can afford it
+groww: can afford it
+indmoney: can afford it
+kotak: needs about 8,360.63 of margin but has 4,954.19 free
+shoonya: needs about 8,820.46 of margin but has 4,950.30 free
+stoxkart: needs about 9,614.72 of margin but has 9,256.67 free
+wisdom_capital: needs about 9,196.69 of margin but has 4,915.80 free
+zerodha: can afford it
+4 brokers passed over

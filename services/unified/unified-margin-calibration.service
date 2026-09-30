@@ -1,0 +1,20 @@
+# The daily margin calibration: bin/unified/orders/margin_calibration asks every broker's own margin calculator about
+# the same reference orders and writes each broker's margin surcharge and hedge benefit to unified.broker_order_costs,
+# which the lowest-cost broker selector reads at 06:00 IST and on start-up. Driven by unified-margin-calibration.timer.
+#
+#     systemctl --user start unified-margin-calibration    # run it now, while the markets are open
+#     bin/unified/orders/margin_calibration --dry-run       # see the figures without writing them
+
+[Unit]
+Description=Daily broker margin calibration
+PartOf=unified.target
+Wants=network-online.target
+After=network-online.target unified-mapping.service
+
+[Service]
+Type=oneshot
+Environment=PYTHONUNBUFFERED=1
+SyslogIdentifier=unified-margin-calibration
+ExecStart=%h/Projects/unified_broker_interface/bin/unified/orders/margin_calibration
+TimeoutStartSec=10min
+Nice=10

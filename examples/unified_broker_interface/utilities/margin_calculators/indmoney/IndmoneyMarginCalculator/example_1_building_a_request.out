@@ -1,0 +1,13 @@
+GET https://api.indstocks.com/margin
+JSON body: {
+  "segment": "DERIVATIVE",
+  "exchange": "NSE",
+  "securityID": "48704",
+  "txnType": "SELL",
+  "quantity": "65",
+  "price": "22833.7",
+  "product": "MARGIN"
+}
+Takes the NIFTY future: True, quantity 65
+Takes crude oil: False
+Prices baskets: False

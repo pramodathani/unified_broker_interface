@@ -1,0 +1,10 @@
+Catalogue date: 2026-09-30
+Identity key: unified:catalogue:2026-09-30:identity
+Text of b"INFY": 'INFY'
+NIFTY futures in the catalogue: ['NIFTY|2026-09-29|||nifty-sep', 'NIFTY|2026-10-27|||nifty-oct']
+INFY quote: {'last_price': 1017.7, 'lot_size': 1}
+INFY instrument segment: nse_equities
+leg_for 10 shares: 10 units at 1017.7
+INFY bought intraday: infy, BUY 1 units MIS at 1017.7
+NIFTY future sold: nifty-oct, SELL 65 units NRML at 22833.7
+crude oil future bought: crude-oct, BUY 100 units NRML at 8618

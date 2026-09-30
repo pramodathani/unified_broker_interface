@@ -1163,6 +1163,7 @@ class SyntheticOrder:
         started_at,
         broker_name=None,
         instrument_id=None,
+        legs=None,
     ):
         """Records a leg, sends it, records the answer, and returns what the broker said.
 
@@ -1176,6 +1177,7 @@ class SyntheticOrder:
             started_at (float): `time.perf_counter()` when the engine took the intent.
             broker_name (str | None): The broker this leg must go to, or None to let the selector choose. Every leg of one parent after the first names the broker the first one chose, because a position split across brokers takes one order per broker to close.
             instrument_id (str | None): The instrument this leg trades, or None for the parent's own. Only the types whose legs span several instruments — a spread, a basket, a hedge — pass this.
+            legs (OrderLegs | None): Every leg of the strategy, when this leg is the one that chooses the broker, so the selector can check the broker can afford all of them. Only a basket passes this.
 
         Returns:
             tuple: The answer's body (dict), its HTTP status (int) and the leg's id (str).
@@ -1187,11 +1189,19 @@ class SyntheticOrder:
         reduce_only = ReduceOnlyCheck(self.placement)
         if reduce_only.is_asked_for(self.parent.parameters):
             reduce_only.refuse_if_it_adds(order, instrument_id)
-        prepared = self.placement.prepare(
-            order,
-            instrument_id,
-            broker_name,
-        )
+        if legs is None:
+            prepared = self.placement.prepare(
+                order,
+                instrument_id,
+                broker_name,
+            )
+        else:
+            prepared = self.placement.prepare(
+                order,
+                instrument_id,
+                broker_name,
+                legs,
+            )
         if self.gates is not None:
             self.gates.refuse_if_capped(
                 prepared.broker_name,

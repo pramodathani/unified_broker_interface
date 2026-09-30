@@ -133,6 +133,100 @@ Building the objects reads nothing. The REST API loads the table in `api.py` onc
 
 This makes PostgreSQL something the REST API and the order engine need at start-up, where before they needed only Redis to place orders.
 
+## Checking that a broker can afford the order
+
+Cost and rate budgets decide which broker is *preferred*. A broker is only *offered* the order if it also has the money for it. Before 2026-09-30 nothing checked this, so an order could go to the cheapest broker, be refused there for want of margin, and come back as a rejection even though another account could have taken it. Now the selector estimates the margin the order needs at each broker and passes over every broker whose free cash is short, in the same way it passes over a broker with no login. The reason goes into the answer's `skipped` list, for example `needs about 185,671.65 of margin but has 12,675.96 free`.
+
+The check calls no broker. The brokers' own margin calculators take 75 to 100 ms each, a full round trip per order, so they are used once a day to *measure* the numbers the check uses, and never while an order waits. The check adds two commands to the Redis pipeline the engine already sends to read the instrument, so an order still costs the same number of round trips.
+
+### What it compares
+
+For each broker in the rotation, the selector works out:
+
+1. **The exchange's margin**, estimated by [`MarginEstimate`][unified_broker_interface.utilities.broker_selection.utilities.margin_estimate.MarginEstimate] from the rates in `unified.margin_rates` and the prices in `unified:quotes:live`.
+2. **Times the broker's surcharge**, from the `margin_multiplier_*` columns of `unified.broker_order_costs`, or 1.15 for a broker that has never been measured.
+3. **Times a cushion** of 5%, so a small move in price between the check and the fill does not turn into a rejection.
+
+It compares that with **the broker's free cash** from `unified:portfolio:funds`, less any margin already promised to orders this process sent there in the last moment. A broker whose funds are `stale`, `missing`, `unreadable` or more than five seconds old is passed over, because assuming money exists is the dangerous direction.
+
+### The estimate for each kind of order
+
+Each kind of order has its own rule. The table below also shows how close each rule came to the brokers' own calculators on 2026-09-30, for the same orders at the same prices.
+
+| Order | Estimate | Estimate on 2026-09-30 | Brokers' answer |
+|---|---|---|---|
+| Delivery (`CNC`) buy | quantity × price | 1,017.70 for 1 INFY | 1,017.40 |
+| Delivery sell | nothing; the broker checks holdings instead | 0 | |
+| Intraday (`MIS`) | quantity × price × the segment's VaR rate (at least 20%) | 203.54 | 203.48 |
+| Future, bought or sold | quantity × price × (SPAN + exposure) | 167,119.85 for 1 lot of NIFTY | 167,109.41 |
+| Option bought | quantity × premium | 7,962.50 | 7,962.50 |
+| Option sold | quantity × **underlying** price × the underlying's futures rate | 166,296.83 for the 22800 call | 161,608.53 |
+| Commodity future | quantity × price × (SPAN + exposure) | 271,036.10 for 1 lot of crude oil | 271,072.50 |
+
+A market order is valued at the last traded price. When an order has no price and its instrument has no quote, the margin cannot be worked out, and no broker is passed over for funds; the broker decides, as before.
+
+`unified.margin_rates` holds the rates per segment, with optional rows per underlying. The segment-wide rows are deliberately high (index derivatives 15%, stock derivatives 40%, commodities 47%), because an estimate that is too high only passes over a broker that could have taken the order, while one that is too low sends an order that will be refused. NIFTY and crude oil have rows measured on 2026-09-30.
+
+### Brokers' surcharges
+
+Six of the nine brokers with a margin calculator charge the exchange's margin to within half a percent. Three charge noticeably more, and the surcharge is what the multiplier columns hold.
+
+| Broker | F&O | Commodity | Intraday | Hedge benefit |
+|---|---|---|---|---|
+| Zerodha, Dhan, Groww, Kotak | 1.000 | 1.000 | 1.000 | Zerodha, Dhan and Groww yes; Kotak has no basket calculator |
+| Fyers | 1.001 | 1.000 | 1.005 | **No**: its calculator priced an iron condor as four separate legs in either order |
+| INDmoney | 1.005 | not measured | 1.013 | Not measured |
+| Shoonya | 1.055 | 1.050 | 1.053 | Yes |
+| Wisdom Capital | 1.100 | not measured | **1.375** | Yes |
+| Flattrade | 1.111 | 1.110 | 1.101 | Yes |
+| Stoxkart | not measured | not measured | not measured | Not measured; it has no margin calculator |
+
+`bin/unified/orders/margin_calibration` re-measures these every trading morning by sending the same reference orders to each broker's calculator, and writes the ratios back. See [Scripts](../operations/scripts.md).
+
+### Which money a broker has
+
+Some brokers keep money for different markets apart. Zerodha and Fyers hold commodity money separately from equity money, and Groww and INDmoney split theirs by segment. The funds combiner writes each broker's own free cash and these separate `pools` into `unified:portfolio:funds`, and the check reads the pool that matches the order: `commodity` for a commodity order, `derivatives` and then `equity` for futures and options, and `equity` for shares. A broker with one pool offers its whole `available_balance`. On 2026-09-30 Zerodha's account had commodity trading switched off, so its commodity pool was 0 and a crude oil order passed it over.
+
+### Strategies, and hedge benefit
+
+A basket sends every leg to the broker its first leg chooses, because margin offsets exist only inside one account. The first leg therefore hands the whole list to the selector, and the check asks whether the broker can afford the whole strategy, not only its first order. A broker checks each order as it arrives, so the estimate is the **highest** requirement reached while the legs go out in the given order.
+
+With `"hedge_benefit": true` in the basket's `synthetic` object, options and futures on one underlying with one expiry are priced as one position at the brokers whose `gives_hedge_benefit` is true:
+
+```text
+hedged margin = the most the legs can lose at expiry, leaving out premiums
+              + exposure on every sold option and every future
+              + the premium paid for every bought option
+```
+
+The most the legs can lose is found by [`OptionPayoff`][unified_broker_interface.utilities.broker_selection.utilities.option_payoff.OptionPayoff], which evaluates the payoff at an underlying price of zero and at every strike, where the lowest point must lie. If more calls and futures are sold than bought, the loss has no limit and the legs are added up instead. For the NIFTY iron condor of 2026-09-30 (23200 call and 22400 put bought, 23000 call and 22600 put sold, one lot each), the estimate and the brokers compare like this:
+
+| | Margin |
+|---|---|
+| This estimate, bought legs first, hedge benefit | 75,786.75 |
+| Shoonya, Groww, Dhan | 75,407 to 75,924 |
+| Flattrade, Wisdom Capital (before their surcharges) | 79,724 and 82,847 |
+| Zerodha, which also credits the premium received | 66,753 |
+| This estimate without hedge benefit, or with the sold legs first | 333,829 to 336,305 |
+
+Sending the sold legs first costs more than four times as much, because the broker sees two naked options before the protection arrives. The basket keeps the order it was given, so put the bought legs first.
+
+### Orders sent in a burst
+
+Funds are read every half second, so ten orders arriving together would all see the same balance. When a broker is chosen, [`FundsReservations`][unified_broker_interface.utilities.broker_selection.utilities.funds_reservations.FundsReservations] records the order's margin against it, and later orders see the balance less those reservations. A reservation is dropped once the broker's funds were read more than two seconds after it, because by then the balance shows the order, or the order was refused and never used the money. A dry run reserves nothing.
+
+### When the check does nothing
+
+The check is off, and queues nothing, in three cases:
+
+| Case | Why |
+|---|---|
+| `UNIFIED_BROKER_INTERFACE_API_ORDER_FUNDS_CHECK=false` | To turn it off without a deploy |
+| `unified.margin_rates` is empty or has not been loaded | A process loads it at start-up with the cost table; the offline suites never do, which keeps their recordings unchanged |
+| The selector is `round_robin` or `fixed_priority` | Only the lowest-cost selector checks funds |
+
+Orders that name their broker, such as the closing orders of [flatten](../rest-api/flatten.md) and every leg after a strategy's first, are never checked: an exit frees margin, and a later leg has to go where the first one went.
+
 ## Other ways this could have been done
 
 Five approaches were considered when this selector was designed. The one built is the third, and the first two are special cases of it.
@@ -157,4 +251,10 @@ The table below lists where each piece lives.
 | The per-second, per-minute and per-hour windows | [`RateBudget`][unified_broker_interface.utilities.order_engine.utilities.rate_budget.RateBudget] |
 | The per-day count | [`DailyOrderCount`][unified_broker_interface.utilities.order_engine.utilities.daily_order_count.DailyOrderCount] |
 | The table's definition and seed | `stock_brokers/instruments/mapping/utilities/sql/ddl/150_unified_broker_order_costs.sql` |
-| Offline checks | `python -m test_runs.broker_selection` |
+| The funds check | [`FundsCheck`][unified_broker_interface.utilities.broker_selection.utilities.funds_check.FundsCheck] |
+| The margin estimate | [`MarginEstimate`][unified_broker_interface.utilities.broker_selection.utilities.margin_estimate.MarginEstimate], [`OptionPayoff`][unified_broker_interface.utilities.broker_selection.utilities.option_payoff.OptionPayoff] and [`PricedLeg`][unified_broker_interface.utilities.broker_selection.utilities.priced_leg.PricedLeg] |
+| A strategy's legs | [`OrderLegs`][unified_broker_interface.utilities.broker_selection.utilities.order_legs.OrderLegs] |
+| Margin promised to orders just sent | [`FundsReservations`][unified_broker_interface.utilities.broker_selection.utilities.funds_reservations.FundsReservations] |
+| The margin rates in memory | [`MarginRateTable`][unified_broker_interface.utilities.broker_selection.utilities.margin_rate_table.MarginRateTable] |
+| The margin rates' definition and seed | `stock_brokers/instruments/mapping/utilities/sql/ddl/160_unified_margin_rates.sql` |
+| Offline checks | `python -m test_runs.broker_selection` and `python -m test_runs.funds_check` |

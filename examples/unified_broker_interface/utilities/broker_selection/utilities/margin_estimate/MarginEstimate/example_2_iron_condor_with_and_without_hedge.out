@@ -1,0 +1,8 @@
+Can be hedged: True
+Rates for each leg: total 0.1126, exposure 0.02
+Hedged once all four are in: 75,786.75
+Added up once all four are in: 336,305.16
+Buys first, hedge benefit: 75,786.75
+Buys first, no hedge benefit: 336,305.16
+Sells first, hedge benefit: 333,828.66
+After the first two sells: 332,593.66

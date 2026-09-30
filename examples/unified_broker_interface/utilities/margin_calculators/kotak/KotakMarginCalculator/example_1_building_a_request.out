@@ -1,0 +1,7 @@
+POST https://gw-napi.kotaksecurities.com/quick/user/check-margin
+Query: {'sId': 'stand-in-session'}
+Form body: {'jData': '{"exSeg": "nse_fo", "prc": "22833.7", "prcTp": "L", "prod": "NRML", "qty": "65", "tok": "48704", "trnsTp": "S", "trgPrc": "0", "brkName": "KOTAK", "brnchId": "ONLINE"}'}
+Takes the NIFTY future: True, quantity 65
+Takes crude oil: True
+Crude oil quantity for 100 barrels: 100
+Prices baskets: False

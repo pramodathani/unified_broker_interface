@@ -103,6 +103,7 @@ Each script in `bin/unified/` keeps its own tuple of broker names, and some keep
 
 - [ ] Write `unified_broker_interface/utilities/broker_orders/newbroker.py` with a `BrokerOrders` subclass (or `NorenOrders`): `BROKER_NAME`, `MARKETS`, `QUANTITY_UNITS`, the settings field lists, `build_place_request`, `build_cancel_request`, `read_order_id`, and `MODIFIABLE_FIELDS` with `build_modify_request` if it can modify orders.
 - [ ] Add it to `BROKER_ORDER_CLASSES` in `unified_broker_interface/utilities/broker_orders/utilities/registry.py`. The list's order is the order brokers take turns in.
+- [ ] If the broker's API has a margin calculator, add `unified_broker_interface/utilities/margin_calculators/<broker>.py` and list it in `MARGIN_CALCULATOR_CLASSES`, then run `bin/unified/orders/margin_calibration --dry-run --brokers <broker>` during market hours. Without one, its margin columns in `unified.broker_order_costs` stay empty and the lowest-cost selector charges it the configured default surcharge of 1.15.
 - [ ] If the broker's REST quotes are verified, write `unified_broker_interface/utilities/broker_quotes/newbroker.py` with a `BrokerQuoteSource` subclass and add it to `SOURCES` in `unified_broker_interface/utilities/broker_quotes/utilities/service.py`.
 - [ ] Add the broker's display name to `BROKER_CODES` in `unified_broker_interface/utilities/import_details.py`, and its document to the `broker_details` export that `bin/import-api-details` loads.
 - [ ] Add the broker's row to `unified.broker_order_costs`: its order limits per second, minute, hour and day, and its brokerage for delivery, F&O and intraday. The statement to copy is in [Choosing a broker by cost](../architecture/broker-selection.md#changing-a-row-or-adding-a-broker). Without a row the broker is offered orders only after every broker that has one.
@@ -138,6 +139,7 @@ The table below collects every named registry from the checklist, for quick refe
 | `API_CLASSES`, `LOGIN_UNITS` | `unified_broker_interface/utilities/broker_quotes/utilities/clients.py` | API classes and login units for the REST API |
 | `SOURCES` | `unified_broker_interface/utilities/broker_quotes/utilities/service.py` | REST quote sources in service |
 | `BROKER_ORDER_CLASSES` | `unified_broker_interface/utilities/broker_orders/utilities/registry.py` | Order classes, in turn order |
+| `MARGIN_CALCULATOR_CLASSES` | `unified_broker_interface/utilities/margin_calculators/utilities/registry.py` | Margin calculators, for a broker that has one |
 | `BROKER_CODES` | `unified_broker_interface/utilities/import_details.py` | Export display names to broker codes |
 | `BROKERS` | `bin/check-broker-connections` | Probe endpoints |
 | `BROKERS` and friends | each combiner in `bin/unified/` | Which brokers' keys and streams to read |
