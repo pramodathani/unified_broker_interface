@@ -1,0 +1,7 @@
+Weights [1.0, 1.0, 1.0, 1.0], ten shared out as [3, 3, 2, 2]
+0 s: due [3]
+10 s: due []
+30 s: due [3]
+60 s: due [2]
+90 s: due [2]
+As a dry run shows it: {'twap': {'slices': 4, 'over_minutes': 2}}

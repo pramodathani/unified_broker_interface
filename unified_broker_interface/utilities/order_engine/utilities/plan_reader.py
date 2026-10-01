@@ -2,6 +2,9 @@
 
 import decimal
 
+from unified_broker_interface.utilities.order_engine.utilities.all_at_once_execution import (
+    AllAtOnceExecution,
+)
 from unified_broker_interface.utilities.order_engine.utilities.condition_group import (
     ConditionGroup,
 )
@@ -11,6 +14,12 @@ from unified_broker_interface.utilities.order_engine.utilities.either_part impor
 )
 from unified_broker_interface.utilities.order_engine.utilities.fixed_pricing import (
     FixedPricing,
+)
+from unified_broker_interface.utilities.order_engine.utilities.front_loaded_execution import (
+    FrontLoadedExecution,
+)
+from unified_broker_interface.utilities.order_engine.utilities.iceberg_execution import (
+    IcebergExecution,
 )
 from unified_broker_interface.utilities.order_engine.utilities.marketable_pricing import (
     MarketablePricing,
@@ -44,6 +53,12 @@ from unified_broker_interface.utilities.order_engine.utilities.trail_pricing imp
 from unified_broker_interface.utilities.order_engine.utilities.trails_condition import (
     TrailsCondition,
 )
+from unified_broker_interface.utilities.order_engine.utilities.twap_execution import (
+    TwapExecution,
+)
+from unified_broker_interface.utilities.order_engine.utilities.vwap_execution import (
+    VwapExecution,
+)
 
 JOIN_NAMES = (
     'then',
@@ -73,7 +88,9 @@ ORDER_SETTINGS = (
     'trigger',
     'side',
     'pricing',
+    'execution',
 )
+MOST_SLICES = 60
 SIDES = (
     'buy',
     'sell',
@@ -322,7 +339,7 @@ class PlanReader:
                 )
         sources = self._preset_sources(order.get('presets', []), path)
         own = {}
-        for slot in ('trigger', 'side', 'pricing'):
+        for slot in ('trigger', 'side', 'pricing', 'execution'):
             if slot in order:
                 own[slot] = order[slot]
         sources.append((own, path))
@@ -336,6 +353,8 @@ class PlanReader:
         side = None
         pricing = None
         pricing_path = None
+        execution = None
+        execution_path = None
         for slots, source_path in sources:
             if 'trigger' in slots:
                 condition = self._read_condition(
@@ -360,6 +379,20 @@ class PlanReader:
                         )
                     pricing = read_pricing
                     pricing_path = f'{source_path}.pricing'
+            if 'execution' in slots:
+                read_execution = self._read_execution_list(
+                    slots['execution'],
+                    f'{source_path}.execution',
+                )
+                if read_execution is not None:
+                    if execution is not None:
+                        self._add_warning(
+                            f'{source_path}.execution',
+                            'execution_replaced',
+                            f'this execution replaces the execution from {execution_path}, because an order has one execution at a time',
+                        )
+                    execution = read_execution
+                    execution_path = f'{source_path}.execution'
         if len(self.problems) > problems_before:
             return None
         trigger = None
@@ -369,7 +402,17 @@ class PlanReader:
             trigger = ConditionGroup('all', conditions)
         if pricing is None:
             pricing = FixedPricing(None, None)
-        return OrderPart(path, preset_names, trigger, side, pricing, keeps_tag)
+        if execution is None:
+            execution = AllAtOnceExecution()
+        if pricing.moves() or isinstance(pricing, NativeStopPricing):
+            if not isinstance(execution, AllAtOnceExecution):
+                self._add_problem(
+                    path,
+                    'stop_not_sliced',
+                    'a resting stop protects the whole position at once, so its order cannot be split into pieces sent over time',
+                )
+                return None
+        return OrderPart(path, preset_names, trigger, side, pricing, keeps_tag, execution)
 
     def _join_preset_tree(self, order, path):
         """The plan tree a join preset in an order stands for, or None when the order names none.
@@ -682,6 +725,157 @@ class PlanReader:
                 f'{name!r} is not a pricing a plan can use yet; the pricings available are fixed, marketable, native_stop and trail',
             )
         return None
+
+    def _read_execution_list(self, execution, path):
+        """Reads an order's execution, which in this stage is exactly one value.
+
+        Args:
+            execution (object): The list as the caller wrote it.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            object | None: The execution, or None when it has a problem.
+        """
+        if not isinstance(execution, list) or not execution:
+            self._add_problem(path, 'execution_shape', 'execution is a list holding one execution value')
+            return None
+        if len(execution) > 1:
+            self._add_problem(
+                path,
+                'nesting_not_built',
+                'an order takes one execution value so far; nesting one inside another is part of the design but not built yet',
+            )
+            return None
+        entry = execution[0]
+        entry_path = f'{path}.0'
+        if not isinstance(entry, dict) or len(entry) != 1:
+            self._add_problem(entry_path, 'execution_shape', 'an execution value is an object holding exactly one execution name and its settings')
+            return None
+        for name, settings in entry.items():
+            if not isinstance(settings, dict):
+                self._add_problem(entry_path, 'execution_shape', f'the {name} execution\'s settings must be an object')
+                return None
+            if name == 'all_at_once':
+                self._refuse_unknown(settings, (), entry_path, 'all_at_once')
+                return AllAtOnceExecution()
+            if name == 'iceberg':
+                return self._read_iceberg(settings, f'{entry_path}.iceberg')
+            if name in ('twap', 'vwap', 'front_loaded'):
+                return self._read_timed(name, settings, f'{entry_path}.{name}')
+            self._add_problem(
+                entry_path,
+                'unknown_execution',
+                f'{name!r} is not an execution a plan can use yet; the executions available are all_at_once, iceberg, twap, vwap and front_loaded',
+            )
+        return None
+
+    def _whole_number(self, value, path, name, lowest, highest):
+        """Reads a whole number within bounds.
+
+        Args:
+            value (object): The value as the caller wrote it.
+            path (str): Where it sits in the plan.
+            name (str): The setting's name, for the message.
+            lowest (int): The smallest allowed.
+            highest (int | None): The largest allowed, or None for no limit.
+
+        Returns:
+            int | None: The number, or None when it is missing or out of bounds.
+        """
+        is_whole = isinstance(value, int) and not isinstance(value, bool)
+        in_bounds = is_whole and value >= lowest
+        if in_bounds and highest is not None and value > highest:
+            in_bounds = False
+        if in_bounds:
+            return value
+        if highest is None:
+            bounds = f'at least {lowest}'
+        else:
+            bounds = f'from {lowest} to {highest}'
+        self._add_problem(path, 'bad_setting', f'{name} must be a whole number {bounds}, not {value!r}')
+        return None
+
+    def _read_iceberg(self, settings, path):
+        """Reads `iceberg` execution.
+
+        Args:
+            settings (dict): `visible_quantity`, and optionally `randomise_percent`.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            IcebergExecution | None: The execution, or None when it has a problem.
+        """
+        problems_before = len(self.problems)
+        self._refuse_unknown(settings, ('visible_quantity', 'randomise_percent'), path, 'iceberg')
+        visible = self._whole_number(settings.get('visible_quantity'), path, 'visible_quantity', 1, None)
+        randomise = self._whole_number(settings.get('randomise_percent', 0), path, 'randomise_percent', 0, 99)
+        if len(self.problems) > problems_before:
+            return None
+        return IcebergExecution(visible, randomise)
+
+    def _read_timed(self, name, settings, path):
+        """Reads `twap`, `vwap` or `front_loaded` execution.
+
+        Args:
+            name (str): The execution's name.
+            settings (dict): `slices` and `over_minutes`, `volume_profile` for VWAP and `urgency` for front-loaded.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            TimedSlicesExecution | None: The execution, or None when it has a problem.
+        """
+        problems_before = len(self.problems)
+        known = ['slices', 'over_minutes']
+        if name == 'vwap':
+            known.append('volume_profile')
+        if name == 'front_loaded':
+            known.append('urgency')
+        self._refuse_unknown(settings, tuple(known), path, name)
+        slices = self._whole_number(settings.get('slices'), path, 'slices', 2, MOST_SLICES)
+        over_minutes = self._price(settings.get('over_minutes'), path, 'over_minutes')
+        profile = None
+        if name == 'vwap' and 'volume_profile' in settings:
+            profile = self._read_profile(settings['volume_profile'], path)
+        urgency = 0.5
+        if name == 'front_loaded' and 'urgency' in settings:
+            value = settings['urgency']
+            is_number = isinstance(value, (int, float)) and not isinstance(value, bool)
+            if is_number and 0 <= value <= 1:
+                urgency = float(value)
+            else:
+                self._add_problem(path, 'bad_setting', f'urgency must be a number from 0 to 1, not {value!r}')
+        if len(self.problems) > problems_before:
+            return None
+        if name == 'twap':
+            return TwapExecution(slices, float(over_minutes))
+        if name == 'vwap':
+            return VwapExecution(slices, float(over_minutes), profile)
+        return FrontLoadedExecution(slices, float(over_minutes), urgency)
+
+    def _read_profile(self, profile, path):
+        """Reads a VWAP volume profile: relative weights, one per half hour from the open.
+
+        Args:
+            profile (object): The list as the caller wrote it.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            list | None: The weights, or None when the profile has a problem.
+        """
+        if not isinstance(profile, list) or not profile:
+            self._add_problem(path, 'bad_setting', 'volume_profile must be a list of relative weights, one per half hour from the open')
+            return None
+        weights = []
+        for value in profile:
+            is_number = isinstance(value, (int, float)) and not isinstance(value, bool)
+            if not is_number or value < 0:
+                self._add_problem(path, 'bad_setting', f'every volume_profile weight must be a number at or above zero, not {value!r}')
+                return None
+            weights.append(float(value))
+        if sum(weights) <= 0:
+            self._add_problem(path, 'bad_setting', 'volume_profile weights must add up to more than zero')
+            return None
+        return weights
 
     def _read_fixed(self, settings, path):
         """Reads `fixed` pricing.

@@ -76,6 +76,23 @@ class WhatEachPresetStandsForExample:
                 'trail_percent': 0.5,
                 'stop_limit_offset': 1,
             },
+            'iceberg': {
+                'slice_quantity': 75,
+                'randomise_percent': 10,
+            },
+            'twap': {
+                'slices': 4,
+                'over_minutes': 20,
+            },
+            'vwap': {
+                'slices': 6,
+                'over_minutes': 90,
+            },
+            'implementation_shortfall': {
+                'slices': 5,
+                'over_minutes': 10,
+                'urgency': 0.8,
+            },
         }
         for name in PRESET_NAMES:
             if name in JOIN_PRESET_NAMES:

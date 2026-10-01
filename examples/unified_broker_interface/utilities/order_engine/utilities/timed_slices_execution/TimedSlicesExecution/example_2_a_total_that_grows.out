@@ -1,0 +1,6 @@
+The base class alone: TimedSlicesExecution must say how its slices are weighted.
+0 s with a total of 8: due [2]
+30 s with a total of 8: due [2]
+60 s with a total of 20: due [5]
+90 s with a total of 20: due [11]
+Sent [2, 2, 5, 11], adding up to 20

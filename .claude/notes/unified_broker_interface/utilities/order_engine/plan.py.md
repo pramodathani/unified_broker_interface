@@ -49,3 +49,7 @@ The offline scenario `a_plan_bracket_behaves_the_same_with_a_restart_between_fil
 ## Stage 2c: trailing (2026-10-01)
 
 A working part whose pricing moves, marked `moves` in its record when the plan is placed, is offered every price tick and moved through `OrderPart.move`, which calls `reprice_leg`. `PlanReader` now gets the body's `transaction_type`, because a `trailing_stop` preset with `activate_at` has to know whether the position is long or short to know which way the activation level is reached.
+
+## Stage 3a: execution (2026-10-01)
+
+A part whose execution is paced by ticks is marked `paced` when the plan is placed, and every price tick calls its `send_due`. The design's nesting of executions and the Using join are not built in this stage: none of the stage's presets needs them, and the design's worked example, a trailing stop exiting through TWAP, is a `trails` trigger with `twap` execution on one order (offline scenario `a_plan_trailing_exit_sells_through_twap_once_the_price_pulls_back`).

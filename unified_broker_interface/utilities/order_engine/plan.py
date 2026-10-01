@@ -99,6 +99,8 @@ class PlanOrder(SyntheticOrder):
                 record['memory'] = memory
             if part.pricing.moves():
                 record['moves'] = True
+            if part.execution.paced_by_ticks():
+                record['paced'] = True
             records[part.path] = record
             if part.needs_prices():
                 needs_prices = True
@@ -315,12 +317,15 @@ class PlanOrder(SyntheticOrder):
         records = self.parent.parameters.get('parts') or {}
         waiting_paths = []
         moving_paths = []
+        paced_paths = []
         for path, record in records.items():
             if record.get('state') == 'waiting':
                 waiting_paths.append(path)
             if record.get('state') == 'working' and record.get('moves'):
                 moving_paths.append(path)
-        if not waiting_paths and not moving_paths:
+            if record.get('state') == 'working' and record.get('paced'):
+                paced_paths.append(path)
+        if not waiting_paths and not moving_paths and not paced_paths:
             return False
         root, _ = self._read_plan()
         placed = []
@@ -350,18 +355,21 @@ class PlanOrder(SyntheticOrder):
             record = self.part_record(part.path)
             record['fired_at'] = now
             self.set_part_record(part.path, record, None)
-            sent = part.send(self, None, quotes)
+            sent = part.send(self, None, quotes, now)
             if not sent:
                 record = self.part_record(part.path)
                 record.pop('fired_at', None)
                 self.set_part_record(part.path, record, None)
             placed = placed + sent
+        for part in root.order_parts():
+            if part.path in paced_paths:
+                placed = placed + part.send_due(self, None, quotes, now)
         moved = False
         for part in root.order_parts():
             if part.path in moving_paths and part.move(self, quotes):
                 moved = True
         if not placed and not moved:
-            if memory_changed or moving_paths:
+            if memory_changed or moving_paths or paced_paths:
                 self.save()
             return False
         placed = placed + root.settle(self)

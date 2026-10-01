@@ -2,7 +2,8 @@ Orders ['root.each_fill'], members [], standalone protecting 1
 Quantity: set by its join; the entry's: the body's quantity
 Before starting, a target of 4 is only recorded: {'state': 'pending', 'target': 4}, started False
 Started: [('root.each_fill', {'outcome': 'accepted', 'order_id': '1', 'broker': 'zerodha'}, 200)]
-1 filled, target 10: traded 1, requests [('change', 'root.each_fill', 10)]
+1 filled, target 10: traded 1, total 10, committed 10, requests [('change', 'root.each_fill', 10)]
+Due now, with its one order resting: []
 Target 1: requests [('change', 'root.each_fill', 10), ('cancel', 'root.each_fill')]
 Settled: done True, record {'state': 'done', 'target': 1, 'reason': 'partly_filled'}
 A target cancelled and settled: done True, record {'state': 'done', 'target': 5, 'reason': 'cancelled'}

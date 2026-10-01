@@ -1,6 +1,11 @@
 """One order in a plan: a leaf of the plan's tree, which places its own broker orders and says when it is done."""
 
 import copy
+import time
+
+from unified_broker_interface.utilities.order_engine.utilities.all_at_once_execution import (
+    AllAtOnceExecution,
+)
 
 OPPOSITE_SIDES = {
     'BUY': 'SELL',
@@ -26,9 +31,10 @@ class OrderPart:
         side (str | None): `buy`, `sell`, `protect`, or None for the body's side.
         pricing (object): The pricing that sets the order type and prices.
         keeps_tag (bool): Whether its orders carry the caller's tag, which only the plan's main order does.
+        execution (object): How its quantity is cut into pieces and when each is sent.
     """
 
-    def __init__(self, path, presets, trigger, side, pricing, keeps_tag=True):
+    def __init__(self, path, presets, trigger, side, pricing, keeps_tag=True, execution=None):
         """Builds the part from values the plan reader has already checked.
 
         Args:
@@ -38,6 +44,7 @@ class OrderPart:
             side (str | None): `buy`, `sell`, `protect`, or None.
             pricing (object): The pricing.
             keeps_tag (bool): Whether its orders carry the caller's tag.
+            execution (object | None): How its quantity is sent, or None for all at once.
 
         Returns:
             None: This method returns nothing.
@@ -48,6 +55,9 @@ class OrderPart:
         self.side = side
         self.pricing = pricing
         self.keeps_tag = keeps_tag
+        if execution is None:
+            execution = AllAtOnceExecution()
+        self.execution = execution
 
     def order_parts(self):
         """Every order in this part, which is itself.
@@ -86,6 +96,8 @@ class OrderPart:
             bool: True when it does.
         """
         if self.trigger is not None and self.trigger.needs_prices():
+            return True
+        if self.execution.needs_prices():
             return True
         return self.pricing.needs_prices()
 
@@ -180,14 +192,15 @@ class OrderPart:
             self.sending_side(opening_side),
         )
 
-    def order(self, plan_order, quotes):
+    def order(self, plan_order, quotes, quantity=None):
         """The order this part sends, priced now, or None when no price can be made yet.
 
-        The quantity is the target a parent join set, less what this part has already traded, or the body's quantity when no join set one. Only the plan's main order keeps the caller's tag, as today's exits do: the tag belongs to the order the caller asked for.
+        The quantity is the piece's when one is given; otherwise the target a parent join set, less what this part has already traded, or the body's quantity when no join set one. Only the plan's main order keeps the caller's tag, as today's exits do: the tag belongs to the order the caller asked for.
 
         Args:
             plan_order (PlanOrder): The plan order.
             quotes (dict): The quotes to price from, by instrument id.
+            quantity (int | None): The piece's quantity, or None for the whole order.
 
         Returns:
             PlaceOrderRequest | None: The order.
@@ -197,7 +210,10 @@ class OrderPart:
         sending_side = self.sending_side(opening_side)
         body['transaction_type'] = sending_side
         target = plan_order.part_record(self.path).get('target')
-        if target is not None:
+        if quantity is not None:
+            body['quantity'] = quantity
+            body.pop('quantity_reference', None)
+        elif target is not None:
             body['quantity'] = target - self.traded(plan_order.parent)
             body.pop('quantity_reference', None)
         if not self.keeps_tag:
@@ -215,18 +231,19 @@ class OrderPart:
             priced.pop('price_reference', None)
         return plan_order.concrete_order(plan_order.read_order(priced))
 
-    def place(self, plan_order, started_at, quotes):
-        """Places this part's order, or does nothing when no price can be made yet.
+    def place(self, plan_order, started_at, quotes, quantity=None):
+        """Places this part's order, or one piece of it, or does nothing when no price can be made yet.
 
         Args:
             plan_order (PlanOrder): The plan order.
             started_at (float | None): `time.perf_counter()` when the engine took the intent, or None.
             quotes (dict): The quotes to price from.
+            quantity (int | None): The piece's quantity, or None for the whole order.
 
         Returns:
             tuple | None: The broker's answer (dict) and its HTTP status (int), or None when nothing was placed.
         """
-        order = self.order(plan_order, quotes)
+        order = self.order(plan_order, quotes, quantity)
         if order is None:
             return None
         broker_name = plan_order.parent.body.get('broker') or plan_order.chosen_broker()
@@ -238,17 +255,18 @@ class OrderPart:
         )
         return body, status
 
-    def start(self, plan_order, target, started_at, quotes):
-        """Starts this order: arms its trigger, or places it at once.
+    def start(self, plan_order, target, started_at, quotes, now=None):
+        """Starts this order: arms its trigger, or starts working and sends whatever its execution says is due now.
 
         Args:
             plan_order (PlanOrder): The plan order.
             target (int | None): The quantity a parent join wants traded, or None for the body's.
             started_at (float | None): When the engine took the intent, or None.
             quotes (dict): The quotes to price from.
+            now (float | None): The Unix time now, or None to read the clock.
 
         Returns:
-            list: One `(path, answer, status)` when an order was placed now, otherwise empty.
+            list: One `(path, answer, status)` per broker order placed now.
         """
         record = plan_order.part_record(self.path)
         if target is not None:
@@ -264,39 +282,119 @@ class OrderPart:
             return []
         record['state'] = 'working'
         plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part is working')
-        return self.send(plan_order, started_at, quotes)
+        return self.send(plan_order, started_at, quotes, now)
 
-    def send(self, plan_order, started_at, quotes):
-        """Places this order now, or leaves it waiting for a tick when no price can be made yet.
+    def send(self, plan_order, started_at, quotes, now=None):
+        """Starts working now, when the order's trigger held or it was waiting for a price, and sends whatever is due.
+
+        The execution's clock starts here, so a TWAP triggered at 10:30 spreads its slices from 10:30. When the first piece cannot be priced yet, the order goes back to waiting and the next tick tries again.
 
         Args:
             plan_order (PlanOrder): The plan order.
             started_at (float | None): When the engine took the intent, or None.
             quotes (dict): The quotes to price from.
+            now (float | None): The Unix time now, or None to read the clock.
 
         Returns:
-            list: One `(path, answer, status)` when an order was placed, otherwise empty.
+            list: One `(path, answer, status)` per broker order placed.
         """
-        placed = self.place(plan_order, started_at, quotes)
+        if now is None:
+            now = time.time()
         record = plan_order.part_record(self.path)
         was_working = record.get('state') == 'working'
-        if placed is None:
-            record['state'] = 'waiting'
-            plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part is waiting for a price')
+        if record.get('execution_memory') is None:
+            memory = {}
+            self.execution.begin(plan_order, memory, quotes, now)
+            if memory:
+                record['execution_memory'] = memory
+                plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part started its execution')
+        placed = self.send_due(plan_order, started_at, quotes, now)
+        record = plan_order.part_record(self.path)
+        if not placed and not self.own_legs(plan_order.parent):
+            if record.get('state') != 'waiting':
+                record['state'] = 'waiting'
+                plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part is waiting for a price')
             return []
-        body, status = placed
+        if record.get('state') == 'done' or was_working:
+            return placed
         record['state'] = 'working'
-        if body.get('outcome') == 'rejected':
-            record['state'] = 'done'
-            record['reason'] = 'refused'
-            plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part is done: refused')
-        elif was_working:
-            plan_order.set_part_record(self.path, record, None)
-        else:
-            plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part\'s order was placed')
-        return [
-            (self.path, body, status),
-        ]
+        plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part\'s order was placed')
+        return placed
+
+    def total(self, plan_order):
+        """How much this order should trade in all: the target a join set, or the body's quantity.
+
+        Args:
+            plan_order (PlanOrder): The plan order.
+
+        Returns:
+            int: The quantity.
+        """
+        target = plan_order.part_record(self.path).get('target')
+        if target is not None:
+            return target
+        return plan_order.parent.body.get('quantity') or 0
+
+    def committed(self, parent):
+        """How much the broker orders sent so far account for: what filled of a finished one, and the whole of a resting one.
+
+        Args:
+            parent (ParentOrder): The plan order's parent.
+
+        Returns:
+            int: The quantity.
+        """
+        total = 0
+        for leg in self.own_legs(parent):
+            if leg.is_finished():
+                total = total + (leg.filled_quantity or 0)
+            else:
+                total = total + (leg.quantity or 0)
+        return total
+
+    def send_due(self, plan_order, started_at, quotes, now=None):
+        """Sends the pieces this order's execution says are due now, each priced by the order's pricing.
+
+        Every due piece is priced before any is sent, and when one cannot be priced none is sent, so the next tick asks again. Executions work out what they have sent from this order's broker orders, which recovery rebuilds after a restart, so nothing here has to be remembered between events.
+
+        Args:
+            plan_order (PlanOrder): The plan order.
+            started_at (float | None): When the engine took the intent, or None.
+            quotes (dict): The quotes to price from.
+            now (float | None): The Unix time now, or None to read the clock.
+
+        Returns:
+            list: One `(path, answer, status)` per broker order placed.
+        """
+        if now is None:
+            now = time.time()
+        record = plan_order.part_record(self.path)
+        memory = copy.deepcopy(record.get('execution_memory') or {})
+        pieces = self.own_legs(plan_order.parent)
+        due = self.execution.due_pieces(plan_order, memory, self.total(plan_order), pieces, quotes, now)
+        if not due:
+            return []
+        for quantity in due:
+            if self.order(plan_order, quotes, quantity) is None:
+                return []
+        placed = []
+        for quantity in due:
+            answer = self.place(plan_order, started_at, quotes, quantity)
+            if answer is None:
+                continue
+            body, status = answer
+            placed.append((self.path, body, status))
+        if placed and len(due) == len(placed) and len(self.own_legs(plan_order.parent)) == len(placed):
+            all_rejected = True
+            for _, body, _ in placed:
+                if body.get('outcome') != 'rejected':
+                    all_rejected = False
+            if all_rejected:
+                record = plan_order.part_record(self.path)
+                record['state'] = 'done'
+                record['reason'] = 'refused'
+                plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part is done: refused')
+        return placed
 
     def move(self, plan_order, quotes):
         """Moves this order's resting broker order on a tick, for a pricing that moves, such as a trailing stop.
@@ -328,24 +426,34 @@ class OrderPart:
         return plan_order.reprice_leg(resting, limit, trigger, reason)
 
     def settle(self, plan_order):
-        """Marks this order done once all of its broker orders have finished.
+        """Sends the next piece when the execution waits for fills, and marks this order done once every broker order has finished and no more will be sent.
 
         Args:
             plan_order (PlanOrder): The plan order.
 
         Returns:
-            list: Always empty, since settling an order places nothing.
+            list: One `(path, answer, status)` per broker order placed while settling.
         """
         record = plan_order.part_record(self.path)
         if record.get('state') != 'working':
             return []
+        placed = []
+        if not self.execution.paced_by_ticks():
+            placed = self.send_due(plan_order, None, plan_order.quotes_now() if self.needs_prices() else {})
+        record = plan_order.part_record(self.path)
+        if record.get('state') != 'working':
+            return placed
+        remaining = self.total(plan_order) - self.committed(plan_order.parent)
+        pieces = self.own_legs(plan_order.parent)
+        if self.execution.will_send_more(record.get('execution_memory') or {}, remaining, pieces):
+            return placed
         reason = self.done_reason(plan_order.parent)
         if reason is None:
-            return []
+            return placed
         record['state'] = 'done'
         record['reason'] = reason
         plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part is done: {reason}')
-        return []
+        return placed
 
     def traded(self, parent):
         """How much this order's broker orders have filled.
@@ -387,6 +495,9 @@ class OrderPart:
             return
         if changed:
             plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part will trade {target}')
+        if not self.execution.changes_its_order_to_grow():
+            self._cut_resting_pieces(plan_order, target)
+            return
         wanted = target - self.traded(plan_order.parent)
         for leg in self.own_legs(plan_order.parent):
             if leg.is_finished() or not leg.broker_order_id:
@@ -401,6 +512,33 @@ class OrderPart:
                     new_total,
                     f'the plan\'s {self.path} part should now trade {target} in all',
                 )
+
+    def _cut_resting_pieces(self, plan_order, target):
+        """Brings the resting pieces down so they account for no more than `target`, newest first; a larger target is left to the execution, which sends more pieces.
+
+        Args:
+            plan_order (PlanOrder): The plan order.
+            target (int): The quantity this order should trade in all.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        excess = self.committed(plan_order.parent) - max(target, self.traded(plan_order.parent))
+        legs = self.own_legs(plan_order.parent)
+        legs.reverse()
+        for leg in legs:
+            if excess <= 0:
+                return
+            if leg.is_finished() or not leg.broker_order_id:
+                continue
+            filled = leg.filled_quantity or 0
+            cut = min((leg.quantity or 0) - filled, excess)
+            new_total = (leg.quantity or 0) - cut
+            if new_total <= filled:
+                plan_order.cancel_leg(leg, f'the plan\'s {self.path} part should now trade {target} in all')
+            else:
+                plan_order.reduce_leg(leg, new_total, f'the plan\'s {self.path} part should now trade {target} in all')
+            excess = excess - cut
 
     def cancel_rest(self, plan_order, reason):
         """Stops whatever of this order has not finished.
@@ -528,7 +666,7 @@ class OrderPart:
                     'quantity': self.quantity_described(),
                     'side': side,
                     'execution': [
-                        'all_at_once',
+                        self.execution.described(),
                     ],
                     'pricing': [
                         self.pricing.described(),
