@@ -23,6 +23,9 @@ from unified_broker_interface.utilities.order_engine.utilities.chase_pricing imp
 from unified_broker_interface.utilities.order_engine.utilities.condition_group import (
     ConditionGroup,
 )
+from unified_broker_interface.utilities.order_engine.utilities.daily_execution import (
+    DailyExecution,
+)
 from unified_broker_interface.utilities.order_engine.utilities.discretion_modifier import (
     DiscretionModifier,
 )
@@ -152,6 +155,7 @@ REPEAT_SETTINGS = (
     'until',
 )
 MOST_REPEATS = 100
+MOST_DAYS = 365
 TOGETHER_SETTINGS = (
     'children',
     'group_margin',
@@ -790,7 +794,7 @@ class PlanReader:
         if execution is None:
             execution = AllAtOnceExecution()
         if isinstance(pricing, STOP_PRICINGS):
-            if not isinstance(execution, AllAtOnceExecution):
+            if not isinstance(execution, (AllAtOnceExecution, DailyExecution)):
                 self._add_problem(
                     path,
                     'stop_not_sliced',
@@ -952,7 +956,7 @@ class PlanReader:
         return True
 
     def _read_lifetime_list(self, lifetime, path):
-        """Reads an order's lifetime: a list holding one object with `at_time` or `after_minutes`, and optionally `applies_to` and `on_end`.
+        """Reads an order's lifetime: a list holding one object with `at_time`, `after_minutes` or `after_days`, and optionally `applies_to` and `on_end`.
 
         Args:
             lifetime (object): The list as the caller wrote it.
@@ -962,23 +966,29 @@ class PlanReader:
             Lifetime | None: The lifetime, or None when it has a problem.
         """
         if not isinstance(lifetime, list) or len(lifetime) != 1 or not isinstance(lifetime[0], dict):
-            self._add_problem(path, 'lifetime_shape', 'lifetime is a list holding one object, with at_time or after_minutes, and optionally applies_to and on_end')
+            self._add_problem(path, 'lifetime_shape', 'lifetime is a list holding one object, with at_time, after_minutes or after_days, and optionally applies_to and on_end')
             return None
         entry = lifetime[0]
         entry_path = f'{path}.0'
         problems_before = len(self.problems)
-        for name in ('after_days', 'when'):
-            if name in entry:
-                self._add_problem(
-                    entry_path,
-                    'lifetime_not_built',
-                    f'{name} is part of the design but not built yet; at_time and after_minutes are',
-                )
+        if 'when' in entry:
+            self._add_problem(
+                entry_path,
+                'lifetime_not_built',
+                'when is part of the design but not built yet; at_time, after_minutes and after_days are',
+            )
         self._refuse_unknown(entry, ('at_time', 'after_minutes', 'applies_to', 'on_end', 'after_days', 'when'), entry_path, 'lifetime', 'value')
+        ends = 0
+        for name in ('at_time', 'after_minutes', 'after_days'):
+            if name in entry:
+                ends = ends + 1
         has_time = 'at_time' in entry
         has_minutes = 'after_minutes' in entry
-        if has_time == has_minutes:
-            self._add_problem(entry_path, 'bad_setting', 'a lifetime ends at_time or after_minutes, exactly one')
+        if ends != 1:
+            self._add_problem(entry_path, 'bad_setting', 'a lifetime ends at_time, after_minutes or after_days, exactly one')
+        after_days = None
+        if 'after_days' in entry:
+            after_days = self._whole_number(entry['after_days'], entry_path, 'after_days', 1, MOST_DAYS)
         at_time = None
         after_minutes = None
         if has_time:
@@ -1000,7 +1010,7 @@ class PlanReader:
             self._add_problem(entry_path, 'bad_setting', f'on_end must be one of {", ".join(ON_END)}, not {on_end!r}')
         if len(self.problems) > problems_before:
             return None
-        return Lifetime(at_time, after_minutes, applies_to, on_end)
+        return Lifetime(at_time, after_minutes, applies_to, on_end, after_days)
 
     def _can_take_at_discretion(self, pricing, execution, path):
         """Whether an order with this pricing and execution can have discretion, reporting the problem when it cannot.
@@ -1778,12 +1788,33 @@ class PlanReader:
             if name == 'top_up':
                 self._refuse_unknown(settings, (), entry_path, 'top_up', 'execution')
                 return TopUpExecution()
+            if name == 'daily':
+                return self._read_daily(settings, f'{entry_path}.daily')
             self._add_problem(
                 entry_path,
                 'unknown_execution',
-                f'{name!r} is not an execution a plan can use yet; the executions available are all_at_once, iceberg, twap, vwap, front_loaded, participation, book_depth and top_up',
+                f'{name!r} is not an execution a plan can use yet; the executions available are all_at_once, iceberg, twap, vwap, front_loaded, participation, book_depth, top_up and daily',
             )
         return None
+
+    def _read_daily(self, settings, path):
+        """Reads `daily` execution.
+
+        Args:
+            settings (dict): `arm_at`, a time of day `HH:MM`, default `09:20`.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            DailyExecution | None: The execution, or None when it has a problem.
+        """
+        self._refuse_unknown(settings, ('arm_at',), path, 'daily', 'execution')
+        arm_at = settings.get('arm_at', '09:20')
+        hours, _, minutes = str(arm_at).partition(':')
+        valid = isinstance(arm_at, str) and hours.isdigit() and minutes.isdigit() and int(hours) < 24 and int(minutes) < 60
+        if not valid:
+            self._add_problem(path, 'bad_setting', f'arm_at must be a time of day such as "09:20", not {arm_at!r}')
+            return None
+        return DailyExecution(arm_at)
 
     def _whole_number(self, value, path, name, lowest, highest):
         """Reads a whole number within bounds.
@@ -1982,7 +2013,7 @@ class PlanReader:
         """Reads `native_stop` pricing.
 
         Args:
-            settings (dict): `trigger_price` and `limit_price`.
+            settings (dict): `trigger_price` and `limit_price`, and optionally `exit_if_gapped`, default false.
             path (str): Where it sits in the plan.
 
         Returns:
@@ -1991,15 +2022,18 @@ class PlanReader:
         problems_before = len(self.problems)
         self._refuse_unknown(
             settings,
-            ('trigger_price', 'limit_price'),
+            ('trigger_price', 'limit_price', 'exit_if_gapped'),
             path,
             'native_stop',
         )
         trigger_price = self._price(settings.get('trigger_price'), path, 'trigger_price')
         limit_price = self._price(settings.get('limit_price'), path, 'limit_price')
+        exit_if_gapped = settings.get('exit_if_gapped', False)
+        if not isinstance(exit_if_gapped, bool):
+            self._add_problem(path, 'bad_setting', f'exit_if_gapped must be true or false, not {exit_if_gapped!r}')
         if len(self.problems) > problems_before:
             return None
-        return NativeStopPricing(trigger_price, limit_price)
+        return NativeStopPricing(trigger_price, limit_price, exit_if_gapped)
 
     def _read_distance(self, settings, path, name):
         """Reads the trailing distance a `trail` pricing or a `trails` condition takes: `points` or `percent`, exactly one.

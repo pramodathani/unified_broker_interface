@@ -59,3 +59,11 @@ The backstop is a second order resting beside the engine-side stop, cancelled be
 ## Stage 5f (2026-10-01)
 
 `candle_close_stop` is the hidden stop with a `candle_closes` trigger. Its backstop form shares `_hidden_stop_with_backstop`, which now takes the engine-side stop's own preset name. Today's candle close stop runs without a position held; a plan's standalone protecting order is refused without one, so the offline scenarios seed a position.
+
+## Stage 5g (2026-10-01)
+
+`good_till_triggered` is `limit_if_touched` with a lifetime in `after_days`, applying only to the wait, so the limit placed when it triggers lives as any order does, as today's gtt does. It is named for the design rather than for today's `gtt` type name.
+
+## Daily stop (2026-10-01)
+
+`daily_stop` is the `protect` side, a native stop that exits if gapped, the `daily` execution and a lifetime of `valid_days`, which also keeps the plan across days. Today's daily stop runs without a position held; a plan's standalone protecting order needs one.

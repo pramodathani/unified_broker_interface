@@ -1,0 +1,8 @@
+Reads quotes: False, paced by ticks: True, grows by changing its order: False, memory {'segment': 'nse_equities', 'armed_on': None}
+Wednesday 09:10: due []
+Wednesday 09:21: due [10]
+Wednesday 09:30: due []
+Thursday 09:20: due [10]
+Saturday 09:30: due []
+Monday 09:25: due [10]
+As a dry run shows it: {'daily': {'arm_at': '09:20'}}

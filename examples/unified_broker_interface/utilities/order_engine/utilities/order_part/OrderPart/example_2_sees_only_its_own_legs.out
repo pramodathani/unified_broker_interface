@@ -9,4 +9,4 @@ Triggered at 1000.05: False
 Triggered at 994.90: True
 Order it builds: {'transaction_type': 'SELL', 'order_type': 'SL', 'quantity': 10, 'price': '988', 'trigger_price': '990'}
 Placed: HTTP 200, accepted, as [('root', 'SELL', 'SL', '990', '988')]
-As a dry run shows it: {'order': {'path': 'root', 'presets': ['hidden_stop'], 'slots': {'trigger': {'price_crosses': {'level': '995', 'direction': 'from the opening side', 'field': 'last', 'confirm': 'none'}}, 'quantity': "the body's quantity", 'side': 'protect', 'execution': ['all_at_once'], 'pricing': [{'native_stop': {'trigger_price': '990', 'limit_price': '988'}}], 'guards': [], 'venue': 'selector', 'lifetime': ["the body's validity"]}}}
+As a dry run shows it: {'order': {'path': 'root', 'presets': ['hidden_stop'], 'slots': {'trigger': {'price_crosses': {'level': '995', 'direction': 'from the opening side', 'field': 'last', 'confirm': 'none'}}, 'quantity': "the body's quantity", 'side': 'protect', 'execution': ['all_at_once'], 'pricing': [{'native_stop': {'trigger_price': '990', 'limit_price': '988', 'exit_if_gapped': False}}], 'guards': [], 'venue': 'selector', 'lifetime': ["the body's validity"]}}}

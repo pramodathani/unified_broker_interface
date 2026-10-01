@@ -61,6 +61,8 @@ PRESET_NAMES = (
     'legged_spread',
     'two_sided_breakout',
     'candle_close_stop',
+    'good_till_triggered',
+    'daily_stop',
     'oto',
     'oco',
     'bracket',
@@ -203,6 +205,10 @@ class PresetExpander:
             return self._post_only(settings, path)
         if name == 'candle_close_stop':
             return self._candle_close_stop(settings, path)
+        if name == 'good_till_triggered':
+            return self._good_till_triggered(settings, path)
+        if name == 'daily_stop':
+            return self._daily_stop(settings, path)
         if name == 'underlying_peg':
             return self._underlying_peg(settings, path)
         if name == 'volatility':
@@ -931,6 +937,79 @@ class PresetExpander:
             'trigger': self._price_trigger(settings, path),
             'pricing': [
                 self._fixed_limit(settings, path, 'limit_if_touched'),
+            ],
+        }
+
+    def _good_till_triggered(self, settings, path):
+        """A limit-if-touched order that keeps waiting across trading days, for `valid_days`, 30 by default, before it gives up.
+
+        Args:
+            settings (dict): The `limit_if_touched` settings, and optionally `valid_days`, from 1 to 365.
+            path (str): The preset's path.
+
+        Returns:
+            dict: A `price_crosses` trigger, `fixed` pricing at the limit, and a lifetime of days bounding the wait.
+        """
+        self._refuse_unknown(
+            settings,
+            (
+                'trigger_price',
+                'limit_price',
+                'trigger_direction',
+                'trigger_on',
+                'hold_seconds',
+                'valid_days',
+            ),
+            path,
+            'good_till_triggered',
+        )
+        return {
+            'trigger': self._price_trigger(settings, path),
+            'pricing': [
+                self._fixed_limit(settings, path, 'good_till_triggered'),
+            ],
+            'lifetime': [
+                {
+                    'after_days': settings.get('valid_days', 30),
+                    'applies_to': 'waiting',
+                },
+            ],
+        }
+
+    def _daily_stop(self, settings, path):
+        """A native stop placed each trading morning for a position carried overnight, exiting instead when the open has gapped past it, for `valid_days`.
+
+        Args:
+            settings (dict): `stop_price` and `stop_limit_price`, and optionally `arm_at`, default `09:20`, and `valid_days`, default 30.
+            path (str): The preset's path.
+
+        Returns:
+            dict: The `protect` side, `native_stop` pricing that exits if gapped, `daily` execution and a lifetime of days.
+        """
+        self._refuse_unknown(settings, ('stop_price', 'stop_limit_price', 'arm_at', 'valid_days'), path, 'daily_stop')
+        daily = {}
+        if 'arm_at' in settings:
+            daily['arm_at'] = settings['arm_at']
+        return {
+            'side': 'protect',
+            'pricing': [
+                {
+                    'native_stop': {
+                        'trigger_price': settings.get('stop_price'),
+                        'limit_price': settings.get('stop_limit_price'),
+                        'exit_if_gapped': True,
+                    },
+                },
+            ],
+            'execution': [
+                {
+                    'daily': daily,
+                },
+            ],
+            'lifetime': [
+                {
+                    'after_days': settings.get('valid_days', 30),
+                },
             ],
         }
 

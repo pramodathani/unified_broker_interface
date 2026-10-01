@@ -13,3 +13,7 @@ Two differences are deliberate. A plan that cancels at its time ends the parent 
 ## Why `ends_at` takes a moment
 
 `Moments` already takes the moment to reckon from, and passing it through lets the example programs work out ends from a fixed Wednesday and a fixed Sunday, so their output does not change from day to day.
+
+## `after_days` (2026-10-01)
+
+Built once recovery could carry one plan overnight without carrying them all. It counts whole days of 24 hours from placing, as today's gtt counts `valid_days`, not trading days. Only `when` is still unbuilt, waiting for the account conditions.

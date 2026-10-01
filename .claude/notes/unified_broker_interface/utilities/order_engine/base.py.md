@@ -77,3 +77,7 @@ Six types combined their orders' answers with `max(status)` and each worked its 
 ## Why `reduce_leg` converts its quantity
 
 `reduce_leg`'s docstring said its quantity was in the broker's own terms, but every caller (OCO, OTO, bracket, scale-out, discretionary) computes it from leg quantities and fills, which are recorded in units. `modify_leg` sends its quantity unchanged, because the other path into it, a caller's change handed over by the modify route, has already been converted. For a securities instrument units are the broker's terms, so nothing showed. For an MCX future the brokers that count lots (Dhan, Zerodha and four others use `broker_lot_size`) would have been sent a hundred times too many: a crude oil exit reduced to 300 units went out as 300 lots. `reduce_leg` now converts through `EnginePlacement.broker_quantity`, which applies the trusted contract size and the broker's `QUANTITY_UNITS`, as a placement does, and refuses a quantity that is not whole lots. The bug was found while building the broker lanes and fixed after the live test of 2026-09-27.
+
+## `carries_parent_overnight` (2026-10-01)
+
+A class method rather than an instance one, because recovery asks it of a rebuilt `ParentOrder` before any order type object exists for it. The base answers `CARRIES_OVERNIGHT`, so only a type that carries some parents and not others overrides it, as `PlanOrder` does.

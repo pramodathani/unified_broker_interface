@@ -33,7 +33,22 @@ class PlanOrder(SyntheticOrder):
     SYNTHETIC_TYPE = 'plan'
     WANTS_PRICES = True
     WANTS_CLOCK = True
+    CARRIES_OVERNIGHT = True
     group_margin_legs = None
+
+    @classmethod
+    def carries_parent_overnight(cls, parent):
+        """Whether recovery should rebuild a plan from before today, which it should only for a plan marked as outliving the day when it was placed.
+
+        Every plan's events are read from the carry window, but a plan without a lifetime of days is a day's plan, and rebuilding it would revive yesterday's waiting orders and let them fire.
+
+        Args:
+            parent (ParentOrder): The parent rebuilt from the record.
+
+        Returns:
+            bool: True when the plan was marked `carries_overnight`.
+        """
+        return parent.parameters.get('carries_overnight') is True
 
     def _read_plan(self):
         """Reads the caller's plan into its root part.
@@ -89,6 +104,7 @@ class PlanOrder(SyntheticOrder):
         if protecting:
             self._refuse_without_position(protecting[0])
         records = {}
+        carries_overnight = False
         needs_prices = False
         watched = []
         for part in root.order_parts():
@@ -105,6 +121,8 @@ class PlanOrder(SyntheticOrder):
             ends_at = part.lifetime_ends_at(self)
             if ends_at is not None:
                 record['ends_at'] = ends_at
+            if part.lifetime is not None and part.lifetime.after_days is not None:
+                carries_overnight = True
             if part.moves_on_ticks():
                 record['moves'] = True
             if part.execution.paced_by_ticks():
@@ -120,6 +138,8 @@ class PlanOrder(SyntheticOrder):
             self._remember_tick_sizes(root)
         self.parent.parameters = dict(self.parent.parameters)
         self.parent.parameters['parts'] = records
+        if carries_overnight:
+            self.parent.parameters['carries_overnight'] = True
         if watched:
             self.parent.parameters['watch_instrument_ids'] = watched
         self.record_received()
@@ -504,7 +524,7 @@ class PlanOrder(SyntheticOrder):
     def on_clock_tick(self, now):
         """Ends every order whose lifetime is up and sends every order waiting only for a time, even when its instrument sent no price tick.
 
-        Orders whose trigger reads prices are left to the price ticks, because some of those triggers count ticks.
+        Orders whose trigger reads prices are left to the price ticks, because some of those triggers count ticks. Orders sent in pieces on later ticks, such as a TWAP or a daily stop, are sent their due pieces too, priced from the quotes as they are now, as today's timed types are sent theirs on the clock.
 
         Args:
             now (float): The Unix time of the tick.
@@ -515,13 +535,27 @@ class PlanOrder(SyntheticOrder):
         if self._end_lifetimes(None, now):
             return True
         waiting_paths = []
+        paced_paths = []
         for path, record in (self.parent.parameters.get('parts') or {}).items():
             if record.get('state') == 'waiting':
                 waiting_paths.append(path)
-        if not waiting_paths:
+            if record.get('state') == 'working' and record.get('paced'):
+                paced_paths.append(path)
+        if not waiting_paths and not paced_paths:
             return False
         root, _ = self._read_plan()
         placed, memory_changed, ended = self._fire_waiting(root, waiting_paths, None, now, True)
+        for part in root.order_parts():
+            if part.path not in paced_paths:
+                continue
+            quotes = {}
+            if part.needs_prices():
+                try:
+                    quotes = self.quotes_now()
+                except RefusedRequestError as refusal:
+                    self.logger.warning(f'Parent {self.parent.parent_order_id} could not read the quotes to send {part.path}: {refusal.body.get("error")}')
+                    continue
+            placed = placed + part.send_due(self, None, quotes, now)
         if not placed and not ended:
             if memory_changed:
                 self.save()

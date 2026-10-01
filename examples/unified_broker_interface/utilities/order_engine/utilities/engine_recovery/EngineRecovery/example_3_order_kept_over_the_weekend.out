@@ -1,4 +1,4 @@
-Rows read: 2 since this morning, 3 for ['daily_stop', 'gtt']
+Rows read: 2 since this morning, 3 for ['daily_stop', 'gtt', 'plan']
 Rows after merging: 4
   aaaaaaaa #1 parent_received
   aaaaaaaa #2 parameters_changed
@@ -6,3 +6,6 @@ Rows after merging: 4
   bbbbbbbb #1 parent_received
 Rebuilt aaaaaaaa: gtt, working, sequence 3, parameters {'type': 'gtt', 'trigger_price': '1050', 'armed_on': '2026-09-18'}
 Rebuilt bbbbbbbb: simple, received, sequence 1, parameters {}
+A gtt from last week with {} is carried: True
+A plan from last week with {'carries_overnight': True} is carried: True
+A plan from last week with {} is carried: False

@@ -1,6 +1,6 @@
 """Works out when three lifetimes end, from a fixed Wednesday morning and a fixed Sunday.
 
-`Lifetime.ends_at` reads `at_time` as that time on the instrument's next trading day, so 14:30 asked for on a Sunday means Monday at 14:30, and counts `after_minutes` from the moment given. Minutes asked for on a day the instrument does not trade are refused, as today's time stop refuses them. The moments are fixed so the output does not change. Nothing is read from Redis or sent anywhere.
+`Lifetime.ends_at` reads `at_time` as that time on the instrument's next trading day, so 14:30 asked for on a Sunday means Monday at 14:30, counts `after_minutes` from the moment given, and `after_days` as whole days of 24 hours from it, as today's gtt counts `valid_days`. Minutes asked for on a day the instrument does not trade are refused, as today's time stop refuses them. The moments are fixed so the output does not change. Nothing is read from Redis or sent anywhere.
 
 Run it from the project root:
 
@@ -63,7 +63,10 @@ class WhenAnOrderEndsExample:
             time_stop.ends_at(plan_order, SUNDAY)
         except RefusedRequestError as refusal:
             print(f'20 minutes asked for on Sunday: {refusal.status} {refusal.body["error"]}')
+        good_till_triggered = Lifetime(None, None, 'waiting', 'cancel', 30)
+        print(f'30 days asked for on Sunday ends {self.shown(good_till_triggered.ends_at(plan_order, SUNDAY))}, {round((good_till_triggered.ends_at(plan_order, SUNDAY) - SUNDAY.timestamp()) / 86400)} days on, trading or not')
         print(f'As a dry run shows them: {good_till_time.described()} and {time_stop.described()}')
+        print(f'And the one of days: {good_till_triggered.described()}')
 
 
 if __name__ == '__main__':

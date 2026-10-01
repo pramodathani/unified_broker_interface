@@ -56,3 +56,7 @@ stop_and_reverse: {'trigger': {'price_crosses': {'level': 995, 'field': 'last', 
   problems: []
 candle_close_stop: {'side': 'protect', 'trigger': {'candle_closes': {'level': 995, 'bar_minutes': 15}}, 'pricing': [{'marketable': {'buffer_ticks': 2}}]}
   problems: []
+good_till_triggered: {'trigger': {'price_crosses': {'level': 995, 'field': 'last', 'confirm': 'none'}}, 'pricing': [{'fixed': {'price': 990}}], 'lifetime': [{'after_days': 30, 'applies_to': 'waiting'}]}
+  problems: []
+daily_stop: {'side': 'protect', 'pricing': [{'native_stop': {'trigger_price': 990, 'limit_price': 988, 'exit_if_gapped': True}}], 'execution': [{'daily': {}}], 'lifetime': [{'after_days': 30}]}
+  problems: []

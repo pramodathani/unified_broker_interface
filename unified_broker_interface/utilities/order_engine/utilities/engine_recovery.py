@@ -124,12 +124,15 @@ class EngineRecovery:
     def replay(self):
         """Rebuilds every parent from the day's recorded transitions, and the carried ones from further back.
 
-        The two reads are merged by parent rather than concatenated. A carried parent that also did something today appears in both, and its events have to end up in one list in sequence order or `ParentOrder.from_events` replays them out of order and rebuilds the wrong state.
+        The two reads are merged by parent rather than concatenated. A carried parent that also did something today appears in both, and its events have to end up in one list in sequence order or `ParentOrder.from_events` replays them out of order and rebuilds the wrong state. A parent found only in the carried read is kept only when its type says it carries that parent, so a type that carries some parents and not others, as a plan does, does not bring back yesterday's.
 
         Returns:
             list: The `ParentOrder` objects, in the order the record holds them.
         """
         events = self.event_log.read_since(self.window_start())
+        seen_today = set()
+        for event in events:
+            seen_today.add(str(event.get('parent_order_id')))
         carried = self.event_log.read_since_for_types(
             self.carry_window_start(),
             self.carried_types(),
@@ -147,9 +150,26 @@ class EngineRecovery:
         parents = []
         for parent_order_id in order:
             parent = ParentOrder.from_events(by_parent[parent_order_id])
-            if parent is not None:
-                parents.append(parent)
+            if parent is None:
+                continue
+            if parent_order_id not in seen_today and not self.carries(parent):
+                continue
+            parents.append(parent)
         return parents
+
+    def carries(self, parent):
+        """Whether a parent from before today is one its type carries overnight, such as a plan with a lifetime of days rather than any plan.
+
+        Args:
+            parent (ParentOrder): The parent rebuilt from the record.
+
+        Returns:
+            bool: True when it should be rebuilt.
+        """
+        synthetic_order_class = SYNTHETIC_ORDER_CLASSES.get(parent.synthetic_type)
+        if synthetic_order_class is None:
+            return False
+        return synthetic_order_class.carries_parent_overnight(parent)
 
     def merged(self, events, carried):
         """The two reads as one list, with each parent's events in sequence order and nothing counted twice.
