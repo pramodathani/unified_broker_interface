@@ -378,6 +378,12 @@ class PlanReader:
         child_key = child_keys[0]
         first = self._read_node(then['first'], f'{path}.first', keeps_tag)
         child = self._read_node(then[child_key], f'{path}.{child_key}', False)
+        if child is not None and first is not None:
+            opened_by = []
+            for part in first.order_parts():
+                opened_by.append(part.path)
+            for part in child.order_parts():
+                part.opened_by = opened_by
         if isinstance(child, OrderPart):
             child.sized_by_fills = True
             if isinstance(child.pricing, FromParentFillPricing) and isinstance(first, OrderPart):

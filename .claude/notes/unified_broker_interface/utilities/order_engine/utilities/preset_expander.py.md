@@ -51,3 +51,7 @@ The backstop is a second order resting beside the engine-side stop, cancelled be
 ## Stage 5d (2026-10-01)
 
 `attached_hedge` chooses the hedge's side from the entry's side and the ratio's sign, as today's does, and refuses `delta_volatility` as not built. `legged_spread` takes the second candidate's side and instrument but not its quantity or price, which come from the first leg's fills.
+
+## Stage 5e (2026-10-01)
+
+`two_sided_breakout` is a Then join whose first plan is an Either join that cancels, with the exits of a bracket as the child. Its exits are absolute prices, as today's are, and are sent against the side that filled. `scale_out` is not a preset: its targets are tranches of one position and only the stop follows their fills, which neither Either rule expresses, so it is left with the types kept whole.

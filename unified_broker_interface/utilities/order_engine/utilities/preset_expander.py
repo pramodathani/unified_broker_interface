@@ -59,6 +59,7 @@ PRESET_NAMES = (
     'accumulation',
     'attached_hedge',
     'legged_spread',
+    'two_sided_breakout',
     'oto',
     'oco',
     'bracket',
@@ -111,6 +112,7 @@ JOIN_PRESET_NAMES = (
     'accumulation',
     'attached_hedge',
     'legged_spread',
+    'two_sided_breakout',
     'basket',
     'oca',
     'oto',
@@ -228,7 +230,7 @@ class PresetExpander:
             settings (dict): The preset's settings.
 
         Returns:
-            bool: True for `accumulation`, `attached_hedge`, `legged_spread`, `basket`, `oca`, `oto`, `oco`, `bracket`, `cover`, a `hidden_stop` with a backstop, and a `stop_and_reverse` that closes before it reverses.
+            bool: True for `accumulation`, `attached_hedge`, `legged_spread`, `two_sided_breakout`, `basket`, `oca`, `oto`, `oco`, `bracket`, `cover`, a `hidden_stop` with a backstop, and a `stop_and_reverse` that closes before it reverses.
         """
         if name in JOIN_PRESET_NAMES:
             return True
@@ -261,6 +263,8 @@ class PresetExpander:
             return self._attached_hedge(settings, entry, path)
         if name == 'legged_spread':
             return self._legged_spread(settings, entry, path)
+        if name == 'two_sided_breakout':
+            return self._two_sided_breakout(settings, entry, path)
         if name == 'basket':
             return self._basket(settings, entry, path)
         if name == 'oca':
@@ -437,6 +441,77 @@ class PresetExpander:
                 },
             },
         }
+
+    def _two_sided_breakout(self, settings, entry, path):
+        """A buy stop above a range and a sell stop below it; the first to fill cancels the other, and exits are armed against the side that filled.
+
+        Args:
+            settings (dict): `buy_trigger`, `buy_limit`, `sell_trigger` and `sell_limit`, and the exits' `stop_price` and `stop_limit_price`, `target_price`, or both.
+            entry (dict): The order it was named in, which each side copies.
+            path (str): The preset's path.
+
+        Returns:
+            dict: A Then join: an Either join of the two sides that cancels, then the exits.
+        """
+        self._refuse_unknown(settings, ('buy_trigger', 'buy_limit', 'sell_trigger', 'sell_limit', 'stop_price', 'stop_limit_price', 'target_price'), path, 'two_sided_breakout')
+        for name in ('buy_trigger', 'buy_limit', 'sell_trigger', 'sell_limit'):
+            if name not in settings:
+                self._add_problem(path, 'missing_setting', 'a two_sided_breakout needs buy_trigger, buy_limit, sell_trigger and sell_limit: both sides are stop-limit orders and each needs its own two prices')
+                return {}
+        try:
+            in_order = float(settings['sell_trigger']) < float(settings['buy_trigger'])
+        except (TypeError, ValueError):
+            in_order = True
+        if not in_order:
+            self._add_problem(path, 'bad_setting', 'sell_trigger must be below buy_trigger; they are the two sides of a range and a range has a top and a bottom')
+            return {}
+        exits = self._exits(self._exit_settings(settings), path, 'two_sided_breakout')
+        if self.problems:
+            return {}
+        sides = []
+        for side, trigger, limit in (('buy', 'buy_trigger', 'buy_limit'), ('sell', 'sell_trigger', 'sell_limit')):
+            order = dict(entry)
+            order['side'] = side
+            order['pricing'] = [
+                {
+                    'native_stop': {
+                        'trigger_price': settings[trigger],
+                        'limit_price': settings[limit],
+                    },
+                },
+            ]
+            sides.append(
+                {
+                    'order': order,
+                }
+            )
+        return {
+            'then': {
+                'first': {
+                    'either': {
+                        'children': sides,
+                        'sibling_rule': 'cancel',
+                    },
+                },
+                'each_fill': exits,
+                'cancel_first_on_child_fill': True,
+            },
+        }
+
+    def _exit_settings(self, settings):
+        """The exits' settings out of a preset's settings.
+
+        Args:
+            settings (dict): The preset's settings.
+
+        Returns:
+            dict: `stop_price`, `stop_limit_price` and `target_price`, where given.
+        """
+        exits = {}
+        for name in ('stop_price', 'stop_limit_price', 'target_price'):
+            if name in settings:
+                exits[name] = settings[name]
+        return exits
 
     def _accumulation(self, settings, entry, path):
         """The order's quantity bought again and again, every `every_minutes`, `purchases` times, each purchase resting on its own side of the book no worse than the body's limit.

@@ -47,6 +47,7 @@ class OrderPart:
         position (PositionQuantity | None): For the `close` side, how the position it closes is read; None for any other order.
         fill_ratio (FillRatio | None): How the size a Then join hands it is scaled, or None to take it as it is.
         sized_by_fills (bool): Whether it is a Then join's child, sized by the first plan's fills.
+        opened_by (list): The paths of the orders whose fills opened the position this order follows, for an order under a Then join; empty otherwise.
     """
 
     def __init__(self, path, presets, trigger, side, pricing, keeps_tag=True, execution=None, cap=None, post_only=None, discretion=None, lifetime=None, overrides=None, position=None):
@@ -89,6 +90,7 @@ class OrderPart:
         self.position = position
         self.fill_ratio = None
         self.sized_by_fills = False
+        self.opened_by = []
 
     def context(self, plan_order):
         """The plan order as this order's pricing, execution and trigger see it: on this order's instrument, with its own body values.
@@ -203,23 +205,27 @@ class OrderPart:
         return self.side in ('protect', 'close')
 
     def _opening_side(self, plan_order):
-        """The side of the caller's body, read the way a validated order reads it.
+        """The side that opened the position this order works on: the side the first plan of its Then join filled on, or the body's side.
 
-        The API accepts the side in any case and keeps the body as the caller sent it, so `buy` must be read as `BUY`. Comparing the raw value made a lower-case buy wait in the sell direction and fire at once, which a live test on 2026-10-01 caught.
+        Under a Then join the position is the one the first plan opened, which for a two-sided breakout is whichever side broke, so the side its filled broker orders traded is the one that counts. Otherwise the body's side is read the way a validated order reads it: the API accepts the side in any case, so `buy` must be read as `BUY`. Comparing the raw value made a lower-case buy wait in the sell direction and fire at once, which a live test on 2026-10-01 caught.
 
         Args:
-            plan_order (PlanOrder): The plan order, whose parent holds the body.
+            plan_order (PlanOrder): The plan order, whose parent holds the body and the legs.
 
         Returns:
             str: BUY or SELL.
         """
+        for leg in plan_order.parent.legs:
+            if leg.role in self.opened_by and (leg.filled_quantity or 0) > 0 and leg.transaction_type:
+                return str(leg.transaction_type).strip().upper()
         return str(self.context(plan_order).body.get('transaction_type') or '').strip().upper()
 
-    def sending_side(self, opening_side):
+    def sending_side(self, opening_side, own_side=None):
         """The side this part's orders are sent on.
 
         Args:
-            opening_side (str): BUY or SELL, the side of the caller's body.
+            opening_side (str): BUY or SELL, the side that opened the position this part works on.
+            own_side (str | None): BUY or SELL, the side of this part's own body, or None to take the opening side.
 
         Returns:
             str: BUY or SELL.
@@ -228,7 +234,21 @@ class OrderPart:
             return OPPOSITE_SIDES[opening_side]
         if self.side in NAMED_SIDES:
             return NAMED_SIDES[self.side]
+        if own_side:
+            return own_side
         return opening_side
+
+    def _sending_side(self, plan_order):
+        """The side this part's orders are sent on in this plan: against the position for `protect` and `close`, the named side for `buy` and `sell`, and otherwise its own body's side.
+
+        Args:
+            plan_order (PlanOrder): The plan order.
+
+        Returns:
+            str: BUY or SELL.
+        """
+        own_side = str(self.context(plan_order).body.get('transaction_type') or '').strip().upper()
+        return self.sending_side(self._opening_side(plan_order), own_side)
 
     def prepare(self, plan_order, memory):
         """Readies the trigger when the plan is placed, such as working out when a time falls.
@@ -272,7 +292,7 @@ class OrderPart:
             quotes,
             now,
             opening_side,
-            self.sending_side(opening_side),
+            self._sending_side(plan_order),
         )
 
     def order(self, plan_order, quotes, quantity=None):
@@ -290,8 +310,7 @@ class OrderPart:
         """
         context = self.context(plan_order)
         body = dict(context.body)
-        opening_side = self._opening_side(plan_order)
-        sending_side = self.sending_side(opening_side)
+        sending_side = self._sending_side(plan_order)
         body['transaction_type'] = sending_side
         target = plan_order.part_record(self.path).get('target')
         if quantity is not None:
@@ -518,7 +537,7 @@ class OrderPart:
         stored = record.get('execution_memory') or {}
         memory = copy.deepcopy(stored)
         pieces = self.own_legs(plan_order.parent)
-        sending_side = self.sending_side(self._opening_side(plan_order))
+        sending_side = self._sending_side(plan_order)
         due = self.execution.due_pieces(self.context(plan_order), memory, self.total(plan_order), pieces, quotes, now, sending_side=sending_side)
         if not due:
             if memory != stored:
@@ -691,7 +710,7 @@ class OrderPart:
         body.pop('trigger_price', None)
         body['order_type'] = 'MARKET'
         body['quantity'] = traded
-        body['transaction_type'] = OPPOSITE_SIDES[self.sending_side(self._opening_side(plan_order))]
+        body['transaction_type'] = OPPOSITE_SIDES[self._sending_side(plan_order)]
         broker_name = plan_order.chosen_broker()
         context.place_leg(f'{self.path}.close', plan_order.concrete_order(plan_order.read_order(body)), None, broker_name)
 

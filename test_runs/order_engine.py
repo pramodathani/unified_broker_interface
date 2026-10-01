@@ -5206,7 +5206,7 @@ class OrderEngineSuite:
         ]
 
     def run_plan_fill_follower_checks(self):
-        """Runs plans whose second order follows the first's fills on another instrument: a hedge in whole lots and a legged spread, beside the types they stand for.
+        """Runs plans whose second order follows the first's fills: a hedge in whole lots, a legged spread, and a two-sided breakout's exits, beside the types they stand for.
 
         Returns:
             list: One recorded result per check.
@@ -5217,6 +5217,26 @@ class OrderEngineSuite:
         )
         identifiers = order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS
         steady = self.book_at(1000.00, 1000.05)
+        numbered = dict(
+            accepted,
+            number_orders=True,
+        )
+        breakout = {
+            'order': {
+                'presets': [
+                    {
+                        'two_sided_breakout': {
+                            'buy_trigger': 1010,
+                            'buy_limit': 1012,
+                            'sell_trigger': 990,
+                            'sell_limit': 988,
+                            'stop_price': 985,
+                            'stop_limit_price': 983,
+                        },
+                    },
+                ],
+            },
+        }
         spread = {
             'order': {
                 'presets': [
@@ -5311,6 +5331,22 @@ class OrderEngineSuite:
                     self.update('26091500000021', 'COMPLETE', 500, average_price=1002.0),
                 ],
                 accepted,
+            ),
+            self.plan_result(
+                'a_plan_two_sided_breakout_cancels_the_side_that_did_not_fire',
+                breakout,
+                [
+                    self.update('26091500000101', 'OPEN', 10),
+                ],
+                numbered,
+            ),
+            self.plan_result(
+                'a_plan_two_sided_breakout_that_breaks_down_protects_the_short',
+                breakout,
+                [
+                    self.update('26091500000102', 'OPEN', 10),
+                ],
+                numbered,
             ),
             self.plan_result(
                 'a_plan_legged_spread_with_three_legs_is_refused',
