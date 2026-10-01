@@ -1,0 +1,5 @@
+The parent holds 2 legs
+root: sees ['parent-1:1'], done reason filled
+root.first: sees ['parent-1:2'], done reason None
+Started root: HTTP 200, accepted, placed as [('root', None)]
+As a dry run shows it: {'order': {'path': 'root', 'presets': ['simple'], 'slots': {'trigger': 'at_once', 'quantity': "the body's quantity", 'side': "the body's transaction_type", 'execution': ['all_at_once'], 'pricing': ['fixed'], 'guards': [], 'venue': 'selector', 'lifetime': ["the body's validity"]}}}

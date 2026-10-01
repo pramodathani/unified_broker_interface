@@ -78,6 +78,7 @@ from unified_broker_interface.utilities.order_engine.peg import Peg
 from unified_broker_interface.utilities.order_engine.participation import (
     Participation,
 )
+from unified_broker_interface.utilities.order_engine.plan import PlanOrder
 from unified_broker_interface.utilities.order_engine.post_only import PostOnly
 from unified_broker_interface.utilities.order_engine.scale_out import ScaleOut
 from unified_broker_interface.utilities.order_engine.scale_with_profit_taker import (
@@ -174,4 +175,5 @@ SYNTHETIC_ORDER_CLASSES = {
     ScaleWithProfitTaker.SYNTHETIC_TYPE: ScaleWithProfitTaker,
     TwoSidedQuote.SYNTHETIC_TYPE: TwoSidedQuote,
     AccountConditional.SYNTHETIC_TYPE: AccountConditional,
+    PlanOrder.SYNTHETIC_TYPE: PlanOrder,
 }
