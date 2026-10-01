@@ -1,0 +1,7 @@
+10:00 falls in half hour 1
+10:20 falls in half hour 2
+10:40 falls in half hour 2
+Weights [0.095, 0.075, 0.075], ten shared out as [4, 3, 3]
+10:00: due [4]
+10:20: due [3]
+10:40: due [3]

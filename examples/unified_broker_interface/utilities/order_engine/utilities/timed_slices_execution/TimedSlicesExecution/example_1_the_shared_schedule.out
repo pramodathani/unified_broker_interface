@@ -1,0 +1,9 @@
+Reads quotes: False, paced by ticks: True, grows by changing its order: False
+Interval 60.0 s, memory {'started_at': 1000.0}, weights [1.0, 2.0, 3.0], 100 shared out as [17, 33, 50]
+0 s: due [17], more to send True
+30 s: due [], more to send True
+60 s: due [33], more to send True
+90 s: due [], more to send True
+120 s: due [50], more to send False
+180 s: due [], more to send False
+As a dry run shows it: {'one_two_three': {'slices': 3, 'over_minutes': 3}}

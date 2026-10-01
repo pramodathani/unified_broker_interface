@@ -1,0 +1,5 @@
+Reads quotes: False, paced by ticks: False, grows by changing its order: True
+Memory after beginning: {}
+Due before anything is sent: [10]; more to send: True
+Due once it is resting: []; more to send: False
+As a dry run shows it: all_at_once

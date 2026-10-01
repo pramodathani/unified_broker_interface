@@ -1,0 +1,10 @@
+Reads quotes: False, paced by ticks: False, grows by changing its order: False
+Step 1: committed 0, due [4]
+  while it rests, due []
+Step 2: committed 4, due [4]
+  while it rests, due []
+Step 3: committed 8, due [2]
+  while it rests, due []
+Step 4: committed 10, due []
+More to send: False
+As a dry run shows it: {'iceberg': {'visible_quantity': 4, 'randomise_percent': 0}}

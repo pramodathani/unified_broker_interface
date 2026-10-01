@@ -1,6 +1,6 @@
 """Walks one order part through the lifecycle a join drives: start, a fill, a new target, cancelling the rest, and done.
 
-An `OrderPart` placed under a join is told how much to trade with a target. `start` places it for that much, `traded` says what has filled, `set_target` changes its resting order to the filled part plus what is still wanted, or cancels it when nothing more is wanted, `cancel_rest` stops whatever is left, and `settle` marks it done once every broker order has finished. `send` is how a part left waiting, for its trigger or for a price, is placed when its tick comes, and `move` is how a working trailing stop follows the market on a tick. A part that has not been started yet only records a new target. This program also shows how the part describes its quantity, and what it holds as a member of a tree.
+An `OrderPart` placed under a join is told how much to trade with a target. `start` places it for that much, `traded` says what has filled, `total` is how much it should trade in all and `committed` how much its broker orders account for, `send_due` sends whatever its execution says is due, which for an order sent all at once is nothing once it has gone, `set_target` changes its resting order to the filled part plus what is still wanted, or cancels it when nothing more is wanted, `cancel_rest` stops whatever is left, and `settle` marks it done once every broker order has finished. `send` is how a part left waiting, for its trigger or for a price, is placed when its tick comes, and `move` is how a working trailing stop follows the market on a tick. A part that has not been started yet only records a new target. This program also shows how the part describes its quantity, and what it holds as a member of a tree.
 
 A stand-in plays the plan order: it keeps the parts' records and turns every order into an acknowledged leg, so nothing leaves the machine.
 
@@ -316,7 +316,8 @@ class LifecycleUnderAJoinExample:
         print(f'Started: {placed}')
         self.plan_order.fill(self.part.path, 1)
         self.part.set_target(self.plan_order, 10)
-        print(f'1 filled, target 10: traded {self.part.traded(self.plan_order.parent)}, requests {self.plan_order.requests[1:]}')
+        print(f'1 filled, target 10: traded {self.part.traded(self.plan_order.parent)}, total {self.part.total(self.plan_order)}, committed {self.part.committed(self.plan_order.parent)}, requests {self.plan_order.requests[1:]}')
+        print(f'Due now, with its one order resting: {self.part.send_due(self.plan_order, None, {}, 0.0)}')
         self.part.set_target(self.plan_order, 1)
         print(f'Target 1: requests {self.plan_order.requests[1:]}')
         self.part.settle(self.plan_order)

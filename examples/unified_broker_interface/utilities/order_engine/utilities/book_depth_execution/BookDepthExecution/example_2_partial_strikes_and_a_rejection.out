@@ -1,0 +1,4 @@
+Bids no worse than 999.90: 30
+With a strike of 30 resting, 12 filled: committed 30, due [20]
+After a rejected strike: last was rejected True, more to send False, due []
+As a dry run shows it: {'book_depth': {'limit_price': '999.90', 'minimum_quantity': 5}}

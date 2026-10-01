@@ -1,0 +1,4 @@
+09:00 falls in half hour 0
+From 09:15, slices every 1800.0 s take weights [1.0, 2.0, 3.0, 3.0]
+Twenty shared out as [2, 4, 7, 7]
+As a dry run shows it: {'vwap': {'slices': 4, 'over_minutes': 120, 'volume_profile': [1.0, 2.0, 3.0]}}

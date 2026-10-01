@@ -149,7 +149,7 @@ The master table below lists every type registered in `SYNTHETIC_ORDER_CLASSES`,
 | `scale_with_profit_taker` | Plain and laddered | A ladder whose every filled rung gets its own profit-taker, and is placed again once that profit is taken. | `from_price`, `to_price`, `steps`, `profit_points`, `most_cycles` | 200 |
 | `two_sided_quote` | Plain and laddered | A bid and an offer kept around the fair price, leaning away from the inventory they build. | `half_spread_points`, `skew_ticks`, `most_inventory` | 200 |
 | `account_conditional` | Price triggers | Sends an order when free margin, the day's profit or the open position count reaches a level, or cancels it then. | `account_field`, `account_level`, `trigger_direction`, `action` | 202, or 200 with `action: cancel` |
-| `plan` | Plans | An order described as a plan of parts: orders that may wait for a trigger, protect a position, trail the market and be priced by one pricing rule, joined with then and either. | `plan` | 200, or 202 when nothing is placed at once |
+| `plan` | Plans | An order described as a plan of parts: orders that may wait for a trigger, protect a position, trail the market, be priced by one pricing rule and be sent in pieces, joined with then and either. | `plan` | 200, or 202 when nothing is placed at once |
 
 The chart below counts how many of the 54 types fall into each family. The families are this page's own grouping, chosen to make the list easier to scan; the code does not group them.
 
@@ -1185,6 +1185,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | `trigger` | object | No | What the order waits for: one condition, or `all` or `any` with a list of them. With no trigger the order is placed at once. |
     | `side` | string | No | `buy`, `sell`, or `protect`, which trades against the position the body's side opened: a body `BUY` with `protect` sends a sell. Defaults to the body's side. |
     | `pricing` | list | No | One pricing rule: `fixed`, `marketable`, `native_stop` or `trail`. Defaults to `fixed` with the body's own order type and price. |
+    | `execution` | list | No | One execution value, which cuts the order into pieces and says when each is sent: `all_at_once`, `iceberg`, `twap`, `vwap`, `front_loaded`, `participation` or `book_depth`. Defaults to `all_at_once`. Nesting one execution inside another is not built yet. |
 
     The trigger conditions are these:
 
@@ -1205,6 +1206,22 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | `native_stop` | `trigger_price` and `limit_price` | A stop-limit (`SL`) resting at the broker. |
     | `trail` | `points` or `percent`, exactly one; `limit_offset`, required; `step_ticks`, default 1 | A stop-limit resting at the broker, placed `points` (or `percent` of the price) behind the last price and moved after the best price seen, never back. A sell stop follows the highest price up and a buy stop the lowest price down. It moves only when it can move by at least `step_ticks`, and every move passes the repricing throttle and rate budget. |
 
+    The execution values are these. Each piece is priced by the order's pricing when it is sent, and what an execution has sent is read from the order's own broker orders, so a restart neither repeats nor skips a piece.
+
+    | Execution | Settings | What is sent |
+    |---|---|---|
+    | `all_at_once` | none | The whole quantity as one broker order. Under a join, a change of size changes that order. |
+    | `iceberg` | `visible_quantity`, required; `randomise_percent`, 0 to 99, default 0 | One piece at a time, the next only once the last has filled; each piece may vary by up to `randomise_percent`. A piece cancelled or rejected stops the iceberg. |
+    | `twap` | `slices`, 2 to 60; `over_minutes`, above zero | Equal slices, one every `over_minutes × 60 / slices` seconds, the first at once. |
+    | `vwap` | as `twap`, and `volume_profile`, one weight per half hour from 09:15 | Slices sized by the half hour they fall in; the default profile is today's NSE equity shape. |
+    | `front_loaded` | as `twap`, and `urgency`, 0 to 1, default 0.5 | Slices each `1 - urgency × 0.5` of the one before. |
+    | `participation` | `percent`, above zero and at most 100; `most_slices`, default 60 | On each tick, `percent` of the volume traded since the last slice, counted from the live quote's `volume` when the order starts working. A share under one unit waits for more volume. The unfilled part of a cancelled slice is sent again by later slices; a rejected slice stops the order. |
+    | `book_depth` | `limit_price`, required; `minimum_quantity`, at least 1 | Nothing until the other side of the book shows at least `minimum_quantity` at or inside `limit_price`, then one strike for the smaller of what is shown and what is left. A strike that partly fills rests at its price, and later strikes are only for what is neither traded nor resting. A rejected strike stops the order. |
+
+    A resting stop, `native_stop` or `trail` pricing, cannot be split into pieces, because it protects the whole position at once; a plan that tries is refused with `stop_not_sliced`. A later preset's execution replaces an earlier one with a warning, as pricing does. An order whose execution is paced by ticks (`twap`, `vwap`, `front_loaded`, `participation` and `book_depth`) starts working as soon as its trigger holds, even when nothing is due yet, so `participation` counts volume from that moment.
+
+    There is no execution for an exchange's freeze quantity yet. Splitting at the freeze quantity needs the broker chosen first, because each broker publishes the limit in its own units, so it is planned to come with nesting, where it would be applied innermost to every piece automatically. Until then, use the `freeze_slicer` type for an order above the freeze quantity.
+
     The presets stand for slot values and take the settings of the type they are named after:
 
     | Preset | Stands for |
@@ -1212,6 +1229,12 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | `simple` | Nothing: the order as the body describes it. |
     | `trailing_stop` | The `protect` side and `trail` pricing. Takes `trail_points` or `trail_percent`, `stop_limit_offset`, `step_ticks` and `activate_at`; with `activate_at`, nothing rests until the price reaches that level from the side of the position's profit. |
     | `trailing_entry` | `trail` pricing on the body's own side, so a buy stop follows a falling market down and fills on the first rebound. Takes the same settings as `trailing_stop`. |
+    | `iceberg` | `iceberg` execution with `visible_quantity` from `slice_quantity`. Takes `slice_quantity` and `randomise_percent`. |
+    | `twap` | `twap` execution. Takes `slices` and `over_minutes`. |
+    | `vwap` | `vwap` execution. Takes `slices`, `over_minutes` and `volume_profile`. |
+    | `implementation_shortfall` | `front_loaded` execution. Takes `slices`, `over_minutes` and `urgency`. |
+    | `participation` | `participation` execution with `percent` from `participation_percent`, and `marketable` pricing two ticks past the touch. Takes `participation_percent` and `most_slices`. |
+    | `liquidity_seeking` | `book_depth` execution and `fixed` pricing at `limit_price`, so a strike that does not fill rests at the limit. Takes `limit_price` and `minimum_quantity`. |
     | `bracket` | A Then join: the order, then a `native_stop` stop and a `fixed` target that reduce each other, sized to each fill; an exit filling cancels the rest of the entry. Takes `stop_price`, `stop_limit_price` and `target_price`. |
     | `cover` | A Then join: the order, then a `native_stop` stop sized to each fill. Takes `stop_price` and `stop_limit_price`, both required. |
     | `oco` | An Either join that reduces: a stop and a target protecting a position already held. It has no order of its own, so it cannot be named beside other presets or slot values. |
@@ -1229,6 +1252,8 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     |---|---|---|
     | `then` | `first`, and exactly one of `each_fill` or `on_complete`; `cancel_first_on_child_fill`, default false | Starts the child once the first plan fills anything, sized to what has filled, and resizes it as more fills. With `on_complete`, waits until the first plan is done. With `cancel_first_on_child_fill`, a fill on the child cancels whatever of the first plan is still working. |
     | `either` | `children`, two or more plans; `sibling_rule`, `cancel` or `reduce`; `cancel_before_send`, default false | Runs the children at once. With `cancel`, the first child to fill cancels the others. With `reduce`, the children share one quantity and each is kept at that quantity less what its siblings have filled, so each child must be a single order. With `cancel_before_send`, a child whose trigger holds cancels its siblings' resting orders before it is sent. |
+
+    Because the slots are independent, an order can wait for one thing and be sent another way: a `trails` trigger with `twap` execution is a trailing stop that, once it fires, sells over a minute rather than all at once, and `[iceberg, bracket]` is a bracket whose entry shows only part of its size, with exits that grow as each piece fills.
 
     A join preset stands for a whole join built around the rest of the order it is named in, so `[{"market_if_touched": {"trigger_price": 995}}, {"bracket": {...}}]` is a bracket whose entry waits for 995. An order can name only one join preset.
 
