@@ -5,6 +5,9 @@ import decimal
 from unified_broker_interface.utilities.order_engine.utilities.all_at_once_execution import (
     AllAtOnceExecution,
 )
+from unified_broker_interface.utilities.order_engine.utilities.atr_trail_pricing import (
+    AtrTrailPricing,
+)
 from unified_broker_interface.utilities.order_engine.utilities.book_depth_execution import (
     BookDepthExecution,
 )
@@ -69,6 +72,9 @@ from unified_broker_interface.utilities.order_engine.utilities.price_crosses_con
     FIELDS,
     PriceCrossesCondition,
 )
+from unified_broker_interface.utilities.order_engine.utilities.stages_pricing import (
+    StagesPricing,
+)
 from unified_broker_interface.utilities.order_engine.utilities.then_part import (
     ThenPart,
 )
@@ -122,6 +128,13 @@ ORDER_SETTINGS = (
 )
 MOST_SLICES = 60
 HIGHEST_VOLATILITY_PERCENT = 500
+MOST_RULES = 20
+STOP_PRICINGS = (
+    NativeStopPricing,
+    TrailPricing,
+    AtrTrailPricing,
+    StagesPricing,
+)
 SIDES = (
     'buy',
     'sell',
@@ -475,7 +488,7 @@ class PlanReader:
             pricing = FixedPricing(None, None)
         if execution is None:
             execution = AllAtOnceExecution()
-        if isinstance(pricing, (NativeStopPricing, TrailPricing)):
+        if isinstance(pricing, STOP_PRICINGS):
             if not isinstance(execution, AllAtOnceExecution):
                 self._add_problem(
                     path,
@@ -502,7 +515,7 @@ class PlanReader:
         Returns:
             bool: True when they can go together.
         """
-        if isinstance(pricing, (NativeStopPricing, TrailPricing)):
+        if isinstance(pricing, STOP_PRICINGS):
             self._add_problem(
                 path,
                 'discretion_needs_limit',
@@ -530,7 +543,7 @@ class PlanReader:
         Returns:
             bool: True when the two can go together.
         """
-        if isinstance(pricing, (NativeStopPricing, TrailPricing)):
+        if isinstance(pricing, STOP_PRICINGS):
             self._add_problem(
                 path,
                 'post_only_needs_limit',
@@ -907,10 +920,12 @@ class PlanReader:
             return self._read_follow_instrument(settings, f'{entry_path}.follow_instrument')
         if name == 'option_model':
             return self._read_option_model(settings, f'{entry_path}.option_model')
+        if name == 'stages':
+            return self._read_stages(settings, f'{entry_path}.stages')
         self._add_problem(
             entry_path,
             'unknown_pricing',
-            f'{name!r} is not a pricing a plan can use yet; the pricings available are fixed, marketable, native_stop, trail, peg, chase, follow_instrument and option_model, with the modifiers cap and discretion',
+            f'{name!r} is not a pricing a plan can use yet; the pricings available are fixed, marketable, native_stop, trail, stages, peg, chase, follow_instrument and option_model, with the modifiers cap and discretion',
         )
         return None
 
@@ -1496,24 +1511,51 @@ class PlanReader:
         return TrailsCondition(points, percent)
 
     def _read_trail(self, settings, path):
-        """Reads `trail` pricing.
+        """Reads `trail` pricing, which with `atr` trails a multiple of the recent average range.
 
         Args:
-            settings (dict): `points` or `percent`, `limit_offset`, and optionally `step_ticks`.
+            settings (dict): `points` or `percent`, `limit_offset`, and optionally `step_ticks` and `atr`.
             path (str): Where it sits in the plan.
 
         Returns:
-            TrailPricing | None: The pricing, or None when it has a problem.
+            TrailPricing | AtrTrailPricing | None: The pricing, or None when it has a problem.
         """
         problems_before = len(self.problems)
         self._refuse_unknown(
             settings,
-            ('points', 'percent', 'limit_offset', 'step_ticks'),
+            ('points', 'percent', 'limit_offset', 'step_ticks', 'atr'),
             path,
             'trail',
         )
         points, percent = self._read_distance(settings, path, 'trail')
         limit_offset = self._price(settings.get('limit_offset'), path, 'limit_offset')
+        step_ticks = self._step_ticks(settings, path)
+        atr = None
+        if 'atr' in settings:
+            atr = self._read_atr(settings['atr'], f'{path}.atr')
+            if percent is not None:
+                self._add_problem(
+                    path,
+                    'bad_setting',
+                    'a trail with atr falls back on points until enough bars have closed, so it takes points rather than percent',
+                )
+        if len(self.problems) > problems_before:
+            return None
+        if atr is not None:
+            bar_minutes, periods, multiple = atr
+            return AtrTrailPricing(points, limit_offset, step_ticks, bar_minutes, periods, multiple)
+        return TrailPricing(points, percent, limit_offset, step_ticks)
+
+    def _step_ticks(self, settings, path):
+        """Reads a stop's `step_ticks`, the smallest move worth sending.
+
+        Args:
+            settings (dict): The pricing's settings.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            int | None: The step, default 1, or None when it is not a whole number of at least one.
+        """
         step_ticks = settings.get('step_ticks', 1)
         if isinstance(step_ticks, bool) or not isinstance(step_ticks, int) or step_ticks < 1:
             self._add_problem(
@@ -1521,9 +1563,103 @@ class PlanReader:
                 'bad_setting',
                 f'step_ticks must be a whole number of ticks, at least one, not {step_ticks!r}',
             )
+            return None
+        return step_ticks
+
+    def _read_atr(self, atr, path):
+        """Reads a trail's `atr` settings.
+
+        Args:
+            atr (object): The settings as the caller wrote them: `bar_minutes` (default 5), `periods` (default 14) and `multiple` (default 2).
+            path (str): Where they sit in the plan.
+
+        Returns:
+            tuple | None: The bar minutes (float), the periods (int) and the multiple (decimal.Decimal), or None when they have a problem.
+        """
+        if not isinstance(atr, dict):
+            self._add_problem(path, 'bad_setting', 'atr is an object with bar_minutes, periods and multiple')
+            return None
+        problems_before = len(self.problems)
+        self._refuse_unknown(atr, ('bar_minutes', 'periods', 'multiple'), path, 'atr', 'setting')
+        bar_minutes = self._seconds(atr.get('bar_minutes', 5), path, 'bar_minutes')
+        periods = self._whole_number(atr.get('periods', 14), path, 'periods', 2, None)
+        multiple = self._price(atr.get('multiple', 2), path, 'multiple')
         if len(self.problems) > problems_before:
             return None
-        return TrailPricing(points, percent, limit_offset, step_ticks)
+        return bar_minutes, periods, multiple
+
+    def _read_stages(self, settings, path):
+        """Reads `stages` pricing: a stop moved by profit milestones.
+
+        Args:
+            settings (dict): `entry_price`, `stop_price`, `limit_offset` and `rules`, required, and `step_ticks`, optional.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            StagesPricing | None: The pricing, or None when it has a problem.
+        """
+        problems_before = len(self.problems)
+        self._refuse_unknown(settings, ('entry_price', 'stop_price', 'limit_offset', 'step_ticks', 'rules'), path, 'stages')
+        entry_price = self._price(settings.get('entry_price'), path, 'entry_price')
+        stop_price = self._price(settings.get('stop_price'), path, 'stop_price')
+        limit_offset = self._price(settings.get('limit_offset'), path, 'limit_offset')
+        step_ticks = self._step_ticks(settings, path)
+        rules = self._read_rules(settings.get('rules'), f'{path}.rules')
+        if len(self.problems) > problems_before:
+            return None
+        return StagesPricing(entry_price, stop_price, limit_offset, step_ticks, rules)
+
+    def _read_rules(self, given, path):
+        """Reads a stepped stop's milestones, with today's rules.
+
+        Args:
+            given (object): The list as the caller wrote it.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            list | None: The rules, each with `gain` and `stop_at_gain` or `trail_points` as `decimal.Decimal`, or None when they have a problem.
+        """
+        if not isinstance(given, list) or not given or len(given) > MOST_RULES:
+            self._add_problem(path, 'bad_setting', f'rules is a list of 1 to {MOST_RULES} milestones')
+            return None
+        rules = []
+        previous_gain = decimal.Decimal(0)
+        for index, rule in enumerate(given):
+            rule_path = f'{path}.{index}'
+            if not isinstance(rule, dict):
+                self._add_problem(rule_path, 'bad_setting', 'a rule is an object with gain and stop_at_gain or trail_points')
+                return None
+            self._refuse_unknown(rule, ('gain', 'stop_at_gain', 'trail_points'), rule_path, 'rule', 'setting')
+            gain = self._price(rule.get('gain'), rule_path, 'gain')
+            if gain is None:
+                return None
+            if gain <= previous_gain:
+                self._add_problem(rule_path, 'bad_setting', f'the gain of {gain} must be larger than the rule before it')
+                return None
+            has_stop = rule.get('stop_at_gain') is not None
+            has_trail = rule.get('trail_points') is not None
+            if has_stop == has_trail:
+                self._add_problem(rule_path, 'bad_setting', 'a rule takes exactly one of stop_at_gain and trail_points')
+                return None
+            checked = {
+                'gain': gain,
+            }
+            if has_trail:
+                if index != len(given) - 1:
+                    self._add_problem(rule_path, 'bad_setting', 'this rule switches to trailing, so it must be the last rule')
+                    return None
+                checked['trail_points'] = self._price(rule['trail_points'], rule_path, 'trail_points')
+            else:
+                stop_at_gain = self._number(rule['stop_at_gain'], rule_path, 'stop_at_gain')
+                if stop_at_gain is None:
+                    return None
+                if stop_at_gain >= gain:
+                    self._add_problem(rule_path, 'bad_setting', f'the stop at {stop_at_gain} would be at or past the gain of {gain} that moves it, where it would fire at once')
+                    return None
+                checked['stop_at_gain'] = stop_at_gain
+            rules.append(checked)
+            previous_gain = gain
+        return rules
 
     def _price(self, value, path, name):
         """Reads a number that must be above zero.

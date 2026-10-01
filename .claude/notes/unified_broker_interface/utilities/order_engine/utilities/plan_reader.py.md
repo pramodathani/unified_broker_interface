@@ -29,3 +29,7 @@ A pricing list now holds at most one setter and at most one `cap`, and across pr
 ## Stage 4b (2026-10-01)
 
 `follow_instrument` and `option_model` are setters and `discretion` a second modifier. Discretion is refused on a stop and with any execution other than `all_at_once`. Whether the followed instrument is the order's own, and whether an option is an option, need the body and the catalogue, so they are checked by the pricing when the plan is placed rather than here.
+
+## Stage 4c (2026-10-01)
+
+`STOP_PRICINGS` lists every pricing that rests a stop, so the rules that refuse a stop with slicing, post-only or discretion name them in one place. `trail` takes `atr`, and `stages` reads today's stepped stop's rules, refusing them with a path to the rule rather than a rule number.

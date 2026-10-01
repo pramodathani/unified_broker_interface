@@ -1,0 +1,9 @@
+Reads quotes: True, moves: True
+Sent as: {'quantity': 10, 'order_type': 'SL', 'trigger_price': '990.00', 'price': '988.00'}
+Last 1025.0, gain 25.0: move (Decimal('998.00'), Decimal('1000.00'), 'milestone 1 moves the stop to 1000.00')
+Last 1045.0, gain 45.0: move (Decimal('1013.00'), Decimal('1015.00'), 'milestone 2 moves the stop to 1015.00')
+Last 1030.0, gain 30.0: move None
+Last 1070.0, gain 70.0: move (Decimal('1043.00'), Decimal('1045.00'), 'the market reached 1070.00, so the stop follows to 1045.00')
+Last 1080.0, gain 80.0: move (Decimal('1053.00'), Decimal('1055.00'), 'the market reached 1080.00, so the stop follows to 1055.00')
+Memory: {'rules_applied': 3, 'trail_points': '25', 'best': '1080.00'}
+As a dry run shows it: {'stages': {'entry_price': '1000', 'stop_price': '990', 'limit_offset': '2', 'step_ticks': 1, 'rules': [{'gain': '20', 'stop_at_gain': '0'}, {'gain': '40', 'stop_at_gain': '15'}, {'gain': '60', 'trail_points': '25'}]}}

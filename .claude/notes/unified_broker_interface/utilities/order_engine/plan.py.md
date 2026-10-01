@@ -69,3 +69,7 @@ The freeze quantity is not an execution yet. Each broker publishes its freeze li
 ## Stage 4b: following another instrument and discretion (2026-10-01)
 
 Every order part's pricing memory is readied when the plan is placed through `OrderPart.prepared_pricing_memory`, so the option model's strike and expiry are read once and recorded with the received event; a refusal there answers before anything is recorded. A part is marked `moves` when its pricing moves or it has discretion. `quotes_now` reads every watched instrument as well as the order's own, so an order priced from another instrument is placed at once.
+
+## Stage 4c: average-range trail and stepped stop (2026-10-01)
+
+Nothing in the plan order changed for this step; `AtrTrailPricing` and `StagesPricing` are pricings that move, and every stop pricing is listed once as `STOP_PRICINGS` in the reader.

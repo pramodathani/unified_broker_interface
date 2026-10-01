@@ -40,3 +40,7 @@ volatility: {'pricing': [{'option_model': {'instrument_id': '11111111-1111-5111-
   problems: []
 discretionary: {'pricing': [{'discretion': {'points': 0.25, 'quantity': 4}}]}
   problems: []
+atr_trail: {'pricing': [{'trail': {'limit_offset': 2, 'step_ticks': 1, 'points': 10, 'atr': {'periods': 14, 'multiple': 2}}}], 'side': 'protect'}
+  problems: []
+stepped_stop: {'side': 'protect', 'pricing': [{'stages': {'entry_price': 1000, 'stop_price': 990, 'limit_offset': 2, 'rules': [{'gain': 20, 'stop_at_gain': 0}]}}]}
+  problems: []

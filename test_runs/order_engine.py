@@ -4231,6 +4231,203 @@ class OrderEngineSuite:
             ),
         ]
 
+    def run_plan_stage_stop_checks(self):
+        """Runs plans whose stop trails the recent average range or moves through profit milestones, each beside the type it stands for.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        accepted = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        steady = self.book_at(1000.00, 1000.05)
+        stop_book = {
+            'order_type': 'SL',
+            'trigger_price': 990.0,
+        }
+        stepped = {
+            'order': {
+                'presets': [
+                    {
+                        'stepped_stop': {
+                            'entry_price': 1000,
+                            'stop_price': 990,
+                            'stop_limit_offset': 2,
+                            'rules': [
+                                {
+                                    'gain': 20,
+                                    'stop_at_gain': 0,
+                                },
+                                {
+                                    'gain': 40,
+                                    'stop_at_gain': 15,
+                                },
+                                {
+                                    'gain': 60,
+                                    'trail_points': 25,
+                                },
+                            ],
+                        },
+                    },
+                ],
+            },
+        }
+        stepped_steps = [
+            {'quote': steady, 'at': 0},
+            {'quote': self.book_at(1024.95, 1025.00), 'at': 1},
+            {'quote': self.book_at(1044.95, 1045.00), 'at': 2},
+            {'quote': self.book_at(1029.95, 1030.00), 'at': 3},
+            {'quote': self.book_at(1069.95, 1070.00), 'at': 4},
+            {'quote': self.book_at(1079.95, 1080.00), 'at': 5},
+        ]
+        return [
+            self.plan_price_result(
+                'a_plan_average_range_trail_uses_its_fixed_fallback_until_it_has_bars',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'atr_trail': {
+                                    'trail_points': 10,
+                                    'stop_limit_offset': 2,
+                                    'bar_minutes': 1,
+                                    'periods': 2,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1020.00, 1020.05), 'at': 1},
+                ],
+                accepted,
+                positions=10,
+                book_overrides={
+                    'order_type': 'SL',
+                    'trigger_price': 990.05,
+                },
+            ),
+            self.plan_price_result(
+                'a_plan_average_range_trail_widens_once_enough_bars_have_closed',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'atr_trail': {
+                                    'trail_points': 10,
+                                    'stop_limit_offset': 2,
+                                    'bar_minutes': 1,
+                                    'periods': 2,
+                                    'atr_multiple': 1,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1040.00, 1040.05), 'at': 10},
+                    {'quote': self.book_at(1010.00, 1010.05), 'at': 70},
+                    {'quote': self.book_at(1060.00, 1060.05), 'at': 130},
+                    {'quote': self.book_at(1080.00, 1080.05), 'at': 190},
+                ],
+                accepted,
+                positions=10,
+                book_overrides={
+                    'order_type': 'SL',
+                    'trigger_price': 990.05,
+                },
+            ),
+            self.plan_price_result(
+                'a_plan_stepped_stop_moves_at_each_milestone_and_then_trails',
+                stepped,
+                stepped_steps,
+                accepted,
+                positions=10,
+                book_overrides=stop_book,
+            ),
+            self.plan_price_result(
+                'a_plan_stepped_stop_keeps_its_milestones_across_a_restart',
+                stepped,
+                stepped_steps,
+                accepted,
+                positions=10,
+                book_overrides=stop_book,
+                restart_between_ticks=True,
+            ),
+            self.plan_price_result(
+                'a_plan_stepped_stop_that_jumps_past_every_milestone_starts_trailing',
+                stepped,
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1064.95, 1065.00), 'at': 1},
+                ],
+                accepted,
+                positions=10,
+                book_overrides=stop_book,
+            ),
+            self.plan_price_result(
+                'a_plan_stepped_stop_with_a_trail_before_its_last_rule_is_refused',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'stepped_stop': {
+                                    'entry_price': 1000,
+                                    'stop_price': 990,
+                                    'stop_limit_offset': 2,
+                                    'rules': [
+                                        {
+                                            'gain': 20,
+                                            'trail_points': 10,
+                                        },
+                                        {
+                                            'gain': 40,
+                                            'stop_at_gain': 15,
+                                        },
+                                    ],
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+                positions=10,
+            ),
+            self.plan_price_result(
+                'a_plan_stepped_stop_rule_that_would_fire_at_once_is_refused',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'stepped_stop': {
+                                    'entry_price': 1000,
+                                    'stop_price': 990,
+                                    'stop_limit_offset': 2,
+                                    'rules': [
+                                        {
+                                            'gain': 20,
+                                            'stop_at_gain': 20,
+                                        },
+                                    ],
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+                positions=10,
+            ),
+        ]
+
     def run_reaction_checks(self):
         """Runs the linked order types through a fill, which is the only way they do anything.
 
@@ -7933,6 +8130,7 @@ class OrderEngineSuite:
             results.extend(self.run_plan_market_execution_checks())
             results.extend(self.run_plan_moving_price_checks())
             results.extend(self.run_plan_followed_price_checks())
+            results.extend(self.run_plan_stage_stop_checks())
             results.extend(self.run_clock_checks())
             results.extend(self.run_price_checks())
             results.extend(self.run_wiring_checks())

@@ -125,6 +125,23 @@ class WhatEachPresetStandsForExample:
                 'discretion_points': 0.25,
                 'discretion_quantity': 4,
             },
+            'atr_trail': {
+                'trail_points': 10,
+                'stop_limit_offset': 2,
+                'periods': 14,
+                'atr_multiple': 2,
+            },
+            'stepped_stop': {
+                'entry_price': 1000,
+                'stop_price': 990,
+                'stop_limit_offset': 2,
+                'rules': [
+                    {
+                        'gain': 20,
+                        'stop_at_gain': 0,
+                    },
+                ],
+            },
         }
         for name in PRESET_NAMES:
             if name in JOIN_PRESET_NAMES:

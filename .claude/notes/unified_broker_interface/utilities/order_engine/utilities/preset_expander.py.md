@@ -27,3 +27,7 @@ The backstop is a second order resting beside the engine-side stop, cancelled be
 ## Stage 4b (2026-10-01)
 
 `underlying_peg` and `volatility` keep their types' names, `watch_instrument_id`, `lowest_price` and `highest_price`, and map them to the pricing's `instrument_id`, `lowest` and `highest`. `discretionary` maps `discretion_points` and `discretion_quantity` to the modifier's `points` and `quantity`.
+
+## Stage 4c (2026-10-01)
+
+`_trailing_slots` holds what the trailing stop, the trailing entry and the average-range trail share, so `atr_trail` adds only its `atr` settings. `stepped_stop` does not take `trail_points`, `trail_percent` or `activate_at`, as today's type refuses them.

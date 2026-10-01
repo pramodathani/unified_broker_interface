@@ -47,6 +47,8 @@ PRESET_NAMES = (
     'underlying_peg',
     'volatility',
     'discretionary',
+    'atr_trail',
+    'stepped_stop',
     'oto',
     'oco',
     'bracket',
@@ -58,6 +60,22 @@ TRAILING_SETTINGS = (
     'stop_limit_offset',
     'step_ticks',
     'activate_at',
+)
+ATR_TRAIL_SETTINGS = (
+    'trail_points',
+    'stop_limit_offset',
+    'step_ticks',
+    'activate_at',
+    'bar_minutes',
+    'periods',
+    'atr_multiple',
+)
+STEPPED_STOP_SETTINGS = (
+    'entry_price',
+    'stop_price',
+    'stop_limit_offset',
+    'step_ticks',
+    'rules',
 )
 JOIN_PRESET_NAMES = (
     'oto',
@@ -151,6 +169,10 @@ class PresetExpander:
             return self._volatility(settings, path)
         if name == 'discretionary':
             return self._discretionary(settings, path)
+        if name == 'atr_trail':
+            return self._atr_trail(settings, path)
+        if name == 'stepped_stop':
+            return self._stepped_stop(settings, path)
         return self._hidden_stop(settings, path)
 
     def is_join(self, name, settings):
@@ -694,6 +716,19 @@ class PresetExpander:
             dict: `trail` pricing, the `protect` side for a trailing stop, and a `price_crosses` trigger when it activates at a level.
         """
         self._refuse_unknown(settings, TRAILING_SETTINGS, path, name)
+        return self._trailing_slots(settings, path, name == 'trailing_stop')
+
+    def _trailing_slots(self, settings, path, protects):
+        """The slot values of a trailing stop or a trailing entry, once its settings have been checked.
+
+        Args:
+            settings (dict): `trail_points` or `trail_percent`, `stop_limit_offset`, and optionally `step_ticks` and `activate_at`.
+            path (str): The preset's path.
+            protects (bool): True for a stop protecting a position, False for a trailing entry.
+
+        Returns:
+            dict: `trail` pricing, the `protect` side when it protects, and a `price_crosses` trigger when it activates at a level.
+        """
         trail = {
             'limit_offset': settings.get('stop_limit_offset'),
             'step_ticks': settings.get('step_ticks', 1),
@@ -709,14 +744,14 @@ class PresetExpander:
                 },
             ],
         }
-        if name == 'trailing_stop':
+        if protects:
             slots['side'] = 'protect'
         if 'activate_at' not in settings:
             return slots
         activation = {
             'level': settings['activate_at'],
         }
-        if name == 'trailing_stop':
+        if protects:
             if self.opening_side == 'BUY':
                 activation['direction'] = 'at_or_above'
             elif self.opening_side == 'SELL':
@@ -731,6 +766,56 @@ class PresetExpander:
             'price_crosses': activation,
         }
         return slots
+
+    def _atr_trail(self, settings, path):
+        """A trailing stop that sits a multiple of the recent average range behind the market, and `trail_points` behind until enough bars have closed.
+
+        Args:
+            settings (dict): `trail_points` and `stop_limit_offset`, and optionally `step_ticks`, `activate_at`, `bar_minutes`, `periods` and `atr_multiple`.
+            path (str): The preset's path.
+
+        Returns:
+            dict: `trail` pricing with `atr`, the `protect` side, and a trigger when it activates at a level.
+        """
+        self._refuse_unknown(settings, ATR_TRAIL_SETTINGS, path, 'atr_trail')
+        slots = self._trailing_slots(settings, path, True)
+        atr = {}
+        if 'bar_minutes' in settings:
+            atr['bar_minutes'] = settings['bar_minutes']
+        if 'periods' in settings:
+            atr['periods'] = settings['periods']
+        if 'atr_multiple' in settings:
+            atr['multiple'] = settings['atr_multiple']
+        slots['pricing'][0]['trail']['atr'] = atr
+        return slots
+
+    def _stepped_stop(self, settings, path):
+        """A stop protecting a position, moved by a table of profit milestones.
+
+        Args:
+            settings (dict): `entry_price`, `stop_price`, `stop_limit_offset` and `rules`, and optionally `step_ticks`.
+            path (str): The preset's path.
+
+        Returns:
+            dict: The `protect` side and `stages` pricing.
+        """
+        self._refuse_unknown(settings, STEPPED_STOP_SETTINGS, path, 'stepped_stop')
+        stages = {
+            'entry_price': settings.get('entry_price'),
+            'stop_price': settings.get('stop_price'),
+            'limit_offset': settings.get('stop_limit_offset'),
+            'rules': settings.get('rules'),
+        }
+        if 'step_ticks' in settings:
+            stages['step_ticks'] = settings['step_ticks']
+        return {
+            'side': 'protect',
+            'pricing': [
+                {
+                    'stages': stages,
+                },
+            ],
+        }
 
     def _iceberg(self, settings, path):
         """Shows only part of the order at a time.
