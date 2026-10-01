@@ -27,6 +27,7 @@ WATCH_FIELDS = {
 DEFAULT_BUFFER_TICKS = 2
 KEPT_WHOLE_PRESETS = (
     'grid',
+    'two_sided_quote',
 )
 PRESET_NAMES = (
     'simple',
@@ -73,6 +74,7 @@ PRESET_NAMES = (
     'opening_auction',
     'virtual_limit',
     'grid',
+    'two_sided_quote',
     'oto',
     'oco',
     'bracket',

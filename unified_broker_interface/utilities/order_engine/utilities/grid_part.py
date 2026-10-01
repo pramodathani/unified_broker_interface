@@ -171,24 +171,6 @@ class GridPart(WholePart):
                 placed.append((self.path, body, status))
         return placed
 
-    def inventory(self, parent):
-        """The net position the grid's own fills have built.
-
-        Args:
-            parent (ParentOrder): The plan order's parent.
-
-        Returns:
-            int: Positive when long.
-        """
-        net = 0
-        for leg in self.own_legs(parent):
-            filled = leg.filled_quantity or 0
-            if leg.transaction_type == 'BUY':
-                net = net + filled
-            else:
-                net = net - filled
-        return net
-
     def stop_adding(self, plan_order):
         """Cancels the resting rungs that would make the position bigger, once it has reached its cap.
 

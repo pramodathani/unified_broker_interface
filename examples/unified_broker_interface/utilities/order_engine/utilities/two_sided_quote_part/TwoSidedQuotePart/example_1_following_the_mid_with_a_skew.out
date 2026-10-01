@@ -1,0 +1,8 @@
+problems [], needs prices True, moves on ticks True
+memory readied: {}
+placed: [('place', 'BUY', 5, '999.00'), ('place', 'SELL', 5, '1001.00')]
+mid moves to 1010, acted: True [('move', 'BUY', '1009.00', 'the fair price moved, so the bid goes to 1009.00'), ('move', 'SELL', '1011.00', 'the fair price moved, so the ask goes to 1011.00')]
+again at 1010, acted: False
+the bid fills; the ask still rests: 1011.0 None
+where they belong now: {'bid': Decimal('1008.90'), 'ask': Decimal('1010.90')}
+next tick: [('place', 'BUY', 5, '1008.90'), ('move', 'SELL', '1010.90', 'the fair price moved, so the ask goes to 1010.90')]

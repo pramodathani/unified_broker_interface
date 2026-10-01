@@ -4,5 +4,7 @@ memory after: {'centre': '1000.00'}
 placed parent-1:1 as root: accepted 200
 placed parent-1:2 as root: accepted 200
 requests: [('place', 'BUY', 5, '995.00', 'mine'), ('place', 'SELL', 3, '1005.00', 'mine')]
+net position before any fill: 0
+net position once the sell of three fills: -3
 messages: ['the part remembers its centre']
 dry run: {'order': {'path': 'root', 'presets': ['grid'], 'kept_whole': {'grid': {'levels': 1}}}}

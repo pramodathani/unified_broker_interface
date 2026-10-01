@@ -176,6 +176,10 @@ class WhatEachPresetStandsForExample:
                 'step_points': 5,
                 'most_inventory': 20,
             },
+            'two_sided_quote': {
+                'half_spread_points': 1,
+                'most_inventory': 30,
+            },
             'account_conditional': {
                 'account_field': 'day_pnl',
                 'account_level': -5000,

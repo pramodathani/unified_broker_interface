@@ -79,6 +79,24 @@ class WholePart(OrderPart):
         record['own_memory'] = memory
         plan_order.set_part_record(self.path, record, message)
 
+    def inventory(self, parent):
+        """The net position this part's own fills have built.
+
+        Args:
+            parent (ParentOrder): The plan order's parent.
+
+        Returns:
+            int: Positive when long.
+        """
+        net = 0
+        for leg in self.own_legs(parent):
+            filled = leg.filled_quantity or 0
+            if leg.transaction_type == 'BUY':
+                net = net + filled
+            else:
+                net = net - filled
+        return net
+
     def limit_order(self, plan_order, side, price, quantity=None):
         """A limit order of this part's own, on its instrument, with the body's other values.
 

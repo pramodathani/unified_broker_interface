@@ -154,6 +154,9 @@ from unified_broker_interface.utilities.order_engine.utilities.trails_condition 
 from unified_broker_interface.utilities.order_engine.utilities.twap_execution import (
     TwapExecution,
 )
+from unified_broker_interface.utilities.order_engine.utilities.two_sided_quote_part import (
+    TwoSidedQuotePart,
+)
 from unified_broker_interface.utilities.order_engine.utilities.vwap_execution import (
     VwapExecution,
 )
@@ -245,6 +248,7 @@ SIDES = (
 )
 WHOLE_PART_CLASSES = {
     'grid': GridPart,
+    'two_sided_quote': TwoSidedQuotePart,
 }
 POSITION_SETTINGS = (
     'product',

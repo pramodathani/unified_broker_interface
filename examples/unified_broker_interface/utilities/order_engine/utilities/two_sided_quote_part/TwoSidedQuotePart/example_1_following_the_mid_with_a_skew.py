@@ -1,10 +1,10 @@
-"""Shows what every part kept whole shares: memory kept in its part record, and limit orders of its own placed at the plan's broker.
+"""Keeps a bid and an ask a rupee either side of the mid, follows the mid when it moves, and skews both once the bid fills.
 
-`WholePart.remember` writes the part's memory into its part record with a message, so a restart replays it, and `own_memory` reads it back. `limit_order` builds a limit on the part's instrument from the body, at a side and price of the part's choosing, and `place_order` sends it with the part's path as the leg's role. `inventory` is the net position the part's own fills have built, `settings_problems` finds nothing for the base class, and `expanded` is how a dry run shows the part. A stand-in plays the plan order, so nothing leaves the machine.
+`TwoSidedQuotePart.start` places the bid and the ask around the fair price; `move`, called on every tick, re-prices a quote that is a whole step out of place, quotes a filled side again, and moves both by `skew_ticks` for every order's worth held. `wanted_prices` is where they belong for a given position, `live_quote` finds the resting order on one side, and `needs_prices` and `moves_on_ticks` are why the plan reads quotes and calls `move` for it. A stand-in plays the plan order, so nothing leaves the machine.
 
 Run it from the project root:
 
-    python examples/unified_broker_interface/utilities/order_engine/utilities/whole_part/WholePart/example_1_memory_and_its_own_orders.py
+    python examples/unified_broker_interface/utilities/order_engine/utilities/two_sided_quote_part/TwoSidedQuotePart/example_1_following_the_mid_with_a_skew.py
 """
 
 import copy
@@ -19,13 +19,52 @@ from unified_broker_interface.utilities.order_engine.utilities.order_leg import 
 from unified_broker_interface.utilities.order_engine.utilities.parent_order import (
     ParentOrder,
 )
-from unified_broker_interface.utilities.order_engine.utilities.whole_part import (
-    WholePart,
+from unified_broker_interface.utilities.order_engine.utilities.two_sided_quote_part import (
+    TwoSidedQuotePart,
 )
 
 
+def book(mid):
+    """A quote whose best bid and offer sit a tick either side of a middle price.
+
+    Args:
+        mid (float | None): The middle, or None for a quote with an empty book.
+
+    Returns:
+        dict: The quote.
+    """
+    if mid is None:
+        return {
+            'depth': {
+                'buy': [],
+                'sell': [],
+            },
+        }
+    return {
+        'last_price': mid,
+        'depth': {
+            'buy': [
+                {
+                    'price': round(mid - 0.05, 2),
+                    'quantity': 100,
+                },
+            ],
+            'sell': [
+                {
+                    'price': round(mid + 0.05, 2),
+                    'quantity': 100,
+                },
+            ],
+        },
+    }
+
+
 class StandInOrder(dict):
-    """Stands in for a validated order: the body itself, which also answers the tick size the brokers agree on."""
+    """Stands in for a validated order: the body itself, with its quantity as a number, which also answers the tick size the brokers agree on.
+
+    Attributes:
+        quantity (int): The quantity.
+    """
 
     def agreed_tick_size(self, handles):
         """The tick size every broker agrees on, which is RELIANCE's.
@@ -124,9 +163,7 @@ class StandInPlanOrder:
         self.parent.parameters = {
             'parts': {},
         }
-        quote = {
-            'last_price': last_price,
-        }
+        quote = book(last_price)
         self.placement = StandInPlacement(quote)
         self.requests = []
         self.messages = []
@@ -166,7 +203,9 @@ class StandInPlanOrder:
         Returns:
             StandInOrder: The same body.
         """
-        return StandInOrder(body)
+        order = StandInOrder(body)
+        order.quantity = int(body['quantity'])
+        return order
 
     def concrete_order(self, order):
         """Answers with the order itself, since it names no references.
@@ -208,7 +247,7 @@ class StandInPlanOrder:
         leg.quantity = order['quantity']
         leg.price = float(order['price'])
         self.parent.legs.append(leg)
-        self.requests.append(('place', leg.transaction_type, leg.quantity, order['price'], order.get('tag')))
+        self.requests.append(('place', leg.transaction_type, leg.quantity, order['price']))
         return {
             'outcome': 'accepted',
             'order_id': leg.broker_order_id,
@@ -229,6 +268,14 @@ class StandInPlanOrder:
         leg.state = 'cancelled'
         return True
 
+    def tick_size(self):
+        """RELIANCE's tick size.
+
+        Returns:
+            decimal.Decimal: 0.05.
+        """
+        return decimal.Decimal('0.05')
+
     def view(self, quotes, instrument_id=None):
         """A quote as a market view, with RELIANCE's tick size of 0.05.
 
@@ -241,6 +288,23 @@ class StandInPlanOrder:
         """
         del instrument_id
         return MarketView(quotes.get('RELIANCE'), decimal.Decimal('0.05'))
+
+    def reprice_leg(self, leg, price, trigger_price, reason):
+        """Moves a leg's limit price, as the broker would once it accepts the change.
+
+        Args:
+            leg (OrderLeg): The leg.
+            price (decimal.Decimal): Its new limit price.
+            trigger_price (decimal.Decimal | None): Unused.
+            reason (str): Why.
+
+        Returns:
+            bool: True, since the change is accepted.
+        """
+        del trigger_price
+        self.requests.append(('move', leg.transaction_type, str(price), reason))
+        leg.price = float(price)
+        return True
 
     def fill(self, number):
         """Fills one leg completely, as an order update would.
@@ -256,41 +320,44 @@ class StandInPlanOrder:
         leg.state = 'filled'
 
 
-class MemoryAndItsOwnOrdersExample:
-    """Remembers, places two orders and describes the part."""
+class FollowingTheMidWithASkewExample:
+    """Quotes, follows the mid, and skews after a fill."""
 
     def run(self):
-        """Prints the memory, the requests and the dry run's view.
+        """Prints the requests after each step.
 
         Returns:
             None: This method returns nothing.
         """
         plan_order = StandInPlanOrder(1000.0)
-        part = WholePart('root', 'grid', {
-            'levels': 1,
-        })
-        print('problems:', part.settings_problems())
-        print('memory before:', part.own_memory(plan_order))
-        part.remember(plan_order, {
-            'centre': '1000.00',
-        }, 'the part remembers its centre')
-        print('memory after:', part.own_memory(plan_order))
-        buy = part.limit_order(plan_order, 'BUY', decimal.Decimal('995.00'))
-        sell = part.limit_order(plan_order, 'SELL', decimal.Decimal('1005.00'), 3)
-        orders = [
-            buy,
-            sell,
-        ]
-        for order in orders:
-            answer, status, leg = part.place_order(plan_order, order, None)
-            print(f'placed {leg.leg_id} as {leg.role}: {answer["outcome"]} {status}')
-        print('requests:', plan_order.requests)
-        print('net position before any fill:', part.inventory(plan_order.parent))
-        plan_order.fill(2)
-        print('net position once the sell of three fills:', part.inventory(plan_order.parent))
-        print('messages:', plan_order.messages)
-        print('dry run:', part.expanded())
+        part = TwoSidedQuotePart(
+            'root',
+            'two_sided_quote',
+            {
+                'half_spread_points': 1,
+                'skew_ticks': 2,
+                'most_inventory': 30,
+            },
+        )
+        print(f'problems {part.settings_problems()}, needs prices {part.needs_prices()}, moves on ticks {part.moves_on_ticks()}')
+        print('memory readied:', part.prepared_own_memory(plan_order))
+        quotes = {
+            'RELIANCE': book(1000.0),
+        }
+        part.start(plan_order, None, None, quotes)
+        print('placed:', plan_order.requests)
+        quotes = {
+            'RELIANCE': book(1010.0),
+        }
+        print('mid moves to 1010, acted:', part.move(plan_order, quotes, 1.0), plan_order.requests[2:])
+        print('again at 1010, acted:', part.move(plan_order, quotes, 2.0))
+        plan_order.fill(1)
+        print('the bid fills; the ask still rests:', part.live_quote(plan_order.parent, 'SELL').price, part.live_quote(plan_order.parent, 'BUY'))
+        view = MarketView(book(1010.0), decimal.Decimal('0.05'))
+        print('where they belong now:', part.wanted_prices(view, decimal.Decimal('0.05'), 5, 5))
+        part.move(plan_order, quotes, 3.0)
+        print('next tick:', plan_order.requests[4:])
 
 
 if __name__ == '__main__':
-    MemoryAndItsOwnOrdersExample().run()
+    FollowingTheMidWithASkewExample().run()

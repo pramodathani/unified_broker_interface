@@ -74,3 +74,5 @@ virtual_limit: {'trigger': {'limit_marketable': {}}, 'venue': [{'session': 'pape
   problems: []
 grid: {'whole': {'name': 'grid', 'settings': {'levels': 2, 'step_points': 5, 'most_inventory': 20}}}
   problems: []
+two_sided_quote: {'whole': {'name': 'two_sided_quote', 'settings': {'half_spread_points': 1, 'most_inventory': 30}}}
+  problems: []

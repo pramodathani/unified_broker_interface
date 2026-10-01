@@ -15,3 +15,7 @@ Every leg a part places carries the part's path as its role, so a kept-whole par
 ## Settings are checked by the part
 
 Each type's settings are checked by its own class in `settings_problems`, which the reader turns into `bad_setting` problems, rather than in the preset expander. That keeps every type's rules in one file, as the user's style asks.
+
+## `inventory` (2026-10-02)
+
+The grid and the two-sided quote both measure the net position their own fills have built, in the same way, so `inventory` moved here from `GridPart` when the quote was ported.

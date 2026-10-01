@@ -2937,6 +2937,27 @@ class OrderEngineSuite:
                 },
             }
 
+        numbered = dict(accepted, number_orders=True)
+
+        def quote(settings):
+            """A plan of one two-sided quote.
+
+            Args:
+                settings (dict): The quote's settings.
+
+            Returns:
+                dict: The plan.
+            """
+            return {
+                'order': {
+                    'presets': [
+                        {
+                            'two_sided_quote': settings,
+                        },
+                    ],
+                },
+            }
+
         capped_at_twenty = {
             'levels': 2,
             'step_points': 5,
@@ -3023,6 +3044,92 @@ class OrderEngineSuite:
                 ],
                 accepted,
                 restart_between_ticks=True,
+            ),
+            self.plan_price_result(
+                'a_plan_two_sided_quote_follows_the_mid',
+                quote({
+                    'half_spread_points': 1,
+                    'most_inventory': 30,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1010.00, 1010.05), 'at': 1},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_filled_bid_skews_the_ask_and_stops_buying_at_the_cap',
+                quote({
+                    'half_spread_points': 1,
+                    'skew_ticks': 2,
+                    'most_inventory': 10,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {
+                        'quote': steady,
+                        'at': 1,
+                        'updates': [
+                            self.update('26091500000101', 'COMPLETE', 10),
+                        ],
+                    },
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_two_sided_quote_without_a_spread_is_refused',
+                quote({
+                    'most_inventory': 10,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_two_sided_quote_stops_when_its_join_cancels_it',
+                {
+                    'either': {
+                        'sibling_rule': 'cancel',
+                        'children': [
+                            quote({
+                                'half_spread_points': 1,
+                                'most_inventory': 30,
+                            }),
+                            {
+                                'order': {
+                                    'presets': [
+                                        {
+                                            'market_if_touched': {
+                                                'trigger_price': 995,
+                                            },
+                                        },
+                                    ],
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                    {
+                        'quote': self.book_at(994.90, 994.95),
+                        'at': 2,
+                        'updates': [
+                            self.update('26091500000103', 'COMPLETE', 10),
+                        ],
+                    },
+                    {
+                        'quote': self.book_at(994.90, 994.95),
+                        'at': 3,
+                        'updates': [
+                            self.update('26091500000101', 'CANCELLED', 0),
+                            self.update('26091500000102', 'CANCELLED', 0),
+                        ],
+                    },
+                ],
+                numbered,
             ),
             self.plan_price_result(
                 'a_plan_grid_beside_another_preset_is_refused',
