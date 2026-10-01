@@ -1,0 +1,7 @@
+venue: {'session': 'pre_open', 'at_time': '09:00:30'}
+nse_equities LIMIT: taken until 09:10:00
+nse_equities MARKET: taken until 09:05:00
+bse_exchange_traded_funds LIMIT: taken until 09:10:00
+nse_equity_index_futures LIMIT: taken until 09:07:00
+nse_equity_index_options LIMIT: refused (nse_equity_index_options has no pre-open auction; a scheduled order at 09:15 is the nearest there is)
+nse_equities SL: refused (the pre-open takes only LIMIT and MARKET orders, not SL)

@@ -1,5 +1,6 @@
 """Reading a caller's plan into the parts that run it, and every problem that stops it running."""
 
+import datetime
 import decimal
 
 from unified_broker_interface.utilities.order_engine.utilities.account_condition import (
@@ -91,6 +92,9 @@ from unified_broker_interface.utilities.order_engine.utilities.peg_pricing impor
 from unified_broker_interface.utilities.order_engine.utilities.position_quantity import (
     PRODUCTS,
     PositionQuantity,
+)
+from unified_broker_interface.utilities.order_engine.utilities.pre_open_venue import (
+    PreOpenVenue,
 )
 from unified_broker_interface.utilities.order_engine.utilities.post_only_guard import (
     ON_CROSSING,
@@ -203,6 +207,7 @@ ORDER_SETTINGS = (
     'execution',
     'guards',
     'lifetime',
+    'venue',
     'instrument_id',
     'quantity',
     'transaction_type',
@@ -675,7 +680,7 @@ class PlanReader:
         sources = self._preset_sources(order.get('presets', []), path)
         overrides = self._read_overrides(order, path)
         own = {}
-        for slot in ('trigger', 'side', 'pricing', 'execution', 'guards', 'lifetime'):
+        for slot in ('trigger', 'side', 'pricing', 'execution', 'guards', 'lifetime', 'venue'):
             if slot in order:
                 own[slot] = order[slot]
         if isinstance(order.get('quantity'), dict):
@@ -701,6 +706,7 @@ class PlanReader:
         post_only_path = None
         lifetime = None
         lifetime_path = None
+        venue = None
         execution = None
         execution_path = None
         for slots, source_path in sources:
@@ -750,6 +756,10 @@ class PlanReader:
                             )
                         discretion = read_discretion
                         discretion_path = f'{source_path}.pricing'
+            if 'venue' in slots:
+                read_venue = self._read_venue_list(slots['venue'], f'{source_path}.venue')
+                if read_venue is not None:
+                    venue = read_venue
             if 'lifetime' in slots:
                 read_lifetime = self._read_lifetime_list(
                     slots['lifetime'],
@@ -799,6 +809,11 @@ class PlanReader:
             trigger = conditions[0]
         elif conditions:
             trigger = ConditionGroup('all', conditions)
+        if venue is not None:
+            if trigger is not None:
+                self._add_problem(path, 'pre_open_sets_its_time', 'an order in the pre-open is sent at the venue\'s at_time, so it takes no trigger of its own')
+                return None
+            trigger = TimeCondition('time_from', venue.at_time)
         if pricing is None:
             pricing = FixedPricing(None, None)
         if execution is None:
@@ -831,6 +846,7 @@ class PlanReader:
             return None
         part = OrderPart(path, preset_names, trigger, side, pricing, keeps_tag, execution, cap, post_only, discretion, lifetime, overrides, position)
         part.fill_ratio = fill_ratio
+        part.venue = venue
         return part
 
     def _closes_sensibly(self, side, position, pricing_path, execution, path):
@@ -964,6 +980,34 @@ class PlanReader:
             )
             return False
         return True
+
+    def _read_venue_list(self, venue, path):
+        """Reads an order's venue: a list holding one object with `session: pre_open` and optionally `at_time`, default `09:00:30`.
+
+        Args:
+            venue (object): The list as the caller wrote it.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            PreOpenVenue | None: The venue, or None when it has a problem.
+        """
+        if not isinstance(venue, list) or len(venue) != 1 or not isinstance(venue[0], dict):
+            self._add_problem(path, 'venue_shape', 'venue is a list holding one object, with session and optionally at_time')
+            return None
+        entry = venue[0]
+        entry_path = f'{path}.0'
+        problems_before = len(self.problems)
+        self._refuse_unknown(entry, ('session', 'at_time'), entry_path, 'venue', 'value')
+        if entry.get('session') != 'pre_open':
+            self._add_problem(entry_path, 'bad_setting', f'session must be pre_open, the one venue session built so far, not {entry.get("session")!r}')
+        at_time = str(entry.get('at_time') or '09:00:30')
+        try:
+            datetime.time.fromisoformat(at_time)
+        except ValueError:
+            self._add_problem(entry_path, 'bad_setting', f'at_time must be a time of day such as 09:00:30, not {at_time!r}')
+        if len(self.problems) > problems_before:
+            return None
+        return PreOpenVenue(at_time)
 
     def _read_lifetime_list(self, lifetime, path):
         """Reads an order's lifetime: a list holding one object with `at_time`, `after_minutes`, `after_days` or `when`, and optionally `applies_to` and `on_end`.

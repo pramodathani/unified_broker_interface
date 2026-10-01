@@ -5439,6 +5439,15 @@ class OrderEngineSuite:
             self.scenarios.answers.place_success('flattrade'),
         )
         frozen = FROZEN_NOW.timestamp()
+        opening_auction = {
+            'order': {
+                'presets': [
+                    {
+                        'opening_auction': {},
+                    },
+                ],
+            },
+        }
         closing_price = {
             'order': {
                 'presets': [
@@ -5650,6 +5659,40 @@ class OrderEngineSuite:
                 closing_price,
                 [],
                 FROZEN_NOW.replace(day=27).replace(hour=15, minute=1).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(day=27),
+            ),
+            self.plan_clock_result(
+                'a_plan_opening_auction_order_waits_for_the_pre_open',
+                opening_auction,
+                [],
+                FROZEN_NOW.replace(hour=9, minute=0, second=30).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(hour=8, minute=45),
+            ),
+            self.plan_clock_result(
+                'a_plan_opening_auction_order_after_collection_is_refused',
+                opening_auction,
+                [],
+                frozen + 60,
+                accepted,
+            ),
+            self.plan_clock_result(
+                'a_plan_opening_auction_order_for_an_option_is_refused',
+                opening_auction,
+                [],
+                FROZEN_NOW.replace(hour=9, minute=0, second=30).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(hour=8, minute=45),
+                body_overrides={
+                    'instrument_id': order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['nifty_option'],
+                },
+            ),
+            self.plan_clock_result(
+                'a_plan_opening_auction_order_taken_on_a_sunday_joins_mondays_pre_open',
+                opening_auction,
+                [],
+                FROZEN_NOW.replace(day=28, hour=9, minute=0, second=30).timestamp(),
                 accepted,
                 taken_at=FROZEN_NOW.replace(day=27),
             ),

@@ -57,3 +57,7 @@ The `lifetime` slot is a list holding one object, with the end and its settings 
 ## Stage 5f (2026-10-01)
 
 `candle_closes` is a trigger condition with `level`, `direction` and `bar_minutes`.
+
+## The `venue` slot (2026-10-01)
+
+A venue turns into a `time_from` trigger at its `at_time`, so the order waits in the ordinary way and recovery needs nothing new. An order with a trigger of its own is refused as `pre_open_sets_its_time`, because two times would leave it unclear when the order goes, and a price trigger could send it after collection closed.

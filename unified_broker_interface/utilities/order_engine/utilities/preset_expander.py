@@ -67,6 +67,7 @@ PRESET_NAMES = (
     'freeze_slicer',
     'account_conditional',
     'closing_price',
+    'opening_auction',
     'oto',
     'oco',
     'bracket',
@@ -217,6 +218,18 @@ class PresetExpander:
             return self._account_conditional(settings, path)
         if name == 'closing_price':
             return self._closing_price(settings, path)
+        if name == 'opening_auction':
+            self._refuse_unknown(settings, ('at_time',), path, 'opening_auction')
+            venue = {
+                'session': 'pre_open',
+            }
+            if 'at_time' in settings:
+                venue['at_time'] = settings['at_time']
+            return {
+                'venue': [
+                    venue,
+                ],
+            }
         if name == 'ladder':
             self._refuse_unknown(settings, ('from_price', 'to_price', 'steps'), path, 'ladder')
             return {

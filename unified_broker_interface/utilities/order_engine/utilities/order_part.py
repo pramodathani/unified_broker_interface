@@ -51,6 +51,7 @@ class OrderPart:
         fill_ratio (FillRatio | None): How the size a Then join hands it is scaled, or None to take it as it is.
         sized_by_fills (bool): Whether it is a Then join's child, sized by the first plan's fills.
         opened_by (list): The paths of the orders whose fills opened the position this order follows, for an order under a Then join; empty otherwise.
+        venue (PreOpenVenue | None): Where the order is sent other than the broker selector's continuous market, or None.
     """
 
     def __init__(self, path, presets, trigger, side, pricing, keeps_tag=True, execution=None, cap=None, post_only=None, discretion=None, lifetime=None, overrides=None, position=None):
@@ -94,6 +95,7 @@ class OrderPart:
         self.fill_ratio = None
         self.sized_by_fills = False
         self.opened_by = []
+        self.venue = None
 
     def context(self, plan_order):
         """The plan order as this order's pricing, execution and trigger see it: on this order's instrument, with its own body values.
@@ -1042,6 +1044,16 @@ class OrderPart:
             self.lifetime.described(),
         ]
 
+    def _venue_described(self):
+        """The venue, as a dry run shows it.
+
+        Returns:
+            str | dict: `selector`, or the pre-open venue's settings.
+        """
+        if self.venue is None:
+            return 'selector'
+        return self.venue.described()
+
     def expanded(self):
         """This part as it will run, with every slot's value or default written out, for a dry run's answer.
 
@@ -1065,7 +1077,7 @@ class OrderPart:
                     ],
                     'pricing': self._pricing_described(),
                     'guards': self._guards_described(),
-                    'venue': 'selector',
+                    'venue': self._venue_described(),
                     'lifetime': self._lifetime_described(),
                 },
             },

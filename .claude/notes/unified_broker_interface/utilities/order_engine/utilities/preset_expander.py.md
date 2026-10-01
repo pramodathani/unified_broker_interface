@@ -79,3 +79,7 @@ The backstop is a second order resting beside the engine-side stop, cancelled be
 ## Closing price (2026-10-01)
 
 `closing_price` is a `time_from` trigger at the window's start and a VWAP `until` 15:30, checked to start from 09:15 and before 15:30, refusing `over_minutes`, as today's type does. A plan answers `armed` where today's answers `scheduled`, and a refusal after 15:30 comes after the parent is recorded.
+
+## Opening auction (2026-10-01)
+
+`opening_auction` is a `pre_open` venue with the caller's `at_time`, or the venue's default of 09:00:30. A plan answers `armed` where today's answers `scheduled`, and the refusals for an option, a stop order and a late order come before the parent is recorded, word for word as today's.
