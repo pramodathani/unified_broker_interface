@@ -28,6 +28,7 @@ DEFAULT_BUFFER_TICKS = 2
 KEPT_WHOLE_PRESETS = (
     'grid',
     'two_sided_quote',
+    'scale_with_profit_taker',
 )
 PRESET_NAMES = (
     'simple',
@@ -75,6 +76,7 @@ PRESET_NAMES = (
     'virtual_limit',
     'grid',
     'two_sided_quote',
+    'scale_with_profit_taker',
     'oto',
     'oco',
     'bracket',

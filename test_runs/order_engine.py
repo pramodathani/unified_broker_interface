@@ -2958,6 +2958,25 @@ class OrderEngineSuite:
                 },
             }
 
+        def scale(settings):
+            """A plan of one scale with profit-taker.
+
+            Args:
+                settings (dict): Its settings.
+
+            Returns:
+                dict: The plan.
+            """
+            return {
+                'order': {
+                    'presets': [
+                        {
+                            'scale_with_profit_taker': settings,
+                        },
+                    ],
+                },
+            }
+
         capped_at_twenty = {
             'levels': 2,
             'step_points': 5,
@@ -3130,6 +3149,147 @@ class OrderEngineSuite:
                     },
                 ],
                 numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_scale_with_profit_taker_takes_each_rungs_profit_and_places_it_again',
+                scale({
+                    'from_price': 1000,
+                    'to_price': 990,
+                    'steps': 3,
+                    'profit_points': 4,
+                    'most_cycles': 1,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {
+                        'quote': steady,
+                        'at': 1,
+                        'updates': [
+                            self.update('26091500000102', 'COMPLETE', 10),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 2,
+                        'updates': [
+                            self.update('26091500000104', 'COMPLETE', 10),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 3,
+                        'updates': [
+                            self.update('26091500000105', 'COMPLETE', 10),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 4,
+                        'updates': [
+                            self.update('26091500000106', 'COMPLETE', 10),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 5,
+                        'updates': [
+                            self.update('26091500000107', 'COMPLETE', 10),
+                        ],
+                    },
+                ],
+                numbered,
+                body_overrides={
+                    'quantity': 30,
+                },
+            ),
+            self.plan_price_result(
+                'a_plan_scale_with_profit_taker_without_a_profit_distance_is_refused',
+                scale({
+                    'from_price': 1000,
+                    'to_price': 990,
+                    'steps': 3,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+                body_overrides={
+                    'quantity': 30,
+                },
+            ),
+            self.plan_price_result(
+                'a_plan_scale_with_profit_taker_is_done_once_its_last_cycle_is_taken',
+                scale({
+                    'from_price': 1000,
+                    'to_price': 995,
+                    'steps': 2,
+                    'profit_points': 4,
+                    'most_cycles': 1,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {
+                        'quote': steady,
+                        'at': 1,
+                        'updates': [
+                            self.update('26091500000101', 'COMPLETE', 10),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 2,
+                        'updates': [
+                            self.update('26091500000102', 'COMPLETE', 10),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 3,
+                        'updates': [
+                            self.update('26091500000103', 'COMPLETE', 10),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 4,
+                        'updates': [
+                            self.update('26091500000104', 'COMPLETE', 10),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 5,
+                        'updates': [
+                            self.update('26091500000105', 'COMPLETE', 10),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 6,
+                        'updates': [
+                            self.update('26091500000106', 'COMPLETE', 10),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 7,
+                        'updates': [
+                            self.update('26091500000107', 'COMPLETE', 10),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 8,
+                        'updates': [
+                            self.update('26091500000108', 'COMPLETE', 10),
+                        ],
+                    },
+                ],
+                numbered,
+                body_overrides={
+                    'quantity': 20,
+                },
+                restart_between_ticks=True,
             ),
             self.plan_price_result(
                 'a_plan_grid_beside_another_preset_is_refused',

@@ -131,7 +131,7 @@ class WholePart(OrderPart):
             started_at (float | None): When the engine took the intent, or None.
 
         Returns:
-            tuple: The broker's answer (dict), its HTTP status (int) and the leg (OrderLeg).
+            tuple: The broker's answer (dict), its HTTP status (int) and the leg's id (str).
         """
         context = self.context(plan_order)
         broker_name = context.body.get('broker') or plan_order.chosen_broker()

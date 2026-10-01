@@ -106,7 +106,7 @@ class OrderContext:
             leg_group (OrderLegs | None): The group whose margin the selector checks together, or None.
 
         Returns:
-            tuple: The answer (dict), its HTTP status (int) and the leg.
+            tuple: The answer (dict), its HTTP status (int) and the leg's id (str).
         """
         if self.is_parents_instrument() and leg_group is None:
             return self.plan_order.place_leg(role, order, started_at, broker_name)

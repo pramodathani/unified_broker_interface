@@ -180,6 +180,12 @@ class WhatEachPresetStandsForExample:
                 'half_spread_points': 1,
                 'most_inventory': 30,
             },
+            'scale_with_profit_taker': {
+                'from_price': 1000,
+                'to_price': 990,
+                'steps': 3,
+                'profit_points': 4,
+            },
             'account_conditional': {
                 'account_field': 'day_pnl',
                 'account_level': -5000,

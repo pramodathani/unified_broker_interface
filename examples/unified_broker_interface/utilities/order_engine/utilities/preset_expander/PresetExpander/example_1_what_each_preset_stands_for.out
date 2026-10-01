@@ -76,3 +76,5 @@ grid: {'whole': {'name': 'grid', 'settings': {'levels': 2, 'step_points': 5, 'mo
   problems: []
 two_sided_quote: {'whole': {'name': 'two_sided_quote', 'settings': {'half_spread_points': 1, 'most_inventory': 30}}}
   problems: []
+scale_with_profit_taker: {'whole': {'name': 'scale_with_profit_taker', 'settings': {'from_price': 1000, 'to_price': 990, 'steps': 3, 'profit_points': 4}}}
+  problems: []

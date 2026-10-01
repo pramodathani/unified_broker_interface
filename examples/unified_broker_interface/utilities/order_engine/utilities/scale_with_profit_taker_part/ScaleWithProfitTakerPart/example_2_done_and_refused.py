@@ -1,15 +1,18 @@
-"""Sets a grid of two levels five rupees apart around a last price of 1,000.10, then answers a filled rung with its opposite.
+"""Shows the part ending once every order has finished, a fill it never answers twice, and what it refuses.
 
-`GridPart.prepared_own_memory` reads the last traded price when the plan is placed and keeps it as the centre. `start` places a buy and a sell at each level, rounded to the tick, and the body's quantity is each rung's size. When the buy at 995.10 fills, `settle` places a sell one step above it at 1,000.10, and remembers the filled rung's leg id, so settling again places nothing more. `inventory` is the net position the fills have built. A stand-in plays the plan order, so nothing leaves the machine.
+Once both rungs have cycled their once and every profit-taker has filled, nothing rests, and `settle` marks the part done, so the plan can complete; today's type stays open instead. Settling again after a fill already answered sends nothing. `prepared_own_memory` refuses a quantity smaller than the number of rungs with `400` before anything is recorded, and `settings_problems` lists every bad setting in today's words. A stand-in plays the plan order, so nothing leaves the machine.
 
 Run it from the project root:
 
-    python examples/unified_broker_interface/utilities/order_engine/utilities/grid_part/GridPart/example_1_a_ladder_and_its_opposites.py
+    python examples/unified_broker_interface/utilities/order_engine/utilities/scale_with_profit_taker_part/ScaleWithProfitTakerPart/example_2_done_and_refused.py
 """
 
 import copy
 import decimal
 
+from unified_broker_interface.utilities.broker_orders.utilities.refused_request import (
+    RefusedRequestError,
+)
 from unified_broker_interface.utilities.order_engine.utilities.market_view import (
     MarketView,
 )
@@ -19,13 +22,53 @@ from unified_broker_interface.utilities.order_engine.utilities.order_leg import 
 from unified_broker_interface.utilities.order_engine.utilities.parent_order import (
     ParentOrder,
 )
-from unified_broker_interface.utilities.order_engine.utilities.grid_part import (
-    GridPart,
+from unified_broker_interface.utilities.order_engine.utilities.scale_with_profit_taker_part import (
+    ScaleWithProfitTakerPart,
 )
 
 
+def book(mid):
+    """A quote whose best bid and offer sit a tick either side of a middle price.
+
+    Args:
+        mid (float | None): The middle, or None for a quote with an empty book.
+
+    Returns:
+        dict: The quote.
+    """
+    if mid is None:
+        return {
+            'depth': {
+                'buy': [],
+                'sell': [],
+            },
+        }
+    return {
+        'last_price': mid,
+        'depth': {
+            'buy': [
+                {
+                    'price': round(mid - 0.05, 2),
+                    'quantity': 100,
+                },
+            ],
+            'sell': [
+                {
+                    'price': round(mid + 0.05, 2),
+                    'quantity': 100,
+                },
+            ],
+        },
+    }
+
+
 class StandInOrder(dict):
-    """Stands in for a validated order: the body itself, which also answers the tick size the brokers agree on."""
+    """Stands in for a validated order: the body itself, with its quantity as a number, which also answers the tick size the brokers agree on.
+
+    Attributes:
+        quantity (int): The quantity.
+        transaction_type (str): BUY or SELL.
+    """
 
     def agreed_tick_size(self, handles):
         """The tick size every broker agrees on, which is RELIANCE's.
@@ -97,7 +140,7 @@ class StandInPlanOrder:
     """Stands in for the plan order: keeps the parts' records, turns every order placed into a leg the broker has acknowledged, and notes each request.
 
     Attributes:
-        parent (ParentOrder): The parent, holding the caller's buy of five RELIANCE and the legs placed.
+        parent (ParentOrder): The parent, holding the caller's buy of twenty RELIANCE and the legs placed.
         placement (StandInPlacement): The catalogue and the live quote.
         requests (list): Every request, as a tuple naming what was asked.
         messages (list): Every change of a part's record that would be recorded as an event.
@@ -117,16 +160,14 @@ class StandInPlanOrder:
         self.parent.body = {
             'transaction_type': 'BUY',
             'order_type': 'LIMIT',
-            'quantity': 5,
+            'quantity': 20,
             'price': '1000.00',
             'tag': 'mine',
         }
         self.parent.parameters = {
             'parts': {},
         }
-        quote = {
-            'last_price': last_price,
-        }
+        quote = book(last_price)
         self.placement = StandInPlacement(quote)
         self.requests = []
         self.messages = []
@@ -166,7 +207,10 @@ class StandInPlanOrder:
         Returns:
             StandInOrder: The same body.
         """
-        return StandInOrder(body)
+        order = StandInOrder(body)
+        order.quantity = int(body['quantity'])
+        order.transaction_type = body['transaction_type']
+        return order
 
     def concrete_order(self, order):
         """Answers with the order itself, since it names no references.
@@ -208,7 +252,7 @@ class StandInPlanOrder:
         leg.quantity = order['quantity']
         leg.price = float(order['price'])
         self.parent.legs.append(leg)
-        self.requests.append(('place', leg.transaction_type, leg.quantity, order['price'], order.get('tag')))
+        self.requests.append(('place', leg.transaction_type, leg.quantity, order['price']))
         return {
             'outcome': 'accepted',
             'order_id': leg.broker_order_id,
@@ -229,6 +273,14 @@ class StandInPlanOrder:
         leg.state = 'cancelled'
         return True
 
+    def tick_size(self):
+        """RELIANCE's tick size.
+
+        Returns:
+            decimal.Decimal: 0.05.
+        """
+        return decimal.Decimal('0.05')
+
     def view(self, quotes, instrument_id=None):
         """A quote as a market view, with RELIANCE's tick size of 0.05.
 
@@ -241,6 +293,23 @@ class StandInPlanOrder:
         """
         del instrument_id
         return MarketView(quotes.get('RELIANCE'), decimal.Decimal('0.05'))
+
+    def reprice_leg(self, leg, price, trigger_price, reason):
+        """Moves a leg's limit price, as the broker would once it accepts the change.
+
+        Args:
+            leg (OrderLeg): The leg.
+            price (decimal.Decimal): Its new limit price.
+            trigger_price (decimal.Decimal | None): Unused.
+            reason (str): Why.
+
+        Returns:
+            bool: True, since the change is accepted.
+        """
+        del trigger_price
+        self.requests.append(('move', leg.transaction_type, str(price), reason))
+        leg.price = float(price)
+        return True
 
     def fill(self, number):
         """Fills one leg completely, as an order update would.
@@ -256,41 +325,52 @@ class StandInPlanOrder:
         leg.state = 'filled'
 
 
-class ALadderAndItsOppositesExample:
-    """Places a grid and answers one fill."""
+class DoneAndRefusedExample:
+    """Runs a ladder to its end and checks its refusals."""
 
     def run(self):
-        """Prints the requests at each step.
+        """Prints what each step did.
 
         Returns:
             None: This method returns nothing.
         """
-        plan_order = StandInPlanOrder(1000.1)
-        part = GridPart('root', 'grid', {
-            'levels': 2,
-            'step_points': 5,
-            'most_inventory': 20,
-        })
-        print('problems:', part.settings_problems())
-        print(f'levels {part.levels()}, step {part.step()}, most inventory {part.most_inventory()}, needs prices {part.needs_prices()}')
-        record = plan_order.part_record('root')
-        record['own_memory'] = part.prepared_own_memory(plan_order)
-        plan_order.set_part_record('root', record, None)
-        print('remembered:', part.own_memory(plan_order))
-        quotes = {
-            'RELIANCE': {
-                'last_price': 1000.1,
+        plan_order = StandInPlanOrder(1000.0)
+        part = ScaleWithProfitTakerPart('root', 'scale_with_profit_taker', {
+                'from_price': 1000,
+                'to_price': 995,
+                'steps': 2,
+                'profit_points': 4,
+                'most_cycles': 1,
+            })
+        print('memory readied:', part.prepared_own_memory(plan_order))
+        part.start(plan_order, None, None, {})
+        number = 1
+        while number <= len(plan_order.parent.legs):
+            plan_order.fill(number)
+            part.settle(plan_order)
+            number = number + 1
+        print(f'{len(plan_order.requests)} orders, state {plan_order.part_record("root")["state"]}, reason {plan_order.part_record("root")["reason"]}')
+        print('settling again sends nothing:', part.settle(plan_order))
+        small = StandInPlanOrder(1000.0)
+        small.parent.body['quantity'] = 1
+        try:
+            part.prepared_own_memory(small)
+        except RefusedRequestError as error:
+            print(f'a quantity of one: {error.status} {error.body["error"]}')
+        bad = ScaleWithProfitTakerPart(
+            'root',
+            'scale_with_profit_taker',
+            {
+                'from_price': 1000,
+                'to_price': 1000,
+                'steps': 1,
+                'most_cycles': 0,
+                'cycles': 2,
             },
-        }
-        placed = part.start(plan_order, None, None, quotes)
-        print(f'placed {len(placed)} rungs:', plan_order.requests)
-        plan_order.fill(1)
-        print('inventory after the buy fills:', part.inventory(plan_order.parent))
-        answered = part.settle(plan_order)
-        print(f'settle placed {len(answered)}:', plan_order.requests[-1])
-        print('settle again placed', len(part.settle(plan_order)))
-        print('answered:', part.own_memory(plan_order)['answered'])
+        )
+        for problem in bad.settings_problems():
+            print('problem:', problem)
 
 
 if __name__ == '__main__':
-    ALadderAndItsOppositesExample().run()
+    DoneAndRefusedExample().run()

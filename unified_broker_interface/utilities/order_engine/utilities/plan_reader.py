@@ -125,6 +125,9 @@ from unified_broker_interface.utilities.order_engine.utilities.price_crosses_con
 from unified_broker_interface.utilities.order_engine.utilities.repeat_part import (
     RepeatPart,
 )
+from unified_broker_interface.utilities.order_engine.utilities.scale_with_profit_taker_part import (
+    ScaleWithProfitTakerPart,
+)
 from unified_broker_interface.utilities.order_engine.utilities.sequence_part import (
     SequencePart,
 )
@@ -249,6 +252,7 @@ SIDES = (
 WHOLE_PART_CLASSES = {
     'grid': GridPart,
     'two_sided_quote': TwoSidedQuotePart,
+    'scale_with_profit_taker': ScaleWithProfitTakerPart,
 }
 POSITION_SETTINGS = (
     'product',

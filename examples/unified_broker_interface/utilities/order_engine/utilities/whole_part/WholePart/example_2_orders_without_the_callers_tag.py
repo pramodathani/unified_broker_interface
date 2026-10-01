@@ -197,7 +197,7 @@ class StandInPlanOrder:
             broker_name (str | None): Unused.
 
         Returns:
-            tuple: The answer (dict), its HTTP status (int) and the leg (OrderLeg).
+            tuple: The answer (dict), its HTTP status (int) and the leg's id (str).
         """
         del started_at, broker_name
         number = len(self.parent.legs) + 1
@@ -213,7 +213,7 @@ class StandInPlanOrder:
             'outcome': 'accepted',
             'order_id': leg.broker_order_id,
             'broker': 'zerodha',
-        }, 200, leg
+        }, 200, leg.leg_id
 
     def cancel_leg(self, leg, reason):
         """Cancels a leg, as the broker would once it confirms the cancel.
