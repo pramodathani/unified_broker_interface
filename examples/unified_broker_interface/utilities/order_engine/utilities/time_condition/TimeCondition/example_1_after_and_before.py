@@ -1,6 +1,6 @@
 """Works out when two time conditions fall, and asks them whether they hold at moments through the morning.
 
-A `TimeCondition` ties a plan order's trigger to a time of day on the instrument's next trading day. `time_after` holds from the time onwards, and `time_before` holds until it, which is how a price trigger is kept to part of the day inside `all`. The time is worked out once, by `prepare`, when the plan is placed.
+A `TimeCondition` ties a plan order's trigger to a time of day on the instrument's next trading day. `time_after` holds from the time onwards, and `time_before` holds until it, which is how a price trigger is kept to part of the day inside `all`. The time is worked out once, by `prepare`, when the plan is placed. `time_from` is `time_at` that holds at once when its time has already passed today, rather than being refused, so 09:00 asked at 09:30 falls at 09:30.
 
 The engine's clock is replaced, in the `time_condition` module, with a stand-in stopped at 09:30 on Thursday 1 October 2026, so every answer is the same whenever the program runs. The trading calendar is read from the calendar files kept in the repository.
 
@@ -75,6 +75,11 @@ class AfterAndBeforeExample:
             before_met = before.is_met(plan_order, before_memory, {}, moment, 'BUY', 'BUY')
             print(f'{hour:02d}:{minute:02d}: after 10:00 {after_met}, before 15:00 {before_met}')
         print(f'As a dry run shows them: {after.described()} and {before.described()}')
+        for text in ('09:00', '11:00'):
+            starting = TimeCondition('time_from', text)
+            starting_memory = {}
+            starting.prepare(plan_order, starting_memory)
+            print(f"time_from {text}, asked at 09:30, falls at {datetime.datetime.fromtimestamp(starting_memory['at'], INDIA).strftime('%H:%M')}")
 
 
 if __name__ == '__main__':

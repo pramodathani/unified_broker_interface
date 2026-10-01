@@ -75,3 +75,7 @@ The backstop is a second order resting beside the engine-side stop, cancelled be
 ## Account conditional (2026-10-01)
 
 `account_conditional` with `action: place` is an `account` trigger; with `action: cancel` it is a lifetime ending `when` the account condition holds, applying to the working order.
+
+## Closing price (2026-10-01)
+
+`closing_price` is a `time_from` trigger at the window's start and a VWAP `until` 15:30, checked to start from 09:15 and before 15:30, refusing `over_minutes`, as today's type does. A plan answers `armed` where today's answers `scheduled`, and a refusal after 15:30 comes after the parent is recorded.

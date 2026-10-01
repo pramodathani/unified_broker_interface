@@ -11,3 +11,7 @@ Today's TWAP counts every leg of the parent, which breaks the moment another par
 ## Why each slice is sized from the total when it falls due
 
 A join can change the order's total while the schedule runs, for example a bracket's entry growing. Sizing slice `i` from the total at that moment spreads the change over the slices still to come, and the last slice sends whatever is left, so the slices always add up to the total. If every slice has gone before the total grows, the growth is not sent; lifetimes and Repeat in later stages are the place to handle that.
+
+## `until` (2026-10-01)
+
+Today's closing price order works out its VWAP's length from the window's end and the moment it starts, whether that is the window's opening or a moment inside it. `until` is that rule for any timed execution: `begin` keeps the minutes in memory, recorded with the order, and `interval` reads them from there. It is set by the reader after building the execution rather than passed to every subclass's constructor.

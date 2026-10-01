@@ -5439,6 +5439,15 @@ class OrderEngineSuite:
             self.scenarios.answers.place_success('flattrade'),
         )
         frozen = FROZEN_NOW.timestamp()
+        closing_price = {
+            'order': {
+                'presets': [
+                    {
+                        'closing_price': {},
+                    },
+                ],
+            },
+        }
         daily_stop = {
             'order': {
                 'presets': [
@@ -5578,6 +5587,71 @@ class OrderEngineSuite:
                     },
                 ),
                 positions=10,
+            ),
+            self.plan_clock_result(
+                'a_plan_closing_price_order_waits_for_the_window_and_then_slices',
+                closing_price,
+                [],
+                FROZEN_NOW.replace(hour=15, minute=0).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(hour=14, minute=30),
+                body_overrides={
+                    'quantity': 60,
+                },
+            ),
+            self.plan_clock_result(
+                'a_plan_closing_price_order_inside_the_window_starts_at_once',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'closing_price': {
+                                    'slices': 4,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [],
+                FROZEN_NOW.replace(hour=15, minute=15).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(hour=15, minute=10),
+                body_overrides={
+                    'quantity': 40,
+                },
+            ),
+            self.plan_clock_result(
+                'a_plan_closing_price_order_after_the_close_is_refused',
+                closing_price,
+                [],
+                FROZEN_NOW.replace(hour=15, minute=32).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(hour=15, minute=31),
+            ),
+            self.plan_clock_result(
+                'a_plan_closing_price_window_starting_after_the_close_is_refused',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'closing_price': {
+                                    'window_start': '15:40',
+                                },
+                            },
+                        ],
+                    },
+                },
+                [],
+                frozen + 60,
+                accepted,
+            ),
+            self.plan_clock_result(
+                'a_plan_closing_price_order_taken_on_a_sunday_is_scheduled_for_monday',
+                closing_price,
+                [],
+                FROZEN_NOW.replace(day=27).replace(hour=15, minute=1).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(day=27),
             ),
             self.plan_clock_result(
                 'a_plan_repeat_whose_child_is_a_join_is_refused',

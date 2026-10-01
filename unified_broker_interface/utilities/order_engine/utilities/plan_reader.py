@@ -1936,11 +1936,19 @@ class PlanReader:
         known = ['slices', 'over_minutes']
         if name == 'vwap':
             known.append('volume_profile')
+            known.append('until')
         if name == 'front_loaded':
             known.append('urgency')
         self._refuse_unknown(settings, tuple(known), path, name, 'execution')
         slices = self._whole_number(settings.get('slices'), path, 'slices', 2, MOST_SLICES)
-        over_minutes = self._price(settings.get('over_minutes'), path, 'over_minutes')
+        until = settings.get('until')
+        over_minutes = None
+        if until is not None:
+            hours, _, minutes = str(until).partition(':')
+            if 'over_minutes' in settings or not (isinstance(until, str) and hours.isdigit() and minutes.isdigit() and int(hours) < 24 and int(minutes) < 60):
+                self._add_problem(path, 'bad_setting', f'until is a time of day such as "15:30", given instead of over_minutes, not {until!r}')
+        else:
+            over_minutes = self._price(settings.get('over_minutes'), path, 'over_minutes')
         profile = None
         if name == 'vwap' and 'volume_profile' in settings:
             profile = self._read_profile(settings['volume_profile'], path)
@@ -1957,7 +1965,9 @@ class PlanReader:
         if name == 'twap':
             return TwapExecution(slices, float(over_minutes))
         if name == 'vwap':
-            return VwapExecution(slices, float(over_minutes), profile)
+            execution = VwapExecution(slices, None if over_minutes is None else float(over_minutes), profile)
+            execution.until = until
+            return execution
         return FrontLoadedExecution(slices, float(over_minutes), urgency)
 
     def _read_participation(self, settings, path):

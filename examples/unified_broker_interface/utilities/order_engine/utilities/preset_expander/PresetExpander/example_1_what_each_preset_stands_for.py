@@ -162,6 +162,9 @@ class WhatEachPresetStandsForExample:
                 'steps': 3,
             },
             'freeze_slicer': {},
+            'closing_price': {
+                'slices': 4,
+            },
             'account_conditional': {
                 'account_field': 'day_pnl',
                 'account_level': -5000,

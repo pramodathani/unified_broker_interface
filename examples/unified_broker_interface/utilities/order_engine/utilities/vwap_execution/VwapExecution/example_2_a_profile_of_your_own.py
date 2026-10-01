@@ -92,6 +92,11 @@ class AProfileOfYourOwnExample:
         print(f'From 09:15, slices every {execution.interval()} s take weights {execution.slice_weights(memory)}')
         print(f'Twenty shared out as {execution.slice_quantities(20, memory)}')
         print(f'As a dry run shows it: {execution.described()}')
+        closing = VwapExecution(4, None, None)
+        closing.until = '15:30'
+        closing_memory = {}
+        closing.begin(StandInPlanOrder(), closing_memory, {}, datetime.datetime(2026, 10, 1, 15, 10, tzinfo=INDIA).timestamp())
+        print(f'Until 15:30, started at 15:10: {closing_memory["over_minutes"]} minutes, a slice every {closing.interval(closing_memory)} s, shown as {closing.described()}')
 
 
 if __name__ == '__main__':

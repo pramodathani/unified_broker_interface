@@ -66,3 +66,5 @@ freeze_slicer: {'execution': [{'freeze_limit': {}}]}
   problems: []
 account_conditional: {'lifetime': [{'when': {'account': {'field': 'day_pnl', 'level': -5000, 'direction': 'at_or_below'}}, 'applies_to': 'working'}]}
   problems: []
+closing_price: {'trigger': {'time_from': '15:00'}, 'execution': [{'vwap': {'slices': 4, 'until': '15:30'}}]}
+  problems: []

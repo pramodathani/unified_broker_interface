@@ -2,3 +2,4 @@
 From 09:15, slices every 1800.0 s take weights [1.0, 2.0, 3.0, 3.0]
 Twenty shared out as [2, 4, 7, 7]
 As a dry run shows it: {'vwap': {'slices': 4, 'over_minutes': 120, 'volume_profile': [1.0, 2.0, 3.0]}}
+Until 15:30, started at 15:10: 20.0 minutes, a slice every 300.0 s, shown as {'vwap': {'slices': 4, 'until': '15:30', 'volume_profile': [0.145, 0.095, 0.075, 0.065, 0.058, 0.052, 0.048, 0.048, 0.052, 0.058, 0.068, 0.093, 0.143]}}

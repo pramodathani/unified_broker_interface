@@ -69,3 +69,7 @@ A part with a `position` is a close: `send` hands it to `_close_positions`, whic
 ## Pieces with their own price and broker (2026-10-01)
 
 `order` and `place` take a piece's own `price`, which a ladder's rungs use, and `place` a `broker_name`, which `send_due` reads from the execution's memory, where the freeze-limit execution puts the broker it chose.
+
+## Triggers that already hold (2026-10-01)
+
+`start` sends an order at once when its trigger needs no prices and already holds, rather than leaving it waiting for the next tick. Before `time_from` no such trigger could hold when a plan was placed, since the time triggers refuse a passed time; now `time_from` and the `account` condition can. For an account-conditional order whose condition already holds, this places it at once where today's type answers `armed` and places it a tick later.

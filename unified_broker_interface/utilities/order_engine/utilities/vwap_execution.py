@@ -88,7 +88,7 @@ class VwapExecution(TimedSlicesExecution):
             return [1.0] * self.slices
         weights = []
         for index in range(self.slices):
-            bucket = min(self.bucket_of(started_at + self.interval() * index), len(self.profile) - 1)
+            bucket = min(self.bucket_of(started_at + self.interval(memory) * index), len(self.profile) - 1)
             weights.append(self.profile[bucket])
         return weights
 

@@ -390,6 +390,8 @@ class OrderPart:
     def start(self, plan_order, target, started_at, quotes, now=None):
         """Starts this order: arms its trigger, or starts working and sends whatever its execution says is due now.
 
+        A trigger that needs no prices and already holds, such as a `time_from` whose time has passed, sends the order at once rather than on the next tick.
+
         Args:
             plan_order (PlanOrder): The plan order.
             target (int | None): The quantity a parent join wants traded, or None for the body's.
@@ -415,9 +417,15 @@ class OrderPart:
             plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part has nothing to trade')
             return []
         if self.trigger is not None:
-            record['state'] = 'waiting'
-            plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part is waiting for its trigger')
-            return []
+            if now is None:
+                now = time.time()
+            memory = copy.deepcopy(record.get('memory') or {})
+            holds_already = not self.trigger.needs_prices() and self.is_triggered(plan_order, memory, quotes, now)
+            if not holds_already:
+                record['state'] = 'waiting'
+                plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part is waiting for its trigger')
+                return []
+            record['fired_at'] = now
         record['state'] = 'working'
         plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part is working')
         return self.send(plan_order, started_at, quotes, now)

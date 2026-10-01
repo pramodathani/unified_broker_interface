@@ -66,6 +66,7 @@ PRESET_NAMES = (
     'ladder',
     'freeze_slicer',
     'account_conditional',
+    'closing_price',
     'oto',
     'oco',
     'bracket',
@@ -214,6 +215,8 @@ class PresetExpander:
             return self._daily_stop(settings, path)
         if name == 'account_conditional':
             return self._account_conditional(settings, path)
+        if name == 'closing_price':
+            return self._closing_price(settings, path)
         if name == 'ladder':
             self._refuse_unknown(settings, ('from_price', 'to_price', 'steps'), path, 'ladder')
             return {
@@ -995,6 +998,43 @@ class PresetExpander:
                 {
                     'after_days': settings.get('valid_days', 30),
                     'applies_to': 'waiting',
+                },
+            ],
+        }
+
+    def _closing_price(self, settings, path):
+        """A VWAP spread across the closing window, from `window_start`, 15:00 by default, until 15:30, starting at once when placed inside the window.
+
+        Args:
+            settings (dict): `window_start` and `slices`, default 6, both optional.
+            path (str): The preset's path.
+
+        Returns:
+            dict: A `time_from` trigger at the window's start and `vwap` execution until 15:30.
+        """
+        self._refuse_unknown(settings, ('window_start', 'slices', 'over_minutes'), path, 'closing_price')
+        if 'over_minutes' in settings:
+            self._add_problem(path, 'bad_setting', 'a closing_price order works out its own duration from the window, so it does not take over_minutes')
+            return {}
+        window_start = str(settings.get('window_start') or '15:00')
+        hours, _, minutes = window_start.partition(':')
+        valid = hours.isdigit() and minutes[:2].isdigit()
+        if valid:
+            moment = int(hours) * 60 + int(minutes[:2])
+            valid = 9 * 60 + 15 <= moment < 15 * 60 + 30
+        if not valid:
+            self._add_problem(path, 'bad_setting', f'window_start must be from 09:15 and before 15:30, not {window_start}')
+            return {}
+        return {
+            'trigger': {
+                'time_from': window_start,
+            },
+            'execution': [
+                {
+                    'vwap': {
+                        'slices': settings.get('slices', 6),
+                        'until': '15:30',
+                    },
                 },
             ],
         }
