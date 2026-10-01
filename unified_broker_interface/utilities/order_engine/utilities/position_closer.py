@@ -61,7 +61,7 @@ class PositionCloser:
             list: One `(broker_name, instrument_id, quantity)` per position, where `broker_name` is a string, `instrument_id` a string or None, and `quantity` a signed decimal.Decimal.
         """
         broker_names = self.runner.placement.order_placement.broker_names
-        position_books = self.position_books(broker_names)
+        position_books = self._position_books(broker_names)
         found = []
         for position in KillSwitch(broker_names).positions_to_close(position_books):
             position_product = POSITION_PRODUCTS.get(
@@ -69,7 +69,7 @@ class PositionCloser:
             )
             if position_product != product:
                 continue
-            instrument_id = self.instrument_for_broker_token(
+            instrument_id = self._instrument_for_broker_token(
                 position['broker'],
                 position.get('instrument_token'),
             )
@@ -82,7 +82,7 @@ class PositionCloser:
             ))
         return found
 
-    def position_books(self, broker_names):
+    def _position_books(self, broker_names):
         """Each broker's positions hash, decoded, by broker name.
 
         Args:
@@ -114,7 +114,7 @@ class PositionCloser:
             books[broker_name] = decoded
         return books
 
-    def instrument_for_broker_token(self, broker_name, broker_token):
+    def _instrument_for_broker_token(self, broker_name, broker_token):
         """The one instrument a broker's token names today, or None when it is not exactly one.
 
         Args:

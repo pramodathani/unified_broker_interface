@@ -3,6 +3,7 @@
 An `ExposureHedge` is built from small steps that this program calls one at a time, on a watch over two bank stocks hedged with a bank index future whose exposure per unit is 30:
 
 - `read_watched`, `read_band` and `read_hedge` read the caller's settings, and `number` reads any one number;
+- `remember_tick_size` keeps the hedge instrument's tick size, since the hedge is the only price it works out;
 - `held` finds the signed quantity of one instrument in the positions document;
 - `exposure` multiplies each watched position by its exposure per unit and adds them up, together with `hedges_in_flight`;
 - `hedge_price` prices a hedge two ticks past the touch so that it trades now;
@@ -483,6 +484,8 @@ class ReadersAndRefusalsExample:
         lower, upper = runner.read_band()
         hedge_instrument, hedge_per_unit = runner.read_hedge()
         print(f'Band: {lower} to {upper}, hedge in {hedge_instrument[-2:]} at {hedge_per_unit} per unit')
+        tick_size = runner.remember_tick_size(runner.read_order(runner.parent.body))
+        print(f"Tick size kept, the hedge instrument's: {tick_size}")
         print(f"number('12.5'): {runner.number('12.5', 'example')}")
         total = runner.exposure(self.placement.positions)
         print(f'Exposure: {total}, with {runner.hedges_in_flight()} in flight')

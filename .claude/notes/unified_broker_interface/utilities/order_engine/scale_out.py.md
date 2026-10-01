@@ -26,6 +26,6 @@ An entry that filled two units against three targets cannot be split three ways.
 
 A scale-out's targets share the position between them and its stop covers all of it, so no one exit's quantity follows from another's the way a bracket's pair does. `on_leg_modified` is overridden to do nothing, and the reduce-only rule inherited from the OCO still applies.
 
-## Why the stop is reduced through `take_fill_off`
+## Why the stop is reduced through `_take_fill_off`
 
-A target that filled in two steps used to have its total fill subtracted from the stop twice, so the stop shrank below what was still held: a target filling 2 and then 4 of a 10-lot position cut the stop to 8 and then 4 instead of 6. `rebalance` now calls `take_fill_off` from `oco.py`, which takes off only the part of each target's fill not taken off before. The note on `oco.py` explains the mechanism, and `a_scale_out_takes_only_the_new_part_of_a_targets_second_fill_off_the_stop` in `test_runs/order_engine.py` checks it.
+A target that filled in two steps used to have its total fill subtracted from the stop twice, so the stop shrank below what was still held: a target filling 2 and then 4 of a 10-lot position cut the stop to 8 and then 4 instead of 6. `rebalance` now calls `_take_fill_off` from `oco.py`, which takes off only the part of each target's fill not taken off before. The note on `oco.py` explains the mechanism, and `a_scale_out_takes_only_the_new_part_of_a_targets_second_fill_off_the_stop` in `test_runs/order_engine.py` checks it.

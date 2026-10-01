@@ -1,6 +1,7 @@
 Watching 13 at 1.1 per unit, holding 900
 Watching 16 at 1.2 per unit, holding -200
 Band: -300 to 300, hedge in 17 at 30 per unit
+Tick size kept, the hedge instrument's: 0.05
 number('12.5'): 12.5
 Exposure: 750.0, with 0 in flight
 A sell hedge would go out at 56011.40
