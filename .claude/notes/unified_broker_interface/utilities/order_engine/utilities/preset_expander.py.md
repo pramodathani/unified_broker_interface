@@ -95,3 +95,7 @@ The backstop is a second order resting beside the engine-side stop, cancelled be
 ## Kept-whole presets (2026-10-02)
 
 The expander does not check a kept-whole preset's settings: it hands `name` and `settings` on in a `whole` slot, and the type's own part checks them. The scenarios and examples that needed an unknown preset now use `no_such_preset`, because `grid`, which they used, became a preset.
+
+## Scale out (2026-10-02)
+
+`scale_out` is a join preset: a Then join of the order and a `scale_out_exits` child, cancelling the rest of the entry once an exit fills, the shape `bracket` uses. The settings are handed on unchecked; the exits check them.

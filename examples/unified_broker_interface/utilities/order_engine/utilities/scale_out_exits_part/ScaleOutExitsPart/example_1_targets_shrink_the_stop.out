@@ -1,0 +1,9 @@
+problems [], needs a Then join True, tranches of 10 over 3: [4, 3, 3]
+the stop it sends: SL 6, trigger 990, limit 988
+armed for 6: [('place', 'SELL', 6, 'SL', '988'), ('place', 'SELL', 3, 'LIMIT', '1010'), ('place', 'SELL', 3, 'LIMIT', '1020')]
+the entry fills to 10: [('change', 'SELL', 10, 'the entry has filled 10 and the targets have taken 0 off, so the stop covers 10')]
+stop 10, targets [3, 3]
+the first target fills; taken 3, entry average 1000.0
+  ('change', 'SELL', 7, 'the entry has filled 10 and the targets have taken 3 off, so the stop covers 7')
+  ('move', 'SELL', '1000.0', '1 target(s) have filled, so the stop moves to the entry price and the trade can no longer lose')
+settling again asks for nothing: []

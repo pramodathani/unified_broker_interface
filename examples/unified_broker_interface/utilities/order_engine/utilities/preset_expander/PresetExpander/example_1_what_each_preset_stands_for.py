@@ -186,6 +186,14 @@ class WhatEachPresetStandsForExample:
                 'steps': 3,
                 'profit_points': 4,
             },
+            'scale_out_exits': {
+                'stop_price': 990,
+                'stop_limit_price': 988,
+                'target_prices': [
+                    1010,
+                    1020,
+                ],
+            },
             'exposure_hedge': {
                 'watched': [
                     {

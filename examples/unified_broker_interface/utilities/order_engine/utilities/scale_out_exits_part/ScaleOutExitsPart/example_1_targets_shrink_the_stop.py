@@ -1,10 +1,10 @@
-"""Shows what every part kept whole shares: memory kept in its part record, and limit orders of its own placed at the plan's broker.
+"""Arms a stop and two targets for an entry of six, grows the stop as the entry fills to ten, shrinks it as a target fills, and moves it to the entry price.
 
-`WholePart.remember` writes the part's memory into its part record with a message, so a restart replays it, and `own_memory` reads it back. `limit_order` builds a limit on the part's instrument from the body, at a side and price of the part's choosing, and `place_order` sends it with the part's path as the leg's role. `inventory` is the net position the part's own fills have built, `cancel_once` asks for one order's cancel only once, `cancel_rest` stops the part and cancels what rests, `is_stopped` says so, `finish_when_done` marks it done once every broker order has finished, `settings_problems` finds nothing for the base class, and `expanded` is how a dry run shows the part. A stand-in plays the plan order, so nothing leaves the machine.
+`ScaleOutExitsPart.start` places a stop-limit for everything the entry filled and the targets that share it, from `tranches`, with the stop's leg id kept in memory. `stop_order` is that stop-limit. `set_target` follows the entry's further fills: `fit_stop` grows the stop and leaves the targets as they were sized. When a target fills, `settle` shrinks the stop by what it took and, with `breakeven_after` of one, `move_to_breakeven` moves it to `entry_average_price`. `stop_leg`, `target_legs` and `taken_by_targets` are what it reads. A stand-in plays the plan order, so nothing leaves the machine.
 
 Run it from the project root:
 
-    python examples/unified_broker_interface/utilities/order_engine/utilities/whole_part/WholePart/example_1_memory_and_its_own_orders.py
+    python examples/unified_broker_interface/utilities/order_engine/utilities/scale_out_exits_part/ScaleOutExitsPart/example_1_targets_shrink_the_stop.py
 """
 
 import copy
@@ -19,13 +19,52 @@ from unified_broker_interface.utilities.order_engine.utilities.order_leg import 
 from unified_broker_interface.utilities.order_engine.utilities.parent_order import (
     ParentOrder,
 )
-from unified_broker_interface.utilities.order_engine.utilities.whole_part import (
-    WholePart,
+from unified_broker_interface.utilities.order_engine.utilities.scale_out_exits_part import (
+    ScaleOutExitsPart,
 )
 
 
+def book(mid):
+    """A quote whose best bid and offer sit a tick either side of a middle price.
+
+    Args:
+        mid (float | None): The middle, or None for a quote with an empty book.
+
+    Returns:
+        dict: The quote.
+    """
+    if mid is None:
+        return {
+            'depth': {
+                'buy': [],
+                'sell': [],
+            },
+        }
+    return {
+        'last_price': mid,
+        'depth': {
+            'buy': [
+                {
+                    'price': round(mid - 0.05, 2),
+                    'quantity': 100,
+                },
+            ],
+            'sell': [
+                {
+                    'price': round(mid + 0.05, 2),
+                    'quantity': 100,
+                },
+            ],
+        },
+    }
+
+
 class StandInOrder(dict):
-    """Stands in for a validated order: the body itself, which also answers the tick size the brokers agree on."""
+    """Stands in for a validated order: the body itself, with its quantity as a number, which also answers the tick size the brokers agree on.
+
+    Attributes:
+        quantity (int): The quantity.
+    """
 
     def agreed_tick_size(self, handles):
         """The tick size every broker agrees on, which is RELIANCE's.
@@ -124,9 +163,7 @@ class StandInPlanOrder:
         self.parent.parameters = {
             'parts': {},
         }
-        quote = {
-            'last_price': last_price,
-        }
+        quote = book(last_price)
         self.placement = StandInPlacement(quote)
         self.requests = []
         self.messages = []
@@ -166,7 +203,9 @@ class StandInPlanOrder:
         Returns:
             StandInOrder: The same body.
         """
-        return StandInOrder(body)
+        order = StandInOrder(body)
+        order.quantity = int(body['quantity'])
+        return order
 
     def concrete_order(self, order):
         """Answers with the order itself, since it names no references.
@@ -208,7 +247,7 @@ class StandInPlanOrder:
         leg.quantity = order['quantity']
         leg.price = float(order['price'])
         self.parent.legs.append(leg)
-        self.requests.append(('place', leg.transaction_type, leg.quantity, order['price'], order.get('tag')))
+        self.requests.append(('place', leg.transaction_type, leg.quantity, order['order_type'], order['price']))
         return {
             'outcome': 'accepted',
             'order_id': leg.broker_order_id,
@@ -229,6 +268,14 @@ class StandInPlanOrder:
         leg.state = 'cancelled'
         return True
 
+    def tick_size(self):
+        """RELIANCE's tick size.
+
+        Returns:
+            decimal.Decimal: 0.05.
+        """
+        return decimal.Decimal('0.05')
+
     def view(self, quotes, instrument_id=None):
         """A quote as a market view, with RELIANCE's tick size of 0.05.
 
@@ -242,67 +289,133 @@ class StandInPlanOrder:
         del instrument_id
         return MarketView(quotes.get('RELIANCE'), decimal.Decimal('0.05'))
 
-    def fill(self, number):
-        """Fills one leg completely, as an order update would.
+    def reprice_leg(self, leg, price, trigger_price, reason):
+        """Moves a leg's limit price, as the broker would once it accepts the change.
 
         Args:
-            number (int): The leg's place in the order placed, from one.
+            leg (OrderLeg): The leg.
+            price (decimal.Decimal): Its new limit price.
+            trigger_price (decimal.Decimal | None): Unused.
+            reason (str): Why.
+
+        Returns:
+            bool: True, since the change is accepted.
+        """
+        del trigger_price
+        self.requests.append(('move', leg.transaction_type, str(price), reason))
+        leg.price = float(price)
+        return True
+
+    def reduce_leg(self, leg, quantity, reason):
+        """Changes a leg's quantity, as the broker would once it accepts the change.
+
+        Args:
+            leg (OrderLeg): The leg.
+            quantity (int): Its new total quantity.
+            reason (str): Why.
+
+        Returns:
+            bool: True, since the change is accepted.
+        """
+        self.requests.append(('change', leg.transaction_type, quantity, reason))
+        leg.quantity = quantity
+        return True
+
+    def enter(self, filled, average_price):
+        """Adds the entry the exits protect, as the first plan of a Then join would have placed it, filled.
+
+        Args:
+            filled (int): How much it filled.
+            average_price (float): The average price it filled at.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        leg = OrderLeg('parent-1:0', 'root.first')
+        leg.state = 'filled'
+        leg.transaction_type = 'BUY'
+        leg.quantity = filled
+        leg.filled_quantity = filled
+        leg.average_price = average_price
+        self.parent.legs.append(leg)
+
+    def fill(self, number, quantity=None):
+        """Fills one leg, wholly or in part, as an order update would.
+
+        Args:
+            number (int): The leg's place among the legs, from one.
+            quantity (int | None): How much has filled in all, or None for all of it.
 
         Returns:
             None: This method returns nothing.
         """
         leg = self.parent.legs[number - 1]
-        leg.filled_quantity = leg.quantity
-        leg.state = 'filled'
+        if quantity is None:
+            quantity = leg.quantity
+        leg.filled_quantity = quantity
+        if quantity >= leg.quantity:
+            leg.state = 'filled'
 
 
-class MemoryAndItsOwnOrdersExample:
-    """Remembers, places two orders and describes the part."""
+class ExitsMaker:
+    """Builds the exits as the reader would under a Then join."""
+
+    def exits(self, settings):
+        """The exits, sized by the entry's fills and protecting what `root.first` opened.
+
+        Args:
+            settings (dict): The exits' settings.
+
+        Returns:
+            ScaleOutExitsPart: The part.
+        """
+        part = ScaleOutExitsPart('root.each_fill', 'scale_out_exits', settings, False, {})
+        part.sized_by_fills = True
+        part.opened_by = [
+            'root.first',
+        ]
+        return part
+
+
+class TargetsShrinkTheStopExample:
+    """Walks the exits through a growing entry and a target fill."""
 
     def run(self):
-        """Prints the memory, the requests and the dry run's view.
+        """Prints the requests after each step.
 
         Returns:
             None: This method returns nothing.
         """
         plan_order = StandInPlanOrder(1000.0)
-        part = WholePart('root', 'grid', {
-            'levels': 1,
-        })
-        print('problems:', part.settings_problems())
-        print('memory before:', part.own_memory(plan_order))
-        part.remember(plan_order, {
-            'centre': '1000.00',
-        }, 'the part remembers its centre')
-        print('memory after:', part.own_memory(plan_order))
-        buy = part.limit_order(plan_order, 'BUY', decimal.Decimal('995.00'))
-        sell = part.limit_order(plan_order, 'SELL', decimal.Decimal('1005.00'), 3)
-        orders = [
-            buy,
-            sell,
-        ]
-        for order in orders:
-            answer, status, leg_id = part.place_order(plan_order, order, None)
-            print(f'placed {leg_id}: {answer["outcome"]} {status}')
-        print('requests:', plan_order.requests)
-        print('net position before any fill:', part.inventory(plan_order.parent))
-        plan_order.fill(2)
-        print('net position once the sell of three fills:', part.inventory(plan_order.parent))
-        record = plan_order.part_record('root')
-        record['state'] = 'working'
-        plan_order.set_part_record('root', record, None)
-        print('stopped before:', part.is_stopped(plan_order))
-        part.finish_when_done(plan_order)
-        print('done while the buy still rests:', plan_order.part_record('root')['state'])
-        print('cancel_once asks for the sell:', part.cancel_once(plan_order, plan_order.parent.legs[1], 'the sell is no longer wanted'))
-        print('and does not ask again:', part.cancel_once(plan_order, plan_order.parent.legs[1], 'the sell is no longer wanted'))
-        part.cancel_rest(plan_order, 'the caller cancelled the plan')
-        print('stopped after:', part.is_stopped(plan_order), plan_order.requests[-1])
-        part.finish_when_done(plan_order)
-        print('once both have finished:', plan_order.part_record('root')['state'], plan_order.part_record('root')['reason'])
-        print('messages:', plan_order.messages)
-        print('dry run:', part.expanded())
+        plan_order.enter(6, 1000.0)
+        part = ExitsMaker().exits({
+                'stop_price': 990,
+                'stop_limit_price': 988,
+                'target_prices': [
+                    1010,
+                    1020,
+                ],
+            })
+        print(f'problems {part.settings_problems()}, needs a Then join {part.NEEDS_THEN}, tranches of 10 over 3: {part.tranches(10, 3)}')
+        stop = part.stop_order(plan_order, 'SELL', 6)
+        print(f'the stop it sends: {stop["order_type"]} {stop["quantity"]}, trigger {stop["trigger_price"]}, limit {stop["price"]}')
+        part.start(plan_order, 6, None, {})
+        print('armed for 6:', plan_order.requests)
+        plan_order.parent.legs[0].filled_quantity = 10
+        part.set_target(plan_order, 10)
+        print('the entry fills to 10:', plan_order.requests[3:])
+        print(f'stop {part.stop_leg(plan_order).quantity}, targets {[leg.quantity for leg in part.target_legs(plan_order)]}')
+        plan_order.fill(3)
+        part.settle(plan_order)
+        print(f'the first target fills; taken {part.taken_by_targets(plan_order)}, entry average {part.entry_average_price(plan_order)}')
+        for request in plan_order.requests[4:]:
+            print(' ', request)
+        before = len(plan_order.requests)
+        part.fit_stop(plan_order)
+        part.fit_targets(plan_order)
+        part.move_to_breakeven(plan_order)
+        print('settling again asks for nothing:', plan_order.requests[before:])
 
 
 if __name__ == '__main__':
-    MemoryAndItsOwnOrdersExample().run()
+    TargetsShrinkTheStopExample().run()

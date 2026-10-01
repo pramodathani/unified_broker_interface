@@ -4,6 +4,7 @@ hidden_stop with {'trigger_price': 995} is a join: False
 hidden_stop with {'trigger_price': 995, 'backstop_price': 980, 'backstop_limit_price': 978} is a join: True
 bracket: {"then": {"cancel_first_on_child_fill": true, "each_fill": {"either": {"children": [{"order": {"pricing": [{"native_stop": {"limit_price": 988, "trigger_price": 990}}], "side": "protect"}}, {"order": {"pricing": [{"fixed": {"price": 1010}}], "side": "protect"}}], "sibling_rule": "reduce"}}, "first": {"order": {"presets": [{"market_if_touched": {"trigger_price": 995}}]}}}}
 cover: {"then": {"cancel_first_on_child_fill": true, "each_fill": {"order": {"pricing": [{"native_stop": {"limit_price": 988, "trigger_price": 990}}], "side": "protect"}}, "first": {"order": {}}}}
+scale_out: {"then": {"cancel_first_on_child_fill": true, "each_fill": {"order": {"presets": [{"scale_out_exits": {"stop_limit_price": 988, "stop_price": 990, "target_prices": [1010, 1020]}}]}}, "first": {"order": {}}}}
 oto: {"then": {"each_fill": {"order": {"pricing": [{"fixed": {"price": 1010}}], "side": "sell"}}, "first": {"order": {}}}}
 oco: {"order": {"pricing": [{"native_stop": {"limit_price": 988, "trigger_price": 990}}], "side": "protect"}}
   root.presets.1 [nothing_to_merge_into]: the oco preset protects a position already held, so it has no order of its own for other presets or slot values to change

@@ -30,6 +30,7 @@ KEPT_WHOLE_PRESETS = (
     'two_sided_quote',
     'scale_with_profit_taker',
     'exposure_hedge',
+    'scale_out_exits',
 )
 PRESET_NAMES = (
     'simple',
@@ -79,6 +80,8 @@ PRESET_NAMES = (
     'two_sided_quote',
     'scale_with_profit_taker',
     'exposure_hedge',
+    'scale_out',
+    'scale_out_exits',
     'oto',
     'oco',
     'bracket',
@@ -138,6 +141,7 @@ JOIN_PRESET_NAMES = (
     'oco',
     'bracket',
     'cover',
+    'scale_out',
 )
 BACKSTOP_SETTINGS = (
     'backstop_price',
@@ -345,6 +349,8 @@ class PresetExpander:
             return self._bracket(settings, entry, path)
         if name == 'cover':
             return self._cover(settings, entry, path)
+        if name == 'scale_out':
+            return self._scale_out(settings, entry, path)
         if name == 'stop_and_reverse':
             return self._sequential_reverse(settings, entry, path)
         return self._hidden_stop_with_backstop(settings, entry, path, name)
@@ -789,6 +795,35 @@ class PresetExpander:
                     'order': entry,
                 },
                 'each_fill': exits,
+                'cancel_first_on_child_fill': True,
+            },
+        }
+
+    def _scale_out(self, settings, entry, path):
+        """The entry, and once it fills, the scale-out's exits kept whole: tranched targets and one stop that shrinks behind them.
+
+        Args:
+            settings (dict): `stop_price`, `stop_limit_price`, `target_prices` and `breakeven_after`, which the exits check.
+            entry (dict): The order it was named in.
+            path (str): The preset's path.
+
+        Returns:
+            dict: A Then join whose child is the exits.
+        """
+        return {
+            'then': {
+                'first': {
+                    'order': entry,
+                },
+                'each_fill': {
+                    'order': {
+                        'presets': [
+                            {
+                                'scale_out_exits': settings,
+                            },
+                        ],
+                    },
+                },
                 'cancel_first_on_child_fill': True,
             },
         }

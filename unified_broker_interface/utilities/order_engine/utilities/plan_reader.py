@@ -128,6 +128,9 @@ from unified_broker_interface.utilities.order_engine.utilities.price_crosses_con
 from unified_broker_interface.utilities.order_engine.utilities.repeat_part import (
     RepeatPart,
 )
+from unified_broker_interface.utilities.order_engine.utilities.scale_out_exits_part import (
+    ScaleOutExitsPart,
+)
 from unified_broker_interface.utilities.order_engine.utilities.scale_with_profit_taker_part import (
     ScaleWithProfitTakerPart,
 )
@@ -165,6 +168,9 @@ from unified_broker_interface.utilities.order_engine.utilities.two_sided_quote_p
 )
 from unified_broker_interface.utilities.order_engine.utilities.vwap_execution import (
     VwapExecution,
+)
+from unified_broker_interface.utilities.order_engine.utilities.whole_part import (
+    WholePart,
 )
 
 JOIN_NAMES = (
@@ -257,6 +263,7 @@ WHOLE_PART_CLASSES = {
     'two_sided_quote': TwoSidedQuotePart,
     'scale_with_profit_taker': ScaleWithProfitTakerPart,
     'exposure_hedge': ExposureHedgePart,
+    'scale_out_exits': ScaleOutExitsPart,
 }
 POSITION_SETTINGS = (
     'product',
@@ -337,6 +344,8 @@ class PlanReader:
         for part in root.order_parts():
             if isinstance(part.pricing, FromParentFillPricing) and part.pricing.first_path is None:
                 self._add_problem(part.path, 'from_parent_fill_needs_then', 'from_parent_fill prices this order from the fills of a Then join\'s first order, so it must be that join\'s child, and the first plan a single order')
+            if isinstance(part, WholePart) and part.NEEDS_THEN and not part.sized_by_fills:
+                self._add_problem(part.path, 'needs_then', f'{part.name} protects what a Then join\'s first plan filled, so it must be that join\'s child')
             if part.fill_ratio is not None and not part.sized_by_fills:
                 self._add_problem(part.path, 'parent_fill_needs_then', 'a quantity of parent_fill or parent_fill_delta scales what a Then join\'s first plan filled, so the order must be that join\'s child')
 

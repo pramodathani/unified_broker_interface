@@ -80,3 +80,5 @@ scale_with_profit_taker: {'whole': {'name': 'scale_with_profit_taker', 'settings
   problems: []
 exposure_hedge: {'whole': {'name': 'exposure_hedge', 'settings': {'watched': [{'instrument_id': 'RELIANCE'}], 'hedge_instrument_id': 'RELIANCE', 'lower_band': -10, 'upper_band': 10}}}
   problems: []
+scale_out_exits: {'whole': {'name': 'scale_out_exits', 'settings': {'stop_price': 990, 'stop_limit_price': 988, 'target_prices': [1010, 1020]}}}
+  problems: []

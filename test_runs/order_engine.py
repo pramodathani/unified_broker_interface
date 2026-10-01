@@ -2998,6 +2998,38 @@ class OrderEngineSuite:
                 },
             }
 
+        stop_in_the_book = {
+            'order_type': 'SL',
+            'trigger_price': 990,
+        }
+        two_targets = {
+            'stop_price': 990,
+            'stop_limit_price': 988,
+            'target_prices': [
+                1010,
+                1020,
+            ],
+        }
+
+        def scale_out(settings):
+            """A plan of one order with the scale-out preset.
+
+            Args:
+                settings (dict): Its settings.
+
+            Returns:
+                dict: The plan.
+            """
+            return {
+                'order': {
+                    'presets': [
+                        {
+                            'scale_out': settings,
+                        },
+                    ],
+                },
+            }
+
         capped_at_twenty = {
             'levels': 2,
             'step_points': 5,
@@ -3408,6 +3440,125 @@ class OrderEngineSuite:
                 accepted,
                 positions=100,
                 restart_between_ticks=True,
+            ),
+            self.plan_result(
+                'a_plan_scale_out_arms_one_stop_and_several_targets',
+                scale_out({
+                    'stop_price': 990,
+                    'stop_limit_price': 988,
+                    'target_prices': [
+                        1010,
+                        1020,
+                        1030,
+                    ],
+                }),
+                [
+                    self.update('26091500000021', 'COMPLETE', 9),
+                ],
+                accepted,
+                body_overrides={
+                    'quantity': 9,
+                },
+            ),
+            self.plan_result(
+                'a_plan_scale_out_takes_only_the_new_part_of_a_targets_second_fill_off_the_stop',
+                scale_out(two_targets),
+                [
+                    self.update('26091500000101', 'COMPLETE', 10),
+                    self.update('26091500000102', 'OPEN', 0),
+                    self.update('26091500000103', 'OPEN', 2),
+                    self.update('26091500000103', 'OPEN', 4),
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_scale_out_moves_its_stop_to_the_entry_price_after_a_target',
+                scale_out(two_targets),
+                [
+                    {'quote': steady, 'at': 0},
+                    {
+                        'quote': steady,
+                        'at': 1,
+                        'updates': [
+                            self.update('26091500000101', 'COMPLETE', 10, average_price=1000.0),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 2,
+                        'updates': [
+                            self.update('26091500000102', 'OPEN', 0, order_type='SL'),
+                            self.update('26091500000103', 'OPEN', 0),
+                            self.update('26091500000104', 'OPEN', 0),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 3,
+                        'updates': [
+                            self.update('26091500000103', 'COMPLETE', 5),
+                        ],
+                    },
+                ],
+                numbered,
+                book_overrides=stop_in_the_book,
+            ),
+            self.plan_result(
+                'a_plan_scale_out_stop_filling_cancels_the_targets',
+                scale_out(two_targets),
+                [
+                    self.update('26091500000101', 'COMPLETE', 10),
+                    self.update('26091500000102', 'OPEN', 0),
+                    self.update('26091500000103', 'OPEN', 0),
+                    self.update('26091500000104', 'OPEN', 0),
+                    self.update('26091500000102', 'COMPLETE', 10),
+                    self.update('26091500000103', 'CANCELLED', 0),
+                    self.update('26091500000104', 'CANCELLED', 0),
+                ],
+                numbered,
+            ),
+            self.plan_result(
+                'a_plan_scale_out_exits_alone_are_refused',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'scale_out_exits': two_targets,
+                            },
+                        ],
+                    },
+                },
+                [],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_scale_out_after_a_market_if_touched_entry',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'market_if_touched': {
+                                    'trigger_price': 995,
+                                },
+                            },
+                            {
+                                'scale_out': two_targets,
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                    {
+                        'quote': self.book_at(994.90, 994.95),
+                        'at': 2,
+                        'updates': [
+                            self.update('26091500000101', 'COMPLETE', 10),
+                        ],
+                    },
+                ],
+                numbered,
             ),
             self.plan_price_result(
                 'a_plan_grid_beside_another_preset_is_refused',

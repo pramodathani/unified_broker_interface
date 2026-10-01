@@ -1,0 +1,8 @@
+the stop fills 6: [('cancel', 'SELL', 1020.0, 'the stop filled 6, so this target has nothing left to take'), ('change', 'SELL', 4, 'the stop filled 6, so this target takes less')]
+the stop fills 10: [('cancel', 'SELL', 1010.0, 'the stop filled 10, so this target has nothing left to take')]
+state: done partly_filled
+one unit: [('place', 'SELL', 1, 'SL', '988'), ('place', 'SELL', 1, 'LIMIT', '1020')]
+problem: the scale_out preset takes stop_price, stop_limit_price, target_prices, breakeven_after, not 'trail'
+problem: a scale_out needs target_prices, a list of at least two prices to take the position off at
+problem: a scale_out needs stop_price and stop_limit_price: the stop is what covers whatever has not been taken off yet
+problem: breakeven_after must be a whole number of at least 1, not 0
