@@ -1,3 +1,5 @@
 Before: {'instrument_id': '11111111-1111-5111-8111-000000000001', 'transaction_type': 'BUY', 'order_type': 'LIMIT', 'quantity': 10, 'price': '1000.00'}
 After: {'instrument_id': '11111111-1111-5111-8111-000000000001', 'transaction_type': 'BUY', 'order_type': 'SL', 'quantity': 10, 'price': '1012', 'trigger_price': '1010'}
-Reads quotes: False; dry run shows {'native_stop': {'trigger_price': '1010', 'limit_price': '1012'}}
+Reads quotes: False; dry run shows {'native_stop': {'trigger_price': '1010', 'limit_price': '1012', 'exit_if_gapped': False}}
+Checking for a gap, it reads quotes: True; at 1,030 the stop is passed: True, at 1,000 not: False
+Opened at 1,030, it is sent as: {'instrument_id': '11111111-1111-5111-8111-000000000001', 'transaction_type': 'BUY', 'order_type': 'LIMIT', 'quantity': 10, 'price': '1030.10'}

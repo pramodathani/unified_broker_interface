@@ -524,7 +524,7 @@ class PlanOrder(SyntheticOrder):
     def on_clock_tick(self, now):
         """Ends every order whose lifetime is up and sends every order waiting only for a time, even when its instrument sent no price tick.
 
-        Orders whose trigger reads prices are left to the price ticks, because some of those triggers count ticks.
+        Orders whose trigger reads prices are left to the price ticks, because some of those triggers count ticks. Orders sent in pieces on later ticks, such as a TWAP or a daily stop, are sent their due pieces too, priced from the quotes as they are now, as today's timed types are sent theirs on the clock.
 
         Args:
             now (float): The Unix time of the tick.
@@ -535,13 +535,27 @@ class PlanOrder(SyntheticOrder):
         if self._end_lifetimes(None, now):
             return True
         waiting_paths = []
+        paced_paths = []
         for path, record in (self.parent.parameters.get('parts') or {}).items():
             if record.get('state') == 'waiting':
                 waiting_paths.append(path)
-        if not waiting_paths:
+            if record.get('state') == 'working' and record.get('paced'):
+                paced_paths.append(path)
+        if not waiting_paths and not paced_paths:
             return False
         root, _ = self._read_plan()
         placed, memory_changed, ended = self._fire_waiting(root, waiting_paths, None, now, True)
+        for part in root.order_parts():
+            if part.path not in paced_paths:
+                continue
+            quotes = {}
+            if part.needs_prices():
+                try:
+                    quotes = self.quotes_now()
+                except RefusedRequestError as refusal:
+                    self.logger.warning(f'Parent {self.parent.parent_order_id} could not read the quotes to send {part.path}: {refusal.body.get("error")}')
+                    continue
+            placed = placed + part.send_due(self, None, quotes, now)
         if not placed and not ended:
             if memory_changed:
                 self.save()

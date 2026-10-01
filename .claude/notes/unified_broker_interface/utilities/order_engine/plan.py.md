@@ -89,3 +89,7 @@ Nothing in the plan order changed for this step; `AtrTrailPricing` and `StagesPr
 ## Stage 5g: plans that outlive the day (2026-10-01)
 
 `PlanOrder` sets `CARRIES_OVERNIGHT`, so recovery reads every plan's events from the 30-day carry window, but `carries_parent_overnight` keeps only a plan whose parameters say `carries_overnight`, which `run` sets when any order has a lifetime in `after_days`. Every other plan is a day's plan: rebuilding it after the 06:00 reset would revive yesterday's waiting orders and let them fire, which the reset's expiry of the parent caches has always prevented. The cost is a larger carry read, every plan of the last 30 days, which is acceptable at today's volumes and is the first thing to narrow if it is not.
+
+## Paced orders on the clock (2026-10-01)
+
+A clock tick now also sends the due pieces of every working paced order, reading the quotes as they are now for one that prices itself. Today's timed types are clock-driven, and a daily stop on an instrument with no price tick at 09:20 would otherwise not be placed. Sending on both kinds of tick is safe, because an execution works out what is due from the orders already sent.

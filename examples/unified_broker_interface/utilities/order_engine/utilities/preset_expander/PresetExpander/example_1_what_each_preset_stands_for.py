@@ -156,6 +156,10 @@ class WhatEachPresetStandsForExample:
                 'trigger_price': 995,
                 'bar_minutes': 15,
             },
+            'daily_stop': {
+                'stop_price': 990,
+                'stop_limit_price': 988,
+            },
             'good_till_triggered': {
                 'trigger_price': 995,
                 'limit_price': 990,

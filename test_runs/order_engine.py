@@ -5198,7 +5198,7 @@ class OrderEngineSuite:
         ]
 
     def run_plan_repeat_checks(self):
-        """Runs plans that send one order again on a schedule, beside the accumulation type they stand for.
+        """Runs plans that send one order again on a schedule, beside the accumulation and daily stop types they stand for.
 
         Returns:
             list: One recorded result per check.
@@ -5208,6 +5208,19 @@ class OrderEngineSuite:
             self.scenarios.answers.place_success('flattrade'),
         )
         frozen = FROZEN_NOW.timestamp()
+        daily_stop = {
+            'order': {
+                'presets': [
+                    {
+                        'daily_stop': {
+                            'stop_price': 990,
+                            'stop_limit_price': 988,
+                            'arm_at': '09:20',
+                        },
+                    },
+                ],
+            },
+        }
         accumulation = {
             'order': {
                 'presets': [
@@ -5284,6 +5297,56 @@ class OrderEngineSuite:
                 body_overrides={
                     'quantity': 5,
                 },
+            ),
+            self.plan_clock_result(
+                'a_plan_daily_stop_taken_on_a_sunday_places_nothing_that_day',
+                daily_stop,
+                [],
+                FROZEN_NOW.replace(day=27).replace(hour=9, minute=21).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(day=27).replace(hour=8, minute=45),
+                quote=self.scenarios.quote(),
+                positions=10,
+            ),
+            self.plan_clock_result(
+                'a_plan_daily_stop_taken_after_its_time_waits_for_the_next_trading_morning',
+                daily_stop,
+                [],
+                frozen + 60,
+                accepted,
+                taken_at=FROZEN_NOW,
+                quote=self.scenarios.quote(),
+                positions=10,
+            ),
+            self.plan_clock_result(
+                'a_plan_daily_stop_places_a_fresh_stop_in_the_morning',
+                daily_stop,
+                [],
+                frozen + 60,
+                accepted,
+                taken_at=FROZEN_NOW.replace(hour=8, minute=45),
+                quote=self.scenarios.quote(),
+                positions=10,
+            ),
+            self.plan_clock_result(
+                'a_plan_daily_stop_closes_the_position_when_the_open_gapped_past_it',
+                daily_stop,
+                [],
+                frozen + 60,
+                accepted,
+                taken_at=FROZEN_NOW.replace(hour=8, minute=45),
+                quote=self.scenarios.quote(
+                    last_price=960.00,
+                    depth={
+                        'buy': [
+                            {'price': 960.00, 'quantity': 100, 'orders': 1},
+                        ],
+                        'sell': [
+                            {'price': 960.05, 'quantity': 100, 'orders': 1},
+                        ],
+                    },
+                ),
+                positions=10,
             ),
             self.plan_clock_result(
                 'a_plan_repeat_whose_child_is_a_join_is_refused',
