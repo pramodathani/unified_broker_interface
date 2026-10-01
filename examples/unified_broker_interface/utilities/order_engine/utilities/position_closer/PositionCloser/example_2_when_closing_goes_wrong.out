@@ -1,4 +1,4 @@
-1. Open intraday position in SBIN or WIPRO: 22222222-2222-5222-8222-000000000001 300
+1. Open intraday position in SBIN or WIPRO: 22222222-2222-5222-8222-000000000001 300 at zerodha
 2. Resting orders with Redis down: []
 3. Cancels accepted once Redis answers: 0
    Recorded outside_cancel_requested for zerodha 250930000777: None, cancelled before squaring off

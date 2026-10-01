@@ -146,16 +146,47 @@ class OneCancelsOther(SyntheticOrder):
                 continue
             if leg.role not in ('stop', 'target'):
                 continue
-            remaining = (leg.quantity or 0) - (filled_leg.filled_quantity or 0)
-            if remaining == leg.quantity:
-                continue
-            self.reduce_leg(
+            self.take_fill_off(
                 leg,
-                remaining,
+                filled_leg,
                 f'{filled_leg.role} filled '
                 f'{filled_leg.filled_quantity}, so this leg follows it down',
             )
         self.save()
+
+    def take_fill_off(self, leg, filled_leg, reason):
+        """Reduces one exit by the part of another exit's fill it has not yet given up.
+
+        An update carries the other exit's total fill, not what is new, and a reduced exit already reflects the fills taken off it before. The parent therefore remembers, for each exit, how much of each other exit's fill has been taken off it, and only the difference is taken off now. It is remembered only once the broker accepts the change, so a change that fails is tried again, whole, on the next fill.
+
+        Args:
+            leg (OrderLeg): The exit to reduce.
+            filled_leg (OrderLeg): The exit that filled.
+            reason (str): Why, for a person reading the parent later.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        taken_off = self.parent.parameters.get('fills_taken_off') or {}
+        taken_off_this_leg = taken_off.get(leg.leg_id) or {}
+        already = taken_off_this_leg.get(filled_leg.leg_id) or 0
+        filled = filled_leg.filled_quantity or 0
+        new_fill = filled - already
+        if new_fill < 1:
+            return
+        accepted = self.reduce_leg(
+            leg,
+            (leg.quantity or 0) - new_fill,
+            reason,
+        )
+        if not accepted:
+            return
+        taken_off_this_leg = dict(taken_off_this_leg)
+        taken_off_this_leg[filled_leg.leg_id] = filled
+        taken_off = dict(taken_off)
+        taken_off[leg.leg_id] = taken_off_this_leg
+        self.parent.parameters = dict(self.parent.parameters)
+        self.parent.parameters['fills_taken_off'] = taken_off
 
     def finish_if_done(self):
         """Closes the parent once nothing it placed can still fill.

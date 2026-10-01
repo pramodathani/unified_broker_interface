@@ -1,10 +1,10 @@
 """Walks through the three steps a square-off takes: find the open positions, cancel the orders resting on them, and build a closing order for each.
 
-A `PositionCloser` works through the order type that owns it, here a real `SquareOff`, so every cancel is recorded on that type's parent. Its three steps are always taken in the same order. First `open_positions` reads the account's net positions on one product. Then `cancel_resting` cancels every open order at every broker on those instruments, because a stop or target left live would fill after the close and open a new position the other way. Finally `closing_order` builds a limit order for each position, priced two ticks past the other side's best price so it fills at once.
+A `PositionCloser` works through the order type that owns it, here a real `SquareOff`, so every cancel is recorded on that type's parent. Its three steps are always taken in the same order. First `open_positions` reads each broker's net positions on one product, from that broker's own positions hash, so every position comes with the broker that holds it, and the closing order can be sent there. Then `cancel_resting` cancels every open order at every broker on those instruments, because a stop or target left live would fill after the close and open a new position the other way. Finally `closing_order` builds a limit order for each position, priced two ticks past the other side's best price so it fills at once.
 
 The program holds a long intraday position of 50 in one share and a short intraday position of 75 in another, plus a delivery position that the square-off leaves alone. `unified:order-updates` holds two open orders on those instruments, one at Zerodha and one at Dhan, and one completed order that needs no cancel. `resting_orders` lists the open ones, which `cancel_resting` then cancels.
 
-Everything the square-off reads or sends goes through a stand-in placement: `market_context` returns the instrument's broker handles, a quote with depth and the positions document, `cache.hgetall` returns the order updates, and `cancel` accepts every cancel without calling a broker. A stand-in event log keeps the recorded events so the program can print them. Nothing is placed: the closing orders are only built and printed.
+Everything the square-off reads or sends goes through a stand-in placement: `market_context` returns the instrument's broker handles and a quote with depth, its stand-in Redis returns the order updates, Zerodha's positions hash and the token lookup made from the positions the program holds, and `cancel` accepts every cancel without calling a broker. A stand-in event log keeps the recorded events so the program can print them. Nothing is placed: the closing orders are only built and printed.
 
 Run it from the project root:
 
@@ -118,21 +118,166 @@ class OrderUpdatesRedis:
         return dict(self.updates)
 
 
+class BrokerPositionsRedis:
+    """Stands in for Redis as the position closer reads it: the order updates from another stand-in, and Zerodha's own positions and the token lookup, made from the positions document.
+
+    The position closer reads each broker's `<broker>:portfolio:positions` hash rather than the unified positions document, because a closing order has to go to the broker that holds the position, and it finds each position's instrument from the broker's token in `unified:broker_tokens`. Here every position is held at Zerodha, and an instrument's token is its own id.
+
+    Attributes:
+        inner (object): The stand-in that holds the order updates.
+        positions (dict | None): The unified positions document the program set up.
+    """
+
+    PRODUCT_CODES = {
+        'intraday': 'MIS',
+        'delivery': 'CNC',
+        'carry': 'NRML',
+        'carryforward': 'NRML',
+    }
+
+    def __init__(self, inner, positions):
+        """Builds the stand-in.
+
+        Args:
+            inner (object): The stand-in that holds the order updates.
+            positions (dict | None): The unified positions document.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.inner = inner
+        self.positions = positions
+
+    def hgetall(self, key):
+        """Reads a whole hash: Zerodha's positions, or whatever the inner stand-in holds.
+
+        Args:
+            key (str): The key.
+
+        Returns:
+            dict: The hash's fields and values.
+        """
+        if key != 'zerodha:portfolio:positions':
+            return self.inner.hgetall(key)
+        entries = {}
+        for row in (self.positions or {}).get('net') or []:
+            code = self.PRODUCT_CODES.get(row['product'], row['product'].upper())
+            entries[f"NET:{row['instrument_id']}:{code}"] = json.dumps({
+                'position': {
+                    'instrument_token': row['instrument_id'],
+                    'product': code,
+                    'quantity': row['quantity'],
+                    'day_or_net': 'NET',
+                },
+            })
+        return entries
+
+    def hget(self, key, field):
+        """Reads one field, which is only ever a token in `unified:broker_tokens`.
+
+        Args:
+            key (str): The key.
+            field (str): `broker:token`.
+
+        Returns:
+            str | None: The instruments the token names, as JSON, or None.
+        """
+        if key != 'unified:broker_tokens' or not field.startswith('zerodha:'):
+            return None
+        return json.dumps([
+            field.split(':', 1)[1],
+        ])
+
+    def pipeline(self, transaction=True):
+        """A pipeline that answers each queued read from this stand-in.
+
+        Args:
+            transaction (bool): Unused.
+
+        Returns:
+            StandInPipeline: The pipeline.
+        """
+        del transaction
+        return StandInPipeline(self)
+
+
+class StandInPipeline:
+    """Stands in for a Redis pipeline, queueing reads and answering them all at once.
+
+    Attributes:
+        redis (BrokerPositionsRedis): The stand-in the reads are answered from.
+        keys (list): The hashes queued, in order.
+    """
+
+    def __init__(self, redis):
+        """Builds an empty pipeline.
+
+        Args:
+            redis (BrokerPositionsRedis): The stand-in the reads are answered from.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.redis = redis
+        self.keys = []
+
+    def hgetall(self, key):
+        """Queues reading a whole hash.
+
+        Args:
+            key (str): The key.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.keys.append(key)
+
+    def execute(self):
+        """Answers every queued read.
+
+        Returns:
+            list: One hash per queued read, in order.
+        """
+        answers = []
+        for key in self.keys:
+            answers.append(self.redis.hgetall(key))
+        return answers
+
+
+class StandInOrderPlacement:
+    """Stands in for the order placement, which names the brokers the system trades with.
+
+    Attributes:
+        broker_names (list): The brokers, which here is only Zerodha.
+    """
+
+    def __init__(self):
+        """Builds the stand-in.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.broker_names = [
+            'zerodha',
+        ]
+
+
 class StandInPlacement:
     """A stand-in for the engine's placement, answering from fixed data and accepting every cancel.
 
     Attributes:
-        cache (OrderUpdatesRedis): The stand-in Redis client.
+        cache (BrokerPositionsRedis): The stand-in Redis client.
         quotes (dict): Each instrument id to its live quote.
         positions (dict): The unified positions document.
         cancels (list): The cancels sent, as `broker order_id` lines.
+        order_placement (StandInOrderPlacement): Names the brokers the system trades with.
     """
 
     def __init__(self, cache, quotes, positions):
         """Builds the placement.
 
         Args:
-            cache (OrderUpdatesRedis): The stand-in Redis client.
+            cache (BrokerPositionsRedis): The stand-in Redis client.
             quotes (dict): Each instrument id to its live quote.
             positions (dict): The unified positions document.
 
@@ -143,6 +288,7 @@ class StandInPlacement:
         self.quotes = quotes
         self.positions = positions
         self.cancels = []
+        self.order_placement = StandInOrderPlacement()
 
     def market_context(self, instrument_id, needs_quote, needs_positions):
         """Returns the instrument, and the quote and positions when asked for.
@@ -254,7 +400,11 @@ class SquaringOffIntradayExample:
             'dhan:52250930456': self.update('dhan', '52250930456', TCS, 'OPEN'),
             'dhan:52250930400': self.update('dhan', '52250930400', TCS, 'COMPLETE'),
         }
-        self.placement = StandInPlacement(OrderUpdatesRedis(updates), quotes, positions)
+        self.placement = StandInPlacement(
+            BrokerPositionsRedis(OrderUpdatesRedis(updates), positions),
+            quotes,
+            positions,
+        )
         self.event_log = ListEventLog()
         parent = ParentOrder('0f5e2c1a-7b3d-4e9f-8a21-6c4d2b1e9f00')
         parent.synthetic_type = 'square_off'
@@ -341,19 +491,19 @@ class SquaringOffIntradayExample:
             None: This method returns nothing.
         """
         positions = self.closer.open_positions('intraday', None)
-        for instrument_id, quantity in positions:
-            print(f'Open intraday position: {SYMBOLS[instrument_id]} {quantity}')
+        for broker_name, instrument_id, quantity in positions:
+            print(f'Open intraday position: {SYMBOLS[instrument_id]} {quantity} at {broker_name}')
         instrument_ids = set()
-        for instrument_id, _ in positions:
+        for _, instrument_id, _ in positions:
             instrument_ids.add(instrument_id)
         print(f'Resting orders: {sorted(self.closer.resting_orders(instrument_ids))}')
         cancelled = self.closer.cancel_resting(instrument_ids, 'cancelled before squaring off')
         print(f'Cancels accepted: {cancelled}, sent: {sorted(self.placement.cancels)}')
         for event in self.event_log.events:
             print(f'Recorded {event["event"]} for {event["broker"]} {event["broker_order_id"]}: {event.get("outcome")}')
-        for instrument_id, quantity in positions:
+        for broker_name, instrument_id, quantity in positions:
             order = self.closer.closing_order(instrument_id, quantity)
-            print(f'Close {SYMBOLS[instrument_id]}: {order.transaction_type} {order.quantity} {order.product} {order.order_type} at {order.price}')
+            print(f'Close {SYMBOLS[instrument_id]} at {broker_name}: {order.transaction_type} {order.quantity} {order.product} {order.order_type} at {order.price}')
 
 
 if __name__ == '__main__':

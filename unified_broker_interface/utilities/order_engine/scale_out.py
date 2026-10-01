@@ -183,12 +183,9 @@ class ScaleOut(Bracket):
         for leg in self.parent.legs:
             if leg.role != 'stop' or leg.is_finished():
                 continue
-            remaining = (leg.quantity or 0) - (filled_leg.filled_quantity or 0)
-            if remaining == leg.quantity:
-                continue
-            self.reduce_leg(
+            self.take_fill_off(
                 leg,
-                remaining,
+                filled_leg,
                 f'a target took off {filled_leg.filled_quantity}, so the stop '
                 'covers what is left',
             )

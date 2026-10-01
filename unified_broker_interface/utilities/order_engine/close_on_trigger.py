@@ -93,29 +93,32 @@ class CloseOnTrigger(PriceTrigger):
             )
             self.save()
             return True
-        instrument_id, quantity = positions[0]
-        closing = closer.closing_order(instrument_id, quantity)
-        if closing is None:
-            self.record_state(
-                'failed',
-                f'{price} reached the trigger at {level}; {cancelled} '
-                'resting orders cancelled, but the book gave no price to '
-                'close at',
+        outcome = None
+        messages = []
+        for broker_name, instrument_id, quantity in positions:
+            closing = closer.closing_order(instrument_id, quantity)
+            if closing is None:
+                messages.append(
+                    f'the book gave no price to close {abs(quantity)} at {broker_name}'
+                )
+                continue
+            body, _, _ = self.place_leg(
+                'close',
+                closing,
+                None,
+                broker_name,
+                instrument_id,
             )
-            self.save()
-            return True
-        body, _, _ = self.place_leg(
-            'close',
-            closing,
-            None,
-            self.chosen_broker(),
-        )
-        outcome = body.get('outcome')
+            if outcome != 'accepted':
+                outcome = body.get('outcome')
+            messages.append(
+                f'{body.get("status_message") or body.get("outcome")} closing '
+                f'{abs(quantity)} at {broker_name}'
+            )
         self.record_state(
             self.state_after_firing(outcome),
             f'{price} reached the trigger at {level}; {cancelled} resting '
-            f'orders cancelled, then {body.get("status_message") or outcome} '
-            f'closing {abs(quantity)}',
+            f'orders cancelled, then {"; ".join(messages)}',
         )
         self.save()
         return True

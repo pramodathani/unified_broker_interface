@@ -19,3 +19,7 @@ The second instrument is named in the parent's `watch_instrument_id` parameter. 
 ## Why a failed tick is logged rather than raised
 
 The ticker is called from the engine's main loop, between reading intents and reading order updates. A type that raises on a tick must not stop that loop, because the loop is also what places new orders and what applies fills to a bracket's exits. One trailing stop failing has to cost that trailing stop and nothing else, which is the same rule the clock ticker follows.
+
+## Why `hedge_instrument_id` is read by name
+
+`instruments_of` decides which quotes a parent is given by reading named parameters, and `exposure_hedge` trades an instrument named `hedge_instrument_id` that no other key covered, so its first hedge never had a quote. The key is added beside `watch_instrument_id` on 2026-10-01. Reading parameters by name is the pattern the composable order design replaces with each part declaring the instruments it needs; until then, a new type that trades or watches another instrument has to add its key here.

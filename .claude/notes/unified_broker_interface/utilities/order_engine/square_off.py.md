@@ -31,3 +31,7 @@ When one of those orders is a leg of another engine parent, the cancel still goe
 ## Where the closing steps went
 
 Finding the positions, cancelling what rests on them and pricing the closing orders moved to `utilities/position_closer.py`, so `close_on_trigger` can take the same steps. `SquareOff` keeps what is its own: the time, the product and the instruments to close.
+
+## Why each close goes to the broker that holds the position
+
+Each position from `PositionCloser.open_positions` now carries its broker, and its close is sent there. Sending every close to `chosen_broker()`, as before 2026-10-01, closed a position merged across brokers at a broker that held only part of it, which opened a new position there. The note on `utilities/position_closer.py` has the details.

@@ -7,4 +7,4 @@ Sent to the brokers, in order:
   cancel 52260930101
   place BUY 150 LIMIT at 140.90 -> 260930000001
 Parent: working
-  140.60 reached the trigger at 140; 2 resting orders cancelled, then accepted closing 150
+  140.60 reached the trigger at 140; 2 resting orders cancelled, then accepted closing 150 at zerodha
