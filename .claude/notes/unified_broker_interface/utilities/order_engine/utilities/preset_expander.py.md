@@ -87,3 +87,7 @@ The backstop is a second order resting beside the engine-side stop, cancelled be
 ## Virtual limit (2026-10-01)
 
 `virtual_limit` is a `limit_marketable` trigger, and with `paper` the paper venue. The plan answers `armed` without today's `paper`, `trigger_level` and `trigger_direction`, and keeps `missed_quantity` in the order's part record rather than the parent's parameters.
+
+## Delta-sized hedge (2026-10-01)
+
+`attached_hedge` with `delta_volatility` is the same Then join as with `ratio`, with the hedge's side `against_delta` and its quantity `parent_fill_delta`. Exactly one of the two is required, with today's message. A plan on a stock is refused before the parent is recorded, through `FillDelta.check`, with today's message.

@@ -41,6 +41,9 @@ from unified_broker_interface.utilities.order_engine.utilities.either_part impor
     SIBLING_RULES,
     EitherPart,
 )
+from unified_broker_interface.utilities.order_engine.utilities.fill_delta import (
+    FillDelta,
+)
 from unified_broker_interface.utilities.order_engine.utilities.fill_ratio import (
     FillRatio,
 )
@@ -235,6 +238,7 @@ SIDES = (
     'sell',
     'protect',
     'close',
+    'against_delta',
 )
 POSITION_SETTINGS = (
     'product',
@@ -316,7 +320,7 @@ class PlanReader:
             if isinstance(part.pricing, FromParentFillPricing) and part.pricing.first_path is None:
                 self._add_problem(part.path, 'from_parent_fill_needs_then', 'from_parent_fill prices this order from the fills of a Then join\'s first order, so it must be that join\'s child, and the first plan a single order')
             if part.fill_ratio is not None and not part.sized_by_fills:
-                self._add_problem(part.path, 'parent_fill_needs_then', 'a quantity of parent_fill scales what a Then join\'s first plan filled, so the order must be that join\'s child')
+                self._add_problem(part.path, 'parent_fill_needs_then', 'a quantity of parent_fill or parent_fill_delta scales what a Then join\'s first plan filled, so the order must be that join\'s child')
 
     def _read_node(self, node, path, keeps_tag):
         """Reads one node of the tree.
@@ -848,11 +852,18 @@ class PlanReader:
             fill_ratio = self._read_fill_ratio(position_quantity, position_path)
             if fill_ratio is None:
                 return None
+        elif position_quantity is not None and 'parent_fill_delta' in position_quantity:
+            fill_ratio = self._read_fill_delta(position_quantity, position_path)
+            if fill_ratio is None:
+                return None
         elif position_quantity is not None:
             position = self._read_position(position_quantity, position_path)
             if position is None:
                 return None
         if not self._closes_sensibly(side, position, pricing_path, execution, path):
+            return None
+        if side == 'against_delta' and not isinstance(fill_ratio, FillDelta):
+            self._add_problem(path, 'against_delta_needs_delta', 'against_delta trades against the delta of the option the plan traded, so the quantity must be parent_fill_delta')
             return None
         part = OrderPart(path, preset_names, trigger, side, pricing, keeps_tag, execution, cap, post_only, discretion, lifetime, overrides, position)
         part.fill_ratio = fill_ratio
@@ -910,6 +921,32 @@ class PlanReader:
         if len(self.problems) > problems_before:
             return None
         return FillRatio(ratio, whole_lots)
+
+    def _read_fill_delta(self, quantity, path):
+        """Reads a quantity given as `{"parent_fill_delta": {...}}`.
+
+        Args:
+            quantity (dict): The quantity as the caller wrote it.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            FillDelta | None: The sizing, or None when it has a problem.
+        """
+        settings = quantity.get('parent_fill_delta')
+        if len(quantity) != 1 or not isinstance(settings, dict):
+            self._add_problem(path, 'bad_setting', 'a quantity is a whole number, or an object holding position, parent_fill or parent_fill_delta and its settings')
+            return None
+        problems_before = len(self.problems)
+        self._refuse_unknown(settings, ('volatility', 'whole_lots'), f'{path}.parent_fill_delta', 'parent_fill_delta', 'quantity')
+        volatility = settings.get('volatility')
+        if isinstance(volatility, bool) or not isinstance(volatility, (int, float)) or volatility <= 0:
+            self._add_problem(path, 'bad_setting', f'volatility must be a percentage above zero, not {volatility!r}')
+        whole_lots = settings.get('whole_lots', False)
+        if not isinstance(whole_lots, bool):
+            self._add_problem(path, 'bad_setting', f'whole_lots must be true or false, not {whole_lots!r}')
+        if len(self.problems) > problems_before:
+            return None
+        return FillDelta(decimal.Decimal(str(volatility)), whole_lots)
 
     def _read_position(self, quantity, path):
         """Reads a quantity given as `{"position": {...}}`.

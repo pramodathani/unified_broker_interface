@@ -73,3 +73,7 @@ A part with a `position` is a close: `send` hands it to `_close_positions`, whic
 ## Triggers that already hold (2026-10-01)
 
 `start` sends an order at once when its trigger needs no prices and already holds, rather than leaving it waiting for the next tick. Before `time_from` no such trigger could hold when a plan was placed, since the time triggers refuse a passed time; now `time_from` and the `account` condition can. For an account-conditional order whose condition already holds, this places it at once where today's type answers `armed` and places it a tick later.
+
+## `against_delta` (2026-10-01)
+
+The side is worked out in `_sending_side` rather than `sending_side`, because it needs the order's context to read whether the plan's option is a call. Nothing calls `sending_side` without going through `_sending_side`.

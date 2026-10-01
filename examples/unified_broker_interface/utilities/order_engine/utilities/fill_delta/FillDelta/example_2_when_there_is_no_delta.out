@@ -1,0 +1,6 @@
+a stock is refused with 400: delta_volatility sizes the hedge by an option's delta, and this instrument is not an option with a strike and an expiry
+expired: delta None
+WARNING Parent plan-1 could not size its hedge: the option has expired or the hedge has no price
+expired: hedge None
+WARNING Parent plan-1 could not size its hedge: the option has expired or the hedge has no price
+no future price: hedge None

@@ -48,7 +48,7 @@ class OrderPart:
         lifetime (Lifetime | None): When it stops working and what is done then, or None for the body's validity.
         overrides (dict): Body values of its own, such as `instrument_id`, `quantity` or `transaction_type`, written over the caller's body; empty for an order on the body as it is.
         position (PositionQuantity | None): For the `close` side, how the position it closes is read; None for any other order.
-        fill_ratio (FillRatio | None): How the size a Then join hands it is scaled, or None to take it as it is.
+        fill_ratio (FillRatio | FillDelta | None): How the size a Then join hands it is scaled, or None to take it as it is.
         sized_by_fills (bool): Whether it is a Then join's child, sized by the first plan's fills.
         opened_by (list): The paths of the orders whose fills opened the position this order follows, for an order under a Then join; empty otherwise.
         venue (PreOpenVenue | None): Where the order is sent other than the broker selector's continuous market, or None.
@@ -244,7 +244,7 @@ class OrderPart:
         return opening_side
 
     def _sending_side(self, plan_order):
-        """The side this part's orders are sent on in this plan: against the position for `protect` and `close`, the named side for `buy` and `sell`, and otherwise its own body's side.
+        """The side this part's orders are sent on in this plan: against the position for `protect` and `close`, the named side for `buy` and `sell`, against the option's delta for `against_delta` (opposite the opening side for a call, the same side for a put), and otherwise its own body's side.
 
         Args:
             plan_order (PlanOrder): The plan order.
@@ -252,6 +252,11 @@ class OrderPart:
         Returns:
             str: BUY or SELL.
         """
+        if self.side == 'against_delta':
+            opening_side = self._opening_side(plan_order)
+            if self.fill_ratio.is_call(self.context(plan_order)):
+                return OPPOSITE_SIDES[opening_side]
+            return opening_side
         own_side = str(self.context(plan_order).body.get('transaction_type') or '').strip().upper()
         return self.sending_side(self._opening_side(plan_order), own_side)
 
@@ -407,6 +412,8 @@ class OrderPart:
         record = plan_order.part_record(self.path)
         if target is not None and self.fill_ratio is not None:
             target = self.fill_ratio.scaled(self.context(plan_order), target)
+            if target is None:
+                return []
             if target <= 0:
                 record['target'] = target
                 plan_order.set_part_record(self.path, record, None)
@@ -807,6 +814,8 @@ class OrderPart:
         """
         if self.fill_ratio is not None:
             target = self.fill_ratio.scaled(self.context(plan_order), target)
+            if target is None:
+                return
         record = plan_order.part_record(self.path)
         state = record.get('state')
         if state == 'done':

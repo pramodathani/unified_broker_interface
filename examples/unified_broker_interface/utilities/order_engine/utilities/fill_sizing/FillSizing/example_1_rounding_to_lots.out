@@ -1,0 +1,7 @@
+check: None
+lot: 75
+37: 0 in lots, 37 in units
+37.5: 75 in lots, 38 in units
+112.4: 75 in lots, 112 in units
+112.5: 150 in lots, 113 in units
+900.2: 900 in lots, 900 in units

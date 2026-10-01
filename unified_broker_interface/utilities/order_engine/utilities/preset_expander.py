@@ -393,10 +393,10 @@ class PresetExpander:
         return nodes
 
     def _attached_hedge(self, settings, entry, path):
-        """The order, and as it fills a hedge in another instrument of `ratio` times what filled, in whole lots, each missing lot sent as a new order past the hedge's touch.
+        """The order, and as it fills a hedge in another instrument of `ratio` times what filled, or the option's delta at `delta_volatility` times what filled, in whole lots, each missing lot sent as a new order past the hedge's touch.
 
         Args:
-            settings (dict): `hedge_instrument_id` and `ratio`.
+            settings (dict): `hedge_instrument_id`, and exactly one of `ratio` and `delta_volatility`.
             entry (dict): The order it was named in.
             path (str): The preset's path.
 
@@ -404,21 +404,40 @@ class PresetExpander:
             dict: A Then join whose child is the hedge.
         """
         self._refuse_unknown(settings, ('hedge_instrument_id', 'ratio', 'delta_volatility'), path, 'attached_hedge')
-        if 'delta_volatility' in settings:
-            self._add_problem(path, 'not_built', 'a hedge sized by an option\'s delta is part of the design but not built yet; give ratio instead')
+        if ('ratio' in settings) == ('delta_volatility' in settings):
+            self._add_problem(path, 'bad_setting', 'an attached hedge needs exactly one of ratio and delta_volatility')
             return {}
         if self.opening_side not in OTO_SIDES:
             self._add_problem(path, 'needs_side', 'a hedge trades against the entry\'s side, so it needs to know the side of the entry')
             return {}
-        ratio = settings.get('ratio')
-        if isinstance(ratio, bool) or not isinstance(ratio, (int, float)) or ratio == 0:
-            self._add_problem(path, 'bad_setting', f'ratio must be a number other than zero, not {ratio!r}')
-            return {}
-        hedges_opposite = ratio > 0
-        if (self.opening_side == 'BUY') == hedges_opposite:
-            side = 'sell'
+        if 'delta_volatility' in settings:
+            volatility = settings['delta_volatility']
+            if isinstance(volatility, bool) or not isinstance(volatility, (int, float)) or volatility <= 0:
+                self._add_problem(path, 'bad_setting', f'delta_volatility must be a percentage above zero, not {volatility!r}')
+                return {}
+            side = 'against_delta'
+            quantity = {
+                'parent_fill_delta': {
+                    'volatility': volatility,
+                    'whole_lots': True,
+                },
+            }
         else:
-            side = 'buy'
+            ratio = settings.get('ratio')
+            if isinstance(ratio, bool) or not isinstance(ratio, (int, float)) or ratio == 0:
+                self._add_problem(path, 'bad_setting', f'ratio must be a number other than zero, not {ratio!r}')
+                return {}
+            hedges_opposite = ratio > 0
+            if (self.opening_side == 'BUY') == hedges_opposite:
+                side = 'sell'
+            else:
+                side = 'buy'
+            quantity = {
+                'parent_fill': {
+                    'ratio': abs(ratio),
+                    'whole_lots': True,
+                },
+            }
         return {
             'then': {
                 'first': {
@@ -428,12 +447,7 @@ class PresetExpander:
                     'order': {
                         'instrument_id': settings.get('hedge_instrument_id'),
                         'side': side,
-                        'quantity': {
-                            'parent_fill': {
-                                'ratio': abs(ratio),
-                                'whole_lots': True,
-                            },
-                        },
+                        'quantity': quantity,
                         'execution': [
                             {
                                 'top_up': {},

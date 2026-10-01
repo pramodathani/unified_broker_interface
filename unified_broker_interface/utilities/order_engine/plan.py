@@ -123,6 +123,8 @@ class PlanOrder(SyntheticOrder):
                 record['memory'] = memory
             if part.venue is not None:
                 part.venue.check(part.context(self))
+            if part.fill_ratio is not None:
+                part.fill_ratio.check(part.context(self))
             pricing_memory = part.prepared_pricing_memory(self)
             if pricing_memory:
                 record['pricing_memory'] = pricing_memory

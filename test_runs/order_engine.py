@@ -6007,7 +6007,101 @@ class OrderEngineSuite:
                 },
             ),
             self.plan_price_result(
-                'a_plan_attached_hedge_sized_by_delta_is_not_built_yet',
+                'a_plan_attached_hedge_sized_by_delta_sells_about_half_a_bought_call',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'attached_hedge': {
+                                    'hedge_instrument_id': identifiers['reliance_future'],
+                                    'delta_volatility': 12.5,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {
+                        'quote': steady,
+                        'at': 0,
+                        'other_quotes': {
+                            'reliance_future': self.scenarios.quote(last_price=25000),
+                        },
+                    },
+                    {
+                        'quote': steady,
+                        'at': 1,
+                        'updates': [
+                            self.update('26091500000021', 'COMPLETE', 1500),
+                        ],
+                    },
+                ],
+                accepted,
+                body_overrides={
+                    'instrument_id': identifiers['nifty_option'],
+                    'quantity': 1500,
+                    'price': 160,
+                },
+            ),
+            self.plan_price_result(
+                'a_plan_attached_hedge_sized_by_delta_buys_the_future_against_a_bought_put',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'attached_hedge': {
+                                    'hedge_instrument_id': identifiers['reliance_future'],
+                                    'delta_volatility': 12.5,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {
+                        'quote': steady,
+                        'at': 0,
+                        'other_quotes': {
+                            'reliance_future': self.scenarios.quote(last_price=82000),
+                        },
+                    },
+                    {
+                        'quote': steady,
+                        'at': 1,
+                        'updates': [
+                            self.update('26091500000021', 'COMPLETE', 2000),
+                        ],
+                    },
+                ],
+                accepted,
+                body_overrides={
+                    'instrument_id': identifiers['sensex_option'],
+                    'quantity': 2000,
+                    'price': 160,
+                },
+            ),
+            self.plan_price_result(
+                'a_plan_attached_hedge_with_both_a_ratio_and_a_delta_is_refused',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'attached_hedge': {
+                                    'hedge_instrument_id': identifiers['reliance_future'],
+                                    'ratio': 1,
+                                    'delta_volatility': 12.5,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_attached_hedge_sized_by_delta_on_a_stock_is_refused',
                 {
                     'order': {
                         'presets': [
