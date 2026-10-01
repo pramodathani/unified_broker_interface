@@ -128,6 +128,9 @@ class PlanOrder(SyntheticOrder):
             pricing_memory = part.prepared_pricing_memory(self)
             if pricing_memory:
                 record['pricing_memory'] = pricing_memory
+            own_memory = part.prepared_own_memory(self)
+            if own_memory:
+                record['own_memory'] = own_memory
             ends_at = part.lifetime_ends_at(self)
             if ends_at is not None:
                 record['ends_at'] = ends_at
@@ -169,7 +172,7 @@ class PlanOrder(SyntheticOrder):
     def _answer(self, root, placed, warnings):
         """The answer to the caller once the plan has started.
 
-        A plan that placed exactly one order at its root answers with that order's broker answer, as a plain order does. A plan whose order a guard refused, such as a post-only limit that would have crossed, answers `409` with the guard's reason. A plan that placed nothing else answers `202 armed`. Any other answers with `legs`, one entry per order placed.
+        A plan that placed exactly one order at its root answers with that order's broker answer, as a plain order does. A plan whose order a guard refused, such as a post-only limit that would have crossed, answers `409` with the guard's reason. A plan that placed nothing else answers `202 armed`. Any other answers with `legs`, one entry per order placed, and an outcome combined as today's types combine several orders: `accepted` when all were, `partial` with 207 when some were, and otherwise `rejected` or `unknown`.
 
         Args:
             root (object): The root part.
@@ -208,8 +211,8 @@ class PlanOrder(SyntheticOrder):
             status = placed[0][2]
         else:
             legs = []
-            outcome = None
-            status = None
+            outcomes = []
+            statuses = []
             broker = None
             for path, body, leg_status in placed:
                 legs.append({
@@ -219,11 +222,11 @@ class PlanOrder(SyntheticOrder):
                     'order_id': body.get('order_id'),
                     'status_message': body.get('status_message'),
                 })
+                outcomes.append(body.get('outcome'))
+                statuses.append(leg_status)
                 if broker is None:
                     broker = body.get('broker')
-                if outcome != 'accepted':
-                    outcome = body.get('outcome')
-                    status = leg_status
+            outcome, status = self.combined_answer(outcomes, statuses)
             answer = {
                 'broker': broker,
                 'instrument_id': self.parent.instrument_id,

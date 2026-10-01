@@ -72,3 +72,5 @@ opening_auction: {'venue': [{'session': 'pre_open', 'at_time': '09:02:00'}]}
   problems: []
 virtual_limit: {'trigger': {'limit_marketable': {}}, 'venue': [{'session': 'paper'}]}
   problems: []
+grid: {'whole': {'name': 'grid', 'settings': {'levels': 2, 'step_points': 5, 'most_inventory': 20}}}
+  problems: []

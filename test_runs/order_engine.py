@@ -2669,7 +2669,7 @@ class OrderEngineSuite:
         document.update(overrides)
         return document
 
-    def plan_result(self, name, plan, updates, answer, dry_run=None):
+    def plan_result(self, name, plan, updates, answer, dry_run=None, quote=None, body_overrides=None):
         """Places one `plan` order through the engine, feeds it order updates, and records what it did and the state of each of its parts.
 
         Args:
@@ -2678,6 +2678,8 @@ class OrderEngineSuite:
             updates (list): One order update per step, applied in order.
             answer (dict): The stubbed broker answer.
             dry_run (bool | None): The body's `dry_run`.
+            quote (dict | None): A live quote to seed, for a plan that reads the book when it is placed.
+            body_overrides (dict | None): Body fields to replace, such as the quantity.
 
         Returns:
             dict: The recorded result, with `parts`, each parent's `parts` parameter.
@@ -2692,7 +2694,9 @@ class OrderEngineSuite:
                 'plan': plan,
             },
         )
-        result = self.reaction_result(name, body, updates, answer)
+        if body_overrides:
+            body.update(body_overrides)
+        result = self.reaction_result(name, body, updates, answer, quote=quote)
         stored = self.fake_redis.hashes.get('unified:orders:parents', {})
         parts = []
         for document in stored.values():
@@ -2782,7 +2786,7 @@ class OrderEngineSuite:
                         'side': 'long',
                         'presets': [
                             {
-                                'grid': {},
+                                'no_such_preset': {},
                             },
                             {
                                 'simple': {
@@ -2897,6 +2901,149 @@ class OrderEngineSuite:
             parts.append(parameters.get('parts'))
         result['parts'] = parts
         return result
+
+    def run_plan_kept_whole_checks(self):
+        """Runs plan orders kept whole, such as a grid, beside today's checks of the same types.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        accepted = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        refused = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_refusal('flattrade'),
+        )
+        steady = self.book_at(1000.00, 1000.05)
+
+        def grid(settings):
+            """A plan of one grid.
+
+            Args:
+                settings (dict): The grid's settings.
+
+            Returns:
+                dict: The plan.
+            """
+            return {
+                'order': {
+                    'presets': [
+                        {
+                            'grid': settings,
+                        },
+                    ],
+                },
+            }
+
+        capped_at_twenty = {
+            'levels': 2,
+            'step_points': 5,
+            'most_inventory': 20,
+        }
+        return [
+            self.plan_result(
+                'a_plan_grid_replaces_a_filled_rung_with_its_opposite',
+                grid(capped_at_twenty),
+                [
+                    self.update('26091500000021', 'COMPLETE', 5),
+                ],
+                accepted,
+                quote=self.scenarios.quote(),
+                body_overrides={
+                    'quantity': 5,
+                },
+            ),
+            self.plan_result(
+                'a_plan_grid_stops_adding_to_a_side_once_it_hits_its_cap',
+                grid({
+                    'levels': 2,
+                    'step_points': 5,
+                    'most_inventory': 5,
+                }),
+                [
+                    self.update('26091500000021', 'COMPLETE', 5),
+                ],
+                accepted,
+                quote=self.scenarios.quote(),
+                body_overrides={
+                    'quantity': 5,
+                },
+            ),
+            self.plan_result(
+                'a_plan_grid_without_an_inventory_cap_is_refused',
+                grid({
+                    'levels': 2,
+                    'step_points': 5,
+                }),
+                [],
+                accepted,
+                quote=self.scenarios.quote(),
+                body_overrides={
+                    'quantity': 5,
+                },
+            ),
+            self.plan_price_result(
+                'a_plan_grid_with_one_rung_refused_answers_partial_with_207',
+                grid({
+                    'levels': 1,
+                    'step_points': 5,
+                    'most_inventory': 30,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                {
+                    'sequence': [
+                        accepted,
+                        refused,
+                    ],
+                },
+            ),
+            self.plan_price_result(
+                'a_plan_grid_with_every_rung_refused_answers_rejected',
+                grid({
+                    'levels': 1,
+                    'step_points': 5,
+                    'most_inventory': 30,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                refused,
+            ),
+            self.plan_price_result(
+                'a_plan_grid_answers_a_fill_once_across_a_restart',
+                grid(capped_at_twenty),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000021', 'COMPLETE', 10)]},
+                    {'quote': steady, 'at': 2},
+                ],
+                accepted,
+                restart_between_ticks=True,
+            ),
+            self.plan_price_result(
+                'a_plan_grid_beside_another_preset_is_refused',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'grid': capped_at_twenty,
+                            },
+                            {
+                                'post_only': {},
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+        ]
 
     def run_plan_virtual_limit_checks(self):
         """Runs plan orders held in the engine until their limit is marketable, sent or filled on paper, beside today's virtual limit checks.
@@ -9984,6 +10131,7 @@ class OrderEngineSuite:
             results.extend(self.run_plan_checks())
             results.extend(self.run_plan_trigger_checks())
             results.extend(self.run_plan_virtual_limit_checks())
+            results.extend(self.run_plan_kept_whole_checks())
             results.extend(self.run_plan_join_checks())
             results.extend(self.run_plan_trailing_checks())
             results.extend(self.run_plan_execution_checks())

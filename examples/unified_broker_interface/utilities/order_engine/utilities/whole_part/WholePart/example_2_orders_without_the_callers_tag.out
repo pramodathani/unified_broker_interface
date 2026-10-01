@@ -1,0 +1,3 @@
+the main order: SELL 5 at 1005.00, tag mine
+inside a join: SELL 2 at 1005.00, tag None
+with its own tag: SELL 5 at 1005.00, tag hedge

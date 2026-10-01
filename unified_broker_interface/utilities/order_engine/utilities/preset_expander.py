@@ -25,6 +25,9 @@ WATCH_FIELDS = {
     'mid': 'mid',
 }
 DEFAULT_BUFFER_TICKS = 2
+KEPT_WHOLE_PRESETS = (
+    'grid',
+)
 PRESET_NAMES = (
     'simple',
     'market_if_touched',
@@ -69,6 +72,7 @@ PRESET_NAMES = (
     'closing_price',
     'opening_auction',
     'virtual_limit',
+    'grid',
     'oto',
     'oco',
     'bracket',
@@ -179,6 +183,13 @@ class PresetExpander:
             dict: Slot names to slot values, as a caller would write them; empty when there are problems.
         """
         self.problems = []
+        if name in KEPT_WHOLE_PRESETS:
+            return {
+                'whole': {
+                    'name': name,
+                    'settings': settings,
+                },
+            }
         if name == 'simple':
             return self._simple(settings, path)
         if name == 'market_if_touched':

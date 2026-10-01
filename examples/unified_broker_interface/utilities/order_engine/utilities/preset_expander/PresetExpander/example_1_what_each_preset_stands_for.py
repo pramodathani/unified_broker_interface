@@ -171,6 +171,11 @@ class WhatEachPresetStandsForExample:
             'virtual_limit': {
                 'paper': True,
             },
+            'grid': {
+                'levels': 2,
+                'step_points': 5,
+                'most_inventory': 20,
+            },
             'account_conditional': {
                 'account_field': 'day_pnl',
                 'account_level': -5000,

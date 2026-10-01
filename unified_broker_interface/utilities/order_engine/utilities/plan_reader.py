@@ -73,6 +73,9 @@ from unified_broker_interface.utilities.order_engine.utilities.lifetime import (
     ON_END,
     Lifetime,
 )
+from unified_broker_interface.utilities.order_engine.utilities.grid_part import (
+    GridPart,
+)
 from unified_broker_interface.utilities.order_engine.utilities.limit_marketable_condition import (
     LimitMarketableCondition,
 )
@@ -240,6 +243,9 @@ SIDES = (
     'close',
     'against_delta',
 )
+WHOLE_PART_CLASSES = {
+    'grid': GridPart,
+}
 POSITION_SETTINGS = (
     'product',
     'instrument_ids',
@@ -695,6 +701,9 @@ class PlanReader:
                 own[slot] = order[slot]
         if isinstance(order.get('quantity'), dict):
             own['quantity'] = order['quantity']
+        for slots, source_path in sources:
+            if 'whole' in slots:
+                return self._read_whole(order, slots['whole'], source_path, own, path, keeps_tag, overrides)
         sources.append((own, path))
         position_quantity = None
         position_path = None
@@ -868,6 +877,33 @@ class PlanReader:
         part = OrderPart(path, preset_names, trigger, side, pricing, keeps_tag, execution, cap, post_only, discretion, lifetime, overrides, position)
         part.fill_ratio = fill_ratio
         part.venue = venue
+        return part
+
+    def _read_whole(self, order, whole, source_path, own, path, keeps_tag, overrides):
+        """Reads an order whose preset is one of the types kept whole, such as a grid.
+
+        Args:
+            order (dict): The order as the caller wrote it.
+            whole (dict): The expanded preset: `name` and `settings`.
+            source_path (str): Where the preset sits in the plan.
+            own (dict): The order's own slot values.
+            path (str): Where the order sits in the plan.
+            keeps_tag (bool): Whether its orders carry the caller's tag.
+            overrides (dict): The order's own values written over the body's.
+
+        Returns:
+            WholePart | None: The part, or None when it has a problem.
+        """
+        name = whole['name']
+        if len(order.get('presets') or []) != 1 or own:
+            self._add_problem(path, 'kept_whole_alone', f'{name} runs by rules of its own, so it takes no other preset and no trigger, side, pricing, execution, guards, lifetime, venue or sized quantity')
+            return None
+        part = WHOLE_PART_CLASSES[name](path, name, whole['settings'], keeps_tag, overrides)
+        problems = part.settings_problems()
+        for message in problems:
+            self._add_problem(source_path, 'bad_setting', message)
+        if problems:
+            return None
         return part
 
     def _closes_sensibly(self, side, position, pricing_path, execution, path):

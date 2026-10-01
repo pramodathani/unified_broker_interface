@@ -1,0 +1,9 @@
+('place', 'SELL', 5, '1000.1', 'mine')
+('cancel', 'BUY', 990.1, 'the grid is holding 5, which is its whole allowance, so it stops adding to that side')
+stop_adding again cancels nothing more: True
+problem: the grid preset takes levels, step_points and most_inventory, not 'spacing'
+problem: levels must be a whole number between 1 and 20, not 30
+problem: step_points must be above zero, not -1
+problem: a grid needs most_inventory: a trending market fills one side over and over, and without a cap the position keeps growing at prices that keep getting worse
+no last price: 503 a grid is built around where the market is and the live quote does not carry a last traded price yet
+state: done partly_filled

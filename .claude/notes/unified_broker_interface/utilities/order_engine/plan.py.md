@@ -97,3 +97,9 @@ A clock tick now also sends the due pieces of every working paced order, reading
 ## Paper fills and missed quantity (2026-10-01)
 
 `_fire_waiting` hands a paper order to its venue instead of asking its trigger, and reports a fill the same way as an order that ended without placing anything, so the plan settles, finishes and saves. An order on a `limit_marketable` trigger records `missed_quantity` in its part record as it fires, from the queue estimate, as today's type records it in the parent's parameters.
+
+## Combined answers and kept-whole memory (2026-10-02)
+
+A plan that placed several orders used to answer with the outcome of the first order that was not accepted, or `accepted` once any was, which hid a refused rung behind a 200. It now combines the outcomes with `combined_answer`, as today's grid and basket do, so a mix answers `partial` with 207. No earlier plan scenario had a mix, so none changed.
+
+`run` also asks every part for `prepared_own_memory`, which only kept-whole parts give, and keeps it as `own_memory` in the part record before the parent is recorded.

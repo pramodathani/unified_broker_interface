@@ -201,6 +201,18 @@ class OrderPart:
             return self.pricing.prepared_memory(self.context(plan_order))
         return {}
 
+    def prepared_own_memory(self, plan_order):
+        """The memory a part kept whole readies when the plan is placed, which an ordinary order does not have.
+
+        Args:
+            plan_order (PlanOrder): Unused.
+
+        Returns:
+            dict: An empty dict.
+        """
+        del plan_order
+        return {}
+
     def closes_position(self):
         """Whether this part's orders close a position, which is so for the `protect` and `close` sides.
 
