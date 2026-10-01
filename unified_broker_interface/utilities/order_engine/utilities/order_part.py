@@ -9,6 +9,9 @@ from unified_broker_interface.utilities.order_engine.utilities.all_at_once_execu
 from unified_broker_interface.utilities.order_engine.utilities.follow_instrument_pricing import (
     FollowInstrumentPricing,
 )
+from unified_broker_interface.utilities.order_engine.utilities.ladder_execution import (
+    LadderExecution,
+)
 from unified_broker_interface.utilities.order_engine.utilities.order_context import (
     OrderContext,
 )
@@ -295,7 +298,7 @@ class OrderPart:
             self._sending_side(plan_order),
         )
 
-    def order(self, plan_order, quotes, quantity=None):
+    def order(self, plan_order, quotes, quantity=None, price=None):
         """The order this part sends, priced now, or None when no price can be made yet or the post-only guard refused it.
 
         The quantity is the piece's when one is given; otherwise the target a parent join set, less what this part has already traded, or the body's quantity when no join set one. Only the plan's main order keeps the caller's tag, as today's exits do: the tag belongs to the order the caller asked for. The cap holds the priced limit, and the post-only guard then checks it against the book; a refusal ends this part as refused.
@@ -304,6 +307,7 @@ class OrderPart:
             plan_order (PlanOrder): The plan order.
             quotes (dict): The quotes to price from, by instrument id.
             quantity (int | None): The piece's quantity, or None for the whole order.
+            price (decimal.Decimal | None): A limit price of the piece's own, such as a ladder rung's, which replaces the pricing's; None to price as usual.
 
         Returns:
             PlaceOrderRequest | None: The order.
@@ -343,11 +347,15 @@ class OrderPart:
                 return None
             if priced is None:
                 return None
+        if price is not None:
+            priced['order_type'] = 'LIMIT'
+            priced['price'] = str(price)
+            priced.pop('trigger_price', None)
         if priced.get('price') != before.get('price'):
             priced.pop('price_reference', None)
         return plan_order.concrete_order(plan_order.read_order(priced))
 
-    def place(self, plan_order, started_at, quotes, quantity=None):
+    def place(self, plan_order, started_at, quotes, quantity=None, price=None, broker_name=None):
         """Places this part's order, or one piece of it, or does nothing when no price can be made yet.
 
         Args:
@@ -355,15 +363,18 @@ class OrderPart:
             started_at (float | None): `time.perf_counter()` when the engine took the intent, or None.
             quotes (dict): The quotes to price from.
             quantity (int | None): The piece's quantity, or None for the whole order.
+            price (decimal.Decimal | None): The piece's own limit price, or None.
+            broker_name (str | None): The broker the execution chose for every piece, or None for the usual choice.
 
         Returns:
             tuple | None: The broker's answer (dict) and its HTTP status (int), or None when nothing was placed.
         """
-        order = self.order(plan_order, quotes, quantity)
+        order = self.order(plan_order, quotes, quantity, price)
         if order is None:
             return None
         context = self.context(plan_order)
-        broker_name = context.body.get('broker') or plan_order.chosen_broker()
+        if broker_name is None:
+            broker_name = context.body.get('broker') or plan_order.chosen_broker()
         leg_group = None
         if broker_name is None:
             leg_group = plan_order.group_margin_legs
@@ -544,15 +555,18 @@ class OrderPart:
                 record['execution_memory'] = memory
                 plan_order.set_part_record(self.path, record, None)
             return []
-        for quantity in due:
-            if self.order(plan_order, quotes, quantity) is None:
+        prices = [None] * len(due)
+        if isinstance(self.execution, LadderExecution):
+            prices = self.execution.rung_prices(self.context(plan_order), sending_side)
+        for index, quantity in enumerate(due):
+            if self.order(plan_order, quotes, quantity, prices[index]) is None:
                 return []
         if memory != stored:
             record['execution_memory'] = memory
             plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part\'s execution moved on to {memory}')
         placed = []
-        for quantity in due:
-            answer = self.place(plan_order, started_at, quotes, quantity)
+        for index, quantity in enumerate(due):
+            answer = self.place(plan_order, started_at, quotes, quantity, prices[index], memory.get('broker'))
             if answer is None:
                 continue
             body, status = answer

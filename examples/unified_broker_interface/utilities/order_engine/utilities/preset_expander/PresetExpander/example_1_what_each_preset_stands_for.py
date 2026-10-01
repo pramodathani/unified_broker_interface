@@ -156,6 +156,12 @@ class WhatEachPresetStandsForExample:
                 'trigger_price': 995,
                 'bar_minutes': 15,
             },
+            'ladder': {
+                'from_price': 995,
+                'to_price': 1000,
+                'steps': 3,
+            },
+            'freeze_slicer': {},
             'daily_stop': {
                 'stop_price': 990,
                 'stop_limit_price': 988,

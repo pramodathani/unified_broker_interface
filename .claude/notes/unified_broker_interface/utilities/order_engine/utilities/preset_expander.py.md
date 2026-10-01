@@ -67,3 +67,7 @@ The backstop is a second order resting beside the engine-side stop, cancelled be
 ## Daily stop (2026-10-01)
 
 `daily_stop` is the `protect` side, a native stop that exits if gapped, the `daily` execution and a lifetime of `valid_days`, which also keeps the plan across days. Today's daily stop runs without a position held; a plan's standalone protecting order needs one.
+
+## Ladder and freeze slicer (2026-10-01)
+
+`ladder` and `freeze_slicer` stand for the `ladder` and `freeze_limit` executions with the same settings as today's types.

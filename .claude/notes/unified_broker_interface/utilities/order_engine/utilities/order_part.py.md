@@ -65,3 +65,7 @@ A part with a `position` is a close: `send` hands it to `_close_positions`, whic
 ## Stage 5e (2026-10-01)
 
 `opened_by` holds the paths of a Then join's first plan's orders, set by the reader on every order of the child. `_opening_side` reads the side those orders filled on, so a two-sided breakout's exits protect whichever side broke; with nothing filled, or outside a Then join, it is the body's side as before. An order with no `side` now sends its own body's side through `_sending_side`, rather than the opening side, which matters once the two differ: a legged spread's second leg names SELL while the first leg filled on BUY.
+
+## Pieces with their own price and broker (2026-10-01)
+
+`order` and `place` take a piece's own `price`, which a ladder's rungs use, and `place` a `broker_name`, which `send_due` reads from the execution's memory, where the freeze-limit execution puts the broker it chose.

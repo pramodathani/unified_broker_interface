@@ -63,6 +63,8 @@ PRESET_NAMES = (
     'candle_close_stop',
     'good_till_triggered',
     'daily_stop',
+    'ladder',
+    'freeze_slicer',
     'oto',
     'oco',
     'bracket',
@@ -209,6 +211,24 @@ class PresetExpander:
             return self._good_till_triggered(settings, path)
         if name == 'daily_stop':
             return self._daily_stop(settings, path)
+        if name == 'ladder':
+            self._refuse_unknown(settings, ('from_price', 'to_price', 'steps'), path, 'ladder')
+            return {
+                'execution': [
+                    {
+                        'ladder': dict(settings),
+                    },
+                ],
+            }
+        if name == 'freeze_slicer':
+            self._refuse_unknown(settings, (), path, 'freeze_slicer')
+            return {
+                'execution': [
+                    {
+                        'freeze_limit': {},
+                    },
+                ],
+            }
         if name == 'underlying_peg':
             return self._underlying_peg(settings, path)
         if name == 'volatility':

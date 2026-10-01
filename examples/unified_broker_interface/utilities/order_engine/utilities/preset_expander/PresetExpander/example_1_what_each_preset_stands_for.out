@@ -60,3 +60,7 @@ good_till_triggered: {'trigger': {'price_crosses': {'level': 995, 'field': 'last
   problems: []
 daily_stop: {'side': 'protect', 'pricing': [{'native_stop': {'trigger_price': 990, 'limit_price': 988, 'exit_if_gapped': True}}], 'execution': [{'daily': {}}], 'lifetime': [{'after_days': 30}]}
   problems: []
+ladder: {'execution': [{'ladder': {'from_price': 995, 'to_price': 1000, 'steps': 3}}]}
+  problems: []
+freeze_slicer: {'execution': [{'freeze_limit': {}}]}
+  problems: []

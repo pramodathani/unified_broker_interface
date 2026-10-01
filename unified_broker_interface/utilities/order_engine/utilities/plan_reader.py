@@ -45,6 +45,9 @@ from unified_broker_interface.utilities.order_engine.utilities.fixed_pricing imp
 from unified_broker_interface.utilities.order_engine.utilities.follow_instrument_pricing import (
     FollowInstrumentPricing,
 )
+from unified_broker_interface.utilities.order_engine.utilities.freeze_limit_execution import (
+    FreezeLimitExecution,
+)
 from unified_broker_interface.utilities.order_engine.utilities.from_parent_fill_pricing import (
     FromParentFillPricing,
 )
@@ -53,6 +56,9 @@ from unified_broker_interface.utilities.order_engine.utilities.front_loaded_exec
 )
 from unified_broker_interface.utilities.order_engine.utilities.iceberg_execution import (
     IcebergExecution,
+)
+from unified_broker_interface.utilities.order_engine.utilities.ladder_execution import (
+    LadderExecution,
 )
 from unified_broker_interface.utilities.order_engine.utilities.lifetime import (
     APPLIES_TO,
@@ -1790,12 +1796,38 @@ class PlanReader:
                 return TopUpExecution()
             if name == 'daily':
                 return self._read_daily(settings, f'{entry_path}.daily')
+            if name == 'ladder':
+                return self._read_ladder(settings, f'{entry_path}.ladder')
+            if name == 'freeze_limit':
+                self._refuse_unknown(settings, (), entry_path, 'freeze_limit', 'execution')
+                return FreezeLimitExecution()
             self._add_problem(
                 entry_path,
                 'unknown_execution',
-                f'{name!r} is not an execution a plan can use yet; the executions available are all_at_once, iceberg, twap, vwap, front_loaded, participation, book_depth, top_up and daily',
+                f'{name!r} is not an execution a plan can use yet; the executions available are all_at_once, iceberg, twap, vwap, front_loaded, participation, book_depth, top_up, daily, ladder and freeze_limit',
             )
         return None
+
+    def _read_ladder(self, settings, path):
+        """Reads `ladder` execution.
+
+        Args:
+            settings (dict): `from_price` and `to_price`, which differ, and `steps`, 2 to 20.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            LadderExecution | None: The execution, or None when it has a problem.
+        """
+        problems_before = len(self.problems)
+        self._refuse_unknown(settings, ('from_price', 'to_price', 'steps'), path, 'ladder', 'execution')
+        from_price = self._price(settings.get('from_price'), path, 'from_price')
+        to_price = self._price(settings.get('to_price'), path, 'to_price')
+        steps = self._whole_number(settings.get('steps'), path, 'steps', 2, 20)
+        if from_price is not None and from_price == to_price:
+            self._add_problem(path, 'bad_setting', 'a ladder needs from_price and to_price to differ')
+        if len(self.problems) > problems_before:
+            return None
+        return LadderExecution(from_price, to_price, steps)
 
     def _read_daily(self, settings, path):
         """Reads `daily` execution.

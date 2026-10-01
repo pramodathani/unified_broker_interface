@@ -1,0 +1,4 @@
+Reads quotes: False, paced by ticks: False, grows by changing its order: False
+Due: [84, 83, 83], memory {'broker': 'flattrade', 'freeze_quantity': 100}
+Once sent, more to send: False, due []
+As a dry run shows it: freeze_limit
