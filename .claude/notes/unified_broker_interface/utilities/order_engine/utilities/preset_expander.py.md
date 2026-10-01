@@ -83,3 +83,7 @@ The backstop is a second order resting beside the engine-side stop, cancelled be
 ## Opening auction (2026-10-01)
 
 `opening_auction` is a `pre_open` venue with the caller's `at_time`, or the venue's default of 09:00:30. A plan answers `armed` where today's answers `scheduled`, and the refusals for an option, a stop order and a late order come before the parent is recorded, word for word as today's.
+
+## Virtual limit (2026-10-01)
+
+`virtual_limit` is a `limit_marketable` trigger, and with `paper` the paper venue. The plan answers `armed` without today's `paper`, `trigger_level` and `trigger_direction`, and keeps `missed_quantity` in the order's part record rather than the parent's parameters.

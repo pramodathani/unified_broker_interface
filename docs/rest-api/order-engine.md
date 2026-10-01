@@ -247,7 +247,7 @@ The `unified.synthetic_order_events` table is a TimescaleDB hypertable with one-
 
 A `virtual_limit` order is held by the engine instead of being sent, and a real limit order is placed only when the other side of the book reaches your price. The engine reads one quote a second, which cannot tell it how the order would have fared resting at the exchange, so a separate process works that out.
 
-`bin/unified/orders/virtual_book` runs as `unified-orders@virtual_book.service`. Every two seconds it reads the engine's open `virtual_limit` parents whose trigger has not fired. It follows `unified:quotes:stream` with a plain `XREAD` from the moment it starts, 1,000 entries at a time, and keeps one queue estimate per held order in the hash `unified:orders:virtual_queue`, keyed by parent id. The engine reads that hash; **no API route exposes it**, so read it with `redis-cli HGET unified:orders:virtual_queue <parent id>`.
+`bin/unified/orders/virtual_book` runs as `unified-orders@virtual_book.service`. Every two seconds it reads the engine's open `virtual_limit` parents whose trigger has not fired, and every order of an open plan still waiting on a `limit_marketable` trigger. It follows `unified:quotes:stream` with a plain `XREAD` from the moment it starts, 1,000 entries at a time, and keeps one queue estimate per held order in the hash `unified:orders:virtual_queue`, keyed by parent id, or for a plan's order by `<parent id>/<path>`. The engine reads that hash; **no API route exposes it**, so read it with `redis-cli HGET unified:orders:virtual_queue <parent id>`.
 
 | Estimate field | Meaning |
 |---|---|

@@ -70,6 +70,9 @@ from unified_broker_interface.utilities.order_engine.utilities.lifetime import (
     ON_END,
     Lifetime,
 )
+from unified_broker_interface.utilities.order_engine.utilities.limit_marketable_condition import (
+    LimitMarketableCondition,
+)
 from unified_broker_interface.utilities.order_engine.utilities.marketable_pricing import (
     MarketablePricing,
 )
@@ -82,6 +85,9 @@ from unified_broker_interface.utilities.order_engine.utilities.option_model_pric
 from unified_broker_interface.utilities.order_engine.utilities.order_part import (
     OrderPart,
 )
+from unified_broker_interface.utilities.order_engine.utilities.paper_venue import (
+    PaperVenue,
+)
 from unified_broker_interface.utilities.order_engine.utilities.participation_execution import (
     ParticipationExecution,
 )
@@ -93,12 +99,12 @@ from unified_broker_interface.utilities.order_engine.utilities.position_quantity
     PRODUCTS,
     PositionQuantity,
 )
-from unified_broker_interface.utilities.order_engine.utilities.pre_open_venue import (
-    PreOpenVenue,
-)
 from unified_broker_interface.utilities.order_engine.utilities.post_only_guard import (
     ON_CROSSING,
     PostOnlyGuard,
+)
+from unified_broker_interface.utilities.order_engine.utilities.pre_open_venue import (
+    PreOpenVenue,
 )
 from unified_broker_interface.utilities.order_engine.utilities.preset_expander import (
     PRESET_NAMES,
@@ -809,13 +815,17 @@ class PlanReader:
             trigger = conditions[0]
         elif conditions:
             trigger = ConditionGroup('all', conditions)
-        if venue is not None:
+        if isinstance(venue, PreOpenVenue):
             if trigger is not None:
                 self._add_problem(path, 'pre_open_sets_its_time', 'an order in the pre-open is sent at the venue\'s at_time, so it takes no trigger of its own')
                 return None
             trigger = TimeCondition('time_from', venue.at_time)
+        if isinstance(venue, PaperVenue) and not self._can_fill_on_paper(trigger, path):
+            return None
         if pricing is None:
             pricing = FixedPricing(None, None)
+        if self._holds_at_its_limit(trigger) and not self._held_at_the_body_price(pricing, path):
+            return None
         if execution is None:
             execution = AllAtOnceExecution()
         if isinstance(pricing, STOP_PRICINGS):
@@ -981,25 +991,80 @@ class PlanReader:
             return False
         return True
 
+    def _holds_at_its_limit(self, trigger):
+        """Whether an order's trigger is, or includes, a `limit_marketable` condition.
+
+        Args:
+            trigger (object | None): The order's trigger.
+
+        Returns:
+            bool: True when it holds the order at its own limit price.
+        """
+        if isinstance(trigger, LimitMarketableCondition):
+            return True
+        if isinstance(trigger, ConditionGroup):
+            for member in trigger.members:
+                if self._holds_at_its_limit(member):
+                    return True
+        return False
+
+    def _held_at_the_body_price(self, pricing, path):
+        """Checks an order held until its limit is marketable is priced at the body's own limit price.
+
+        Args:
+            pricing (object): The order's pricing.
+            path (str): Where the order sits in the plan.
+
+        Returns:
+            bool: True when it is, otherwise False with the problem recorded.
+        """
+        if isinstance(pricing, FixedPricing) and pricing.price is None and pricing.order_type is None:
+            return True
+        self._add_problem(path, 'held_at_the_body_price', 'a limit_marketable order is held at the body\'s own LIMIT price, so it takes no pricing of its own')
+        return False
+
+    def _can_fill_on_paper(self, trigger, path):
+        """Checks a paper order is the whole plan and waits on a `limit_marketable` trigger alone, since its fills come from that order's queue estimate.
+
+        Args:
+            trigger (object | None): The order's trigger.
+            path (str): Where the order sits in the plan.
+
+        Returns:
+            bool: True when it can be filled on paper, otherwise False with the problem recorded.
+        """
+        if not isinstance(trigger, LimitMarketableCondition):
+            self._add_problem(path, 'paper_needs_limit_marketable', 'a paper order is filled from the queue estimate of an order held at its limit, so its trigger is limit_marketable alone')
+            return False
+        if path != 'root':
+            self._add_problem(path, 'paper_is_the_whole_plan', 'a paper order fills nothing at a broker, so it cannot be joined with orders that would trade for real')
+            return False
+        return True
+
     def _read_venue_list(self, venue, path):
-        """Reads an order's venue: a list holding one object with `session: pre_open` and optionally `at_time`, default `09:00:30`.
+        """Reads an order's venue: a list holding one object with `session: pre_open` and optionally `at_time`, default `09:00:30`, or `session: paper`.
 
         Args:
             venue (object): The list as the caller wrote it.
             path (str): Where it sits in the plan.
 
         Returns:
-            PreOpenVenue | None: The venue, or None when it has a problem.
+            PreOpenVenue | PaperVenue | None: The venue, or None when it has a problem.
         """
         if not isinstance(venue, list) or len(venue) != 1 or not isinstance(venue[0], dict):
-            self._add_problem(path, 'venue_shape', 'venue is a list holding one object, with session and optionally at_time')
+            self._add_problem(path, 'venue_shape', 'venue is a list holding one object, with session and, for pre_open, optionally at_time')
             return None
         entry = venue[0]
         entry_path = f'{path}.0'
         problems_before = len(self.problems)
+        if entry.get('session') == 'paper':
+            self._refuse_unknown(entry, ('session',), entry_path, 'venue', 'value')
+            if len(self.problems) > problems_before:
+                return None
+            return PaperVenue()
         self._refuse_unknown(entry, ('session', 'at_time'), entry_path, 'venue', 'value')
         if entry.get('session') != 'pre_open':
-            self._add_problem(entry_path, 'bad_setting', f'session must be pre_open, the one venue session built so far, not {entry.get("session")!r}')
+            self._add_problem(entry_path, 'bad_setting', f'session must be pre_open or paper, not {entry.get("session")!r}')
         at_time = str(entry.get('at_time') or '09:00:30')
         try:
             datetime.time.fromisoformat(at_time)
@@ -1270,6 +1335,11 @@ class PlanReader:
                 return self._read_candle_closes(content, f'{path}.candle_closes')
             if kind == 'account':
                 return self._read_account(content, f'{path}.account')
+            if kind == 'limit_marketable':
+                if content != {}:
+                    self._add_problem(f'{path}.limit_marketable', 'bad_setting', 'limit_marketable takes no settings, so it is written {}')
+                    return None
+                return LimitMarketableCondition()
             if kind in KINDS:
                 if not isinstance(content, str):
                     self._add_problem(
@@ -1282,7 +1352,7 @@ class PlanReader:
             self._add_problem(
                 path,
                 'unknown_condition',
-                f'{kind!r} is not a trigger condition; the conditions are price_crosses, trails, candle_closes, account, {", ".join(KINDS)}, all and any',
+                f'{kind!r} is not a trigger condition; the conditions are price_crosses, trails, candle_closes, account, limit_marketable, {", ".join(KINDS)}, all and any',
             )
         return None
 

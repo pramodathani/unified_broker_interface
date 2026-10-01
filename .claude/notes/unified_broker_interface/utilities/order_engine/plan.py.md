@@ -93,3 +93,7 @@ Nothing in the plan order changed for this step; `AtrTrailPricing` and `StagesPr
 ## Paced orders on the clock (2026-10-01)
 
 A clock tick now also sends the due pieces of every working paced order, reading the quotes as they are now for one that prices itself. Today's timed types are clock-driven, and a daily stop on an instrument with no price tick at 09:20 would otherwise not be placed. Sending on both kinds of tick is safe, because an execution works out what is due from the orders already sent.
+
+## Paper fills and missed quantity (2026-10-01)
+
+`_fire_waiting` hands a paper order to its venue instead of asking its trigger, and reports a fill the same way as an order that ended without placing anything, so the plan settles, finishes and saves. An order on a `limit_marketable` trigger records `missed_quantity` in its part record as it fires, from the queue estimate, as today's type records it in the parent's parameters.

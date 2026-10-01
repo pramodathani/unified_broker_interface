@@ -1,0 +1,12 @@
+estimate says 0 filled:
+  recorded a fill: False
+estimate says 4 filled:
+  event paper_filled: 4 of 10 at 1498.5
+  parent is now working: paper fill of 4 of 10
+  part record: the plan's root part filled 4 of 10 on paper
+  recorded a fill: True
+estimate says 10 filled:
+  event paper_filled: 10 of 10 at 1498.5
+  part record: the plan's root part filled on paper: 10 at 1498.50
+  recorded a fill: True
+final record: done filled_on_paper 10

@@ -1,0 +1,10 @@
+The key for root.together.1: plan/root.together.1
+plan holds:
+  plan/root.together.0: BUY 20 of NSE:INFY at 1498.5
+  plan/root.together.1: SELL 5 of NSE:TCS at 3610
+single holds:
+  single: BUY 10 of NSE:INFY at 1500
+Followed after refresh: ['plan/root.together.0', 'plan/root.together.1', 'single']
+By instrument: {'NSE:INFY': ['plan/root.together.0', 'single'], 'NSE:TCS': ['plan/root.together.1']}
+Written to Redis: ['plan/root.together.0', 'plan/root.together.1', 'single']
+After the plan closes: ['single']

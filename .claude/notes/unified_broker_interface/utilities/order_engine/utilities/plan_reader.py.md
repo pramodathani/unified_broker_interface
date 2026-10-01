@@ -61,3 +61,7 @@ The `lifetime` slot is a list holding one object, with the end and its settings 
 ## The `venue` slot (2026-10-01)
 
 A venue turns into a `time_from` trigger at its `at_time`, so the order waits in the ordinary way and recovery needs nothing new. An order with a trigger of its own is refused as `pre_open_sets_its_time`, because two times would leave it unclear when the order goes, and a price trigger could send it after collection closed.
+
+## The `paper` venue and `limit_marketable` (2026-10-01)
+
+`paper` takes no `at_time` and adds no trigger. The reader insists on a `limit_marketable` trigger alone and on the order being the whole plan; the reasons are in the paper venue's note. Any order whose trigger includes `limit_marketable` must keep the body's own pricing.

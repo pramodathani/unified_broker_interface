@@ -214,7 +214,7 @@ The three `unified_details` scripts take `--once` to copy once and exit, and the
 | `websocket_order_details` | Reads all ten order update streams and the four position update streams as the consumer group `unified`, and normalizes each entry | `<broker>:order-updates:stream`, `<broker>:positions_updates:stream` | streams `unified:order-updates:stream` and `unified:positions_updates:stream`; hashes `unified:order-updates` and `unified:positions_updates` |
 | `store_orders_to_db` | Drains the unified order update stream | `unified:order-updates:stream` | TimescaleDB `unified.order_updates` |
 | `order_engine` | Places every order the REST API accepts, and runs the synthetic order types | stream `unified:orders:intents:stream`, `unified:order-updates:stream` | the broker, and a reply on `unified:orders:intents:result:<intent_id>` |
-| `virtual_book` | Keeps a queue estimate for every held `virtual_limit` order | stream `unified:quotes:stream`, the engine's parent cache | Redis hash `unified:orders:virtual_queue` |
+| `virtual_book` | Keeps a queue estimate for every held `virtual_limit` order and plan order on a `limit_marketable` trigger | stream `unified:quotes:stream`, the engine's parent cache | Redis hash `unified:orders:virtual_queue` |
 | `margin_calibration` | Asks every broker's own margin calculator about the same reference orders, once, and works out each broker's margin surcharge and hedge benefit | today's catalogue and `unified:quotes:live`; the brokers' margin calculators | TimescaleDB `unified.broker_order_costs`, the `margin_multiplier_*`, `gives_hedge_benefit` and `margin_calibrated_at` columns |
 
 !!! danger "`bin/unified/orders/order_engine` places live orders"

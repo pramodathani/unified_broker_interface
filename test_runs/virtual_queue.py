@@ -383,6 +383,7 @@ class VirtualQueueSuite:
         self.the_book_moves_estimates_on_their_own_instrument()
         self.the_book_forgets_a_parent_that_has_closed()
         self.the_book_starts_again_when_a_held_order_is_changed()
+        self.the_book_follows_a_plans_held_orders()
 
         total = self.passed + len(self.failed)
         print(f'{self.passed}/{total} checks passed.')
@@ -862,6 +863,75 @@ class VirtualQueueSuite:
         self.check('the closed parent\'s estimate is removed', sorted(cache.hashes[ESTIMATES_KEY]), [])
         book.write_changed()
         self.check('the held parent\'s new estimate is written', sorted(cache.hashes[ESTIMATES_KEY]), ['held'])
+
+    def plan_document(self, parent_order_id):
+        """A plan as the engine's cache holds it: one order waiting on `limit_marketable`, a buy of 500 at 98, one already sent and one waiting on a price.
+
+        Args:
+            parent_order_id (str): The parent's id.
+
+        Returns:
+            dict: The document.
+        """
+        held = {
+            'instrument_id': INSTRUMENT_ID,
+            'transaction_type': 'BUY',
+            'price': '98',
+            'quantity': 500,
+        }
+        return {
+            'parent_order_id': parent_order_id,
+            'synthetic_type': 'plan',
+            'state': 'received',
+            'instrument_id': INSTRUMENT_ID,
+            'body': {},
+            'parameters': {
+                'parts': {
+                    'root.together.0': {
+                        'state': 'waiting',
+                        'memory': {
+                            'trigger': {
+                                'held': held,
+                            },
+                        },
+                    },
+                    'root.together.1': {
+                        'state': 'working',
+                        'memory': {
+                            'trigger': {
+                                'held': held,
+                            },
+                        },
+                    },
+                    'root.together.2': {
+                        'state': 'waiting',
+                        'memory': {
+                            'trigger': {},
+                        },
+                    },
+                },
+            },
+            'legs': [],
+        }
+
+    def the_book_follows_a_plans_held_orders(self):
+        """A plan's order still waiting on `limit_marketable` is followed under its parent id and path, and dropped with its parent.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        book, cache = self.book_with({
+            'plan': self.plan_document('plan'),
+        })
+        book.refresh()
+        key = 'plan/root.together.0'
+        self.check('only the plan\'s waiting held order is followed', sorted(book.estimates), [key])
+        self.check('it is held at the terms its trigger wrote', (book.estimates[key].price, book.estimates[key].quantity), (98, 500))
+        book.write_changed()
+        self.check('its estimate is written under the parent id and path', sorted(cache.hashes[ESTIMATES_KEY]), [key])
+        book.parent_store.documents = {}
+        book.refresh()
+        self.check('it is removed once the plan is no longer open', sorted(cache.hashes[ESTIMATES_KEY]), [])
 
     def the_book_starts_again_when_a_held_order_is_changed(self):
         """A held order whose price or quantity was changed through the modify route gets a fresh estimate at its new terms.

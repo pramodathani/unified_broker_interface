@@ -109,6 +109,7 @@ from unified_broker_interface.utilities.order_engine.utilities import (
 )
 from unified_broker_interface.utilities.order_engine.utilities.virtual_book import (
     ESTIMATES_KEY,
+    VirtualBook,
 )
 from utilities.configurations import api_configuration
 
@@ -2896,6 +2897,191 @@ class OrderEngineSuite:
             parts.append(parameters.get('parts'))
         result['parts'] = parts
         return result
+
+    def run_plan_virtual_limit_checks(self):
+        """Runs plan orders held in the engine until their limit is marketable, sent or filled on paper, beside today's virtual limit checks.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        accepted = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        steady = self.book_at(1000.00, 1000.05)
+        virtual_limit = {
+            'order': {
+                'presets': [
+                    {
+                        'virtual_limit': {},
+                    },
+                ],
+            },
+        }
+        paper = {
+            'order': {
+                'presets': [
+                    {
+                        'virtual_limit': {
+                            'paper': True,
+                        },
+                    },
+                ],
+            },
+        }
+        return [
+            self.plan_price_result(
+                'a_plan_virtual_limit_is_held_until_the_offer_reaches_its_price',
+                virtual_limit,
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(999.50, 999.55), 'at': 1},
+                    {
+                        'quote': self.book_at(999.40, 999.45),
+                        'estimate': {
+                            'queue_filled': 4,
+                            'filled': 4,
+                        },
+                        'at': 2,
+                    },
+                    {'quote': self.book_at(999.40, 999.45), 'at': 3},
+                ],
+                accepted,
+                body_overrides={
+                    'price': 999.50,
+                },
+            ),
+            self.plan_price_result(
+                'a_plan_virtual_limit_ignores_a_stale_quote',
+                virtual_limit,
+                [
+                    {'quote': steady, 'at': 0},
+                    {
+                        'quote': dict(self.book_at(999.40, 999.45), stale=True),
+                        'at': 1,
+                    },
+                    {'quote': self.book_at(999.40, 999.45), 'at': 2},
+                ],
+                accepted,
+                body_overrides={
+                    'price': 999.50,
+                },
+            ),
+            self.plan_price_result(
+                'a_plan_virtual_limit_must_be_a_limit_order',
+                virtual_limit,
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+                body_overrides={
+                    'order_type': 'MARKET',
+                    'price': None,
+                },
+            ),
+            self.plan_price_result(
+                'a_plan_paper_virtual_limit_fills_from_the_queue_estimate',
+                paper,
+                [
+                    {
+                        'quote': steady,
+                        'estimate': {
+                            'queue_filled': 0,
+                            'filled': 0,
+                        },
+                        'at': 0,
+                    },
+                    {
+                        'quote': steady,
+                        'estimate': {
+                            'queue_filled': 4,
+                            'filled': 4,
+                        },
+                        'at': 1,
+                    },
+                    {
+                        'quote': self.book_at(999.40, 999.45),
+                        'estimate': {
+                            'queue_filled': 4,
+                            'filled': 10,
+                        },
+                        'at': 2,
+                    },
+                ],
+                accepted,
+                body_overrides={
+                    'price': 999.50,
+                },
+            ),
+            self.plan_price_result(
+                'a_plan_paper_fill_is_not_repeated_after_a_restart',
+                paper,
+                [
+                    {
+                        'quote': steady,
+                        'estimate': {
+                            'queue_filled': 4,
+                            'filled': 4,
+                        },
+                        'at': 0,
+                    },
+                    {'quote': steady, 'at': 1},
+                ],
+                accepted,
+                restart_between_ticks=True,
+                body_overrides={
+                    'price': 999.50,
+                },
+            ),
+            self.plan_price_result(
+                'a_plan_paper_order_must_wait_on_limit_marketable',
+                {
+                    'order': {
+                        'trigger': {
+                            'price_crosses': {
+                                'level': 995,
+                            },
+                        },
+                        'venue': [
+                            {
+                                'session': 'paper',
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_paper_order_cannot_be_joined',
+                {
+                    'then': {
+                        'first': {
+                            'order': {
+                                'presets': [
+                                    {
+                                        'virtual_limit': {
+                                            'paper': True,
+                                        },
+                                    },
+                                ],
+                            },
+                        },
+                        'on_complete': {
+                            'order': {
+                                'side': 'protect',
+                            },
+                        },
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+        ]
 
     def run_plan_trigger_checks(self):
         """Runs plan orders that wait for a trigger, protect a position or are priced by a pricing rule, through price ticks.
@@ -6811,7 +6997,7 @@ class OrderEngineSuite:
         if daily_caps is not None:
             result['daily_counts'] = self.shown_daily_counts()
         synthetic = request_body.get('synthetic') or {}
-        if synthetic.get('type') == 'virtual_limit':
+        if synthetic.get('type') == 'virtual_limit' or '"virtual_limit"' in json.dumps(synthetic):
             result['held'] = [
                 {
                     'paper_filled': parent.parameters.get('paper_filled'),
@@ -6838,11 +7024,12 @@ class OrderEngineSuite:
             None: This method returns nothing.
         """
         estimates = self.fake_redis.hashes.setdefault(ESTIMATES_KEY, {})
-        for parent_order_id in self.fake_redis.hashes.get(
-            'unified:orders:parents',
-            {},
-        ):
+        stored = self.fake_redis.hashes.get('unified:orders:parents', {})
+        for parent_order_id, document in stored.items():
             estimates[parent_order_id] = json.dumps(estimate)
+            parts = (json.loads(document).get('parameters') or {}).get('parts') or {}
+            for path in parts:
+                estimates[VirtualBook.part_key(parent_order_id, path)] = json.dumps(estimate)
 
     def tick_at(self, ticker, moment):
         """Runs one tick as though it were `moment`.
@@ -9702,6 +9889,7 @@ class OrderEngineSuite:
             results.extend(self.run_reaction_checks())
             results.extend(self.run_plan_checks())
             results.extend(self.run_plan_trigger_checks())
+            results.extend(self.run_plan_virtual_limit_checks())
             results.extend(self.run_plan_join_checks())
             results.extend(self.run_plan_trailing_checks())
             results.extend(self.run_plan_execution_checks())

@@ -12,6 +12,12 @@ from unified_broker_interface.utilities.order_engine.base import (
 from unified_broker_interface.utilities.order_engine.utilities.either_part import (
     EitherPart,
 )
+from unified_broker_interface.utilities.order_engine.utilities.limit_marketable_condition import (
+    LimitMarketableCondition,
+)
+from unified_broker_interface.utilities.order_engine.utilities.paper_venue import (
+    PaperVenue,
+)
 from unified_broker_interface.utilities.order_engine.utilities.plan_reader import (
     PlanReader,
 )
@@ -365,8 +371,10 @@ class PlanOrder(SyntheticOrder):
             rejected = True
         nothing_held = False
         for part in root.order_parts():
-            if self.part_record(part.path).get('reason') == 'nothing_held':
+            record = self.part_record(part.path)
+            if record.get('reason') == 'nothing_held':
                 nothing_held = True
+            traded = traded + (record.get('paper_filled') or 0)
         if traded > 0 or (nothing_held and not rejected):
             state = 'completed'
         elif rejected:
@@ -462,7 +470,7 @@ class PlanOrder(SyntheticOrder):
     def _fire_waiting(self, root, waiting_paths, quotes, now, timed_only):
         """Sends every waiting order whose trigger holds now.
 
-        An order whose join cancels before sending is sent only once every sibling's resting order has been cancelled; otherwise it tries again on the next tick.
+        An order whose join cancels before sending is sent only once every sibling's resting order has been cancelled; otherwise it tries again on the next tick. A paper order is never sent; it takes whatever more its queue estimate has filled. An order held until its limit is marketable records, as it fires, how much a resting order would have filled while it was held, as `missed_quantity`.
 
         Args:
             root (object): The root part.
@@ -472,7 +480,7 @@ class PlanOrder(SyntheticOrder):
             timed_only (bool): Whether to look only at orders whose trigger needs no prices, as on a clock tick.
 
         Returns:
-            tuple: The orders placed, as `(path, answer, status)`; whether any trigger's memory changed (bool); and whether an order fired and ended without placing anything (bool).
+            tuple: The orders placed, as `(path, answer, status)`; whether any trigger's memory changed (bool); and whether an order fired and ended without placing anything, or filled on paper (bool).
         """
         placed = []
         memory_changed = False
@@ -484,6 +492,10 @@ class PlanOrder(SyntheticOrder):
                 continue
             record = self.part_record(part.path)
             if record.get('state') != 'waiting':
+                continue
+            if isinstance(part.venue, PaperVenue):
+                if part.venue.fill(self, part):
+                    ended = True
                 continue
             memory = copy.deepcopy(record.get('memory') or {})
             triggered = part.is_triggered(self, memory, quotes or {}, now)
@@ -512,6 +524,10 @@ class PlanOrder(SyntheticOrder):
                         continue
             record = self.part_record(part.path)
             record['fired_at'] = now
+            if isinstance(part.trigger, LimitMarketableCondition):
+                missed = (part.trigger.estimate(self, part.path) or {}).get('queue_filled')
+                if isinstance(missed, int):
+                    record['missed_quantity'] = missed
             self.set_part_record(part.path, record, None)
             sent = part.send(self, None, sending_quotes, now)
             record = self.part_record(part.path)

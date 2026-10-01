@@ -68,6 +68,7 @@ PRESET_NAMES = (
     'account_conditional',
     'closing_price',
     'opening_auction',
+    'virtual_limit',
     'oto',
     'oco',
     'bracket',
@@ -230,6 +231,8 @@ class PresetExpander:
                     venue,
                 ],
             }
+        if name == 'virtual_limit':
+            return self._virtual_limit(settings, path)
         if name == 'ladder':
             self._refuse_unknown(settings, ('from_price', 'to_price', 'steps'), path, 'ladder')
             return {
@@ -1147,6 +1150,34 @@ class PresetExpander:
                 'time_at': settings['at_time'],
             },
         }
+
+    def _virtual_limit(self, settings, path):
+        """Holds a limit order in the engine until the other side reaches its price, or with `paper` fills it from the queue estimate instead.
+
+        Args:
+            settings (dict): Optionally `paper`, true or false.
+            path (str): Where the preset sits, for problems.
+
+        Returns:
+            dict: A `limit_marketable` trigger, and with `paper` the paper venue.
+        """
+        self._refuse_unknown(settings, ('paper',), path, 'virtual_limit')
+        paper = settings.get('paper', False)
+        if not isinstance(paper, bool):
+            self._add_problem(path, 'bad_setting', f'paper is true or false, not {paper!r}')
+            return {}
+        slots = {
+            'trigger': {
+                'limit_marketable': {},
+            },
+        }
+        if paper:
+            slots['venue'] = [
+                {
+                    'session': 'paper',
+                },
+            ]
+        return slots
 
     def _indicator_triggered(self, settings, path):
         """Sends a limit when a chosen field of the live quote crosses a level.

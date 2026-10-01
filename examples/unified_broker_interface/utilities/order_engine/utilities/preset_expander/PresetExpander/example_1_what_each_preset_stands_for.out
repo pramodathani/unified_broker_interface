@@ -70,3 +70,5 @@ closing_price: {'trigger': {'time_from': '15:00'}, 'execution': [{'vwap': {'slic
   problems: []
 opening_auction: {'venue': [{'session': 'pre_open', 'at_time': '09:02:00'}]}
   problems: []
+virtual_limit: {'trigger': {'limit_marketable': {}}, 'venue': [{'session': 'paper'}]}
+  problems: []

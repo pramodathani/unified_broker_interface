@@ -168,6 +168,9 @@ class WhatEachPresetStandsForExample:
             'opening_auction': {
                 'at_time': '09:02:00',
             },
+            'virtual_limit': {
+                'paper': True,
+            },
             'account_conditional': {
                 'account_field': 'day_pnl',
                 'account_level': -5000,

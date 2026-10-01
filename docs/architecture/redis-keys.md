@@ -205,7 +205,7 @@ The order engine and the REST API's order routes share the keys below. The engin
 | `unified:orders:parents:open` | set | The order engine | The engine, `virtual_book` and `GET /api/orders/parents` | The ids of parents not yet finished; expires at the next 06:00 IST |
 | `unified:orders:children` | hash | The order engine | The engine; the REST API's modify and cancel routes; `bin/unified/orders/api_order_details` and `api_trade_details` | `broker:broker_order_id` to its parent; expires at the next 06:00 IST |
 | `unified:orders:parents:intents` | hash | The order engine | The engine, before placing an intent | Intent id to the parent it started; expires at the next 06:00 IST |
-| `unified:orders:virtual_queue` | hash | `bin/unified/orders/virtual_book` | The engine's `virtual_limit` orders | One queue estimate per held order, by parent id; removed when the parent is no longer open |
+| `unified:orders:virtual_queue` | hash | `bin/unified/orders/virtual_book` | The engine's `virtual_limit` orders and plan orders on a `limit_marketable` trigger | One queue estimate per held order, by parent id, or `<parent id>/<path>` for a plan's order; removed when the parent is no longer open |
 
 !!! danger "Do not delete the engine lock by hand while an engine runs"
     `unified:orders:engine:lock` is what stops two engines reading the same intents. Two engines would each hold pending intents and could place the same order twice, with real money behind both.
