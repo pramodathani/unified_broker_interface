@@ -2,6 +2,10 @@
 
 import decimal
 
+from unified_broker_interface.utilities.order_engine.utilities.account_condition import (
+    ACCOUNT_FIELDS,
+    AccountCondition,
+)
 from unified_broker_interface.utilities.order_engine.utilities.all_at_once_execution import (
     AllAtOnceExecution,
 )
@@ -962,7 +966,7 @@ class PlanReader:
         return True
 
     def _read_lifetime_list(self, lifetime, path):
-        """Reads an order's lifetime: a list holding one object with `at_time`, `after_minutes` or `after_days`, and optionally `applies_to` and `on_end`.
+        """Reads an order's lifetime: a list holding one object with `at_time`, `after_minutes`, `after_days` or `when`, and optionally `applies_to` and `on_end`.
 
         Args:
             lifetime (object): The list as the caller wrote it.
@@ -972,26 +976,23 @@ class PlanReader:
             Lifetime | None: The lifetime, or None when it has a problem.
         """
         if not isinstance(lifetime, list) or len(lifetime) != 1 or not isinstance(lifetime[0], dict):
-            self._add_problem(path, 'lifetime_shape', 'lifetime is a list holding one object, with at_time, after_minutes or after_days, and optionally applies_to and on_end')
+            self._add_problem(path, 'lifetime_shape', 'lifetime is a list holding one object, with at_time, after_minutes, after_days or when, and optionally applies_to and on_end')
             return None
         entry = lifetime[0]
         entry_path = f'{path}.0'
         problems_before = len(self.problems)
-        if 'when' in entry:
-            self._add_problem(
-                entry_path,
-                'lifetime_not_built',
-                'when is part of the design but not built yet; at_time, after_minutes and after_days are',
-            )
         self._refuse_unknown(entry, ('at_time', 'after_minutes', 'applies_to', 'on_end', 'after_days', 'when'), entry_path, 'lifetime', 'value')
         ends = 0
-        for name in ('at_time', 'after_minutes', 'after_days'):
+        for name in ('at_time', 'after_minutes', 'after_days', 'when'):
             if name in entry:
                 ends = ends + 1
+        when = None
+        if 'when' in entry:
+            when = self._read_condition(entry['when'], f'{entry_path}.when')
         has_time = 'at_time' in entry
         has_minutes = 'after_minutes' in entry
         if ends != 1:
-            self._add_problem(entry_path, 'bad_setting', 'a lifetime ends at_time, after_minutes or after_days, exactly one')
+            self._add_problem(entry_path, 'bad_setting', 'a lifetime ends at_time, after_minutes, after_days or when, exactly one')
         after_days = None
         if 'after_days' in entry:
             after_days = self._whole_number(entry['after_days'], entry_path, 'after_days', 1, MOST_DAYS)
@@ -1016,7 +1017,7 @@ class PlanReader:
             self._add_problem(entry_path, 'bad_setting', f'on_end must be one of {", ".join(ON_END)}, not {on_end!r}')
         if len(self.problems) > problems_before:
             return None
-        return Lifetime(at_time, after_minutes, applies_to, on_end, after_days)
+        return Lifetime(at_time, after_minutes, applies_to, on_end, after_days, when)
 
     def _can_take_at_discretion(self, pricing, execution, path):
         """Whether an order with this pricing and execution can have discretion, reporting the problem when it cannot.
@@ -1223,6 +1224,8 @@ class PlanReader:
                 return self._read_trails(content, f'{path}.trails')
             if kind == 'candle_closes':
                 return self._read_candle_closes(content, f'{path}.candle_closes')
+            if kind == 'account':
+                return self._read_account(content, f'{path}.account')
             if kind in KINDS:
                 if not isinstance(content, str):
                     self._add_problem(
@@ -1235,9 +1238,35 @@ class PlanReader:
             self._add_problem(
                 path,
                 'unknown_condition',
-                f'{kind!r} is not a trigger condition; the conditions are price_crosses, trails, candle_closes, {", ".join(KINDS)}, all and any',
+                f'{kind!r} is not a trigger condition; the conditions are price_crosses, trails, candle_closes, account, {", ".join(KINDS)}, all and any',
             )
         return None
+
+    def _read_account(self, settings, path):
+        """Reads an `account` condition.
+
+        Args:
+            settings (object): `field`, `level` and `direction`, all required.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            AccountCondition | None: The condition, or None when it has a problem.
+        """
+        if not isinstance(settings, dict):
+            self._add_problem(path, 'bad_setting', 'account takes an object with field, level and direction')
+            return None
+        problems_before = len(self.problems)
+        self._refuse_unknown(settings, ('field', 'level', 'direction'), path, 'account', 'condition')
+        field = settings.get('field')
+        if field not in ACCOUNT_FIELDS:
+            self._add_problem(path, 'bad_setting', f'field must be one of {", ".join(ACCOUNT_FIELDS)}, not {field!r}')
+        level = self._number(settings.get('level'), path, 'level')
+        direction = settings.get('direction')
+        if direction not in DIRECTIONS:
+            self._add_problem(path, 'bad_setting', f'direction is required for an account figure and must be one of {", ".join(DIRECTIONS)}, not {direction!r}')
+        if len(self.problems) > problems_before:
+            return None
+        return AccountCondition(field, level, direction)
 
     def _read_candle_closes(self, settings, path):
         """Reads a `candle_closes` condition.

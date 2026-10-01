@@ -639,7 +639,7 @@ class OrderPart:
         return moved_any or took
 
     def end_lifetime(self, plan_order, quotes, now):
-        """Ends this order when its lifetime is up: a waiting order is done, and a working one's resting orders are cancelled, made marketable, or cancelled and what filled closed.
+        """Ends this order when its lifetime is up, or when its `when` condition holds: a waiting order is done, and a working one's resting orders are cancelled, made marketable, or cancelled and what filled closed.
 
         Args:
             plan_order (PlanOrder): The plan order.
@@ -652,12 +652,23 @@ class OrderPart:
         if self.lifetime is None:
             return False
         record = plan_order.part_record(self.path)
-        ends_at = record.get('ends_at')
-        if record.get('ended') or ends_at is None or now < ends_at:
+        if record.get('ended'):
             return False
         state = record.get('state')
         if not self.lifetime.bounds(state):
             return False
+        if self.lifetime.when is not None:
+            memory = copy.deepcopy(record.get('lifetime_memory') or {})
+            holds = self.lifetime.when.is_met(self.context(plan_order), memory, quotes, now, self._opening_side(plan_order), self._sending_side(plan_order))
+            if memory != (record.get('lifetime_memory') or {}):
+                record['lifetime_memory'] = memory
+                plan_order.set_part_record(self.path, record, None)
+            if not holds:
+                return False
+        else:
+            ends_at = record.get('ends_at')
+            if ends_at is None or now < ends_at:
+                return False
         record['ended'] = True
         if state != 'working':
             record['state'] = 'done'

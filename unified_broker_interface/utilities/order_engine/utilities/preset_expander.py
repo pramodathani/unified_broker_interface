@@ -65,6 +65,7 @@ PRESET_NAMES = (
     'daily_stop',
     'ladder',
     'freeze_slicer',
+    'account_conditional',
     'oto',
     'oco',
     'bracket',
@@ -211,6 +212,8 @@ class PresetExpander:
             return self._good_till_triggered(settings, path)
         if name == 'daily_stop':
             return self._daily_stop(settings, path)
+        if name == 'account_conditional':
+            return self._account_conditional(settings, path)
         if name == 'ladder':
             self._refuse_unknown(settings, ('from_price', 'to_price', 'steps'), path, 'ladder')
             return {
@@ -992,6 +995,41 @@ class PresetExpander:
                 {
                     'after_days': settings.get('valid_days', 30),
                     'applies_to': 'waiting',
+                },
+            ],
+        }
+
+    def _account_conditional(self, settings, path):
+        """Waits on an account figure: sends the order once it reaches a level, or with `action: cancel` sends it now and cancels it when the figure reaches the level.
+
+        Args:
+            settings (dict): `account_field`, `account_level` and `trigger_direction`, and optionally `action`, `place` or `cancel`.
+            path (str): The preset's path.
+
+        Returns:
+            dict: An `account` trigger, or a lifetime that ends `when` the account condition holds.
+        """
+        self._refuse_unknown(settings, ('account_field', 'account_level', 'trigger_direction', 'action'), path, 'account_conditional')
+        condition = {
+            'account': {
+                'field': settings.get('account_field'),
+                'level': settings.get('account_level'),
+                'direction': settings.get('trigger_direction'),
+            },
+        }
+        action = settings.get('action', 'place')
+        if action == 'place':
+            return {
+                'trigger': condition,
+            }
+        if action != 'cancel':
+            self._add_problem(path, 'bad_setting', f'action must be one of place, cancel, not {action!r}')
+            return {}
+        return {
+            'lifetime': [
+                {
+                    'when': condition,
+                    'applies_to': 'working',
                 },
             ],
         }

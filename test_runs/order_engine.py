@@ -8564,6 +8564,126 @@ class OrderEngineSuite:
                 accepted,
             ),
             self.price_result(
+                'a_plan_account_conditional_order_waits_for_margin_to_free_up',
+                dict(entry, synthetic={
+                    'type': 'plan',
+                    'plan': {
+                        'order': {
+                            'presets': [
+                                {
+                                    'account_conditional': {
+                                    'account_field': 'available_balance',
+                                    'account_level': 50000,
+                                    'trigger_direction': 'at_or_above',
+                                    },
+                                },
+                            ],
+                        },
+                    },
+                }),
+                [
+                    {'quote': steady, 'at': 0, 'funds': {'summary': {'available_balance': 40000.0}, 'pnl': {'realized': 0.0, 'unrealized': 0.0}}},
+                    {'quote': steady, 'at': 1, 'funds': {'summary': {'available_balance': 60000.0}, 'pnl': {'realized': 0.0, 'unrealized': 0.0}}},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_plan_account_conditional_order_is_cancelled_when_the_day_loss_is_reached',
+                dict(entry, synthetic={
+                    'type': 'plan',
+                    'plan': {
+                        'order': {
+                            'presets': [
+                                {
+                                    'account_conditional': {
+                                    'account_field': 'day_pnl',
+                                    'account_level': -5000,
+                                    'trigger_direction': 'at_or_below',
+                                    'action': 'cancel',
+                                    },
+                                },
+                            ],
+                        },
+                    },
+                }),
+                [
+                    {'quote': steady, 'at': 0, 'funds': {'summary': {'available_balance': 60000.0}, 'pnl': {'realized': -1000.0, 'unrealized': 0.0}}},
+                    {'quote': steady, 'at': 1, 'funds': {'summary': {'available_balance': 60000.0}, 'pnl': {'realized': -6000.0, 'unrealized': 0.0}}},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_plan_account_conditional_order_waits_while_a_position_is_open',
+                dict(entry, synthetic={
+                    'type': 'plan',
+                    'plan': {
+                        'order': {
+                            'presets': [
+                                {
+                                    'account_conditional': {
+                                    'account_field': 'open_positions',
+                                    'account_level': 0,
+                                    'trigger_direction': 'at_or_below',
+                                    },
+                                },
+                            ],
+                        },
+                    },
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1},
+                ],
+                accepted,
+                positions=75,
+            ),
+            self.price_result(
+                'a_plan_account_conditional_order_is_placed_once_the_book_is_flat',
+                dict(entry, synthetic={
+                    'type': 'plan',
+                    'plan': {
+                        'order': {
+                            'presets': [
+                                {
+                                    'account_conditional': {
+                                    'account_field': 'open_positions',
+                                    'account_level': 0,
+                                    'trigger_direction': 'at_or_below',
+                                    },
+                                },
+                            ],
+                        },
+                    },
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+                positions=0,
+            ),
+            self.price_result(
+                'a_plan_account_conditional_order_without_a_direction_is_refused',
+                dict(entry, synthetic={
+                    'type': 'plan',
+                    'plan': {
+                        'order': {
+                            'presets': [
+                                {
+                                    'account_conditional': {
+                                    'account_field': 'day_pnl',
+                                    'account_level': -5000,
+                                    },
+                                },
+                            ],
+                        },
+                    },
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
                 'a_grid_with_one_rung_refused_answers_partial_with_207',
                 dict(entry, synthetic={
                     'type': 'grid',

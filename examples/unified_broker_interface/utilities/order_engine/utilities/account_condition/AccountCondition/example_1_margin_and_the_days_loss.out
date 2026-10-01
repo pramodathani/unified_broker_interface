@@ -1,0 +1,4 @@
+Reads quotes: False, watches: []
+Free 40000.0, day -1000.0: margin freed False, loss reached False
+Free 60000.0, day -6500.0: margin freed True, loss reached True
+As a dry run shows them: {'account': {'field': 'available_balance', 'level': '50000', 'direction': 'at_or_above'}} and {'account': {'field': 'day_pnl', 'level': '-5000', 'direction': 'at_or_below'}}

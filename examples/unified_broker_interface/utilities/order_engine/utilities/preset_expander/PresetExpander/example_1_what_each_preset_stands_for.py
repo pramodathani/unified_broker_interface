@@ -162,6 +162,12 @@ class WhatEachPresetStandsForExample:
                 'steps': 3,
             },
             'freeze_slicer': {},
+            'account_conditional': {
+                'account_field': 'day_pnl',
+                'account_level': -5000,
+                'trigger_direction': 'at_or_below',
+                'action': 'cancel',
+            },
             'daily_stop': {
                 'stop_price': 990,
                 'stop_limit_price': 988,

@@ -121,6 +121,8 @@ class PlanOrder(SyntheticOrder):
             ends_at = part.lifetime_ends_at(self)
             if ends_at is not None:
                 record['ends_at'] = ends_at
+            if part.lifetime is not None and part.lifetime.when is not None:
+                record['ends_when'] = True
             if part.lifetime is not None and part.lifetime.after_days is not None:
                 carries_overnight = True
             if part.moves_on_ticks():
@@ -579,7 +581,9 @@ class PlanOrder(SyntheticOrder):
         due = False
         for record in (self.parent.parameters.get('parts') or {}).values():
             ends_at = record.get('ends_at')
-            if ends_at is not None and not record.get('ended') and now >= ends_at and record.get('state') != 'done':
+            if record.get('ended') or record.get('state') == 'done':
+                continue
+            if record.get('ends_when') or (ends_at is not None and now >= ends_at):
                 due = True
         if not due:
             return False

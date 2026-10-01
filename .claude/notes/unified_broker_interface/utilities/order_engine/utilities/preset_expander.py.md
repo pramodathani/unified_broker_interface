@@ -71,3 +71,7 @@ The backstop is a second order resting beside the engine-side stop, cancelled be
 ## Ladder and freeze slicer (2026-10-01)
 
 `ladder` and `freeze_slicer` stand for the `ladder` and `freeze_limit` executions with the same settings as today's types.
+
+## Account conditional (2026-10-01)
+
+`account_conditional` with `action: place` is an `account` trigger; with `action: cancel` it is a lifetime ending `when` the account condition holds, applying to the working order.

@@ -30,7 +30,7 @@ WAITING_STATES = (
 class Lifetime:
     """A plan order's lifetime: a moment it ends at, which part of its life that bounds, and what is done when it ends.
 
-    The end is `at_time`, a time of day on the instrument's next trading day, `after_minutes`, counted from when the plan is placed, as today's time stop counts them, or `after_days`, counted the same way, as today's gtt counts its `valid_days`; a plan with an end in days outlives the trading day. `applies_to` says whether the end bounds the time the order waits for its trigger, the time it works after it is sent, or both. An order still waiting when it ends is simply done. An order working when it ends has its resting orders cancelled (`cancel`), moved past the other side's touch so they fill (`marketable`, today's good-till-time `market`), or cancelled and then what filled closed at market (`close_filled`, today's time stop).
+    The end is `when`, a trigger condition such as an account figure reaching a level, checked on every tick, or `at_time`, a time of day on the instrument's next trading day, `after_minutes`, counted from when the plan is placed, as today's time stop counts them, or `after_days`, counted the same way, as today's gtt counts its `valid_days`; a plan with an end in days outlives the trading day. `applies_to` says whether the end bounds the time the order waits for its trigger, the time it works after it is sent, or both. An order still waiting when it ends is simply done. An order working when it ends has its resting orders cancelled (`cancel`), moved past the other side's touch so they fill (`marketable`, today's good-till-time `market`), or cancelled and then what filled closed at market (`close_filled`, today's time stop).
 
     Attributes:
         at_time (str | None): The time of day it ends at, or None.
@@ -38,9 +38,10 @@ class Lifetime:
         applies_to (str): `waiting`, `working` or `both`.
         on_end (str): `cancel`, `marketable` or `close_filled`.
         after_days (int | None): The days after placing it ends, or None.
+        when (object | None): A trigger condition that ends it when it holds, such as an account figure, or None.
     """
 
-    def __init__(self, at_time, after_minutes, applies_to, on_end, after_days=None):
+    def __init__(self, at_time, after_minutes, applies_to, on_end, after_days=None, when=None):
         """Builds the lifetime from settings the plan reader has already checked.
 
         Args:
@@ -49,6 +50,7 @@ class Lifetime:
             applies_to (str): `waiting`, `working` or `both`.
             on_end (str): `cancel`, `marketable` or `close_filled`.
             after_days (int | None): The days, or None.
+            when (object | None): A condition that ends it, or None.
 
         Returns:
             None: This method returns nothing.
@@ -58,6 +60,7 @@ class Lifetime:
         self.applies_to = applies_to
         self.on_end = on_end
         self.after_days = after_days
+        self.when = when
 
     def ends_at(self, plan_order, now=None):
         """The Unix time the order ends at, worked out when the plan is placed.
@@ -67,11 +70,13 @@ class Lifetime:
             now (datetime.datetime | None): The moment to reckon from, or None for now.
 
         Returns:
-            float: The moment.
+            float | None: The moment, or None for a lifetime that ends `when` a condition holds.
 
         Raises:
             RefusedRequestError: With HTTP 400 when the time has already passed today, or minutes are given on a day the instrument does not trade.
         """
+        if self.when is not None:
+            return None
         moments = Moments()
         if now is None:
             now = moments.now()
@@ -113,7 +118,9 @@ class Lifetime:
             'applies_to': self.applies_to,
             'on_end': self.on_end,
         }
-        if self.at_time is not None:
+        if self.when is not None:
+            described['when'] = self.when.described()
+        elif self.at_time is not None:
             described['at_time'] = self.at_time
         elif self.after_days is not None:
             described['after_days'] = self.after_days

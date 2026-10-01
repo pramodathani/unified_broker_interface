@@ -64,3 +64,5 @@ ladder: {'execution': [{'ladder': {'from_price': 995, 'to_price': 1000, 'steps':
   problems: []
 freeze_slicer: {'execution': [{'freeze_limit': {}}]}
   problems: []
+account_conditional: {'lifetime': [{'when': {'account': {'field': 'day_pnl', 'level': -5000, 'direction': 'at_or_below'}}, 'applies_to': 'working'}]}
+  problems: []

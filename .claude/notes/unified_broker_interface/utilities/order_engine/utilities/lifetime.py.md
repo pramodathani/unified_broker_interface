@@ -17,3 +17,7 @@ Two differences are deliberate. A plan that cancels at its time ends the parent 
 ## `after_days` (2026-10-01)
 
 Built once recovery could carry one plan overnight without carrying them all. It counts whole days of 24 hours from placing, as today's gtt counts `valid_days`, not trading days. Only `when` is still unbuilt, waiting for the account conditions.
+
+## `when` (2026-10-01)
+
+Built with the account condition. A lifetime ending `when` has no moment to work out, so `ends_at` is None and the plan marks the part's record `ends_when`; the condition is asked on every tick, with its memory kept as `lifetime_memory`.
