@@ -128,7 +128,7 @@ class PlanOrder(SyntheticOrder):
     def _answer(self, root, placed, warnings):
         """The answer to the caller once the plan has started.
 
-        A plan that placed exactly one order at its root answers with that order's broker answer, as a plain order does. A plan that placed nothing answers `202 armed`. Any other answers with `legs`, one entry per order placed.
+        A plan that placed exactly one order at its root answers with that order's broker answer, as a plain order does. A plan whose order a guard refused, such as a post-only limit that would have crossed, answers `409` with the guard's reason. A plan that placed nothing else answers `202 armed`. Any other answers with `legs`, one entry per order placed.
 
         Args:
             root (object): The root part.
@@ -138,7 +138,19 @@ class PlanOrder(SyntheticOrder):
         Returns:
             tuple: The answer's body (dict) and its HTTP status (int).
         """
-        if not placed:
+        refusal = self._guard_refusal(root)
+        if not placed and refusal is not None:
+            answer = {
+                'broker': None,
+                'instrument_id': self.parent.instrument_id,
+                'tag': self.parent.tag,
+                'outcome': 'rejected',
+                'order_id': None,
+                'status_message': refusal,
+                'skipped': [],
+            }
+            status = 409
+        elif not placed:
             answer = {
                 'broker': None,
                 'instrument_id': self.parent.instrument_id,
@@ -272,6 +284,8 @@ class PlanOrder(SyntheticOrder):
             traded = traded + (leg.filled_quantity or 0)
             if leg.state == 'rejected':
                 rejected = True
+        if self._guard_refusal(root) is not None:
+            rejected = True
         if traded > 0:
             state = 'completed'
         elif rejected:
@@ -280,6 +294,21 @@ class PlanOrder(SyntheticOrder):
             state = 'cancelled'
         if self.parent.can_change_to(state):
             self.record_state(state, f'every part of the plan is done, with {traded} traded')
+
+    def _guard_refusal(self, root):
+        """Why a guard refused an order of the plan without sending it, when one did.
+
+        Args:
+            root (object): The root part.
+
+        Returns:
+            str | None: The guard's reason, or None when no guard refused an order.
+        """
+        for part in root.order_parts():
+            record = self.part_record(part.path)
+            if record.get('reason') == 'refused' and record.get('message'):
+                return record['message']
+        return None
 
     def _parent_join(self, root, path):
         """The join that holds a part directly.
@@ -368,7 +397,7 @@ class PlanOrder(SyntheticOrder):
                 placed = placed + part.send_due(self, None, quotes, now)
         moved = False
         for part in root.order_parts():
-            if part.path in moving_paths and part.move(self, quotes):
+            if part.path in moving_paths and part.move(self, quotes, now):
                 moved = True
         if not placed and not moved:
             if memory_changed or moving_paths or paced_paths:

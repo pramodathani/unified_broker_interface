@@ -1184,8 +1184,9 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | `presets` | list | No | Objects each holding one preset name and its settings, from the table below. An order with no presets and no slot values runs as `simple`. |
     | `trigger` | object | No | What the order waits for: one condition, or `all` or `any` with a list of them. With no trigger the order is placed at once. |
     | `side` | string | No | `buy`, `sell`, or `protect`, which trades against the position the body's side opened: a body `BUY` with `protect` sends a sell. Defaults to the body's side. |
-    | `pricing` | list | No | One pricing rule: `fixed`, `marketable`, `native_stop` or `trail`. Defaults to `fixed` with the body's own order type and price. |
+    | `pricing` | list | No | One pricing setter (`fixed`, `marketable`, `native_stop`, `trail`, `peg` or `chase`), and optionally a `cap`. Defaults to `fixed` with the body's own order type and price. |
     | `execution` | list | No | One execution value, which cuts the order into pieces and says when each is sent: `all_at_once`, `iceberg`, `twap`, `vwap`, `front_loaded`, `participation` or `book_depth`. Defaults to `all_at_once`. Nesting one execution inside another is not built yet. |
+    | `guards` | list | No | Checks made before an order is sent or moved: `post_only` so far. |
 
     The trigger conditions are these:
 
@@ -1205,6 +1206,13 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | `marketable` | `buffer_ticks`, default 2 | A limit that many ticks past the opposite touch, read when the order is sent. With no book to price against, the order waits for the next tick. |
     | `native_stop` | `trigger_price` and `limit_price` | A stop-limit (`SL`) resting at the broker. |
     | `trail` | `points` or `percent`, exactly one; `limit_offset`, required; `step_ticks`, default 1 | A stop-limit resting at the broker, placed `points` (or `percent` of the price) behind the last price and moved after the best price seen, never back. A sell stop follows the highest price up and a buy stop the lowest price down. It moves only when it can move by at least `step_ticks`, and every move passes the repricing throttle and rate budget. |
+    | `peg` | `reference`: `own_touch` (default), `mid` or `opposite_touch`; `offset_ticks`, default 0 | A limit at that place in the book, moved `offset_ticks` away from filling (a negative offset moves towards it), and moved again whenever the reference moves. Every move passes the repricing throttle, and a move that changes nothing is not sent. |
+    | `chase` | `step_ticks`, default 1; `step_seconds`, default 5; `cross_after_seconds`, optional | A limit at its own side's touch that steps `step_ticks` towards the market every `step_seconds`, from where it is, never past the other side's touch. With `cross_after_seconds`, once that long has passed it moves to the other side's touch. Its clock is recorded with each step, so a restart neither steps at once nor forgets when it began. |
+    | `cap` | `worst_price`, required | Not a setter but a limit on one: whatever the setter works out, when the order is sent and every time it moves, a buy's limit is held at or below `worst_price` and a sell's at or above it. A market order has no limit to cap. |
+
+    The `post_only` guard takes `on_crossing`, `refuse` (default) or `rest`. Before a limit is sent it is checked against the book: one that would trade, a buy at or above the best offer or a sell at or below the best bid, is refused with `on_crossing: refuse`, which ends the order and answers <span class="status s4">409</span> when it was the plan's first order, or moved back to its own side's touch with `rest`. A move of a resting order that would cross is skipped with `refuse` and held at the own touch with `rest`. Indian exchanges have no post-only flag, so the book can still move while the order is in flight.
+
+    A price the caller changes on a plan's pegged order is not yet taken up as the `peg` type takes it up: the next tick moves the order back to its reference. A chase steps on from the caller's price, as the `chaser` type does. A post-only guard on an order whose pricing means to trade at once (`marketable`, `chase`, a `peg` to the `opposite_touch` or a `MARKET` order) is refused with `post_only_crosses`, and on a stop with `post_only_needs_limit`.
 
     The execution values are these. Each piece is priced by the order's pricing when it is sent, and what an execution has sent is read from the order's own broker orders, so a restart neither repeats nor skips a piece.
 
@@ -1218,7 +1226,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | `participation` | `percent`, above zero and at most 100; `most_slices`, default 60 | On each tick, `percent` of the volume traded since the last slice, counted from the live quote's `volume` when the order starts working. A share under one unit waits for more volume. The unfilled part of a cancelled slice is sent again by later slices; a rejected slice stops the order. |
     | `book_depth` | `limit_price`, required; `minimum_quantity`, at least 1 | Nothing until the other side of the book shows at least `minimum_quantity` at or inside `limit_price`, then one strike for the smaller of what is shown and what is left. A strike that partly fills rests at its price, and later strikes are only for what is neither traded nor resting. A rejected strike stops the order. |
 
-    A resting stop, `native_stop` or `trail` pricing, cannot be split into pieces, because it protects the whole position at once; a plan that tries is refused with `stop_not_sliced`. A later preset's execution replaces an earlier one with a warning, as pricing does. An order whose execution is paced by ticks (`twap`, `vwap`, `front_loaded`, `participation` and `book_depth`) starts working as soon as its trigger holds, even when nothing is due yet, so `participation` counts volume from that moment.
+    A pricing that moves its order moves every piece still resting, so a `twap` with a `peg` keeps each slice on the bid. A resting stop, `native_stop` or `trail` pricing, cannot be split into pieces, because it protects the whole position at once; a plan that tries is refused with `stop_not_sliced`. A later preset's execution replaces an earlier one with a warning, as pricing does. An order whose execution is paced by ticks (`twap`, `vwap`, `front_loaded`, `participation` and `book_depth`) starts working as soon as its trigger holds, even when nothing is due yet, so `participation` counts volume from that moment.
 
     There is no execution for an exchange's freeze quantity yet. Splitting at the freeze quantity needs the broker chosen first, because each broker publishes the limit in its own units, so it is planned to come with nesting, where it would be applied innermost to every piece automatically. Until then, use the `freeze_slicer` type for an order above the freeze quantity.
 
@@ -1235,6 +1243,9 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | `implementation_shortfall` | `front_loaded` execution. Takes `slices`, `over_minutes` and `urgency`. |
     | `participation` | `participation` execution with `percent` from `participation_percent`, and `marketable` pricing two ticks past the touch. Takes `participation_percent` and `most_slices`. |
     | `liquidity_seeking` | `book_depth` execution and `fixed` pricing at `limit_price`, so a strike that does not fill rests at the limit. Takes `limit_price` and `minimum_quantity`. |
+    | `peg` | `peg` pricing, and a `cap` at `cap_price` when it is given. Takes `reference`, `offset_ticks` and `cap_price`. |
+    | `chaser` | `chase` pricing, and a `cap` at `cap_price` when it is given. Takes `step_ticks`, `step_seconds`, `cross_after_seconds` and `cap_price`. |
+    | `post_only` | The `post_only` guard. Takes `on_crossing`. The order's price is the body's, or a `fixed` pricing of its own. |
     | `bracket` | A Then join: the order, then a `native_stop` stop and a `fixed` target that reduce each other, sized to each fill; an exit filling cancels the rest of the entry. Takes `stop_price`, `stop_limit_price` and `target_price`. |
     | `cover` | A Then join: the order, then a `native_stop` stop sized to each fill. Takes `stop_price` and `stop_limit_price`, both required. |
     | `oco` | An Either join that reduces: a stop and a target protecting a position already held. It has no order of its own, so it cannot be named beside other presets or slot values. |

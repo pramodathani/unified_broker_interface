@@ -1,0 +1,4 @@
+Refuse: ({'order_type': 'LIMIT', 'price': '1000.10'}, 'a post-only BUY at 1000.10 would take liquidity against a book of 1000.00 bid and 1000.05 offered, so nothing was sent')
+Rest: ({'order_type': 'LIMIT', 'price': '1000.00'}, None)
+At the bid: ({'order_type': 'LIMIT', 'price': '1000.00'}, None)
+As a dry run shows them: {'post_only': {'on_crossing': 'refuse'}} and {'post_only': {'on_crossing': 'rest'}}

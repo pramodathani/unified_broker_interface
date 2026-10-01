@@ -19,3 +19,7 @@ The backstop is a second order resting beside the engine-side stop, cancelled be
 ## Stage 2c: trailing presets
 
 `trailing_stop` is the `protect` side with `trail` pricing, and `trailing_entry` is `trail` pricing on the body's side, matching `TrailingStop` and `TrailingEntry`, which differ only in which side the stop is on. `activate_at` becomes a `price_crosses` trigger. For a trailing entry the default direction is the right one; for a trailing stop it is the opposite (a long's stop activates when the price rises to the level), so the expander needs the opening side, and reports `needs_side` when it was not given.
+
+## Stage 4a (2026-10-01)
+
+`peg` and `chaser` keep their types' setting names, and `cap_price` becomes a `cap` modifier beside the pricing. `post_only` stands for the guard alone, so the order's price is the body's or a `fixed` pricing the caller adds.

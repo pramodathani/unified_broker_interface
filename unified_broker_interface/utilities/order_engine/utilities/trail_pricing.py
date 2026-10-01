@@ -136,7 +136,7 @@ class TrailPricing:
         body['price'] = str(limit)
         return body
 
-    def moved_prices(self, plan_order, memory, leg, quotes):
+    def moved_prices(self, plan_order, memory, leg, quotes, now):
         """Where the resting stop should move to on this tick, or None when it should stay.
 
         Args:
@@ -144,10 +144,12 @@ class TrailPricing:
             memory (dict): The pricing's memory, whose `best` is updated in place.
             leg (OrderLeg): The resting stop.
             quotes (dict): The quotes the tick carried.
+            now (float): Unused, since a trail follows prices rather than time.
 
         Returns:
             tuple | None: The new limit and trigger (decimal.Decimal) and a reason (str), or None.
         """
+        del now
         view = plan_order.view(quotes)
         price = view.last()
         if price is None:

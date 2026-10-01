@@ -177,7 +177,7 @@ class PercentAndABuyStopExample:
             quotes = {
                 INSTRUMENT_ID: self.quotes.book_at(last - 0.05, last),
             }
-            print(f'last {last}: move {pricing.moved_prices(self.plan_order, memory, leg, quotes)}')
+            print(f'last {last}: move {pricing.moved_prices(self.plan_order, memory, leg, quotes, 0.0)}')
         print(f'As a dry run shows it: {pricing.described()}')
 
 

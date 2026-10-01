@@ -41,6 +41,9 @@ PRESET_NAMES = (
     'implementation_shortfall',
     'participation',
     'liquidity_seeking',
+    'peg',
+    'chaser',
+    'post_only',
     'oto',
     'oco',
     'bracket',
@@ -133,6 +136,12 @@ class PresetExpander:
             return self._participation(settings, path)
         if name == 'liquidity_seeking':
             return self._liquidity_seeking(settings, path)
+        if name == 'peg':
+            return self._peg(settings, path)
+        if name == 'chaser':
+            return self._chaser(settings, path)
+        if name == 'post_only':
+            return self._post_only(settings, path)
         return self._hidden_stop(settings, path)
 
     def is_join(self, name, settings):
@@ -796,6 +805,93 @@ class PresetExpander:
                     'marketable': {
                         'buffer_ticks': DEFAULT_BUFFER_TICKS,
                     },
+                },
+            ],
+        }
+
+    def _peg(self, settings, path):
+        """Keeps a limit at a place in the book, held at a cap when one is given.
+
+        Args:
+            settings (dict): `reference`, `offset_ticks` and `cap_price`, all optional.
+            path (str): The preset's path.
+
+        Returns:
+            dict: `peg` pricing, and a `cap` when `cap_price` is given.
+        """
+        self._refuse_unknown(settings, ('reference', 'offset_ticks', 'cap_price'), path, 'peg')
+        peg = {}
+        if 'reference' in settings:
+            peg['reference'] = settings['reference']
+        if 'offset_ticks' in settings:
+            peg['offset_ticks'] = settings['offset_ticks']
+        pricing = [
+            {
+                'peg': peg,
+            },
+        ]
+        if 'cap_price' in settings:
+            pricing.append(
+                {
+                    'cap': {
+                        'worst_price': settings['cap_price'],
+                    },
+                }
+            )
+        return {
+            'pricing': pricing,
+        }
+
+    def _chaser(self, settings, path):
+        """Starts a limit on its own side of the book and walks it towards the other, held at a cap when one is given.
+
+        Args:
+            settings (dict): `step_ticks`, `step_seconds`, `cross_after_seconds` and `cap_price`, all optional.
+            path (str): The preset's path.
+
+        Returns:
+            dict: `chase` pricing, and a `cap` when `cap_price` is given.
+        """
+        self._refuse_unknown(settings, ('step_ticks', 'step_seconds', 'cross_after_seconds', 'cap_price'), path, 'chaser')
+        chase = {}
+        for setting in ('step_ticks', 'step_seconds', 'cross_after_seconds'):
+            if setting in settings:
+                chase[setting] = settings[setting]
+        pricing = [
+            {
+                'chase': chase,
+            },
+        ]
+        if 'cap_price' in settings:
+            pricing.append(
+                {
+                    'cap': {
+                        'worst_price': settings['cap_price'],
+                    },
+                }
+            )
+        return {
+            'pricing': pricing,
+        }
+
+    def _post_only(self, settings, path):
+        """Sends a limit only when it would rest rather than trade.
+
+        Args:
+            settings (dict): `on_crossing`, optional.
+            path (str): The preset's path.
+
+        Returns:
+            dict: The `post_only` guard.
+        """
+        self._refuse_unknown(settings, ('on_crossing',), path, 'post_only')
+        post_only = {}
+        if 'on_crossing' in settings:
+            post_only['on_crossing'] = settings['on_crossing']
+        return {
+            'guards': [
+                {
+                    'post_only': post_only,
                 },
             ],
         }

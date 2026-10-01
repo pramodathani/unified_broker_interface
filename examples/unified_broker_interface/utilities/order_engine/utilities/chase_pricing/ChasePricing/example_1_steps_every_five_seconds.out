@@ -1,0 +1,10 @@
+Reads quotes: True, moves: True
+Sent as: {'quantity': 10, 'order_type': 'LIMIT', 'price': '1000.00'}
+At 0.0 seconds: move None
+At 3.0 seconds: move None
+At 5.0 seconds: move (Decimal('1000.05'), None, 'the chase stepped to 1000.05')
+At 10.0 seconds: move (Decimal('1000.10'), None, 'the chase stepped to 1000.10')
+At 15.0 seconds: move (Decimal('1000.15'), None, 'the chase stepped to 1000.15')
+At 20.0 seconds: move (Decimal('1000.15'), None, 'the chase stepped to 1000.15')
+Memory: {'started_at': 0.0, 'stepped_at': 20.0}
+As a dry run shows it: {'chase': {'step_ticks': 1, 'step_seconds': 5.0, 'cross_after_seconds': None}}

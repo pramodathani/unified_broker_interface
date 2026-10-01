@@ -1,0 +1,3 @@
+A sell at 990.00 becomes 995.00, at 999.00 stays 999.00
+A market order: {'order_type': 'MARKET'}
+As a dry run shows it: {'cap': {'worst_price': '995.00'}}

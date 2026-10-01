@@ -28,3 +28,9 @@ participation: {'execution': [{'participation': {'percent': 10}}], 'pricing': [{
   problems: []
 liquidity_seeking: {'execution': [{'book_depth': {'limit_price': 1000.1, 'minimum_quantity': 10}}], 'pricing': [{'fixed': {'price': 1000.1}}]}
   problems: []
+peg: {'pricing': [{'peg': {'reference': 'mid'}}, {'cap': {'worst_price': 1000.1}}]}
+  problems: []
+chaser: {'pricing': [{'chase': {'step_seconds': 3, 'cross_after_seconds': 60}}]}
+  problems: []
+post_only: {'guards': [{'post_only': {'on_crossing': 'rest'}}]}
+  problems: []

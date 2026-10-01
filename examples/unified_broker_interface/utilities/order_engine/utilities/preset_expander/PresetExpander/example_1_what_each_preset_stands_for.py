@@ -100,6 +100,17 @@ class WhatEachPresetStandsForExample:
                 'limit_price': 1000.10,
                 'minimum_quantity': 10,
             },
+            'peg': {
+                'reference': 'mid',
+                'cap_price': 1000.10,
+            },
+            'chaser': {
+                'step_seconds': 3,
+                'cross_after_seconds': 60,
+            },
+            'post_only': {
+                'on_crossing': 'rest',
+            },
         }
         for name in PRESET_NAMES:
             if name in JOIN_PRESET_NAMES:

@@ -61,3 +61,7 @@ Executions now receive `sending_side` in `due_pieces`, because `book_depth` has 
 An order whose execution is paced by ticks now starts working when its trigger holds even if nothing is due, rather than going back to waiting. Before this, a `scheduled` participation began counting, sent nothing on that tick, went back to waiting and was not saved, so every later tick began counting again from the new volume and nothing was ever sent (offline scenario `a_plan_participation_that_starts_at_a_time`). `on_price_tick` keeps `fired_at` and saves the parent in that case.
 
 The freeze quantity is not an execution yet. Each broker publishes its freeze limit in its own units and the broker is chosen only when a piece is placed, so splitting at the freeze limit belongs with nesting, where it would be applied innermost to every piece.
+
+## Stage 4a: moving prices, cap and post-only (2026-10-01)
+
+`on_price_tick` passes the tick's time to `OrderPart.move`, because a chase steps on a clock. A guard that refuses an order leaves the part `done` with reason `refused` and a `message`; `_guard_refusal` finds it, so `_finish_if_done` ends the parent as `rejected` and `_answer` answers 409 with the message when nothing was placed.

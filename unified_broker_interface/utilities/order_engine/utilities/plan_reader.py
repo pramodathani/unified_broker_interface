@@ -8,6 +8,12 @@ from unified_broker_interface.utilities.order_engine.utilities.all_at_once_execu
 from unified_broker_interface.utilities.order_engine.utilities.book_depth_execution import (
     BookDepthExecution,
 )
+from unified_broker_interface.utilities.order_engine.utilities.cap_modifier import (
+    CapModifier,
+)
+from unified_broker_interface.utilities.order_engine.utilities.chase_pricing import (
+    ChasePricing,
+)
 from unified_broker_interface.utilities.order_engine.utilities.condition_group import (
     ConditionGroup,
 )
@@ -35,6 +41,14 @@ from unified_broker_interface.utilities.order_engine.utilities.order_part import
 )
 from unified_broker_interface.utilities.order_engine.utilities.participation_execution import (
     ParticipationExecution,
+)
+from unified_broker_interface.utilities.order_engine.utilities.peg_pricing import (
+    REFERENCES,
+    PegPricing,
+)
+from unified_broker_interface.utilities.order_engine.utilities.post_only_guard import (
+    ON_CROSSING,
+    PostOnlyGuard,
 )
 from unified_broker_interface.utilities.order_engine.utilities.preset_expander import (
     PRESET_NAMES,
@@ -95,6 +109,7 @@ ORDER_SETTINGS = (
     'side',
     'pricing',
     'execution',
+    'guards',
 )
 MOST_SLICES = 60
 SIDES = (
@@ -121,7 +136,7 @@ class PlanReader:
 
     A plan is a tree. Each node is an object holding exactly one key: `order` for a leaf, or the name of a join for a branch. Each part gets a path from its place in the tree, starting at `root`, which is how its broker orders and its state are told apart from every other part's.
 
-    An order takes `presets`, a list of named presets each standing for slot values, and may give slot values of its own: `trigger`, `side` and `pricing`. They are merged in order, presets first and the order's own values last. Triggers from several sources are joined with `all`. A later pricing setter replaces an earlier one, which is reported in `warnings` rather than refused, because naming a preset for its trigger and then choosing another price is a normal thing to want. Two different sides are refused, because there is no sensible way to join them.
+    An order takes `presets`, a list of named presets each standing for slot values, and may give slot values of its own: `trigger`, `side`, `pricing`, `execution` and `guards`. They are merged in order, presets first and the order's own values last. Triggers from several sources are joined with `all`. A later pricing setter, cap, execution or guard replaces an earlier one of the same kind, which is reported in `warnings` rather than refused, because naming a preset for its trigger and then choosing another price is a normal thing to want. Two different sides are refused, because there is no sensible way to join them, and so is a post-only guard on an order whose pricing means to trade at once.
 
     The joins are named in the design and recognised here, so a caller who writes one is told it is not built yet rather than that it is unknown.
 
@@ -345,7 +360,7 @@ class PlanReader:
                 )
         sources = self._preset_sources(order.get('presets', []), path)
         own = {}
-        for slot in ('trigger', 'side', 'pricing', 'execution'):
+        for slot in ('trigger', 'side', 'pricing', 'execution', 'guards'):
             if slot in order:
                 own[slot] = order[slot]
         sources.append((own, path))
@@ -359,6 +374,10 @@ class PlanReader:
         side = None
         pricing = None
         pricing_path = None
+        cap = None
+        cap_path = None
+        post_only = None
+        post_only_path = None
         execution = None
         execution_path = None
         for slots, source_path in sources:
@@ -377,14 +396,39 @@ class PlanReader:
                     f'{source_path}.pricing',
                 )
                 if read_pricing is not None:
-                    if pricing is not None:
+                    read_setter, read_cap = read_pricing
+                    if read_setter is not None:
+                        if pricing is not None:
+                            self._add_warning(
+                                f'{source_path}.pricing',
+                                'pricing_replaced',
+                                f'this pricing replaces the pricing from {pricing_path}, because an order has one pricing rule at a time',
+                            )
+                        pricing = read_setter
+                        pricing_path = f'{source_path}.pricing'
+                    if read_cap is not None:
+                        if cap is not None:
+                            self._add_warning(
+                                f'{source_path}.pricing',
+                                'cap_replaced',
+                                f'this cap replaces the cap from {cap_path}, because an order has one worst price',
+                            )
+                        cap = read_cap
+                        cap_path = f'{source_path}.pricing'
+            if 'guards' in slots:
+                read_post_only = self._read_guards_list(
+                    slots['guards'],
+                    f'{source_path}.guards',
+                )
+                if read_post_only is not None:
+                    if post_only is not None:
                         self._add_warning(
-                            f'{source_path}.pricing',
-                            'pricing_replaced',
-                            f'this pricing replaces the pricing from {pricing_path}, because an order has one pricing rule at a time',
+                            f'{source_path}.guards',
+                            'guard_replaced',
+                            f'this post_only guard replaces the one from {post_only_path}',
                         )
-                    pricing = read_pricing
-                    pricing_path = f'{source_path}.pricing'
+                    post_only = read_post_only
+                    post_only_path = f'{source_path}.guards'
             if 'execution' in slots:
                 read_execution = self._read_execution_list(
                     slots['execution'],
@@ -410,7 +454,7 @@ class PlanReader:
             pricing = FixedPricing(None, None)
         if execution is None:
             execution = AllAtOnceExecution()
-        if pricing.moves() or isinstance(pricing, NativeStopPricing):
+        if isinstance(pricing, (NativeStopPricing, TrailPricing)):
             if not isinstance(execution, AllAtOnceExecution):
                 self._add_problem(
                     path,
@@ -418,7 +462,42 @@ class PlanReader:
                     'a resting stop protects the whole position at once, so its order cannot be split into pieces sent over time',
                 )
                 return None
-        return OrderPart(path, preset_names, trigger, side, pricing, keeps_tag, execution)
+        if post_only is not None and not self._can_rest(pricing, path):
+            return None
+        return OrderPart(path, preset_names, trigger, side, pricing, keeps_tag, execution, cap, post_only)
+
+    def _can_rest(self, pricing, path):
+        """Whether an order with this pricing can be post-only, reporting the problem when it cannot.
+
+        A post-only order must be a limit meant to rest. A stop is not a resting limit, and marketable pricing, a chase or a peg to the opposite touch all mean to trade against the other side, which a post-only guard exists to prevent.
+
+        Args:
+            pricing (object): The order's pricing setter.
+            path (str): Where the order sits in the plan.
+
+        Returns:
+            bool: True when the two can go together.
+        """
+        if isinstance(pricing, (NativeStopPricing, TrailPricing)):
+            self._add_problem(
+                path,
+                'post_only_needs_limit',
+                'a post-only guard checks a limit before it rests, and a stop order is not a resting limit',
+            )
+            return False
+        crossing = isinstance(pricing, (MarketablePricing, ChasePricing))
+        if isinstance(pricing, PegPricing) and pricing.reference == 'opposite_touch':
+            crossing = True
+        if isinstance(pricing, FixedPricing) and pricing.order_type == 'MARKET':
+            crossing = True
+        if crossing:
+            self._add_problem(
+                path,
+                'post_only_crosses',
+                'this pricing means to trade against the other side of the book, which a post-only guard exists to prevent',
+            )
+            return False
+        return True
 
     def _join_preset_tree(self, order, path):
         """The plan tree a join preset in an order stands for, or None when the order names none.
@@ -677,14 +756,14 @@ class PlanReader:
         )
 
     def _read_pricing_list(self, pricing, path):
-        """Reads an order's pricing, which in this stage is exactly one setter.
+        """Reads an order's pricing: at most one setter, which decides the price, and at most one cap, which limits it.
 
         Args:
             pricing (object): The list as the caller wrote it.
             path (str): Where it sits in the plan.
 
         Returns:
-            object | None: The pricing, or None when it has a problem.
+            tuple | None: The setter (object | None) and the cap (CapModifier | None), or None when the list has a problem.
         """
         if not isinstance(pricing, list) or not pricing:
             self._add_problem(
@@ -693,44 +772,211 @@ class PlanReader:
                 'pricing is a list of one or more pricing values',
             )
             return None
-        if len(pricing) > 1:
-            self._add_problem(
-                path,
-                'two_setters',
-                'every pricing value so far sets the price from scratch, so an order can have only one',
-            )
-            return None
-        entry = pricing[0]
-        entry_path = f'{path}.0'
-        if not isinstance(entry, dict) or len(entry) != 1:
-            self._add_problem(
-                entry_path,
-                'pricing_shape',
-                'a pricing value is an object holding exactly one pricing name and its settings',
-            )
-            return None
-        for name, settings in entry.items():
-            if not isinstance(settings, dict):
+        problems_before = len(self.problems)
+        setter = None
+        cap = None
+        for index, entry in enumerate(pricing):
+            entry_path = f'{path}.{index}'
+            if not isinstance(entry, dict) or len(entry) != 1:
                 self._add_problem(
                     entry_path,
                     'pricing_shape',
-                    f'the {name} pricing\'s settings must be an object',
+                    'a pricing value is an object holding exactly one pricing name and its settings',
                 )
-                return None
-            if name == 'fixed':
-                return self._read_fixed(settings, f'{entry_path}.fixed')
-            if name == 'marketable':
-                return self._read_marketable(settings, f'{entry_path}.marketable')
-            if name == 'native_stop':
-                return self._read_native_stop(settings, f'{entry_path}.native_stop')
-            if name == 'trail':
-                return self._read_trail(settings, f'{entry_path}.trail')
-            self._add_problem(
-                entry_path,
-                'unknown_pricing',
-                f'{name!r} is not a pricing a plan can use yet; the pricings available are fixed, marketable, native_stop and trail',
-            )
+                continue
+            for name, settings in entry.items():
+                if not isinstance(settings, dict):
+                    self._add_problem(
+                        entry_path,
+                        'pricing_shape',
+                        f'the {name} pricing\'s settings must be an object',
+                    )
+                    continue
+                if name == 'cap':
+                    if cap is not None:
+                        self._add_problem(
+                            entry_path,
+                            'two_caps',
+                            'an order has one worst price, so a pricing list can hold only one cap',
+                        )
+                        continue
+                    cap = self._read_cap(settings, f'{entry_path}.cap')
+                    continue
+                read_setter = self._read_setter(name, settings, entry_path)
+                if read_setter is None:
+                    continue
+                if setter is not None:
+                    self._add_problem(
+                        entry_path,
+                        'two_setters',
+                        'each pricing setter decides the price from scratch, so an order can have only one; a cap may go beside it',
+                    )
+                    continue
+                setter = read_setter
+        if len(self.problems) > problems_before:
+            return None
+        return setter, cap
+
+    def _read_setter(self, name, settings, entry_path):
+        """Reads one pricing setter by its name.
+
+        Args:
+            name (str): The setter's name.
+            settings (dict): Its settings.
+            entry_path (str): Where it sits in the plan.
+
+        Returns:
+            object | None: The pricing, or None when it has a problem.
+        """
+        if name == 'fixed':
+            return self._read_fixed(settings, f'{entry_path}.fixed')
+        if name == 'marketable':
+            return self._read_marketable(settings, f'{entry_path}.marketable')
+        if name == 'native_stop':
+            return self._read_native_stop(settings, f'{entry_path}.native_stop')
+        if name == 'trail':
+            return self._read_trail(settings, f'{entry_path}.trail')
+        if name == 'peg':
+            return self._read_peg(settings, f'{entry_path}.peg')
+        if name == 'chase':
+            return self._read_chase(settings, f'{entry_path}.chase')
+        self._add_problem(
+            entry_path,
+            'unknown_pricing',
+            f'{name!r} is not a pricing a plan can use yet; the pricings available are fixed, marketable, native_stop, trail, peg, chase and cap',
+        )
         return None
+
+    def _read_peg(self, settings, path):
+        """Reads `peg` pricing.
+
+        Args:
+            settings (dict): `reference`, default `own_touch`, and `offset_ticks`, default 0.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            PegPricing | None: The pricing, or None when it has a problem.
+        """
+        problems_before = len(self.problems)
+        self._refuse_unknown(settings, ('reference', 'offset_ticks'), path, 'peg')
+        reference = settings.get('reference', 'own_touch')
+        if reference not in REFERENCES:
+            self._add_problem(
+                path,
+                'bad_setting',
+                f'reference must be one of {", ".join(REFERENCES)}, not {reference!r}',
+            )
+        offset = settings.get('offset_ticks', 0)
+        if isinstance(offset, bool) or not isinstance(offset, int):
+            self._add_problem(
+                path,
+                'bad_setting',
+                f'offset_ticks must be a whole number of ticks, not {offset!r}',
+            )
+        if len(self.problems) > problems_before:
+            return None
+        return PegPricing(reference, offset)
+
+    def _read_chase(self, settings, path):
+        """Reads `chase` pricing.
+
+        Args:
+            settings (dict): `step_ticks`, default 1; `step_seconds`, default 5; and `cross_after_seconds`, optional.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            ChasePricing | None: The pricing, or None when it has a problem.
+        """
+        problems_before = len(self.problems)
+        self._refuse_unknown(settings, ('step_ticks', 'step_seconds', 'cross_after_seconds'), path, 'chase')
+        step_ticks = self._whole_number(settings.get('step_ticks', 1), path, 'step_ticks', 1, None)
+        step_seconds = self._seconds(settings.get('step_seconds', 5.0), path, 'step_seconds')
+        cross_after = None
+        if settings.get('cross_after_seconds') is not None:
+            cross_after = self._seconds(settings['cross_after_seconds'], path, 'cross_after_seconds')
+        if len(self.problems) > problems_before:
+            return None
+        return ChasePricing(step_ticks, step_seconds, cross_after)
+
+    def _seconds(self, value, path, name):
+        """Reads a number of seconds above zero.
+
+        Args:
+            value (object): The value as the caller wrote it.
+            path (str): Where it sits in the plan.
+            name (str): The setting's name, for the message.
+
+        Returns:
+            float | None: The seconds, or None when the value is not a number above zero.
+        """
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+            self._add_problem(
+                path,
+                'bad_setting',
+                f'{name} must be a number of seconds above zero, not {value!r}',
+            )
+            return None
+        return float(value)
+
+    def _read_cap(self, settings, path):
+        """Reads the `cap` pricing modifier.
+
+        Args:
+            settings (dict): `worst_price`, required.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            CapModifier | None: The cap, or None when it has a problem.
+        """
+        problems_before = len(self.problems)
+        self._refuse_unknown(settings, ('worst_price',), path, 'cap')
+        worst_price = self._price(settings.get('worst_price'), path, 'worst_price')
+        if len(self.problems) > problems_before:
+            return None
+        return CapModifier(worst_price)
+
+    def _read_guards_list(self, guards, path):
+        """Reads an order's guards, of which `post_only` is the one built so far.
+
+        Args:
+            guards (object): The list as the caller wrote it.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            PostOnlyGuard | None: The guard, or None when there is none or it has a problem.
+        """
+        if not isinstance(guards, list):
+            self._add_problem(path, 'guards_shape', 'guards is a list of guard values')
+            return None
+        guard = None
+        for index, entry in enumerate(guards):
+            entry_path = f'{path}.{index}'
+            if not isinstance(entry, dict) or len(entry) != 1:
+                self._add_problem(entry_path, 'guards_shape', 'a guard is an object holding exactly one guard name and its settings')
+                continue
+            for name, settings in entry.items():
+                if name != 'post_only':
+                    self._add_problem(
+                        entry_path,
+                        'unknown_guard',
+                        f'{name!r} is not a guard a plan can use yet; the guard available is post_only',
+                    )
+                    continue
+                if not isinstance(settings, dict):
+                    self._add_problem(entry_path, 'guards_shape', 'the post_only guard\'s settings must be an object')
+                    continue
+                problems_before = len(self.problems)
+                self._refuse_unknown(settings, ('on_crossing',), f'{entry_path}.post_only', 'post_only', 'guard')
+                on_crossing = settings.get('on_crossing', 'refuse')
+                if on_crossing not in ON_CROSSING:
+                    self._add_problem(
+                        f'{entry_path}.post_only',
+                        'bad_setting',
+                        f'on_crossing must be one of {", ".join(ON_CROSSING)}, not {on_crossing!r}',
+                    )
+                if len(self.problems) == problems_before:
+                    guard = PostOnlyGuard(on_crossing)
+        return guard
 
     def _read_execution_list(self, execution, path):
         """Reads an order's execution, which in this stage is exactly one value.
@@ -762,7 +1008,7 @@ class PlanReader:
                 self._add_problem(entry_path, 'execution_shape', f'the {name} execution\'s settings must be an object')
                 return None
             if name == 'all_at_once':
-                self._refuse_unknown(settings, (), entry_path, 'all_at_once')
+                self._refuse_unknown(settings, (), entry_path, 'all_at_once', 'execution')
                 return AllAtOnceExecution()
             if name == 'iceberg':
                 return self._read_iceberg(settings, f'{entry_path}.iceberg')
@@ -816,7 +1062,7 @@ class PlanReader:
             IcebergExecution | None: The execution, or None when it has a problem.
         """
         problems_before = len(self.problems)
-        self._refuse_unknown(settings, ('visible_quantity', 'randomise_percent'), path, 'iceberg')
+        self._refuse_unknown(settings, ('visible_quantity', 'randomise_percent'), path, 'iceberg', 'execution')
         visible = self._whole_number(settings.get('visible_quantity'), path, 'visible_quantity', 1, None)
         randomise = self._whole_number(settings.get('randomise_percent', 0), path, 'randomise_percent', 0, 99)
         if len(self.problems) > problems_before:
@@ -840,7 +1086,7 @@ class PlanReader:
             known.append('volume_profile')
         if name == 'front_loaded':
             known.append('urgency')
-        self._refuse_unknown(settings, tuple(known), path, name)
+        self._refuse_unknown(settings, tuple(known), path, name, 'execution')
         slices = self._whole_number(settings.get('slices'), path, 'slices', 2, MOST_SLICES)
         over_minutes = self._price(settings.get('over_minutes'), path, 'over_minutes')
         profile = None
@@ -873,7 +1119,7 @@ class PlanReader:
             ParticipationExecution | None: The execution, or None when it has a problem.
         """
         problems_before = len(self.problems)
-        self._refuse_unknown(settings, ('percent', 'most_slices'), path, 'participation')
+        self._refuse_unknown(settings, ('percent', 'most_slices'), path, 'participation', 'execution')
         percent = self._price(settings.get('percent'), path, 'percent')
         if percent is not None and percent > 100:
             self._add_problem(path, 'bad_setting', f'percent must be above zero and at most 100, not {percent}')
@@ -893,7 +1139,7 @@ class PlanReader:
             BookDepthExecution | None: The execution, or None when it has a problem.
         """
         problems_before = len(self.problems)
-        self._refuse_unknown(settings, ('limit_price', 'minimum_quantity'), path, 'book_depth')
+        self._refuse_unknown(settings, ('limit_price', 'minimum_quantity'), path, 'book_depth', 'execution')
         limit_price = self._price(settings.get('limit_price'), path, 'limit_price')
         minimum_quantity = self._whole_number(settings.get('minimum_quantity'), path, 'minimum_quantity', 1, None)
         if len(self.problems) > problems_before:
@@ -1101,14 +1347,15 @@ class PlanReader:
             return None
         return number
 
-    def _refuse_unknown(self, settings, known, path, name):
-        """Reports every setting a pricing value does not take.
+    def _refuse_unknown(self, settings, known, path, name, kind='pricing'):
+        """Reports every setting a slot value does not take.
 
         Args:
             settings (dict): The settings.
             known (tuple): The settings it takes.
             path (str): Where it sits in the plan.
-            name (str): The pricing's name, for the message.
+            name (str): The value's name, for the message.
+            kind (str): What the value is, such as `pricing`, `execution` or `guard`, for the message.
 
         Returns:
             None: This method returns nothing.
@@ -1118,7 +1365,7 @@ class PlanReader:
                 self._add_problem(
                     path,
                     'unknown_setting',
-                    f'the {name} pricing takes {", ".join(known)}, not {setting!r}',
+                    f'the {name} {kind} takes {", ".join(known)}, not {setting!r}',
                 )
 
     def _add_problem(self, path, rule, message):

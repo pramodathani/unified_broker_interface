@@ -73,7 +73,7 @@ class CollectsEveryProblemExample:
                     'side': 'buy',
                     'presets': [
                         {
-                            'peg': {},
+                            'grid': {},
                         },
                         {
                             'simple': {

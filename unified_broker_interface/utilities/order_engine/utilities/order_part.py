@@ -32,9 +32,11 @@ class OrderPart:
         pricing (object): The pricing that sets the order type and prices.
         keeps_tag (bool): Whether its orders carry the caller's tag, which only the plan's main order does.
         execution (object): How its quantity is cut into pieces and when each is sent.
+        cap (CapModifier | None): The worst price its limit may reach, or None.
+        post_only (PostOnlyGuard | None): The check that keeps its limit from crossing, or None.
     """
 
-    def __init__(self, path, presets, trigger, side, pricing, keeps_tag=True, execution=None):
+    def __init__(self, path, presets, trigger, side, pricing, keeps_tag=True, execution=None, cap=None, post_only=None):
         """Builds the part from values the plan reader has already checked.
 
         Args:
@@ -45,6 +47,8 @@ class OrderPart:
             pricing (object): The pricing.
             keeps_tag (bool): Whether its orders carry the caller's tag.
             execution (object | None): How its quantity is sent, or None for all at once.
+            cap (CapModifier | None): The worst price its limit may reach, or None.
+            post_only (PostOnlyGuard | None): The check that keeps its limit from crossing, or None.
 
         Returns:
             None: This method returns nothing.
@@ -58,6 +62,8 @@ class OrderPart:
         if execution is None:
             execution = AllAtOnceExecution()
         self.execution = execution
+        self.cap = cap
+        self.post_only = post_only
 
     def order_parts(self):
         """Every order in this part, which is itself.
@@ -98,6 +104,8 @@ class OrderPart:
         if self.trigger is not None and self.trigger.needs_prices():
             return True
         if self.execution.needs_prices():
+            return True
+        if self.post_only is not None:
             return True
         return self.pricing.needs_prices()
 
@@ -193,9 +201,9 @@ class OrderPart:
         )
 
     def order(self, plan_order, quotes, quantity=None):
-        """The order this part sends, priced now, or None when no price can be made yet.
+        """The order this part sends, priced now, or None when no price can be made yet or the post-only guard refused it.
 
-        The quantity is the piece's when one is given; otherwise the target a parent join set, less what this part has already traded, or the body's quantity when no join set one. Only the plan's main order keeps the caller's tag, as today's exits do: the tag belongs to the order the caller asked for.
+        The quantity is the piece's when one is given; otherwise the target a parent join set, less what this part has already traded, or the body's quantity when no join set one. Only the plan's main order keeps the caller's tag, as today's exits do: the tag belongs to the order the caller asked for. The cap holds the priced limit, and the post-only guard then checks it against the book; a refusal ends this part as refused.
 
         Args:
             plan_order (PlanOrder): The plan order.
@@ -227,6 +235,19 @@ class OrderPart:
         if memory != (record.get('pricing_memory') or {}):
             record['pricing_memory'] = memory
             plan_order.set_part_record(self.path, record, None)
+        if self.cap is not None:
+            priced = self.cap.capped_body(priced, sending_side)
+        if self.post_only is not None:
+            priced, refusal = self.post_only.checked_body(plan_order.view(quotes), priced, sending_side)
+            if refusal is not None:
+                record = plan_order.part_record(self.path)
+                record['state'] = 'done'
+                record['reason'] = 'refused'
+                record['message'] = refusal
+                plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part is done: {refusal}')
+                return None
+            if priced is None:
+                return None
         if priced.get('price') != before.get('price'):
             priced.pop('price_reference', None)
         return plan_order.concrete_order(plan_order.read_order(priced))
@@ -310,6 +331,8 @@ class OrderPart:
                 plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part started its execution')
         placed = self.send_due(plan_order, started_at, quotes, now)
         record = plan_order.part_record(self.path)
+        if record.get('state') == 'done':
+            return placed
         if not placed and not self.own_legs(plan_order.parent):
             if self.execution.paced_by_ticks() and record.get('state') != 'working':
                 record['state'] = 'working'
@@ -410,34 +433,57 @@ class OrderPart:
                 plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part is done: refused')
         return placed
 
-    def move(self, plan_order, quotes):
-        """Moves this order's resting broker order on a tick, for a pricing that moves, such as a trailing stop.
+    def move(self, plan_order, quotes, now):
+        """Moves this order's resting broker orders on a tick, for a pricing that moves, such as a peg or a trailing stop.
+
+        Every resting order is asked about with the memory as it stood before the tick, so pieces resting side by side move together. The cap holds each new limit and the post-only guard checks it. The memory is recorded with an event when an order moved or the pricing started its clock, so a restart keeps it.
 
         Args:
             plan_order (PlanOrder): The plan order.
             quotes (dict): The quotes the tick carried.
+            now (float): The Unix time of the tick.
 
         Returns:
-            bool: True when the order was moved.
+            bool: True when an order was moved.
         """
         if not self.pricing.moves():
             return False
-        resting = None
+        resting = []
         for leg in self.own_legs(plan_order.parent):
             if not leg.is_finished() and leg.broker_order_id:
-                resting = leg
-        if resting is None:
+                resting.append(leg)
+        if not resting:
             return False
         record = plan_order.part_record(self.path)
-        memory = copy.deepcopy(record.get('pricing_memory') or {})
-        moved = self.pricing.moved_prices(plan_order, memory, resting, quotes)
-        if memory != (record.get('pricing_memory') or {}):
-            record['pricing_memory'] = memory
-            plan_order.set_part_record(self.path, record, None)
-        if moved is None:
-            return False
-        limit, trigger, reason = moved
-        return plan_order.reprice_leg(resting, limit, trigger, reason)
+        stored = record.get('pricing_memory') or {}
+        new_memory = stored
+        moved_any = False
+        reasons = []
+        for leg in resting:
+            memory = copy.deepcopy(stored)
+            moved = self.pricing.moved_prices(plan_order, memory, leg, quotes, now)
+            if memory != stored:
+                new_memory = memory
+            if moved is None:
+                continue
+            limit, trigger, reason = moved
+            if self.cap is not None:
+                limit = self.cap.capped(limit, leg.transaction_type)
+            if self.post_only is not None:
+                limit = self.post_only.checked_move(plan_order.view(quotes), limit, leg.transaction_type)
+                if limit is None:
+                    continue
+            if plan_order.reprice_leg(leg, limit, trigger, reason):
+                moved_any = True
+                reasons.append(reason)
+        if new_memory != stored:
+            record = plan_order.part_record(self.path)
+            record['pricing_memory'] = new_memory
+            message = None
+            if moved_any or not stored:
+                message = f'the plan\'s {self.path} part\'s pricing remembers {new_memory}'
+            plan_order.set_part_record(self.path, record, message)
+        return moved_any
 
     def settle(self, plan_order):
         """Sends the next piece when the execution waits for fills, and marks this order done once every broker order has finished and no more will be sent.
@@ -661,6 +707,31 @@ class OrderPart:
             return 'the body\'s quantity'
         return 'set by its join'
 
+    def _pricing_described(self):
+        """The pricing setter and its modifiers, as a dry run shows them.
+
+        Returns:
+            list: The setter, then the cap when there is one.
+        """
+        described = [
+            self.pricing.described(),
+        ]
+        if self.cap is not None:
+            described.append(self.cap.described())
+        return described
+
+    def _guards_described(self):
+        """The guards, as a dry run shows them.
+
+        Returns:
+            list: The post-only guard when there is one.
+        """
+        if self.post_only is None:
+            return []
+        return [
+            self.post_only.described(),
+        ]
+
     def expanded(self):
         """This part as it will run, with every slot's value or default written out, for a dry run's answer.
 
@@ -682,10 +753,8 @@ class OrderPart:
                     'execution': [
                         self.execution.described(),
                     ],
-                    'pricing': [
-                        self.pricing.described(),
-                    ],
-                    'guards': [],
+                    'pricing': self._pricing_described(),
+                    'guards': self._guards_described(),
                     'venue': 'selector',
                     'lifetime': [
                         'the body\'s validity',

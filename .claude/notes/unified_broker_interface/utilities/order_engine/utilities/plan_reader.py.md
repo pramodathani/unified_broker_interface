@@ -21,3 +21,7 @@ An order's presets are expanded first and its own `trigger`, `side` and `pricing
 `then` and `either` are read into `ThenPart` and `EitherPart`; the other four joins are still refused as `join_not_built`. A join preset (`bracket`, `cover`, `oco`, `oto`, and `hidden_stop` with a backstop) is found before the order is read, and the order without that preset becomes the join's main order, so `[market_if_touched, bracket]` is a bracket whose entry waits for a price. Only one join preset per order is allowed, because two would each want to be the tree around the order.
 
 An Either's first child inherits `keeps_tag`; every other child, and every Then child, does not.
+
+## Stage 4a (2026-10-01)
+
+A pricing list now holds at most one setter and at most one `cap`, and across presets a later setter or cap replaces an earlier one with a warning, so the `peg` preset's cap survives a caller's own `fixed` price. The `guards` slot reads `post_only`. Two combinations are refused rather than run: `post_only_crosses`, a post-only guard with a pricing that means to trade at once (`marketable`, `chase`, a peg to the opposite touch, a `MARKET` order), and `post_only_needs_limit`, a post-only guard on a stop. The `stop_not_sliced` rule now names the stop pricings themselves rather than every pricing that moves, because a peg or a chase on each slice is a sensible thing to want. `_refuse_unknown` takes a `kind`, so an execution's or a guard's unknown setting is no longer called a pricing.

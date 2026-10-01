@@ -1,0 +1,4 @@
+Midpoint peg, buy: 1000.05, sell: 1000.10
+Opposite touch peg, buy: 1000.15, sell: 1000.00
+With no offer, the midpoint peg sends: None
+As a dry run shows them: {'peg': {'reference': 'mid', 'offset_ticks': 0}} and {'peg': {'reference': 'opposite_touch', 'offset_ticks': 0}}

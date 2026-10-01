@@ -174,7 +174,7 @@ class SellStopFollowsARisingMarketExample:
             quotes = {
                 INSTRUMENT_ID: self.quotes.book_at(last - 0.05, last),
             }
-            moved = pricing.moved_prices(self.plan_order, memory, leg, quotes)
+            moved = pricing.moved_prices(self.plan_order, memory, leg, quotes, 0.0)
             print(f'last {last}: best {memory["best"]}, move {moved}')
             if moved is not None:
                 leg.trigger_price = float(moved[1])

@@ -37,3 +37,7 @@ An order part now sends its quantity as pieces chosen by its execution. `send` s
 ## Stage 3b (2026-10-01)
 
 `send` puts a part whose execution is paced by ticks into `working` even when nothing is due on the tick its trigger holds, so the execution's start (participation's `counted_volume`, a timed schedule's `started_at`) is kept and later ticks send through `send_due`. An execution that is not paced by ticks still goes back to `waiting` when its first piece cannot be priced. `send_due` passes `sending_side` to the execution and saves changed execution memory with an event once the pieces are placed.
+
+## Stage 4a (2026-10-01)
+
+`move` now moves every resting broker order of the part, not only the newest, so a TWAP with a peg keeps each resting slice on the bid. Each order is asked about with the memory as it stood before the tick, so pieces side by side move together. The memory is recorded with an event when an order moved or when it was first set. The cap holds every limit, sent or moved, and the post-only guard checks it; a refusal ends the part as `refused` with the guard's message, and `send` then leaves it done rather than putting it back to waiting.

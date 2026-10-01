@@ -2550,7 +2550,7 @@ class OrderEngineSuite:
                         'side': 'long',
                         'presets': [
                             {
-                                'peg': {},
+                                'grid': {},
                             },
                             {
                                 'simple': {
@@ -3743,6 +3743,281 @@ class OrderEngineSuite:
                     {'quote': self.with_volume(steady, 1250), 'at': 41},
                 ],
                 numbered,
+            ),
+        ]
+
+    def run_plan_moving_price_checks(self):
+        """Runs plans whose price moves after the order rests, a cap that holds it, and the post-only guard, each beside the type it stands for.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        accepted = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        numbered = dict(
+            accepted,
+            number_orders=True,
+        )
+        steady = self.book_at(1000.00, 1000.05)
+        chaser = {
+            'order': {
+                'presets': [
+                    {
+                        'chaser': {
+                            'step_ticks': 1,
+                            'step_seconds': 5,
+                        },
+                    },
+                ],
+            },
+        }
+        chaser_steps = [
+            {'quote': steady, 'at': 0},
+            {'quote': steady, 'at': 1},
+            {'quote': steady, 'at': 6},
+            {'quote': steady, 'at': 7},
+            {'quote': steady, 'at': 12},
+        ]
+        return [
+            self.plan_price_result(
+                'a_plan_peg_follows_the_bid_it_is_pegged_to',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'peg': {
+                                    'reference': 'own_touch',
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1000.20, 1000.25), 'at': 1},
+                    {'quote': self.book_at(999.80, 999.85), 'at': 2},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_peg_will_not_follow_the_bid_past_its_cap',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'peg': {
+                                    'reference': 'own_touch',
+                                    'cap_price': 1000.10,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1000.50, 1000.55), 'at': 1},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_peg_to_the_midpoint_rests_between_the_touch',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'peg': {
+                                    'reference': 'mid',
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': self.book_at(1000.00, 1000.10), 'at': 0},
+                    {'quote': self.book_at(1000.20, 1000.30), 'at': 1},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_chaser_steps_towards_the_market_when_its_wait_is_up',
+                chaser,
+                chaser_steps,
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_chaser_keeps_its_clock_across_a_restart',
+                chaser,
+                chaser_steps,
+                accepted,
+                restart_between_ticks=True,
+            ),
+            self.plan_price_result(
+                'a_plan_chaser_will_not_step_past_its_cap',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'chaser': {
+                                    'step_ticks': 1,
+                                    'step_seconds': 5,
+                                    'cap_price': 1000.05,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 6},
+                    {'quote': steady, 'at': 12},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_chaser_crosses_when_its_time_is_up',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'chaser': {
+                                    'step_ticks': 1,
+                                    'step_seconds': 5,
+                                    'cross_after_seconds': 10,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': self.book_at(1000.00, 1000.50), 'at': 0},
+                    {'quote': self.book_at(1000.00, 1000.50), 'at': 6},
+                    {'quote': self.book_at(1000.00, 1000.50), 'at': 11},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_post_only_refuses_a_price_that_would_cross',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'post_only': {},
+                            },
+                        ],
+                        'pricing': [
+                            {
+                                'fixed': {
+                                    'price': 1000.10,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_post_only_can_be_told_to_rest_at_the_touch_instead',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'post_only': {
+                                    'on_crossing': 'rest',
+                                },
+                            },
+                        ],
+                        'pricing': [
+                            {
+                                'fixed': {
+                                    'price': 1000.10,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_post_only_with_a_marketable_price_is_refused',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'market_if_touched': {
+                                    'trigger_price': 1001,
+                                },
+                            },
+                            {
+                                'post_only': {},
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_twap_pegs_every_resting_slice_to_the_bid',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'twap': {
+                                    'slices': 2,
+                                    'over_minutes': 1,
+                                },
+                            },
+                            {
+                                'peg': {
+                                    'reference': 'own_touch',
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1000.10, 1000.15), 'at': 1},
+                    {'quote': self.book_at(1000.10, 1000.15), 'at': 30},
+                    {'quote': self.book_at(999.90, 999.95), 'at': 31},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_scheduled_peg_rests_at_its_time_and_then_follows',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'scheduled': {
+                                    'at_time': '10:00:30',
+                                },
+                            },
+                            {
+                                'peg': {
+                                    'reference': 'own_touch',
+                                    'offset_ticks': 1,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 40},
+                    {'quote': self.book_at(1000.30, 1000.35), 'at': 41},
+                ],
+                accepted,
             ),
         ]
 
@@ -7446,6 +7721,7 @@ class OrderEngineSuite:
             results.extend(self.run_plan_trailing_checks())
             results.extend(self.run_plan_execution_checks())
             results.extend(self.run_plan_market_execution_checks())
+            results.extend(self.run_plan_moving_price_checks())
             results.extend(self.run_clock_checks())
             results.extend(self.run_price_checks())
             results.extend(self.run_wiring_checks())

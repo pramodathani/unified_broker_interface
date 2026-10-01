@@ -335,8 +335,8 @@ class LifecycleUnderAJoinExample:
         trailing = OrderPart('root.children.3', [], None, 'protect', TrailPricing(decimal.Decimal('5'), None, decimal.Decimal('1'), 1), False)
         self.plan_order.set_part_record(trailing.path, {'state': 'pending'}, None)
         trailing.start(self.plan_order, 10, None, {'reliance': {'last_price': 1000.05}})
-        print(f"A trailing stop placed: {self.plan_order.requests[-1]}; moved at 1003: {trailing.move(self.plan_order, {'reliance': {'last_price': 1003.00}})}, at 1001: {trailing.move(self.plan_order, {'reliance': {'last_price': 1001.00}})}")
-        print(f'Last request: {self.plan_order.requests[-1]}; a stop that does not trail moves: {self.part.move(self.plan_order, {})}')
+        print(f"A trailing stop placed: {self.plan_order.requests[-1]}; moved at 1003: {trailing.move(self.plan_order, {'reliance': {'last_price': 1003.00}}, 0.0)}, at 1001: {trailing.move(self.plan_order, {'reliance': {'last_price': 1001.00}}, 0.0)}")
+        print(f'Last request: {self.plan_order.requests[-1]}; a stop that does not trail moves: {self.part.move(self.plan_order, {}, 0.0)}')
         print(f'Messages: {self.plan_order.messages}')
 
 
