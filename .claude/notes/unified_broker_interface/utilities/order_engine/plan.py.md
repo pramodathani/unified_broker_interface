@@ -73,3 +73,7 @@ Every order part's pricing memory is readied when the plan is placed through `Or
 ## Stage 4c: average-range trail and stepped stop (2026-10-01)
 
 Nothing in the plan order changed for this step; `AtrTrailPricing` and `StagesPricing` are pricings that move, and every stop pricing is listed once as `STOP_PRICINGS` in the reader.
+
+## Stage 4d: lifetimes (2026-10-01)
+
+`PlanOrder` now sets `WANTS_CLOCK`, so the clock ticker gives every open plan `on_clock_tick` once a second and an order ends on time even when its instrument stops quoting; a plan with no lifetime returns at once, after reading only its part records. Each part's `ends_at` is worked out when the plan is placed and recorded with the received event. `_end_lifetimes` runs on both kinds of tick, before anything else on a price tick; on a clock tick it reads quotes only when an order is to be made marketable. A close sent by `close_filled` has the role `<path>.close`, which `closes_position` counts as closing, so it may use the exit reserve of a broker's daily cap.

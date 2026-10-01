@@ -44,3 +44,7 @@ atr_trail: {'pricing': [{'trail': {'limit_offset': 2, 'step_ticks': 1, 'points':
   problems: []
 stepped_stop: {'side': 'protect', 'pricing': [{'stages': {'entry_price': 1000, 'stop_price': 990, 'limit_offset': 2, 'rules': [{'gain': 20, 'stop_at_gain': 0}]}}]}
   problems: []
+good_till_time: {'lifetime': [{'at_time': '14:30', 'on_end': 'marketable'}]}
+  problems: []
+time_stop: {'lifetime': [{'on_end': 'close_filled', 'after_minutes': 20}]}
+  problems: []

@@ -1,0 +1,8 @@
+Ends at 10:30
+Before its time: False
+At its time: True, and again: False
+Requests: [('place', 'root', 'BUY', 10, 'LIMIT', '1000.00'), ('cancel', 'root'), ('place', 'root.close', 'SELL', 4, 'MARKET', None)]
+Record: {'state': 'done', 'ends_at': 1790139600.0, 'ended': True, 'reason': 'closed'}
+Twenty minutes on: True, requests [('place', 'root', 'BUY', 10, 'LIMIT', '1000.00'), ('move', 'root', 'None', '1001.15')]
+Waiting at its time: True, record {'state': 'done', 'ends_at': 1790139600.0, 'ended': True, 'reason': 'expired'}
+As a dry run shows its lifetime: [{'applies_to': 'waiting', 'on_end': 'cancel', 'at_time': '10:30'}]

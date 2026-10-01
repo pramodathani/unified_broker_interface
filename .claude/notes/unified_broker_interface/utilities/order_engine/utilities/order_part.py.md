@@ -45,3 +45,7 @@ An order part now sends its quantity as pieces chosen by its execution. `send` s
 ## Stage 4b (2026-10-01)
 
 Pricing memory set by `priced_body` is now recorded with an event, because the follow pricings keep their start there and a restart must not lose it. `move` gives discretion its turn before the pricing moves. `set_target` shares the wanted quantity across every resting order, oldest first with the last taking the rest, instead of giving each the whole amount, which only worked while a part had one resting order.
+
+## Stage 4d (2026-10-01)
+
+A part whose lifetime has ended is marked `ended`, which stops `send_due` sending more pieces and lets `settle` mark it done once its broker orders have finished. `end_lifetime` ends a waiting part as `expired` at once; a working one is cancelled, made marketable, or cancelled and closed. A close placed by `close_filled` has the role `<path>.close`, so it is not one of the part's own legs and its fill does not count as the part's trading; the part is marked done with reason `closed` as soon as the close is sent, as today's time stop records `completed` then. A lifetime ending `marketable` makes the part read prices, so the plan remembers the tick size it needs to round the new price.

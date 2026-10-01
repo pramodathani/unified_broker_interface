@@ -2571,6 +2571,40 @@ class OrderEngineSuite:
             ),
         ]
 
+    def plan_clock_result(self, name, plan, fills, tick_at, answer, quote=None, taken_at=None):
+        """Places one `plan` order, optionally fills it, gives it two clock ticks, and records what it did and the state of each of its parts.
+
+        Args:
+            name (str): The check's name.
+            plan (object): The `plan` object, as a caller would send it.
+            fills (list): Order updates to apply before the tick.
+            tick_at (float): The Unix time to tick at.
+            answer (dict): The stubbed broker answer.
+            quote (dict | None): A live quote to seed, for an order made marketable when it ends.
+            taken_at (datetime.datetime | None): The moment the engine takes the order, or None for `FROZEN_NOW`.
+
+        Returns:
+            dict: The recorded result, with `parts`, each parent's `parts` parameter.
+        """
+        body = self.scenarios.bodies.market_order(
+            dry_run=None,
+            order_type='LIMIT',
+            price=1000,
+            quantity=10,
+            synthetic={
+                'type': 'plan',
+                'plan': plan,
+            },
+        )
+        result = self.clock_result(name, body, fills, tick_at, answer, quote=quote, taken_at=taken_at)
+        stored = self.fake_redis.hashes.get('unified:orders:parents', {})
+        parts = []
+        for document in stored.values():
+            parameters = json.loads(document).get('parameters') or {}
+            parts.append(parameters.get('parts'))
+        result['parts'] = parts
+        return result
+
     def plan_price_result(self, name, plan, steps, answer, positions=None, restart_between_ticks=False, book_overrides=None, transaction_type='BUY', body_overrides=None):
         """Places one `plan` order and walks it through price ticks, recording what it did and the state of each of its parts.
 
@@ -4425,6 +4459,167 @@ class OrderEngineSuite:
                 ],
                 accepted,
                 positions=10,
+            ),
+        ]
+
+    def run_plan_lifetime_checks(self):
+        """Runs plans whose orders end at a time: cancelled, made marketable, or with what filled closed, each beside the type it stands for.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        accepted = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        frozen = FROZEN_NOW.timestamp()
+        sunday = FROZEN_NOW.replace(day=27)
+        time_stop = {
+            'order': {
+                'presets': [
+                    {
+                        'time_stop': {
+                            'until_time': '10:30',
+                        },
+                    },
+                ],
+            },
+        }
+        return [
+            self.plan_clock_result(
+                'a_plan_good_till_time_order_is_cancelled_when_it_runs_out',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'good_till_time': {
+                                    'until_time': '10:30',
+                                },
+                            },
+                        ],
+                    },
+                },
+                [],
+                frozen + 1900,
+                accepted,
+            ),
+            self.plan_clock_result(
+                'a_plan_limit_then_market_order_is_made_marketable_when_its_time_comes',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'good_till_time': {
+                                    'until_time': '10:30',
+                                    'at_expiry': 'market',
+                                },
+                            },
+                        ],
+                    },
+                },
+                [],
+                frozen + 1900,
+                accepted,
+                quote=self.scenarios.quote(),
+            ),
+            self.plan_clock_result(
+                'a_plan_good_till_time_order_taken_on_a_sunday_cancels_on_monday',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'good_till_time': {
+                                    'until_time': '14:30',
+                                },
+                            },
+                        ],
+                    },
+                },
+                [],
+                sunday.replace(hour=14, minute=31).timestamp(),
+                accepted,
+                taken_at=sunday,
+            ),
+            self.plan_clock_result(
+                'a_plan_time_stop_in_minutes_on_a_sunday_is_refused',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'time_stop': {
+                                    'minutes': 20,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [],
+                sunday.replace(hour=11).timestamp(),
+                accepted,
+                taken_at=sunday,
+            ),
+            self.plan_clock_result(
+                'a_plan_time_stop_closes_what_it_filled',
+                time_stop,
+                [
+                    self.update('26091500000021', 'OPEN', 6),
+                ],
+                frozen + 1900,
+                accepted,
+            ),
+            self.plan_clock_result(
+                'a_plan_time_stop_that_filled_nothing_just_cancels',
+                time_stop,
+                [],
+                frozen + 1900,
+                accepted,
+            ),
+            self.plan_clock_result(
+                'a_plan_waiting_order_runs_out_of_time_before_its_trigger',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'limit_if_touched': {
+                                    'trigger_price': 1050,
+                                    'limit_price': 1050,
+                                },
+                            },
+                            {
+                                'good_till_time': {
+                                    'until_time': '10:30',
+                                },
+                            },
+                        ],
+                    },
+                },
+                [],
+                frozen + 1900,
+                accepted,
+            ),
+            self.plan_clock_result(
+                'a_plan_time_stop_inside_a_bracket_is_refused',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'bracket': {
+                                    'stop_price': 990,
+                                    'stop_limit_price': 988,
+                                    'target_price': 1010,
+                                },
+                            },
+                            {
+                                'time_stop': {
+                                    'until_time': '10:30',
+                                },
+                            },
+                        ],
+                    },
+                },
+                [],
+                frozen + 1900,
+                accepted,
             ),
         ]
 
@@ -8131,6 +8326,7 @@ class OrderEngineSuite:
             results.extend(self.run_plan_moving_price_checks())
             results.extend(self.run_plan_followed_price_checks())
             results.extend(self.run_plan_stage_stop_checks())
+            results.extend(self.run_plan_lifetime_checks())
             results.extend(self.run_clock_checks())
             results.extend(self.run_price_checks())
             results.extend(self.run_wiring_checks())

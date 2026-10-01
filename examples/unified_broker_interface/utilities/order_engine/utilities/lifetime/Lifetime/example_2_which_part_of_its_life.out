@@ -1,0 +1,4 @@
+waiting: ends an order that is pending, waiting
+working: ends an order that is working
+both: ends an order that is pending, waiting, working
+As a dry run shows one: {'applies_to': 'both', 'on_end': 'marketable', 'after_minutes': 45}

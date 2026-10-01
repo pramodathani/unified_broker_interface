@@ -142,6 +142,13 @@ class WhatEachPresetStandsForExample:
                     },
                 ],
             },
+            'good_till_time': {
+                'until_time': '14:30',
+                'at_expiry': 'market',
+            },
+            'time_stop': {
+                'minutes': 20,
+            },
         }
         for name in PRESET_NAMES:
             if name in JOIN_PRESET_NAMES:

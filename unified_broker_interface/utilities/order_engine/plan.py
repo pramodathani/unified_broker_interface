@@ -32,6 +32,7 @@ class PlanOrder(SyntheticOrder):
 
     SYNTHETIC_TYPE = 'plan'
     WANTS_PRICES = True
+    WANTS_CLOCK = True
 
     def _read_plan(self):
         """Reads the caller's plan into its root part.
@@ -100,6 +101,9 @@ class PlanOrder(SyntheticOrder):
             pricing_memory = part.prepared_pricing_memory(self)
             if pricing_memory:
                 record['pricing_memory'] = pricing_memory
+            ends_at = part.lifetime_ends_at(self)
+            if ends_at is not None:
+                record['ends_at'] = ends_at
             if part.moves_on_ticks():
                 record['moves'] = True
             if part.execution.paced_by_ticks():
@@ -356,6 +360,8 @@ class PlanOrder(SyntheticOrder):
         Returns:
             bool: True when an order was placed or moved on this tick.
         """
+        if self._end_lifetimes(quotes, now):
+            return True
         records = self.parent.parameters.get('parts') or {}
         waiting_paths = []
         moving_paths = []
@@ -422,16 +428,68 @@ class PlanOrder(SyntheticOrder):
         self.save()
         return True
 
-    def closes_position(self, role):
-        """Whether a leg closes a position, which a leg of a `protect` order does.
+    def on_clock_tick(self, now):
+        """Ends every order whose lifetime is up, even when its instrument sent no price tick.
 
         Args:
-            role (str): The leg's role, which is its part's path.
+            now (float): The Unix time of the tick.
+
+        Returns:
+            bool: True when an order's lifetime ended.
+        """
+        return self._end_lifetimes(None, now)
+
+    def _end_lifetimes(self, quotes, now):
+        """Ends every order whose lifetime is up, then settles the plan and ends the parent if it is done.
+
+        Args:
+            quotes (dict | None): The quotes the tick carried, or None on a clock tick, when they are read only if an order is to be made marketable.
+            now (float): The Unix time of the tick.
+
+        Returns:
+            bool: True when an order's lifetime ended.
+        """
+        due = False
+        for record in (self.parent.parameters.get('parts') or {}).values():
+            ends_at = record.get('ends_at')
+            if ends_at is not None and not record.get('ended') and now >= ends_at and record.get('state') != 'done':
+                due = True
+        if not due:
+            return False
+        root, _ = self._read_plan()
+        if quotes is None:
+            quotes = {}
+            for part in root.order_parts():
+                if part.lifetime is not None and part.lifetime.on_end == 'marketable':
+                    try:
+                        quotes = self.quotes_now()
+                    except RefusedRequestError as refusal:
+                        self.logger.warning(f'Parent {self.parent.parent_order_id} could not read the quote to make its order marketable: {refusal.body.get("error")}')
+                    break
+        ended = False
+        for part in root.order_parts():
+            if part.end_lifetime(self, quotes, now):
+                ended = True
+        if not ended:
+            return False
+        placed = root.settle(self)
+        self._after_placing(placed)
+        self._finish_if_done(root)
+        self.save()
+        return True
+
+    def closes_position(self, role):
+        """Whether a leg closes a position, which a leg of a `protect` order does, and so does the close a lifetime's `close_filled` sends.
+
+        Args:
+            role (str): The leg's role, which is its part's path, or the path followed by `.close`.
 
         Returns:
             bool: True when the leg closes a position.
         """
         if super().closes_position(role):
+            return True
+        if role.endswith('.close'):
             return True
         root, _ = self._read_plan()
         for part in root.order_parts():

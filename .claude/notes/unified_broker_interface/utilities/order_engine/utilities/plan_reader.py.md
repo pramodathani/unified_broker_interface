@@ -33,3 +33,7 @@ A pricing list now holds at most one setter and at most one `cap`, and across pr
 ## Stage 4c (2026-10-01)
 
 `STOP_PRICINGS` lists every pricing that rests a stop, so the rules that refuse a stop with slicing, post-only or discretion name them in one place. `trail` takes `atr`, and `stages` reads today's stepped stop's rules, refusing them with a path to the rule rather than a rule number.
+
+## Stage 4d (2026-10-01)
+
+The `lifetime` slot is a list holding one object, with the end and its settings in the same object rather than under a name as the other slots are, because a lifetime is one value with options rather than a choice between named kinds. `close_filled` is refused for any order but the root, and for a protecting order; `marketable` is refused for a stop. `after_days` and `when` are recognised and refused as not built.

@@ -39,6 +39,11 @@ from unified_broker_interface.utilities.order_engine.utilities.front_loaded_exec
 from unified_broker_interface.utilities.order_engine.utilities.iceberg_execution import (
     IcebergExecution,
 )
+from unified_broker_interface.utilities.order_engine.utilities.lifetime import (
+    APPLIES_TO,
+    ON_END,
+    Lifetime,
+)
 from unified_broker_interface.utilities.order_engine.utilities.marketable_pricing import (
     MarketablePricing,
 )
@@ -125,6 +130,7 @@ ORDER_SETTINGS = (
     'pricing',
     'execution',
     'guards',
+    'lifetime',
 )
 MOST_SLICES = 60
 HIGHEST_VOLATILITY_PERCENT = 500
@@ -383,7 +389,7 @@ class PlanReader:
                 )
         sources = self._preset_sources(order.get('presets', []), path)
         own = {}
-        for slot in ('trigger', 'side', 'pricing', 'execution', 'guards'):
+        for slot in ('trigger', 'side', 'pricing', 'execution', 'guards', 'lifetime'):
             if slot in order:
                 own[slot] = order[slot]
         sources.append((own, path))
@@ -403,6 +409,8 @@ class PlanReader:
         discretion_path = None
         post_only = None
         post_only_path = None
+        lifetime = None
+        lifetime_path = None
         execution = None
         execution_path = None
         for slots, source_path in sources:
@@ -449,6 +457,20 @@ class PlanReader:
                             )
                         discretion = read_discretion
                         discretion_path = f'{source_path}.pricing'
+            if 'lifetime' in slots:
+                read_lifetime = self._read_lifetime_list(
+                    slots['lifetime'],
+                    f'{source_path}.lifetime',
+                )
+                if read_lifetime is not None:
+                    if lifetime is not None:
+                        self._add_warning(
+                            f'{source_path}.lifetime',
+                            'lifetime_replaced',
+                            f'this lifetime replaces the lifetime from {lifetime_path}, because an order has one lifetime',
+                        )
+                    lifetime = read_lifetime
+                    lifetime_path = f'{source_path}.lifetime'
             if 'guards' in slots:
                 read_post_only = self._read_guards_list(
                     slots['guards'],
@@ -500,7 +522,97 @@ class PlanReader:
             return None
         if discretion is not None and not self._can_take_at_discretion(pricing, execution, path):
             return None
-        return OrderPart(path, preset_names, trigger, side, pricing, keeps_tag, execution, cap, post_only, discretion)
+        if lifetime is not None and not self._can_end(lifetime, pricing, side, path):
+            return None
+        return OrderPart(path, preset_names, trigger, side, pricing, keeps_tag, execution, cap, post_only, discretion, lifetime)
+
+    def _can_end(self, lifetime, pricing, side, path):
+        """Whether an order can end the way its lifetime says, reporting the problem when it cannot.
+
+        Closing what filled is only safe for the plan's own order: inside a join, other orders are sized to its fills and would be left protecting a position that was closed under them. A protecting order closing what it filled would open the position again. A stop has no limit to make marketable.
+
+        Args:
+            lifetime (Lifetime): The order's lifetime.
+            pricing (object): The order's pricing setter.
+            side (str | None): The order's side.
+            path (str): Where the order sits in the plan.
+
+        Returns:
+            bool: True when it can.
+        """
+        if lifetime.on_end == 'close_filled' and path != 'root':
+            self._add_problem(
+                path,
+                'close_filled_needs_whole_plan',
+                'closing what filled is only allowed for a plan that is one order, because orders joined to it are sized to its fills',
+            )
+            return False
+        if lifetime.on_end == 'close_filled' and side == 'protect':
+            self._add_problem(
+                path,
+                'close_filled_on_protect',
+                'this order closes a position, so closing what it filled would open the position again',
+            )
+            return False
+        if lifetime.on_end == 'marketable' and isinstance(pricing, STOP_PRICINGS):
+            self._add_problem(
+                path,
+                'marketable_needs_limit',
+                'a stop has no resting limit to make marketable; end it with cancel instead',
+            )
+            return False
+        return True
+
+    def _read_lifetime_list(self, lifetime, path):
+        """Reads an order's lifetime: a list holding one object with `at_time` or `after_minutes`, and optionally `applies_to` and `on_end`.
+
+        Args:
+            lifetime (object): The list as the caller wrote it.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            Lifetime | None: The lifetime, or None when it has a problem.
+        """
+        if not isinstance(lifetime, list) or len(lifetime) != 1 or not isinstance(lifetime[0], dict):
+            self._add_problem(path, 'lifetime_shape', 'lifetime is a list holding one object, with at_time or after_minutes, and optionally applies_to and on_end')
+            return None
+        entry = lifetime[0]
+        entry_path = f'{path}.0'
+        problems_before = len(self.problems)
+        for name in ('after_days', 'when'):
+            if name in entry:
+                self._add_problem(
+                    entry_path,
+                    'lifetime_not_built',
+                    f'{name} is part of the design but not built yet; at_time and after_minutes are',
+                )
+        self._refuse_unknown(entry, ('at_time', 'after_minutes', 'applies_to', 'on_end', 'after_days', 'when'), entry_path, 'lifetime', 'value')
+        has_time = 'at_time' in entry
+        has_minutes = 'after_minutes' in entry
+        if has_time == has_minutes:
+            self._add_problem(entry_path, 'bad_setting', 'a lifetime ends at_time or after_minutes, exactly one')
+        at_time = None
+        after_minutes = None
+        if has_time:
+            if isinstance(entry['at_time'], str):
+                at_time = entry['at_time']
+            else:
+                self._add_problem(entry_path, 'bad_setting', f'at_time is a time of day such as "14:30", not {entry["at_time"]!r}')
+        if has_minutes:
+            minutes = entry['after_minutes']
+            if isinstance(minutes, bool) or not isinstance(minutes, (int, float)) or minutes <= 0:
+                self._add_problem(entry_path, 'bad_setting', f'after_minutes must be a number of minutes above zero, not {minutes!r}')
+            else:
+                after_minutes = minutes
+        applies_to = entry.get('applies_to', 'both')
+        if applies_to not in APPLIES_TO:
+            self._add_problem(entry_path, 'bad_setting', f'applies_to must be one of {", ".join(APPLIES_TO)}, not {applies_to!r}')
+        on_end = entry.get('on_end', 'cancel')
+        if on_end not in ON_END:
+            self._add_problem(entry_path, 'bad_setting', f'on_end must be one of {", ".join(ON_END)}, not {on_end!r}')
+        if len(self.problems) > problems_before:
+            return None
+        return Lifetime(at_time, after_minutes, applies_to, on_end)
 
     def _can_take_at_discretion(self, pricing, execution, path):
         """Whether an order with this pricing and execution can have discretion, reporting the problem when it cannot.

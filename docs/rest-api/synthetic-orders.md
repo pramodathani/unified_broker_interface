@@ -1187,6 +1187,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | `pricing` | list | No | One pricing setter (`fixed`, `marketable`, `native_stop`, `trail`, `stages`, `peg`, `chase`, `follow_instrument` or `option_model`), and optionally the modifiers `cap` and `discretion`. Defaults to `fixed` with the body's own order type and price. |
     | `execution` | list | No | One execution value, which cuts the order into pieces and says when each is sent: `all_at_once`, `iceberg`, `twap`, `vwap`, `front_loaded`, `participation` or `book_depth`. Defaults to `all_at_once`. Nesting one execution inside another is not built yet. |
     | `guards` | list | No | Checks made before an order is sent or moved: `post_only` so far. |
+    | `lifetime` | list | No | One object saying when the order stops and what is done then, described below. Defaults to the body's validity. |
 
     The trigger conditions are these:
 
@@ -1218,6 +1219,16 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     The `post_only` guard takes `on_crossing`, `refuse` (default) or `rest`. Before a limit is sent it is checked against the book: one that would trade, a buy at or above the best offer or a sell at or below the best bid, is refused with `on_crossing: refuse`, which ends the order and answers <span class="status s4">409</span> when it was the plan's first order, or moved back to its own side's touch with `rest`. A move of a resting order that would cross is skipped with `refuse` and held at the own touch with `rest`. Indian exchanges have no post-only flag, so the book can still move while the order is in flight.
 
     A price the caller changes on a plan's pegged order is not yet taken up as the `peg` type takes it up: the next tick moves the order back to its reference. A chase steps on from the caller's price, as the `chaser` type does. A post-only guard on an order whose pricing means to trade at once (`marketable`, `chase`, a `peg` to the `opposite_touch` or a `MARKET` order) is refused with `post_only_crosses`, and on a stop with `post_only_needs_limit`.
+
+    A lifetime is one object with `at_time`, a time of day such as `"14:30"` on the instrument's next trading day, or `after_minutes`, counted from when the plan is placed; `applies_to`, `waiting`, `working` or `both` (default), saying which part of the order's life the end bounds; and `on_end`. An order still waiting for its trigger when its time comes is done as expired. An order working when its time comes ends according to `on_end`:
+
+    | `on_end` | What is done |
+    |---|---|
+    | `cancel` (default) | Whatever is still resting is cancelled; what filled is kept. The order is done once the broker confirms the cancel. |
+    | `marketable` | Whatever is still resting is moved two ticks past the other side's touch, so it fills. A stop has no limit to make marketable, so it is refused with `marketable_needs_limit`. |
+    | `close_filled` | Whatever is still resting is cancelled first, then what filled is closed with a market order the other way, sent as `<path>.close`. Only a plan that is one order can do this, because orders joined to it are sized to its fills (`close_filled_needs_whole_plan`), and not an order that itself protects a position (`close_filled_on_protect`). |
+
+    Minutes asked for on a day the instrument does not trade are refused with <span class="status s4">400</span>. The engine checks lifetimes on every price tick and once a second on the clock, so an order ends on time even when its instrument stops quoting. `after_days` and `when` are in the design but not built yet: a plan does not outlive the trading day, so the `gtt` type's `valid_days` has no preset yet.
 
     The execution values are these. Each piece is priced by the order's pricing when it is sent, and what an execution has sent is read from the order's own broker orders, so a restart neither repeats nor skips a piece.
 
@@ -1256,6 +1267,8 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | `discretionary` | The `discretion` modifier beside the body's own price. Takes `discretion_points` and `discretion_quantity`. |
     | `atr_trail` | The `protect` side and `trail` pricing with `atr`. Takes `trail_points`, `stop_limit_offset`, `step_ticks`, `activate_at`, `bar_minutes`, `periods` and `atr_multiple`. |
     | `stepped_stop` | The `protect` side and `stages` pricing. Takes `entry_price`, `stop_price`, `stop_limit_offset`, `step_ticks` and `rules`. |
+    | `good_till_time` | A lifetime ending `at_time` `until_time`, cancelling what rests, or with `at_expiry: market` making it marketable. Takes `until_time` and `at_expiry`. |
+    | `time_stop` | A lifetime ending at `until_time` or after `minutes`, closing what filled. Takes `until_time` or `minutes`. |
     | `bracket` | A Then join: the order, then a `native_stop` stop and a `fixed` target that reduce each other, sized to each fill; an exit filling cancels the rest of the entry. Takes `stop_price`, `stop_limit_price` and `target_price`. |
     | `cover` | A Then join: the order, then a `native_stop` stop sized to each fill. Takes `stop_price` and `stop_limit_price`, both required. |
     | `oco` | An Either join that reduces: a stop and a target protecting a position already held. It has no order of its own, so it cannot be named beside other presets or slot values. |

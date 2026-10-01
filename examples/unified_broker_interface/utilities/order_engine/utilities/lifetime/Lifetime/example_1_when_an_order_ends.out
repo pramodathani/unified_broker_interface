@@ -1,0 +1,5 @@
+14:30 asked for on Wednesday morning ends Wednesday 14:30
+14:30 asked for on Sunday ends Monday 14:30
+20 minutes asked for on Wednesday morning ends Wednesday 10:20
+20 minutes asked for on Sunday: 400 after_minutes are counted from now and today is not a trading day for this instrument; give at_time instead
+As a dry run shows them: {'applies_to': 'both', 'on_end': 'cancel', 'at_time': '14:30'} and {'applies_to': 'working', 'on_end': 'close_filled', 'after_minutes': 20}

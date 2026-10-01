@@ -10,6 +10,7 @@ from unified_broker_interface.utilities.order_engine.utilities.follow_instrument
     FollowInstrumentPricing,
 )
 
+MARKETABLE_BUFFER_TICKS = 2
 OPPOSITE_SIDES = {
     'BUY': 'SELL',
     'SELL': 'BUY',
@@ -38,9 +39,10 @@ class OrderPart:
         cap (CapModifier | None): The worst price its limit may reach, or None.
         post_only (PostOnlyGuard | None): The check that keeps its limit from crossing, or None.
         discretion (DiscretionModifier | None): How far past its visible price it quietly goes, or None.
+        lifetime (Lifetime | None): When it stops working and what is done then, or None for the body's validity.
     """
 
-    def __init__(self, path, presets, trigger, side, pricing, keeps_tag=True, execution=None, cap=None, post_only=None, discretion=None):
+    def __init__(self, path, presets, trigger, side, pricing, keeps_tag=True, execution=None, cap=None, post_only=None, discretion=None, lifetime=None):
         """Builds the part from values the plan reader has already checked.
 
         Args:
@@ -54,6 +56,7 @@ class OrderPart:
             cap (CapModifier | None): The worst price its limit may reach, or None.
             post_only (PostOnlyGuard | None): The check that keeps its limit from crossing, or None.
             discretion (DiscretionModifier | None): How far past its visible price it quietly goes, or None.
+            lifetime (Lifetime | None): When it stops working and what is done then, or None.
 
         Returns:
             None: This method returns nothing.
@@ -70,6 +73,7 @@ class OrderPart:
         self.cap = cap
         self.post_only = post_only
         self.discretion = discretion
+        self.lifetime = lifetime
 
     def order_parts(self):
         """Every order in this part, which is itself.
@@ -102,7 +106,7 @@ class OrderPart:
         return []
 
     def needs_prices(self):
-        """Whether this part reads quotes, for its trigger or its pricing.
+        """Whether this part reads quotes: for its trigger, its execution, its pricing or a modifier or guard, or to make its order marketable when its lifetime ends.
 
         Returns:
             bool: True when it does.
@@ -112,6 +116,8 @@ class OrderPart:
         if self.execution.needs_prices():
             return True
         if self.post_only is not None or self.discretion is not None:
+            return True
+        if self.lifetime is not None and self.lifetime.on_end == 'marketable':
             return True
         return self.pricing.needs_prices()
 
@@ -431,6 +437,8 @@ class OrderPart:
         if now is None:
             now = time.time()
         record = plan_order.part_record(self.path)
+        if record.get('ended'):
+            return []
         stored = record.get('execution_memory') or {}
         memory = copy.deepcopy(stored)
         pieces = self.own_legs(plan_order.parent)
@@ -521,6 +529,95 @@ class OrderPart:
             plan_order.set_part_record(self.path, record, message)
         return moved_any or took
 
+    def end_lifetime(self, plan_order, quotes, now):
+        """Ends this order when its lifetime is up: a waiting order is done, and a working one's resting orders are cancelled, made marketable, or cancelled and what filled closed.
+
+        Args:
+            plan_order (PlanOrder): The plan order.
+            quotes (dict): The quotes the tick carried, for making resting orders marketable.
+            now (float): The Unix time of the tick.
+
+        Returns:
+            bool: True when the lifetime ended on this tick.
+        """
+        if self.lifetime is None:
+            return False
+        record = plan_order.part_record(self.path)
+        ends_at = record.get('ends_at')
+        if record.get('ended') or ends_at is None or now < ends_at:
+            return False
+        state = record.get('state')
+        if not self.lifetime.bounds(state):
+            return False
+        record['ended'] = True
+        if state != 'working':
+            record['state'] = 'done'
+            record['reason'] = 'expired'
+            plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part ran out of time before it was sent')
+            return True
+        plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part ran out of time, so it will {self.lifetime.on_end.replace("_", " ")}')
+        if self.lifetime.on_end == 'marketable':
+            self._make_marketable(plan_order, quotes)
+            return True
+        self.cancel_rest(plan_order, 'the time this order was given has run out')
+        if self.lifetime.on_end == 'close_filled':
+            self._close_filled(plan_order)
+        return True
+
+    def _make_marketable(self, plan_order, quotes):
+        """Moves every resting order a little past the other side's touch, or the last price when the book shows no other side, so it fills.
+
+        Args:
+            plan_order (PlanOrder): The plan order.
+            quotes (dict): The quotes the tick carried.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        view = plan_order.view(quotes)
+        for leg in self.own_legs(plan_order.parent):
+            if leg.is_finished() or not leg.broker_order_id:
+                continue
+            touch = view.opposite_touch(leg.transaction_type)
+            if touch is None:
+                touch = view.last()
+            if touch is None:
+                continue
+            price = view.rounded(view.moved(touch, MARKETABLE_BUFFER_TICKS, leg.transaction_type, True), leg.transaction_type)
+            if price is None or price <= 0:
+                continue
+            plan_order.reprice_leg(leg, price, None, 'the time this order was given has run out, so what is left is made marketable')
+
+    def _close_filled(self, plan_order):
+        """Closes what this order traded with a market order on the other side, placed under `<path>.close`, and marks the order done.
+
+        Args:
+            plan_order (PlanOrder): The plan order.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        traded = self.traded(plan_order.parent)
+        record = plan_order.part_record(self.path)
+        record['state'] = 'done'
+        if traded < 1:
+            record['reason'] = 'expired'
+            plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part ran out of time before anything filled')
+            return
+        record['reason'] = 'closed'
+        plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part ran out of time, so the {traded} it traded is being closed')
+        body = dict(plan_order.parent.body)
+        body.pop('price_reference', None)
+        body.pop('quantity_reference', None)
+        body.pop('tag', None)
+        body.pop('price', None)
+        body.pop('trigger_price', None)
+        body['order_type'] = 'MARKET'
+        body['quantity'] = traded
+        body['transaction_type'] = OPPOSITE_SIDES[self.sending_side(self._opening_side(plan_order))]
+        broker_name = plan_order.chosen_broker()
+        plan_order.place_leg(f'{self.path}.close', plan_order.concrete_order(plan_order.read_order(body)), None, broker_name)
+
     def settle(self, plan_order):
         """Sends the next piece when the execution waits for fills, and marks this order done once every broker order has finished and no more will be sent.
 
@@ -541,7 +638,7 @@ class OrderPart:
             return placed
         remaining = self.total(plan_order) - self.committed(plan_order.parent)
         pieces = self.own_legs(plan_order.parent)
-        if self.execution.will_send_more(record.get('execution_memory') or {}, remaining, pieces):
+        if not record.get('ended') and self.execution.will_send_more(record.get('execution_memory') or {}, remaining, pieces):
             return placed
         reason = self.done_reason(plan_order.parent)
         if reason is None:
@@ -765,6 +862,23 @@ class OrderPart:
             described.append(self.discretion.described())
         return described
 
+    def lifetime_ends_at(self, plan_order, now=None):
+        """When this order's lifetime ends, worked out when the plan is placed.
+
+        Args:
+            plan_order (PlanOrder): The plan order.
+            now (datetime.datetime | None): The moment to reckon from, or None for now.
+
+        Returns:
+            float | None: The Unix time, or None when the order has no lifetime of its own.
+
+        Raises:
+            RefusedRequestError: When the end cannot be worked out, such as a time already passed today.
+        """
+        if self.lifetime is None:
+            return None
+        return self.lifetime.ends_at(plan_order, now)
+
     def _guards_described(self):
         """The guards, as a dry run shows them.
 
@@ -775,6 +889,20 @@ class OrderPart:
             return []
         return [
             self.post_only.described(),
+        ]
+
+    def _lifetime_described(self):
+        """The lifetime, as a dry run shows it.
+
+        Returns:
+            list: The lifetime, or the body's validity when the order has none.
+        """
+        if self.lifetime is None:
+            return [
+                'the body\'s validity',
+            ]
+        return [
+            self.lifetime.described(),
         ]
 
     def expanded(self):
@@ -801,9 +929,7 @@ class OrderPart:
                     'pricing': self._pricing_described(),
                     'guards': self._guards_described(),
                     'venue': 'selector',
-                    'lifetime': [
-                        'the body\'s validity',
-                    ],
+                    'lifetime': self._lifetime_described(),
                 },
             },
         }

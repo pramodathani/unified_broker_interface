@@ -31,3 +31,7 @@ The backstop is a second order resting beside the engine-side stop, cancelled be
 ## Stage 4c (2026-10-01)
 
 `_trailing_slots` holds what the trailing stop, the trailing entry and the average-range trail share, so `atr_trail` adds only its `atr` settings. `stepped_stop` does not take `trail_points`, `trail_percent` or `activate_at`, as today's type refuses them.
+
+## Stage 4d (2026-10-01)
+
+`good_till_time` maps `at_expiry: market` to `on_end: marketable`. `time_stop` maps `minutes` to `after_minutes`. There is no preset for the `gtt` type, because a plan does not yet outlive the trading day.

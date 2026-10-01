@@ -49,6 +49,8 @@ PRESET_NAMES = (
     'discretionary',
     'atr_trail',
     'stepped_stop',
+    'good_till_time',
+    'time_stop',
     'oto',
     'oco',
     'bracket',
@@ -173,6 +175,10 @@ class PresetExpander:
             return self._atr_trail(settings, path)
         if name == 'stepped_stop':
             return self._stepped_stop(settings, path)
+        if name == 'good_till_time':
+            return self._good_till_time(settings, path)
+        if name == 'time_stop':
+            return self._time_stop(settings, path)
         return self._hidden_stop(settings, path)
 
     def is_join(self, name, settings):
@@ -814,6 +820,55 @@ class PresetExpander:
                 {
                     'stages': stages,
                 },
+            ],
+        }
+
+    def _good_till_time(self, settings, path):
+        """Works until a time of day, then cancels what rests, or with `at_expiry: market` makes it marketable.
+
+        Args:
+            settings (dict): `until_time`, and optionally `at_expiry`, `cancel` or `market`.
+            path (str): The preset's path.
+
+        Returns:
+            dict: A lifetime ending `at_time`.
+        """
+        self._refuse_unknown(settings, ('until_time', 'at_expiry'), path, 'good_till_time')
+        on_end = 'cancel'
+        if settings.get('at_expiry') == 'market':
+            on_end = 'marketable'
+        elif settings.get('at_expiry') not in (None, 'cancel'):
+            self._add_problem(path, 'bad_setting', f'at_expiry must be one of cancel, market, not {settings.get("at_expiry")!r}')
+        return {
+            'lifetime': [
+                {
+                    'at_time': settings.get('until_time'),
+                    'on_end': on_end,
+                },
+            ],
+        }
+
+    def _time_stop(self, settings, path):
+        """Closes what the order filled at a time of day, or a number of minutes after it was placed, cancelling what still rests first.
+
+        Args:
+            settings (dict): `until_time` or `minutes`.
+            path (str): The preset's path.
+
+        Returns:
+            dict: A lifetime ending with `close_filled`.
+        """
+        self._refuse_unknown(settings, ('until_time', 'minutes'), path, 'time_stop')
+        ending = {
+            'on_end': 'close_filled',
+        }
+        if 'until_time' in settings:
+            ending['at_time'] = settings['until_time']
+        if 'minutes' in settings:
+            ending['after_minutes'] = settings['minutes']
+        return {
+            'lifetime': [
+                ending,
             ],
         }
 
