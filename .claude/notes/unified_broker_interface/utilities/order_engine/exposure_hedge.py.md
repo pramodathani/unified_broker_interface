@@ -19,3 +19,9 @@ So a hedge leg that has not been rejected or cancelled counts towards the exposu
 A band of zero would send an order every time a price moved a paisa. There is no sensible default width, because it depends entirely on what is being hedged and how much churn the account can afford, so both edges are required and the caller has to have thought about it.
 
 The hedge is sized to bring the exposure back to the middle of the band rather than to its near edge, so that a small further move does not immediately trigger another one.
+
+## Why the hedge instrument gets its own quote and tick size
+
+Until 2026-10-01 a hedge in an instrument other than the order's own was never sent. The price ticker fetched quotes only for the parent's `instrument_id`, `watch_instrument_id` and the instruments of existing legs, so the first hedge found no quote for `hedge_instrument_id`, `hedge_price` returned None, and nothing went out. The only offline scenario used the same instrument for the order, the watched position and the hedge, which is why it was missed. `PriceTicker.instruments_of` now adds `hedge_instrument_id`.
+
+The tick size kept on the parent was also the order's own instrument's, while the only price this type computes is the hedge's. `remember_tick_size` is overridden to keep the hedge instrument's tick size. The scenario `an_exposure_hedge_prices_a_hedge_in_another_instrument_from_that_instruments_quote` hedges a RELIANCE equity position with the RELIANCE future, whose tick of 0.1 differs from the equity's 0.05, and sent nothing against the old code.

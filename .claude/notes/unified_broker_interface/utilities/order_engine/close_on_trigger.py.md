@@ -11,3 +11,7 @@ A leg with the role `entry` counts against the daily cap as a new position and i
 ## Why it closes the position rather than a named quantity
 
 The Atlas describes the exit as closing the position. A position that has grown or partly closed since the order was armed would otherwise be over- or under-closed, and over-closing opens a new position the other way.
+
+## Why it closes every broker's share, not the first position
+
+Before 2026-10-01 this type took `positions[0]` from the merged positions document and closed all of it at `chosen_broker()`. Positions now come one per broker, so it sends one close per broker, each to the broker holding that share. The parent's state follows the best outcome: `working` when any close was accepted, since that close still has to be followed.

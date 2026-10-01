@@ -235,7 +235,7 @@ A `simple`, `freeze_slicer`, `ladder`, `basket`, `oca` or `post_only` parent pla
 
 A few rules come from the shared base class rather than from any one type, and they explain behavior you will see across the whole list.
 
-- **Every leg of one parent goes to the same broker.** The first leg lets the broker selector choose, and every later leg is sent to that broker. A stop at one broker cannot protect a position held at another.
+- **Every leg of one parent goes to the same broker.** The first leg lets the broker selector choose, and every later leg is sent to that broker. A stop at one broker cannot protect a position held at another. The three types that close positions they did not open, `square_off`, `close_on_trigger` and `stop_and_reverse`, are the exception: they read each broker's own positions, as [`POST /api/orders/flatten`](flatten.md) does, and send each closing order to the broker that holds that position.
 - **A linked leg is reduced, not cancelled and replaced.** When one of two exits fills, the other is modified down by what filled, so the position is never unprotected and the order keeps its place in the queue.
 - **A move that changes nothing is never sent.** A re-price to the price an order already has is dropped silently.
 - **Re-prices are throttled and count against the daily cap.** A re-price of an entry stops where new entries stop, and a re-price of an exit may use the exit reserve. Cancels and quantity reductions are never held back.
@@ -590,7 +590,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     A close-on-trigger order (the Atlas's G12) is a stop that makes sure its exit is not rejected for margin. When the level is reached it does two things in order:
 
     1. It cancels every order resting on the instrument, at every broker, including orders placed outside the engine. Pending orders hold margin, and on a short option position that margin can be what an exit is refused for.
-    2. It closes the whole net position held on the instrument and the order's product, with a limit two ticks past the other side's best price.
+    2. It closes the whole net position held on the instrument and the order's product, with a limit two ticks past the other side's best price. A position held at several brokers is closed with one order at each of them, for the part that broker holds.
 
     It closes what is held when it fires, not a quantity named in advance, so the body's `quantity` is not used. Set `transaction_type` to the side that opened the position: a long is protected by a `BUY`, which fires when the price falls to the level. If nothing is held when it fires, the parent completes without sending an order. It takes no fields besides the price trigger fields above, including `trigger_on`.
 
@@ -607,7 +607,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | `sequential` (default) | A closing order for the position, and, once it has completely filled, a second order of the same size and side that opens the reverse | Nothing opens until the old position is gone, but there is a gap between the two |
     | `double` | One order for twice the position | Faster, but the exchange sees one order of double size, and the broker must accept margin for the new side before the old one closes |
 
-    Both are limits two ticks past the other side's best price. A sequential close that only partly fills sends no reverse until it completes.
+    Both are limits two ticks past the other side's best price. A position held at several brokers is flipped at each of them, for the part that broker holds, and a sequential reverse at one broker waits only for that broker's close. A sequential close that only partly fills sends no reverse until it completes.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
@@ -1056,7 +1056,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `square_off`
 
-    A square-off answers `202 scheduled` and, at `at_time`, cancels every open order on each instrument it is closing and then closes the positions with limit orders priced 2 ticks past the touch. Each of those cancels takes a rate token and is recorded on the square-off's own parent, as `outside_cancel_requested` and `outside_cancelled`, because the order it cancels may not be one the engine placed. Unlike [`POST /api/orders/flatten`](flatten.md), it leaves other products and other instruments alone.
+    A square-off answers `202 scheduled` and, at `at_time`, cancels every open order on each instrument it is closing and then closes the positions with limit orders priced 2 ticks past the touch. Positions are read from each broker's own positions, and each closing order goes to the broker that holds that position, so a position split across two brokers is closed with one order at each. A position whose broker token does not name exactly one instrument today is left open and counted in the parent's status message. Each of those cancels takes a rate token and is recorded on the square-off's own parent, as `outside_cancel_requested` and `outside_cancelled`, because the order it cancels may not be one the engine placed. Unlike [`POST /api/orders/flatten`](flatten.md), it leaves other products and other instruments alone.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
