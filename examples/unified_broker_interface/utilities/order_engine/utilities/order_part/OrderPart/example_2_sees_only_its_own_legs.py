@@ -2,7 +2,7 @@
 
 Every broker order an `OrderPart` places carries the part's path as its role, and the part only looks at orders with that role. This is the rule that lets parts share one parent: today's order types each assume they own every leg, so a second type's leg would confuse them. This program builds a parent holding a filled order for the part `root` and a resting order for another part, `root.first`, and shows that `root` is done while `root.first` is not.
 
-It then builds a part that protects the position the caller's buy opened, waiting for the last price to fall to 995 and resting a native stop, and walks it through a small stand-in for the plan order, which records each broker order instead of sending it: what it watches and whether it reads quotes, whether its resting order is looked at on every tick and what its pricing readies when the plan is placed, the side it sends, readying and asking its trigger, the order it builds, placing it, and the part as a dry run would show it, from `expanded`.
+It then builds a part that protects the position the caller's buy opened, waiting for the last price to fall to 995 and resting a native stop, and walks it through a small stand-in for the plan order, which records each broker order instead of sending it: what it watches and whether it reads quotes, whether its resting order is looked at on every tick and what its pricing readies when the plan is placed, the context its pricing sees, which is the parent's own instrument and body for an order that names none of its own, the side it sends, readying and asking its trigger, the order it builds, placing it, and the part as a dry run would show it, from `expanded`.
 
 Nothing is read from Redis or sent anywhere.
 
@@ -39,6 +39,7 @@ class StandInPlanOrder:
     Attributes:
         parent (ParentOrder): The parent, whose body is the caller's buy of ten.
         placed (list): Each order placed, as `(role, transaction_type, order_type, trigger_price, price)`.
+        group_margin_legs (OrderLegs | None): The group a Together join hands the broker selector, which is none here.
     """
 
     def __init__(self):
@@ -55,6 +56,7 @@ class StandInPlanOrder:
             'price': '1000.00',
         }
         self.placed = []
+        self.group_margin_legs = None
 
     def view(self, quotes, instrument_id=None):
         """The instrument's quote as a market view, with a tick size of 0.05.
@@ -203,6 +205,7 @@ class SeesOnlyItsOwnLegsExample:
         )
         print(f'Protecting part: watches {part.instruments()}, reads quotes {part.needs_prices()}, closes a position {part.closes_position()}')
         print(f'Looked at on every tick once resting: {part.moves_on_ticks()}, pricing memory readied when placed: {part.prepared_pricing_memory(plan_order)}')
+        print(f'It trades the parent\'s own instrument with the caller\'s body: {part.context(plan_order).is_parents_instrument()}, quantity {part.context(plan_order).body["quantity"]}')
         print(f"Sends {part.sending_side('BUY')} for a position opened with a BUY")
         memory = {}
         part.prepare(plan_order, memory)

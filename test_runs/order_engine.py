@@ -2571,7 +2571,7 @@ class OrderEngineSuite:
             ),
         ]
 
-    def plan_clock_result(self, name, plan, fills, tick_at, answer, quote=None, taken_at=None):
+    def plan_clock_result(self, name, plan, fills, tick_at, answer, quote=None, taken_at=None, positions=None, resting=None, body_overrides=None, record_prices=False):
         """Places one `plan` order, optionally fills it, gives it two clock ticks, and records what it did and the state of each of its parts.
 
         Args:
@@ -2582,6 +2582,10 @@ class OrderEngineSuite:
             answer (dict): The stubbed broker answer.
             quote (dict | None): A live quote to seed, for an order made marketable when it ends.
             taken_at (datetime.datetime | None): The moment the engine takes the order, or None for `FROZEN_NOW`.
+            positions (float | dict | None): A net RELIANCE position to seed, or each broker's share, or None for none.
+            resting (list | None): Flattrade order ids of open RELIANCE orders placed outside the engine.
+            body_overrides (dict | None): Body fields to replace, such as the quantity and price.
+            record_prices (bool): Whether to record the price of every leg placed, as `leg_prices`.
 
         Returns:
             dict: The recorded result, with `parts`, each parent's `parts` parameter.
@@ -2596,16 +2600,23 @@ class OrderEngineSuite:
                 'plan': plan,
             },
         )
-        result = self.clock_result(name, body, fills, tick_at, answer, quote=quote, taken_at=taken_at)
+        if body_overrides:
+            body.update(body_overrides)
+        result = self.clock_result(name, body, fills, tick_at, answer, quote=quote, taken_at=taken_at, positions=positions, resting=resting)
         stored = self.fake_redis.hashes.get('unified:orders:parents', {})
         parts = []
+        prices = []
         for document in stored.values():
             parameters = json.loads(document).get('parameters') or {}
             parts.append(parameters.get('parts'))
+            for leg in ParentOrder.from_document(json.loads(document)).legs:
+                prices.append(leg.price)
         result['parts'] = parts
+        if record_prices:
+            result['leg_prices'] = prices
         return result
 
-    def plan_price_result(self, name, plan, steps, answer, positions=None, restart_between_ticks=False, book_overrides=None, transaction_type='BUY', body_overrides=None):
+    def plan_price_result(self, name, plan, steps, answer, positions=None, restart_between_ticks=False, book_overrides=None, transaction_type='BUY', body_overrides=None, resting=None):
         """Places one `plan` order and walks it through price ticks, recording what it did and the state of each of its parts.
 
         Args:
@@ -2618,6 +2629,7 @@ class OrderEngineSuite:
             book_overrides (dict | None): Fields to put on every order in the broker's book, such as a stop's order type.
             transaction_type (str): The body's side, as a caller sent it; the API accepts it in any case.
             body_overrides (dict | None): Body fields to replace, such as another instrument, quantity and price.
+            resting (list | None): Flattrade order ids of open RELIANCE orders placed outside the engine, for an order that cancels what is resting.
 
         Returns:
             dict: The recorded result, with `parts`, each parent's `parts` parameter.
@@ -2644,6 +2656,7 @@ class OrderEngineSuite:
             restart_between_ticks=restart_between_ticks,
             book_every_order=True,
             book_overrides=book_overrides,
+            resting=resting,
         )
         stored = self.fake_redis.hashes.get('unified:orders:parents', {})
         parts = []
@@ -4266,7 +4279,7 @@ class OrderEngineSuite:
         ]
 
     def run_plan_stage_stop_checks(self):
-        """Runs plans whose stop trails the recent average range or moves through profit milestones, each beside the type it stands for.
+        """Runs plans whose stop trails the recent average range, moves through profit milestones, or waits for a bar to close past its level, each beside the type it stands for.
 
         Returns:
             list: One recorded result per check.
@@ -4302,6 +4315,18 @@ class OrderEngineSuite:
                                     'trail_points': 25,
                                 },
                             ],
+                        },
+                    },
+                ],
+            },
+        }
+        candle = {
+            'order': {
+                'presets': [
+                    {
+                        'candle_close_stop': {
+                            'trigger_price': 995,
+                            'bar_minutes': 1,
                         },
                     },
                 ],
@@ -4397,6 +4422,56 @@ class OrderEngineSuite:
                 [
                     {'quote': steady, 'at': 0},
                     {'quote': self.book_at(1064.95, 1065.00), 'at': 1},
+                ],
+                accepted,
+                positions=10,
+                book_overrides=stop_book,
+            ),
+            self.plan_price_result(
+                'a_plan_candle_close_stop_sits_through_a_wick',
+                candle,
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(990.00, 990.05), 'at': 10},
+                    {'quote': steady, 'at': 50},
+                    {'quote': steady, 'at': 70},
+                ],
+                accepted,
+                positions=10,
+            ),
+            self.plan_price_result(
+                'a_plan_candle_close_stop_fires_on_a_bar_that_closed_below',
+                candle,
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(990.00, 990.05), 'at': 10},
+                    {'quote': self.book_at(990.00, 990.05), 'at': 50},
+                    {'quote': self.book_at(990.00, 990.05), 'at': 70},
+                ],
+                accepted,
+                positions=10,
+            ),
+            self.plan_price_result(
+                'a_plan_candle_close_stop_with_a_backstop_cancels_it_before_exiting',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'candle_close_stop': {
+                                    'trigger_price': 995,
+                                    'bar_minutes': 1,
+                                    'backstop_price': 980,
+                                    'backstop_limit_price': 978,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(990.00, 990.05), 'at': 10},
+                    {'quote': self.book_at(990.00, 990.05), 'at': 70},
+                    {'quote': self.book_at(990.00, 990.05), 'at': 71},
                 ],
                 accepted,
                 positions=10,
@@ -4619,6 +4694,741 @@ class OrderEngineSuite:
                 },
                 [],
                 frozen + 1900,
+                accepted,
+            ),
+        ]
+
+    def run_plan_group_checks(self):
+        """Runs plans whose orders trade several instruments: a basket, a one-cancels-all group, a sequence, and a group done when any order is, beside the types they stand for.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        numbered = dict(
+            self.scenarios.answers.json_answer(
+                200,
+                self.scenarios.answers.place_success('flattrade'),
+            ),
+            number_orders=True,
+        )
+        identifiers = order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS
+        basket_candidates = [
+            {
+                'instrument_id': identifiers['reliance'],
+                'quantity': 10,
+                'price': 1000,
+            },
+            {
+                'instrument_id': identifiers['kwil'],
+                'quantity': 5,
+                'price': 250,
+            },
+            {
+                'instrument_id': identifiers['nifty_option'],
+                'transaction_type': 'SELL',
+                'quantity': 75,
+                'price': 120,
+            },
+        ]
+        return [
+            self.plan_result(
+                'a_plan_basket_places_every_leg_and_reports_each_one',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'basket': {
+                                    'candidates': basket_candidates,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [],
+                numbered,
+            ),
+            self.plan_result(
+                'a_plan_basket_may_repeat_an_instrument',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'basket': {
+                                    'candidates': [
+                                        {
+                                            'instrument_id': identifiers['reliance'],
+                                            'quantity': 10,
+                                        },
+                                        {
+                                            'instrument_id': identifiers['reliance'],
+                                            'quantity': 5,
+                                            'price': 995,
+                                        },
+                                    ],
+                                },
+                            },
+                        ],
+                    },
+                },
+                [],
+                numbered,
+            ),
+            self.plan_result(
+                'a_plan_one_cancels_all_group_calls_off_the_rest_on_the_first_fill',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'oca': {
+                                    'candidates': [
+                                        {
+                                            'instrument_id': identifiers['reliance'],
+                                            'quantity': 10,
+                                            'price': 1000,
+                                        },
+                                        {
+                                            'instrument_id': identifiers['kwil'],
+                                            'quantity': 5,
+                                            'price': 250,
+                                        },
+                                        {
+                                            'instrument_id': identifiers['sensex_option'],
+                                            'quantity': 20,
+                                            'price': 80,
+                                        },
+                                    ],
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    self.update('26091500000101', 'OPEN', 4),
+                ],
+                numbered,
+            ),
+            self.plan_result(
+                'a_plan_order_can_trade_another_instrument',
+                {
+                    'order': {
+                        'instrument_id': identifiers['kwil'],
+                        'quantity': 5,
+                        'pricing': [
+                            {
+                                'fixed': {
+                                    'price': 250,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [],
+                numbered,
+            ),
+            self.plan_result(
+                'a_plan_sequence_sends_its_second_order_once_the_first_is_done',
+                {
+                    'sequence': {
+                        'children': [
+                            {
+                                'order': {
+                                    'transaction_type': 'SELL',
+                                },
+                            },
+                            {
+                                'order': {
+                                    'instrument_id': identifiers['kwil'],
+                                    'quantity': 5,
+                                    'pricing': [
+                                        {
+                                            'fixed': {
+                                                'price': 250,
+                                            },
+                                        },
+                                    ],
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    self.update('26091500000101', 'OPEN', 4),
+                    self.update('26091500000101', 'COMPLETE', 10),
+                ],
+                numbered,
+            ),
+            self.plan_result(
+                'a_plan_group_done_when_any_order_is_cancels_the_rest',
+                {
+                    'together': {
+                        'done_when': 'any',
+                        'group_margin': False,
+                        'children': [
+                            {
+                                'order': {},
+                            },
+                            {
+                                'order': {
+                                    'instrument_id': identifiers['kwil'],
+                                    'quantity': 5,
+                                    'pricing': [
+                                        {
+                                            'fixed': {
+                                                'price': 250,
+                                            },
+                                        },
+                                    ],
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    self.update('26091500000101', 'COMPLETE', 10),
+                ],
+                numbered,
+            ),
+            self.plan_result(
+                'a_plan_then_whose_child_is_a_group_is_refused',
+                {
+                    'then': {
+                        'first': {
+                            'order': {},
+                        },
+                        'each_fill': {
+                            'together': {
+                                'children': [
+                                    {
+                                        'order': {},
+                                    },
+                                ],
+                            },
+                        },
+                    },
+                },
+                [],
+                numbered,
+            ),
+        ]
+
+    def run_plan_close_checks(self):
+        """Runs plans that close the position held when they fire: on a price, at a time, and reversed, beside the types they stand for.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        accepted = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        steady = self.book_at(1000.00, 1000.05)
+        frozen = FROZEN_NOW.timestamp()
+        close_at_995 = {
+            'order': {
+                'presets': [
+                    {
+                        'close_on_trigger': {
+                            'trigger_price': 995,
+                        },
+                    },
+                ],
+            },
+        }
+        square_off = {
+            'order': {
+                'presets': [
+                    {
+                        'square_off': {
+                            'at_time': '15:10',
+                        },
+                    },
+                ],
+            },
+        }
+        doubled = {
+            'order': {
+                'presets': [
+                    {
+                        'stop_and_reverse': {
+                            'trigger_price': 995,
+                            'method': 'double',
+                        },
+                    },
+                ],
+            },
+        }
+        return [
+            self.plan_price_result(
+                'a_plan_close_on_trigger_cancels_resting_orders_then_closes_the_long',
+                close_at_995,
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                    {'quote': self.book_at(994.00, 994.05), 'at': 2},
+                ],
+                accepted,
+                positions=75,
+                resting=[
+                    '26091500000077',
+                ],
+            ),
+            self.plan_price_result(
+                'a_plan_close_on_trigger_closes_a_position_split_across_brokers_at_each_broker',
+                close_at_995,
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                ],
+                accepted,
+                positions={
+                    'flattrade': 50,
+                    'zerodha': 25,
+                },
+            ),
+            self.plan_price_result(
+                'a_plan_close_on_trigger_with_nothing_held_completes_without_an_order',
+                close_at_995,
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                ],
+                accepted,
+                positions=0,
+            ),
+            self.plan_price_result(
+                'a_plan_close_on_trigger_buys_back_a_short_when_the_price_rises',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'close_on_trigger': {
+                                    'trigger_price': 1005,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1005.00, 1005.05), 'at': 1},
+                ],
+                accepted,
+                positions=-40,
+                transaction_type='SELL',
+            ),
+            self.plan_price_result(
+                'a_plan_stop_and_reverse_closes_then_reverses_once_the_close_fills',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'stop_and_reverse': {
+                                    'trigger_price': 995,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                    {'quote': self.book_at(994.00, 994.05), 'at': 2},
+                    {
+                        'quote': self.book_at(994.00, 994.05),
+                        'at': 3,
+                        'updates': [
+                            self.update('26091500000021', 'COMPLETE', 75),
+                        ],
+                    },
+                ],
+                accepted,
+                positions=75,
+            ),
+            self.plan_price_result(
+                'a_plan_doubled_stop_and_reverse_sends_one_order_for_twice_the_position',
+                doubled,
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                ],
+                accepted,
+                positions=75,
+            ),
+            self.plan_price_result(
+                'a_plan_doubled_stop_and_reverse_doubles_each_brokers_share_at_that_broker',
+                doubled,
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                ],
+                accepted,
+                positions={
+                    'flattrade': 50,
+                    'zerodha': 25,
+                },
+            ),
+            self.plan_price_result(
+                'a_plan_stop_and_reverse_with_an_unknown_method_is_refused',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'stop_and_reverse': {
+                                    'trigger_price': 995,
+                                    'method': 'sideways',
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.plan_clock_result(
+                'a_plan_square_off_cancels_what_is_resting_and_closes_what_is_held',
+                square_off,
+                [],
+                frozen + 20000,
+                accepted,
+                quote=self.scenarios.quote(),
+                positions=8,
+            ),
+            self.plan_clock_result(
+                'a_plan_square_off_records_the_cancel_of_an_order_placed_outside_the_engine',
+                square_off,
+                [],
+                frozen + 20000,
+                accepted,
+                quote=self.scenarios.quote(),
+                positions=8,
+                resting=[
+                    '26091500000077',
+                ],
+            ),
+            self.plan_clock_result(
+                'a_plan_square_off_closes_a_position_split_across_brokers_at_each_broker',
+                square_off,
+                [],
+                frozen + 20000,
+                accepted,
+                quote=self.scenarios.quote(),
+                positions={
+                    'flattrade': 5,
+                    'zerodha': 3,
+                },
+            ),
+            self.plan_clock_result(
+                'a_plan_square_off_with_nothing_held_closes_nothing',
+                square_off,
+                [],
+                frozen + 20000,
+                accepted,
+                quote=self.scenarios.quote(),
+            ),
+            self.plan_price_result(
+                'a_plan_close_with_a_price_of_its_own_is_refused',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'close_on_trigger': {
+                                    'trigger_price': 995,
+                                },
+                            },
+                        ],
+                        'pricing': [
+                            {
+                                'fixed': {
+                                    'price': 990,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+                positions=75,
+            ),
+        ]
+
+    def run_plan_repeat_checks(self):
+        """Runs plans that send one order again on a schedule, beside the accumulation type they stand for.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        accepted = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        frozen = FROZEN_NOW.timestamp()
+        accumulation = {
+            'order': {
+                'presets': [
+                    {
+                        'accumulation': {
+                            'every_minutes': 30,
+                            'purchases': 4,
+                        },
+                    },
+                ],
+            },
+        }
+        return [
+            self.plan_clock_result(
+                'a_plan_accumulation_buys_again_when_its_gap_is_up',
+                accumulation,
+                [],
+                frozen + 2000,
+                accepted,
+                quote=self.scenarios.quote(),
+                body_overrides={
+                    'quantity': 5,
+                },
+            ),
+            self.plan_clock_result(
+                'a_plan_accumulation_never_bids_above_the_callers_limit',
+                accumulation,
+                [],
+                frozen + 60,
+                accepted,
+                quote=self.scenarios.quote(),
+                body_overrides={
+                    'quantity': 5,
+                    'price': 995,
+                },
+                record_prices=True,
+            ),
+            self.plan_clock_result(
+                'a_plan_accumulation_rests_on_the_bid_when_it_is_better_than_the_limit',
+                accumulation,
+                [],
+                frozen + 60,
+                accepted,
+                quote=self.scenarios.quote(),
+                body_overrides={
+                    'quantity': 5,
+                    'price': 1005,
+                },
+                record_prices=True,
+            ),
+            self.plan_clock_result(
+                'a_plan_accumulation_with_no_bid_rests_at_the_callers_limit',
+                accumulation,
+                [],
+                frozen + 60,
+                accepted,
+                quote=self.scenarios.quote(depth={
+                    'buy': [],
+                    'sell': [],
+                }),
+                body_overrides={
+                    'quantity': 5,
+                    'price': 995,
+                },
+                record_prices=True,
+            ),
+            self.plan_clock_result(
+                'a_plan_accumulation_waits_out_the_gap_between_purchases',
+                accumulation,
+                [],
+                frozen + 60,
+                accepted,
+                quote=self.scenarios.quote(),
+                body_overrides={
+                    'quantity': 5,
+                },
+            ),
+            self.plan_clock_result(
+                'a_plan_repeat_whose_child_is_a_join_is_refused',
+                {
+                    'repeat': {
+                        'child': {
+                            'then': {
+                                'first': {
+                                    'order': {},
+                                },
+                                'each_fill': {
+                                    'order': {},
+                                },
+                            },
+                        },
+                        'times': 2,
+                        'every_minutes': 5,
+                    },
+                },
+                [],
+                frozen + 60,
+                accepted,
+            ),
+        ]
+
+    def run_plan_fill_follower_checks(self):
+        """Runs plans whose second order follows the first's fills: a hedge in whole lots, a legged spread, and a two-sided breakout's exits, beside the types they stand for.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        accepted = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        identifiers = order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS
+        steady = self.book_at(1000.00, 1000.05)
+        numbered = dict(
+            accepted,
+            number_orders=True,
+        )
+        breakout = {
+            'order': {
+                'presets': [
+                    {
+                        'two_sided_breakout': {
+                            'buy_trigger': 1010,
+                            'buy_limit': 1012,
+                            'sell_trigger': 990,
+                            'sell_limit': 988,
+                            'stop_price': 985,
+                            'stop_limit_price': 983,
+                        },
+                    },
+                ],
+            },
+        }
+        spread = {
+            'order': {
+                'presets': [
+                    {
+                        'legged_spread': {
+                            'net_price': 20,
+                            'candidates': [
+                                {
+                                    'instrument_id': identifiers['reliance'],
+                                    'transaction_type': 'BUY',
+                                    'quantity': 500,
+                                    'price': 1000,
+                                },
+                                {
+                                    'instrument_id': identifiers['reliance_future'],
+                                    'transaction_type': 'SELL',
+                                    'quantity': 500,
+                                    'price': 980,
+                                },
+                            ],
+                        },
+                    },
+                ],
+            },
+        }
+        return [
+            self.plan_price_result(
+                'a_plan_attached_hedge_sells_the_future_in_whole_lots_as_the_entry_fills',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'attached_hedge': {
+                                    'hedge_instrument_id': identifiers['reliance_future'],
+                                    'ratio': 1,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {
+                        'quote': steady,
+                        'at': 0,
+                        'other_quotes': {
+                            'reliance_future': self.scenarios.quote(),
+                        },
+                    },
+                    {
+                        'quote': steady,
+                        'at': 1,
+                        'updates': [
+                            self.update('26091500000021', 'OPEN', 600),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 2,
+                        'updates': [
+                            self.update('26091500000021', 'COMPLETE', 1000),
+                        ],
+                    },
+                ],
+                accepted,
+                body_overrides={
+                    'quantity': 1000,
+                },
+            ),
+            self.plan_price_result(
+                'a_plan_attached_hedge_sized_by_delta_is_not_built_yet',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'attached_hedge': {
+                                    'hedge_instrument_id': identifiers['reliance_future'],
+                                    'delta_volatility': 12.5,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.plan_result(
+                'a_plan_legged_spread_prices_its_second_leg_from_the_first_fill',
+                spread,
+                [
+                    self.update('26091500000021', 'COMPLETE', 500, average_price=1002.0),
+                ],
+                accepted,
+            ),
+            self.plan_result(
+                'a_plan_two_sided_breakout_cancels_the_side_that_did_not_fire',
+                breakout,
+                [
+                    self.update('26091500000101', 'OPEN', 10),
+                ],
+                numbered,
+            ),
+            self.plan_result(
+                'a_plan_two_sided_breakout_that_breaks_down_protects_the_short',
+                breakout,
+                [
+                    self.update('26091500000102', 'OPEN', 10),
+                ],
+                numbered,
+            ),
+            self.plan_result(
+                'a_plan_legged_spread_with_three_legs_is_refused',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'legged_spread': {
+                                    'net_price': 20,
+                                    'candidates': [
+                                        {'instrument_id': identifiers['reliance']},
+                                        {'instrument_id': identifiers['kwil']},
+                                        {'instrument_id': identifiers['nifty_option']},
+                                    ],
+                                },
+                            },
+                        ],
+                    },
+                },
+                [],
                 accepted,
             ),
         ]
@@ -8327,6 +9137,10 @@ class OrderEngineSuite:
             results.extend(self.run_plan_followed_price_checks())
             results.extend(self.run_plan_stage_stop_checks())
             results.extend(self.run_plan_lifetime_checks())
+            results.extend(self.run_plan_group_checks())
+            results.extend(self.run_plan_close_checks())
+            results.extend(self.run_plan_repeat_checks())
+            results.extend(self.run_plan_fill_follower_checks())
             results.extend(self.run_clock_checks())
             results.extend(self.run_price_checks())
             results.extend(self.run_wiring_checks())

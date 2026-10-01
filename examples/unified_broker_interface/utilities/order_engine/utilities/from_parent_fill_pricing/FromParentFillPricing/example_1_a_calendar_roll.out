@@ -1,0 +1,4 @@
+Reads quotes: False, moves: False
+First fill: (Decimal('1002.0'), 'BUY')
+Sent as: {'quantity': 500, 'order_type': 'LIMIT', 'price': '982.0'}
+As a dry run shows it: {'from_parent_fill': {'net_price': '20'}}

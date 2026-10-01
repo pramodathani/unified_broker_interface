@@ -33,6 +33,7 @@ class PlanOrder(SyntheticOrder):
     SYNTHETIC_TYPE = 'plan'
     WANTS_PRICES = True
     WANTS_CLOCK = True
+    group_margin_legs = None
 
     def _read_plan(self):
         """Reads the caller's plan into its root part.
@@ -86,7 +87,7 @@ class PlanOrder(SyntheticOrder):
 
         protecting = root.standalone_protecting_parts()
         if protecting:
-            self._refuse_without_position(protecting[0], order)
+            self._refuse_without_position(protecting[0])
         records = {}
         needs_prices = False
         watched = []
@@ -116,6 +117,7 @@ class PlanOrder(SyntheticOrder):
                     watched.append(instrument_id)
         if needs_prices:
             self.remember_tick_size(order)
+            self._remember_tick_sizes(root)
         self.parent.parameters = dict(self.parent.parameters)
         self.parent.parameters['parts'] = records
         if watched:
@@ -180,6 +182,7 @@ class PlanOrder(SyntheticOrder):
             for path, body, leg_status in placed:
                 legs.append({
                     'path': path,
+                    'instrument_id': body.get('instrument_id'),
                     'outcome': body.get('outcome'),
                     'order_id': body.get('order_id'),
                     'status_message': body.get('status_message'),
@@ -203,12 +206,41 @@ class PlanOrder(SyntheticOrder):
             answer['warnings'] = warnings
         return answer, status
 
-    def _refuse_without_position(self, part, order):
-        """Refuses a part that protects a position when none is held on the caller's side.
+    def _remember_tick_sizes(self, root):
+        """Works out the tick size of every other instrument a priced order of the plan trades, and keeps them on the parent beside the parent's own.
+
+        Args:
+            root (object): The root part.
+
+        Returns:
+            None: This method returns nothing.
+
+        Raises:
+            RefusedRequestError: With HTTP 503 when the brokers do not agree on a tick size for one of them.
+        """
+        tick_sizes = {}
+        for part in root.order_parts():
+            context = part.context(self)
+            if context.is_parents_instrument() or not part.needs_prices():
+                continue
+            instrument, _, _ = self.placement.market_context(context.instrument_id, False, False)
+            tick_size = self.read_order(context.body).agreed_tick_size(instrument.handles)
+            if tick_size is None:
+                raise RefusedRequestError.refusal(
+                    'an order of this plan works its prices out from the live quote, which needs a tick size the brokers agree on, and there is none for its instrument',
+                    503,
+                    instrument_id=context.instrument_id,
+                )
+            tick_sizes[context.instrument_id] = str(tick_size)
+        if tick_sizes:
+            self.parent.parameters = dict(self.parent.parameters)
+            self.parent.parameters['tick_sizes'] = tick_sizes
+
+    def _refuse_without_position(self, part):
+        """Refuses a part that protects a position when none is held on its instrument on the side that opened it.
 
         Args:
             part (OrderPart): The protecting part.
-            order (PlaceOrderRequest): The caller's order, whose side opened the position.
 
         Returns:
             None: This method returns nothing.
@@ -216,8 +248,10 @@ class PlanOrder(SyntheticOrder):
         Raises:
             RefusedRequestError: With HTTP 409 when no position is held on that side.
         """
+        context = part.context(self)
+        order = self.read_order(context.body)
         held = ReduceOnlyCheck(self.placement).held(
-            self.parent.instrument_id,
+            context.instrument_id,
             order.product,
         )
         if order.transaction_type == 'BUY' and held > 0:
@@ -287,6 +321,8 @@ class PlanOrder(SyntheticOrder):
     def _finish_if_done(self, root):
         """Ends the parent once the root part is done.
 
+        A plan that only closed positions and found none held ends `completed`, as today's close types do, even straight from `received`, which the usual state changes do not allow.
+
         Args:
             root (object): The root part.
 
@@ -303,13 +339,18 @@ class PlanOrder(SyntheticOrder):
                 rejected = True
         if self._guard_refusal(root) is not None:
             rejected = True
-        if traded > 0:
+        nothing_held = False
+        for part in root.order_parts():
+            if self.part_record(part.path).get('reason') == 'nothing_held':
+                nothing_held = True
+        if traded > 0 or (nothing_held and not rejected):
             state = 'completed'
         elif rejected:
             state = 'rejected'
         else:
             state = 'cancelled'
-        if self.parent.can_change_to(state):
+        closed_nothing = nothing_held and traded == 0 and not rejected
+        if self.parent.can_change_to(state) or closed_nothing:
             self.record_state(state, f'every part of the plan is done, with {traded} traded')
 
     def _guard_refusal(self, root):
@@ -376,16 +417,52 @@ class PlanOrder(SyntheticOrder):
         if not waiting_paths and not moving_paths and not paced_paths:
             return False
         root, _ = self._read_plan()
+        placed, memory_changed, ended = self._fire_waiting(root, waiting_paths, quotes, now, False)
+        for part in root.order_parts():
+            if part.path in paced_paths:
+                placed = placed + part.send_due(self, None, quotes, now)
+        moved = False
+        for part in root.order_parts():
+            if part.path in moving_paths and part.move(self, quotes, now):
+                moved = True
+        if not placed and not moved and not ended:
+            if memory_changed or moving_paths or paced_paths:
+                self.save()
+            return False
+        placed = placed + root.settle(self)
+        self._after_placing(placed)
+        self._finish_if_done(root)
+        self.save()
+        return True
+
+    def _fire_waiting(self, root, waiting_paths, quotes, now, timed_only):
+        """Sends every waiting order whose trigger holds now.
+
+        An order whose join cancels before sending is sent only once every sibling's resting order has been cancelled; otherwise it tries again on the next tick.
+
+        Args:
+            root (object): The root part.
+            waiting_paths (list): The paths of the orders waiting for their trigger.
+            quotes (dict | None): The quotes the tick carried, or None on a clock tick, when they are read only for an order that fires and prices itself.
+            now (float): The Unix time of the tick.
+            timed_only (bool): Whether to look only at orders whose trigger needs no prices, as on a clock tick.
+
+        Returns:
+            tuple: The orders placed, as `(path, answer, status)`; whether any trigger's memory changed (bool); and whether an order fired and ended without placing anything (bool).
+        """
         placed = []
         memory_changed = False
+        ended = False
         for part in root.order_parts():
             if part.path not in waiting_paths:
+                continue
+            if timed_only and part.trigger is not None and part.trigger.needs_prices():
                 continue
             record = self.part_record(part.path)
             if record.get('state') != 'waiting':
                 continue
             memory = copy.deepcopy(record.get('memory') or {})
-            triggered = part.is_triggered(self, memory, quotes, now)
+            triggered = part.is_triggered(self, memory, quotes or {}, now)
             if memory != (record.get('memory') or {}):
                 record['memory'] = memory
                 self.set_part_record(part.path, record, None)
@@ -400,26 +477,53 @@ class PlanOrder(SyntheticOrder):
                     f'{part.path} is about to be sent, so its siblings are cancelled first',
                 ):
                     continue
+            sending_quotes = quotes
+            if sending_quotes is None:
+                sending_quotes = {}
+                if part.needs_prices():
+                    try:
+                        sending_quotes = self.quotes_now()
+                    except RefusedRequestError as refusal:
+                        self.logger.warning(f'Parent {self.parent.parent_order_id} could not read the quotes to send {part.path}: {refusal.body.get("error")}')
+                        continue
             record = self.part_record(part.path)
             record['fired_at'] = now
             self.set_part_record(part.path, record, None)
-            sent = part.send(self, None, quotes, now)
+            sent = part.send(self, None, sending_quotes, now)
             record = self.part_record(part.path)
             if not sent and record.get('state') == 'waiting':
                 record.pop('fired_at', None)
                 self.set_part_record(part.path, record, None)
             if not sent and record.get('state') == 'working':
                 memory_changed = True
+            if not sent and record.get('state') == 'done':
+                ended = True
             placed = placed + sent
-        for part in root.order_parts():
-            if part.path in paced_paths:
-                placed = placed + part.send_due(self, None, quotes, now)
-        moved = False
-        for part in root.order_parts():
-            if part.path in moving_paths and part.move(self, quotes, now):
-                moved = True
-        if not placed and not moved:
-            if memory_changed or moving_paths or paced_paths:
+        return placed, memory_changed, ended
+
+    def on_clock_tick(self, now):
+        """Ends every order whose lifetime is up and sends every order waiting only for a time, even when its instrument sent no price tick.
+
+        Orders whose trigger reads prices are left to the price ticks, because some of those triggers count ticks.
+
+        Args:
+            now (float): The Unix time of the tick.
+
+        Returns:
+            bool: True when an order's lifetime ended or an order was sent.
+        """
+        if self._end_lifetimes(None, now):
+            return True
+        waiting_paths = []
+        for path, record in (self.parent.parameters.get('parts') or {}).items():
+            if record.get('state') == 'waiting':
+                waiting_paths.append(path)
+        if not waiting_paths:
+            return False
+        root, _ = self._read_plan()
+        placed, memory_changed, ended = self._fire_waiting(root, waiting_paths, None, now, True)
+        if not placed and not ended:
+            if memory_changed:
                 self.save()
             return False
         placed = placed + root.settle(self)
@@ -427,17 +531,6 @@ class PlanOrder(SyntheticOrder):
         self._finish_if_done(root)
         self.save()
         return True
-
-    def on_clock_tick(self, now):
-        """Ends every order whose lifetime is up, even when its instrument sent no price tick.
-
-        Args:
-            now (float): The Unix time of the tick.
-
-        Returns:
-            bool: True when an order's lifetime ended.
-        """
-        return self._end_lifetimes(None, now)
 
     def _end_lifetimes(self, quotes, now):
         """Ends every order whose lifetime is up, then settles the plan and ends the parent if it is done.

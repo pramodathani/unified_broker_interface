@@ -51,6 +51,16 @@ PRESET_NAMES = (
     'stepped_stop',
     'good_till_time',
     'time_stop',
+    'basket',
+    'oca',
+    'close_on_trigger',
+    'square_off',
+    'stop_and_reverse',
+    'accumulation',
+    'attached_hedge',
+    'legged_spread',
+    'two_sided_breakout',
+    'candle_close_stop',
     'oto',
     'oco',
     'bracket',
@@ -79,7 +89,33 @@ STEPPED_STOP_SETTINGS = (
     'step_ticks',
     'rules',
 )
+MOST_CANDIDATES = 25
+CANDIDATE_SETTINGS = (
+    'instrument_id',
+    'transaction_type',
+    'product',
+    'order_type',
+    'validity',
+    'quantity',
+    'price',
+    'trigger_price',
+    'tag',
+)
+CANDIDATE_OVERRIDES = (
+    'instrument_id',
+    'transaction_type',
+    'product',
+    'validity',
+    'quantity',
+    'tag',
+)
 JOIN_PRESET_NAMES = (
+    'accumulation',
+    'attached_hedge',
+    'legged_spread',
+    'two_sided_breakout',
+    'basket',
+    'oca',
     'oto',
     'oco',
     'bracket',
@@ -165,6 +201,8 @@ class PresetExpander:
             return self._chaser(settings, path)
         if name == 'post_only':
             return self._post_only(settings, path)
+        if name == 'candle_close_stop':
+            return self._candle_close_stop(settings, path)
         if name == 'underlying_peg':
             return self._underlying_peg(settings, path)
         if name == 'volatility':
@@ -179,6 +217,12 @@ class PresetExpander:
             return self._good_till_time(settings, path)
         if name == 'time_stop':
             return self._time_stop(settings, path)
+        if name == 'close_on_trigger':
+            return self._close_on_trigger(settings, path)
+        if name == 'square_off':
+            return self._square_off(settings, path)
+        if name == 'stop_and_reverse':
+            return self._stop_and_reverse(settings, path)
         return self._hidden_stop(settings, path)
 
     def is_join(self, name, settings):
@@ -189,11 +233,13 @@ class PresetExpander:
             settings (dict): The preset's settings.
 
         Returns:
-            bool: True for `oto`, `oco`, `bracket`, `cover`, and a `hidden_stop` with a backstop.
+            bool: True for `accumulation`, `attached_hedge`, `legged_spread`, `two_sided_breakout`, `basket`, `oca`, `oto`, `oco`, `bracket`, `cover`, a `hidden_stop` with a backstop, and a `stop_and_reverse` that closes before it reverses.
         """
         if name in JOIN_PRESET_NAMES:
             return True
-        if name == 'hidden_stop':
+        if name == 'stop_and_reverse' and settings.get('method', 'sequential') == 'sequential':
+            return True
+        if name in ('hidden_stop', 'candle_close_stop'):
             for setting in BACKSTOP_SETTINGS:
                 if setting in settings:
                     return True
@@ -214,6 +260,18 @@ class PresetExpander:
             dict: The plan node, as a caller would write it; empty when there are problems.
         """
         self.problems = []
+        if name == 'accumulation':
+            return self._accumulation(settings, entry, path)
+        if name == 'attached_hedge':
+            return self._attached_hedge(settings, entry, path)
+        if name == 'legged_spread':
+            return self._legged_spread(settings, entry, path)
+        if name == 'two_sided_breakout':
+            return self._two_sided_breakout(settings, entry, path)
+        if name == 'basket':
+            return self._basket(settings, entry, path)
+        if name == 'oca':
+            return self._oca(settings, entry, path)
         if name == 'oto':
             return self._oto(settings, entry, path)
         if name == 'oco':
@@ -222,7 +280,321 @@ class PresetExpander:
             return self._bracket(settings, entry, path)
         if name == 'cover':
             return self._cover(settings, entry, path)
-        return self._hidden_stop_with_backstop(settings, entry, path)
+        if name == 'stop_and_reverse':
+            return self._sequential_reverse(settings, entry, path)
+        return self._hidden_stop_with_backstop(settings, entry, path, name)
+
+    def _candidate_orders(self, settings, entry, path, name):
+        """One order per candidate, each the rest of the order it was named in with the candidate's own instrument, side, quantity and prices.
+
+        A candidate's `price` and `order_type` become `fixed` pricing, and with a `trigger_price` a `native_stop` at that trigger and limit, replacing whatever pricing the rest of the order gave.
+
+        Args:
+            settings (dict): The preset's settings, holding `candidates`.
+            entry (dict): The order it was named in.
+            path (str): The preset's path.
+            name (str): The preset's name, for the messages.
+
+        Returns:
+            list: The plan nodes, one per candidate; empty when there are problems.
+        """
+        candidates = settings.get('candidates')
+        if not isinstance(candidates, list) or not candidates or len(candidates) > MOST_CANDIDATES:
+            self._add_problem(
+                path,
+                'missing_setting',
+                f'the {name} preset needs candidates, a list of 1 to {MOST_CANDIDATES} orders, each naming its instrument_id',
+            )
+            return []
+        nodes = []
+        for index, candidate in enumerate(candidates):
+            candidate_path = f'{path}.candidates.{index}'
+            if not isinstance(candidate, dict) or not candidate.get('instrument_id'):
+                self._add_problem(candidate_path, 'bad_setting', 'a candidate is an object naming its instrument_id')
+                continue
+            self._refuse_unknown(candidate, CANDIDATE_SETTINGS, candidate_path, 'candidate')
+            order = dict(entry)
+            for setting in CANDIDATE_OVERRIDES:
+                if setting in candidate:
+                    order[setting] = candidate[setting]
+            if candidate.get('trigger_price') is not None:
+                order['pricing'] = [
+                    {
+                        'native_stop': {
+                            'trigger_price': candidate['trigger_price'],
+                            'limit_price': candidate.get('price'),
+                        },
+                    },
+                ]
+            elif 'price' in candidate or 'order_type' in candidate:
+                fixed = {}
+                if 'price' in candidate:
+                    fixed['price'] = candidate['price']
+                if 'order_type' in candidate:
+                    fixed['order_type'] = candidate['order_type']
+                order['pricing'] = [
+                    {
+                        'fixed': fixed,
+                    },
+                ]
+            nodes.append(
+                {
+                    'order': order,
+                }
+            )
+        return nodes
+
+    def _attached_hedge(self, settings, entry, path):
+        """The order, and as it fills a hedge in another instrument of `ratio` times what filled, in whole lots, each missing lot sent as a new order past the hedge's touch.
+
+        Args:
+            settings (dict): `hedge_instrument_id` and `ratio`.
+            entry (dict): The order it was named in.
+            path (str): The preset's path.
+
+        Returns:
+            dict: A Then join whose child is the hedge.
+        """
+        self._refuse_unknown(settings, ('hedge_instrument_id', 'ratio', 'delta_volatility'), path, 'attached_hedge')
+        if 'delta_volatility' in settings:
+            self._add_problem(path, 'not_built', 'a hedge sized by an option\'s delta is part of the design but not built yet; give ratio instead')
+            return {}
+        if self.opening_side not in OTO_SIDES:
+            self._add_problem(path, 'needs_side', 'a hedge trades against the entry\'s side, so it needs to know the side of the entry')
+            return {}
+        ratio = settings.get('ratio')
+        if isinstance(ratio, bool) or not isinstance(ratio, (int, float)) or ratio == 0:
+            self._add_problem(path, 'bad_setting', f'ratio must be a number other than zero, not {ratio!r}')
+            return {}
+        hedges_opposite = ratio > 0
+        if (self.opening_side == 'BUY') == hedges_opposite:
+            side = 'sell'
+        else:
+            side = 'buy'
+        return {
+            'then': {
+                'first': {
+                    'order': entry,
+                },
+                'each_fill': {
+                    'order': {
+                        'instrument_id': settings.get('hedge_instrument_id'),
+                        'side': side,
+                        'quantity': {
+                            'parent_fill': {
+                                'ratio': abs(ratio),
+                                'whole_lots': True,
+                            },
+                        },
+                        'execution': [
+                            {
+                                'top_up': {},
+                            },
+                        ],
+                        'pricing': [
+                            {
+                                'marketable': {
+                                    'buffer_ticks': DEFAULT_BUFFER_TICKS,
+                                },
+                            },
+                        ],
+                    },
+                },
+            },
+        }
+
+    def _legged_spread(self, settings, entry, path):
+        """Two legs put on for a net price: the first candidate worked at its own price, and as it fills the second sent at whatever price makes the net.
+
+        Args:
+            settings (dict): `net_price`, and `candidates`, exactly two.
+            entry (dict): The order it was named in, whose other presets and slot values the first leg keeps.
+            path (str): The preset's path.
+
+        Returns:
+            dict: A Then join whose child is the second leg.
+        """
+        self._refuse_unknown(settings, ('net_price', 'candidates'), path, 'legged_spread')
+        nodes = self._candidate_orders(settings, entry, path, 'legged_spread')
+        if self.problems:
+            return {}
+        if len(nodes) != 2:
+            self._add_problem(path, 'bad_setting', f'a legged spread has exactly two legs, the one to work first; {len(nodes)} were given')
+            return {}
+        second = dict(nodes[1]['order'])
+        second.pop('quantity', None)
+        second.pop('presets', None)
+        second['pricing'] = [
+            {
+                'from_parent_fill': {
+                    'net_price': settings.get('net_price'),
+                },
+            },
+        ]
+        second['execution'] = [
+            {
+                'top_up': {},
+            },
+        ]
+        return {
+            'then': {
+                'first': nodes[0],
+                'each_fill': {
+                    'order': second,
+                },
+            },
+        }
+
+    def _two_sided_breakout(self, settings, entry, path):
+        """A buy stop above a range and a sell stop below it; the first to fill cancels the other, and exits are armed against the side that filled.
+
+        Args:
+            settings (dict): `buy_trigger`, `buy_limit`, `sell_trigger` and `sell_limit`, and the exits' `stop_price` and `stop_limit_price`, `target_price`, or both.
+            entry (dict): The order it was named in, which each side copies.
+            path (str): The preset's path.
+
+        Returns:
+            dict: A Then join: an Either join of the two sides that cancels, then the exits.
+        """
+        self._refuse_unknown(settings, ('buy_trigger', 'buy_limit', 'sell_trigger', 'sell_limit', 'stop_price', 'stop_limit_price', 'target_price'), path, 'two_sided_breakout')
+        for name in ('buy_trigger', 'buy_limit', 'sell_trigger', 'sell_limit'):
+            if name not in settings:
+                self._add_problem(path, 'missing_setting', 'a two_sided_breakout needs buy_trigger, buy_limit, sell_trigger and sell_limit: both sides are stop-limit orders and each needs its own two prices')
+                return {}
+        try:
+            in_order = float(settings['sell_trigger']) < float(settings['buy_trigger'])
+        except (TypeError, ValueError):
+            in_order = True
+        if not in_order:
+            self._add_problem(path, 'bad_setting', 'sell_trigger must be below buy_trigger; they are the two sides of a range and a range has a top and a bottom')
+            return {}
+        exits = self._exits(self._exit_settings(settings), path, 'two_sided_breakout')
+        if self.problems:
+            return {}
+        sides = []
+        for side, trigger, limit in (('buy', 'buy_trigger', 'buy_limit'), ('sell', 'sell_trigger', 'sell_limit')):
+            order = dict(entry)
+            order['side'] = side
+            order['pricing'] = [
+                {
+                    'native_stop': {
+                        'trigger_price': settings[trigger],
+                        'limit_price': settings[limit],
+                    },
+                },
+            ]
+            sides.append(
+                {
+                    'order': order,
+                }
+            )
+        return {
+            'then': {
+                'first': {
+                    'either': {
+                        'children': sides,
+                        'sibling_rule': 'cancel',
+                    },
+                },
+                'each_fill': exits,
+                'cancel_first_on_child_fill': True,
+            },
+        }
+
+    def _exit_settings(self, settings):
+        """The exits' settings out of a preset's settings.
+
+        Args:
+            settings (dict): The preset's settings.
+
+        Returns:
+            dict: `stop_price`, `stop_limit_price` and `target_price`, where given.
+        """
+        exits = {}
+        for name in ('stop_price', 'stop_limit_price', 'target_price'):
+            if name in settings:
+                exits[name] = settings[name]
+        return exits
+
+    def _accumulation(self, settings, entry, path):
+        """The order's quantity bought again and again, every `every_minutes`, `purchases` times, each purchase resting on its own side of the book no worse than the body's limit.
+
+        Args:
+            settings (dict): `every_minutes` and `purchases`.
+            entry (dict): The order it was named in, which each purchase copies.
+            path (str): The preset's path.
+
+        Returns:
+            dict: A Repeat join of a peg to the own touch that does not follow.
+        """
+        self._refuse_unknown(settings, ('every_minutes', 'purchases'), path, 'accumulation')
+        purchase = dict(entry)
+        purchase['pricing'] = [
+            {
+                'peg': {
+                    'reference': 'own_touch',
+                    'follows': False,
+                    'within_body_price': True,
+                },
+            },
+        ]
+        return {
+            'repeat': {
+                'child': {
+                    'order': purchase,
+                },
+                'times': settings.get('purchases'),
+                'every_minutes': settings.get('every_minutes'),
+            },
+        }
+
+    def _basket(self, settings, entry, path):
+        """Several orders, usually on different instruments, placed at once at one broker that can afford them all.
+
+        Args:
+            settings (dict): `candidates`, and optionally `hedge_benefit`.
+            entry (dict): The order it was named in, whose other presets and slot values every candidate shares.
+            path (str): The preset's path.
+
+        Returns:
+            dict: A Together join that checks the group's margin.
+        """
+        self._refuse_unknown(settings, ('candidates', 'hedge_benefit'), path, 'basket')
+        nodes = self._candidate_orders(settings, entry, path, 'basket')
+        if self.problems:
+            return {}
+        return {
+            'together': {
+                'children': nodes,
+                'group_margin': True,
+                'hedge_benefit': settings.get('hedge_benefit') is True,
+            },
+        }
+
+    def _oca(self, settings, entry, path):
+        """Several candidate entries where the first to fill is the trade, and the others are cancelled.
+
+        Args:
+            settings (dict): `candidates`.
+            entry (dict): The order it was named in, whose other presets and slot values every candidate shares.
+            path (str): The preset's path.
+
+        Returns:
+            dict: An Either join that cancels.
+        """
+        self._refuse_unknown(settings, ('candidates',), path, 'oca')
+        nodes = self._candidate_orders(settings, entry, path, 'oca')
+        if self.problems:
+            return {}
+        if len(nodes) < 2:
+            self._add_problem(path, 'bad_setting', 'the oca preset needs at least two candidates, since one cancels the others')
+            return {}
+        return {
+            'either': {
+                'children': nodes,
+                'sibling_rule': 'cancel',
+            },
+        }
 
     def _oto(self, settings, entry, path):
         """Places the entry, and once it fills places the `then` order, sized to what filled and growing with it.
@@ -371,13 +743,14 @@ class PresetExpander:
             },
         }
 
-    def _hidden_stop_with_backstop(self, settings, entry, path):
+    def _hidden_stop_with_backstop(self, settings, entry, path, name):
         """The engine-side stop with a native backstop resting further away, where whichever acts first stops the other.
 
         Args:
             settings (dict): The hidden stop's settings with `backstop_price` and `backstop_limit_price`.
             entry (dict): The order it was named in.
             path (str): The preset's path.
+            name (str): `hidden_stop` or `candle_close_stop`, the engine-side stop's own preset.
 
         Returns:
             dict: An Either join that cancels, whose engine-side stop cancels the backstop before it is sent.
@@ -397,7 +770,7 @@ class PresetExpander:
         stop = dict(entry)
         stop['presets'] = list(entry.get('presets') or []) + [
             {
-                'hidden_stop': stop_settings,
+                name: stop_settings,
             },
         ]
         return {
@@ -708,6 +1081,38 @@ class PresetExpander:
             ],
         }
 
+    def _candle_close_stop(self, settings, path):
+        """A stop kept in the engine that exits only when a whole bar closes past the level, with a limit past the touch.
+
+        Args:
+            settings (dict): `trigger_price`, and optionally `trigger_direction`, `bar_minutes` and `buffer_ticks`.
+            path (str): The preset's path.
+
+        Returns:
+            dict: The `protect` side, a `candle_closes` trigger and `marketable` pricing.
+        """
+        self._refuse_unknown(settings, ('trigger_price', 'trigger_direction', 'bar_minutes', 'buffer_ticks'), path, 'candle_close_stop')
+        trigger = {
+            'level': settings.get('trigger_price'),
+        }
+        if 'trigger_direction' in settings:
+            trigger['direction'] = settings['trigger_direction']
+        if 'bar_minutes' in settings:
+            trigger['bar_minutes'] = settings['bar_minutes']
+        return {
+            'side': 'protect',
+            'trigger': {
+                'candle_closes': trigger,
+            },
+            'pricing': [
+                {
+                    'marketable': {
+                        'buffer_ticks': settings.get('buffer_ticks', DEFAULT_BUFFER_TICKS),
+                    },
+                },
+            ],
+        }
+
     def _trailing(self, settings, path, name):
         """A native stop-limit that trails the market: a trailing stop protecting a position, or a trailing entry opening one.
 
@@ -871,6 +1276,140 @@ class PresetExpander:
                 ending,
             ],
         }
+
+    def _close_on_trigger(self, settings, path):
+        """Waits for a price, then cancels what rests on the instrument and closes the whole position held then.
+
+        Args:
+            settings (dict): `trigger_price`, and optionally `trigger_direction`, `trigger_on` and `hold_seconds`.
+            path (str): The preset's path.
+
+        Returns:
+            dict: A `price_crosses` trigger, the `close` side and a quantity read from the position.
+        """
+        self._refuse_unknown(settings, ('trigger_price', 'trigger_direction', 'trigger_on', 'hold_seconds'), path, 'close_on_trigger')
+        return {
+            'trigger': self._price_trigger(settings, path),
+            'side': 'close',
+            'quantity': {
+                'position': {},
+            },
+        }
+
+    def _square_off(self, settings, path):
+        """Closes every position on a product at a time of day, cancelling what rests on those instruments first.
+
+        Args:
+            settings (dict): `at_time`, and optionally `product`, default `intraday`, and `instrument_ids`.
+            path (str): The preset's path.
+
+        Returns:
+            dict: A `time_at` trigger, the `close` side and a quantity read from every position held.
+        """
+        self._refuse_unknown(settings, ('at_time', 'product', 'instrument_ids'), path, 'square_off')
+        position = {
+            'product': str(settings.get('product') or 'intraday').lower(),
+        }
+        if settings.get('instrument_ids'):
+            position['instrument_ids'] = settings['instrument_ids']
+        else:
+            position['every_instrument'] = True
+        return {
+            'trigger': {
+                'time_at': settings.get('at_time'),
+            },
+            'side': 'close',
+            'quantity': {
+                'position': position,
+            },
+        }
+
+    def _stop_and_reverse(self, settings, path):
+        """Waits for a price, then sends one order for twice the position held, closing it and opening the reverse together.
+
+        This is the `double` method; the default, `sequential`, is a join built by `expand_join`.
+
+        Args:
+            settings (dict): The price trigger's settings and `method: double`.
+            path (str): The preset's path.
+
+        Returns:
+            dict: A `price_crosses` trigger, the `close` side and twice the position.
+        """
+        self._refuse_unknown(settings, ('trigger_price', 'trigger_direction', 'trigger_on', 'hold_seconds', 'method'), path, 'stop_and_reverse')
+        if settings.get('method') != 'double':
+            self._add_problem(path, 'bad_setting', f'method must be one of sequential, double, not {settings.get("method")!r}')
+            return {}
+        return {
+            'trigger': self._price_trigger(settings, path),
+            'side': 'close',
+            'quantity': {
+                'position': {
+                    'ratio': 2,
+                },
+            },
+        }
+
+    def _sequential_reverse(self, settings, entry, path):
+        """Waits for a price, closes the position held, and once the close is done opens the reverse for what it closed.
+
+        Args:
+            settings (dict): The price trigger's settings, and optionally `method: sequential`.
+            entry (dict): The order it was named in, which becomes the close.
+            path (str): The preset's path.
+
+        Returns:
+            dict: A Then join: the close, then on completion an order the other way sized to what closed.
+        """
+        self._refuse_unknown(settings, ('trigger_price', 'trigger_direction', 'trigger_on', 'hold_seconds', 'method'), path, 'stop_and_reverse')
+        if self.opening_side not in OTO_SIDES:
+            self._add_problem(path, 'needs_side', 'a stop and reverse opens the side opposite to the position, so it needs to know the side of the order that opened it')
+            return {}
+        if self.opening_side == 'BUY':
+            reverse_side = 'sell'
+        else:
+            reverse_side = 'buy'
+        close = dict(entry)
+        presets = list(close.get('presets') or [])
+        presets.append(
+            {
+                'close_on_trigger': self._without(settings, 'method'),
+            }
+        )
+        close['presets'] = presets
+        return {
+            'then': {
+                'first': {
+                    'order': close,
+                },
+                'on_complete': {
+                    'order': {
+                        'side': reverse_side,
+                        'pricing': [
+                            {
+                                'marketable': {
+                                    'buffer_ticks': DEFAULT_BUFFER_TICKS,
+                                },
+                            },
+                        ],
+                    },
+                },
+            },
+        }
+
+    def _without(self, settings, name):
+        """A copy of settings without one of them.
+
+        Args:
+            settings (dict): The settings.
+            name (str): The setting to leave out.
+
+        Returns:
+            dict: The copy.
+        """
+        copied = dict(settings)
+        copied.pop(name, None)
+        return copied
 
     def _iceberg(self, settings, path):
         """Shows only part of the order at a time.

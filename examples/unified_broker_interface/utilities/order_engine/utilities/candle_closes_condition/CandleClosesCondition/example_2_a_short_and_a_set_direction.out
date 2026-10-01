@@ -1,0 +1,5 @@
+For a short: at_or_above; with no last price it holds False
+At 0 seconds, last 1000.0: holds False
+At 30 seconds, last 1006.0: holds False
+At 60 seconds, last 1006.0: holds True
+Given at_or_above outright, a long uses at_or_above: {'candle_closes': {'level': '995', 'direction': 'at_or_above', 'bar_minutes': 5.0}}

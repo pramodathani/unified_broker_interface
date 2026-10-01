@@ -52,6 +52,7 @@ class StandInPlanOrder:
 
     Attributes:
         parent (StandInParent): The parent.
+        body (dict): The caller's body.
         requests (list): Every request, in order.
     """
 
@@ -62,6 +63,7 @@ class StandInPlanOrder:
             None: This method returns nothing.
         """
         self.parent = StandInParent()
+        self.body = self.parent.body
         self.requests = []
 
     def view(self, quotes):

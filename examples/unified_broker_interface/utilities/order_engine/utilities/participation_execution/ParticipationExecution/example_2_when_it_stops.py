@@ -39,6 +39,7 @@ class StandInPlanOrder:
 
     Attributes:
         parent (StandInParent): The parent.
+        instrument_id (str): The instrument the order trades.
     """
 
     def __init__(self):
@@ -48,6 +49,7 @@ class StandInPlanOrder:
             None: This method returns nothing.
         """
         self.parent = StandInParent()
+        self.instrument_id = INSTRUMENT_ID
 
 
 class PieceMaker:

@@ -1,0 +1,6 @@
+Lot: 250
+100 filled: hedge 0
+300 filled: hedge 250
+600 filled: hedge 250
+1000 filled: hedge 500
+As a dry run shows it: {'parent_fill': {'ratio': '0.5', 'whole_lots': True}}

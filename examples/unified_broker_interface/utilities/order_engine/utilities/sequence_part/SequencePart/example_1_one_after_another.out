@@ -1,0 +1,7 @@
+Orders: ['root.children.0', 'root.children.1', 'root.children.2'], members: 3, protecting on their own: []
+Started: True; settling while the first works places []
+root.children.0 starts, the selector holding None
+root.children.1 starts, the selector holding None
+root.children.2 starts, the selector holding None
+Done: False, traded: 0
+As a dry run shows it: {'sequence': {'path': 'root', 'children': [{'order': {'path': 'root.children.0', 'instrument_id': 'close shorts'}}, {'order': {'path': 'root.children.1', 'instrument_id': 'close longs'}}, {'order': {'path': 'root.children.2', 'instrument_id': 'open the new trade'}}]}}

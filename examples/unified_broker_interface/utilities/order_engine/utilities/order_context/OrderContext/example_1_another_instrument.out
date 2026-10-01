@@ -1,0 +1,6 @@
+The parent's instrument: False, tick size 0.01, the parent's tick size 0.05
+Last price on its tick: 250.00, segment mcx_commodity_futures, body quantity 5
+Reads an order as {'quantity': 5}, chosen broker zerodha, placement StandInPlacement, parent instrument 11111111-1111-5111-8111-000000000001
+  place root.children.1 on 11111111-1111-5111-8111-000000000002 at zerodha
+  cancel leg-1: the plan was cancelled
+  reduce leg-2 to 3: a sibling filled

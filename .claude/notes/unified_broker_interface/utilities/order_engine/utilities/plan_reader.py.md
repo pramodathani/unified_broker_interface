@@ -37,3 +37,23 @@ A pricing list now holds at most one setter and at most one `cap`, and across pr
 ## Stage 4d (2026-10-01)
 
 The `lifetime` slot is a list holding one object, with the end and its settings in the same object rather than under a name as the other slots are, because a lifetime is one value with options rather than a choice between named kinds. `close_filled` is refused for any order but the root, and for a protecting order; `marketable` is refused for a stop. `after_days` and `when` are recognised and refused as not built.
+
+## Stage 5a (2026-10-01)
+
+`together` and `sequence` are built. An order may give `instrument_id`, `quantity`, `transaction_type`, `product`, `validity` and `tag` of its own, checked by `_read_overrides`. A together or sequence join cannot be a Then join's child, because Then sizes its child to fills and these joins' children trade their own quantities (`join_not_sized`). A join holds at most 25 children, today's basket limit.
+
+## Stage 5b (2026-10-01)
+
+`close` is a side and `quantity` may be `{"position": {...}}`, which presets can supply as a slot; a later source's position replaces an earlier one. The two must come together (`close_needs_position`, `position_needs_close`), and a close refuses pricing and execution of its own (`close_prices_itself`).
+
+## Stage 5c (2026-10-01)
+
+`repeat` is read into `times` copies of its order with `ElapsedCondition` triggers; its child must be an order node (`repeat_needs_order`), because copies are given triggers. `every_trading_day_at` and `until` are recognised and refused as not built. A repeat cannot be a Then join's child.
+
+## Stage 5d (2026-10-01)
+
+`quantity` may be `{"parent_fill": {...}}`; `top_up` is an execution and `from_parent_fill` a pricing. Both kinds of fill-following need the order to be a Then join's child, which `_read_then` marks and `_check_fill_sizing` checks once the whole tree is read; `from_parent_fill` also needs the first plan to be a single order, whose path it is given.
+
+## Stage 5f (2026-10-01)
+
+`candle_closes` is a trigger condition with `level`, `direction` and `bar_minutes`.

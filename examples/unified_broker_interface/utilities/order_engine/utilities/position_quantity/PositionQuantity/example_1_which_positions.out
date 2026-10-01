@@ -1,0 +1,4 @@
+close on trigger: product intraday, instruments ['RELIANCE']
+named: product delivery, instruments ['INFY', 'TCS']
+square off: product intraday, instruments None
+A stop and reverse that doubles: {'position': {'product': None, 'instrument_ids': None, 'every_instrument': False, 'ratio': 2, 'cancel_resting_first': True}}

@@ -11,6 +11,9 @@ from unified_broker_interface.utilities.order_engine.utilities.atr_trail_pricing
 from unified_broker_interface.utilities.order_engine.utilities.book_depth_execution import (
     BookDepthExecution,
 )
+from unified_broker_interface.utilities.order_engine.utilities.candle_closes_condition import (
+    CandleClosesCondition,
+)
 from unified_broker_interface.utilities.order_engine.utilities.cap_modifier import (
     CapModifier,
 )
@@ -23,15 +26,24 @@ from unified_broker_interface.utilities.order_engine.utilities.condition_group i
 from unified_broker_interface.utilities.order_engine.utilities.discretion_modifier import (
     DiscretionModifier,
 )
+from unified_broker_interface.utilities.order_engine.utilities.elapsed_condition import (
+    ElapsedCondition,
+)
 from unified_broker_interface.utilities.order_engine.utilities.either_part import (
     SIBLING_RULES,
     EitherPart,
+)
+from unified_broker_interface.utilities.order_engine.utilities.fill_ratio import (
+    FillRatio,
 )
 from unified_broker_interface.utilities.order_engine.utilities.fixed_pricing import (
     FixedPricing,
 )
 from unified_broker_interface.utilities.order_engine.utilities.follow_instrument_pricing import (
     FollowInstrumentPricing,
+)
+from unified_broker_interface.utilities.order_engine.utilities.from_parent_fill_pricing import (
+    FromParentFillPricing,
 )
 from unified_broker_interface.utilities.order_engine.utilities.front_loaded_execution import (
     FrontLoadedExecution,
@@ -63,6 +75,10 @@ from unified_broker_interface.utilities.order_engine.utilities.peg_pricing impor
     REFERENCES,
     PegPricing,
 )
+from unified_broker_interface.utilities.order_engine.utilities.position_quantity import (
+    PRODUCTS,
+    PositionQuantity,
+)
 from unified_broker_interface.utilities.order_engine.utilities.post_only_guard import (
     ON_CROSSING,
     PostOnlyGuard,
@@ -77,15 +93,28 @@ from unified_broker_interface.utilities.order_engine.utilities.price_crosses_con
     FIELDS,
     PriceCrossesCondition,
 )
+from unified_broker_interface.utilities.order_engine.utilities.repeat_part import (
+    RepeatPart,
+)
+from unified_broker_interface.utilities.order_engine.utilities.sequence_part import (
+    SequencePart,
+)
 from unified_broker_interface.utilities.order_engine.utilities.stages_pricing import (
     StagesPricing,
 )
 from unified_broker_interface.utilities.order_engine.utilities.then_part import (
     ThenPart,
 )
+from unified_broker_interface.utilities.order_engine.utilities.together_part import (
+    DONE_WHEN,
+    TogetherPart,
+)
 from unified_broker_interface.utilities.order_engine.utilities.time_condition import (
     KINDS,
     TimeCondition,
+)
+from unified_broker_interface.utilities.order_engine.utilities.top_up_execution import (
+    TopUpExecution,
 )
 from unified_broker_interface.utilities.order_engine.utilities.trail_pricing import (
     TrailPricing,
@@ -111,6 +140,35 @@ JOIN_NAMES = (
 BUILT_JOIN_NAMES = (
     'then',
     'either',
+    'together',
+    'sequence',
+    'repeat',
+)
+REPEAT_SETTINGS = (
+    'child',
+    'times',
+    'every_minutes',
+    'every_trading_day_at',
+    'until',
+)
+MOST_REPEATS = 100
+TOGETHER_SETTINGS = (
+    'children',
+    'group_margin',
+    'hedge_benefit',
+    'done_when',
+)
+SEQUENCE_SETTINGS = (
+    'children',
+)
+MOST_CHILDREN = 25
+OVERRIDE_SETTINGS = (
+    'instrument_id',
+    'quantity',
+    'transaction_type',
+    'product',
+    'validity',
+    'tag',
 )
 THEN_SETTINGS = (
     'first',
@@ -131,6 +189,12 @@ ORDER_SETTINGS = (
     'execution',
     'guards',
     'lifetime',
+    'instrument_id',
+    'quantity',
+    'transaction_type',
+    'product',
+    'validity',
+    'tag',
 )
 MOST_SLICES = 60
 HIGHEST_VOLATILITY_PERCENT = 500
@@ -145,6 +209,14 @@ SIDES = (
     'buy',
     'sell',
     'protect',
+    'close',
+)
+POSITION_SETTINGS = (
+    'product',
+    'instrument_ids',
+    'every_instrument',
+    'ratio',
+    'cancel_resting_first',
 )
 PRICE_CROSSES_SETTINGS = (
     'level',
@@ -200,9 +272,26 @@ class PlanReader:
         self.problems = []
         self.warnings = []
         root = self._read_node(plan, 'root', True)
+        if root is not None:
+            self._check_fill_sizing(root)
         if self.problems:
             return None
         return root
+
+    def _check_fill_sizing(self, root):
+        """Reports every order sized or priced from a first plan's fills that is not the child of a Then join.
+
+        Args:
+            root (object): The root part.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        for part in root.order_parts():
+            if isinstance(part.pricing, FromParentFillPricing) and part.pricing.first_path is None:
+                self._add_problem(part.path, 'from_parent_fill_needs_then', 'from_parent_fill prices this order from the fills of a Then join\'s first order, so it must be that join\'s child, and the first plan a single order')
+            if part.fill_ratio is not None and not part.sized_by_fills:
+                self._add_problem(part.path, 'parent_fill_needs_then', 'a quantity of parent_fill scales what a Then join\'s first plan filled, so the order must be that join\'s child')
 
     def _read_node(self, node, path, keeps_tag):
         """Reads one node of the tree.
@@ -229,6 +318,12 @@ class PlanReader:
                 return self._read_then(content, path, keeps_tag)
             if kind == 'either':
                 return self._read_either(content, path, keeps_tag)
+            if kind == 'together':
+                return self._read_together(content, path, keeps_tag)
+            if kind == 'sequence':
+                return self._read_sequence(content, path, keeps_tag)
+            if kind == 'repeat':
+                return self._read_repeat(content, path, keeps_tag)
             if kind in JOIN_NAMES:
                 self._add_problem(
                     path,
@@ -286,9 +381,185 @@ class PlanReader:
         child_key = child_keys[0]
         first = self._read_node(then['first'], f'{path}.first', keeps_tag)
         child = self._read_node(then[child_key], f'{path}.{child_key}', False)
+        if child is not None and first is not None:
+            opened_by = []
+            for part in first.order_parts():
+                opened_by.append(part.path)
+            for part in child.order_parts():
+                part.opened_by = opened_by
+        if isinstance(child, OrderPart):
+            child.sized_by_fills = True
+            if isinstance(child.pricing, FromParentFillPricing) and isinstance(first, OrderPart):
+                child.pricing.first_path = first.path
+        if isinstance(child, (TogetherPart, SequencePart, RepeatPart)):
+            self._add_problem(
+                child.path,
+                'join_not_sized',
+                'a Then join sizes its child to what the first plan filled, and the plans of a together or sequence join each trade their own quantity',
+            )
         if len(self.problems) > problems_before:
             return None
         return ThenPart(path, first, child, child_key, cancel_first)
+
+    def _read_children(self, content, path, keeps_tag, name, smallest):
+        """Reads the `children` list a join holds.
+
+        Args:
+            content (dict): The join's content.
+            path (str): Where the join sits in the plan.
+            keeps_tag (bool): Whether the first child's main order carries the caller's tag.
+            name (str): The join's name, for the message.
+            smallest (int): The fewest children it takes.
+
+        Returns:
+            list | None: The children read, or None when the list itself has a problem.
+        """
+        children = content.get('children')
+        if not isinstance(children, list) or len(children) < smallest or len(children) > MOST_CHILDREN:
+            self._add_problem(
+                path,
+                'join_shape',
+                f'{name} holds children, a list of {smallest} to {MOST_CHILDREN} plans',
+            )
+            return None
+        read_children = []
+        for index, child in enumerate(children):
+            read_child = self._read_node(child, f'{path}.children.{index}', keeps_tag and index == 0)
+            if read_child is not None:
+                read_children.append(read_child)
+        return read_children
+
+    def _read_together(self, together, path, keeps_tag):
+        """Reads a Together join.
+
+        Args:
+            together (object): The join's content as the caller wrote it.
+            path (str): Where the join sits in the plan.
+            keeps_tag (bool): Whether the first child's main order carries the caller's tag.
+
+        Returns:
+            TogetherPart | None: The join, or None when it has a problem.
+        """
+        if not isinstance(together, dict):
+            self._add_problem(path, 'join_shape', 'together holds an object with children')
+            return None
+        problems_before = len(self.problems)
+        for setting in together:
+            if setting not in TOGETHER_SETTINGS:
+                self._add_problem(path, 'unknown_setting', f'together takes {", ".join(TOGETHER_SETTINGS)}, not {setting!r}')
+        flags = {}
+        for name in ('group_margin', 'hedge_benefit'):
+            value = together.get(name, name == 'group_margin')
+            if not isinstance(value, bool):
+                self._add_problem(path, 'bad_setting', f'{name} must be true or false, not {value!r}')
+            flags[name] = value
+        done_when = together.get('done_when', 'all')
+        if done_when not in DONE_WHEN:
+            self._add_problem(path, 'bad_setting', f'done_when must be one of {", ".join(DONE_WHEN)}, not {done_when!r}')
+        children = self._read_children(together, path, keeps_tag, 'together', 1)
+        if children is None or len(self.problems) > problems_before:
+            return None
+        return TogetherPart(path, children, flags['group_margin'], flags['hedge_benefit'], done_when)
+
+    def _read_sequence(self, sequence, path, keeps_tag):
+        """Reads a Sequence join.
+
+        Args:
+            sequence (object): The join's content as the caller wrote it.
+            path (str): Where the join sits in the plan.
+            keeps_tag (bool): Whether the first child's main order carries the caller's tag.
+
+        Returns:
+            SequencePart | None: The join, or None when it has a problem.
+        """
+        if not isinstance(sequence, dict):
+            self._add_problem(path, 'join_shape', 'sequence holds an object with children')
+            return None
+        problems_before = len(self.problems)
+        for setting in sequence:
+            if setting not in SEQUENCE_SETTINGS:
+                self._add_problem(path, 'unknown_setting', f'sequence takes {", ".join(SEQUENCE_SETTINGS)}, not {setting!r}')
+        children = self._read_children(sequence, path, keeps_tag, 'sequence', 2)
+        if children is None or len(self.problems) > problems_before:
+            return None
+        return SequencePart(path, children)
+
+    def _read_repeat(self, repeat, path, keeps_tag):
+        """Reads a Repeat join into one copy of its order per time, each after the first waiting its turn.
+
+        Args:
+            repeat (object): The join's content as the caller wrote it.
+            path (str): Where the join sits in the plan.
+            keeps_tag (bool): Whether the first copy carries the caller's tag.
+
+        Returns:
+            RepeatPart | None: The join, or None when it has a problem.
+        """
+        if not isinstance(repeat, dict):
+            self._add_problem(path, 'join_shape', 'repeat holds an object with child, times and every_minutes')
+            return None
+        problems_before = len(self.problems)
+        for setting in repeat:
+            if setting not in REPEAT_SETTINGS:
+                self._add_problem(path, 'unknown_setting', f'repeat takes {", ".join(REPEAT_SETTINGS)}, not {setting!r}')
+        for name in ('every_trading_day_at', 'until'):
+            if name in repeat:
+                self._add_problem(path, 'not_built', f'{name} is part of the design but not built yet, because a plan does not yet outlive the trading day')
+        times = self._whole_number(repeat.get('times'), path, 'times', 1, MOST_REPEATS)
+        every_minutes = repeat.get('every_minutes')
+        if isinstance(every_minutes, bool) or not isinstance(every_minutes, (int, float)) or every_minutes <= 0:
+            self._add_problem(path, 'bad_setting', f'every_minutes must be a number of minutes above zero, not {every_minutes!r}')
+        child = repeat.get('child')
+        if not isinstance(child, dict) or list(child) != ['order']:
+            self._add_problem(path, 'repeat_needs_order', 'repeat sends one order again and again, so its child is an order node')
+        if len(self.problems) > problems_before:
+            return None
+        copies = []
+        for index in range(times):
+            copy_path = f'{path}.children.{index}'
+            part = self._read_node(child, copy_path, keeps_tag and index == 0)
+            if part is None:
+                return None
+            if index > 0:
+                elapsed = ElapsedCondition(every_minutes * index)
+                if part.trigger is None:
+                    part.trigger = elapsed
+                else:
+                    part.trigger = ConditionGroup('all', [part.trigger, elapsed])
+            copies.append(part)
+        return RepeatPart(path, copies, times, every_minutes)
+
+    def _read_overrides(self, order, path):
+        """Reads the body values an order gives of its own, such as another instrument or quantity.
+
+        Args:
+            order (dict): The order as the caller wrote it.
+            path (str): Where the order sits in the plan.
+
+        Returns:
+            dict: The values, checked.
+        """
+        overrides = {}
+        for name in OVERRIDE_SETTINGS:
+            if name not in order:
+                continue
+            value = order[name]
+            if name == 'quantity' and isinstance(value, dict):
+                continue
+            if name == 'quantity':
+                if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                    self._add_problem(path, 'bad_setting', f'quantity must be a whole number of at least 1, not {value!r}')
+                    continue
+            elif name == 'transaction_type':
+                if not isinstance(value, str) or value.strip().upper() not in ('BUY', 'SELL'):
+                    self._add_problem(path, 'bad_setting', f'transaction_type must be BUY or SELL, not {value!r}')
+                    continue
+                value = value.strip().upper()
+            elif not isinstance(value, str) or not value:
+                self._add_problem(path, 'bad_setting', f'{name} must be text, not {value!r}')
+                continue
+            overrides[name] = value
+        return overrides
 
     def _read_either(self, either, path, keeps_tag):
         """Reads an Either join.
@@ -388,11 +659,16 @@ class PlanReader:
                     f'an order in a plan takes {", ".join(ORDER_SETTINGS)}, not {setting!r}',
                 )
         sources = self._preset_sources(order.get('presets', []), path)
+        overrides = self._read_overrides(order, path)
         own = {}
         for slot in ('trigger', 'side', 'pricing', 'execution', 'guards', 'lifetime'):
             if slot in order:
                 own[slot] = order[slot]
+        if isinstance(order.get('quantity'), dict):
+            own['quantity'] = order['quantity']
         sources.append((own, path))
+        position_quantity = None
+        position_path = None
 
         preset_names = []
         for preset in order.get('presets', []) or []:
@@ -414,6 +690,9 @@ class PlanReader:
         execution = None
         execution_path = None
         for slots, source_path in sources:
+            if 'quantity' in slots:
+                position_quantity = slots['quantity']
+                position_path = f'{source_path}.quantity'
             if 'trigger' in slots:
                 condition = self._read_condition(
                     slots['trigger'],
@@ -524,7 +803,116 @@ class PlanReader:
             return None
         if lifetime is not None and not self._can_end(lifetime, pricing, side, path):
             return None
-        return OrderPart(path, preset_names, trigger, side, pricing, keeps_tag, execution, cap, post_only, discretion, lifetime)
+        position = None
+        fill_ratio = None
+        if position_quantity is not None and 'parent_fill' in position_quantity:
+            fill_ratio = self._read_fill_ratio(position_quantity, position_path)
+            if fill_ratio is None:
+                return None
+        elif position_quantity is not None:
+            position = self._read_position(position_quantity, position_path)
+            if position is None:
+                return None
+        if not self._closes_sensibly(side, position, pricing_path, execution, path):
+            return None
+        part = OrderPart(path, preset_names, trigger, side, pricing, keeps_tag, execution, cap, post_only, discretion, lifetime, overrides, position)
+        part.fill_ratio = fill_ratio
+        return part
+
+    def _closes_sensibly(self, side, position, pricing_path, execution, path):
+        """Whether a `close` side and a position quantity come together and with nothing they would ignore, reporting the problem when not.
+
+        A close reads the position held and prices each closing order a little past the touch itself, so a pricing or an execution of its own would be ignored.
+
+        Args:
+            side (str | None): The order's side.
+            position (PositionQuantity | None): The order's position quantity.
+            pricing_path (str | None): Where the order's pricing was given, or None when it has none.
+            execution (object): The order's execution.
+            path (str): Where the order sits in the plan.
+
+        Returns:
+            bool: True when they are sensible.
+        """
+        if side == 'close' and position is None:
+            self._add_problem(path, 'close_needs_position', 'a close reads the position held when it fires, so its quantity must be {"position": {...}}')
+            return False
+        if position is not None and side != 'close':
+            self._add_problem(path, 'position_needs_close', 'a quantity read from the position closes that position, so the order\'s side must be close')
+            return False
+        if position is None:
+            return True
+        if pricing_path is not None or not isinstance(execution, AllAtOnceExecution):
+            self._add_problem(path, 'close_prices_itself', 'a close sends one order per position a little past the touch, so it takes no pricing or execution of its own')
+            return False
+        return True
+
+    def _read_fill_ratio(self, quantity, path):
+        """Reads a quantity given as `{"parent_fill": {...}}`.
+
+        Args:
+            quantity (dict): The quantity as the caller wrote it.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            FillRatio | None: The sizing, or None when it has a problem.
+        """
+        settings = quantity.get('parent_fill')
+        if len(quantity) != 1 or not isinstance(settings, dict):
+            self._add_problem(path, 'bad_setting', 'a quantity is a whole number, or an object holding position or parent_fill and its settings')
+            return None
+        problems_before = len(self.problems)
+        self._refuse_unknown(settings, ('ratio', 'whole_lots'), f'{path}.parent_fill', 'parent_fill', 'quantity')
+        ratio = self._price(settings.get('ratio', 1), path, 'ratio')
+        whole_lots = settings.get('whole_lots', False)
+        if not isinstance(whole_lots, bool):
+            self._add_problem(path, 'bad_setting', f'whole_lots must be true or false, not {whole_lots!r}')
+        if len(self.problems) > problems_before:
+            return None
+        return FillRatio(ratio, whole_lots)
+
+    def _read_position(self, quantity, path):
+        """Reads a quantity given as `{"position": {...}}`.
+
+        Args:
+            quantity (dict): The quantity as the caller wrote it.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            PositionQuantity | None: The quantity, or None when it has a problem.
+        """
+        if len(quantity) != 1 or not isinstance(quantity.get('position'), dict):
+            self._add_problem(path, 'bad_setting', 'a quantity is a whole number, or an object holding position and its settings')
+            return None
+        settings = quantity['position']
+        problems_before = len(self.problems)
+        self._refuse_unknown(settings, POSITION_SETTINGS, f'{path}.position', 'position', 'quantity')
+        product = settings.get('product')
+        if product is not None and product not in PRODUCTS:
+            self._add_problem(path, 'bad_setting', f'product must be one of {", ".join(PRODUCTS)}, not {product!r}')
+        instrument_ids = settings.get('instrument_ids')
+        if instrument_ids is not None:
+            valid = isinstance(instrument_ids, list) and bool(instrument_ids)
+            if valid:
+                for instrument_id in instrument_ids:
+                    if not isinstance(instrument_id, str) or not instrument_id:
+                        valid = False
+            if not valid:
+                self._add_problem(path, 'bad_setting', 'instrument_ids is a list of instrument ids')
+        flags = {}
+        for name, default in (('every_instrument', False), ('cancel_resting_first', True)):
+            value = settings.get(name, default)
+            if not isinstance(value, bool):
+                self._add_problem(path, 'bad_setting', f'{name} must be true or false, not {value!r}')
+            flags[name] = value
+        if flags['every_instrument'] is True and instrument_ids is not None:
+            self._add_problem(path, 'bad_setting', 'every_instrument closes every instrument held, so it takes no instrument_ids')
+        ratio = settings.get('ratio', 1)
+        if ratio not in (1, 2) or isinstance(ratio, bool):
+            self._add_problem(path, 'bad_setting', f'ratio must be 1, to close, or 2, to close and reverse, not {ratio!r}')
+        if len(self.problems) > problems_before:
+            return None
+        return PositionQuantity(product, instrument_ids, flags['every_instrument'], ratio, flags['cancel_resting_first'])
 
     def _can_end(self, lifetime, pricing, side, path):
         """Whether an order can end the way its lifetime says, reporting the problem when it cannot.
@@ -817,6 +1205,8 @@ class PlanReader:
                 return self._read_price_crosses(content, f'{path}.price_crosses')
             if kind == 'trails':
                 return self._read_trails(content, f'{path}.trails')
+            if kind == 'candle_closes':
+                return self._read_candle_closes(content, f'{path}.candle_closes')
             if kind in KINDS:
                 if not isinstance(content, str):
                     self._add_problem(
@@ -829,9 +1219,33 @@ class PlanReader:
             self._add_problem(
                 path,
                 'unknown_condition',
-                f'{kind!r} is not a trigger condition; the conditions are price_crosses, trails, {", ".join(KINDS)}, all and any',
+                f'{kind!r} is not a trigger condition; the conditions are price_crosses, trails, candle_closes, {", ".join(KINDS)}, all and any',
             )
         return None
+
+    def _read_candle_closes(self, settings, path):
+        """Reads a `candle_closes` condition.
+
+        Args:
+            settings (object): `level`, required; `direction` and `bar_minutes`, default 5, optional.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            CandleClosesCondition | None: The condition, or None when it has a problem.
+        """
+        if not isinstance(settings, dict):
+            self._add_problem(path, 'bad_setting', 'candle_closes takes an object with level, and optionally direction and bar_minutes')
+            return None
+        problems_before = len(self.problems)
+        self._refuse_unknown(settings, ('level', 'direction', 'bar_minutes'), path, 'candle_closes', 'condition')
+        level = self._price(settings.get('level'), path, 'level')
+        direction = settings.get('direction')
+        if direction is not None and direction not in DIRECTIONS:
+            self._add_problem(path, 'bad_setting', f'direction must be one of {", ".join(DIRECTIONS)}, not {direction!r}')
+        bar_minutes = self._seconds(settings.get('bar_minutes', 5), path, 'bar_minutes')
+        if len(self.problems) > problems_before:
+            return None
+        return CandleClosesCondition(level, direction, bar_minutes)
 
     def _read_condition_group(self, joiner, members, path):
         """Reads `all` or `any` and its list of conditions.
@@ -1034,10 +1448,16 @@ class PlanReader:
             return self._read_option_model(settings, f'{entry_path}.option_model')
         if name == 'stages':
             return self._read_stages(settings, f'{entry_path}.stages')
+        if name == 'from_parent_fill':
+            self._refuse_unknown(settings, ('net_price',), f'{entry_path}.from_parent_fill', 'from_parent_fill')
+            net_price = self._number(settings.get('net_price'), f'{entry_path}.from_parent_fill', 'net_price')
+            if net_price is None:
+                return None
+            return FromParentFillPricing(net_price)
         self._add_problem(
             entry_path,
             'unknown_pricing',
-            f'{name!r} is not a pricing a plan can use yet; the pricings available are fixed, marketable, native_stop, trail, stages, peg, chase, follow_instrument and option_model, with the modifiers cap and discretion',
+            f'{name!r} is not a pricing a plan can use yet; the pricings available are fixed, marketable, native_stop, trail, stages, peg, chase, follow_instrument, option_model and from_parent_fill, with the modifiers cap and discretion',
         )
         return None
 
@@ -1045,14 +1465,14 @@ class PlanReader:
         """Reads `peg` pricing.
 
         Args:
-            settings (dict): `reference`, default `own_touch`, and `offset_ticks`, default 0.
+            settings (dict): `reference`, default `own_touch`; `offset_ticks`, default 0; `follows`, default true; and `within_body_price`, default false.
             path (str): Where it sits in the plan.
 
         Returns:
             PegPricing | None: The pricing, or None when it has a problem.
         """
         problems_before = len(self.problems)
-        self._refuse_unknown(settings, ('reference', 'offset_ticks'), path, 'peg')
+        self._refuse_unknown(settings, ('reference', 'offset_ticks', 'follows', 'within_body_price'), path, 'peg')
         reference = settings.get('reference', 'own_touch')
         if reference not in REFERENCES:
             self._add_problem(
@@ -1067,9 +1487,15 @@ class PlanReader:
                 'bad_setting',
                 f'offset_ticks must be a whole number of ticks, not {offset!r}',
             )
+        flags = {}
+        for name, default in (('follows', True), ('within_body_price', False)):
+            value = settings.get(name, default)
+            if not isinstance(value, bool):
+                self._add_problem(path, 'bad_setting', f'{name} must be true or false, not {value!r}')
+            flags[name] = value
         if len(self.problems) > problems_before:
             return None
-        return PegPricing(reference, offset)
+        return PegPricing(reference, offset, flags['follows'], flags['within_body_price'])
 
     def _read_chase(self, settings, path):
         """Reads `chase` pricing.
@@ -1349,10 +1775,13 @@ class PlanReader:
                 return self._read_participation(settings, f'{entry_path}.participation')
             if name == 'book_depth':
                 return self._read_book_depth(settings, f'{entry_path}.book_depth')
+            if name == 'top_up':
+                self._refuse_unknown(settings, (), entry_path, 'top_up', 'execution')
+                return TopUpExecution()
             self._add_problem(
                 entry_path,
                 'unknown_execution',
-                f'{name!r} is not an execution a plan can use yet; the executions available are all_at_once, iceberg, twap, vwap, front_loaded, participation and book_depth',
+                f'{name!r} is not an execution a plan can use yet; the executions available are all_at_once, iceberg, twap, vwap, front_loaded, participation, book_depth and top_up',
             )
         return None
 

@@ -44,6 +44,7 @@ class StandInPlanOrder:
         parent (ParentOrder): The parent, holding the caller's buy of ten RELIANCE at 1,000 and the legs placed.
         requests (list): Every request, as a tuple naming what was asked.
         messages (list): Every change of a part's record that would be recorded as an event.
+        group_margin_legs (OrderLegs | None): The group a Together join hands the broker selector, which is none here.
     """
 
     def __init__(self):
@@ -64,6 +65,7 @@ class StandInPlanOrder:
         }
         self.requests = []
         self.messages = []
+        self.group_margin_legs = None
 
     def part_record(self, path):
         """A copy of one part's record.

@@ -1,0 +1,6 @@
+A settle after the cancel places []
+root.children.0 starts, the selector holding None
+root.children.0 cancelled: the caller cancelled the plan
+root.children.1 cancelled: the caller cancelled the plan
+root.children.2 cancelled: the caller cancelled the plan
+Done: True

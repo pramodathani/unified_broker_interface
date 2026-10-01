@@ -67,12 +67,12 @@ class FollowInstrumentPricing:
         Raises:
             RefusedRequestError: With HTTP 400 when the order would follow its own instrument, or is not a limit with a price to start from.
         """
-        if self.instrument_id == plan_order.parent.instrument_id:
+        if self.instrument_id == plan_order.instrument_id:
             raise RefusedRequestError.refusal(
                 'follow_instrument follows another instrument; to follow the traded instrument itself use peg',
                 400,
             )
-        body = plan_order.parent.body
+        body = plan_order.body
         if str(body.get('order_type') or '').upper() != 'LIMIT' or body.get('price') is None:
             raise RefusedRequestError.refusal(
                 'follow_instrument starts from the price you give, so the order must be a LIMIT with a price',

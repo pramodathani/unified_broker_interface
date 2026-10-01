@@ -35,3 +35,27 @@ The backstop is a second order resting beside the engine-side stop, cancelled be
 ## Stage 4d (2026-10-01)
 
 `good_till_time` maps `at_expiry: market` to `on_end: marketable`. `time_stop` maps `minutes` to `after_minutes`. There is no preset for the `gtt` type, because a plan does not yet outlive the trading day.
+
+## Stage 5a (2026-10-01)
+
+`basket` and `oca` turn each candidate into an order made of the rest of the order the preset was named in and the candidate's own values, so a basket named beside `post_only` is a basket of post-only orders. A candidate's `price` and `order_type` become `fixed` pricing, or with a `trigger_price` a `native_stop`. Today's types refuse an instrument named twice because their legs are told apart by instrument; a plan's are told apart by path, so it is allowed. Today's one-cancels-all type checks the group's margin as a basket does; the `oca` preset's Either join does not.
+
+## Stage 5b (2026-10-01)
+
+`close_on_trigger` and the `double` form of `stop_and_reverse` are slot values. The default `sequential` form of `stop_and_reverse` is a join, so `is_join` depends on its `method`; it is a Then join whose child, sent `on_complete` and sized to what closed, trades the side opposite to the position, which needs the body's side. `square_off` closes every instrument on its product unless `instrument_ids` narrows it, as today.
+
+## Stage 5c (2026-10-01)
+
+`accumulation` is a join preset: a repeat of the rest of the order, priced with a peg to the own touch that does not follow and stays within the body's limit.
+
+## Stage 5d (2026-10-01)
+
+`attached_hedge` chooses the hedge's side from the entry's side and the ratio's sign, as today's does, and refuses `delta_volatility` as not built. `legged_spread` takes the second candidate's side and instrument but not its quantity or price, which come from the first leg's fills.
+
+## Stage 5e (2026-10-01)
+
+`two_sided_breakout` is a Then join whose first plan is an Either join that cancels, with the exits of a bracket as the child. Its exits are absolute prices, as today's are, and are sent against the side that filled. `scale_out` is not a preset: its targets are tranches of one position and only the stop follows their fills, which neither Either rule expresses, so it is left with the types kept whole.
+
+## Stage 5f (2026-10-01)
+
+`candle_close_stop` is the hidden stop with a `candle_closes` trigger. Its backstop form shares `_hidden_stop_with_backstop`, which now takes the engine-side stop's own preset name. Today's candle close stop runs without a position held; a plan's standalone protecting order is refused without one, so the offline scenarios seed a position.

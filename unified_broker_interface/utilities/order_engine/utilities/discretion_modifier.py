@@ -96,7 +96,7 @@ class DiscretionModifier:
         """Takes the other side's price when it has come within reach of the visible order.
 
         Args:
-            plan_order (PlanOrder): The plan order.
+            plan_order (OrderContext): The order's view of the plan order.
             part (OrderPart): The order the discretion belongs to.
             quotes (dict): The quotes the tick carried.
 
@@ -127,7 +127,7 @@ class DiscretionModifier:
             made_room = plan_order.reduce_leg(visible, (visible.quantity or 0) - taking, reason)
         if not made_room:
             return False
-        body = dict(plan_order.parent.body)
+        body = dict(plan_order.body)
         body.pop('price_reference', None)
         body.pop('quantity_reference', None)
         if not part.keeps_tag:

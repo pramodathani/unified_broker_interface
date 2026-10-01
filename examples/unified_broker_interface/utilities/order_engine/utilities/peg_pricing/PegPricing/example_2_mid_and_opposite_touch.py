@@ -1,6 +1,6 @@
 """Shows where a midpoint peg and a peg to the opposite touch sit, and a book that cannot be priced yet.
 
-`PegPricing.wanted_price` reads the reference from the book and rounds it onto the tick on the passive side, so a midpoint that falls between two ticks rests on the side away from filling. A book with no offer cannot give a midpoint, so nothing is priced. Nothing is read from Redis or sent anywhere.
+`PegPricing.wanted_price` reads the reference from the book and rounds it onto the tick on the passive side, so a midpoint that falls between two ticks rests on the side away from filling. A book with no offer cannot give a midpoint, so nothing is priced. A peg that does not follow, as each of an accumulation's purchases is, never moves, and with `within_body_price` it bids no more than the body's limit, and at that limit when the book shows no bid. Nothing is read from Redis or sent anywhere.
 
 Run it from the project root:
 
@@ -121,6 +121,9 @@ class MidAndOppositeTouchExample:
         }
         print(f'With no offer, the midpoint peg sends: {mid.priced_body(plan_order, {}, "BUY", one_sided, {})}')
         print(f'As a dry run shows them: {mid.described()} and {opposite.described()}')
+        purchase = PegPricing('own_touch', 0, False, True)
+        print(f'A purchase that stays put moves: {purchase.moves()}; within a limit of 999.95 it bids {purchase.within(decimal.Decimal("1000.00"), {"order_type": "LIMIT", "price": 999.95}, "BUY")}, and with no bid {purchase.within(None, {"order_type": "LIMIT", "price": 999.95}, "BUY")}')
+        print(f'Sent with the bid at 1000.00 and no offer: {purchase.priced_body(plan_order, {"order_type": "LIMIT", "price": 999.95}, "BUY", one_sided, {})}')
 
 
 if __name__ == '__main__':
