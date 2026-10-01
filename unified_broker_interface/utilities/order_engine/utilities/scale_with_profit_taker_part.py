@@ -189,7 +189,7 @@ class ScaleWithProfitTakerPart(WholePart):
         return placed
 
     def settle(self, plan_order):
-        """Sends a profit-taker for every rung that has filled, places a rung again once its profit-taker has filled, and is done once every order has finished.
+        """Sends a profit-taker for every rung that has filled, places a rung again once its profit-taker has filled, and is done once every order has finished; once stopped, it places nothing more.
 
         Args:
             plan_order (PlanOrder): The plan order.
@@ -199,6 +199,9 @@ class ScaleWithProfitTakerPart(WholePart):
         """
         record = plan_order.part_record(self.path)
         if record.get('state') != 'working':
+            return []
+        if self.is_stopped(plan_order):
+            self.finish_when_done(plan_order)
             return []
         context = self.context(plan_order)
         side = plan_order.read_order(context.body).transaction_type
@@ -240,10 +243,5 @@ class ScaleWithProfitTakerPart(WholePart):
             memory['rung_of_leg'] = rung_of_leg
             self.remember(plan_order, memory, f'the plan\'s {self.path} order {leg_id} belongs to rung {rung_index + 1}')
             placed.append((self.path, body, status))
-        reason = self.done_reason(plan_order.parent)
-        if reason is not None:
-            record = plan_order.part_record(self.path)
-            record['state'] = 'done'
-            record['reason'] = reason
-            plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part is done: {reason}')
+        self.finish_when_done(plan_order)
         return placed

@@ -41,6 +41,9 @@ from unified_broker_interface.utilities.order_engine.utilities.either_part impor
     SIBLING_RULES,
     EitherPart,
 )
+from unified_broker_interface.utilities.order_engine.utilities.exposure_hedge_part import (
+    ExposureHedgePart,
+)
 from unified_broker_interface.utilities.order_engine.utilities.fill_delta import (
     FillDelta,
 )
@@ -253,6 +256,7 @@ WHOLE_PART_CLASSES = {
     'grid': GridPart,
     'two_sided_quote': TwoSidedQuotePart,
     'scale_with_profit_taker': ScaleWithProfitTakerPart,
+    'exposure_hedge': ExposureHedgePart,
 }
 POSITION_SETTINGS = (
     'product',

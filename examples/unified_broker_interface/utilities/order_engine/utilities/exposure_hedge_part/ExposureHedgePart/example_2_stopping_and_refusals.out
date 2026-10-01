@@ -1,0 +1,9 @@
+after the hedge fills: working
+stopped, hedges again: False
+state: done filled
+problem: the exposure_hedge preset takes watched, hedge_instrument_id, hedge_exposure_per_unit, lower_band, upper_band, not 'band'
+problem: watched entry 1 must name its instrument_id
+problem: watched entry 1 exposure_per_unit must be a number, not 'half'
+problem: lower_band of 10 is not below upper_band of -10
+problem: an exposure hedge needs hedge_instrument_id, the instrument it trades to bring the exposure back
+problem: hedge_exposure_per_unit cannot be zero: an instrument with no exposure per unit cannot hedge anything

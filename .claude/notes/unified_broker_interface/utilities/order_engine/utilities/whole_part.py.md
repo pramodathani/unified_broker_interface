@@ -19,3 +19,7 @@ Each type's settings are checked by its own class in `settings_problems`, which 
 ## `inventory` (2026-10-02)
 
 The grid and the two-sided quote both measure the net position their own fills have built, in the same way, so `inventory` moved here from `GridPart` when the quote was ported.
+
+## Stopping (2026-10-02)
+
+`cancel_rest` records `stopped` for every kept-whole part before cancelling what rests. The two-sided quote and the exposure hedge end only once stopped; the grid and the scale with profit-taker stop placing anything new once stopped, so a rung that fills after its join cancelled the grid is not answered with a fresh order. `finish_when_done` is `OrderPart`'s done rule, shared by all four.

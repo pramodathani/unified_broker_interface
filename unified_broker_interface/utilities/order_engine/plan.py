@@ -353,6 +353,23 @@ class PlanOrder(SyntheticOrder):
         if self.parent.state != state and self.parent.can_change_to(state):
             self.record_state(state, message)
 
+    def _after_first_moves(self):
+        """Moves the parent out of `received` once a part has placed the plan's first orders on a tick rather than when it started, as an exposure hedge does.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        if self.parent.state != 'received' or not self.parent.legs:
+            return
+        placed = []
+        for leg in self.parent.legs:
+            answer = {
+                'outcome': leg.outcome,
+                'status_message': leg.status_message,
+            }
+            placed.append((leg.role, answer, None))
+        self._after_placing(placed)
+
     def _finish_if_done(self, root):
         """Ends the parent once the root part is done.
 
@@ -462,6 +479,8 @@ class PlanOrder(SyntheticOrder):
         for part in root.order_parts():
             if part.path in moving_paths and part.move(self, quotes, now):
                 moved = True
+        if moved:
+            self._after_first_moves()
         if not placed and not moved and not ended:
             if memory_changed or moving_paths or paced_paths:
                 self.save()

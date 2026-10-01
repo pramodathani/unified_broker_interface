@@ -103,3 +103,7 @@ A clock tick now also sends the due pieces of every working paced order, reading
 A plan that placed several orders used to answer with the outcome of the first order that was not accepted, or `accepted` once any was, which hid a refused rung behind a 200. It now combines the outcomes with `combined_answer`, as today's grid and basket do, so a mix answers `partial` with 207. No earlier plan scenario had a mix, so none changed.
 
 `run` also asks every part for `prepared_own_memory`, which only kept-whole parts give, and keeps it as `own_memory` in the part record before the parent is recorded.
+
+## A first order placed on a tick (2026-10-02)
+
+An exposure hedge places its first order from `move` on a tick, not from `start`, and orders placed in `move` never pass through `_after_placing`, so the parent stayed `received` with a hedge resting. `_after_first_moves` hands the legs' recorded outcomes to `_after_placing` after any tick on which a part moved, while the parent is still `received`. Parts that only reprice what they already placed reach it with the parent already `working`, so it changes nothing for them.

@@ -1,15 +1,18 @@
-"""Shows what every part kept whole shares: memory kept in its part record, and limit orders of its own placed at the plan's broker.
+"""Watches a RELIANCE position against a band of minus ten to ten, hedges when a hundred is held, and does not hedge twice.
 
-`WholePart.remember` writes the part's memory into its part record with a message, so a restart replays it, and `own_memory` reads it back. `limit_order` builds a limit on the part's instrument from the body, at a side and price of the part's choosing, and `place_order` sends it with the part's path as the leg's role. `inventory` is the net position the part's own fills have built, `cancel_rest` stops the part and cancels what rests, `is_stopped` says so, `finish_when_done` marks it done once every broker order has finished, `settings_problems` finds nothing for the base class, and `expanded` is how a dry run shows the part. A stand-in plays the plan order, so nothing leaves the machine.
+`ExposureHedgePart.start` places nothing. On each tick `move` reads the account's positions, `exposure` adds them up at their exposure per unit together with `hedges_in_flight`, the hedges already sent, and when the total is outside the band a sell goes out two ticks under the bid, sized to bring the total back to the middle. The next tick sees the hedge in flight and sends nothing more, even before the position catches up. `held` reads one instrument out of the positions document and `hedge_price` is the hedge's price. A stand-in plays the plan order, so nothing leaves the machine.
 
 Run it from the project root:
 
-    python examples/unified_broker_interface/utilities/order_engine/utilities/whole_part/WholePart/example_1_memory_and_its_own_orders.py
+    python examples/unified_broker_interface/utilities/order_engine/utilities/exposure_hedge_part/ExposureHedgePart/example_1_out_of_band_and_back.py
 """
 
 import copy
 import decimal
 
+from unified_broker_interface.utilities.order_engine.utilities.exposure_hedge_part import (
+    ExposureHedgePart,
+)
 from unified_broker_interface.utilities.order_engine.utilities.market_view import (
     MarketView,
 )
@@ -19,13 +22,49 @@ from unified_broker_interface.utilities.order_engine.utilities.order_leg import 
 from unified_broker_interface.utilities.order_engine.utilities.parent_order import (
     ParentOrder,
 )
-from unified_broker_interface.utilities.order_engine.utilities.whole_part import (
-    WholePart,
-)
+
+
+def book(mid):
+    """A quote whose best bid and offer sit a tick either side of a middle price.
+
+    Args:
+        mid (float | None): The middle, or None for a quote with an empty book.
+
+    Returns:
+        dict: The quote.
+    """
+    if mid is None:
+        return {
+            'depth': {
+                'buy': [],
+                'sell': [],
+            },
+        }
+    return {
+        'last_price': mid,
+        'depth': {
+            'buy': [
+                {
+                    'price': round(mid - 0.05, 2),
+                    'quantity': 100,
+                },
+            ],
+            'sell': [
+                {
+                    'price': round(mid + 0.05, 2),
+                    'quantity': 100,
+                },
+            ],
+        },
+    }
 
 
 class StandInOrder(dict):
-    """Stands in for a validated order: the body itself, which also answers the tick size the brokers agree on."""
+    """Stands in for a validated order: the body itself, with its quantity as a number, which also answers the tick size the brokers agree on.
+
+    Attributes:
+        quantity (int): The quantity.
+    """
 
     def agreed_tick_size(self, handles):
         """The tick size every broker agrees on, which is RELIANCE's.
@@ -61,14 +100,15 @@ class StandInInstrument:
 
 
 class StandInPlacement:
-    """Stands in for the placement, which reads the catalogue and the live quote.
+    """Stands in for the placement, which reads the catalogue, the live quote and the account's positions.
 
     Attributes:
         quote (dict | None): RELIANCE's live quote.
+        positions (dict): The positions document, whose `net` list holds the account's RELIANCE position.
     """
 
     def __init__(self, quote):
-        """Builds the placement.
+        """Builds the placement with no position held.
 
         Args:
             quote (dict | None): The live quote.
@@ -77,9 +117,30 @@ class StandInPlacement:
             None: This method returns nothing.
         """
         self.quote = quote
+        self.positions = {
+            'net': [],
+        }
+
+    def hold(self, quantity):
+        """Sets the account's RELIANCE position, as the position poller would.
+
+        Args:
+            quantity (int): The signed quantity.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.positions = {
+            'net': [
+                {
+                    'instrument_id': 'RELIANCE',
+                    'quantity': quantity,
+                },
+            ],
+        }
 
     def market_context(self, instrument_id, with_quote, with_positions):
-        """The instrument and its quote.
+        """The instrument, its quote and the account's positions.
 
         Args:
             instrument_id (str): Unused.
@@ -87,10 +148,10 @@ class StandInPlacement:
             with_positions (bool): Unused.
 
         Returns:
-            tuple: The instrument, the quote and an unused value.
+            tuple: The instrument, the quote and the positions document.
         """
         del instrument_id, with_quote, with_positions
-        return StandInInstrument(), self.quote, None
+        return StandInInstrument(), self.quote, self.positions
 
 
 class StandInPlanOrder:
@@ -124,9 +185,7 @@ class StandInPlanOrder:
         self.parent.parameters = {
             'parts': {},
         }
-        quote = {
-            'last_price': last_price,
-        }
+        quote = book(last_price)
         self.placement = StandInPlacement(quote)
         self.requests = []
         self.messages = []
@@ -166,7 +225,9 @@ class StandInPlanOrder:
         Returns:
             StandInOrder: The same body.
         """
-        return StandInOrder(body)
+        order = StandInOrder(body)
+        order.quantity = int(body['quantity'])
+        return order
 
     def concrete_order(self, order):
         """Answers with the order itself, since it names no references.
@@ -208,7 +269,7 @@ class StandInPlanOrder:
         leg.quantity = order['quantity']
         leg.price = float(order['price'])
         self.parent.legs.append(leg)
-        self.requests.append(('place', leg.transaction_type, leg.quantity, order['price'], order.get('tag')))
+        self.requests.append(('place', leg.transaction_type, leg.quantity, order['price']))
         return {
             'outcome': 'accepted',
             'order_id': leg.broker_order_id,
@@ -229,6 +290,14 @@ class StandInPlanOrder:
         leg.state = 'cancelled'
         return True
 
+    def tick_size(self):
+        """RELIANCE's tick size.
+
+        Returns:
+            decimal.Decimal: 0.05.
+        """
+        return decimal.Decimal('0.05')
+
     def view(self, quotes, instrument_id=None):
         """A quote as a market view, with RELIANCE's tick size of 0.05.
 
@@ -241,6 +310,23 @@ class StandInPlanOrder:
         """
         del instrument_id
         return MarketView(quotes.get('RELIANCE'), decimal.Decimal('0.05'))
+
+    def reprice_leg(self, leg, price, trigger_price, reason):
+        """Moves a leg's limit price, as the broker would once it accepts the change.
+
+        Args:
+            leg (OrderLeg): The leg.
+            price (decimal.Decimal): Its new limit price.
+            trigger_price (decimal.Decimal | None): Unused.
+            reason (str): Why.
+
+        Returns:
+            bool: True, since the change is accepted.
+        """
+        del trigger_price
+        self.requests.append(('move', leg.transaction_type, str(price), reason))
+        leg.price = float(price)
+        return True
 
     def fill(self, number):
         """Fills one leg completely, as an order update would.
@@ -256,51 +342,42 @@ class StandInPlanOrder:
         leg.state = 'filled'
 
 
-class MemoryAndItsOwnOrdersExample:
-    """Remembers, places two orders and describes the part."""
+class OutOfBandAndBackExample:
+    """Holds a position, hedges it and ticks again."""
 
     def run(self):
-        """Prints the memory, the requests and the dry run's view.
+        """Prints what each tick did.
 
         Returns:
             None: This method returns nothing.
         """
         plan_order = StandInPlanOrder(1000.0)
-        part = WholePart('root', 'grid', {
-            'levels': 1,
-        })
-        print('problems:', part.settings_problems())
-        print('memory before:', part.own_memory(plan_order))
-        part.remember(plan_order, {
-            'centre': '1000.00',
-        }, 'the part remembers its centre')
-        print('memory after:', part.own_memory(plan_order))
-        buy = part.limit_order(plan_order, 'BUY', decimal.Decimal('995.00'))
-        sell = part.limit_order(plan_order, 'SELL', decimal.Decimal('1005.00'), 3)
-        orders = [
-            buy,
-            sell,
-        ]
-        for order in orders:
-            answer, status, leg_id = part.place_order(plan_order, order, None)
-            print(f'placed {leg_id}: {answer["outcome"]} {status}')
-        print('requests:', plan_order.requests)
-        print('net position before any fill:', part.inventory(plan_order.parent))
-        plan_order.fill(2)
-        print('net position once the sell of three fills:', part.inventory(plan_order.parent))
-        record = plan_order.part_record('root')
-        record['state'] = 'working'
-        plan_order.set_part_record('root', record, None)
-        print('stopped before:', part.is_stopped(plan_order))
-        part.finish_when_done(plan_order)
-        print('done while the buy still rests:', plan_order.part_record('root')['state'])
-        part.cancel_rest(plan_order, 'the caller cancelled the plan')
-        print('stopped after:', part.is_stopped(plan_order), plan_order.requests[-1])
-        part.finish_when_done(plan_order)
-        print('once both have finished:', plan_order.part_record('root')['state'], plan_order.part_record('root')['reason'])
-        print('messages:', plan_order.messages)
-        print('dry run:', part.expanded())
+        part = ExposureHedgePart('root', 'exposure_hedge', {
+                'watched': [
+                    {
+                        'instrument_id': 'RELIANCE',
+                        'exposure_per_unit': 1,
+                    },
+                ],
+                'hedge_instrument_id': 'RELIANCE',
+                'lower_band': -10,
+                'upper_band': 10,
+            })
+        print(f'problems {part.settings_problems()}, trades {part.context(plan_order).instrument_id}, needs prices {part.needs_prices()}, moves on ticks {part.moves_on_ticks()}')
+        print('start places:', part.start(plan_order, None, None, {}))
+        quotes = {
+            'RELIANCE': book(1000.0),
+        }
+        print('flat, hedged:', part.move(plan_order, quotes, 1.0))
+        plan_order.placement.hold(100)
+        positions = plan_order.placement.positions
+        print(f'holding {part.held(positions, "RELIANCE")}, exposure {part.exposure(positions, plan_order.parent)}')
+        print('a hundred held, hedged:', part.move(plan_order, quotes, 2.0), plan_order.requests)
+        print(f'in flight {part.hedges_in_flight(plan_order.parent)}, exposure {part.exposure(positions, plan_order.parent)}')
+        print('next tick, hedged again:', part.move(plan_order, quotes, 3.0))
+        view = MarketView(book(1000.0), decimal.Decimal('0.05'))
+        print(f'a buy would go at {part.hedge_price(view, "BUY")}, a sell at {part.hedge_price(view, "SELL")}')
 
 
 if __name__ == '__main__':
-    MemoryAndItsOwnOrdersExample().run()
+    OutOfBandAndBackExample().run()

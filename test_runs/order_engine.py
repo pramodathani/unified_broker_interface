@@ -2977,6 +2977,27 @@ class OrderEngineSuite:
                 },
             }
 
+        identifiers = order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS
+
+        def hedge(settings):
+            """A plan of one exposure hedge.
+
+            Args:
+                settings (dict): Its settings.
+
+            Returns:
+                dict: The plan.
+            """
+            return {
+                'order': {
+                    'presets': [
+                        {
+                            'exposure_hedge': settings,
+                        },
+                    ],
+                },
+            }
+
         capped_at_twenty = {
             'levels': 2,
             'step_points': 5,
@@ -3289,6 +3310,103 @@ class OrderEngineSuite:
                 body_overrides={
                     'quantity': 20,
                 },
+                restart_between_ticks=True,
+            ),
+            self.plan_price_result(
+                'a_plan_exposure_hedge_trades_when_the_band_is_left',
+                hedge({
+                    'watched': [
+                        {
+                            'instrument_id': identifiers['reliance'],
+                            'exposure_per_unit': 1,
+                        },
+                    ],
+                    'hedge_instrument_id': identifiers['reliance'],
+                    'hedge_exposure_per_unit': 1,
+                    'lower_band': -10,
+                    'upper_band': 10,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1},
+                ],
+                accepted,
+                positions=100,
+            ),
+            self.plan_price_result(
+                'a_plan_exposure_hedge_prices_a_hedge_in_another_instrument_from_that_instruments_quote',
+                hedge({
+                    'watched': [
+                        {
+                            'instrument_id': identifiers['reliance'],
+                            'exposure_per_unit': 1,
+                        },
+                    ],
+                    'hedge_instrument_id': identifiers['reliance_future'],
+                    'hedge_exposure_per_unit': 0.2,
+                    'lower_band': -10,
+                    'upper_band': 10,
+                }),
+                [
+                    {
+                        'quote': steady,
+                        'at': 0,
+                        'other_quotes': {
+                            'reliance_future': self.book_at(1004.10, 1004.30),
+                        },
+                    },
+                    {'quote': steady, 'at': 1},
+                ],
+                accepted,
+                positions=100,
+            ),
+            self.plan_price_result(
+                'a_plan_exposure_hedge_inside_its_band_does_nothing',
+                hedge({
+                    'watched': [
+                        {
+                            'instrument_id': identifiers['reliance'],
+                            'exposure_per_unit': 1,
+                        },
+                    ],
+                    'hedge_instrument_id': identifiers['reliance'],
+                    'lower_band': -10,
+                    'upper_band': 10,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1},
+                ],
+                accepted,
+                positions=5,
+            ),
+            self.plan_price_result(
+                'a_plan_exposure_hedge_keeps_watching_after_its_hedge_fills',
+                hedge({
+                    'watched': [
+                        {
+                            'instrument_id': identifiers['reliance'],
+                            'exposure_per_unit': 1,
+                        },
+                    ],
+                    'hedge_instrument_id': identifiers['reliance'],
+                    'hedge_exposure_per_unit': 1,
+                    'lower_band': -10,
+                    'upper_band': 10,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {
+                        'quote': steady,
+                        'at': 1,
+                        'updates': [
+                            self.update('26091500000021', 'COMPLETE', 100),
+                        ],
+                    },
+                    {'quote': steady, 'at': 2},
+                ],
+                accepted,
+                positions=100,
                 restart_between_ticks=True,
             ),
             self.plan_price_result(

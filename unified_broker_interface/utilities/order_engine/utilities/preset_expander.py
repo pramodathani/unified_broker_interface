@@ -29,6 +29,7 @@ KEPT_WHOLE_PRESETS = (
     'grid',
     'two_sided_quote',
     'scale_with_profit_taker',
+    'exposure_hedge',
 )
 PRESET_NAMES = (
     'simple',
@@ -77,6 +78,7 @@ PRESET_NAMES = (
     'grid',
     'two_sided_quote',
     'scale_with_profit_taker',
+    'exposure_hedge',
     'oto',
     'oco',
     'bracket',

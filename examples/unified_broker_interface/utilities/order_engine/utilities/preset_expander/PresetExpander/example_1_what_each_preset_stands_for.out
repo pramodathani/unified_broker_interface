@@ -78,3 +78,5 @@ two_sided_quote: {'whole': {'name': 'two_sided_quote', 'settings': {'half_spread
   problems: []
 scale_with_profit_taker: {'whole': {'name': 'scale_with_profit_taker', 'settings': {'from_price': 1000, 'to_price': 990, 'steps': 3, 'profit_points': 4}}}
   problems: []
+exposure_hedge: {'whole': {'name': 'exposure_hedge', 'settings': {'watched': [{'instrument_id': 'RELIANCE'}], 'hedge_instrument_id': 'RELIANCE', 'lower_band': -10, 'upper_band': 10}}}
+  problems: []

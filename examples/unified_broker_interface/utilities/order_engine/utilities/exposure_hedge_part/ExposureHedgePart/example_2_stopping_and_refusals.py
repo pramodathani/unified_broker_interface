@@ -1,15 +1,18 @@
-"""Shows what every part kept whole shares: memory kept in its part record, and limit orders of its own placed at the plan's broker.
+"""Shows the hedge watching on after its hedge fills, stopping when its join cancels it, and what it refuses.
 
-`WholePart.remember` writes the part's memory into its part record with a message, so a restart replays it, and `own_memory` reads it back. `limit_order` builds a limit on the part's instrument from the body, at a side and price of the part's choosing, and `place_order` sends it with the part's path as the leg's role. `inventory` is the net position the part's own fills have built, `cancel_rest` stops the part and cancels what rests, `is_stopped` says so, `finish_when_done` marks it done once every broker order has finished, `settings_problems` finds nothing for the base class, and `expanded` is how a dry run shows the part. A stand-in plays the plan order, so nothing leaves the machine.
+A filled hedge leaves the part working, because `settle` marks it done only once it has been stopped, by `cancel_rest`, and its hedges have finished. A stopped part sends no more hedges. `settings_problems` lists every bad setting in today's words. A stand-in plays the plan order, so nothing leaves the machine.
 
 Run it from the project root:
 
-    python examples/unified_broker_interface/utilities/order_engine/utilities/whole_part/WholePart/example_1_memory_and_its_own_orders.py
+    python examples/unified_broker_interface/utilities/order_engine/utilities/exposure_hedge_part/ExposureHedgePart/example_2_stopping_and_refusals.py
 """
 
 import copy
 import decimal
 
+from unified_broker_interface.utilities.order_engine.utilities.exposure_hedge_part import (
+    ExposureHedgePart,
+)
 from unified_broker_interface.utilities.order_engine.utilities.market_view import (
     MarketView,
 )
@@ -19,13 +22,49 @@ from unified_broker_interface.utilities.order_engine.utilities.order_leg import 
 from unified_broker_interface.utilities.order_engine.utilities.parent_order import (
     ParentOrder,
 )
-from unified_broker_interface.utilities.order_engine.utilities.whole_part import (
-    WholePart,
-)
+
+
+def book(mid):
+    """A quote whose best bid and offer sit a tick either side of a middle price.
+
+    Args:
+        mid (float | None): The middle, or None for a quote with an empty book.
+
+    Returns:
+        dict: The quote.
+    """
+    if mid is None:
+        return {
+            'depth': {
+                'buy': [],
+                'sell': [],
+            },
+        }
+    return {
+        'last_price': mid,
+        'depth': {
+            'buy': [
+                {
+                    'price': round(mid - 0.05, 2),
+                    'quantity': 100,
+                },
+            ],
+            'sell': [
+                {
+                    'price': round(mid + 0.05, 2),
+                    'quantity': 100,
+                },
+            ],
+        },
+    }
 
 
 class StandInOrder(dict):
-    """Stands in for a validated order: the body itself, which also answers the tick size the brokers agree on."""
+    """Stands in for a validated order: the body itself, with its quantity as a number, which also answers the tick size the brokers agree on.
+
+    Attributes:
+        quantity (int): The quantity.
+    """
 
     def agreed_tick_size(self, handles):
         """The tick size every broker agrees on, which is RELIANCE's.
@@ -61,14 +100,15 @@ class StandInInstrument:
 
 
 class StandInPlacement:
-    """Stands in for the placement, which reads the catalogue and the live quote.
+    """Stands in for the placement, which reads the catalogue, the live quote and the account's positions.
 
     Attributes:
         quote (dict | None): RELIANCE's live quote.
+        positions (dict): The positions document, whose `net` list holds the account's RELIANCE position.
     """
 
     def __init__(self, quote):
-        """Builds the placement.
+        """Builds the placement with no position held.
 
         Args:
             quote (dict | None): The live quote.
@@ -77,9 +117,30 @@ class StandInPlacement:
             None: This method returns nothing.
         """
         self.quote = quote
+        self.positions = {
+            'net': [],
+        }
+
+    def hold(self, quantity):
+        """Sets the account's RELIANCE position, as the position poller would.
+
+        Args:
+            quantity (int): The signed quantity.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.positions = {
+            'net': [
+                {
+                    'instrument_id': 'RELIANCE',
+                    'quantity': quantity,
+                },
+            ],
+        }
 
     def market_context(self, instrument_id, with_quote, with_positions):
-        """The instrument and its quote.
+        """The instrument, its quote and the account's positions.
 
         Args:
             instrument_id (str): Unused.
@@ -87,10 +148,10 @@ class StandInPlacement:
             with_positions (bool): Unused.
 
         Returns:
-            tuple: The instrument, the quote and an unused value.
+            tuple: The instrument, the quote and the positions document.
         """
         del instrument_id, with_quote, with_positions
-        return StandInInstrument(), self.quote, None
+        return StandInInstrument(), self.quote, self.positions
 
 
 class StandInPlanOrder:
@@ -124,9 +185,7 @@ class StandInPlanOrder:
         self.parent.parameters = {
             'parts': {},
         }
-        quote = {
-            'last_price': last_price,
-        }
+        quote = book(last_price)
         self.placement = StandInPlacement(quote)
         self.requests = []
         self.messages = []
@@ -166,7 +225,9 @@ class StandInPlanOrder:
         Returns:
             StandInOrder: The same body.
         """
-        return StandInOrder(body)
+        order = StandInOrder(body)
+        order.quantity = int(body['quantity'])
+        return order
 
     def concrete_order(self, order):
         """Answers with the order itself, since it names no references.
@@ -208,7 +269,7 @@ class StandInPlanOrder:
         leg.quantity = order['quantity']
         leg.price = float(order['price'])
         self.parent.legs.append(leg)
-        self.requests.append(('place', leg.transaction_type, leg.quantity, order['price'], order.get('tag')))
+        self.requests.append(('place', leg.transaction_type, leg.quantity, order['price']))
         return {
             'outcome': 'accepted',
             'order_id': leg.broker_order_id,
@@ -229,6 +290,14 @@ class StandInPlanOrder:
         leg.state = 'cancelled'
         return True
 
+    def tick_size(self):
+        """RELIANCE's tick size.
+
+        Returns:
+            decimal.Decimal: 0.05.
+        """
+        return decimal.Decimal('0.05')
+
     def view(self, quotes, instrument_id=None):
         """A quote as a market view, with RELIANCE's tick size of 0.05.
 
@@ -241,6 +310,23 @@ class StandInPlanOrder:
         """
         del instrument_id
         return MarketView(quotes.get('RELIANCE'), decimal.Decimal('0.05'))
+
+    def reprice_leg(self, leg, price, trigger_price, reason):
+        """Moves a leg's limit price, as the broker would once it accepts the change.
+
+        Args:
+            leg (OrderLeg): The leg.
+            price (decimal.Decimal): Its new limit price.
+            trigger_price (decimal.Decimal | None): Unused.
+            reason (str): Why.
+
+        Returns:
+            bool: True, since the change is accepted.
+        """
+        del trigger_price
+        self.requests.append(('move', leg.transaction_type, str(price), reason))
+        leg.price = float(price)
+        return True
 
     def fill(self, number):
         """Fills one leg completely, as an order update would.
@@ -256,51 +342,59 @@ class StandInPlanOrder:
         leg.state = 'filled'
 
 
-class MemoryAndItsOwnOrdersExample:
-    """Remembers, places two orders and describes the part."""
+class StoppingAndRefusalsExample:
+    """Fills a hedge, stops the part, and checks its refusals."""
 
     def run(self):
-        """Prints the memory, the requests and the dry run's view.
+        """Prints what each step did.
 
         Returns:
             None: This method returns nothing.
         """
         plan_order = StandInPlanOrder(1000.0)
-        part = WholePart('root', 'grid', {
-            'levels': 1,
-        })
-        print('problems:', part.settings_problems())
-        print('memory before:', part.own_memory(plan_order))
-        part.remember(plan_order, {
-            'centre': '1000.00',
-        }, 'the part remembers its centre')
-        print('memory after:', part.own_memory(plan_order))
-        buy = part.limit_order(plan_order, 'BUY', decimal.Decimal('995.00'))
-        sell = part.limit_order(plan_order, 'SELL', decimal.Decimal('1005.00'), 3)
-        orders = [
-            buy,
-            sell,
-        ]
-        for order in orders:
-            answer, status, leg_id = part.place_order(plan_order, order, None)
-            print(f'placed {leg_id}: {answer["outcome"]} {status}')
-        print('requests:', plan_order.requests)
-        print('net position before any fill:', part.inventory(plan_order.parent))
-        plan_order.fill(2)
-        print('net position once the sell of three fills:', part.inventory(plan_order.parent))
-        record = plan_order.part_record('root')
-        record['state'] = 'working'
-        plan_order.set_part_record('root', record, None)
-        print('stopped before:', part.is_stopped(plan_order))
-        part.finish_when_done(plan_order)
-        print('done while the buy still rests:', plan_order.part_record('root')['state'])
-        part.cancel_rest(plan_order, 'the caller cancelled the plan')
-        print('stopped after:', part.is_stopped(plan_order), plan_order.requests[-1])
-        part.finish_when_done(plan_order)
-        print('once both have finished:', plan_order.part_record('root')['state'], plan_order.part_record('root')['reason'])
-        print('messages:', plan_order.messages)
-        print('dry run:', part.expanded())
+        part = ExposureHedgePart('root', 'exposure_hedge', {
+                'watched': [
+                    {
+                        'instrument_id': 'RELIANCE',
+                        'exposure_per_unit': 1,
+                    },
+                ],
+                'hedge_instrument_id': 'RELIANCE',
+                'lower_band': -10,
+                'upper_band': 10,
+            })
+        part.start(plan_order, None, None, {})
+        plan_order.placement.hold(100)
+        quotes = {
+            'RELIANCE': book(1000.0),
+        }
+        part.move(plan_order, quotes, 1.0)
+        plan_order.fill(1)
+        part.settle(plan_order)
+        print('after the hedge fills:', plan_order.part_record('root')['state'])
+        part.cancel_rest(plan_order, 'its join is done')
+        plan_order.placement.hold(300)
+        print('stopped, hedges again:', part.move(plan_order, quotes, 2.0))
+        part.settle(plan_order)
+        print('state:', plan_order.part_record('root')['state'], plan_order.part_record('root')['reason'])
+        bad = ExposureHedgePart(
+            'root',
+            'exposure_hedge',
+            {
+                'watched': [
+                    {
+                        'exposure_per_unit': 'half',
+                    },
+                ],
+                'lower_band': 10,
+                'upper_band': -10,
+                'hedge_exposure_per_unit': 0,
+                'band': 5,
+            },
+        )
+        for problem in bad.settings_problems():
+            print('problem:', problem)
 
 
 if __name__ == '__main__':
-    MemoryAndItsOwnOrdersExample().run()
+    StoppingAndRefusalsExample().run()

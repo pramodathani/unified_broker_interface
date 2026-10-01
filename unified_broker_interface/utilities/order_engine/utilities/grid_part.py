@@ -190,7 +190,7 @@ class GridPart(WholePart):
             plan_order.cancel_leg(leg, f'the grid is holding {net}, which is its whole allowance, so it stops adding to that side')
 
     def settle(self, plan_order):
-        """Places the opposite of every rung that has filled and not been answered yet, then stops adding past the cap.
+        """Places the opposite of every rung that has filled and not been answered yet, then stops adding past the cap; once stopped, it places nothing more and is done when its orders have finished.
 
         Args:
             plan_order (PlanOrder): The plan order.
@@ -200,6 +200,9 @@ class GridPart(WholePart):
         """
         record = plan_order.part_record(self.path)
         if record.get('state') != 'working':
+            return []
+        if self.is_stopped(plan_order):
+            self.finish_when_done(plan_order)
             return []
         memory = self.own_memory(plan_order)
         answered = list(memory.get('answered') or [])
@@ -220,10 +223,5 @@ class GridPart(WholePart):
                 placed.append((self.path, body, status))
         if newly_filled:
             self.stop_adding(plan_order)
-        reason = self.done_reason(plan_order.parent)
-        if reason is not None:
-            record = plan_order.part_record(self.path)
-            record['state'] = 'done'
-            record['reason'] = reason
-            plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part is done: {reason}')
+        self.finish_when_done(plan_order)
         return placed

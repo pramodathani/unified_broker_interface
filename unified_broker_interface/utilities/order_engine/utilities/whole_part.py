@@ -137,6 +137,54 @@ class WholePart(OrderPart):
         broker_name = context.body.get('broker') or plan_order.chosen_broker()
         return context.place_leg(self.path, order, started_at, broker_name, None)
 
+    def cancel_rest(self, plan_order, reason):
+        """Stops this part placing anything more and cancels what it has resting.
+
+        `stopped` is recorded with a message, so a restart keeps it; a part that only ends once stopped, such as a two-sided quote, is then done when its orders have finished.
+
+        Args:
+            plan_order (PlanOrder): The plan order.
+            reason (str): Why, for the event log.
+
+        Returns:
+            bool: True when every resting order was cancelled, or none was resting.
+        """
+        record = plan_order.part_record(self.path)
+        if record.get('state') == 'working' and not record.get('stopped'):
+            record['stopped'] = True
+            plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part stops, because {reason}')
+        return super().cancel_rest(plan_order, reason)
+
+    def is_stopped(self, plan_order):
+        """Whether this part has been stopped by its join or the caller.
+
+        Args:
+            plan_order (PlanOrder): The plan order.
+
+        Returns:
+            bool: True once `cancel_rest` has stopped it.
+        """
+        return bool(plan_order.part_record(self.path).get('stopped'))
+
+    def finish_when_done(self, plan_order):
+        """Marks this part done once every one of its broker orders has finished.
+
+        Args:
+            plan_order (PlanOrder): The plan order.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        record = plan_order.part_record(self.path)
+        if record.get('state') != 'working':
+            return
+        reason = self.done_reason(plan_order.parent)
+        if reason is None:
+            return
+        record['state'] = 'done'
+        record['reason'] = reason
+        plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part is done: {reason}')
+
     def expanded(self):
         """This part as it will run, for a dry run's answer: the type it keeps whole and its settings.
 

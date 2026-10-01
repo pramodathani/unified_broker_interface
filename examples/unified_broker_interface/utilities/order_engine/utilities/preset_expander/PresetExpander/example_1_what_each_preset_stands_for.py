@@ -186,6 +186,16 @@ class WhatEachPresetStandsForExample:
                 'steps': 3,
                 'profit_points': 4,
             },
+            'exposure_hedge': {
+                'watched': [
+                    {
+                        'instrument_id': 'RELIANCE',
+                    },
+                ],
+                'hedge_instrument_id': 'RELIANCE',
+                'lower_band': -10,
+                'upper_band': 10,
+            },
             'account_conditional': {
                 'account_field': 'day_pnl',
                 'account_level': -5000,

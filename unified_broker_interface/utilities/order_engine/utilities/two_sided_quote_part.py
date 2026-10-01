@@ -230,7 +230,7 @@ class TwoSidedQuotePart(WholePart):
         """
         del now
         record = plan_order.part_record(self.path)
-        if record.get('state') != 'working' or record.get('stopped'):
+        if record.get('state') != 'working' or self.is_stopped(plan_order):
             return False
         context = self.context(plan_order)
         view = context.view(quotes)
@@ -270,22 +270,6 @@ class TwoSidedQuotePart(WholePart):
                 acted = True
         return acted
 
-    def cancel_rest(self, plan_order, reason):
-        """Stops quoting and cancels both resting quotes.
-
-        Args:
-            plan_order (PlanOrder): The plan order.
-            reason (str): Why, for the event log.
-
-        Returns:
-            bool: True when every resting quote was cancelled, or none was resting.
-        """
-        record = plan_order.part_record(self.path)
-        if record.get('state') == 'working' and not record.get('stopped'):
-            record['stopped'] = True
-            plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} quote stops quoting, because {reason}')
-        return super().cancel_rest(plan_order, reason)
-
     def settle(self, plan_order):
         """Marks the quote done once it has been stopped and its orders have finished; a filled side is left to the next tick to quote again.
 
@@ -295,12 +279,6 @@ class TwoSidedQuotePart(WholePart):
         Returns:
             list: Nothing is placed while settling, so an empty list.
         """
-        record = plan_order.part_record(self.path)
-        if record.get('state') != 'working' or not record.get('stopped'):
-            return []
-        reason = self.done_reason(plan_order.parent)
-        if reason is not None:
-            record['state'] = 'done'
-            record['reason'] = reason
-            plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part is done: {reason}')
+        if self.is_stopped(plan_order):
+            self.finish_when_done(plan_order)
         return []

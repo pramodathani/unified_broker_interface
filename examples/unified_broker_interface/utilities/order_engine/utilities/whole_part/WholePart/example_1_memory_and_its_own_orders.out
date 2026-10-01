@@ -6,5 +6,9 @@ placed parent-1:2: accepted 200
 requests: [('place', 'BUY', 5, '995.00', 'mine'), ('place', 'SELL', 3, '1005.00', 'mine')]
 net position before any fill: 0
 net position once the sell of three fills: -3
-messages: ['the part remembers its centre']
+stopped before: False
+done while the buy still rests: working
+stopped after: True ('cancel', 'BUY', 995.0, 'the caller cancelled the plan')
+once both have finished: done partly_filled
+messages: ['the part remembers its centre', "the plan's root part stops, because the caller cancelled the plan", "the plan's root part is done: partly_filled"]
 dry run: {'order': {'path': 'root', 'presets': ['grid'], 'kept_whole': {'grid': {'levels': 1}}}}
