@@ -1,4 +1,5 @@
 Orders ['root.each_fill'], members [], standalone protecting 1
+Memory readied when the plan is placed, which only a part kept whole has: {}
 Quantity: set by its join; the entry's: the body's quantity
 Before starting, a target of 4 is only recorded: {'state': 'pending', 'target': 4}, started False
 Started: [('root.each_fill', {'outcome': 'accepted', 'order_id': '1', 'broker': 'zerodha'}, 200)]

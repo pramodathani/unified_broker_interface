@@ -2669,7 +2669,7 @@ class OrderEngineSuite:
         document.update(overrides)
         return document
 
-    def plan_result(self, name, plan, updates, answer, dry_run=None):
+    def plan_result(self, name, plan, updates, answer, dry_run=None, quote=None, body_overrides=None):
         """Places one `plan` order through the engine, feeds it order updates, and records what it did and the state of each of its parts.
 
         Args:
@@ -2678,6 +2678,8 @@ class OrderEngineSuite:
             updates (list): One order update per step, applied in order.
             answer (dict): The stubbed broker answer.
             dry_run (bool | None): The body's `dry_run`.
+            quote (dict | None): A live quote to seed, for a plan that reads the book when it is placed.
+            body_overrides (dict | None): Body fields to replace, such as the quantity.
 
         Returns:
             dict: The recorded result, with `parts`, each parent's `parts` parameter.
@@ -2692,7 +2694,9 @@ class OrderEngineSuite:
                 'plan': plan,
             },
         )
-        result = self.reaction_result(name, body, updates, answer)
+        if body_overrides:
+            body.update(body_overrides)
+        result = self.reaction_result(name, body, updates, answer, quote=quote)
         stored = self.fake_redis.hashes.get('unified:orders:parents', {})
         parts = []
         for document in stored.values():
@@ -2782,7 +2786,7 @@ class OrderEngineSuite:
                         'side': 'long',
                         'presets': [
                             {
-                                'grid': {},
+                                'no_such_preset': {},
                             },
                             {
                                 'simple': {
@@ -2897,6 +2901,800 @@ class OrderEngineSuite:
             parts.append(parameters.get('parts'))
         result['parts'] = parts
         return result
+
+    def run_plan_kept_whole_checks(self):
+        """Runs plan orders kept whole, such as a grid, beside today's checks of the same types.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        accepted = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        refused = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_refusal('flattrade'),
+        )
+        steady = self.book_at(1000.00, 1000.05)
+
+        def grid(settings):
+            """A plan of one grid.
+
+            Args:
+                settings (dict): The grid's settings.
+
+            Returns:
+                dict: The plan.
+            """
+            return {
+                'order': {
+                    'presets': [
+                        {
+                            'grid': settings,
+                        },
+                    ],
+                },
+            }
+
+        numbered = dict(accepted, number_orders=True)
+
+        def quote(settings):
+            """A plan of one two-sided quote.
+
+            Args:
+                settings (dict): The quote's settings.
+
+            Returns:
+                dict: The plan.
+            """
+            return {
+                'order': {
+                    'presets': [
+                        {
+                            'two_sided_quote': settings,
+                        },
+                    ],
+                },
+            }
+
+        def scale(settings):
+            """A plan of one scale with profit-taker.
+
+            Args:
+                settings (dict): Its settings.
+
+            Returns:
+                dict: The plan.
+            """
+            return {
+                'order': {
+                    'presets': [
+                        {
+                            'scale_with_profit_taker': settings,
+                        },
+                    ],
+                },
+            }
+
+        identifiers = order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS
+
+        def hedge(settings):
+            """A plan of one exposure hedge.
+
+            Args:
+                settings (dict): Its settings.
+
+            Returns:
+                dict: The plan.
+            """
+            return {
+                'order': {
+                    'presets': [
+                        {
+                            'exposure_hedge': settings,
+                        },
+                    ],
+                },
+            }
+
+        stop_in_the_book = {
+            'order_type': 'SL',
+            'trigger_price': 990,
+        }
+        two_targets = {
+            'stop_price': 990,
+            'stop_limit_price': 988,
+            'target_prices': [
+                1010,
+                1020,
+            ],
+        }
+
+        def scale_out(settings):
+            """A plan of one order with the scale-out preset.
+
+            Args:
+                settings (dict): Its settings.
+
+            Returns:
+                dict: The plan.
+            """
+            return {
+                'order': {
+                    'presets': [
+                        {
+                            'scale_out': settings,
+                        },
+                    ],
+                },
+            }
+
+        condor_legs = [
+            {
+                'instrument_id': identifiers['reliance'],
+                'quantity': 10,
+                'price': 1000,
+            },
+            {
+                'instrument_id': identifiers['kwil'],
+                'transaction_type': 'SELL',
+                'quantity': 10,
+                'price': 250,
+            },
+        ]
+
+        def strategy(settings):
+            """A plan of one order with the strategy stop preset.
+
+            Args:
+                settings (dict): Its settings.
+
+            Returns:
+                dict: The plan.
+            """
+            return {
+                'order': {
+                    'presets': [
+                        {
+                            'strategy_stop': settings,
+                        },
+                    ],
+                },
+            }
+
+        capped_at_twenty = {
+            'levels': 2,
+            'step_points': 5,
+            'most_inventory': 20,
+        }
+        return [
+            self.plan_result(
+                'a_plan_grid_replaces_a_filled_rung_with_its_opposite',
+                grid(capped_at_twenty),
+                [
+                    self.update('26091500000021', 'COMPLETE', 5),
+                ],
+                accepted,
+                quote=self.scenarios.quote(),
+                body_overrides={
+                    'quantity': 5,
+                },
+            ),
+            self.plan_result(
+                'a_plan_grid_stops_adding_to_a_side_once_it_hits_its_cap',
+                grid({
+                    'levels': 2,
+                    'step_points': 5,
+                    'most_inventory': 5,
+                }),
+                [
+                    self.update('26091500000021', 'COMPLETE', 5),
+                ],
+                accepted,
+                quote=self.scenarios.quote(),
+                body_overrides={
+                    'quantity': 5,
+                },
+            ),
+            self.plan_result(
+                'a_plan_grid_without_an_inventory_cap_is_refused',
+                grid({
+                    'levels': 2,
+                    'step_points': 5,
+                }),
+                [],
+                accepted,
+                quote=self.scenarios.quote(),
+                body_overrides={
+                    'quantity': 5,
+                },
+            ),
+            self.plan_price_result(
+                'a_plan_grid_with_one_rung_refused_answers_partial_with_207',
+                grid({
+                    'levels': 1,
+                    'step_points': 5,
+                    'most_inventory': 30,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                {
+                    'sequence': [
+                        accepted,
+                        refused,
+                    ],
+                },
+            ),
+            self.plan_price_result(
+                'a_plan_grid_with_every_rung_refused_answers_rejected',
+                grid({
+                    'levels': 1,
+                    'step_points': 5,
+                    'most_inventory': 30,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                refused,
+            ),
+            self.plan_price_result(
+                'a_plan_grid_answers_a_fill_once_across_a_restart',
+                grid(capped_at_twenty),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000021', 'COMPLETE', 10)]},
+                    {'quote': steady, 'at': 2},
+                ],
+                accepted,
+                restart_between_ticks=True,
+            ),
+            self.plan_price_result(
+                'a_plan_two_sided_quote_follows_the_mid',
+                quote({
+                    'half_spread_points': 1,
+                    'most_inventory': 30,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1010.00, 1010.05), 'at': 1},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_filled_bid_skews_the_ask_and_stops_buying_at_the_cap',
+                quote({
+                    'half_spread_points': 1,
+                    'skew_ticks': 2,
+                    'most_inventory': 10,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {
+                        'quote': steady,
+                        'at': 1,
+                        'updates': [
+                            self.update('26091500000101', 'COMPLETE', 10),
+                        ],
+                    },
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_two_sided_quote_without_a_spread_is_refused',
+                quote({
+                    'most_inventory': 10,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_two_sided_quote_stops_when_its_join_cancels_it',
+                {
+                    'either': {
+                        'sibling_rule': 'cancel',
+                        'children': [
+                            quote({
+                                'half_spread_points': 1,
+                                'most_inventory': 30,
+                            }),
+                            {
+                                'order': {
+                                    'presets': [
+                                        {
+                                            'market_if_touched': {
+                                                'trigger_price': 995,
+                                            },
+                                        },
+                                    ],
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                    {
+                        'quote': self.book_at(994.90, 994.95),
+                        'at': 2,
+                        'updates': [
+                            self.update('26091500000103', 'COMPLETE', 10),
+                        ],
+                    },
+                    {
+                        'quote': self.book_at(994.90, 994.95),
+                        'at': 3,
+                        'updates': [
+                            self.update('26091500000101', 'CANCELLED', 0),
+                            self.update('26091500000102', 'CANCELLED', 0),
+                        ],
+                    },
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_scale_with_profit_taker_takes_each_rungs_profit_and_places_it_again',
+                scale({
+                    'from_price': 1000,
+                    'to_price': 990,
+                    'steps': 3,
+                    'profit_points': 4,
+                    'most_cycles': 1,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {
+                        'quote': steady,
+                        'at': 1,
+                        'updates': [
+                            self.update('26091500000102', 'COMPLETE', 10),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 2,
+                        'updates': [
+                            self.update('26091500000104', 'COMPLETE', 10),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 3,
+                        'updates': [
+                            self.update('26091500000105', 'COMPLETE', 10),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 4,
+                        'updates': [
+                            self.update('26091500000106', 'COMPLETE', 10),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 5,
+                        'updates': [
+                            self.update('26091500000107', 'COMPLETE', 10),
+                        ],
+                    },
+                ],
+                numbered,
+                body_overrides={
+                    'quantity': 30,
+                },
+            ),
+            self.plan_price_result(
+                'a_plan_scale_with_profit_taker_without_a_profit_distance_is_refused',
+                scale({
+                    'from_price': 1000,
+                    'to_price': 990,
+                    'steps': 3,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+                body_overrides={
+                    'quantity': 30,
+                },
+            ),
+            self.plan_price_result(
+                'a_plan_scale_with_profit_taker_is_done_once_its_last_cycle_is_taken',
+                scale({
+                    'from_price': 1000,
+                    'to_price': 995,
+                    'steps': 2,
+                    'profit_points': 4,
+                    'most_cycles': 1,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {
+                        'quote': steady,
+                        'at': 1,
+                        'updates': [
+                            self.update('26091500000101', 'COMPLETE', 10),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 2,
+                        'updates': [
+                            self.update('26091500000102', 'COMPLETE', 10),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 3,
+                        'updates': [
+                            self.update('26091500000103', 'COMPLETE', 10),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 4,
+                        'updates': [
+                            self.update('26091500000104', 'COMPLETE', 10),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 5,
+                        'updates': [
+                            self.update('26091500000105', 'COMPLETE', 10),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 6,
+                        'updates': [
+                            self.update('26091500000106', 'COMPLETE', 10),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 7,
+                        'updates': [
+                            self.update('26091500000107', 'COMPLETE', 10),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 8,
+                        'updates': [
+                            self.update('26091500000108', 'COMPLETE', 10),
+                        ],
+                    },
+                ],
+                numbered,
+                body_overrides={
+                    'quantity': 20,
+                },
+                restart_between_ticks=True,
+            ),
+            self.plan_price_result(
+                'a_plan_exposure_hedge_trades_when_the_band_is_left',
+                hedge({
+                    'watched': [
+                        {
+                            'instrument_id': identifiers['reliance'],
+                            'exposure_per_unit': 1,
+                        },
+                    ],
+                    'hedge_instrument_id': identifiers['reliance'],
+                    'hedge_exposure_per_unit': 1,
+                    'lower_band': -10,
+                    'upper_band': 10,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1},
+                ],
+                accepted,
+                positions=100,
+            ),
+            self.plan_price_result(
+                'a_plan_exposure_hedge_prices_a_hedge_in_another_instrument_from_that_instruments_quote',
+                hedge({
+                    'watched': [
+                        {
+                            'instrument_id': identifiers['reliance'],
+                            'exposure_per_unit': 1,
+                        },
+                    ],
+                    'hedge_instrument_id': identifiers['reliance_future'],
+                    'hedge_exposure_per_unit': 0.2,
+                    'lower_band': -10,
+                    'upper_band': 10,
+                }),
+                [
+                    {
+                        'quote': steady,
+                        'at': 0,
+                        'other_quotes': {
+                            'reliance_future': self.book_at(1004.10, 1004.30),
+                        },
+                    },
+                    {'quote': steady, 'at': 1},
+                ],
+                accepted,
+                positions=100,
+            ),
+            self.plan_price_result(
+                'a_plan_exposure_hedge_inside_its_band_does_nothing',
+                hedge({
+                    'watched': [
+                        {
+                            'instrument_id': identifiers['reliance'],
+                            'exposure_per_unit': 1,
+                        },
+                    ],
+                    'hedge_instrument_id': identifiers['reliance'],
+                    'lower_band': -10,
+                    'upper_band': 10,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1},
+                ],
+                accepted,
+                positions=5,
+            ),
+            self.plan_price_result(
+                'a_plan_exposure_hedge_keeps_watching_after_its_hedge_fills',
+                hedge({
+                    'watched': [
+                        {
+                            'instrument_id': identifiers['reliance'],
+                            'exposure_per_unit': 1,
+                        },
+                    ],
+                    'hedge_instrument_id': identifiers['reliance'],
+                    'hedge_exposure_per_unit': 1,
+                    'lower_band': -10,
+                    'upper_band': 10,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {
+                        'quote': steady,
+                        'at': 1,
+                        'updates': [
+                            self.update('26091500000021', 'COMPLETE', 100),
+                        ],
+                    },
+                    {'quote': steady, 'at': 2},
+                ],
+                accepted,
+                positions=100,
+                restart_between_ticks=True,
+            ),
+            self.plan_result(
+                'a_plan_scale_out_arms_one_stop_and_several_targets',
+                scale_out({
+                    'stop_price': 990,
+                    'stop_limit_price': 988,
+                    'target_prices': [
+                        1010,
+                        1020,
+                        1030,
+                    ],
+                }),
+                [
+                    self.update('26091500000021', 'COMPLETE', 9),
+                ],
+                accepted,
+                body_overrides={
+                    'quantity': 9,
+                },
+            ),
+            self.plan_result(
+                'a_plan_scale_out_takes_only_the_new_part_of_a_targets_second_fill_off_the_stop',
+                scale_out(two_targets),
+                [
+                    self.update('26091500000101', 'COMPLETE', 10),
+                    self.update('26091500000102', 'OPEN', 0),
+                    self.update('26091500000103', 'OPEN', 2),
+                    self.update('26091500000103', 'OPEN', 4),
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_scale_out_moves_its_stop_to_the_entry_price_after_a_target',
+                scale_out(two_targets),
+                [
+                    {'quote': steady, 'at': 0},
+                    {
+                        'quote': steady,
+                        'at': 1,
+                        'updates': [
+                            self.update('26091500000101', 'COMPLETE', 10, average_price=1000.0),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 2,
+                        'updates': [
+                            self.update('26091500000102', 'OPEN', 0, order_type='SL'),
+                            self.update('26091500000103', 'OPEN', 0),
+                            self.update('26091500000104', 'OPEN', 0),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 3,
+                        'updates': [
+                            self.update('26091500000103', 'COMPLETE', 5),
+                        ],
+                    },
+                ],
+                numbered,
+                book_overrides=stop_in_the_book,
+            ),
+            self.plan_result(
+                'a_plan_scale_out_stop_filling_cancels_the_targets',
+                scale_out(two_targets),
+                [
+                    self.update('26091500000101', 'COMPLETE', 10),
+                    self.update('26091500000102', 'OPEN', 0),
+                    self.update('26091500000103', 'OPEN', 0),
+                    self.update('26091500000104', 'OPEN', 0),
+                    self.update('26091500000102', 'COMPLETE', 10),
+                    self.update('26091500000103', 'CANCELLED', 0),
+                    self.update('26091500000104', 'CANCELLED', 0),
+                ],
+                numbered,
+            ),
+            self.plan_result(
+                'a_plan_scale_out_exits_alone_are_refused',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'scale_out_exits': two_targets,
+                            },
+                        ],
+                    },
+                },
+                [],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_scale_out_after_a_market_if_touched_entry',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'market_if_touched': {
+                                    'trigger_price': 995,
+                                },
+                            },
+                            {
+                                'scale_out': two_targets,
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                    {
+                        'quote': self.book_at(994.90, 994.95),
+                        'at': 2,
+                        'updates': [
+                            self.update('26091500000101', 'COMPLETE', 10),
+                        ],
+                    },
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_strategy_stop_closes_every_leg_when_the_total_is_past_its_limit',
+                strategy({
+                    'loss_limit': -500,
+                    'candidates': condor_legs,
+                }),
+                [
+                    {
+                        'quote': steady,
+                        'at': 0,
+                        'updates': [
+                            self.update('26091500000021', 'COMPLETE', 10, average_price=1000.0),
+                        ],
+                    },
+                    {'quote': self.book_at(900.00, 900.05), 'at': 1},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_strategy_stop_leaves_a_strategy_inside_its_limits_alone',
+                strategy({
+                    'loss_limit': -500,
+                    'candidates': condor_legs,
+                }),
+                [
+                    {
+                        'quote': steady,
+                        'at': 0,
+                        'updates': [
+                            self.update('26091500000021', 'COMPLETE', 10, average_price=1000.0),
+                        ],
+                    },
+                    {'quote': self.book_at(990.00, 990.05), 'at': 1},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_strategy_stop_takes_its_profit_closing_the_short_first',
+                strategy({
+                    'profit_target': 500,
+                    'candidates': condor_legs,
+                }),
+                [
+                    {
+                        'quote': steady,
+                        'at': 0,
+                        'updates': [
+                            self.update('26091500000101', 'COMPLETE', 10, average_price=1000.0),
+                            self.update('26091500000102', 'COMPLETE', 10, average_price=250.0),
+                        ],
+                        'other_quotes': {
+                            'kwil': self.book_at(250.00, 250.05),
+                        },
+                    },
+                    {
+                        'quote': self.book_at(1100.00, 1100.05),
+                        'at': 1,
+                        'other_quotes': {
+                            'kwil': self.book_at(250.00, 250.05),
+                        },
+                    },
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_strategy_stop_exits_alone_are_refused',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'strategy_stop_exits': {
+                                    'loss_limit': -500,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_grid_beside_another_preset_is_refused',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'grid': capped_at_twenty,
+                            },
+                            {
+                                'post_only': {},
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+        ]
 
     def run_plan_virtual_limit_checks(self):
         """Runs plan orders held in the engine until their limit is marketable, sent or filled on paper, beside today's virtual limit checks.
@@ -9984,6 +10782,7 @@ class OrderEngineSuite:
             results.extend(self.run_plan_checks())
             results.extend(self.run_plan_trigger_checks())
             results.extend(self.run_plan_virtual_limit_checks())
+            results.extend(self.run_plan_kept_whole_checks())
             results.extend(self.run_plan_join_checks())
             results.extend(self.run_plan_trailing_checks())
             results.extend(self.run_plan_execution_checks())

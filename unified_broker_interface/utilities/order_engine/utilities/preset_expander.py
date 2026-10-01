@@ -25,6 +25,14 @@ WATCH_FIELDS = {
     'mid': 'mid',
 }
 DEFAULT_BUFFER_TICKS = 2
+KEPT_WHOLE_PRESETS = (
+    'grid',
+    'two_sided_quote',
+    'scale_with_profit_taker',
+    'exposure_hedge',
+    'scale_out_exits',
+    'strategy_stop_exits',
+)
 PRESET_NAMES = (
     'simple',
     'market_if_touched',
@@ -69,6 +77,14 @@ PRESET_NAMES = (
     'closing_price',
     'opening_auction',
     'virtual_limit',
+    'grid',
+    'two_sided_quote',
+    'scale_with_profit_taker',
+    'exposure_hedge',
+    'scale_out',
+    'scale_out_exits',
+    'strategy_stop',
+    'strategy_stop_exits',
     'oto',
     'oco',
     'bracket',
@@ -128,6 +144,8 @@ JOIN_PRESET_NAMES = (
     'oco',
     'bracket',
     'cover',
+    'scale_out',
+    'strategy_stop',
 )
 BACKSTOP_SETTINGS = (
     'backstop_price',
@@ -179,6 +197,13 @@ class PresetExpander:
             dict: Slot names to slot values, as a caller would write them; empty when there are problems.
         """
         self.problems = []
+        if name in KEPT_WHOLE_PRESETS:
+            return {
+                'whole': {
+                    'name': name,
+                    'settings': settings,
+                },
+            }
         if name == 'simple':
             return self._simple(settings, path)
         if name == 'market_if_touched':
@@ -328,6 +353,10 @@ class PresetExpander:
             return self._bracket(settings, entry, path)
         if name == 'cover':
             return self._cover(settings, entry, path)
+        if name == 'scale_out':
+            return self._scale_out(settings, entry, path)
+        if name == 'strategy_stop':
+            return self._strategy_stop(settings, entry, path)
         if name == 'stop_and_reverse':
             return self._sequential_reverse(settings, entry, path)
         return self._hidden_stop_with_backstop(settings, entry, path, name)
@@ -772,6 +801,73 @@ class PresetExpander:
                     'order': entry,
                 },
                 'each_fill': exits,
+                'cancel_first_on_child_fill': True,
+            },
+        }
+
+    def _scale_out(self, settings, entry, path):
+        """The entry, and once it fills, the scale-out's exits kept whole: tranched targets and one stop that shrinks behind them.
+
+        Args:
+            settings (dict): `stop_price`, `stop_limit_price`, `target_prices` and `breakeven_after`, which the exits check.
+            entry (dict): The order it was named in.
+            path (str): The preset's path.
+
+        Returns:
+            dict: A Then join whose child is the exits.
+        """
+        return {
+            'then': {
+                'first': {
+                    'order': entry,
+                },
+                'each_fill': {
+                    'order': {
+                        'presets': [
+                            {
+                                'scale_out_exits': settings,
+                            },
+                        ],
+                    },
+                },
+                'cancel_first_on_child_fill': True,
+            },
+        }
+
+    def _strategy_stop(self, settings, entry, path):
+        """A basket of the candidates, and once any of it fills, the strategy stop's exits kept whole, marking the whole strategy and closing it past a level.
+
+        Args:
+            settings (dict): `candidates` and `hedge_benefit` for the basket, and `loss_limit` and `profit_target`, which the exits check.
+            entry (dict): The order it was named in, whose other presets and slot values every candidate shares.
+            path (str): The preset's path.
+
+        Returns:
+            dict: A Then join of the basket and the exits.
+        """
+        self._refuse_unknown(settings, ('candidates', 'hedge_benefit', 'loss_limit', 'profit_target'), path, 'strategy_stop')
+        basket_settings = {}
+        exit_settings = {}
+        for name, value in settings.items():
+            if name in ('candidates', 'hedge_benefit'):
+                basket_settings[name] = value
+            else:
+                exit_settings[name] = value
+        basket = self._basket(basket_settings, entry, path)
+        if self.problems:
+            return {}
+        return {
+            'then': {
+                'first': basket,
+                'each_fill': {
+                    'order': {
+                        'presets': [
+                            {
+                                'strategy_stop_exits': exit_settings,
+                            },
+                        ],
+                    },
+                },
                 'cancel_first_on_child_fill': True,
             },
         }

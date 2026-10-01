@@ -41,6 +41,9 @@ from unified_broker_interface.utilities.order_engine.utilities.either_part impor
     SIBLING_RULES,
     EitherPart,
 )
+from unified_broker_interface.utilities.order_engine.utilities.exposure_hedge_part import (
+    ExposureHedgePart,
+)
 from unified_broker_interface.utilities.order_engine.utilities.fill_delta import (
     FillDelta,
 )
@@ -72,6 +75,9 @@ from unified_broker_interface.utilities.order_engine.utilities.lifetime import (
     APPLIES_TO,
     ON_END,
     Lifetime,
+)
+from unified_broker_interface.utilities.order_engine.utilities.grid_part import (
+    GridPart,
 )
 from unified_broker_interface.utilities.order_engine.utilities.limit_marketable_condition import (
     LimitMarketableCondition,
@@ -122,11 +128,20 @@ from unified_broker_interface.utilities.order_engine.utilities.price_crosses_con
 from unified_broker_interface.utilities.order_engine.utilities.repeat_part import (
     RepeatPart,
 )
+from unified_broker_interface.utilities.order_engine.utilities.scale_out_exits_part import (
+    ScaleOutExitsPart,
+)
+from unified_broker_interface.utilities.order_engine.utilities.scale_with_profit_taker_part import (
+    ScaleWithProfitTakerPart,
+)
 from unified_broker_interface.utilities.order_engine.utilities.sequence_part import (
     SequencePart,
 )
 from unified_broker_interface.utilities.order_engine.utilities.stages_pricing import (
     StagesPricing,
+)
+from unified_broker_interface.utilities.order_engine.utilities.strategy_stop_exits_part import (
+    StrategyStopExitsPart,
 )
 from unified_broker_interface.utilities.order_engine.utilities.then_part import (
     ThenPart,
@@ -151,8 +166,14 @@ from unified_broker_interface.utilities.order_engine.utilities.trails_condition 
 from unified_broker_interface.utilities.order_engine.utilities.twap_execution import (
     TwapExecution,
 )
+from unified_broker_interface.utilities.order_engine.utilities.two_sided_quote_part import (
+    TwoSidedQuotePart,
+)
 from unified_broker_interface.utilities.order_engine.utilities.vwap_execution import (
     VwapExecution,
+)
+from unified_broker_interface.utilities.order_engine.utilities.whole_part import (
+    WholePart,
 )
 
 JOIN_NAMES = (
@@ -240,6 +261,14 @@ SIDES = (
     'close',
     'against_delta',
 )
+WHOLE_PART_CLASSES = {
+    'grid': GridPart,
+    'two_sided_quote': TwoSidedQuotePart,
+    'scale_with_profit_taker': ScaleWithProfitTakerPart,
+    'exposure_hedge': ExposureHedgePart,
+    'scale_out_exits': ScaleOutExitsPart,
+    'strategy_stop_exits': StrategyStopExitsPart,
+}
 POSITION_SETTINGS = (
     'product',
     'instrument_ids',
@@ -319,6 +348,8 @@ class PlanReader:
         for part in root.order_parts():
             if isinstance(part.pricing, FromParentFillPricing) and part.pricing.first_path is None:
                 self._add_problem(part.path, 'from_parent_fill_needs_then', 'from_parent_fill prices this order from the fills of a Then join\'s first order, so it must be that join\'s child, and the first plan a single order')
+            if isinstance(part, WholePart) and part.NEEDS_THEN and not part.sized_by_fills:
+                self._add_problem(part.path, 'needs_then', f'{part.name} protects what a Then join\'s first plan filled, so it must be that join\'s child')
             if part.fill_ratio is not None and not part.sized_by_fills:
                 self._add_problem(part.path, 'parent_fill_needs_then', 'a quantity of parent_fill or parent_fill_delta scales what a Then join\'s first plan filled, so the order must be that join\'s child')
 
@@ -414,8 +445,13 @@ class PlanReader:
             opened_by = []
             for part in first.order_parts():
                 opened_by.append(part.path)
+            opened_instruments = []
+            for part in first.order_parts():
+                opened_instruments.append(part.overrides.get('instrument_id'))
             for part in child.order_parts():
                 part.opened_by = opened_by
+                if isinstance(part, WholePart):
+                    part.opened_instruments = opened_instruments
         if isinstance(child, OrderPart):
             child.sized_by_fills = True
             if isinstance(child.pricing, FromParentFillPricing) and isinstance(first, OrderPart):
@@ -695,6 +731,9 @@ class PlanReader:
                 own[slot] = order[slot]
         if isinstance(order.get('quantity'), dict):
             own['quantity'] = order['quantity']
+        for slots, source_path in sources:
+            if 'whole' in slots:
+                return self._read_whole(order, slots['whole'], source_path, own, path, keeps_tag, overrides)
         sources.append((own, path))
         position_quantity = None
         position_path = None
@@ -868,6 +907,33 @@ class PlanReader:
         part = OrderPart(path, preset_names, trigger, side, pricing, keeps_tag, execution, cap, post_only, discretion, lifetime, overrides, position)
         part.fill_ratio = fill_ratio
         part.venue = venue
+        return part
+
+    def _read_whole(self, order, whole, source_path, own, path, keeps_tag, overrides):
+        """Reads an order whose preset is one of the types kept whole, such as a grid.
+
+        Args:
+            order (dict): The order as the caller wrote it.
+            whole (dict): The expanded preset: `name` and `settings`.
+            source_path (str): Where the preset sits in the plan.
+            own (dict): The order's own slot values.
+            path (str): Where the order sits in the plan.
+            keeps_tag (bool): Whether its orders carry the caller's tag.
+            overrides (dict): The order's own values written over the body's.
+
+        Returns:
+            WholePart | None: The part, or None when it has a problem.
+        """
+        name = whole['name']
+        if len(order.get('presets') or []) != 1 or own:
+            self._add_problem(path, 'kept_whole_alone', f'{name} runs by rules of its own, so it takes no other preset and no trigger, side, pricing, execution, guards, lifetime, venue or sized quantity')
+            return None
+        part = WHOLE_PART_CLASSES[name](path, name, whole['settings'], keeps_tag, overrides)
+        problems = part.settings_problems()
+        for message in problems:
+            self._add_problem(source_path, 'bad_setting', message)
+        if problems:
+            return None
         return part
 
     def _closes_sensibly(self, side, position, pricing_path, execution, path):

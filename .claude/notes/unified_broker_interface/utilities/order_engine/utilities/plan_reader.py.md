@@ -65,3 +65,7 @@ A venue turns into a `time_from` trigger at its `at_time`, so the order waits in
 ## The `paper` venue and `limit_marketable` (2026-10-01)
 
 `paper` takes no `at_time` and adds no trigger. The reader insists on a `limit_marketable` trigger alone and on the order being the whole plan; the reasons are in the paper venue's note. Any order whose trigger includes `limit_marketable` must keep the body's own pricing.
+
+## Kept-whole presets (2026-10-02)
+
+A kept-whole preset expands to a `whole` slot naming its type and settings. The reader builds that type's part from `WHOLE_PART_CLASSES` and refuses it beside another preset or any slot value as `kept_whole_alone`, as the design's table of refused combinations asks. The order's plain overrides, such as its instrument and quantity, still apply, since they only change the body the part reads.

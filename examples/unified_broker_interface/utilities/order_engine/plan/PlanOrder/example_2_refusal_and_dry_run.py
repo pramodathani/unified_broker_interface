@@ -298,7 +298,7 @@ class RefusalAndDryRunExample:
                     'side': 'buy',
                     'presets': [
                         {
-                            'grid': {},
+                            'no_such_preset': {},
                         },
                         {
                             'simple': {

@@ -171,6 +171,42 @@ class WhatEachPresetStandsForExample:
             'virtual_limit': {
                 'paper': True,
             },
+            'grid': {
+                'levels': 2,
+                'step_points': 5,
+                'most_inventory': 20,
+            },
+            'two_sided_quote': {
+                'half_spread_points': 1,
+                'most_inventory': 30,
+            },
+            'scale_with_profit_taker': {
+                'from_price': 1000,
+                'to_price': 990,
+                'steps': 3,
+                'profit_points': 4,
+            },
+            'strategy_stop_exits': {
+                'loss_limit': -500,
+            },
+            'scale_out_exits': {
+                'stop_price': 990,
+                'stop_limit_price': 988,
+                'target_prices': [
+                    1010,
+                    1020,
+                ],
+            },
+            'exposure_hedge': {
+                'watched': [
+                    {
+                        'instrument_id': 'RELIANCE',
+                    },
+                ],
+                'hedge_instrument_id': 'RELIANCE',
+                'lower_band': -10,
+                'upper_band': 10,
+            },
             'account_conditional': {
                 'account_field': 'day_pnl',
                 'account_level': -5000,

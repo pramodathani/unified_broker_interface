@@ -1,0 +1,8 @@
+problems: []
+levels 2, step 5, most inventory 20, needs prices True
+remembered: {'centre': '1000.10', 'answered': []}
+placed 4 rungs: [('place', 'BUY', 5, '995.10', 'mine'), ('place', 'SELL', 5, '1005.10', 'mine'), ('place', 'BUY', 5, '990.10', 'mine'), ('place', 'SELL', 5, '1010.10', 'mine')]
+inventory after the buy fills: 5
+settle placed 1: ('place', 'SELL', 5, '1000.1', 'mine')
+settle again placed 0
+answered: ['parent-1:1']

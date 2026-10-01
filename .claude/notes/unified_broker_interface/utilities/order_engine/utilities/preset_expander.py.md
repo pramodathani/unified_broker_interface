@@ -91,3 +91,15 @@ The backstop is a second order resting beside the engine-side stop, cancelled be
 ## Delta-sized hedge (2026-10-01)
 
 `attached_hedge` with `delta_volatility` is the same Then join as with `ratio`, with the hedge's side `against_delta` and its quantity `parent_fill_delta`. Exactly one of the two is required, with today's message. A plan on a stock is refused before the parent is recorded, through `FillDelta.check`, with today's message.
+
+## Kept-whole presets (2026-10-02)
+
+The expander does not check a kept-whole preset's settings: it hands `name` and `settings` on in a `whole` slot, and the type's own part checks them. The scenarios and examples that needed an unknown preset now use `no_such_preset`, because `grid`, which they used, became a preset.
+
+## Scale out (2026-10-02)
+
+`scale_out` is a join preset: a Then join of the order and a `scale_out_exits` child, cancelling the rest of the entry once an exit fills, the shape `bracket` uses. The settings are handed on unchecked; the exits check them.
+
+## Strategy stop (2026-10-02)
+
+`strategy_stop` is a join preset: a Then join of the `basket` the candidates make and a `strategy_stop_exits` child, cancelling the rest of the basket once a close fills. `candidates` and `hedge_benefit` go to the basket; the levels go to the exits, which check them.

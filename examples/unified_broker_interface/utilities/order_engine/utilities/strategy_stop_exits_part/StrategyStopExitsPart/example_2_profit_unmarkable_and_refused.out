@@ -1,0 +1,10 @@
+INFY has no quote; closed: False
+both quoted, up 1,000; closed: True
+  ('place', 'INFY', 'BUY', 10, '1500.15')
+  ('place', 'RELIANCE', 'SELL', 10, '1099.85')
+before the closes fill: working
+after: done filled
+problem: the strategy_stop_exits preset takes loss_limit and profit_target, not 'trail'
+problem: profit_target must be a number, not 'lots'
+problem: loss_limit is a loss, so it must be below zero, not 200
+neither level: ['a strategy stop needs loss_limit, profit_target, or both']

@@ -1,0 +1,9 @@
+memory readied: {}
+8 orders, state done, reason filled
+settling again sends nothing: []
+a quantity of one: 400 a ladder of 2 steps needs a quantity of at least 2, not 1
+problem: the scale_with_profit_taker preset takes from_price, to_price, steps, profit_points, most_cycles, not 'cycles'
+problem: a ladder needs steps between 2 and 20, not 1
+problem: a ladder needs from_price and to_price to differ
+problem: a scale with profit-taker needs profit_points, the distance above zero to take each rung's profit at, not None
+problem: most_cycles must be a whole number of at least 1, not 0

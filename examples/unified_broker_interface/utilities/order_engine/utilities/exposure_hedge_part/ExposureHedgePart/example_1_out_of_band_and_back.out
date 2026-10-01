@@ -1,0 +1,8 @@
+problems [], trades RELIANCE, needs prices True, moves on ticks True
+start places: []
+flat, hedged: False
+holding 100, exposure 100
+a hundred held, hedged: True [('place', 'SELL', 100, '999.85')]
+in flight -100, exposure 0
+next tick, hedged again: False
+a buy would go at 1000.15, a sell at 999.85
