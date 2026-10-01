@@ -81,3 +81,7 @@ Nothing in the plan order changed for this step; `AtrTrailPricing` and `StagesPr
 ## Stage 5a: orders on several instruments, together and sequence (2026-10-01)
 
 `_remember_tick_sizes` keeps the tick size of every other instrument a priced order trades. `_refuse_without_position` checks a protecting order against the position on its own instrument and product. A multi-order answer names each leg's `instrument_id`. `group_margin_legs` is set by a together join while its children start; it is a class attribute holding None so a plan order that never builds a group has it.
+
+## Stage 5b: closing what is held (2026-10-01)
+
+`_fire_waiting` is shared by price and clock ticks. A clock tick looks only at orders whose trigger needs no prices, because a price trigger may count ticks to confirm, and reads quotes only for an order that fires and prices itself; before this, a time trigger in a plan fired only on a price tick, so a square off whose instrument sent no tick never ran. A tick on which an order fired and ended without placing anything now settles and finishes the plan. A plan whose only work was a close that found nothing held ends `completed` even from `received`, as today's close types record, though the usual state changes do not allow it; recovery replays whatever was recorded.

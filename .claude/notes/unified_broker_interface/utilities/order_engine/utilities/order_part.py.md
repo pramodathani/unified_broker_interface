@@ -53,3 +53,7 @@ A part whose lifetime has ended is marked `ended`, which stops `send_due` sendin
 ## Stage 5a (2026-10-01)
 
 `overrides` holds the order's own body values. `context` builds the `OrderContext` every pricing, execution, trigger, guard, modifier and lifetime is given, and `place` places through it so the broker order carries the order's instrument. An order naming its own `tag` keeps it even when it is not the plan's main order. `instruments` lists the order's own instrument so the price ticker brings its quotes.
+
+## Stage 5b (2026-10-01)
+
+A part with a `position` is a close: `send` hands it to `_close_positions`, which closes through `PositionQuantity` and records `nothing_held`, `refused` when the book gave no price, or `working`. Its closing orders carry the part's path as their role, so the part settles as done once they finish. `close` sends the side opposite to the body's for any trigger that needs a side, as `protect` does, and counts as closing a position.

@@ -1183,12 +1183,12 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     |---|---|:---:|---|
     | `presets` | list | No | Objects each holding one preset name and its settings, from the table below. An order with no presets and no slot values runs as `simple`. |
     | `trigger` | object | No | What the order waits for: one condition, or `all` or `any` with a list of them. With no trigger the order is placed at once. |
-    | `side` | string | No | `buy`, `sell`, or `protect`, which trades against the position the body's side opened: a body `BUY` with `protect` sends a sell. Defaults to the body's side. |
+    | `side` | string | No | `buy`, `sell`, `protect`, which trades against the position the body's side opened, so a body `BUY` with `protect` sends a sell, or `close`, which closes the position held when the order fires and needs a position `quantity`. Defaults to the body's side. |
     | `pricing` | list | No | One pricing setter (`fixed`, `marketable`, `native_stop`, `trail`, `stages`, `peg`, `chase`, `follow_instrument` or `option_model`), and optionally the modifiers `cap` and `discretion`. Defaults to `fixed` with the body's own order type and price. |
     | `execution` | list | No | One execution value, which cuts the order into pieces and says when each is sent: `all_at_once`, `iceberg`, `twap`, `vwap`, `front_loaded`, `participation` or `book_depth`. Defaults to `all_at_once`. Nesting one execution inside another is not built yet. |
     | `guards` | list | No | Checks made before an order is sent or moved: `post_only` so far. |
     | `lifetime` | list | No | One object saying when the order stops and what is done then, described below. Defaults to the body's validity. |
-    | `instrument_id`, `quantity`, `transaction_type`, `product`, `validity`, `tag` | as in the body | No | The order's own values, written over the body's, so the orders of one plan can trade different instruments, sides and sizes. Every broker order of a plan still goes to the broker the first one chose. |
+    | `instrument_id`, `quantity`, `transaction_type`, `product`, `validity`, `tag` | as in the body | No | The order's own values, written over the body's, so the orders of one plan can trade different instruments, sides and sizes. Every broker order of a plan still goes to the broker the first one chose, except a close's. `quantity` can also be `{"position": {...}}`, described below. |
 
     The trigger conditions are these:
 
@@ -1229,7 +1229,9 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | `marketable` | Whatever is still resting is moved two ticks past the other side's touch, so it fills. A stop has no limit to make marketable, so it is refused with `marketable_needs_limit`. |
     | `close_filled` | Whatever is still resting is cancelled first, then what filled is closed with a market order the other way, sent as `<path>.close`. Only a plan that is one order can do this, because orders joined to it are sized to its fills (`close_filled_needs_whole_plan`), and not an order that itself protects a position (`close_filled_on_protect`). |
 
-    Minutes asked for on a day the instrument does not trade are refused with <span class="status s4">400</span>. The engine checks lifetimes on every price tick and once a second on the clock, so an order ends on time even when its instrument stops quoting. `after_days` and `when` are in the design but not built yet: a plan does not outlive the trading day, so the `gtt` type's `valid_days` has no preset yet.
+    Minutes asked for on a day the instrument does not trade are refused with <span class="status s4">400</span>. The engine checks lifetimes, and triggers that wait only for a time, on every price tick and once a second on the clock, so an order ends, or is sent, on time even when its instrument stops quoting. `after_days` and `when` are in the design but not built yet: a plan does not outlive the trading day, so the `gtt` type's `valid_days` has no preset yet.
+
+    A close reads the position held when it fires. `quantity` is `{"position": {...}}` with `product` (`intraday`, `delivery` or `carry`; default the body's product), `instrument_ids` or `every_instrument: true` (default the order's own instrument), `ratio` (1 to close, 2 to close and open the reverse in one order) and `cancel_resting_first` (default true). It cancels every order resting on those instruments first, so a stop or target left live cannot re-open the position, and then sends each broker's share to the broker that holds it, as a limit two ticks past the other side's touch. A close takes no pricing or execution of its own (`close_prices_itself`). Nothing held ends the plan `completed` without an order.
 
     The execution values are these. Each piece is priced by the order's pricing when it is sent, and what an execution has sent is read from the order's own broker orders, so a restart neither repeats nor skips a piece.
 
@@ -1274,6 +1276,9 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | `cover` | A Then join: the order, then a `native_stop` stop sized to each fill. Takes `stop_price` and `stop_limit_price`, both required. |
     | `oco` | An Either join that reduces: a stop and a target protecting a position already held. It has no order of its own, so it cannot be named beside other presets or slot values. |
     | `basket` | A together join with `group_margin`: one order per candidate, each the rest of the order with the candidate's `instrument_id`, `transaction_type`, `product`, `validity`, `quantity` and `tag`, and its `price` and `order_type` as `fixed` pricing, or with a `trigger_price` a `native_stop`. Takes `candidates`, 1 to 25, and `hedge_benefit`. Unlike the `basket` type, an instrument may appear twice, because each order is told apart by its path. |
+    | `close_on_trigger` | A `price_crosses` trigger, the `close` side and the position on the order's own instrument. Takes `trigger_price`, `trigger_direction`, `trigger_on` and `hold_seconds`. |
+    | `square_off` | A `time_at` trigger at `at_time`, the `close` side and every position on `product` (default `intraday`), or on `instrument_ids`. Takes `at_time`, `product` and `instrument_ids`. |
+    | `stop_and_reverse` | With `method: double`, a close of twice the position. With `sequential`, the default, a Then join: the close on the trigger, then once it is done an order the other way for what it closed, priced two ticks past the touch. Takes the trigger's settings and `method`. |
     | `oca` | An Either join that cancels: one order per candidate, as for `basket`, and the first to fill cancels the rest. Takes `candidates`, at least two. |
     | `oto` | A Then join: the order, then the `then` order sized to each fill. `then` takes `transaction_type`, `order_type` (`LIMIT`, `MARKET` or `SL`), `price` and `trigger_price` so far. |
     | `market_if_touched` | A `price_crosses` trigger at `trigger_price` and `marketable` pricing. Takes `trigger_price`, `trigger_direction`, `trigger_on`, `hold_seconds` and `buffer_ticks`. |

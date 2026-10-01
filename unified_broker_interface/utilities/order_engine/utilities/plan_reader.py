@@ -63,6 +63,10 @@ from unified_broker_interface.utilities.order_engine.utilities.peg_pricing impor
     REFERENCES,
     PegPricing,
 )
+from unified_broker_interface.utilities.order_engine.utilities.position_quantity import (
+    PRODUCTS,
+    PositionQuantity,
+)
 from unified_broker_interface.utilities.order_engine.utilities.post_only_guard import (
     ON_CROSSING,
     PostOnlyGuard,
@@ -178,6 +182,14 @@ SIDES = (
     'buy',
     'sell',
     'protect',
+    'close',
+)
+POSITION_SETTINGS = (
+    'product',
+    'instrument_ids',
+    'every_instrument',
+    'ratio',
+    'cancel_resting_first',
 )
 PRICE_CROSSES_SETTINGS = (
     'level',
@@ -431,6 +443,8 @@ class PlanReader:
             if name not in order:
                 continue
             value = order[name]
+            if name == 'quantity' and isinstance(value, dict):
+                continue
             if name == 'quantity':
                 if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                     self._add_problem(path, 'bad_setting', f'quantity must be a whole number of at least 1, not {value!r}')
@@ -549,7 +563,11 @@ class PlanReader:
         for slot in ('trigger', 'side', 'pricing', 'execution', 'guards', 'lifetime'):
             if slot in order:
                 own[slot] = order[slot]
+        if isinstance(order.get('quantity'), dict):
+            own['quantity'] = order['quantity']
         sources.append((own, path))
+        position_quantity = None
+        position_path = None
 
         preset_names = []
         for preset in order.get('presets', []) or []:
@@ -571,6 +589,9 @@ class PlanReader:
         execution = None
         execution_path = None
         for slots, source_path in sources:
+            if 'quantity' in slots:
+                position_quantity = slots['quantity']
+                position_path = f'{source_path}.quantity'
             if 'trigger' in slots:
                 condition = self._read_condition(
                     slots['trigger'],
@@ -681,7 +702,85 @@ class PlanReader:
             return None
         if lifetime is not None and not self._can_end(lifetime, pricing, side, path):
             return None
-        return OrderPart(path, preset_names, trigger, side, pricing, keeps_tag, execution, cap, post_only, discretion, lifetime, overrides)
+        position = None
+        if position_quantity is not None:
+            position = self._read_position(position_quantity, position_path)
+            if position is None:
+                return None
+        if not self._closes_sensibly(side, position, pricing_path, execution, path):
+            return None
+        return OrderPart(path, preset_names, trigger, side, pricing, keeps_tag, execution, cap, post_only, discretion, lifetime, overrides, position)
+
+    def _closes_sensibly(self, side, position, pricing_path, execution, path):
+        """Whether a `close` side and a position quantity come together and with nothing they would ignore, reporting the problem when not.
+
+        A close reads the position held and prices each closing order a little past the touch itself, so a pricing or an execution of its own would be ignored.
+
+        Args:
+            side (str | None): The order's side.
+            position (PositionQuantity | None): The order's position quantity.
+            pricing_path (str | None): Where the order's pricing was given, or None when it has none.
+            execution (object): The order's execution.
+            path (str): Where the order sits in the plan.
+
+        Returns:
+            bool: True when they are sensible.
+        """
+        if side == 'close' and position is None:
+            self._add_problem(path, 'close_needs_position', 'a close reads the position held when it fires, so its quantity must be {"position": {...}}')
+            return False
+        if position is not None and side != 'close':
+            self._add_problem(path, 'position_needs_close', 'a quantity read from the position closes that position, so the order\'s side must be close')
+            return False
+        if position is None:
+            return True
+        if pricing_path is not None or not isinstance(execution, AllAtOnceExecution):
+            self._add_problem(path, 'close_prices_itself', 'a close sends one order per position a little past the touch, so it takes no pricing or execution of its own')
+            return False
+        return True
+
+    def _read_position(self, quantity, path):
+        """Reads a quantity given as `{"position": {...}}`.
+
+        Args:
+            quantity (dict): The quantity as the caller wrote it.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            PositionQuantity | None: The quantity, or None when it has a problem.
+        """
+        if len(quantity) != 1 or not isinstance(quantity.get('position'), dict):
+            self._add_problem(path, 'bad_setting', 'a quantity is a whole number, or an object holding position and its settings')
+            return None
+        settings = quantity['position']
+        problems_before = len(self.problems)
+        self._refuse_unknown(settings, POSITION_SETTINGS, f'{path}.position', 'position', 'quantity')
+        product = settings.get('product')
+        if product is not None and product not in PRODUCTS:
+            self._add_problem(path, 'bad_setting', f'product must be one of {", ".join(PRODUCTS)}, not {product!r}')
+        instrument_ids = settings.get('instrument_ids')
+        if instrument_ids is not None:
+            valid = isinstance(instrument_ids, list) and bool(instrument_ids)
+            if valid:
+                for instrument_id in instrument_ids:
+                    if not isinstance(instrument_id, str) or not instrument_id:
+                        valid = False
+            if not valid:
+                self._add_problem(path, 'bad_setting', 'instrument_ids is a list of instrument ids')
+        flags = {}
+        for name, default in (('every_instrument', False), ('cancel_resting_first', True)):
+            value = settings.get(name, default)
+            if not isinstance(value, bool):
+                self._add_problem(path, 'bad_setting', f'{name} must be true or false, not {value!r}')
+            flags[name] = value
+        if flags['every_instrument'] is True and instrument_ids is not None:
+            self._add_problem(path, 'bad_setting', 'every_instrument closes every instrument held, so it takes no instrument_ids')
+        ratio = settings.get('ratio', 1)
+        if ratio not in (1, 2) or isinstance(ratio, bool):
+            self._add_problem(path, 'bad_setting', f'ratio must be 1, to close, or 2, to close and reverse, not {ratio!r}')
+        if len(self.problems) > problems_before:
+            return None
+        return PositionQuantity(product, instrument_ids, flags['every_instrument'], ratio, flags['cancel_resting_first'])
 
     def _can_end(self, lifetime, pricing, side, path):
         """Whether an order can end the way its lifetime says, reporting the problem when it cannot.

@@ -44,9 +44,10 @@ class OrderPart:
         discretion (DiscretionModifier | None): How far past its visible price it quietly goes, or None.
         lifetime (Lifetime | None): When it stops working and what is done then, or None for the body's validity.
         overrides (dict): Body values of its own, such as `instrument_id`, `quantity` or `transaction_type`, written over the caller's body; empty for an order on the body as it is.
+        position (PositionQuantity | None): For the `close` side, how the position it closes is read; None for any other order.
     """
 
-    def __init__(self, path, presets, trigger, side, pricing, keeps_tag=True, execution=None, cap=None, post_only=None, discretion=None, lifetime=None, overrides=None):
+    def __init__(self, path, presets, trigger, side, pricing, keeps_tag=True, execution=None, cap=None, post_only=None, discretion=None, lifetime=None, overrides=None, position=None):
         """Builds the part from values the plan reader has already checked.
 
         Args:
@@ -62,6 +63,7 @@ class OrderPart:
             discretion (DiscretionModifier | None): How far past its visible price it quietly goes, or None.
             lifetime (Lifetime | None): When it stops working and what is done then, or None.
             overrides (dict | None): Body values of its own, or None for none.
+            position (PositionQuantity | None): How the position a `close` order closes is read, or None.
 
         Returns:
             None: This method returns nothing.
@@ -82,6 +84,7 @@ class OrderPart:
         if overrides is None:
             overrides = {}
         self.overrides = overrides
+        self.position = position
 
     def context(self, plan_order):
         """The plan order as this order's pricing, execution and trigger see it: on this order's instrument, with its own body values.
@@ -188,12 +191,12 @@ class OrderPart:
         return {}
 
     def closes_position(self):
-        """Whether this part's orders close a position, which is so for the `protect` side.
+        """Whether this part's orders close a position, which is so for the `protect` and `close` sides.
 
         Returns:
-            bool: True for `protect`.
+            bool: True for `protect` and `close`.
         """
-        return self.side == 'protect'
+        return self.side in ('protect', 'close')
 
     def _opening_side(self, plan_order):
         """The side of the caller's body, read the way a validated order reads it.
@@ -217,7 +220,7 @@ class OrderPart:
         Returns:
             str: BUY or SELL.
         """
-        if self.side == 'protect':
+        if self.side in ('protect', 'close'):
             return OPPOSITE_SIDES[opening_side]
         if self.side in NAMED_SIDES:
             return NAMED_SIDES[self.side]
@@ -395,6 +398,8 @@ class OrderPart:
         """
         if now is None:
             now = time.time()
+        if self.position is not None:
+            return self._close_positions(plan_order)
         record = plan_order.part_record(self.path)
         was_working = record.get('state') == 'working'
         if record.get('execution_memory') is None:
@@ -422,6 +427,32 @@ class OrderPart:
             return placed
         record['state'] = 'working'
         plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part\'s order was placed')
+        return placed
+
+    def _close_positions(self, plan_order):
+        """Closes the positions a `close` order reads, and records what came of it.
+
+        Args:
+            plan_order (PlanOrder): The plan order.
+
+        Returns:
+            list: One `(path, answer, status)` per closing order placed.
+        """
+        placed, found, cancelled = self.position.close(plan_order, self.context(plan_order), self.path)
+        record = plan_order.part_record(self.path)
+        if found == 0:
+            record['state'] = 'done'
+            record['reason'] = 'nothing_held'
+            plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part cancelled {cancelled} resting orders and found nothing held to close')
+            return placed
+        if not placed:
+            record['state'] = 'done'
+            record['reason'] = 'refused'
+            record['message'] = f'the book gave no price to close the {found} positions found'
+            plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part is done: {record["message"]}')
+            return placed
+        record['state'] = 'working'
+        plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part cancelled {cancelled} resting orders and sent {len(placed)} closing orders for {found} positions')
         return placed
 
     def total(self, plan_order):
@@ -877,8 +908,12 @@ class OrderPart:
         """Where this part's quantity comes from, as a dry run shows it.
 
         Returns:
-            str: `the body's quantity` for the plan's main order, and `set by its join` for any other.
+            str | int | dict: The position read when it fires, the order's own quantity, `the body's quantity` for the plan's main order, or `set by its join` for any other.
         """
+        if self.position is not None:
+            return self.position.described()
+        if 'quantity' in self.overrides:
+            return self.overrides['quantity']
         if self.keeps_tag:
             return 'the body\'s quantity'
         return 'set by its join'

@@ -53,6 +53,9 @@ PRESET_NAMES = (
     'time_stop',
     'basket',
     'oca',
+    'close_on_trigger',
+    'square_off',
+    'stop_and_reverse',
     'oto',
     'oco',
     'bracket',
@@ -203,6 +206,12 @@ class PresetExpander:
             return self._good_till_time(settings, path)
         if name == 'time_stop':
             return self._time_stop(settings, path)
+        if name == 'close_on_trigger':
+            return self._close_on_trigger(settings, path)
+        if name == 'square_off':
+            return self._square_off(settings, path)
+        if name == 'stop_and_reverse':
+            return self._stop_and_reverse(settings, path)
         return self._hidden_stop(settings, path)
 
     def is_join(self, name, settings):
@@ -213,9 +222,11 @@ class PresetExpander:
             settings (dict): The preset's settings.
 
         Returns:
-            bool: True for `oto`, `oco`, `bracket`, `cover`, and a `hidden_stop` with a backstop.
+            bool: True for `basket`, `oca`, `oto`, `oco`, `bracket`, `cover`, a `hidden_stop` with a backstop, and a `stop_and_reverse` that closes before it reverses.
         """
         if name in JOIN_PRESET_NAMES:
+            return True
+        if name == 'stop_and_reverse' and settings.get('method', 'sequential') == 'sequential':
             return True
         if name == 'hidden_stop':
             for setting in BACKSTOP_SETTINGS:
@@ -250,6 +261,8 @@ class PresetExpander:
             return self._bracket(settings, entry, path)
         if name == 'cover':
             return self._cover(settings, entry, path)
+        if name == 'stop_and_reverse':
+            return self._sequential_reverse(settings, entry, path)
         return self._hidden_stop_with_backstop(settings, entry, path)
 
     def _candidate_orders(self, settings, entry, path, name):
@@ -1007,6 +1020,140 @@ class PresetExpander:
                 ending,
             ],
         }
+
+    def _close_on_trigger(self, settings, path):
+        """Waits for a price, then cancels what rests on the instrument and closes the whole position held then.
+
+        Args:
+            settings (dict): `trigger_price`, and optionally `trigger_direction`, `trigger_on` and `hold_seconds`.
+            path (str): The preset's path.
+
+        Returns:
+            dict: A `price_crosses` trigger, the `close` side and a quantity read from the position.
+        """
+        self._refuse_unknown(settings, ('trigger_price', 'trigger_direction', 'trigger_on', 'hold_seconds'), path, 'close_on_trigger')
+        return {
+            'trigger': self._price_trigger(settings, path),
+            'side': 'close',
+            'quantity': {
+                'position': {},
+            },
+        }
+
+    def _square_off(self, settings, path):
+        """Closes every position on a product at a time of day, cancelling what rests on those instruments first.
+
+        Args:
+            settings (dict): `at_time`, and optionally `product`, default `intraday`, and `instrument_ids`.
+            path (str): The preset's path.
+
+        Returns:
+            dict: A `time_at` trigger, the `close` side and a quantity read from every position held.
+        """
+        self._refuse_unknown(settings, ('at_time', 'product', 'instrument_ids'), path, 'square_off')
+        position = {
+            'product': str(settings.get('product') or 'intraday').lower(),
+        }
+        if settings.get('instrument_ids'):
+            position['instrument_ids'] = settings['instrument_ids']
+        else:
+            position['every_instrument'] = True
+        return {
+            'trigger': {
+                'time_at': settings.get('at_time'),
+            },
+            'side': 'close',
+            'quantity': {
+                'position': position,
+            },
+        }
+
+    def _stop_and_reverse(self, settings, path):
+        """Waits for a price, then sends one order for twice the position held, closing it and opening the reverse together.
+
+        This is the `double` method; the default, `sequential`, is a join built by `expand_join`.
+
+        Args:
+            settings (dict): The price trigger's settings and `method: double`.
+            path (str): The preset's path.
+
+        Returns:
+            dict: A `price_crosses` trigger, the `close` side and twice the position.
+        """
+        self._refuse_unknown(settings, ('trigger_price', 'trigger_direction', 'trigger_on', 'hold_seconds', 'method'), path, 'stop_and_reverse')
+        if settings.get('method') != 'double':
+            self._add_problem(path, 'bad_setting', f'method must be one of sequential, double, not {settings.get("method")!r}')
+            return {}
+        return {
+            'trigger': self._price_trigger(settings, path),
+            'side': 'close',
+            'quantity': {
+                'position': {
+                    'ratio': 2,
+                },
+            },
+        }
+
+    def _sequential_reverse(self, settings, entry, path):
+        """Waits for a price, closes the position held, and once the close is done opens the reverse for what it closed.
+
+        Args:
+            settings (dict): The price trigger's settings, and optionally `method: sequential`.
+            entry (dict): The order it was named in, which becomes the close.
+            path (str): The preset's path.
+
+        Returns:
+            dict: A Then join: the close, then on completion an order the other way sized to what closed.
+        """
+        self._refuse_unknown(settings, ('trigger_price', 'trigger_direction', 'trigger_on', 'hold_seconds', 'method'), path, 'stop_and_reverse')
+        if self.opening_side not in OTO_SIDES:
+            self._add_problem(path, 'needs_side', 'a stop and reverse opens the side opposite to the position, so it needs to know the side of the order that opened it')
+            return {}
+        if self.opening_side == 'BUY':
+            reverse_side = 'sell'
+        else:
+            reverse_side = 'buy'
+        close = dict(entry)
+        presets = list(close.get('presets') or [])
+        presets.append(
+            {
+                'close_on_trigger': self._without(settings, 'method'),
+            }
+        )
+        close['presets'] = presets
+        return {
+            'then': {
+                'first': {
+                    'order': close,
+                },
+                'on_complete': {
+                    'order': {
+                        'side': reverse_side,
+                        'pricing': [
+                            {
+                                'marketable': {
+                                    'buffer_ticks': DEFAULT_BUFFER_TICKS,
+                                },
+                            },
+                        ],
+                    },
+                },
+            },
+        }
+
+    def _without(self, settings, name):
+        """A copy of settings without one of them.
+
+        Args:
+            settings (dict): The settings.
+            name (str): The setting to leave out.
+
+        Returns:
+            dict: The copy.
+        """
+        copied = dict(settings)
+        copied.pop(name, None)
+        return copied
 
     def _iceberg(self, settings, path):
         """Shows only part of the order at a time.

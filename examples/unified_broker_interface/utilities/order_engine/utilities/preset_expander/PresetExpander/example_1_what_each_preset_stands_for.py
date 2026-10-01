@@ -149,6 +149,16 @@ class WhatEachPresetStandsForExample:
             'time_stop': {
                 'minutes': 20,
             },
+            'close_on_trigger': {
+                'trigger_price': 995,
+            },
+            'square_off': {
+                'at_time': '15:10',
+            },
+            'stop_and_reverse': {
+                'trigger_price': 995,
+                'method': 'double',
+            },
         }
         for name in PRESET_NAMES:
             if name in JOIN_PRESET_NAMES:

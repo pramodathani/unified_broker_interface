@@ -39,3 +39,7 @@ The backstop is a second order resting beside the engine-side stop, cancelled be
 ## Stage 5a (2026-10-01)
 
 `basket` and `oca` turn each candidate into an order made of the rest of the order the preset was named in and the candidate's own values, so a basket named beside `post_only` is a basket of post-only orders. A candidate's `price` and `order_type` become `fixed` pricing, or with a `trigger_price` a `native_stop`. Today's types refuse an instrument named twice because their legs are told apart by instrument; a plan's are told apart by path, so it is allowed. Today's one-cancels-all type checks the group's margin as a basket does; the `oca` preset's Either join does not.
+
+## Stage 5b (2026-10-01)
+
+`close_on_trigger` and the `double` form of `stop_and_reverse` are slot values. The default `sequential` form of `stop_and_reverse` is a join, so `is_join` depends on its `method`; it is a Then join whose child, sent `on_complete` and sized to what closed, trades the side opposite to the position, which needs the body's side. `square_off` closes every instrument on its product unless `instrument_ids` narrows it, as today.

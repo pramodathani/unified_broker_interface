@@ -1,6 +1,6 @@
 """Expands the presets that stand for a join of several orders into the plan trees they build.
 
-Some presets are not one order's slot values but a whole join. `is_join` says which: `basket`, `oca`, `oto`, `oco`, `bracket` and `cover`, and `hidden_stop` once it has a backstop. `expand_join` builds the tree around the rest of the order the preset was named in, which becomes the join's main order: the entry of a bracket, a cover or an OTO, and the engine-side stop of a hidden stop with a backstop. An OCO protects a position already held, so it has no main order, and naming anything beside it is a problem. A basket and a one-cancels-all group make one order per candidate, each the rest of the order with the candidate's own instrument, side, quantity and price, so a basket named beside `post_only` is a basket of post-only orders.
+Some presets are not one order's slot values but a whole join. `is_join` says which: `basket`, `oca`, `oto`, `oco`, `bracket` and `cover`, and `hidden_stop` once it has a backstop. `expand_join` builds the tree around the rest of the order the preset was named in, which becomes the join's main order: the entry of a bracket, a cover or an OTO, and the engine-side stop of a hidden stop with a backstop. An OCO protects a position already held, so it has no main order, and naming anything beside it is a problem. A basket and a one-cancels-all group make one order per candidate, each the rest of the order with the candidate's own instrument, side, quantity and price, so a basket named beside `post_only` is a basket of post-only orders. A stop and reverse is a join only with its default `sequential` method, and needs the side of the order that opened the position, so it is shown with an expander for a long: it closes the position held when the price is reached, and once the close is done opens the other side for what closed.
 
 Nothing is read from Redis or sent anywhere.
 
@@ -95,6 +95,9 @@ class PresetsThatStandForJoinsExample:
         }
         self.show('basket', {'candidates': candidates, 'hedge_benefit': True}, post_only)
         self.show('oca', {'candidates': candidates}, {})
+        print(f"stop_and_reverse with method double is a join: {self.expander.is_join('stop_and_reverse', {'method': 'double'})}")
+        self.expander = PresetExpander('BUY')
+        self.show('stop_and_reverse', {'trigger_price': 995}, {})
 
 
 if __name__ == '__main__':

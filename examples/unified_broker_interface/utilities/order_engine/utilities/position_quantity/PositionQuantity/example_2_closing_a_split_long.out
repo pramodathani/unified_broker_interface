@@ -1,0 +1,4 @@
+Found 2 positions, cancelled 1 resting orders, placed 2 closing orders
+  cancel 26091500000077 at flattrade: cancelled before closing the position, so it cannot re-open it, and to free its margin
+  root: SELL 50 at 994.80 at flattrade, True
+  root: SELL 25 at 994.80 at zerodha, True
