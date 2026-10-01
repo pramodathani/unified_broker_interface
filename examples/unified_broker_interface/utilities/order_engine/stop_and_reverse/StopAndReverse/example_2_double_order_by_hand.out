@@ -1,5 +1,5 @@
 Method: double
 fire: sent ['place BUY 100 LIMIT at 1521.20 -> 260930000001']
-  parent working, 1521.00 reached the trigger at 1520; 0 resting orders cancelled, then the reverse order was accepted
+  parent working, 1521.00 reached the trigger at 1520; 0 resting orders cancelled, then the reverse order at zerodha was accepted
 The reverse order filled: orders sent in all 1
 Method triple: HTTP 400, method must be one of sequential, double, not 'triple'

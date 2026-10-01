@@ -8,4 +8,4 @@ Position already closed:
 Forty held, but the book is empty:
   child_order is the caller order itself: True
   orders sent: []
-  parent failed: 1449.00 reached the trigger at 1450; 0 resting orders cancelled, but the book gave no price to close at
+  parent failed: 1449.00 reached the trigger at 1450; 0 resting orders cancelled, then the book gave no price to close 40 at zerodha
