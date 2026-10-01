@@ -3,7 +3,7 @@ name: unified_broker_interface
 services:
   redis:
     image: redis:trixie
-    command: redis-server --requirepass ${UNIFIED_BROKER_INTERFACE_REDIS_PASSWORD} --appendonly yes
+    command: redis-server --requirepass ${UNIFIED_BROKER_INTERFACE_REDIS_PASSWORD} --appendonly yes --save ""
     environment:
       REDIS_PASSWORD: "${UNIFIED_BROKER_INTERFACE_REDIS_PASSWORD}"
     ports:

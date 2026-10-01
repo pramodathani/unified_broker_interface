@@ -50,7 +50,7 @@ The `.env` file at the project root holds the address and password of each store
 
 A few details of the compose file matter when you set it up:
 
-- Redis starts with `--requirepass` set from `UNIFIED_BROKER_INTERFACE_REDIS_PASSWORD` and with `--appendonly yes`, so its data survives a restart.
+- Redis starts with `--requirepass` set from `UNIFIED_BROKER_INTERFACE_REDIS_PASSWORD` and with `--appendonly yes`, so its data survives a restart. It also starts with `--save ""`, which turns off its snapshots: the append-only file already restores everything on a restart, and snapshotting a dataset of over 10 GB every minute saturated the disk PostgreSQL shares, stalling its commits for seconds.
 - MongoDB's root user and password come from `UNIFIED_BROKER_INTERFACE_MONGODB_USERNAME` (default `unified_broker_interface`) and `UNIFIED_BROKER_INTERFACE_MONGODB_PASSWORD`.
 - TimescaleDB's database and user come from `UNIFIED_BROKER_INTERFACE_POSTGRES_DB` and `UNIFIED_BROKER_INTERFACE_POSTGRES_USERNAME` (both default to `unified_broker_interface`), and the container gets 4 GB of shared memory (see below).
 - Every port is published on `0.0.0.0`, so the stores are reachable from other machines unless a firewall stops them.
