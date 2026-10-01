@@ -1,0 +1,5 @@
+At 0.0 seconds: move None
+At 6.0 seconds: move (Decimal('1000.40'), None, 'the chase stepped to 1000.40')
+At 12.0 seconds: move (Decimal('1000.00'), None, 'the chase ran out of time and crossed to 1000.00')
+A sell step to 999.90 with the bid at 1000.00 goes no further than 1000.00
+As a dry run shows it: {'chase': {'step_ticks': 2, 'step_seconds': 5.0, 'cross_after_seconds': 12.0}}

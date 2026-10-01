@@ -1,0 +1,4 @@
+A body priced at 1000.25: {'order_type': 'LIMIT', 'price': '1000.10'}
+A body priced at 999.90: {'order_type': 'LIMIT', 'price': '999.90'}
+A move to 1000.40 becomes 1000.10
+As a dry run shows it: {'cap': {'worst_price': '1000.10'}}

@@ -1,0 +1,6 @@
+Reachable price: 1000.25
+Offer 1000.5: within reach False, took False
+Offer 1000.2: within reach True, took True
+  cancel parent-1:1: the other side reached 1000.20, which is inside the discretion, so 10 is being taken
+  place for root at flattrade: 10 at 1000.25, tag mine
+As a dry run shows it: {'discretion': {'points': '0.25', 'quantity': None}}

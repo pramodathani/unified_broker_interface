@@ -1,0 +1,4 @@
+Bars kept: {'bar_started_at': 120.0, 'bar_high': '1000', 'bar_low': '1000', 'bar_close': '1000', 'closed_bars': [['1006', '998', '998'], ['1003', '1001', '1003']]}
+Distance now: 8
+The trail it hands to: {'trail': {'limit_offset': '1', 'step_ticks': 1, 'points': '12'}}
+A buy stop with no bars is sent as: {'quantity': 10, 'order_type': 'SL', 'trigger_price': '998.00', 'price': '999.00'}

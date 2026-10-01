@@ -2,6 +2,7 @@ The parent holds 2 legs
 root: sees ['parent-1:1'], done reason filled
 root.first: sees ['parent-1:2'], done reason None
 Protecting part: watches [], reads quotes True, closes a position True
+Looked at on every tick once resting: False, pricing memory readied when placed: {}
 Sends SELL for a position opened with a BUY
 Triggered at 1000.05: False
 Triggered at 994.90: True

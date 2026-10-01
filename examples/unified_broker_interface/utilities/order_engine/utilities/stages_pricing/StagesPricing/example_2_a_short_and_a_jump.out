@@ -1,0 +1,3 @@
+A buy stop at 1010 has its limit at 1012
+Last 955, a gain of 45: move (Decimal('972.00'), Decimal('970.00'), 'the market reached 955.00, so the stop follows to 970.00')
+Memory: {'rules_applied': 2, 'trail_points': '15', 'best': '955.00'}, so the trail is {'trail': {'limit_offset': '2', 'step_ticks': 1, 'points': '15'}}

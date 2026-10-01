@@ -1,0 +1,9 @@
+# Notes on `unified_broker_interface/utilities/order_engine/utilities/peg_pricing.py`
+
+## Why it copies the peg type's rules
+
+The three references, the offset moved away from filling and the rounding onto the passive side are those of `peg.py`, so the `peg` preset sends what today's type sends; the offline scenarios `a_plan_peg_*` send the same requests at the same prices as the `a_peg_*` ones. The cap moved out into `CapModifier`, because a cap is useful on any pricing, not only on a peg.
+
+## What it does not do yet
+
+Today's peg re-anchors its offset when the caller changes the order's price, so it follows the market from the caller's price. A plan order has no `on_leg_modified` yet, so the next tick moves a hand-moved plan peg back to its reference. The trailing stop has the same gap since stage 2c.

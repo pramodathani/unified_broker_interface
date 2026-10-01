@@ -41,6 +41,16 @@ PRESET_NAMES = (
     'implementation_shortfall',
     'participation',
     'liquidity_seeking',
+    'peg',
+    'chaser',
+    'post_only',
+    'underlying_peg',
+    'volatility',
+    'discretionary',
+    'atr_trail',
+    'stepped_stop',
+    'good_till_time',
+    'time_stop',
     'oto',
     'oco',
     'bracket',
@@ -52,6 +62,22 @@ TRAILING_SETTINGS = (
     'stop_limit_offset',
     'step_ticks',
     'activate_at',
+)
+ATR_TRAIL_SETTINGS = (
+    'trail_points',
+    'stop_limit_offset',
+    'step_ticks',
+    'activate_at',
+    'bar_minutes',
+    'periods',
+    'atr_multiple',
+)
+STEPPED_STOP_SETTINGS = (
+    'entry_price',
+    'stop_price',
+    'stop_limit_offset',
+    'step_ticks',
+    'rules',
 )
 JOIN_PRESET_NAMES = (
     'oto',
@@ -133,6 +159,26 @@ class PresetExpander:
             return self._participation(settings, path)
         if name == 'liquidity_seeking':
             return self._liquidity_seeking(settings, path)
+        if name == 'peg':
+            return self._peg(settings, path)
+        if name == 'chaser':
+            return self._chaser(settings, path)
+        if name == 'post_only':
+            return self._post_only(settings, path)
+        if name == 'underlying_peg':
+            return self._underlying_peg(settings, path)
+        if name == 'volatility':
+            return self._volatility(settings, path)
+        if name == 'discretionary':
+            return self._discretionary(settings, path)
+        if name == 'atr_trail':
+            return self._atr_trail(settings, path)
+        if name == 'stepped_stop':
+            return self._stepped_stop(settings, path)
+        if name == 'good_till_time':
+            return self._good_till_time(settings, path)
+        if name == 'time_stop':
+            return self._time_stop(settings, path)
         return self._hidden_stop(settings, path)
 
     def is_join(self, name, settings):
@@ -676,6 +722,19 @@ class PresetExpander:
             dict: `trail` pricing, the `protect` side for a trailing stop, and a `price_crosses` trigger when it activates at a level.
         """
         self._refuse_unknown(settings, TRAILING_SETTINGS, path, name)
+        return self._trailing_slots(settings, path, name == 'trailing_stop')
+
+    def _trailing_slots(self, settings, path, protects):
+        """The slot values of a trailing stop or a trailing entry, once its settings have been checked.
+
+        Args:
+            settings (dict): `trail_points` or `trail_percent`, `stop_limit_offset`, and optionally `step_ticks` and `activate_at`.
+            path (str): The preset's path.
+            protects (bool): True for a stop protecting a position, False for a trailing entry.
+
+        Returns:
+            dict: `trail` pricing, the `protect` side when it protects, and a `price_crosses` trigger when it activates at a level.
+        """
         trail = {
             'limit_offset': settings.get('stop_limit_offset'),
             'step_ticks': settings.get('step_ticks', 1),
@@ -691,14 +750,14 @@ class PresetExpander:
                 },
             ],
         }
-        if name == 'trailing_stop':
+        if protects:
             slots['side'] = 'protect'
         if 'activate_at' not in settings:
             return slots
         activation = {
             'level': settings['activate_at'],
         }
-        if name == 'trailing_stop':
+        if protects:
             if self.opening_side == 'BUY':
                 activation['direction'] = 'at_or_above'
             elif self.opening_side == 'SELL':
@@ -713,6 +772,105 @@ class PresetExpander:
             'price_crosses': activation,
         }
         return slots
+
+    def _atr_trail(self, settings, path):
+        """A trailing stop that sits a multiple of the recent average range behind the market, and `trail_points` behind until enough bars have closed.
+
+        Args:
+            settings (dict): `trail_points` and `stop_limit_offset`, and optionally `step_ticks`, `activate_at`, `bar_minutes`, `periods` and `atr_multiple`.
+            path (str): The preset's path.
+
+        Returns:
+            dict: `trail` pricing with `atr`, the `protect` side, and a trigger when it activates at a level.
+        """
+        self._refuse_unknown(settings, ATR_TRAIL_SETTINGS, path, 'atr_trail')
+        slots = self._trailing_slots(settings, path, True)
+        atr = {}
+        if 'bar_minutes' in settings:
+            atr['bar_minutes'] = settings['bar_minutes']
+        if 'periods' in settings:
+            atr['periods'] = settings['periods']
+        if 'atr_multiple' in settings:
+            atr['multiple'] = settings['atr_multiple']
+        slots['pricing'][0]['trail']['atr'] = atr
+        return slots
+
+    def _stepped_stop(self, settings, path):
+        """A stop protecting a position, moved by a table of profit milestones.
+
+        Args:
+            settings (dict): `entry_price`, `stop_price`, `stop_limit_offset` and `rules`, and optionally `step_ticks`.
+            path (str): The preset's path.
+
+        Returns:
+            dict: The `protect` side and `stages` pricing.
+        """
+        self._refuse_unknown(settings, STEPPED_STOP_SETTINGS, path, 'stepped_stop')
+        stages = {
+            'entry_price': settings.get('entry_price'),
+            'stop_price': settings.get('stop_price'),
+            'limit_offset': settings.get('stop_limit_offset'),
+            'rules': settings.get('rules'),
+        }
+        if 'step_ticks' in settings:
+            stages['step_ticks'] = settings['step_ticks']
+        return {
+            'side': 'protect',
+            'pricing': [
+                {
+                    'stages': stages,
+                },
+            ],
+        }
+
+    def _good_till_time(self, settings, path):
+        """Works until a time of day, then cancels what rests, or with `at_expiry: market` makes it marketable.
+
+        Args:
+            settings (dict): `until_time`, and optionally `at_expiry`, `cancel` or `market`.
+            path (str): The preset's path.
+
+        Returns:
+            dict: A lifetime ending `at_time`.
+        """
+        self._refuse_unknown(settings, ('until_time', 'at_expiry'), path, 'good_till_time')
+        on_end = 'cancel'
+        if settings.get('at_expiry') == 'market':
+            on_end = 'marketable'
+        elif settings.get('at_expiry') not in (None, 'cancel'):
+            self._add_problem(path, 'bad_setting', f'at_expiry must be one of cancel, market, not {settings.get("at_expiry")!r}')
+        return {
+            'lifetime': [
+                {
+                    'at_time': settings.get('until_time'),
+                    'on_end': on_end,
+                },
+            ],
+        }
+
+    def _time_stop(self, settings, path):
+        """Closes what the order filled at a time of day, or a number of minutes after it was placed, cancelling what still rests first.
+
+        Args:
+            settings (dict): `until_time` or `minutes`.
+            path (str): The preset's path.
+
+        Returns:
+            dict: A lifetime ending with `close_filled`.
+        """
+        self._refuse_unknown(settings, ('until_time', 'minutes'), path, 'time_stop')
+        ending = {
+            'on_end': 'close_filled',
+        }
+        if 'until_time' in settings:
+            ending['at_time'] = settings['until_time']
+        if 'minutes' in settings:
+            ending['after_minutes'] = settings['minutes']
+        return {
+            'lifetime': [
+                ending,
+            ],
+        }
 
     def _iceberg(self, settings, path):
         """Shows only part of the order at a time.
@@ -796,6 +954,184 @@ class PresetExpander:
                     'marketable': {
                         'buffer_ticks': DEFAULT_BUFFER_TICKS,
                     },
+                },
+            ],
+        }
+
+    def _peg(self, settings, path):
+        """Keeps a limit at a place in the book, held at a cap when one is given.
+
+        Args:
+            settings (dict): `reference`, `offset_ticks` and `cap_price`, all optional.
+            path (str): The preset's path.
+
+        Returns:
+            dict: `peg` pricing, and a `cap` when `cap_price` is given.
+        """
+        self._refuse_unknown(settings, ('reference', 'offset_ticks', 'cap_price'), path, 'peg')
+        peg = {}
+        if 'reference' in settings:
+            peg['reference'] = settings['reference']
+        if 'offset_ticks' in settings:
+            peg['offset_ticks'] = settings['offset_ticks']
+        pricing = [
+            {
+                'peg': peg,
+            },
+        ]
+        if 'cap_price' in settings:
+            pricing.append(
+                {
+                    'cap': {
+                        'worst_price': settings['cap_price'],
+                    },
+                }
+            )
+        return {
+            'pricing': pricing,
+        }
+
+    def _chaser(self, settings, path):
+        """Starts a limit on its own side of the book and walks it towards the other, held at a cap when one is given.
+
+        Args:
+            settings (dict): `step_ticks`, `step_seconds`, `cross_after_seconds` and `cap_price`, all optional.
+            path (str): The preset's path.
+
+        Returns:
+            dict: `chase` pricing, and a `cap` when `cap_price` is given.
+        """
+        self._refuse_unknown(settings, ('step_ticks', 'step_seconds', 'cross_after_seconds', 'cap_price'), path, 'chaser')
+        chase = {}
+        for setting in ('step_ticks', 'step_seconds', 'cross_after_seconds'):
+            if setting in settings:
+                chase[setting] = settings[setting]
+        pricing = [
+            {
+                'chase': chase,
+            },
+        ]
+        if 'cap_price' in settings:
+            pricing.append(
+                {
+                    'cap': {
+                        'worst_price': settings['cap_price'],
+                    },
+                }
+            )
+        return {
+            'pricing': pricing,
+        }
+
+    def _post_only(self, settings, path):
+        """Sends a limit only when it would rest rather than trade.
+
+        Args:
+            settings (dict): `on_crossing`, optional.
+            path (str): The preset's path.
+
+        Returns:
+            dict: The `post_only` guard.
+        """
+        self._refuse_unknown(settings, ('on_crossing',), path, 'post_only')
+        post_only = {}
+        if 'on_crossing' in settings:
+            post_only['on_crossing'] = settings['on_crossing']
+        return {
+            'guards': [
+                {
+                    'post_only': post_only,
+                },
+            ],
+        }
+
+    def _followed_bounds(self, settings, followed):
+        """Copies the bounds and step that the underlying peg and volatility types share into a pricing's settings.
+
+        Args:
+            settings (dict): The preset's settings.
+            followed (dict): The pricing's settings, changed in place.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        if 'lowest_price' in settings:
+            followed['lowest'] = settings['lowest_price']
+        if 'highest_price' in settings:
+            followed['highest'] = settings['highest_price']
+        if 'step_ticks' in settings:
+            followed['step_ticks'] = settings['step_ticks']
+
+    def _underlying_peg(self, settings, path):
+        """Moves a resting limit by a delta times another instrument's move.
+
+        Args:
+            settings (dict): `watch_instrument_id` and `delta`, and optionally `lowest_price`, `highest_price` and `step_ticks`.
+            path (str): The preset's path.
+
+        Returns:
+            dict: `follow_instrument` pricing.
+        """
+        self._refuse_unknown(settings, ('watch_instrument_id', 'delta', 'lowest_price', 'highest_price', 'step_ticks'), path, 'underlying_peg')
+        followed = {
+            'instrument_id': settings.get('watch_instrument_id'),
+            'delta': settings.get('delta'),
+        }
+        self._followed_bounds(settings, followed)
+        return {
+            'pricing': [
+                {
+                    'follow_instrument': followed,
+                },
+            ],
+        }
+
+    def _volatility(self, settings, path):
+        """Prices an option from an implied volatility, kept current as the underlying moves.
+
+        Args:
+            settings (dict): `watch_instrument_id` and `volatility`, and optionally `interest_rate`, `lowest_price`, `highest_price` and `step_ticks`.
+            path (str): The preset's path.
+
+        Returns:
+            dict: `option_model` pricing.
+        """
+        self._refuse_unknown(settings, ('watch_instrument_id', 'volatility', 'interest_rate', 'lowest_price', 'highest_price', 'step_ticks'), path, 'volatility')
+        modelled = {
+            'instrument_id': settings.get('watch_instrument_id'),
+            'volatility': settings.get('volatility'),
+        }
+        if 'interest_rate' in settings:
+            modelled['interest_rate'] = settings['interest_rate']
+        self._followed_bounds(settings, modelled)
+        return {
+            'pricing': [
+                {
+                    'option_model': modelled,
+                },
+            ],
+        }
+
+    def _discretionary(self, settings, path):
+        """Shows the body's price and quietly takes a better one within a distance.
+
+        Args:
+            settings (dict): `discretion_points`, and optionally `discretion_quantity`.
+            path (str): The preset's path.
+
+        Returns:
+            dict: The `discretion` modifier, beside the body's own price.
+        """
+        self._refuse_unknown(settings, ('discretion_points', 'discretion_quantity'), path, 'discretionary')
+        discretion = {
+            'points': settings.get('discretion_points'),
+        }
+        if 'discretion_quantity' in settings:
+            discretion['quantity'] = settings['discretion_quantity']
+        return {
+            'pricing': [
+                {
+                    'discretion': discretion,
                 },
             ],
         }

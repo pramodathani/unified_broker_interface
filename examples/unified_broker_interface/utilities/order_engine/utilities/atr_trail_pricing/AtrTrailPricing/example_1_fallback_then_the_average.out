@@ -1,0 +1,7 @@
+Reads quotes: True, moves: True
+Sent as: {'quantity': 10, 'order_type': 'SL', 'trigger_price': '990.05', 'price': '988.05'}
+At 10 seconds, last 1040.05: distance 10, move (Decimal('1028.05'), Decimal('1030.05'), 'the market reached 1040.05, so the stop follows to 1030.05')
+At 70 seconds, last 1010.05: distance 10, move None
+At 130 seconds, last 1060.05: distance 10, move (Decimal('1048.05'), Decimal('1050.05'), 'the market reached 1060.05, so the stop follows to 1050.05')
+At 190 seconds, last 1080.05: distance 40.00, move None
+As a dry run shows it: {'trail': {'points': '10', 'limit_offset': '2', 'step_ticks': 1, 'atr': {'bar_minutes': 1.0, 'periods': 2, 'multiple': '1'}}}

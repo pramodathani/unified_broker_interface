@@ -32,6 +32,7 @@ class PlanOrder(SyntheticOrder):
 
     SYNTHETIC_TYPE = 'plan'
     WANTS_PRICES = True
+    WANTS_CLOCK = True
 
     def _read_plan(self):
         """Reads the caller's plan into its root part.
@@ -97,7 +98,13 @@ class PlanOrder(SyntheticOrder):
                 memory = {}
                 part.prepare(self, memory)
                 record['memory'] = memory
-            if part.pricing.moves():
+            pricing_memory = part.prepared_pricing_memory(self)
+            if pricing_memory:
+                record['pricing_memory'] = pricing_memory
+            ends_at = part.lifetime_ends_at(self)
+            if ends_at is not None:
+                record['ends_at'] = ends_at
+            if part.moves_on_ticks():
                 record['moves'] = True
             if part.execution.paced_by_ticks():
                 record['paced'] = True
@@ -128,7 +135,7 @@ class PlanOrder(SyntheticOrder):
     def _answer(self, root, placed, warnings):
         """The answer to the caller once the plan has started.
 
-        A plan that placed exactly one order at its root answers with that order's broker answer, as a plain order does. A plan that placed nothing answers `202 armed`. Any other answers with `legs`, one entry per order placed.
+        A plan that placed exactly one order at its root answers with that order's broker answer, as a plain order does. A plan whose order a guard refused, such as a post-only limit that would have crossed, answers `409` with the guard's reason. A plan that placed nothing else answers `202 armed`. Any other answers with `legs`, one entry per order placed.
 
         Args:
             root (object): The root part.
@@ -138,7 +145,19 @@ class PlanOrder(SyntheticOrder):
         Returns:
             tuple: The answer's body (dict) and its HTTP status (int).
         """
-        if not placed:
+        refusal = self._guard_refusal(root)
+        if not placed and refusal is not None:
+            answer = {
+                'broker': None,
+                'instrument_id': self.parent.instrument_id,
+                'tag': self.parent.tag,
+                'outcome': 'rejected',
+                'order_id': None,
+                'status_message': refusal,
+                'skipped': [],
+            }
+            status = 409
+        elif not placed:
             answer = {
                 'broker': None,
                 'instrument_id': self.parent.instrument_id,
@@ -218,19 +237,29 @@ class PlanOrder(SyntheticOrder):
         )
 
     def quotes_now(self):
-        """This parent's instrument's quote as it is now, for pricing an order placed outside a tick.
+        """The quotes of this parent's instrument and of every instrument the plan watches, as they are now, for pricing an order placed outside a tick.
 
         Returns:
-            dict: The instrument id to its quote, which may be None.
+            dict: Each instrument id to its quote, which may be None.
+
+        Raises:
+            RefusedRequestError: When an instrument cannot be read, such as one that is not mapped.
         """
-        _, quote, _ = self.placement.market_context(
+        wanted = [
             self.parent.instrument_id,
-            True,
-            False,
-        )
-        return {
-            self.parent.instrument_id: quote,
-        }
+        ]
+        for instrument_id in self.parent.parameters.get('watch_instrument_ids') or []:
+            if instrument_id not in wanted:
+                wanted.append(instrument_id)
+        quotes = {}
+        for instrument_id in wanted:
+            _, quote, _ = self.placement.market_context(
+                instrument_id,
+                True,
+                False,
+            )
+            quotes[instrument_id] = quote
+        return quotes
 
     def _after_placing(self, placed):
         """Moves the parent to `working` once any order is accepted, or records why none was.
@@ -272,6 +301,8 @@ class PlanOrder(SyntheticOrder):
             traded = traded + (leg.filled_quantity or 0)
             if leg.state == 'rejected':
                 rejected = True
+        if self._guard_refusal(root) is not None:
+            rejected = True
         if traded > 0:
             state = 'completed'
         elif rejected:
@@ -280,6 +311,21 @@ class PlanOrder(SyntheticOrder):
             state = 'cancelled'
         if self.parent.can_change_to(state):
             self.record_state(state, f'every part of the plan is done, with {traded} traded')
+
+    def _guard_refusal(self, root):
+        """Why a guard refused an order of the plan without sending it, when one did.
+
+        Args:
+            root (object): The root part.
+
+        Returns:
+            str | None: The guard's reason, or None when no guard refused an order.
+        """
+        for part in root.order_parts():
+            record = self.part_record(part.path)
+            if record.get('reason') == 'refused' and record.get('message'):
+                return record['message']
+        return None
 
     def _parent_join(self, root, path):
         """The join that holds a part directly.
@@ -314,6 +360,8 @@ class PlanOrder(SyntheticOrder):
         Returns:
             bool: True when an order was placed or moved on this tick.
         """
+        if self._end_lifetimes(quotes, now):
+            return True
         records = self.parent.parameters.get('parts') or {}
         waiting_paths = []
         moving_paths = []
@@ -368,7 +416,7 @@ class PlanOrder(SyntheticOrder):
                 placed = placed + part.send_due(self, None, quotes, now)
         moved = False
         for part in root.order_parts():
-            if part.path in moving_paths and part.move(self, quotes):
+            if part.path in moving_paths and part.move(self, quotes, now):
                 moved = True
         if not placed and not moved:
             if memory_changed or moving_paths or paced_paths:
@@ -380,16 +428,68 @@ class PlanOrder(SyntheticOrder):
         self.save()
         return True
 
-    def closes_position(self, role):
-        """Whether a leg closes a position, which a leg of a `protect` order does.
+    def on_clock_tick(self, now):
+        """Ends every order whose lifetime is up, even when its instrument sent no price tick.
 
         Args:
-            role (str): The leg's role, which is its part's path.
+            now (float): The Unix time of the tick.
+
+        Returns:
+            bool: True when an order's lifetime ended.
+        """
+        return self._end_lifetimes(None, now)
+
+    def _end_lifetimes(self, quotes, now):
+        """Ends every order whose lifetime is up, then settles the plan and ends the parent if it is done.
+
+        Args:
+            quotes (dict | None): The quotes the tick carried, or None on a clock tick, when they are read only if an order is to be made marketable.
+            now (float): The Unix time of the tick.
+
+        Returns:
+            bool: True when an order's lifetime ended.
+        """
+        due = False
+        for record in (self.parent.parameters.get('parts') or {}).values():
+            ends_at = record.get('ends_at')
+            if ends_at is not None and not record.get('ended') and now >= ends_at and record.get('state') != 'done':
+                due = True
+        if not due:
+            return False
+        root, _ = self._read_plan()
+        if quotes is None:
+            quotes = {}
+            for part in root.order_parts():
+                if part.lifetime is not None and part.lifetime.on_end == 'marketable':
+                    try:
+                        quotes = self.quotes_now()
+                    except RefusedRequestError as refusal:
+                        self.logger.warning(f'Parent {self.parent.parent_order_id} could not read the quote to make its order marketable: {refusal.body.get("error")}')
+                    break
+        ended = False
+        for part in root.order_parts():
+            if part.end_lifetime(self, quotes, now):
+                ended = True
+        if not ended:
+            return False
+        placed = root.settle(self)
+        self._after_placing(placed)
+        self._finish_if_done(root)
+        self.save()
+        return True
+
+    def closes_position(self, role):
+        """Whether a leg closes a position, which a leg of a `protect` order does, and so does the close a lifetime's `close_filled` sends.
+
+        Args:
+            role (str): The leg's role, which is its part's path, or the path followed by `.close`.
 
         Returns:
             bool: True when the leg closes a position.
         """
         if super().closes_position(role):
+            return True
+        if role.endswith('.close'):
             return True
         root, _ = self._read_plan()
         for part in root.order_parts():

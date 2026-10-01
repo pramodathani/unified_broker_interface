@@ -1,0 +1,4 @@
+A sell at 1000.00 would cross: True
+Moving it there, refuse: None, rest: 1000.05
+A move to 1000.10: 1000.10
+With no book: (None, None)

@@ -61,3 +61,19 @@ Executions now receive `sending_side` in `due_pieces`, because `book_depth` has 
 An order whose execution is paced by ticks now starts working when its trigger holds even if nothing is due, rather than going back to waiting. Before this, a `scheduled` participation began counting, sent nothing on that tick, went back to waiting and was not saved, so every later tick began counting again from the new volume and nothing was ever sent (offline scenario `a_plan_participation_that_starts_at_a_time`). `on_price_tick` keeps `fired_at` and saves the parent in that case.
 
 The freeze quantity is not an execution yet. Each broker publishes its freeze limit in its own units and the broker is chosen only when a piece is placed, so splitting at the freeze limit belongs with nesting, where it would be applied innermost to every piece.
+
+## Stage 4a: moving prices, cap and post-only (2026-10-01)
+
+`on_price_tick` passes the tick's time to `OrderPart.move`, because a chase steps on a clock. A guard that refuses an order leaves the part `done` with reason `refused` and a `message`; `_guard_refusal` finds it, so `_finish_if_done` ends the parent as `rejected` and `_answer` answers 409 with the message when nothing was placed.
+
+## Stage 4b: following another instrument and discretion (2026-10-01)
+
+Every order part's pricing memory is readied when the plan is placed through `OrderPart.prepared_pricing_memory`, so the option model's strike and expiry are read once and recorded with the received event; a refusal there answers before anything is recorded. A part is marked `moves` when its pricing moves or it has discretion. `quotes_now` reads every watched instrument as well as the order's own, so an order priced from another instrument is placed at once.
+
+## Stage 4c: average-range trail and stepped stop (2026-10-01)
+
+Nothing in the plan order changed for this step; `AtrTrailPricing` and `StagesPricing` are pricings that move, and every stop pricing is listed once as `STOP_PRICINGS` in the reader.
+
+## Stage 4d: lifetimes (2026-10-01)
+
+`PlanOrder` now sets `WANTS_CLOCK`, so the clock ticker gives every open plan `on_clock_tick` once a second and an order ends on time even when its instrument stops quoting; a plan with no lifetime returns at once, after reading only its part records. Each part's `ends_at` is worked out when the plan is placed and recorded with the received event. `_end_lifetimes` runs on both kinds of tick, before anything else on a price tick; on a clock tick it reads quotes only when an order is to be made marketable. A close sent by `close_filled` has the role `<path>.close`, which `closes_position` counts as closing, so it may use the exit reserve of a broker's daily cap.

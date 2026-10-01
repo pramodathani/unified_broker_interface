@@ -37,3 +37,15 @@ An order part now sends its quantity as pieces chosen by its execution. `send` s
 ## Stage 3b (2026-10-01)
 
 `send` puts a part whose execution is paced by ticks into `working` even when nothing is due on the tick its trigger holds, so the execution's start (participation's `counted_volume`, a timed schedule's `started_at`) is kept and later ticks send through `send_due`. An execution that is not paced by ticks still goes back to `waiting` when its first piece cannot be priced. `send_due` passes `sending_side` to the execution and saves changed execution memory with an event once the pieces are placed.
+
+## Stage 4a (2026-10-01)
+
+`move` now moves every resting broker order of the part, not only the newest, so a TWAP with a peg keeps each resting slice on the bid. Each order is asked about with the memory as it stood before the tick, so pieces side by side move together. The memory is recorded with an event when an order moved or when it was first set. The cap holds every limit, sent or moved, and the post-only guard checks it; a refusal ends the part as `refused` with the guard's message, and `send` then leaves it done rather than putting it back to waiting.
+
+## Stage 4b (2026-10-01)
+
+Pricing memory set by `priced_body` is now recorded with an event, because the follow pricings keep their start there and a restart must not lose it. `move` gives discretion its turn before the pricing moves. `set_target` shares the wanted quantity across every resting order, oldest first with the last taking the rest, instead of giving each the whole amount, which only worked while a part had one resting order.
+
+## Stage 4d (2026-10-01)
+
+A part whose lifetime has ended is marked `ended`, which stops `send_due` sending more pieces and lets `settle` mark it done once its broker orders have finished. `end_lifetime` ends a waiting part as `expired` at once; a working one is cancelled, made marketable, or cancelled and closed. A close placed by `close_filled` has the role `<path>.close`, so it is not one of the part's own legs and its fill does not count as the part's trading; the part is marked done with reason `closed` as soon as the close is sent, as today's time stop records `completed` then. A lifetime ending `marketable` makes the part read prices, so the plan remembers the tick size it needs to round the new price.

@@ -19,3 +19,19 @@ The backstop is a second order resting beside the engine-side stop, cancelled be
 ## Stage 2c: trailing presets
 
 `trailing_stop` is the `protect` side with `trail` pricing, and `trailing_entry` is `trail` pricing on the body's side, matching `TrailingStop` and `TrailingEntry`, which differ only in which side the stop is on. `activate_at` becomes a `price_crosses` trigger. For a trailing entry the default direction is the right one; for a trailing stop it is the opposite (a long's stop activates when the price rises to the level), so the expander needs the opening side, and reports `needs_side` when it was not given.
+
+## Stage 4a (2026-10-01)
+
+`peg` and `chaser` keep their types' setting names, and `cap_price` becomes a `cap` modifier beside the pricing. `post_only` stands for the guard alone, so the order's price is the body's or a `fixed` pricing the caller adds.
+
+## Stage 4b (2026-10-01)
+
+`underlying_peg` and `volatility` keep their types' names, `watch_instrument_id`, `lowest_price` and `highest_price`, and map them to the pricing's `instrument_id`, `lowest` and `highest`. `discretionary` maps `discretion_points` and `discretion_quantity` to the modifier's `points` and `quantity`.
+
+## Stage 4c (2026-10-01)
+
+`_trailing_slots` holds what the trailing stop, the trailing entry and the average-range trail share, so `atr_trail` adds only its `atr` settings. `stepped_stop` does not take `trail_points`, `trail_percent` or `activate_at`, as today's type refuses them.
+
+## Stage 4d (2026-10-01)
+
+`good_till_time` maps `at_expiry: market` to `on_end: marketable`. `time_stop` maps `minutes` to `after_minutes`. There is no preset for the `gtt` type, because a plan does not yet outlive the trading day.

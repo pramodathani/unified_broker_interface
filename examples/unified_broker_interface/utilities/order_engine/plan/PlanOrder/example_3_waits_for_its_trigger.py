@@ -1,6 +1,6 @@
 """Arms a plan that waits for the price to touch a level, walks it through price ticks, and shows it firing once.
 
-A `PlanOrder` whose order has a trigger answers `202 armed` and places nothing. The order engine's price ticker then hands it every tick through `on_price_tick`, and the first tick on which the trigger holds places the order, priced at that moment. This plan uses the `market_if_touched` preset: a buy waiting for the last price to fall to 1,400, which then takes the offer two ticks through.
+A `PlanOrder` whose order has a trigger answers `202 armed` and places nothing. The order engine's price ticker then hands it every tick through `on_price_tick`, and the first tick on which the trigger holds places the order, priced at that moment. The clock ticker also calls `on_clock_tick` every second, which ends any order whose lifetime is up. This plan uses the `market_if_touched` preset: a buy waiting for the last price to fall to 1,400, which then takes the offer two ticks through.
 
 The engine's placement is a small stand-in that always chooses Zerodha and accepts every order, and the event log is the `RecordingEventLog` stand-in from the offline suites, so nothing leaves the machine. The ticks are quotes written out here, and RELIANCE's tick size is 0.10.
 
@@ -332,6 +332,7 @@ class WaitsForItsTriggerExample:
             }
             acted = runner.on_price_tick(quotes, 1790000000.0 + seconds)
             print(f'tick {seconds}, offer {offer}: placed {acted}, sent so far {self.placement.sent}')
+        print(f'A clock tick, which only ends orders whose lifetime is up, and this plan has none: {runner.on_clock_tick(1790000010.0)}')
         record = runner.part_record('root')
         print(f'The root part\'s record: {record}')
         record['note'] = 'kept only in the parameters'

@@ -1,0 +1,6 @@
+120 is held at 150.00
+199.97 is held at 199.95
+300 is held at 250.00
+The reason it gives: the followed instrument is at 25040, so the order moved to 220
+Following from its own instrument: 400 follow_instrument follows another instrument; to follow the traded instrument itself use peg
+Following from a market order: 400 follow_instrument starts from the price you give, so the order must be a LIMIT with a price

@@ -1,0 +1,6 @@
+Reads quotes: True, moves: True, first memory: {}
+Sent as: {'order_type': 'LIMIT', 'price': 200}, remembering {'start_price': '200', 'watched_start': '25000.00'}
+Index 25040: watched 25040.00, target 220.00, move (Decimal('220.00'), None, 'the followed instrument is at 25040.00, so the order moved to 220.00')
+Index 25041: watched 25041.00, target 220.50, move (Decimal('220.50'), None, 'the followed instrument is at 25041.00, so the order moved to 220.50')
+Index 24960: watched 24960.00, target 180.00, move (Decimal('180.00'), None, 'the followed instrument is at 24960.00, so the order moved to 180.00')
+As a dry run shows it: {'follow_instrument': {'instrument_id': '11111111-1111-5111-8111-000000000010', 'delta': '0.5', 'lowest': None, 'highest': None, 'step_ticks': 20}}
