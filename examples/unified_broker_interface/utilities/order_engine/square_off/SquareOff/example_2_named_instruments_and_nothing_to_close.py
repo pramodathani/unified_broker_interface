@@ -17,6 +17,7 @@ Run it from the project root:
 """
 
 import datetime
+import json
 import logging
 import time
 
@@ -163,6 +164,150 @@ class StandInPreparedPlacement:
         self.broker_quantity = broker_request.body['quantity']
 
 
+class BrokerPositionsRedis:
+    """Stands in for Redis as the position closer reads it: the order updates from another stand-in, and Zerodha's own positions and the token lookup, made from the positions document.
+
+    The position closer reads each broker's `<broker>:portfolio:positions` hash rather than the unified positions document, because a closing order has to go to the broker that holds the position, and it finds each position's instrument from the broker's token in `unified:broker_tokens`. Here every position is held at Zerodha, and an instrument's token is its own id.
+
+    Attributes:
+        inner (object): The stand-in that holds the order updates.
+        positions (dict | None): The unified positions document the program set up.
+    """
+
+    PRODUCT_CODES = {
+        'intraday': 'MIS',
+        'delivery': 'CNC',
+        'carry': 'NRML',
+        'carryforward': 'NRML',
+    }
+
+    def __init__(self, inner, positions):
+        """Builds the stand-in.
+
+        Args:
+            inner (object): The stand-in that holds the order updates.
+            positions (dict | None): The unified positions document.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.inner = inner
+        self.positions = positions
+
+    def hgetall(self, key):
+        """Reads a whole hash: Zerodha's positions, or whatever the inner stand-in holds.
+
+        Args:
+            key (str): The key.
+
+        Returns:
+            dict: The hash's fields and values.
+        """
+        if key != 'zerodha:portfolio:positions':
+            return self.inner.hgetall(key)
+        entries = {}
+        for row in (self.positions or {}).get('net') or []:
+            code = self.PRODUCT_CODES.get(row['product'], row['product'].upper())
+            entries[f"NET:{row['instrument_id']}:{code}"] = json.dumps({
+                'position': {
+                    'instrument_token': row['instrument_id'],
+                    'product': code,
+                    'quantity': row['quantity'],
+                    'day_or_net': 'NET',
+                },
+            })
+        return entries
+
+    def hget(self, key, field):
+        """Reads one field, which is only ever a token in `unified:broker_tokens`.
+
+        Args:
+            key (str): The key.
+            field (str): `broker:token`.
+
+        Returns:
+            str | None: The instruments the token names, as JSON, or None.
+        """
+        if key != 'unified:broker_tokens' or not field.startswith('zerodha:'):
+            return None
+        return json.dumps([
+            field.split(':', 1)[1],
+        ])
+
+    def pipeline(self, transaction=True):
+        """A pipeline that answers each queued read from this stand-in.
+
+        Args:
+            transaction (bool): Unused.
+
+        Returns:
+            StandInPipeline: The pipeline.
+        """
+        del transaction
+        return StandInPipeline(self)
+
+
+class StandInPipeline:
+    """Stands in for a Redis pipeline, queueing reads and answering them all at once.
+
+    Attributes:
+        redis (BrokerPositionsRedis): The stand-in the reads are answered from.
+        keys (list): The hashes queued, in order.
+    """
+
+    def __init__(self, redis):
+        """Builds an empty pipeline.
+
+        Args:
+            redis (BrokerPositionsRedis): The stand-in the reads are answered from.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.redis = redis
+        self.keys = []
+
+    def hgetall(self, key):
+        """Queues reading a whole hash.
+
+        Args:
+            key (str): The key.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.keys.append(key)
+
+    def execute(self):
+        """Answers every queued read.
+
+        Returns:
+            list: One hash per queued read, in order.
+        """
+        answers = []
+        for key in self.keys:
+            answers.append(self.redis.hgetall(key))
+        return answers
+
+
+class StandInOrderPlacement:
+    """Stands in for the order placement, which names the brokers the system trades with.
+
+    Attributes:
+        broker_names (list): The brokers, which here is only Zerodha.
+    """
+
+    def __init__(self):
+        """Builds the stand-in.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.broker_names = [
+            'zerodha',
+        ]
+
+
 class StandInPlacement:
     """Stands in for the engine's placement: serves fixed quotes and positions, chooses Zerodha, and accepts every order, change and cancel.
 
@@ -175,6 +320,7 @@ class StandInPlacement:
         attributes (dict): Every broker's extra fields, such as a freeze quantity.
         refuse_places (bool): Whether the broker refuses new orders.
         cache (object | None): The Redis stand-in an order type reads directly, or None when it reads nothing.
+        order_placement (StandInOrderPlacement): Names the brokers the system trades with.
         messages (list): A line for every request the broker received, in order.
         next_number (int): The number the next broker order id is made from.
     """
@@ -198,6 +344,7 @@ class StandInPlacement:
         self.attributes = {}
         self.refuse_places = False
         self.cache = None
+        self.order_placement = StandInOrderPlacement()
         self.messages = []
         self.next_number = 1
 
@@ -460,6 +607,7 @@ class NamedInstrumentsAndNothingToCloseExample:
             },
         )
         placement.cache = EmptyOrderUpdatesCache()
+        placement.cache = BrokerPositionsRedis(placement.cache, placement.positions)
         intent = {
             'intent_id': 'intent-1',
             'instrument_id': RELIANCE,

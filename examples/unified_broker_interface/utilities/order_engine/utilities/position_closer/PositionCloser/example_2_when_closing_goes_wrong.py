@@ -2,13 +2,13 @@
 
 Closing positions has to keep going when something is wrong, because leaving a position open is usually the worse mistake. This program runs a `PositionCloser`, owned by a real `SquareOff`, through five awkward cases:
 
-1. `open_positions` is asked for only one instrument, so a second open position is left out, and a position of zero is skipped.
+1. `open_positions` is asked for only one instrument, so a second open position is left out, and a position of zero is skipped. Positions are read from each broker's own positions hash, so each comes with the broker that holds it.
 2. `resting_orders` cannot read Redis the first time. The error is logged and an empty list comes back, so nothing is cancelled and the closing still goes ahead.
 3. On the next read Redis answers with one open Zerodha order, and `cancel_resting` sends a cancel that the broker refuses. The refusal is recorded on the parent and counted as not accepted, and the closing carries on.
 4. `closing_order` finds an empty book, so it prices two ticks past the last traded price instead of past the best bid.
 5. `closing_order` finds no quote at all, or brokers that disagree on the tick size, and returns None rather than guess a price.
 
-A stand-in placement answers every read from fixed data, raises `redis.ConnectionError` the first time the order updates are read, and refuses every cancel with the `RefusedRequestError` a broker class raises for an order that is already complete. A stand-in event log keeps the recorded events, and a stand-in logger keeps the error message. The program needs no broker, no data store and no network, and places nothing.
+A stand-in placement answers every read from fixed data, serving Zerodha's positions hash and the token lookup from the positions the program holds, raises `redis.ConnectionError` the first time the order updates are read, and refuses every cancel with the `RefusedRequestError` a broker class raises for an order that is already complete. A stand-in event log keeps the recorded events, and a stand-in logger keeps the error message. The program needs no broker, no data store and no network, and places nothing.
 
 Run it from the project root:
 
@@ -96,13 +96,158 @@ class FlakyRedis:
         return dict(self.updates)
 
 
+class BrokerPositionsRedis:
+    """Stands in for Redis as the position closer reads it: the order updates from another stand-in, and Zerodha's own positions and the token lookup, made from the positions document.
+
+    The position closer reads each broker's `<broker>:portfolio:positions` hash rather than the unified positions document, because a closing order has to go to the broker that holds the position, and it finds each position's instrument from the broker's token in `unified:broker_tokens`. Here every position is held at Zerodha, and an instrument's token is its own id.
+
+    Attributes:
+        inner (object): The stand-in that holds the order updates.
+        positions (dict | None): The unified positions document the program set up.
+    """
+
+    PRODUCT_CODES = {
+        'intraday': 'MIS',
+        'delivery': 'CNC',
+        'carry': 'NRML',
+        'carryforward': 'NRML',
+    }
+
+    def __init__(self, inner, positions):
+        """Builds the stand-in.
+
+        Args:
+            inner (object): The stand-in that holds the order updates.
+            positions (dict | None): The unified positions document.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.inner = inner
+        self.positions = positions
+
+    def hgetall(self, key):
+        """Reads a whole hash: Zerodha's positions, or whatever the inner stand-in holds.
+
+        Args:
+            key (str): The key.
+
+        Returns:
+            dict: The hash's fields and values.
+        """
+        if key != 'zerodha:portfolio:positions':
+            return self.inner.hgetall(key)
+        entries = {}
+        for row in (self.positions or {}).get('net') or []:
+            code = self.PRODUCT_CODES.get(row['product'], row['product'].upper())
+            entries[f"NET:{row['instrument_id']}:{code}"] = json.dumps({
+                'position': {
+                    'instrument_token': row['instrument_id'],
+                    'product': code,
+                    'quantity': row['quantity'],
+                    'day_or_net': 'NET',
+                },
+            })
+        return entries
+
+    def hget(self, key, field):
+        """Reads one field, which is only ever a token in `unified:broker_tokens`.
+
+        Args:
+            key (str): The key.
+            field (str): `broker:token`.
+
+        Returns:
+            str | None: The instruments the token names, as JSON, or None.
+        """
+        if key != 'unified:broker_tokens' or not field.startswith('zerodha:'):
+            return None
+        return json.dumps([
+            field.split(':', 1)[1],
+        ])
+
+    def pipeline(self, transaction=True):
+        """A pipeline that answers each queued read from this stand-in.
+
+        Args:
+            transaction (bool): Unused.
+
+        Returns:
+            StandInPipeline: The pipeline.
+        """
+        del transaction
+        return StandInPipeline(self)
+
+
+class StandInPipeline:
+    """Stands in for a Redis pipeline, queueing reads and answering them all at once.
+
+    Attributes:
+        redis (BrokerPositionsRedis): The stand-in the reads are answered from.
+        keys (list): The hashes queued, in order.
+    """
+
+    def __init__(self, redis):
+        """Builds an empty pipeline.
+
+        Args:
+            redis (BrokerPositionsRedis): The stand-in the reads are answered from.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.redis = redis
+        self.keys = []
+
+    def hgetall(self, key):
+        """Queues reading a whole hash.
+
+        Args:
+            key (str): The key.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.keys.append(key)
+
+    def execute(self):
+        """Answers every queued read.
+
+        Returns:
+            list: One hash per queued read, in order.
+        """
+        answers = []
+        for key in self.keys:
+            answers.append(self.redis.hgetall(key))
+        return answers
+
+
+class StandInOrderPlacement:
+    """Stands in for the order placement, which names the brokers the system trades with.
+
+    Attributes:
+        broker_names (list): The brokers, which here is only Zerodha.
+    """
+
+    def __init__(self):
+        """Builds the stand-in.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.broker_names = [
+            'zerodha',
+        ]
+
+
 class StandInPlacement:
     """A stand-in for the engine's placement that answers from fixed data and refuses every cancel.
 
     Attributes:
-        cache (FlakyRedis): The stand-in Redis client.
+        cache (BrokerPositionsRedis): The stand-in Redis client, whose order updates come from a `FlakyRedis`.
         quotes (dict): Each instrument id to its live quote.
         positions (dict): The unified positions document.
+        order_placement (StandInOrderPlacement): Names the brokers the system trades with.
     """
 
     def __init__(self, quotes, positions):
@@ -124,9 +269,10 @@ class StandInPlacement:
         updates = {
             'zerodha:250930000777': json.dumps(open_order),
         }
-        self.cache = FlakyRedis(updates)
+        self.cache = BrokerPositionsRedis(FlakyRedis(updates), positions)
         self.quotes = quotes
         self.positions = positions
+        self.order_placement = StandInOrderPlacement()
 
     def market_context(self, instrument_id, needs_quote, needs_positions):
         """Returns the instrument, and the quote and positions when asked for.
@@ -321,8 +467,8 @@ class WhenClosingGoesWrongExample:
             WIPRO,
         }
         positions = self.closer.open_positions('intraday', wanted)
-        for instrument_id, quantity in positions:
-            print(f'1. Open intraday position in SBIN or WIPRO: {instrument_id} {quantity}')
+        for broker_name, instrument_id, quantity in positions:
+            print(f'1. Open intraday position in SBIN or WIPRO: {instrument_id} {quantity} at {broker_name}')
         watched = {
             SBIN,
         }
