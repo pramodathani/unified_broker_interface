@@ -97,7 +97,10 @@ class PlanOrder(SyntheticOrder):
                 memory = {}
                 part.prepare(self, memory)
                 record['memory'] = memory
-            if part.pricing.moves():
+            pricing_memory = part.prepared_pricing_memory(self)
+            if pricing_memory:
+                record['pricing_memory'] = pricing_memory
+            if part.moves_on_ticks():
                 record['moves'] = True
             if part.execution.paced_by_ticks():
                 record['paced'] = True
@@ -230,19 +233,29 @@ class PlanOrder(SyntheticOrder):
         )
 
     def quotes_now(self):
-        """This parent's instrument's quote as it is now, for pricing an order placed outside a tick.
+        """The quotes of this parent's instrument and of every instrument the plan watches, as they are now, for pricing an order placed outside a tick.
 
         Returns:
-            dict: The instrument id to its quote, which may be None.
+            dict: Each instrument id to its quote, which may be None.
+
+        Raises:
+            RefusedRequestError: When an instrument cannot be read, such as one that is not mapped.
         """
-        _, quote, _ = self.placement.market_context(
+        wanted = [
             self.parent.instrument_id,
-            True,
-            False,
-        )
-        return {
-            self.parent.instrument_id: quote,
-        }
+        ]
+        for instrument_id in self.parent.parameters.get('watch_instrument_ids') or []:
+            if instrument_id not in wanted:
+                wanted.append(instrument_id)
+        quotes = {}
+        for instrument_id in wanted:
+            _, quote, _ = self.placement.market_context(
+                instrument_id,
+                True,
+                False,
+            )
+            quotes[instrument_id] = quote
+        return quotes
 
     def _after_placing(self, placed):
         """Moves the parent to `working` once any order is accepted, or records why none was.

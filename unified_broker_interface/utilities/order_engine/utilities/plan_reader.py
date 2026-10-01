@@ -17,12 +17,18 @@ from unified_broker_interface.utilities.order_engine.utilities.chase_pricing imp
 from unified_broker_interface.utilities.order_engine.utilities.condition_group import (
     ConditionGroup,
 )
+from unified_broker_interface.utilities.order_engine.utilities.discretion_modifier import (
+    DiscretionModifier,
+)
 from unified_broker_interface.utilities.order_engine.utilities.either_part import (
     SIBLING_RULES,
     EitherPart,
 )
 from unified_broker_interface.utilities.order_engine.utilities.fixed_pricing import (
     FixedPricing,
+)
+from unified_broker_interface.utilities.order_engine.utilities.follow_instrument_pricing import (
+    FollowInstrumentPricing,
 )
 from unified_broker_interface.utilities.order_engine.utilities.front_loaded_execution import (
     FrontLoadedExecution,
@@ -35,6 +41,9 @@ from unified_broker_interface.utilities.order_engine.utilities.marketable_pricin
 )
 from unified_broker_interface.utilities.order_engine.utilities.native_stop_pricing import (
     NativeStopPricing,
+)
+from unified_broker_interface.utilities.order_engine.utilities.option_model_pricing import (
+    OptionModelPricing,
 )
 from unified_broker_interface.utilities.order_engine.utilities.order_part import (
     OrderPart,
@@ -112,6 +121,7 @@ ORDER_SETTINGS = (
     'guards',
 )
 MOST_SLICES = 60
+HIGHEST_VOLATILITY_PERCENT = 500
 SIDES = (
     'buy',
     'sell',
@@ -376,6 +386,8 @@ class PlanReader:
         pricing_path = None
         cap = None
         cap_path = None
+        discretion = None
+        discretion_path = None
         post_only = None
         post_only_path = None
         execution = None
@@ -396,7 +408,7 @@ class PlanReader:
                     f'{source_path}.pricing',
                 )
                 if read_pricing is not None:
-                    read_setter, read_cap = read_pricing
+                    read_setter, read_cap, read_discretion = read_pricing
                     if read_setter is not None:
                         if pricing is not None:
                             self._add_warning(
@@ -415,6 +427,15 @@ class PlanReader:
                             )
                         cap = read_cap
                         cap_path = f'{source_path}.pricing'
+                    if read_discretion is not None:
+                        if discretion is not None:
+                            self._add_warning(
+                                f'{source_path}.pricing',
+                                'discretion_replaced',
+                                f'this discretion replaces the discretion from {discretion_path}',
+                            )
+                        discretion = read_discretion
+                        discretion_path = f'{source_path}.pricing'
             if 'guards' in slots:
                 read_post_only = self._read_guards_list(
                     slots['guards'],
@@ -464,7 +485,38 @@ class PlanReader:
                 return None
         if post_only is not None and not self._can_rest(pricing, path):
             return None
-        return OrderPart(path, preset_names, trigger, side, pricing, keeps_tag, execution, cap, post_only)
+        if discretion is not None and not self._can_take_at_discretion(pricing, execution, path):
+            return None
+        return OrderPart(path, preset_names, trigger, side, pricing, keeps_tag, execution, cap, post_only, discretion)
+
+    def _can_take_at_discretion(self, pricing, execution, path):
+        """Whether an order with this pricing and execution can have discretion, reporting the problem when it cannot.
+
+        Discretion takes a price from one visible limit, so it needs a limit rather than a stop, and one visible order rather than pieces.
+
+        Args:
+            pricing (object): The order's pricing setter.
+            execution (object): The order's execution.
+            path (str): Where the order sits in the plan.
+
+        Returns:
+            bool: True when they can go together.
+        """
+        if isinstance(pricing, (NativeStopPricing, TrailPricing)):
+            self._add_problem(
+                path,
+                'discretion_needs_limit',
+                'discretion takes a better price than a visible limit shows, and a stop order is not a visible limit',
+            )
+            return False
+        if not isinstance(execution, AllAtOnceExecution):
+            self._add_problem(
+                path,
+                'discretion_not_sliced',
+                'discretion takes from one visible order, so the order cannot also be split into pieces',
+            )
+            return False
+        return True
 
     def _can_rest(self, pricing, path):
         """Whether an order with this pricing can be post-only, reporting the problem when it cannot.
@@ -756,14 +808,14 @@ class PlanReader:
         )
 
     def _read_pricing_list(self, pricing, path):
-        """Reads an order's pricing: at most one setter, which decides the price, and at most one cap, which limits it.
+        """Reads an order's pricing: at most one setter, which decides the price, and at most one each of the modifiers `cap` and `discretion`.
 
         Args:
             pricing (object): The list as the caller wrote it.
             path (str): Where it sits in the plan.
 
         Returns:
-            tuple | None: The setter (object | None) and the cap (CapModifier | None), or None when the list has a problem.
+            tuple | None: The setter (object | None), the cap (CapModifier | None) and the discretion (DiscretionModifier | None), or None when the list has a problem.
         """
         if not isinstance(pricing, list) or not pricing:
             self._add_problem(
@@ -775,6 +827,7 @@ class PlanReader:
         problems_before = len(self.problems)
         setter = None
         cap = None
+        discretion = None
         for index, entry in enumerate(pricing):
             entry_path = f'{path}.{index}'
             if not isinstance(entry, dict) or len(entry) != 1:
@@ -802,6 +855,16 @@ class PlanReader:
                         continue
                     cap = self._read_cap(settings, f'{entry_path}.cap')
                     continue
+                if name == 'discretion':
+                    if discretion is not None:
+                        self._add_problem(
+                            entry_path,
+                            'two_discretions',
+                            'an order has one discretion, so a pricing list can hold only one',
+                        )
+                        continue
+                    discretion = self._read_discretion(settings, f'{entry_path}.discretion')
+                    continue
                 read_setter = self._read_setter(name, settings, entry_path)
                 if read_setter is None:
                     continue
@@ -815,7 +878,7 @@ class PlanReader:
                 setter = read_setter
         if len(self.problems) > problems_before:
             return None
-        return setter, cap
+        return setter, cap, discretion
 
     def _read_setter(self, name, settings, entry_path):
         """Reads one pricing setter by its name.
@@ -840,10 +903,14 @@ class PlanReader:
             return self._read_peg(settings, f'{entry_path}.peg')
         if name == 'chase':
             return self._read_chase(settings, f'{entry_path}.chase')
+        if name == 'follow_instrument':
+            return self._read_follow_instrument(settings, f'{entry_path}.follow_instrument')
+        if name == 'option_model':
+            return self._read_option_model(settings, f'{entry_path}.option_model')
         self._add_problem(
             entry_path,
             'unknown_pricing',
-            f'{name!r} is not a pricing a plan can use yet; the pricings available are fixed, marketable, native_stop, trail, peg, chase and cap',
+            f'{name!r} is not a pricing a plan can use yet; the pricings available are fixed, marketable, native_stop, trail, peg, chase, follow_instrument and option_model, with the modifiers cap and discretion',
         )
         return None
 
@@ -917,6 +984,143 @@ class PlanReader:
             )
             return None
         return float(value)
+
+    def _read_bounds(self, settings, path):
+        """Reads the `lowest`, `highest` and `step_ticks` that the pricings following another instrument share.
+
+        Args:
+            settings (dict): The pricing's settings.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            tuple: The lowest and highest prices (decimal.Decimal | None) and the step (int | None).
+        """
+        lowest = None
+        highest = None
+        if settings.get('lowest') is not None:
+            lowest = self._price(settings['lowest'], path, 'lowest')
+        if settings.get('highest') is not None:
+            highest = self._price(settings['highest'], path, 'highest')
+        if lowest is not None and highest is not None and lowest > highest:
+            self._add_problem(
+                path,
+                'bad_setting',
+                f'lowest {lowest} is above highest {highest}',
+            )
+        step_ticks = self._whole_number(settings.get('step_ticks', 1), path, 'step_ticks', 1, None)
+        return lowest, highest, step_ticks
+
+    def _instrument_id(self, value, path):
+        """Reads the instrument a pricing follows.
+
+        Args:
+            value (object): The value as the caller wrote it.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            str | None: The instrument id, or None when it is missing.
+        """
+        if not isinstance(value, str) or not value:
+            self._add_problem(
+                path,
+                'bad_setting',
+                f'instrument_id names the instrument to follow, and is required, not {value!r}',
+            )
+            return None
+        return value
+
+    def _read_follow_instrument(self, settings, path):
+        """Reads `follow_instrument` pricing.
+
+        Args:
+            settings (dict): `instrument_id` and `delta`, required; `lowest`, `highest` and `step_ticks`, optional.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            FollowInstrumentPricing | None: The pricing, or None when it has a problem.
+        """
+        problems_before = len(self.problems)
+        self._refuse_unknown(settings, ('instrument_id', 'delta', 'lowest', 'highest', 'step_ticks'), path, 'follow_instrument')
+        instrument_id = self._instrument_id(settings.get('instrument_id'), path)
+        delta = self._number(settings.get('delta'), path, 'delta')
+        lowest, highest, step_ticks = self._read_bounds(settings, path)
+        if len(self.problems) > problems_before:
+            return None
+        return FollowInstrumentPricing(instrument_id, delta, lowest, highest, step_ticks)
+
+    def _read_option_model(self, settings, path):
+        """Reads `option_model` pricing.
+
+        Args:
+            settings (dict): `instrument_id` and `volatility`, required; `interest_rate`, `lowest`, `highest` and `step_ticks`, optional.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            OptionModelPricing | None: The pricing, or None when it has a problem.
+        """
+        problems_before = len(self.problems)
+        self._refuse_unknown(settings, ('instrument_id', 'volatility', 'interest_rate', 'lowest', 'highest', 'step_ticks'), path, 'option_model')
+        instrument_id = self._instrument_id(settings.get('instrument_id'), path)
+        volatility = self._price(settings.get('volatility'), path, 'volatility')
+        if volatility is not None and volatility > HIGHEST_VOLATILITY_PERCENT:
+            self._add_problem(
+                path,
+                'bad_setting',
+                f'volatility is a percentage above zero and at most {HIGHEST_VOLATILITY_PERCENT}, not {volatility}',
+            )
+        interest_rate = decimal.Decimal('0')
+        if settings.get('interest_rate') is not None:
+            interest_rate = self._number(settings['interest_rate'], path, 'interest_rate')
+        lowest, highest, step_ticks = self._read_bounds(settings, path)
+        if len(self.problems) > problems_before:
+            return None
+        return OptionModelPricing(instrument_id, volatility, interest_rate, lowest, highest, step_ticks)
+
+    def _number(self, value, path, name):
+        """Reads any finite number, which may be zero or below.
+
+        Args:
+            value (object): The value as the caller wrote it.
+            path (str): Where it sits in the plan.
+            name (str): The setting's name, for the message.
+
+        Returns:
+            decimal.Decimal | None: The number, or None when it is missing or not a number.
+        """
+        number = None
+        if value is not None and not isinstance(value, bool):
+            try:
+                number = decimal.Decimal(str(value))
+            except (decimal.InvalidOperation, TypeError, ValueError):
+                number = None
+        if number is None or not number.is_finite():
+            self._add_problem(
+                path,
+                'bad_setting',
+                f'{name} must be a number, not {value!r}',
+            )
+            return None
+        return number
+
+    def _read_discretion(self, settings, path):
+        """Reads the `discretion` pricing modifier.
+
+        Args:
+            settings (dict): `points`, required, and `quantity`, optional.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            DiscretionModifier | None: The discretion, or None when it has a problem.
+        """
+        problems_before = len(self.problems)
+        self._refuse_unknown(settings, ('points', 'quantity'), path, 'discretion')
+        points = self._price(settings.get('points'), path, 'points')
+        quantity = None
+        if settings.get('quantity') is not None:
+            quantity = self._whole_number(settings['quantity'], path, 'quantity', 1, None)
+        if len(self.problems) > problems_before:
+            return None
+        return DiscretionModifier(points, quantity)
 
     def _read_cap(self, settings, path):
         """Reads the `cap` pricing modifier.

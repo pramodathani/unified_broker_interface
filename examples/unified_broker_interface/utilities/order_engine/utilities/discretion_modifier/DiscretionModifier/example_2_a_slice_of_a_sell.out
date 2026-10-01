@@ -1,0 +1,5 @@
+Of 8 resting it takes 4; of 3 resting it takes 3
+With the bid at 1000.30 it takes at 1000.25
+Took: True
+  reduce parent-1:1 to 6: the other side reached 1000.30, which is inside the discretion, so 4 is being taken
+  place for root at flattrade: 4 at 1000.25, tag mine

@@ -23,3 +23,7 @@ The backstop is a second order resting beside the engine-side stop, cancelled be
 ## Stage 4a (2026-10-01)
 
 `peg` and `chaser` keep their types' setting names, and `cap_price` becomes a `cap` modifier beside the pricing. `post_only` stands for the guard alone, so the order's price is the body's or a `fixed` pricing the caller adds.
+
+## Stage 4b (2026-10-01)
+
+`underlying_peg` and `volatility` keep their types' names, `watch_instrument_id`, `lowest_price` and `highest_price`, and map them to the pricing's `instrument_id`, `lowest` and `highest`. `discretionary` maps `discretion_points` and `discretion_quantity` to the modifier's `points` and `quantity`.

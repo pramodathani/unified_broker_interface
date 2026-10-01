@@ -1,0 +1,5 @@
+With a worst price of 150: 150.00
+The first order is a LIMIT at 150.00, remembering the index at 25000.00
+The reason it gives: at 12.5 volatility with the underlying at 25100, the premium is 150
+On a share: 400 option_model prices an option, and this instrument is not an option with a strike and an expiry
+As a dry run shows it: {'option_model': {'instrument_id': '11111111-1111-5111-8111-000000000010', 'volatility': '12.5', 'interest_rate': '6.5', 'lowest': None, 'highest': None, 'step_ticks': 1}}

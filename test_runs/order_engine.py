@@ -2571,7 +2571,7 @@ class OrderEngineSuite:
             ),
         ]
 
-    def plan_price_result(self, name, plan, steps, answer, positions=None, restart_between_ticks=False, book_overrides=None, transaction_type='BUY'):
+    def plan_price_result(self, name, plan, steps, answer, positions=None, restart_between_ticks=False, book_overrides=None, transaction_type='BUY', body_overrides=None):
         """Places one `plan` order and walks it through price ticks, recording what it did and the state of each of its parts.
 
         Args:
@@ -2583,6 +2583,7 @@ class OrderEngineSuite:
             restart_between_ticks (bool): Whether to rebuild every parent from its recorded events after each tick, as recovery does.
             book_overrides (dict | None): Fields to put on every order in the broker's book, such as a stop's order type.
             transaction_type (str): The body's side, as a caller sent it; the API accepts it in any case.
+            body_overrides (dict | None): Body fields to replace, such as another instrument, quantity and price.
 
         Returns:
             dict: The recorded result, with `parts`, each parent's `parts` parameter.
@@ -2598,6 +2599,8 @@ class OrderEngineSuite:
             },
         )
         body['transaction_type'] = transaction_type
+        if body_overrides:
+            body.update(body_overrides)
         result = self.price_result(
             name,
             body,
@@ -4016,6 +4019,213 @@ class OrderEngineSuite:
                     {'quote': steady, 'at': 0},
                     {'quote': steady, 'at': 40},
                     {'quote': self.book_at(1000.30, 1000.35), 'at': 41},
+                ],
+                accepted,
+            ),
+        ]
+
+    def run_plan_followed_price_checks(self):
+        """Runs plans priced from another instrument or an option model, and plans with discretion, each beside the type it stands for.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        accepted = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        identifiers = order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS
+        steady = self.book_at(1000.00, 1000.05)
+        underlying_peg = {
+            'order': {
+                'presets': [
+                    {
+                        'underlying_peg': {
+                            'watch_instrument_id': identifiers['nifty_index'],
+                            'delta': 0.5,
+                            'step_ticks': 20,
+                        },
+                    },
+                ],
+            },
+        }
+        underlying_steps = [
+            {'quote': steady, 'at': 0, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=25000)}},
+            {'quote': steady, 'at': 1, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=25040)}},
+            {'quote': steady, 'at': 2, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=25041)}},
+            {'quote': steady, 'at': 3, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=24960)}},
+        ]
+        option = {
+            'instrument_id': identifiers['nifty_option'],
+            'quantity': 75,
+            'price': 500,
+        }
+        volatility = {
+            'order': {
+                'presets': [
+                    {
+                        'volatility': {
+                            'watch_instrument_id': identifiers['nifty_index'],
+                            'volatility': 12.5,
+                        },
+                    },
+                ],
+            },
+        }
+        discretionary = {
+            'order': {
+                'presets': [
+                    {
+                        'discretionary': {
+                            'discretion_points': 0.25,
+                        },
+                    },
+                ],
+            },
+        }
+        return [
+            self.plan_price_result(
+                'a_plan_underlying_peg_moves_with_the_index_by_its_delta',
+                underlying_peg,
+                underlying_steps,
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_underlying_peg_keeps_its_start_across_a_restart',
+                underlying_peg,
+                underlying_steps,
+                accepted,
+                restart_between_ticks=True,
+            ),
+            self.plan_price_result(
+                'a_plan_underlying_peg_stays_inside_its_range',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'underlying_peg': {
+                                    'watch_instrument_id': identifiers['nifty_index'],
+                                    'delta': 0.5,
+                                    'highest_price': 1010,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=25000)}},
+                    {'quote': steady, 'at': 1, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=25100)}},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_underlying_peg_on_its_own_instrument_is_refused',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'underlying_peg': {
+                                    'watch_instrument_id': identifiers['reliance'],
+                                    'delta': 0.5,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_volatility_order_is_priced_by_the_model_and_follows_the_index',
+                volatility,
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=25000)}},
+                    {'quote': steady, 'at': 1, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=25000)}},
+                    {'quote': steady, 'at': 2, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=25100)}},
+                ],
+                accepted,
+                body_overrides=option,
+            ),
+            self.plan_price_result(
+                'a_plan_volatility_order_never_pays_more_than_its_own_price',
+                volatility,
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=25000)}},
+                    {'quote': steady, 'at': 1, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=24900)}},
+                ],
+                accepted,
+                body_overrides=dict(option, price=150),
+            ),
+            self.plan_price_result(
+                'a_plan_volatility_order_on_something_that_is_not_an_option_is_refused',
+                volatility,
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=25000)}},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_discretionary_order_takes_the_offer_when_it_comes_within_reach',
+                discretionary,
+                [
+                    {'quote': self.book_at(1000.00, 1000.50), 'at': 0},
+                    {'quote': self.book_at(1000.00, 1000.20), 'at': 1},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_discretionary_order_leaves_the_rest_showing_when_it_takes_a_slice',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'discretionary': {
+                                    'discretion_points': 0.25,
+                                    'discretion_quantity': 4,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': self.book_at(1000.00, 1000.50), 'at': 0},
+                    {'quote': self.book_at(1000.00, 1000.20), 'at': 1},
+                    {'quote': self.book_at(1000.00, 1000.20), 'at': 2},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_discretionary_order_waits_while_the_offer_stays_out_of_reach',
+                discretionary,
+                [
+                    {'quote': self.book_at(1000.00, 1000.50), 'at': 0},
+                    {'quote': self.book_at(1000.00, 1000.40), 'at': 1},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_discretionary_order_sliced_by_twap_is_refused',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'discretionary': {
+                                    'discretion_points': 0.25,
+                                },
+                            },
+                            {
+                                'twap': {
+                                    'slices': 2,
+                                    'over_minutes': 1,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
                 ],
                 accepted,
             ),
@@ -7722,6 +7932,7 @@ class OrderEngineSuite:
             results.extend(self.run_plan_execution_checks())
             results.extend(self.run_plan_market_execution_checks())
             results.extend(self.run_plan_moving_price_checks())
+            results.extend(self.run_plan_followed_price_checks())
             results.extend(self.run_clock_checks())
             results.extend(self.run_price_checks())
             results.extend(self.run_wiring_checks())

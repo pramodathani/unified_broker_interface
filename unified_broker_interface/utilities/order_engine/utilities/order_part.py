@@ -6,6 +6,9 @@ import time
 from unified_broker_interface.utilities.order_engine.utilities.all_at_once_execution import (
     AllAtOnceExecution,
 )
+from unified_broker_interface.utilities.order_engine.utilities.follow_instrument_pricing import (
+    FollowInstrumentPricing,
+)
 
 OPPOSITE_SIDES = {
     'BUY': 'SELL',
@@ -34,9 +37,10 @@ class OrderPart:
         execution (object): How its quantity is cut into pieces and when each is sent.
         cap (CapModifier | None): The worst price its limit may reach, or None.
         post_only (PostOnlyGuard | None): The check that keeps its limit from crossing, or None.
+        discretion (DiscretionModifier | None): How far past its visible price it quietly goes, or None.
     """
 
-    def __init__(self, path, presets, trigger, side, pricing, keeps_tag=True, execution=None, cap=None, post_only=None):
+    def __init__(self, path, presets, trigger, side, pricing, keeps_tag=True, execution=None, cap=None, post_only=None, discretion=None):
         """Builds the part from values the plan reader has already checked.
 
         Args:
@@ -49,6 +53,7 @@ class OrderPart:
             execution (object | None): How its quantity is sent, or None for all at once.
             cap (CapModifier | None): The worst price its limit may reach, or None.
             post_only (PostOnlyGuard | None): The check that keeps its limit from crossing, or None.
+            discretion (DiscretionModifier | None): How far past its visible price it quietly goes, or None.
 
         Returns:
             None: This method returns nothing.
@@ -64,6 +69,7 @@ class OrderPart:
         self.execution = execution
         self.cap = cap
         self.post_only = post_only
+        self.discretion = discretion
 
     def order_parts(self):
         """Every order in this part, which is itself.
@@ -105,7 +111,7 @@ class OrderPart:
             return True
         if self.execution.needs_prices():
             return True
-        if self.post_only is not None:
+        if self.post_only is not None or self.discretion is not None:
             return True
         return self.pricing.needs_prices()
 
@@ -115,9 +121,36 @@ class OrderPart:
         Returns:
             list: The instrument ids.
         """
-        if self.trigger is None:
-            return []
-        return self.trigger.instruments()
+        watched = []
+        if self.trigger is not None:
+            watched = list(self.trigger.instruments())
+        if isinstance(self.pricing, FollowInstrumentPricing) and self.pricing.instrument_id not in watched:
+            watched.append(self.pricing.instrument_id)
+        return watched
+
+    def moves_on_ticks(self):
+        """Whether this part's resting orders are looked at on every tick, for a pricing that moves or for discretion.
+
+        Returns:
+            bool: True when they are.
+        """
+        return self.pricing.moves() or self.discretion is not None
+
+    def prepared_pricing_memory(self, plan_order):
+        """The pricing's first memory, readied when the plan is placed, such as an option's strike and expiry.
+
+        Args:
+            plan_order (PlanOrder): The plan order.
+
+        Returns:
+            dict: The memory, empty for a pricing that needs nothing readied.
+
+        Raises:
+            RefusedRequestError: When the pricing cannot work for this order.
+        """
+        if isinstance(self.pricing, FollowInstrumentPricing):
+            return self.pricing.prepared_memory(plan_order)
+        return {}
 
     def closes_position(self):
         """Whether this part's orders close a position, which is so for the `protect` side.
@@ -234,7 +267,7 @@ class OrderPart:
             return None
         if memory != (record.get('pricing_memory') or {}):
             record['pricing_memory'] = memory
-            plan_order.set_part_record(self.path, record, None)
+            plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part\'s pricing remembers {memory}')
         if self.cap is not None:
             priced = self.cap.capped_body(priced, sending_side)
         if self.post_only is not None:
@@ -446,8 +479,11 @@ class OrderPart:
         Returns:
             bool: True when an order was moved.
         """
+        took = False
+        if self.discretion is not None:
+            took = self.discretion.take(plan_order, self, quotes)
         if not self.pricing.moves():
-            return False
+            return took
         resting = []
         for leg in self.own_legs(plan_order.parent):
             if not leg.is_finished() and leg.broker_order_id:
@@ -483,7 +519,7 @@ class OrderPart:
             if moved_any or not stored:
                 message = f'the plan\'s {self.path} part\'s pricing remembers {new_memory}'
             plan_order.set_part_record(self.path, record, message)
-        return moved_any
+        return moved_any or took
 
     def settle(self, plan_order):
         """Sends the next piece when the execution waits for fills, and marks this order done once every broker order has finished and no more will be sent.
@@ -559,13 +595,20 @@ class OrderPart:
             self._cut_resting_pieces(plan_order, target)
             return
         wanted = target - self.traded(plan_order.parent)
+        resting = []
         for leg in self.own_legs(plan_order.parent):
-            if leg.is_finished() or not leg.broker_order_id:
-                continue
+            if not leg.is_finished() and leg.broker_order_id:
+                resting.append(leg)
+        for index, leg in enumerate(resting):
             if wanted <= 0:
                 plan_order.cancel_leg(leg, f'the plan\'s {self.path} part has nothing left to trade')
                 continue
-            new_total = (leg.filled_quantity or 0) + wanted
+            unfilled = (leg.quantity or 0) - (leg.filled_quantity or 0)
+            share = wanted
+            if index < len(resting) - 1:
+                share = min(wanted, unfilled)
+            wanted = wanted - share
+            new_total = (leg.filled_quantity or 0) + share
             if new_total != leg.quantity:
                 plan_order.reduce_leg(
                     leg,
@@ -711,13 +754,15 @@ class OrderPart:
         """The pricing setter and its modifiers, as a dry run shows them.
 
         Returns:
-            list: The setter, then the cap when there is one.
+            list: The setter, then the cap and the discretion when there are any.
         """
         described = [
             self.pricing.described(),
         ]
         if self.cap is not None:
             described.append(self.cap.described())
+        if self.discretion is not None:
+            described.append(self.discretion.described())
         return described
 
     def _guards_described(self):

@@ -1,0 +1,6 @@
+Read from the catalogue: {'strike_price': 25000.0, 'expires_at': 1790676000.0, 'is_call': True, 'underlying_is_forward': False}
+Model price at 12.5 volatility: 162.86
+Premium sent: 162.85
+Index at 25100: target 218.00, move (Decimal('218.00'), None, 'at 12.5 volatility with the underlying at 25100.00, the premium is 218.00')
+After expiry the model is None
+As a dry run shows it: {'option_model': {'instrument_id': '11111111-1111-5111-8111-000000000010', 'volatility': '12.5', 'interest_rate': '0', 'lowest': None, 'highest': None, 'step_ticks': 1}}

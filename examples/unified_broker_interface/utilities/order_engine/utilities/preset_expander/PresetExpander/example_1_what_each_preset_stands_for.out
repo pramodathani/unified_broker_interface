@@ -34,3 +34,9 @@ chaser: {'pricing': [{'chase': {'step_seconds': 3, 'cross_after_seconds': 60}}]}
   problems: []
 post_only: {'guards': [{'post_only': {'on_crossing': 'rest'}}]}
   problems: []
+underlying_peg: {'pricing': [{'follow_instrument': {'instrument_id': '11111111-1111-5111-8111-000000000010', 'delta': 0.5, 'highest': 250}}]}
+  problems: []
+volatility: {'pricing': [{'option_model': {'instrument_id': '11111111-1111-5111-8111-000000000010', 'volatility': 12.5, 'interest_rate': 6.5}}]}
+  problems: []
+discretionary: {'pricing': [{'discretion': {'points': 0.25, 'quantity': 4}}]}
+  problems: []

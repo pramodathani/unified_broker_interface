@@ -44,6 +44,9 @@ PRESET_NAMES = (
     'peg',
     'chaser',
     'post_only',
+    'underlying_peg',
+    'volatility',
+    'discretionary',
     'oto',
     'oco',
     'bracket',
@@ -142,6 +145,12 @@ class PresetExpander:
             return self._chaser(settings, path)
         if name == 'post_only':
             return self._post_only(settings, path)
+        if name == 'underlying_peg':
+            return self._underlying_peg(settings, path)
+        if name == 'volatility':
+            return self._volatility(settings, path)
+        if name == 'discretionary':
+            return self._discretionary(settings, path)
         return self._hidden_stop(settings, path)
 
     def is_join(self, name, settings):
@@ -892,6 +901,97 @@ class PresetExpander:
             'guards': [
                 {
                     'post_only': post_only,
+                },
+            ],
+        }
+
+    def _followed_bounds(self, settings, followed):
+        """Copies the bounds and step that the underlying peg and volatility types share into a pricing's settings.
+
+        Args:
+            settings (dict): The preset's settings.
+            followed (dict): The pricing's settings, changed in place.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        if 'lowest_price' in settings:
+            followed['lowest'] = settings['lowest_price']
+        if 'highest_price' in settings:
+            followed['highest'] = settings['highest_price']
+        if 'step_ticks' in settings:
+            followed['step_ticks'] = settings['step_ticks']
+
+    def _underlying_peg(self, settings, path):
+        """Moves a resting limit by a delta times another instrument's move.
+
+        Args:
+            settings (dict): `watch_instrument_id` and `delta`, and optionally `lowest_price`, `highest_price` and `step_ticks`.
+            path (str): The preset's path.
+
+        Returns:
+            dict: `follow_instrument` pricing.
+        """
+        self._refuse_unknown(settings, ('watch_instrument_id', 'delta', 'lowest_price', 'highest_price', 'step_ticks'), path, 'underlying_peg')
+        followed = {
+            'instrument_id': settings.get('watch_instrument_id'),
+            'delta': settings.get('delta'),
+        }
+        self._followed_bounds(settings, followed)
+        return {
+            'pricing': [
+                {
+                    'follow_instrument': followed,
+                },
+            ],
+        }
+
+    def _volatility(self, settings, path):
+        """Prices an option from an implied volatility, kept current as the underlying moves.
+
+        Args:
+            settings (dict): `watch_instrument_id` and `volatility`, and optionally `interest_rate`, `lowest_price`, `highest_price` and `step_ticks`.
+            path (str): The preset's path.
+
+        Returns:
+            dict: `option_model` pricing.
+        """
+        self._refuse_unknown(settings, ('watch_instrument_id', 'volatility', 'interest_rate', 'lowest_price', 'highest_price', 'step_ticks'), path, 'volatility')
+        modelled = {
+            'instrument_id': settings.get('watch_instrument_id'),
+            'volatility': settings.get('volatility'),
+        }
+        if 'interest_rate' in settings:
+            modelled['interest_rate'] = settings['interest_rate']
+        self._followed_bounds(settings, modelled)
+        return {
+            'pricing': [
+                {
+                    'option_model': modelled,
+                },
+            ],
+        }
+
+    def _discretionary(self, settings, path):
+        """Shows the body's price and quietly takes a better one within a distance.
+
+        Args:
+            settings (dict): `discretion_points`, and optionally `discretion_quantity`.
+            path (str): The preset's path.
+
+        Returns:
+            dict: The `discretion` modifier, beside the body's own price.
+        """
+        self._refuse_unknown(settings, ('discretion_points', 'discretion_quantity'), path, 'discretionary')
+        discretion = {
+            'points': settings.get('discretion_points'),
+        }
+        if 'discretion_quantity' in settings:
+            discretion['quantity'] = settings['discretion_quantity']
+        return {
+            'pricing': [
+                {
+                    'discretion': discretion,
                 },
             ],
         }

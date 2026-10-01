@@ -41,3 +41,7 @@ An order part now sends its quantity as pieces chosen by its execution. `send` s
 ## Stage 4a (2026-10-01)
 
 `move` now moves every resting broker order of the part, not only the newest, so a TWAP with a peg keeps each resting slice on the bid. Each order is asked about with the memory as it stood before the tick, so pieces side by side move together. The memory is recorded with an event when an order moved or when it was first set. The cap holds every limit, sent or moved, and the post-only guard checks it; a refusal ends the part as `refused` with the guard's message, and `send` then leaves it done rather than putting it back to waiting.
+
+## Stage 4b (2026-10-01)
+
+Pricing memory set by `priced_body` is now recorded with an event, because the follow pricings keep their start there and a restart must not lose it. `move` gives discretion its turn before the pricing moves. `set_target` shares the wanted quantity across every resting order, oldest first with the last taking the rest, instead of giving each the whole amount, which only worked while a part had one resting order.

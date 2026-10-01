@@ -111,6 +111,20 @@ class WhatEachPresetStandsForExample:
             'post_only': {
                 'on_crossing': 'rest',
             },
+            'underlying_peg': {
+                'watch_instrument_id': '11111111-1111-5111-8111-000000000010',
+                'delta': 0.5,
+                'highest_price': 250,
+            },
+            'volatility': {
+                'watch_instrument_id': '11111111-1111-5111-8111-000000000010',
+                'volatility': 12.5,
+                'interest_rate': 6.5,
+            },
+            'discretionary': {
+                'discretion_points': 0.25,
+                'discretion_quantity': 4,
+            },
         }
         for name in PRESET_NAMES:
             if name in JOIN_PRESET_NAMES:

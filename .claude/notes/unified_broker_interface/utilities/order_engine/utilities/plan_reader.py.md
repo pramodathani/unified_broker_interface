@@ -25,3 +25,7 @@ An Either's first child inherits `keeps_tag`; every other child, and every Then 
 ## Stage 4a (2026-10-01)
 
 A pricing list now holds at most one setter and at most one `cap`, and across presets a later setter or cap replaces an earlier one with a warning, so the `peg` preset's cap survives a caller's own `fixed` price. The `guards` slot reads `post_only`. Two combinations are refused rather than run: `post_only_crosses`, a post-only guard with a pricing that means to trade at once (`marketable`, `chase`, a peg to the opposite touch, a `MARKET` order), and `post_only_needs_limit`, a post-only guard on a stop. The `stop_not_sliced` rule now names the stop pricings themselves rather than every pricing that moves, because a peg or a chase on each slice is a sensible thing to want. `_refuse_unknown` takes a `kind`, so an execution's or a guard's unknown setting is no longer called a pricing.
+
+## Stage 4b (2026-10-01)
+
+`follow_instrument` and `option_model` are setters and `discretion` a second modifier. Discretion is refused on a stop and with any execution other than `all_at_once`. Whether the followed instrument is the order's own, and whether an option is an option, need the body and the catalogue, so they are checked by the pricing when the plan is placed rather than here.

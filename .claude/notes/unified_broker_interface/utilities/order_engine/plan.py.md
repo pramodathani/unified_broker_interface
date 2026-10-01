@@ -65,3 +65,7 @@ The freeze quantity is not an execution yet. Each broker publishes its freeze li
 ## Stage 4a: moving prices, cap and post-only (2026-10-01)
 
 `on_price_tick` passes the tick's time to `OrderPart.move`, because a chase steps on a clock. A guard that refuses an order leaves the part `done` with reason `refused` and a `message`; `_guard_refusal` finds it, so `_finish_if_done` ends the parent as `rejected` and `_answer` answers 409 with the message when nothing was placed.
+
+## Stage 4b: following another instrument and discretion (2026-10-01)
+
+Every order part's pricing memory is readied when the plan is placed through `OrderPart.prepared_pricing_memory`, so the option model's strike and expiry are read once and recorded with the received event; a refusal there answers before anything is recorded. A part is marked `moves` when its pricing moves or it has discretion. `quotes_now` reads every watched instrument as well as the order's own, so an order priced from another instrument is placed at once.
