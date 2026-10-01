@@ -1,0 +1,2 @@
+SELL 10: SL, trigger 990, limit 988
+Reads quotes: False; moves a resting order False; dry run shows {'native_stop': {'trigger_price': '990', 'limit_price': '988'}}

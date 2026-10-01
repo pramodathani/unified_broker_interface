@@ -2,7 +2,7 @@
 
 `PlanReader` does not stop at the first problem. It walks the whole plan and records each one with the path of the part it is in, the name of the rule it breaks and a message for the caller, so a caller can fix everything in one go. This program reads a plan that is not an object, a plan that names a join, a plan that names a key no node has, and an order with three problems of its own.
 
-The joins, such as `then`, are part of the design and are recognised, so the reader says they are not built yet rather than that they are unknown.
+The joins not built yet, such as `together`, are part of the design and are recognised, so the reader says they are not built yet rather than that they are unknown.
 
 Run it from the project root:
 
@@ -55,9 +55,9 @@ class CollectsEveryProblemExample:
             'buy 10',
         )
         self.show(
-            'A join',
+            'A join not built yet',
             {
-                'then': {},
+                'together': {},
             },
         )
         self.show(

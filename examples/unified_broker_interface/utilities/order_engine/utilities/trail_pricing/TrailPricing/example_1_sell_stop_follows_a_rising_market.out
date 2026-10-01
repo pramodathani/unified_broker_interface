@@ -1,0 +1,8 @@
+Reads quotes: True, moves a resting order: True
+Placed at last 1000.05: SL, trigger 995.05, limit 994.05, memory {'best': '1000.05'}
+last 1003.0: best 1003.00, move (Decimal('997.00'), Decimal('998.00'), 'the market reached 1003.00, so the stop follows to 998.00')
+last 1001.0: best 1003.00, move None
+last 1003.02: best 1003.00, move None
+last 1006.0: best 1006.00, move (Decimal('1000.00'), Decimal('1001.00'), 'the market reached 1006.00, so the stop follows to 1001.00')
+Distance from a best of 1006: 5
+As a dry run shows it: {'trail': {'limit_offset': '1', 'step_ticks': 1, 'points': '5'}}

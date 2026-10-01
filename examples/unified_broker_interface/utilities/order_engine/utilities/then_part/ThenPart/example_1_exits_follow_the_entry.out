@@ -1,0 +1,8 @@
+Members ['root.first', 'root.each_fill'], orders ['root.first', 'root.each_fill'], standalone protecting []
+Started: [('place', 'root.first', 'BUY', 10, 'LIMIT', '1000.00')]; child started False
+Entry filled 4: traded 4, requests so far [('place', 'root.each_fill', 'SELL', 4, 'SL', '988')]
+Entry filled 4: traded 4, requests so far [('place', 'root.each_fill', 'SELL', 4, 'SL', '988')]
+Entry filled 10: traded 10, requests so far [('place', 'root.each_fill', 'SELL', 4, 'SL', '988'), ('change', 'root.each_fill', 10)]
+Stop record: {'state': 'working', 'target': 10}
+Join done: False, started: True
+As a dry run shows it: {'then': {'path': 'root', 'first': {'order': {'path': 'root.first', 'presets': [], 'slots': {'trigger': 'at_once', 'quantity': "the body's quantity", 'side': "the body's transaction_type", 'execution': ['all_at_once'], 'pricing': [{'fixed': {'price': "the body's price", 'order_type': "the body's order_type"}}], 'guards': [], 'venue': 'selector', 'lifetime': ["the body's validity"]}}}, 'each_fill': {'order': {'path': 'root.each_fill', 'presets': [], 'slots': {'trigger': 'at_once', 'quantity': 'set by its join', 'side': 'protect', 'execution': ['all_at_once'], 'pricing': [{'native_stop': {'trigger_price': '990', 'limit_price': '988'}}], 'guards': [], 'venue': 'selector', 'lifetime': ["the body's validity"]}}}, 'cancel_first_on_child_fill': False}}

@@ -1,0 +1,7 @@
+With no quote: False
+990 improves on 1000 for a buy: True; for a sell: False
+last 1000.0: met False, lowest 1000.00
+last 990.0: met False, lowest 990.00
+last 994.0: met False, lowest 990.00
+last 995.0: met True, lowest 990.00
+As a dry run shows it: {'trails': {'percent': '0.5'}}

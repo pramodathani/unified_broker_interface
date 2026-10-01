@@ -146,7 +146,7 @@ class OneCancelsOther(SyntheticOrder):
                 continue
             if leg.role not in ('stop', 'target'):
                 continue
-            self.take_fill_off(
+            self._take_fill_off(
                 leg,
                 filled_leg,
                 f'{filled_leg.role} filled '
@@ -154,7 +154,7 @@ class OneCancelsOther(SyntheticOrder):
             )
         self.save()
 
-    def take_fill_off(self, leg, filled_leg, reason):
+    def _take_fill_off(self, leg, filled_leg, reason):
         """Reduces one exit by the part of another exit's fill it has not yet given up.
 
         An update carries the other exit's total fill, not what is new, and a reduced exit already reflects the fills taken off it before. The parent therefore remembers, for each exit, how much of each other exit's fill has been taken off it, and only the difference is taken off now. It is remembered only once the broker accepts the change, so a change that fails is tried again, whole, on the next fill.

@@ -9,6 +9,9 @@ Run it from the project root:
     python examples/unified_broker_interface/utilities/order_engine/utilities/order_part/OrderPart/example_1_done_reason_from_its_legs.py
 """
 
+from unified_broker_interface.utilities.order_engine.utilities.fixed_pricing import (
+    FixedPricing,
+)
 from unified_broker_interface.utilities.order_engine.utilities.order_leg import (
     OrderLeg,
 )
@@ -38,6 +41,9 @@ class DoneReasonFromItsLegsExample:
             [
                 'simple',
             ],
+            None,
+            None,
+            FixedPricing(None, None),
         )
 
     def reason(self, state, filled):

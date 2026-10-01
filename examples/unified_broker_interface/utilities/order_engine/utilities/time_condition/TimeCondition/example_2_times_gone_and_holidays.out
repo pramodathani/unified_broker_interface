@@ -1,0 +1,5 @@
+09:15 at 09:30 on a trading day: refused with HTTP 400: time_at of 09:15 has already passed today, and an order is not held overnight on the strength of a time that has gone
+09:15 asked on the holiday falls at 2026-10-05 09:15:00+05:30
+Holds at 09:14 that day: False
+Holds at 09:15 that day: True
+Not prepared yet, it never holds: False

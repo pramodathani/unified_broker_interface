@@ -1,0 +1,12 @@
+Orders ['root.each_fill'], members [], standalone protecting 1
+Quantity: set by its join; the entry's: the body's quantity
+Before starting, a target of 4 is only recorded: {'state': 'pending', 'target': 4}, started False
+Started: [('root.each_fill', {'outcome': 'accepted', 'order_id': '1', 'broker': 'zerodha'}, 200)]
+1 filled, target 10: traded 1, requests [('change', 'root.each_fill', 10)]
+Target 1: requests [('change', 'root.each_fill', 10), ('cancel', 'root.each_fill')]
+Settled: done True, record {'state': 'done', 'target': 1, 'reason': 'partly_filled'}
+A target cancelled and settled: done True, record {'state': 'done', 'target': 5, 'reason': 'cancelled'}
+A waiting target sent when its tick comes: accepted for 3, record {'state': 'working', 'target': 3}
+A trailing stop placed: ('place', 'root.children.3', 'SELL', 10, 'SL', '994.05'); moved at 1003: True, at 1001: False
+Last request: ('move', 'root.children.3', '998.00', '997.00'); a stop that does not trail moves: False
+Messages: ["the plan's root.each_fill part will trade 4", "the plan's root.each_fill part is working", "the plan's root.each_fill part will trade 10", "the plan's root.each_fill part will trade 1", "the plan's root.each_fill part is done: partly_filled", "the plan's root.children.1 part is working", "the plan's root.children.1 part is done: cancelled", "the plan's root.children.2 part's order was placed", "the plan's root.children.3 part is working"]

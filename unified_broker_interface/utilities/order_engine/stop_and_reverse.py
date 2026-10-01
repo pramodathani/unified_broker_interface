@@ -154,7 +154,7 @@ class StopAndReverse(CloseOnTrigger):
         for other in self.parent.legs:
             if other.role == 'reverse' and other.broker == leg.broker:
                 return
-        quantity = self.reverse_quantity(leg.broker)
+        quantity = self._reverse_quantity(leg.broker)
         if quantity is None:
             return
         closer = PositionCloser(self)
@@ -183,7 +183,7 @@ class StopAndReverse(CloseOnTrigger):
         )
         self.save()
 
-    def reverse_quantity(self, broker_name):
+    def _reverse_quantity(self, broker_name):
         """The position, signed, that the close at one broker was sent for, which is what its reverse trades again.
 
         A parent recorded before closes were sent per broker holds one quantity rather than one per broker, and that quantity is used for whichever broker's close fills.

@@ -1,7 +1,48 @@
 """Reading a caller's plan into the parts that run it, and every problem that stops it running."""
 
+import decimal
+
+from unified_broker_interface.utilities.order_engine.utilities.condition_group import (
+    ConditionGroup,
+)
+from unified_broker_interface.utilities.order_engine.utilities.either_part import (
+    SIBLING_RULES,
+    EitherPart,
+)
+from unified_broker_interface.utilities.order_engine.utilities.fixed_pricing import (
+    FixedPricing,
+)
+from unified_broker_interface.utilities.order_engine.utilities.marketable_pricing import (
+    MarketablePricing,
+)
+from unified_broker_interface.utilities.order_engine.utilities.native_stop_pricing import (
+    NativeStopPricing,
+)
 from unified_broker_interface.utilities.order_engine.utilities.order_part import (
     OrderPart,
+)
+from unified_broker_interface.utilities.order_engine.utilities.preset_expander import (
+    PRESET_NAMES,
+    PresetExpander,
+)
+from unified_broker_interface.utilities.order_engine.utilities.price_crosses_condition import (
+    CONFIRMATIONS,
+    DIRECTIONS,
+    FIELDS,
+    PriceCrossesCondition,
+)
+from unified_broker_interface.utilities.order_engine.utilities.then_part import (
+    ThenPart,
+)
+from unified_broker_interface.utilities.order_engine.utilities.time_condition import (
+    KINDS,
+    TimeCondition,
+)
+from unified_broker_interface.utilities.order_engine.utilities.trail_pricing import (
+    TrailPricing,
+)
+from unified_broker_interface.utilities.order_engine.utilities.trails_condition import (
+    TrailsCondition,
 )
 
 JOIN_NAMES = (
@@ -12,11 +53,43 @@ JOIN_NAMES = (
     'repeat',
     'sequence',
 )
+BUILT_JOIN_NAMES = (
+    'then',
+    'either',
+)
+THEN_SETTINGS = (
+    'first',
+    'each_fill',
+    'on_complete',
+    'cancel_first_on_child_fill',
+)
+EITHER_SETTINGS = (
+    'children',
+    'sibling_rule',
+    'cancel_before_send',
+)
 ORDER_SETTINGS = (
     'presets',
+    'trigger',
+    'side',
+    'pricing',
 )
-PRESET_NAMES = (
-    'simple',
+SIDES = (
+    'buy',
+    'sell',
+    'protect',
+)
+PRICE_CROSSES_SETTINGS = (
+    'level',
+    'direction',
+    'field',
+    'instrument_id',
+    'confirm',
+    'hold_seconds',
+)
+ORDER_TYPES = (
+    'LIMIT',
+    'MARKET',
 )
 
 
@@ -25,19 +98,28 @@ class PlanReader:
 
     A plan is a tree. Each node is an object holding exactly one key: `order` for a leaf, or the name of a join for a branch. Each part gets a path from its place in the tree, starting at `root`, which is how its broker orders and its state are told apart from every other part's.
 
-    Only what the engine can run so far is accepted. An order takes a list of `presets`, and the only preset is `simple`. The joins are named in the design and recognised here, so a caller who writes one is told it is not built yet rather than that it is unknown.
+    An order takes `presets`, a list of named presets each standing for slot values, and may give slot values of its own: `trigger`, `side` and `pricing`. They are merged in order, presets first and the order's own values last. Triggers from several sources are joined with `all`. A later pricing setter replaces an earlier one, which is reported in `warnings` rather than refused, because naming a preset for its trigger and then choosing another price is a normal thing to want. Two different sides are refused, because there is no sensible way to join them.
+
+    The joins are named in the design and recognised here, so a caller who writes one is told it is not built yet rather than that it is unknown.
 
     Attributes:
+        opening_side (str | None): BUY or SELL, the side of the caller's body, which some presets need; None when it is not known.
         problems (list): Every problem found by the last `read`, each a dictionary with `path`, `rule` and `message`.
+        warnings (list): Every warning from the last `read`, in the same form.
     """
 
-    def __init__(self):
+    def __init__(self, opening_side=None):
         """Builds a reader that has found no problems.
+
+        Args:
+            opening_side (str | None): BUY or SELL, the side of the caller's body, or None when it is not known.
 
         Returns:
             None: This method returns nothing.
         """
+        self.opening_side = opening_side
         self.problems = []
+        self.warnings = []
 
     def read(self, plan):
         """Reads a whole plan.
@@ -46,23 +128,25 @@ class PlanReader:
             plan (object): The `plan` object from the caller's `synthetic` object.
 
         Returns:
-            OrderPart | None: The root part, or None when the plan has any problem, which are then in `problems`.
+            object | None: The root part, an `OrderPart`, `ThenPart` or `EitherPart`, or None when the plan has any problem, which are then in `problems`.
         """
         self.problems = []
-        root = self._read_node(plan, 'root')
+        self.warnings = []
+        root = self._read_node(plan, 'root', True)
         if self.problems:
             return None
         return root
 
-    def _read_node(self, node, path):
+    def _read_node(self, node, path, keeps_tag):
         """Reads one node of the tree.
 
         Args:
             node (object): The node as the caller wrote it.
             path (str): Where the node sits in the plan.
+            keeps_tag (bool): Whether the orders the node places first carry the caller's tag, which only the plan's main order does.
 
         Returns:
-            OrderPart | None: The part, or None when the node has a problem.
+            object | None: The part, or None when the node has a problem.
         """
         if not isinstance(node, dict) or len(node) != 1:
             self._add_problem(
@@ -73,12 +157,16 @@ class PlanReader:
             return None
         for kind, content in node.items():
             if kind == 'order':
-                return self._read_order(content, path)
+                return self._read_order(content, path, keeps_tag)
+            if kind == 'then':
+                return self._read_then(content, path, keeps_tag)
+            if kind == 'either':
+                return self._read_either(content, path, keeps_tag)
             if kind in JOIN_NAMES:
                 self._add_problem(
                     path,
                     'join_not_built',
-                    f'the {kind} join is part of the design but is not built yet, so a plan can only be a single order for now',
+                    f'the {kind} join is part of the design but is not built yet; the joins built so far are {", ".join(BUILT_JOIN_NAMES)}',
                 )
                 return None
             self._add_problem(
@@ -88,15 +176,129 @@ class PlanReader:
             )
         return None
 
-    def _read_order(self, order, path):
-        """Reads one order.
+    def _read_then(self, then, path, keeps_tag):
+        """Reads a Then join.
+
+        Args:
+            then (object): The join's content as the caller wrote it.
+            path (str): Where the join sits in the plan.
+            keeps_tag (bool): Whether the first plan's main order carries the caller's tag.
+
+        Returns:
+            ThenPart | None: The join, or None when it has a problem.
+        """
+        if not isinstance(then, dict):
+            self._add_problem(path, 'join_shape', 'then holds an object with first and each_fill or on_complete')
+            return None
+        problems_before = len(self.problems)
+        for setting in then:
+            if setting not in THEN_SETTINGS:
+                self._add_problem(
+                    path,
+                    'unknown_setting',
+                    f'then takes {", ".join(THEN_SETTINGS)}, not {setting!r}',
+                )
+        child_keys = []
+        for key in ('each_fill', 'on_complete'):
+            if key in then:
+                child_keys.append(key)
+        if 'first' not in then or len(child_keys) != 1:
+            self._add_problem(
+                path,
+                'join_shape',
+                'then needs first and exactly one of each_fill or on_complete',
+            )
+            return None
+        cancel_first = then.get('cancel_first_on_child_fill', False)
+        if not isinstance(cancel_first, bool):
+            self._add_problem(
+                path,
+                'bad_setting',
+                f'cancel_first_on_child_fill must be true or false, not {cancel_first!r}',
+            )
+        child_key = child_keys[0]
+        first = self._read_node(then['first'], f'{path}.first', keeps_tag)
+        child = self._read_node(then[child_key], f'{path}.{child_key}', False)
+        if len(self.problems) > problems_before:
+            return None
+        return ThenPart(path, first, child, child_key, cancel_first)
+
+    def _read_either(self, either, path, keeps_tag):
+        """Reads an Either join.
+
+        A `reduce` join's children share one quantity, which only makes sense when each child is one order, so any other child is refused.
+
+        Args:
+            either (object): The join's content as the caller wrote it.
+            path (str): Where the join sits in the plan.
+            keeps_tag (bool): Whether the first child's main order carries the caller's tag.
+
+        Returns:
+            EitherPart | None: The join, or None when it has a problem.
+        """
+        if not isinstance(either, dict):
+            self._add_problem(path, 'join_shape', 'either holds an object with children and sibling_rule')
+            return None
+        problems_before = len(self.problems)
+        for setting in either:
+            if setting not in EITHER_SETTINGS:
+                self._add_problem(
+                    path,
+                    'unknown_setting',
+                    f'either takes {", ".join(EITHER_SETTINGS)}, not {setting!r}',
+                )
+        sibling_rule = either.get('sibling_rule')
+        if sibling_rule not in SIBLING_RULES:
+            self._add_problem(
+                path,
+                'bad_setting',
+                f'sibling_rule must be one of {", ".join(SIBLING_RULES)}, not {sibling_rule!r}',
+            )
+        cancel_before_send = either.get('cancel_before_send', False)
+        if not isinstance(cancel_before_send, bool):
+            self._add_problem(
+                path,
+                'bad_setting',
+                f'cancel_before_send must be true or false, not {cancel_before_send!r}',
+            )
+        children = either.get('children')
+        if not isinstance(children, list) or len(children) < 2:
+            self._add_problem(
+                path,
+                'join_shape',
+                'either holds children, a list of two or more plans',
+            )
+            return None
+        read_children = []
+        for index, child in enumerate(children):
+            read_child = self._read_node(
+                child,
+                f'{path}.children.{index}',
+                keeps_tag and index == 0,
+            )
+            if read_child is None:
+                continue
+            if sibling_rule == 'reduce' and not isinstance(read_child, OrderPart):
+                self._add_problem(
+                    read_child.path,
+                    'reduce_needs_orders',
+                    'the children of a reduce join share one quantity, so each must be a single order',
+                )
+            read_children.append(read_child)
+        if len(self.problems) > problems_before:
+            return None
+        return EitherPart(path, read_children, sibling_rule, cancel_before_send)
+
+    def _read_order(self, order, path, keeps_tag):
+        """Reads one order, merging its presets and its own slot values, or the join a join preset in it stands for.
 
         Args:
             order (object): The order's content as the caller wrote it.
             path (str): Where the order sits in the plan.
+            keeps_tag (bool): Whether its orders carry the caller's tag.
 
         Returns:
-            OrderPart | None: The part, or None when the order has a problem.
+            object | None: The part, or None when the order has a problem.
         """
         if not isinstance(order, dict):
             self._add_problem(
@@ -105,29 +307,120 @@ class PlanReader:
                 'an order is an object',
             )
             return None
-        found_problem = False
+        tree = self._join_preset_tree(order, path)
+        if tree is not None:
+            if not tree:
+                return None
+            return self._read_node(tree, path, keeps_tag)
+        problems_before = len(self.problems)
         for setting in order:
             if setting not in ORDER_SETTINGS:
                 self._add_problem(
                     path,
                     'unknown_setting',
-                    f'an order in a plan takes only {", ".join(ORDER_SETTINGS)} so far, not {setting!r}',
+                    f'an order in a plan takes {", ".join(ORDER_SETTINGS)}, not {setting!r}',
                 )
-                found_problem = True
-        presets = self._read_presets(order.get('presets', []), path)
-        if presets is None or found_problem:
-            return None
-        return OrderPart(path, presets)
+        sources = self._preset_sources(order.get('presets', []), path)
+        own = {}
+        for slot in ('trigger', 'side', 'pricing'):
+            if slot in order:
+                own[slot] = order[slot]
+        sources.append((own, path))
 
-    def _read_presets(self, presets, path):
-        """Reads an order's list of presets.
+        preset_names = []
+        for preset in order.get('presets', []) or []:
+            if isinstance(preset, dict):
+                for name in preset:
+                    preset_names.append(name)
+        conditions = []
+        side = None
+        pricing = None
+        pricing_path = None
+        for slots, source_path in sources:
+            if 'trigger' in slots:
+                condition = self._read_condition(
+                    slots['trigger'],
+                    f'{source_path}.trigger',
+                )
+                if condition is not None:
+                    conditions.append(condition)
+            if 'side' in slots:
+                side = self._merged_side(side, slots['side'], f'{source_path}.side')
+            if 'pricing' in slots:
+                read_pricing = self._read_pricing_list(
+                    slots['pricing'],
+                    f'{source_path}.pricing',
+                )
+                if read_pricing is not None:
+                    if pricing is not None:
+                        self._add_warning(
+                            f'{source_path}.pricing',
+                            'pricing_replaced',
+                            f'this pricing replaces the pricing from {pricing_path}, because an order has one pricing rule at a time',
+                        )
+                    pricing = read_pricing
+                    pricing_path = f'{source_path}.pricing'
+        if len(self.problems) > problems_before:
+            return None
+        trigger = None
+        if len(conditions) == 1:
+            trigger = conditions[0]
+        elif conditions:
+            trigger = ConditionGroup('all', conditions)
+        if pricing is None:
+            pricing = FixedPricing(None, None)
+        return OrderPart(path, preset_names, trigger, side, pricing, keeps_tag)
+
+    def _join_preset_tree(self, order, path):
+        """The plan tree a join preset in an order stands for, or None when the order names none.
+
+        Args:
+            order (dict): The order as the caller wrote it.
+            path (str): Where the order sits in the plan.
+
+        Returns:
+            dict | None: The tree, as a caller would write it, or None when there is no join preset or it has problems.
+        """
+        presets = order.get('presets')
+        if not isinstance(presets, list):
+            return None
+        expander = PresetExpander(self.opening_side)
+        found = []
+        for index, preset in enumerate(presets):
+            if not isinstance(preset, dict) or len(preset) != 1:
+                continue
+            for name, settings in preset.items():
+                if isinstance(settings, dict) and expander.is_join(name, settings):
+                    found.append((index, name, settings))
+        if not found:
+            return None
+        if len(found) > 1:
+            self._add_problem(
+                f'{path}.presets',
+                'two_join_presets',
+                'an order can name one preset that stands for a join, such as a bracket or an oco, not several',
+            )
+            return {}
+        index, name, settings = found[0]
+        entry = dict(order)
+        entry['presets'] = presets[:index] + presets[index + 1:]
+        if not entry['presets']:
+            entry.pop('presets')
+        tree = expander.expand_join(name, settings, entry, f'{path}.presets.{index}')
+        self.problems.extend(expander.problems)
+        if expander.problems:
+            return {}
+        return tree
+
+    def _preset_sources(self, presets, path):
+        """Expands each preset into its slot values.
 
         Args:
             presets (object): The list as the caller wrote it.
             path (str): Where the order sits in the plan.
 
         Returns:
-            list | None: The preset names in order, or None when any has a problem.
+            list: One `(slot values, preset path)` pair per preset that could be expanded.
         """
         if not isinstance(presets, list):
             self._add_problem(
@@ -135,9 +428,9 @@ class PlanReader:
                 'presets_shape',
                 'presets is a list of objects, each holding one preset name and its settings',
             )
-            return None
-        names = []
-        found_problem = False
+            return []
+        sources = []
+        expander = PresetExpander(self.opening_side)
         for index, preset in enumerate(presets):
             preset_path = f'{path}.presets.{index}'
             if not isinstance(preset, dict) or len(preset) != 1:
@@ -146,7 +439,6 @@ class PlanReader:
                     'preset_shape',
                     'a preset is an object holding exactly one preset name, whose value is that preset\'s settings',
                 )
-                found_problem = True
                 continue
             for name, settings in preset.items():
                 if name not in PRESET_NAMES:
@@ -155,20 +447,437 @@ class PlanReader:
                         'unknown_preset',
                         f'{name!r} is not a preset a plan can use yet; the presets available are {", ".join(PRESET_NAMES)}',
                     )
-                    found_problem = True
                     continue
-                if settings != {}:
+                if not isinstance(settings, dict):
                     self._add_problem(
                         preset_path,
-                        'unknown_setting',
-                        f'the {name} preset takes no settings, so its value must be an empty object',
+                        'preset_shape',
+                        f'the {name} preset\'s settings must be an object',
                     )
-                    found_problem = True
                     continue
-                names.append(name)
-        if found_problem:
+                slots = expander.expand(name, settings, preset_path)
+                self.problems.extend(expander.problems)
+                if not expander.problems:
+                    sources.append((slots, preset_path))
+        return sources
+
+    def _merged_side(self, side, value, path):
+        """The order's side once one more source has named one.
+
+        Args:
+            side (str | None): The side named so far, or None.
+            value (object): The side this source names.
+            path (str): Where it was named.
+
+        Returns:
+            str | None: The side.
+        """
+        if value not in SIDES:
+            self._add_problem(
+                path,
+                'bad_setting',
+                f'side must be one of {", ".join(SIDES)}, not {value!r}',
+            )
+            return side
+        if side is not None and side != value:
+            self._add_problem(
+                path,
+                'two_sides',
+                f'this order is already {side}, so it cannot also be {value}',
+            )
+            return side
+        return value
+
+    def _read_condition(self, condition, path):
+        """Reads one trigger condition, or a group of them.
+
+        Args:
+            condition (object): The condition as the caller wrote it.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            object | None: The condition, or None when it has a problem.
+        """
+        if not isinstance(condition, dict) or len(condition) != 1:
+            self._add_problem(
+                path,
+                'trigger_shape',
+                'a trigger is an object holding exactly one condition, or `all` or `any` with a list of them',
+            )
             return None
-        return names
+        for kind, content in condition.items():
+            if kind in ('all', 'any'):
+                return self._read_condition_group(kind, content, path)
+            if kind == 'price_crosses':
+                return self._read_price_crosses(content, f'{path}.price_crosses')
+            if kind == 'trails':
+                return self._read_trails(content, f'{path}.trails')
+            if kind in KINDS:
+                if not isinstance(content, str):
+                    self._add_problem(
+                        f'{path}.{kind}',
+                        'bad_setting',
+                        f'{kind} is a time of day such as "10:00", not {content!r}',
+                    )
+                    return None
+                return TimeCondition(kind, content)
+            self._add_problem(
+                path,
+                'unknown_condition',
+                f'{kind!r} is not a trigger condition; the conditions are price_crosses, trails, {", ".join(KINDS)}, all and any',
+            )
+        return None
+
+    def _read_condition_group(self, joiner, members, path):
+        """Reads `all` or `any` and its list of conditions.
+
+        Args:
+            joiner (str): `all` or `any`.
+            members (object): The list as the caller wrote it.
+            path (str): Where the group sits in the plan.
+
+        Returns:
+            ConditionGroup | None: The group, or None when it has a problem.
+        """
+        if not isinstance(members, list) or not members:
+            self._add_problem(
+                f'{path}.{joiner}',
+                'trigger_shape',
+                f'{joiner} holds a list of one or more conditions',
+            )
+            return None
+        read_members = []
+        for index, member in enumerate(members):
+            read_member = self._read_condition(member, f'{path}.{joiner}.{index}')
+            if read_member is not None:
+                read_members.append(read_member)
+        if len(read_members) != len(members):
+            return None
+        return ConditionGroup(joiner, read_members)
+
+    def _read_price_crosses(self, settings, path):
+        """Reads a `price_crosses` condition.
+
+        Args:
+            settings (object): The condition's settings as the caller wrote them.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            PriceCrossesCondition | None: The condition, or None when it has a problem.
+        """
+        if not isinstance(settings, dict):
+            self._add_problem(
+                path,
+                'trigger_shape',
+                'price_crosses holds an object of settings',
+            )
+            return None
+        problems_before = len(self.problems)
+        for setting in settings:
+            if setting not in PRICE_CROSSES_SETTINGS:
+                self._add_problem(
+                    path,
+                    'unknown_setting',
+                    f'price_crosses takes {", ".join(PRICE_CROSSES_SETTINGS)}, not {setting!r}',
+                )
+        level = self._price(settings.get('level'), path, 'level')
+        direction = settings.get('direction')
+        if direction is not None and direction not in DIRECTIONS:
+            self._add_problem(
+                path,
+                'bad_setting',
+                f'direction must be one of {", ".join(DIRECTIONS)}, not {direction!r}',
+            )
+        field = settings.get('field', 'last')
+        if field not in FIELDS:
+            self._add_problem(
+                path,
+                'bad_setting',
+                f'field must be one of {", ".join(FIELDS)}, not {field!r}',
+            )
+        confirm = settings.get('confirm', 'none')
+        if confirm not in CONFIRMATIONS:
+            self._add_problem(
+                path,
+                'bad_setting',
+                f'confirm must be one of {", ".join(CONFIRMATIONS)}, not {confirm!r}',
+            )
+        hold_seconds = None
+        if confirm == 'held':
+            hold_seconds = self._price(
+                settings.get('hold_seconds'),
+                path,
+                'hold_seconds',
+            )
+        instrument_id = settings.get('instrument_id')
+        if instrument_id is not None and not isinstance(instrument_id, str):
+            self._add_problem(
+                path,
+                'bad_setting',
+                f'instrument_id must be an instrument id, not {instrument_id!r}',
+            )
+        if len(self.problems) > problems_before:
+            return None
+        return PriceCrossesCondition(
+            level,
+            direction,
+            field,
+            instrument_id,
+            confirm,
+            hold_seconds,
+        )
+
+    def _read_pricing_list(self, pricing, path):
+        """Reads an order's pricing, which in this stage is exactly one setter.
+
+        Args:
+            pricing (object): The list as the caller wrote it.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            object | None: The pricing, or None when it has a problem.
+        """
+        if not isinstance(pricing, list) or not pricing:
+            self._add_problem(
+                path,
+                'pricing_shape',
+                'pricing is a list of one or more pricing values',
+            )
+            return None
+        if len(pricing) > 1:
+            self._add_problem(
+                path,
+                'two_setters',
+                'every pricing value so far sets the price from scratch, so an order can have only one',
+            )
+            return None
+        entry = pricing[0]
+        entry_path = f'{path}.0'
+        if not isinstance(entry, dict) or len(entry) != 1:
+            self._add_problem(
+                entry_path,
+                'pricing_shape',
+                'a pricing value is an object holding exactly one pricing name and its settings',
+            )
+            return None
+        for name, settings in entry.items():
+            if not isinstance(settings, dict):
+                self._add_problem(
+                    entry_path,
+                    'pricing_shape',
+                    f'the {name} pricing\'s settings must be an object',
+                )
+                return None
+            if name == 'fixed':
+                return self._read_fixed(settings, f'{entry_path}.fixed')
+            if name == 'marketable':
+                return self._read_marketable(settings, f'{entry_path}.marketable')
+            if name == 'native_stop':
+                return self._read_native_stop(settings, f'{entry_path}.native_stop')
+            if name == 'trail':
+                return self._read_trail(settings, f'{entry_path}.trail')
+            self._add_problem(
+                entry_path,
+                'unknown_pricing',
+                f'{name!r} is not a pricing a plan can use yet; the pricings available are fixed, marketable, native_stop and trail',
+            )
+        return None
+
+    def _read_fixed(self, settings, path):
+        """Reads `fixed` pricing.
+
+        Args:
+            settings (dict): `price` and `order_type`, both optional.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            FixedPricing | None: The pricing, or None when it has a problem.
+        """
+        problems_before = len(self.problems)
+        self._refuse_unknown(settings, ('price', 'order_type'), path, 'fixed')
+        price = None
+        if 'price' in settings:
+            price = self._price(settings['price'], path, 'price')
+        order_type = settings.get('order_type')
+        if order_type is not None and order_type not in ORDER_TYPES:
+            self._add_problem(
+                path,
+                'bad_setting',
+                f'order_type must be one of {", ".join(ORDER_TYPES)}, not {order_type!r}',
+            )
+        if len(self.problems) > problems_before:
+            return None
+        return FixedPricing(price, order_type)
+
+    def _read_marketable(self, settings, path):
+        """Reads `marketable` pricing.
+
+        Args:
+            settings (dict): `buffer_ticks`, optional.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            MarketablePricing | None: The pricing, or None when it has a problem.
+        """
+        self._refuse_unknown(settings, ('buffer_ticks',), path, 'marketable')
+        value = settings.get('buffer_ticks', 2)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            self._add_problem(
+                path,
+                'bad_setting',
+                f'buffer_ticks must be a whole number of ticks at or above zero, not {value!r}',
+            )
+            return None
+        return MarketablePricing(value)
+
+    def _read_native_stop(self, settings, path):
+        """Reads `native_stop` pricing.
+
+        Args:
+            settings (dict): `trigger_price` and `limit_price`.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            NativeStopPricing | None: The pricing, or None when it has a problem.
+        """
+        problems_before = len(self.problems)
+        self._refuse_unknown(
+            settings,
+            ('trigger_price', 'limit_price'),
+            path,
+            'native_stop',
+        )
+        trigger_price = self._price(settings.get('trigger_price'), path, 'trigger_price')
+        limit_price = self._price(settings.get('limit_price'), path, 'limit_price')
+        if len(self.problems) > problems_before:
+            return None
+        return NativeStopPricing(trigger_price, limit_price)
+
+    def _read_distance(self, settings, path, name):
+        """Reads the trailing distance a `trail` pricing or a `trails` condition takes: `points` or `percent`, exactly one.
+
+        Args:
+            settings (dict): The settings.
+            path (str): Where they sit in the plan.
+            name (str): The pricing's or condition's name, for the message.
+
+        Returns:
+            tuple: `points` and `percent` (decimal.Decimal | None), one of them None.
+        """
+        has_points = 'points' in settings
+        has_percent = 'percent' in settings
+        if has_points == has_percent:
+            self._add_problem(
+                path,
+                'bad_setting',
+                f'{name} takes points or percent, exactly one, to say how far behind the market it follows',
+            )
+            return None, None
+        if 'points' in settings:
+            return self._price(settings['points'], path, 'points'), None
+        return None, self._price(settings['percent'], path, 'percent')
+
+    def _read_trails(self, settings, path):
+        """Reads a `trails` condition.
+
+        Args:
+            settings (object): `points` or `percent`.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            TrailsCondition | None: The condition, or None when it has a problem.
+        """
+        if not isinstance(settings, dict):
+            self._add_problem(path, 'trigger_shape', 'trails holds an object of settings')
+            return None
+        problems_before = len(self.problems)
+        for setting in settings:
+            if setting not in ('points', 'percent'):
+                self._add_problem(
+                    path,
+                    'unknown_setting',
+                    f'trails takes points or percent, not {setting!r}',
+                )
+        points, percent = self._read_distance(settings, path, 'trails')
+        if len(self.problems) > problems_before:
+            return None
+        return TrailsCondition(points, percent)
+
+    def _read_trail(self, settings, path):
+        """Reads `trail` pricing.
+
+        Args:
+            settings (dict): `points` or `percent`, `limit_offset`, and optionally `step_ticks`.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            TrailPricing | None: The pricing, or None when it has a problem.
+        """
+        problems_before = len(self.problems)
+        self._refuse_unknown(
+            settings,
+            ('points', 'percent', 'limit_offset', 'step_ticks'),
+            path,
+            'trail',
+        )
+        points, percent = self._read_distance(settings, path, 'trail')
+        limit_offset = self._price(settings.get('limit_offset'), path, 'limit_offset')
+        step_ticks = settings.get('step_ticks', 1)
+        if isinstance(step_ticks, bool) or not isinstance(step_ticks, int) or step_ticks < 1:
+            self._add_problem(
+                path,
+                'bad_setting',
+                f'step_ticks must be a whole number of ticks, at least one, not {step_ticks!r}',
+            )
+        if len(self.problems) > problems_before:
+            return None
+        return TrailPricing(points, percent, limit_offset, step_ticks)
+
+    def _price(self, value, path, name):
+        """Reads a number that must be above zero.
+
+        Args:
+            value (object): The value as the caller wrote it.
+            path (str): Where it sits in the plan.
+            name (str): The setting's name, for the message.
+
+        Returns:
+            decimal.Decimal | None: The number, or None when it is missing or not above zero.
+        """
+        number = None
+        if value is not None and not isinstance(value, bool):
+            try:
+                number = decimal.Decimal(str(value))
+            except (decimal.InvalidOperation, TypeError, ValueError):
+                number = None
+        if number is None or not number.is_finite() or number <= 0:
+            self._add_problem(
+                path,
+                'bad_setting',
+                f'{name} must be a number above zero, not {value!r}',
+            )
+            return None
+        return number
+
+    def _refuse_unknown(self, settings, known, path, name):
+        """Reports every setting a pricing value does not take.
+
+        Args:
+            settings (dict): The settings.
+            known (tuple): The settings it takes.
+            path (str): Where it sits in the plan.
+            name (str): The pricing's name, for the message.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        for setting in settings:
+            if setting not in known:
+                self._add_problem(
+                    path,
+                    'unknown_setting',
+                    f'the {name} pricing takes {", ".join(known)}, not {setting!r}',
+                )
 
     def _add_problem(self, path, rule, message):
         """Records one problem.
@@ -182,6 +891,23 @@ class PlanReader:
             None: This method returns nothing.
         """
         self.problems.append({
+            'path': path,
+            'rule': rule,
+            'message': message,
+        })
+
+    def _add_warning(self, path, rule, message):
+        """Records one warning.
+
+        Args:
+            path (str): The path the warning is about.
+            rule (str): The name of the rule that produced it.
+            message (str): What the caller should know.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.warnings.append({
             'path': path,
             'rule': rule,
             'message': message,

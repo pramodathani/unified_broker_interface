@@ -1,0 +1,7 @@
+No quote yet: None
+Buy stop at last 1000.05: trigger 1010.05, limit 1012.05
+990 improves on 1000 for a buy stop: True; for a sell stop: False
+Prices from a best of 990 for a buy stop: (Decimal('999.90'), Decimal('1001.90'))
+last 999.95: move (Decimal('1011.90'), Decimal('1009.90'), 'the market reached 999.95, so the stop follows to 1009.90')
+last 990.0: move (Decimal('1001.90'), Decimal('999.90'), 'the market reached 990.00, so the stop follows to 999.90')
+As a dry run shows it: {'trail': {'limit_offset': '2', 'step_ticks': 2, 'percent': '1'}}

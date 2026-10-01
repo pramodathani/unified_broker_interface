@@ -2538,7 +2538,7 @@ class OrderEngineSuite:
             self.plan_result(
                 'a_plan_with_a_join_is_refused_as_not_built_yet',
                 {
-                    'then': {},
+                    'together': {},
                 },
                 [],
                 accepted,
@@ -2547,7 +2547,7 @@ class OrderEngineSuite:
                 'a_plan_lists_every_problem_at_once',
                 {
                     'order': {
-                        'side': 'buy',
+                        'side': 'long',
                         'presets': [
                             {
                                 'peg': {},
@@ -2568,6 +2568,740 @@ class OrderEngineSuite:
                 'buy 10',
                 [],
                 accepted,
+            ),
+        ]
+
+    def plan_price_result(self, name, plan, steps, answer, positions=None, restart_between_ticks=False, book_overrides=None):
+        """Places one `plan` order and walks it through price ticks, recording what it did and the state of each of its parts.
+
+        Args:
+            name (str): The check's name.
+            plan (object): The `plan` object, as a caller would send it.
+            steps (list): One tick per step, as `price_result` takes them.
+            answer (dict): The stubbed broker answer.
+            positions (float | None): A net RELIANCE position to seed, or None for none.
+            restart_between_ticks (bool): Whether to rebuild every parent from its recorded events after each tick, as recovery does.
+            book_overrides (dict | None): Fields to put on every order in the broker's book, such as a stop's order type.
+
+        Returns:
+            dict: The recorded result, with `parts`, each parent's `parts` parameter.
+        """
+        body = self.scenarios.bodies.market_order(
+            dry_run=None,
+            order_type='LIMIT',
+            price=1000,
+            quantity=10,
+            synthetic={
+                'type': 'plan',
+                'plan': plan,
+            },
+        )
+        result = self.price_result(
+            name,
+            body,
+            steps,
+            answer,
+            positions=positions,
+            restart_between_ticks=restart_between_ticks,
+            book_every_order=True,
+            book_overrides=book_overrides,
+        )
+        stored = self.fake_redis.hashes.get('unified:orders:parents', {})
+        parts = []
+        for document in stored.values():
+            parameters = json.loads(document).get('parameters') or {}
+            parts.append(parameters.get('parts'))
+        result['parts'] = parts
+        return result
+
+    def run_plan_trigger_checks(self):
+        """Runs plan orders that wait for a trigger, protect a position or are priced by a pricing rule, through price ticks.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        accepted = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        identifiers = order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS
+        steady = self.book_at(1000.00, 1000.05)
+        touched = self.book_at(994.90, 994.95)
+        return [
+            self.plan_price_result(
+                'a_plan_market_if_touched_waits_then_takes_the_offer',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'market_if_touched': {
+                                    'trigger_price': 995,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': touched, 'at': 1},
+                    {'quote': touched, 'at': 2},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_waiting_plan_survives_a_restart_and_fires_once',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'market_if_touched': {
+                                    'trigger_price': 995,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': touched, 'at': 1},
+                    {'quote': touched, 'at': 2},
+                ],
+                accepted,
+                restart_between_ticks=True,
+            ),
+            self.plan_price_result(
+                'a_plan_limit_if_touched_rests_its_limit_once_touched',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'limit_if_touched': {
+                                    'trigger_price': 995,
+                                    'limit_price': 996,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': touched, 'at': 1},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_scheduled_order_waits_for_its_time',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'scheduled': {
+                                    'at_time': '10:00:30',
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 10},
+                    {'quote': steady, 'at': 40},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_joins_a_time_and_a_price_trigger_so_both_must_hold',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'scheduled': {
+                                    'at_time': '10:00:30',
+                                },
+                            },
+                            {
+                                'market_if_touched': {
+                                    'trigger_price': 995,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': touched, 'at': 10},
+                    {'quote': steady, 'at': 40},
+                    {'quote': touched, 'at': 50},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_held_trigger_waits_until_the_level_has_held',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'market_if_touched': {
+                                    'trigger_price': 995,
+                                    'trigger_on': 'held',
+                                    'hold_seconds': 5,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': touched, 'at': 1},
+                    {'quote': touched, 'at': 3},
+                    {'quote': touched, 'at': 7},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_cross_instrument_watches_another_instruments_price',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'cross_instrument': {
+                                    'watch_instrument_id': identifiers['reliance_future'],
+                                    'trigger_price': 1010,
+                                    'trigger_direction': 'at_or_above',
+                                    'limit_price': 1000,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {
+                        'quote': steady,
+                        'at': 0,
+                        'other_quotes': {
+                            'reliance_future': self.book_at(1004.10, 1004.30),
+                        },
+                    },
+                    {
+                        'quote': steady,
+                        'at': 1,
+                        'other_quotes': {
+                            'reliance_future': self.book_at(1010.10, 1010.30),
+                        },
+                    },
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_hidden_stop_protects_a_long_and_sells_past_the_bid',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'hidden_stop': {
+                                    'trigger_price': 995,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': touched, 'at': 1},
+                ],
+                accepted,
+                positions=10,
+            ),
+            self.plan_price_result(
+                'a_plan_that_protects_with_no_position_held_is_refused',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'hidden_stop': {
+                                    'trigger_price': 995,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_with_a_native_stop_rests_it_at_once',
+                {
+                    'order': {
+                        'side': 'protect',
+                        'pricing': [
+                            {
+                                'native_stop': {
+                                    'trigger_price': 990,
+                                    'limit_price': 988,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+                positions=10,
+            ),
+            self.plan_price_result(
+                'a_plan_later_pricing_replaces_a_presets_with_a_warning',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'market_if_touched': {
+                                    'trigger_price': 995,
+                                },
+                            },
+                        ],
+                        'pricing': [
+                            {
+                                'fixed': {
+                                    'price': 994,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': touched, 'at': 1},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_with_two_sides_and_bad_trigger_settings_lists_them_all',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'hidden_stop': {
+                                    'trigger_price': -5,
+                                },
+                            },
+                        ],
+                        'side': 'buy',
+                        'trigger': {
+                            'all': [
+                                {
+                                    'time_after': 1000,
+                                },
+                                {
+                                    'price_crosses': {
+                                        'level': 990,
+                                        'confirm': 'held',
+                                    },
+                                },
+                            ],
+                        },
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+        ]
+
+    def run_plan_join_checks(self):
+        """Runs plans that join orders with Then and Either, through fills and price ticks.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        numbered = dict(
+            self.scenarios.answers.json_answer(
+                200,
+                self.scenarios.answers.place_success('flattrade'),
+            ),
+            number_orders=True,
+        )
+        steady = self.book_at(1000.00, 1000.05)
+        touched = self.book_at(994.90, 994.95)
+        bracket = {
+            'bracket': {
+                'stop_price': 990,
+                'stop_limit_price': 988,
+                'target_price': 1010,
+            },
+        }
+        oco = {
+            'oco': {
+                'stop_price': 990,
+                'stop_limit_price': 988,
+                'target_price': 1010,
+            },
+        }
+        hidden_with_backstop = {
+            'hidden_stop': {
+                'trigger_price': 995,
+                'backstop_price': 980,
+                'backstop_limit_price': 978,
+            },
+        }
+        return [
+            self.plan_price_result(
+                'a_plan_bracket_grows_its_exits_and_takes_only_new_fills_off_the_stop',
+                {
+                    'order': {
+                        'presets': [
+                            bracket,
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'OPEN', 4)]},
+                    {'quote': steady, 'at': 2, 'updates': [self.update('26091500000101', 'COMPLETE', 10)]},
+                    {'quote': steady, 'at': 3, 'updates': [self.update('26091500000103', 'OPEN', 3)]},
+                    {'quote': steady, 'at': 4, 'updates': [self.update('26091500000103', 'OPEN', 7)]},
+                    {'quote': steady, 'at': 5, 'updates': [self.update('26091500000103', 'COMPLETE', 10)]},
+                    {'quote': steady, 'at': 6, 'updates': [self.update('26091500000102', 'CANCELLED', 0)]},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_bracket_behaves_the_same_with_a_restart_between_fills',
+                {
+                    'order': {
+                        'presets': [
+                            bracket,
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'OPEN', 4)]},
+                    {'quote': steady, 'at': 2, 'updates': [self.update('26091500000101', 'COMPLETE', 10)]},
+                    {'quote': steady, 'at': 3, 'updates': [self.update('26091500000103', 'OPEN', 3)]},
+                    {'quote': steady, 'at': 4, 'updates': [self.update('26091500000103', 'OPEN', 7)]},
+                    {'quote': steady, 'at': 5, 'updates': [self.update('26091500000103', 'COMPLETE', 10)]},
+                    {'quote': steady, 'at': 6, 'updates': [self.update('26091500000102', 'CANCELLED', 0)]},
+                ],
+                numbered,
+                restart_between_ticks=True,
+            ),
+            self.plan_price_result(
+                'a_plan_bracket_exit_filling_cancels_the_rest_of_the_entry',
+                {
+                    'order': {
+                        'presets': [
+                            bracket,
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'OPEN', 4)]},
+                    {'quote': steady, 'at': 2, 'updates': [self.update('26091500000103', 'OPEN', 2)]},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_oco_protects_a_held_position_and_reduces_the_sibling',
+                {
+                    'order': {
+                        'presets': [
+                            oco,
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000102', 'OPEN', 3)]},
+                    {'quote': steady, 'at': 2, 'updates': [self.update('26091500000102', 'OPEN', 7)]},
+                ],
+                numbered,
+                positions=10,
+            ),
+            self.plan_price_result(
+                'a_plan_oco_with_nothing_held_is_refused',
+                {
+                    'order': {
+                        'presets': [
+                            oco,
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_cover_places_its_stop_once_the_entry_fills',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'cover': {
+                                    'stop_price': 990,
+                                    'stop_limit_price': 988,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'COMPLETE', 10)]},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_oto_places_its_then_order_sized_to_the_fill',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'oto': {
+                                    'then': {
+                                        'transaction_type': 'SELL',
+                                        'price': 1010,
+                                    },
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'OPEN', 6)]},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_hidden_stop_cancels_its_backstop_before_it_exits',
+                {
+                    'order': {
+                        'presets': [
+                            hidden_with_backstop,
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': touched, 'at': 1},
+                ],
+                numbered,
+                positions=10,
+            ),
+            self.plan_price_result(
+                'a_plan_hidden_stop_whose_backstop_fills_stops_watching',
+                {
+                    'order': {
+                        'presets': [
+                            hidden_with_backstop,
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'COMPLETE', 10)]},
+                    {'quote': touched, 'at': 2},
+                ],
+                numbered,
+                positions=10,
+            ),
+            self.plan_price_result(
+                'a_plan_market_if_touched_entry_with_a_bracket_around_it',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'market_if_touched': {
+                                    'trigger_price': 995,
+                                },
+                            },
+                            bracket,
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': touched, 'at': 1},
+                    {'quote': touched, 'at': 2, 'updates': [self.update('26091500000101', 'COMPLETE', 10)]},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_reduce_join_over_a_join_and_two_join_presets_are_refused',
+                {
+                    'either': {
+                        'sibling_rule': 'reduce',
+                        'children': [
+                            {
+                                'order': {
+                                    'presets': [
+                                        bracket,
+                                        oco,
+                                    ],
+                                },
+                            },
+                            {
+                                'then': {
+                                    'first': {
+                                        'order': {},
+                                    },
+                                    'each_fill': {
+                                        'order': {},
+                                    },
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                numbered,
+            ),
+        ]
+
+    def run_plan_trailing_checks(self):
+        """Runs plans whose orders trail the market, as a native stop that moves or as an engine-side trigger.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        numbered = dict(
+            self.scenarios.answers.json_answer(
+                200,
+                self.scenarios.answers.place_success('flattrade'),
+            ),
+            number_orders=True,
+        )
+        stop_in_the_book = {
+            'order_type': 'SL',
+            'trigger_price': 995.05,
+        }
+        trail_five = {
+            'trail_points': 5,
+            'stop_limit_offset': 1,
+        }
+        return [
+            self.plan_price_result(
+                'a_plan_trailing_stop_follows_a_rising_market_and_never_back',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'trailing_stop': trail_five,
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': self.book_at(1000.00, 1000.05), 'at': 0},
+                    {'quote': self.book_at(1002.95, 1003.00), 'at': 1},
+                    {'quote': self.book_at(1000.95, 1001.00), 'at': 2},
+                    {'quote': self.book_at(1005.95, 1006.00), 'at': 3},
+                ],
+                numbered,
+                positions=10,
+                book_overrides=stop_in_the_book,
+            ),
+            self.plan_price_result(
+                'a_plan_trailing_entry_follows_a_falling_market_down',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'trailing_entry': trail_five,
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': self.book_at(1000.00, 1000.05), 'at': 0},
+                    {'quote': self.book_at(996.95, 997.00), 'at': 1},
+                    {'quote': self.book_at(998.95, 999.00), 'at': 2},
+                ],
+                numbered,
+                book_overrides=stop_in_the_book,
+            ),
+            self.plan_price_result(
+                'a_plan_trailing_stop_waits_for_its_activation_level',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'trailing_stop': dict(trail_five, activate_at=1010),
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': self.book_at(1000.00, 1000.05), 'at': 0},
+                    {'quote': self.book_at(1005.00, 1005.05), 'at': 1},
+                    {'quote': self.book_at(1010.00, 1010.05), 'at': 2},
+                    {'quote': self.book_at(1012.00, 1012.05), 'at': 3},
+                ],
+                numbered,
+                positions=10,
+                book_overrides=stop_in_the_book,
+            ),
+            self.plan_price_result(
+                'a_plan_engine_side_trailing_exit_sells_past_the_bid_on_the_pullback',
+                {
+                    'order': {
+                        'side': 'protect',
+                        'trigger': {
+                            'trails': {
+                                'points': 5,
+                            },
+                        },
+                        'pricing': [
+                            {
+                                'marketable': {
+                                    'buffer_ticks': 2,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': self.book_at(1000.00, 1000.05), 'at': 0},
+                    {'quote': self.book_at(1005.95, 1006.00), 'at': 1},
+                    {'quote': self.book_at(1002.95, 1003.00), 'at': 2},
+                    {'quote': self.book_at(1000.90, 1000.95), 'at': 3},
+                ],
+                numbered,
+                positions=10,
+                book_overrides=stop_in_the_book,
+            ),
+            self.plan_price_result(
+                'a_plan_entry_then_a_trailing_stop_sized_to_its_fill',
+                {
+                    'then': {
+                        'first': {
+                            'order': {},
+                        },
+                        'each_fill': {
+                            'order': {
+                                'presets': [
+                                    {
+                                        'trailing_stop': trail_five,
+                                    },
+                                ],
+                            },
+                        },
+                    },
+                },
+                [
+                    {'quote': self.book_at(1000.00, 1000.05), 'at': 0},
+                    {'quote': self.book_at(1000.00, 1000.05), 'at': 1, 'updates': [self.update('26091500000101', 'COMPLETE', 10)]},
+                    {'quote': self.book_at(1003.95, 1004.00), 'at': 2},
+                ],
+                numbered,
+                book_overrides=stop_in_the_book,
             ),
         ]
 
@@ -3333,6 +4067,7 @@ class OrderEngineSuite:
         daily_caps=None,
         daily_sent=None,
         resting=None,
+        book_every_order=False,
     ):
         """Places one watching order, then walks it through a sequence of quotes.
 
@@ -3351,6 +4086,7 @@ class OrderEngineSuite:
             daily_caps (dict | None): Each capped broker's daily cap, or None for no daily order count.
             daily_sent (dict | None): Each broker's order messages already sent today, written before the order is placed.
             resting (list | None): Flattrade order ids of open RELIANCE orders placed outside the engine, for a type that cancels what is resting.
+            book_every_order (bool): Whether every order placed on a tick is also put into the broker's book before the next tick, so the order type can change or cancel it, as it can in life.
 
         Returns:
             dict: The recorded result.
@@ -3456,6 +4192,15 @@ class OrderEngineSuite:
             step_at = started + step.get('at', 0)
             time.time = lambda: step_at
             try:
+                if book_every_order:
+                    for number in range(1, self.network.placed + 1):
+                        numbered = str(26091500000100 + number)
+                        if numbered not in book:
+                            book[numbered] = self.broker_book_entry(
+                                numbered,
+                                status='OPEN',
+                                **(book_overrides or {}),
+                            )
                 self.seed_quote(step.get('quote'))
                 self.seed_other_quotes(step)
                 if step.get('funds') is not None:
@@ -6298,6 +7043,9 @@ class OrderEngineSuite:
             results.extend(self.run_follower_checks())
             results.extend(self.run_reaction_checks())
             results.extend(self.run_plan_checks())
+            results.extend(self.run_plan_trigger_checks())
+            results.extend(self.run_plan_join_checks())
+            results.extend(self.run_plan_trailing_checks())
             results.extend(self.run_clock_checks())
             results.extend(self.run_price_checks())
             results.extend(self.run_wiring_checks())
