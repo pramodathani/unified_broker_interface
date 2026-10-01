@@ -12,3 +12,4 @@ release_daily_place without gates: nothing to release
 record_and_send_leg: HTTP 200, accepted, leg 2 of the parent
 record: a fill written as the order update follower writes it leaves leg 2 filled with 10, sequence 7
 Sent to the broker: ['place BUY 10 LIMIT at 1000.10 -> 260930000001', 'place BUY 10 LIMIT at 1000.10 -> 260930000002']
+carries_parent_overnight: a type that does not set CARRIES_OVERNIGHT is not rebuilt from before today: False

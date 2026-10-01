@@ -27,3 +27,7 @@ The lesson worth keeping is the shape of both: a stand-in that is easier to sati
 ## Why an abandoned orphan applies the parent's state
 
 Replaying `orphan_abandoned` sets the parent to `failed`, not only the leg to `unknown`. Before that was fixed, a parent replayed as `received` with an `unknown` leg: not terminal, so the open set kept it for ever, and not in `sending`, so nothing ever looked at it again. It leaked one parent per crash, silently, and only showed up because the live run was done twice.
+
+## Carrying some parents of a type and not others (2026-10-01)
+
+`replay` notes which parents had events since this morning. A parent found only in the carried read is kept only when `carries` says so, which asks the type's `carries_parent_overnight`. Every type before plans answers with its `CARRIES_OVERNIGHT`, so nothing changes for them; a plan answers with its own `carries_overnight` mark.

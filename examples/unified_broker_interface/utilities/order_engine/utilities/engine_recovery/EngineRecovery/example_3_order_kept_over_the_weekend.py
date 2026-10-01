@@ -6,6 +6,8 @@ Recovery reads the record twice. The first read covers everything since the last
 
 The event log is a stand-in class holding the rows each of the two reads would return, since the real one is a TimescaleDB table. Redis is only needed for the recovery window, so the in-memory `FakeEngineStoreRedis` from `test_runs/redis_stand_ins.py` is enough.
 
+A parent found only in the second read is rebuilt only when its type carries it, which `carries` asks the type: every GTT order, but only a plan marked `carries_overnight`, because it has a lifetime of days, so yesterday's ordinary plans stay gone.
+
 Notice that the two reads return five rows between them, the merge keeps four, and the GTT parent's sequence numbers run 1, 2, 3 even though row 3 came from the first read and rows 1 and 2 from the second.
 
 Run it from the project root:
@@ -18,6 +20,9 @@ import logging
 from test_runs import redis_stand_ins
 from unified_broker_interface.utilities.order_engine.utilities.engine_recovery import (
     EngineRecovery,
+)
+from unified_broker_interface.utilities.order_engine.utilities.parent_order import (
+    ParentOrder,
 )
 from unified_broker_interface.utilities.order_engine.utilities.parent_store import (
     ParentStore,
@@ -177,6 +182,12 @@ class OrderKeptOverTheWeekendExample:
         parents = self.recovery.replay()
         for parent in parents:
             print(f'Rebuilt {parent.parent_order_id[:8]}: {parent.synthetic_type}, {parent.state}, sequence {parent.sequence}, parameters {parent.parameters}')
+
+        for synthetic_type, parameters in (('gtt', {}), ('plan', {'carries_overnight': True}), ('plan', {})):
+            parent = ParentOrder('from-last-week')
+            parent.synthetic_type = synthetic_type
+            parent.parameters = parameters
+            print(f'A {synthetic_type} from last week with {parameters} is carried: {self.recovery.carries(parent)}')
 
 
 if __name__ == '__main__':

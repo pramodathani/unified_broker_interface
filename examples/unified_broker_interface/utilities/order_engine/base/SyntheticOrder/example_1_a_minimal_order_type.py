@@ -519,6 +519,7 @@ class AMinimalOrderTypeExample:
         leg = runner.parent.legs[-1]
         print(f'record: a fill written as the order update follower writes it leaves leg 2 {leg.state} with {leg.filled_quantity}, sequence {runner.parent.sequence}')
         print(f'Sent to the broker: {self.placement.messages}')
+        print(f'carries_parent_overnight: a type that does not set CARRIES_OVERNIGHT is not rebuilt from before today: {MidPriceOrder.carries_parent_overnight(runner.parent)}')
 
 
 if __name__ == '__main__':

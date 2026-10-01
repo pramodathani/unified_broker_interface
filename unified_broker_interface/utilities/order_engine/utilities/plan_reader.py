@@ -152,6 +152,7 @@ REPEAT_SETTINGS = (
     'until',
 )
 MOST_REPEATS = 100
+MOST_DAYS = 365
 TOGETHER_SETTINGS = (
     'children',
     'group_margin',
@@ -952,7 +953,7 @@ class PlanReader:
         return True
 
     def _read_lifetime_list(self, lifetime, path):
-        """Reads an order's lifetime: a list holding one object with `at_time` or `after_minutes`, and optionally `applies_to` and `on_end`.
+        """Reads an order's lifetime: a list holding one object with `at_time`, `after_minutes` or `after_days`, and optionally `applies_to` and `on_end`.
 
         Args:
             lifetime (object): The list as the caller wrote it.
@@ -962,23 +963,29 @@ class PlanReader:
             Lifetime | None: The lifetime, or None when it has a problem.
         """
         if not isinstance(lifetime, list) or len(lifetime) != 1 or not isinstance(lifetime[0], dict):
-            self._add_problem(path, 'lifetime_shape', 'lifetime is a list holding one object, with at_time or after_minutes, and optionally applies_to and on_end')
+            self._add_problem(path, 'lifetime_shape', 'lifetime is a list holding one object, with at_time, after_minutes or after_days, and optionally applies_to and on_end')
             return None
         entry = lifetime[0]
         entry_path = f'{path}.0'
         problems_before = len(self.problems)
-        for name in ('after_days', 'when'):
-            if name in entry:
-                self._add_problem(
-                    entry_path,
-                    'lifetime_not_built',
-                    f'{name} is part of the design but not built yet; at_time and after_minutes are',
-                )
+        if 'when' in entry:
+            self._add_problem(
+                entry_path,
+                'lifetime_not_built',
+                'when is part of the design but not built yet; at_time, after_minutes and after_days are',
+            )
         self._refuse_unknown(entry, ('at_time', 'after_minutes', 'applies_to', 'on_end', 'after_days', 'when'), entry_path, 'lifetime', 'value')
+        ends = 0
+        for name in ('at_time', 'after_minutes', 'after_days'):
+            if name in entry:
+                ends = ends + 1
         has_time = 'at_time' in entry
         has_minutes = 'after_minutes' in entry
-        if has_time == has_minutes:
-            self._add_problem(entry_path, 'bad_setting', 'a lifetime ends at_time or after_minutes, exactly one')
+        if ends != 1:
+            self._add_problem(entry_path, 'bad_setting', 'a lifetime ends at_time, after_minutes or after_days, exactly one')
+        after_days = None
+        if 'after_days' in entry:
+            after_days = self._whole_number(entry['after_days'], entry_path, 'after_days', 1, MOST_DAYS)
         at_time = None
         after_minutes = None
         if has_time:
@@ -1000,7 +1007,7 @@ class PlanReader:
             self._add_problem(entry_path, 'bad_setting', f'on_end must be one of {", ".join(ON_END)}, not {on_end!r}')
         if len(self.problems) > problems_before:
             return None
-        return Lifetime(at_time, after_minutes, applies_to, on_end)
+        return Lifetime(at_time, after_minutes, applies_to, on_end, after_days)
 
     def _can_take_at_discretion(self, pricing, execution, path):
         """Whether an order with this pricing and execution can have discretion, reporting the problem when it cannot.

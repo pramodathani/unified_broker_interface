@@ -56,3 +56,5 @@ stop_and_reverse: {'trigger': {'price_crosses': {'level': 995, 'field': 'last', 
   problems: []
 candle_close_stop: {'side': 'protect', 'trigger': {'candle_closes': {'level': 995, 'bar_minutes': 15}}, 'pricing': [{'marketable': {'buffer_ticks': 2}}]}
   problems: []
+good_till_triggered: {'trigger': {'price_crosses': {'level': 995, 'field': 'last', 'confirm': 'none'}}, 'pricing': [{'fixed': {'price': 990}}], 'lifetime': [{'after_days': 30, 'applies_to': 'waiting'}]}
+  problems: []

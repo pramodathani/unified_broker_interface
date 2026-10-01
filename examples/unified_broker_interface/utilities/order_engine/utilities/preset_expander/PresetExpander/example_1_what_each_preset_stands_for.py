@@ -156,6 +156,11 @@ class WhatEachPresetStandsForExample:
                 'trigger_price': 995,
                 'bar_minutes': 15,
             },
+            'good_till_triggered': {
+                'trigger_price': 995,
+                'limit_price': 990,
+                'valid_days': 30,
+            },
             'square_off': {
                 'at_time': '15:10',
             },

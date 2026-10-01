@@ -333,6 +333,7 @@ class WaitsForItsTriggerExample:
             acted = runner.on_price_tick(quotes, 1790000000.0 + seconds)
             print(f'tick {seconds}, offer {offer}: placed {acted}, sent so far {self.placement.sent}')
         print(f'A clock tick, which only ends orders whose lifetime is up, and this plan has none: {runner.on_clock_tick(1790000010.0)}')
+        print(f"Kept over the day only with a lifetime of days, which this plan has not: {PlanOrder.carries_parent_overnight(runner.parent)}")
         record = runner.part_record('root')
         print(f'The root part\'s record: {record}')
         record['note'] = 'kept only in the parameters'

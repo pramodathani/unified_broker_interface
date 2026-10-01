@@ -85,3 +85,7 @@ Nothing in the plan order changed for this step; `AtrTrailPricing` and `StagesPr
 ## Stage 5b: closing what is held (2026-10-01)
 
 `_fire_waiting` is shared by price and clock ticks. A clock tick looks only at orders whose trigger needs no prices, because a price trigger may count ticks to confirm, and reads quotes only for an order that fires and prices itself; before this, a time trigger in a plan fired only on a price tick, so a square off whose instrument sent no tick never ran. A tick on which an order fired and ended without placing anything now settles and finishes the plan. A plan whose only work was a close that found nothing held ends `completed` even from `received`, as today's close types record, though the usual state changes do not allow it; recovery replays whatever was recorded.
+
+## Stage 5g: plans that outlive the day (2026-10-01)
+
+`PlanOrder` sets `CARRIES_OVERNIGHT`, so recovery reads every plan's events from the 30-day carry window, but `carries_parent_overnight` keeps only a plan whose parameters say `carries_overnight`, which `run` sets when any order has a lifetime in `after_days`. Every other plan is a day's plan: rebuilding it after the 06:00 reset would revive yesterday's waiting orders and let them fire, which the reset's expiry of the parent caches has always prevented. The cost is a larger carry read, every plan of the last 30 days, which is acceptable at today's volumes and is the first thing to narrow if it is not.

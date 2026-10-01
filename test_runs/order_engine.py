@@ -4478,6 +4478,48 @@ class OrderEngineSuite:
                 book_overrides=stop_book,
             ),
             self.plan_price_result(
+                'a_plan_good_till_triggered_order_fires_on_the_day_the_level_is_touched',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'good_till_triggered': {
+                                    'trigger_price': 995,
+                                    'limit_price': 990,
+                                    'valid_days': 30,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_good_till_triggered_order_expires_once_it_has_waited_long_enough',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'good_till_triggered': {
+                                    'trigger_price': 900,
+                                    'limit_price': 890,
+                                    'valid_days': 1,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 60 * 60 * 25},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
                 'a_plan_stepped_stop_with_a_trail_before_its_last_rule_is_refused',
                 {
                     'order': {

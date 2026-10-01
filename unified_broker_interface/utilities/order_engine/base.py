@@ -1297,6 +1297,19 @@ class SyntheticOrder:
         })
         return body, status, leg_id
 
+    @classmethod
+    def carries_parent_overnight(cls, parent):
+        """Whether recovery should rebuild a parent of this type from before today, which by default every parent of a type that sets `CARRIES_OVERNIGHT` is.
+
+        Args:
+            parent (ParentOrder): The parent rebuilt from the record.
+
+        Returns:
+            bool: True when the parent outlives the trading day.
+        """
+        del parent
+        return cls.CARRIES_OVERNIGHT
+
     def closes_position(self, role):
         """Whether a leg closes a position, and so may use the part of a broker's daily cap kept for exits.
 

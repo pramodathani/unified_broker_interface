@@ -33,7 +33,22 @@ class PlanOrder(SyntheticOrder):
     SYNTHETIC_TYPE = 'plan'
     WANTS_PRICES = True
     WANTS_CLOCK = True
+    CARRIES_OVERNIGHT = True
     group_margin_legs = None
+
+    @classmethod
+    def carries_parent_overnight(cls, parent):
+        """Whether recovery should rebuild a plan from before today, which it should only for a plan marked as outliving the day when it was placed.
+
+        Every plan's events are read from the carry window, but a plan without a lifetime of days is a day's plan, and rebuilding it would revive yesterday's waiting orders and let them fire.
+
+        Args:
+            parent (ParentOrder): The parent rebuilt from the record.
+
+        Returns:
+            bool: True when the plan was marked `carries_overnight`.
+        """
+        return parent.parameters.get('carries_overnight') is True
 
     def _read_plan(self):
         """Reads the caller's plan into its root part.
@@ -89,6 +104,7 @@ class PlanOrder(SyntheticOrder):
         if protecting:
             self._refuse_without_position(protecting[0])
         records = {}
+        carries_overnight = False
         needs_prices = False
         watched = []
         for part in root.order_parts():
@@ -105,6 +121,8 @@ class PlanOrder(SyntheticOrder):
             ends_at = part.lifetime_ends_at(self)
             if ends_at is not None:
                 record['ends_at'] = ends_at
+            if part.lifetime is not None and part.lifetime.after_days is not None:
+                carries_overnight = True
             if part.moves_on_ticks():
                 record['moves'] = True
             if part.execution.paced_by_ticks():
@@ -120,6 +138,8 @@ class PlanOrder(SyntheticOrder):
             self._remember_tick_sizes(root)
         self.parent.parameters = dict(self.parent.parameters)
         self.parent.parameters['parts'] = records
+        if carries_overnight:
+            self.parent.parameters['carries_overnight'] = True
         if watched:
             self.parent.parameters['watch_instrument_ids'] = watched
         self.record_received()

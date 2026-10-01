@@ -20,6 +20,7 @@ ON_END = (
     'marketable',
     'close_filled',
 )
+SECONDS_IN_A_DAY = 86400
 WAITING_STATES = (
     'pending',
     'waiting',
@@ -29,16 +30,17 @@ WAITING_STATES = (
 class Lifetime:
     """A plan order's lifetime: a moment it ends at, which part of its life that bounds, and what is done when it ends.
 
-    The end is `at_time`, a time of day on the instrument's next trading day, or `after_minutes`, counted from when the plan is placed, as today's time stop counts them. `applies_to` says whether the end bounds the time the order waits for its trigger, the time it works after it is sent, or both. An order still waiting when it ends is simply done. An order working when it ends has its resting orders cancelled (`cancel`), moved past the other side's touch so they fill (`marketable`, today's good-till-time `market`), or cancelled and then what filled closed at market (`close_filled`, today's time stop).
+    The end is `at_time`, a time of day on the instrument's next trading day, `after_minutes`, counted from when the plan is placed, as today's time stop counts them, or `after_days`, counted the same way, as today's gtt counts its `valid_days`; a plan with an end in days outlives the trading day. `applies_to` says whether the end bounds the time the order waits for its trigger, the time it works after it is sent, or both. An order still waiting when it ends is simply done. An order working when it ends has its resting orders cancelled (`cancel`), moved past the other side's touch so they fill (`marketable`, today's good-till-time `market`), or cancelled and then what filled closed at market (`close_filled`, today's time stop).
 
     Attributes:
         at_time (str | None): The time of day it ends at, or None.
         after_minutes (float | None): The minutes after placing it ends, or None.
         applies_to (str): `waiting`, `working` or `both`.
         on_end (str): `cancel`, `marketable` or `close_filled`.
+        after_days (int | None): The days after placing it ends, or None.
     """
 
-    def __init__(self, at_time, after_minutes, applies_to, on_end):
+    def __init__(self, at_time, after_minutes, applies_to, on_end, after_days=None):
         """Builds the lifetime from settings the plan reader has already checked.
 
         Args:
@@ -46,6 +48,7 @@ class Lifetime:
             after_minutes (float | None): The minutes, or None.
             applies_to (str): `waiting`, `working` or `both`.
             on_end (str): `cancel`, `marketable` or `close_filled`.
+            after_days (int | None): The days, or None.
 
         Returns:
             None: This method returns nothing.
@@ -54,6 +57,7 @@ class Lifetime:
         self.after_minutes = after_minutes
         self.applies_to = applies_to
         self.on_end = on_end
+        self.after_days = after_days
 
     def ends_at(self, plan_order, now=None):
         """The Unix time the order ends at, worked out when the plan is placed.
@@ -71,6 +75,8 @@ class Lifetime:
         moments = Moments()
         if now is None:
             now = moments.now()
+        if self.after_days is not None:
+            return now.timestamp() + self.after_days * SECONDS_IN_A_DAY
         segment = plan_order.trading_segment()
         if self.at_time is not None:
             moment, _ = moments.time_on_trading_day(self.at_time, 'at_time', segment, now)
@@ -109,6 +115,8 @@ class Lifetime:
         }
         if self.at_time is not None:
             described['at_time'] = self.at_time
+        elif self.after_days is not None:
+            described['after_days'] = self.after_days
         else:
             described['after_minutes'] = self.after_minutes
         return described
