@@ -1,0 +1,2 @@
+No figure from Flattrade: due [250], its freeze quantity None
+5,000 at a limit of 10: 400 this order is 500 times the freeze limit, which would take 500 orders; the engine sends at most 20 at once

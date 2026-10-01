@@ -1,0 +1,9 @@
+check: None
+is a call: True
+strike: 25000.0
+delta: 0.61
+75 filled: hedge 75
+750 filled: hedge 450
+1500 filled: hedge 900
+the put is a call: False, delta -0.39, 1500 filled: hedge 600
+As a dry run shows it: {'parent_fill_delta': {'volatility': '12.5', 'whole_lots': True}}

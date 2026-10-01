@@ -1,5 +1,12 @@
 """What every execution that sends slices on a clock has in common."""
 
+import datetime
+
+from unified_broker_interface.utilities.broker_orders.utilities.refused_request import (
+    RefusedRequestError,
+)
+from unified_broker_interface.utilities.order_engine.utilities import moments
+
 
 class TimedSlicesExecution:
     """A plan order's execution that cuts the quantity into `slices` and sends one every `over_minutes × 60 / slices` seconds, the first at once.
@@ -8,9 +15,12 @@ class TimedSlicesExecution:
 
     A subclass says only how the slices are weighted, in `slice_weights`.
 
+    With `until`, a time of day, the slices are spread from when the order starts until that time, as the closing price order spreads them over what is left of its window, and an order that starts after that time is refused.
+
     Attributes:
         slices (int): How many slices, from 2 up to 60.
-        over_minutes (float): The minutes the slices are spread across.
+        over_minutes (float | None): The minutes the slices are spread across, or None when `until` sets them.
+        until (str | None): A time of day, `HH:MM`, the slices end by, or None.
     """
 
     NAME = 'timed_slices'
@@ -27,6 +37,7 @@ class TimedSlicesExecution:
         """
         self.slices = slices
         self.over_minutes = over_minutes
+        self.until = None
 
     def needs_prices(self):
         """Whether this execution reads quotes, which it does not.
@@ -52,13 +63,19 @@ class TimedSlicesExecution:
         """
         return False
 
-    def interval(self):
+    def interval(self, memory=None):
         """The seconds between one slice and the next.
+
+        Args:
+            memory (dict | None): The execution's memory, which holds the minutes when `until` set them.
 
         Returns:
             float: The interval.
         """
-        return self.over_minutes * 60 / self.slices
+        over_minutes = self.over_minutes
+        if memory is not None and memory.get('over_minutes') is not None:
+            over_minutes = memory['over_minutes']
+        return over_minutes * 60 / self.slices
 
     def begin(self, plan_order, memory, quotes, now):
         """Starts the clock.
@@ -71,9 +88,20 @@ class TimedSlicesExecution:
 
         Returns:
             None: This method returns nothing.
+
+        Raises:
+            RefusedRequestError: With HTTP 400 when it starts after `until`.
         """
         del plan_order, quotes
         memory['started_at'] = now
+        if self.until is None:
+            return
+        when = datetime.datetime.fromtimestamp(now, moments.INDIA)
+        hours, _, minutes = self.until.partition(':')
+        ends = when.replace(hour=int(hours), minute=int(minutes), second=0, microsecond=0)
+        if when >= ends:
+            raise RefusedRequestError.refusal(f'the window ended at {self.until} today', 400)
+        memory['over_minutes'] = (ends - when).total_seconds() / 60
 
     def slice_weights(self, memory):
         """The relative share of the order each slice takes.
@@ -143,7 +171,7 @@ class TimedSlicesExecution:
         started_at = memory.get('started_at')
         if started_at is None or index >= self.slices:
             return []
-        if now < started_at + self.interval() * index:
+        if now < started_at + self.interval(memory) * index:
             return []
         sent = 0
         for piece in pieces:
@@ -179,9 +207,13 @@ class TimedSlicesExecution:
         Returns:
             dict: The settings.
         """
+        described = {
+            'slices': self.slices,
+        }
+        if self.until is not None:
+            described['until'] = self.until
+        else:
+            described['over_minutes'] = self.over_minutes
         return {
-            self.NAME: {
-                'slices': self.slices,
-                'over_minutes': self.over_minutes,
-            },
+            self.NAME: described,
         }

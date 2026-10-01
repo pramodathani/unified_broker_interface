@@ -1,0 +1,4 @@
+Reads quotes: True, paced by ticks: False, grows by changing its order: False
+Due: [34, 33, 33] at [Decimal('995.00'), Decimal('997.50'), Decimal('1000.00')]
+Once sent, more to send: False, due []
+As a dry run shows it: {'ladder': {'from_price': '995', 'to_price': '1000', 'steps': 3}}

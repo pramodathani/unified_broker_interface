@@ -156,6 +156,27 @@ class WhatEachPresetStandsForExample:
                 'trigger_price': 995,
                 'bar_minutes': 15,
             },
+            'ladder': {
+                'from_price': 995,
+                'to_price': 1000,
+                'steps': 3,
+            },
+            'freeze_slicer': {},
+            'closing_price': {
+                'slices': 4,
+            },
+            'opening_auction': {
+                'at_time': '09:02:00',
+            },
+            'virtual_limit': {
+                'paper': True,
+            },
+            'account_conditional': {
+                'account_field': 'day_pnl',
+                'account_level': -5000,
+                'trigger_direction': 'at_or_below',
+                'action': 'cancel',
+            },
             'daily_stop': {
                 'stop_price': 990,
                 'stop_limit_price': 988,

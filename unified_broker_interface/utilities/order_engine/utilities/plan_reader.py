@@ -1,7 +1,12 @@
 """Reading a caller's plan into the parts that run it, and every problem that stops it running."""
 
+import datetime
 import decimal
 
+from unified_broker_interface.utilities.order_engine.utilities.account_condition import (
+    ACCOUNT_FIELDS,
+    AccountCondition,
+)
 from unified_broker_interface.utilities.order_engine.utilities.all_at_once_execution import (
     AllAtOnceExecution,
 )
@@ -36,6 +41,9 @@ from unified_broker_interface.utilities.order_engine.utilities.either_part impor
     SIBLING_RULES,
     EitherPart,
 )
+from unified_broker_interface.utilities.order_engine.utilities.fill_delta import (
+    FillDelta,
+)
 from unified_broker_interface.utilities.order_engine.utilities.fill_ratio import (
     FillRatio,
 )
@@ -44,6 +52,9 @@ from unified_broker_interface.utilities.order_engine.utilities.fixed_pricing imp
 )
 from unified_broker_interface.utilities.order_engine.utilities.follow_instrument_pricing import (
     FollowInstrumentPricing,
+)
+from unified_broker_interface.utilities.order_engine.utilities.freeze_limit_execution import (
+    FreezeLimitExecution,
 )
 from unified_broker_interface.utilities.order_engine.utilities.from_parent_fill_pricing import (
     FromParentFillPricing,
@@ -54,10 +65,16 @@ from unified_broker_interface.utilities.order_engine.utilities.front_loaded_exec
 from unified_broker_interface.utilities.order_engine.utilities.iceberg_execution import (
     IcebergExecution,
 )
+from unified_broker_interface.utilities.order_engine.utilities.ladder_execution import (
+    LadderExecution,
+)
 from unified_broker_interface.utilities.order_engine.utilities.lifetime import (
     APPLIES_TO,
     ON_END,
     Lifetime,
+)
+from unified_broker_interface.utilities.order_engine.utilities.limit_marketable_condition import (
+    LimitMarketableCondition,
 )
 from unified_broker_interface.utilities.order_engine.utilities.marketable_pricing import (
     MarketablePricing,
@@ -70,6 +87,9 @@ from unified_broker_interface.utilities.order_engine.utilities.option_model_pric
 )
 from unified_broker_interface.utilities.order_engine.utilities.order_part import (
     OrderPart,
+)
+from unified_broker_interface.utilities.order_engine.utilities.paper_venue import (
+    PaperVenue,
 )
 from unified_broker_interface.utilities.order_engine.utilities.participation_execution import (
     ParticipationExecution,
@@ -85,6 +105,9 @@ from unified_broker_interface.utilities.order_engine.utilities.position_quantity
 from unified_broker_interface.utilities.order_engine.utilities.post_only_guard import (
     ON_CROSSING,
     PostOnlyGuard,
+)
+from unified_broker_interface.utilities.order_engine.utilities.pre_open_venue import (
+    PreOpenVenue,
 )
 from unified_broker_interface.utilities.order_engine.utilities.preset_expander import (
     PRESET_NAMES,
@@ -193,6 +216,7 @@ ORDER_SETTINGS = (
     'execution',
     'guards',
     'lifetime',
+    'venue',
     'instrument_id',
     'quantity',
     'transaction_type',
@@ -214,6 +238,7 @@ SIDES = (
     'sell',
     'protect',
     'close',
+    'against_delta',
 )
 POSITION_SETTINGS = (
     'product',
@@ -295,7 +320,7 @@ class PlanReader:
             if isinstance(part.pricing, FromParentFillPricing) and part.pricing.first_path is None:
                 self._add_problem(part.path, 'from_parent_fill_needs_then', 'from_parent_fill prices this order from the fills of a Then join\'s first order, so it must be that join\'s child, and the first plan a single order')
             if part.fill_ratio is not None and not part.sized_by_fills:
-                self._add_problem(part.path, 'parent_fill_needs_then', 'a quantity of parent_fill scales what a Then join\'s first plan filled, so the order must be that join\'s child')
+                self._add_problem(part.path, 'parent_fill_needs_then', 'a quantity of parent_fill or parent_fill_delta scales what a Then join\'s first plan filled, so the order must be that join\'s child')
 
     def _read_node(self, node, path, keeps_tag):
         """Reads one node of the tree.
@@ -665,7 +690,7 @@ class PlanReader:
         sources = self._preset_sources(order.get('presets', []), path)
         overrides = self._read_overrides(order, path)
         own = {}
-        for slot in ('trigger', 'side', 'pricing', 'execution', 'guards', 'lifetime'):
+        for slot in ('trigger', 'side', 'pricing', 'execution', 'guards', 'lifetime', 'venue'):
             if slot in order:
                 own[slot] = order[slot]
         if isinstance(order.get('quantity'), dict):
@@ -691,6 +716,7 @@ class PlanReader:
         post_only_path = None
         lifetime = None
         lifetime_path = None
+        venue = None
         execution = None
         execution_path = None
         for slots, source_path in sources:
@@ -740,6 +766,10 @@ class PlanReader:
                             )
                         discretion = read_discretion
                         discretion_path = f'{source_path}.pricing'
+            if 'venue' in slots:
+                read_venue = self._read_venue_list(slots['venue'], f'{source_path}.venue')
+                if read_venue is not None:
+                    venue = read_venue
             if 'lifetime' in slots:
                 read_lifetime = self._read_lifetime_list(
                     slots['lifetime'],
@@ -789,8 +819,17 @@ class PlanReader:
             trigger = conditions[0]
         elif conditions:
             trigger = ConditionGroup('all', conditions)
+        if isinstance(venue, PreOpenVenue):
+            if trigger is not None:
+                self._add_problem(path, 'pre_open_sets_its_time', 'an order in the pre-open is sent at the venue\'s at_time, so it takes no trigger of its own')
+                return None
+            trigger = TimeCondition('time_from', venue.at_time)
+        if isinstance(venue, PaperVenue) and not self._can_fill_on_paper(trigger, path):
+            return None
         if pricing is None:
             pricing = FixedPricing(None, None)
+        if self._holds_at_its_limit(trigger) and not self._held_at_the_body_price(pricing, path):
+            return None
         if execution is None:
             execution = AllAtOnceExecution()
         if isinstance(pricing, STOP_PRICINGS):
@@ -813,14 +852,22 @@ class PlanReader:
             fill_ratio = self._read_fill_ratio(position_quantity, position_path)
             if fill_ratio is None:
                 return None
+        elif position_quantity is not None and 'parent_fill_delta' in position_quantity:
+            fill_ratio = self._read_fill_delta(position_quantity, position_path)
+            if fill_ratio is None:
+                return None
         elif position_quantity is not None:
             position = self._read_position(position_quantity, position_path)
             if position is None:
                 return None
         if not self._closes_sensibly(side, position, pricing_path, execution, path):
             return None
+        if side == 'against_delta' and not isinstance(fill_ratio, FillDelta):
+            self._add_problem(path, 'against_delta_needs_delta', 'against_delta trades against the delta of the option the plan traded, so the quantity must be parent_fill_delta')
+            return None
         part = OrderPart(path, preset_names, trigger, side, pricing, keeps_tag, execution, cap, post_only, discretion, lifetime, overrides, position)
         part.fill_ratio = fill_ratio
+        part.venue = venue
         return part
 
     def _closes_sensibly(self, side, position, pricing_path, execution, path):
@@ -874,6 +921,32 @@ class PlanReader:
         if len(self.problems) > problems_before:
             return None
         return FillRatio(ratio, whole_lots)
+
+    def _read_fill_delta(self, quantity, path):
+        """Reads a quantity given as `{"parent_fill_delta": {...}}`.
+
+        Args:
+            quantity (dict): The quantity as the caller wrote it.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            FillDelta | None: The sizing, or None when it has a problem.
+        """
+        settings = quantity.get('parent_fill_delta')
+        if len(quantity) != 1 or not isinstance(settings, dict):
+            self._add_problem(path, 'bad_setting', 'a quantity is a whole number, or an object holding position, parent_fill or parent_fill_delta and its settings')
+            return None
+        problems_before = len(self.problems)
+        self._refuse_unknown(settings, ('volatility', 'whole_lots'), f'{path}.parent_fill_delta', 'parent_fill_delta', 'quantity')
+        volatility = settings.get('volatility')
+        if isinstance(volatility, bool) or not isinstance(volatility, (int, float)) or volatility <= 0:
+            self._add_problem(path, 'bad_setting', f'volatility must be a percentage above zero, not {volatility!r}')
+        whole_lots = settings.get('whole_lots', False)
+        if not isinstance(whole_lots, bool):
+            self._add_problem(path, 'bad_setting', f'whole_lots must be true or false, not {whole_lots!r}')
+        if len(self.problems) > problems_before:
+            return None
+        return FillDelta(decimal.Decimal(str(volatility)), whole_lots)
 
     def _read_position(self, quantity, path):
         """Reads a quantity given as `{"position": {...}}`.
@@ -955,8 +1028,91 @@ class PlanReader:
             return False
         return True
 
+    def _holds_at_its_limit(self, trigger):
+        """Whether an order's trigger is, or includes, a `limit_marketable` condition.
+
+        Args:
+            trigger (object | None): The order's trigger.
+
+        Returns:
+            bool: True when it holds the order at its own limit price.
+        """
+        if isinstance(trigger, LimitMarketableCondition):
+            return True
+        if isinstance(trigger, ConditionGroup):
+            for member in trigger.members:
+                if self._holds_at_its_limit(member):
+                    return True
+        return False
+
+    def _held_at_the_body_price(self, pricing, path):
+        """Checks an order held until its limit is marketable is priced at the body's own limit price.
+
+        Args:
+            pricing (object): The order's pricing.
+            path (str): Where the order sits in the plan.
+
+        Returns:
+            bool: True when it is, otherwise False with the problem recorded.
+        """
+        if isinstance(pricing, FixedPricing) and pricing.price is None and pricing.order_type is None:
+            return True
+        self._add_problem(path, 'held_at_the_body_price', 'a limit_marketable order is held at the body\'s own LIMIT price, so it takes no pricing of its own')
+        return False
+
+    def _can_fill_on_paper(self, trigger, path):
+        """Checks a paper order is the whole plan and waits on a `limit_marketable` trigger alone, since its fills come from that order's queue estimate.
+
+        Args:
+            trigger (object | None): The order's trigger.
+            path (str): Where the order sits in the plan.
+
+        Returns:
+            bool: True when it can be filled on paper, otherwise False with the problem recorded.
+        """
+        if not isinstance(trigger, LimitMarketableCondition):
+            self._add_problem(path, 'paper_needs_limit_marketable', 'a paper order is filled from the queue estimate of an order held at its limit, so its trigger is limit_marketable alone')
+            return False
+        if path != 'root':
+            self._add_problem(path, 'paper_is_the_whole_plan', 'a paper order fills nothing at a broker, so it cannot be joined with orders that would trade for real')
+            return False
+        return True
+
+    def _read_venue_list(self, venue, path):
+        """Reads an order's venue: a list holding one object with `session: pre_open` and optionally `at_time`, default `09:00:30`, or `session: paper`.
+
+        Args:
+            venue (object): The list as the caller wrote it.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            PreOpenVenue | PaperVenue | None: The venue, or None when it has a problem.
+        """
+        if not isinstance(venue, list) or len(venue) != 1 or not isinstance(venue[0], dict):
+            self._add_problem(path, 'venue_shape', 'venue is a list holding one object, with session and, for pre_open, optionally at_time')
+            return None
+        entry = venue[0]
+        entry_path = f'{path}.0'
+        problems_before = len(self.problems)
+        if entry.get('session') == 'paper':
+            self._refuse_unknown(entry, ('session',), entry_path, 'venue', 'value')
+            if len(self.problems) > problems_before:
+                return None
+            return PaperVenue()
+        self._refuse_unknown(entry, ('session', 'at_time'), entry_path, 'venue', 'value')
+        if entry.get('session') != 'pre_open':
+            self._add_problem(entry_path, 'bad_setting', f'session must be pre_open or paper, not {entry.get("session")!r}')
+        at_time = str(entry.get('at_time') or '09:00:30')
+        try:
+            datetime.time.fromisoformat(at_time)
+        except ValueError:
+            self._add_problem(entry_path, 'bad_setting', f'at_time must be a time of day such as 09:00:30, not {at_time!r}')
+        if len(self.problems) > problems_before:
+            return None
+        return PreOpenVenue(at_time)
+
     def _read_lifetime_list(self, lifetime, path):
-        """Reads an order's lifetime: a list holding one object with `at_time`, `after_minutes` or `after_days`, and optionally `applies_to` and `on_end`.
+        """Reads an order's lifetime: a list holding one object with `at_time`, `after_minutes`, `after_days` or `when`, and optionally `applies_to` and `on_end`.
 
         Args:
             lifetime (object): The list as the caller wrote it.
@@ -966,26 +1122,23 @@ class PlanReader:
             Lifetime | None: The lifetime, or None when it has a problem.
         """
         if not isinstance(lifetime, list) or len(lifetime) != 1 or not isinstance(lifetime[0], dict):
-            self._add_problem(path, 'lifetime_shape', 'lifetime is a list holding one object, with at_time, after_minutes or after_days, and optionally applies_to and on_end')
+            self._add_problem(path, 'lifetime_shape', 'lifetime is a list holding one object, with at_time, after_minutes, after_days or when, and optionally applies_to and on_end')
             return None
         entry = lifetime[0]
         entry_path = f'{path}.0'
         problems_before = len(self.problems)
-        if 'when' in entry:
-            self._add_problem(
-                entry_path,
-                'lifetime_not_built',
-                'when is part of the design but not built yet; at_time, after_minutes and after_days are',
-            )
         self._refuse_unknown(entry, ('at_time', 'after_minutes', 'applies_to', 'on_end', 'after_days', 'when'), entry_path, 'lifetime', 'value')
         ends = 0
-        for name in ('at_time', 'after_minutes', 'after_days'):
+        for name in ('at_time', 'after_minutes', 'after_days', 'when'):
             if name in entry:
                 ends = ends + 1
+        when = None
+        if 'when' in entry:
+            when = self._read_condition(entry['when'], f'{entry_path}.when')
         has_time = 'at_time' in entry
         has_minutes = 'after_minutes' in entry
         if ends != 1:
-            self._add_problem(entry_path, 'bad_setting', 'a lifetime ends at_time, after_minutes or after_days, exactly one')
+            self._add_problem(entry_path, 'bad_setting', 'a lifetime ends at_time, after_minutes, after_days or when, exactly one')
         after_days = None
         if 'after_days' in entry:
             after_days = self._whole_number(entry['after_days'], entry_path, 'after_days', 1, MOST_DAYS)
@@ -1010,7 +1163,7 @@ class PlanReader:
             self._add_problem(entry_path, 'bad_setting', f'on_end must be one of {", ".join(ON_END)}, not {on_end!r}')
         if len(self.problems) > problems_before:
             return None
-        return Lifetime(at_time, after_minutes, applies_to, on_end, after_days)
+        return Lifetime(at_time, after_minutes, applies_to, on_end, after_days, when)
 
     def _can_take_at_discretion(self, pricing, execution, path):
         """Whether an order with this pricing and execution can have discretion, reporting the problem when it cannot.
@@ -1217,6 +1370,13 @@ class PlanReader:
                 return self._read_trails(content, f'{path}.trails')
             if kind == 'candle_closes':
                 return self._read_candle_closes(content, f'{path}.candle_closes')
+            if kind == 'account':
+                return self._read_account(content, f'{path}.account')
+            if kind == 'limit_marketable':
+                if content != {}:
+                    self._add_problem(f'{path}.limit_marketable', 'bad_setting', 'limit_marketable takes no settings, so it is written {}')
+                    return None
+                return LimitMarketableCondition()
             if kind in KINDS:
                 if not isinstance(content, str):
                     self._add_problem(
@@ -1229,9 +1389,35 @@ class PlanReader:
             self._add_problem(
                 path,
                 'unknown_condition',
-                f'{kind!r} is not a trigger condition; the conditions are price_crosses, trails, candle_closes, {", ".join(KINDS)}, all and any',
+                f'{kind!r} is not a trigger condition; the conditions are price_crosses, trails, candle_closes, account, limit_marketable, {", ".join(KINDS)}, all and any',
             )
         return None
+
+    def _read_account(self, settings, path):
+        """Reads an `account` condition.
+
+        Args:
+            settings (object): `field`, `level` and `direction`, all required.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            AccountCondition | None: The condition, or None when it has a problem.
+        """
+        if not isinstance(settings, dict):
+            self._add_problem(path, 'bad_setting', 'account takes an object with field, level and direction')
+            return None
+        problems_before = len(self.problems)
+        self._refuse_unknown(settings, ('field', 'level', 'direction'), path, 'account', 'condition')
+        field = settings.get('field')
+        if field not in ACCOUNT_FIELDS:
+            self._add_problem(path, 'bad_setting', f'field must be one of {", ".join(ACCOUNT_FIELDS)}, not {field!r}')
+        level = self._number(settings.get('level'), path, 'level')
+        direction = settings.get('direction')
+        if direction not in DIRECTIONS:
+            self._add_problem(path, 'bad_setting', f'direction is required for an account figure and must be one of {", ".join(DIRECTIONS)}, not {direction!r}')
+        if len(self.problems) > problems_before:
+            return None
+        return AccountCondition(field, level, direction)
 
     def _read_candle_closes(self, settings, path):
         """Reads a `candle_closes` condition.
@@ -1790,12 +1976,38 @@ class PlanReader:
                 return TopUpExecution()
             if name == 'daily':
                 return self._read_daily(settings, f'{entry_path}.daily')
+            if name == 'ladder':
+                return self._read_ladder(settings, f'{entry_path}.ladder')
+            if name == 'freeze_limit':
+                self._refuse_unknown(settings, (), entry_path, 'freeze_limit', 'execution')
+                return FreezeLimitExecution()
             self._add_problem(
                 entry_path,
                 'unknown_execution',
-                f'{name!r} is not an execution a plan can use yet; the executions available are all_at_once, iceberg, twap, vwap, front_loaded, participation, book_depth, top_up and daily',
+                f'{name!r} is not an execution a plan can use yet; the executions available are all_at_once, iceberg, twap, vwap, front_loaded, participation, book_depth, top_up, daily, ladder and freeze_limit',
             )
         return None
+
+    def _read_ladder(self, settings, path):
+        """Reads `ladder` execution.
+
+        Args:
+            settings (dict): `from_price` and `to_price`, which differ, and `steps`, 2 to 20.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            LadderExecution | None: The execution, or None when it has a problem.
+        """
+        problems_before = len(self.problems)
+        self._refuse_unknown(settings, ('from_price', 'to_price', 'steps'), path, 'ladder', 'execution')
+        from_price = self._price(settings.get('from_price'), path, 'from_price')
+        to_price = self._price(settings.get('to_price'), path, 'to_price')
+        steps = self._whole_number(settings.get('steps'), path, 'steps', 2, 20)
+        if from_price is not None and from_price == to_price:
+            self._add_problem(path, 'bad_setting', 'a ladder needs from_price and to_price to differ')
+        if len(self.problems) > problems_before:
+            return None
+        return LadderExecution(from_price, to_price, steps)
 
     def _read_daily(self, settings, path):
         """Reads `daily` execution.
@@ -1875,11 +2087,19 @@ class PlanReader:
         known = ['slices', 'over_minutes']
         if name == 'vwap':
             known.append('volume_profile')
+            known.append('until')
         if name == 'front_loaded':
             known.append('urgency')
         self._refuse_unknown(settings, tuple(known), path, name, 'execution')
         slices = self._whole_number(settings.get('slices'), path, 'slices', 2, MOST_SLICES)
-        over_minutes = self._price(settings.get('over_minutes'), path, 'over_minutes')
+        until = settings.get('until')
+        over_minutes = None
+        if until is not None:
+            hours, _, minutes = str(until).partition(':')
+            if 'over_minutes' in settings or not (isinstance(until, str) and hours.isdigit() and minutes.isdigit() and int(hours) < 24 and int(minutes) < 60):
+                self._add_problem(path, 'bad_setting', f'until is a time of day such as "15:30", given instead of over_minutes, not {until!r}')
+        else:
+            over_minutes = self._price(settings.get('over_minutes'), path, 'over_minutes')
         profile = None
         if name == 'vwap' and 'volume_profile' in settings:
             profile = self._read_profile(settings['volume_profile'], path)
@@ -1896,7 +2116,9 @@ class PlanReader:
         if name == 'twap':
             return TwapExecution(slices, float(over_minutes))
         if name == 'vwap':
-            return VwapExecution(slices, float(over_minutes), profile)
+            execution = VwapExecution(slices, None if over_minutes is None else float(over_minutes), profile)
+            execution.until = until
+            return execution
         return FrontLoadedExecution(slices, float(over_minutes), urgency)
 
     def _read_participation(self, settings, path):

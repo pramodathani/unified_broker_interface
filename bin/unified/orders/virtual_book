@@ -15,9 +15,10 @@ held order: how much is ahead of it in the queue at its price (`ahead`), how muc
 `queue_filled` at the moment it is sent is the cost of holding it back; for a paper order, `filled` is what the engine
 fills it with.
 
-**Which orders.** Every open `virtual_limit` parent in the engine's parent cache whose trigger has not fired, read
-every two seconds. A fired order's last estimate stays in the hash, unchanged, until its parent is no longer open, and
-is then removed.
+**Which orders.** Every open `virtual_limit` parent in the engine's parent cache whose trigger has not fired, and
+every order of an open plan still waiting on a `limit_marketable` trigger, read every two seconds. A plan's order is
+keyed by the parent id and its path, as `<parent id>/root`. A fired order's last estimate stays in the hash, unchanged,
+until its parent is no longer open, and is then removed.
 
 **Reading the stream.** A plain `XREAD` from the moment the script starts, 1,000 entries at a time, blocking for one
 second, not a consumer group: old quotes are of no use to an estimate. The stream carries every instrument's quotes and

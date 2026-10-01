@@ -11,3 +11,7 @@ Both hold from the time onwards. `time_at` is kept because it reads naturally fo
 ## Why time conditions are checked on price ticks
 
 `PlanOrder` sets `WANTS_PRICES` and not `WANTS_CLOCK`, so a plan with only a time trigger is still offered a tick every second through the price ticker, which calls every price-watching parent whether or not a quote arrived. That avoids asking every plan on two tickers. If the price ticker stops, a time trigger stops too; `WANTS_CLOCK` can be added if that proves a problem.
+
+## `time_from` (2026-10-01)
+
+`time_at` refuses a time already passed on a trading day, which is right for a scheduled order. The closing price order wants the opposite: placed inside its window, it starts at once. `time_from` holds at once in that case.

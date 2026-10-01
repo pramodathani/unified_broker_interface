@@ -1,0 +1,15 @@
+described: {'session': 'paper'}
+check: None
+no estimate yet:
+  recorded a fill: False
+estimate says 6 filled:
+  event paper_filled: 6 of 10 at 1498.5
+  parent is now working: paper fill of 6 of 10
+  part record: the plan's root part filled 6 of 10 on paper
+  recorded a fill: True
+the same estimate read again:
+  recorded a fill: False
+estimate says 25 filled:
+  event paper_filled: 10 of 10 at 1498.5
+  part record: the plan's root part filled on paper: 10 at 1498.50
+  recorded a fill: True

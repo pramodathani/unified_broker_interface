@@ -109,6 +109,7 @@ from unified_broker_interface.utilities.order_engine.utilities import (
 )
 from unified_broker_interface.utilities.order_engine.utilities.virtual_book import (
     ESTIMATES_KEY,
+    VirtualBook,
 )
 from utilities.configurations import api_configuration
 
@@ -1051,6 +1052,237 @@ class OrderEngineScenarios:
                             'from_price': 995,
                             'to_price': 1000,
                             'steps': 1,
+                        },
+                    ),
+                ],
+            ),
+            self.intents(
+                'a_plan_order_below_the_freeze_limit_is_sent_whole',
+                [
+                    self.bodies.market_order(
+                        dry_run=None,
+                        quantity=10,
+                        synthetic={
+                            'type': 'plan',
+                            'plan': {
+                                'order': {
+                                    'presets': [
+                                        {
+                                            'freeze_slicer': {},
+                                        },
+                                    ],
+                                },
+                            },
+                        },
+                    ),
+                ],
+                attributes={
+                    'flattrade': {
+                        'freeze_quantity': '100',
+                    },
+                },
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
+                'a_plan_order_above_the_freeze_limit_is_split_evenly',
+                [
+                    self.bodies.market_order(
+                        dry_run=None,
+                        quantity=250,
+                        synthetic={
+                            'type': 'plan',
+                            'plan': {
+                                'order': {
+                                    'presets': [
+                                        {
+                                            'freeze_slicer': {},
+                                        },
+                                    ],
+                                },
+                            },
+                        },
+                    ),
+                ],
+                attributes={
+                    'flattrade': {
+                        'freeze_quantity': '100',
+                    },
+                },
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
+                'a_plan_every_slice_goes_to_the_same_broker',
+                [
+                    self.bodies.market_order(
+                        dry_run=None,
+                        quantity=300,
+                        synthetic={
+                            'type': 'plan',
+                            'plan': {
+                                'order': {
+                                    'presets': [
+                                        {
+                                            'freeze_slicer': {},
+                                        },
+                                    ],
+                                },
+                            },
+                        },
+                    ),
+                ],
+                attributes={
+                    'flattrade': {
+                        'freeze_quantity': '100',
+                    },
+                },
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
+                'a_plan_broker_publishing_no_freeze_limit_sends_it_whole',
+                [
+                    self.bodies.market_order(
+                        dry_run=None,
+                        quantity=250,
+                        synthetic={
+                            'type': 'plan',
+                            'plan': {
+                                'order': {
+                                    'presets': [
+                                        {
+                                            'freeze_slicer': {},
+                                        },
+                                    ],
+                                },
+                            },
+                        },
+                    ),
+                ],
+                attributes={
+                    'zerodha': {
+                        'freeze_quantity': '100',
+                    },
+                },
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
+                'a_plan_order_needing_too_many_slices_is_refused',
+                [
+                    self.bodies.market_order(
+                        dry_run=None,
+                        quantity=5000,
+                        synthetic={
+                            'type': 'plan',
+                            'plan': {
+                                'order': {
+                                    'presets': [
+                                        {
+                                            'freeze_slicer': {},
+                                        },
+                                    ],
+                                },
+                            },
+                        },
+                    ),
+                ],
+                attributes={
+                    'flattrade': {
+                        'freeze_quantity': '10',
+                    },
+                },
+            ),
+            self.intents(
+                'a_plan_ladder_spreads_its_rungs_across_the_range',
+                [
+                    self.bodies.market_order(
+                        dry_run=None,
+                        order_type='LIMIT',
+                        price=1000,
+                        quantity=100,
+                        synthetic={
+                            'type': 'plan',
+                            'plan': {
+                                'order': {
+                                    'presets': [
+                                        {
+                                            'ladder': {
+                                                'from_price': 995,
+                                                'to_price': 1000,
+                                                'steps': 3,
+                                            },
+                                        },
+                                    ],
+                                },
+                            },
+                        },
+                    ),
+                ],
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
+                'a_plan_ladder_needs_a_quantity_for_every_rung',
+                [
+                    self.bodies.market_order(
+                        dry_run=None,
+                        order_type='LIMIT',
+                        price=1000,
+                        quantity=2,
+                        synthetic={
+                            'type': 'plan',
+                            'plan': {
+                                'order': {
+                                    'presets': [
+                                        {
+                                            'ladder': {
+                                                'from_price': 995,
+                                                'to_price': 1000,
+                                                'steps': 5,
+                                            },
+                                        },
+                                    ],
+                                },
+                            },
+                        },
+                    ),
+                ],
+            ),
+            self.intents(
+                'a_plan_ladder_with_one_step_is_refused',
+                [
+                    self.bodies.market_order(
+                        dry_run=None,
+                        order_type='LIMIT',
+                        price=1000,
+                        quantity=10,
+                        synthetic={
+                            'type': 'plan',
+                            'plan': {
+                                'order': {
+                                    'presets': [
+                                        {
+                                            'ladder': {
+                                                'from_price': 995,
+                                                'to_price': 1000,
+                                                'steps': 1,
+                                            },
+                                        },
+                                    ],
+                                },
+                            },
                         },
                     ),
                 ],
@@ -2665,6 +2897,191 @@ class OrderEngineSuite:
             parts.append(parameters.get('parts'))
         result['parts'] = parts
         return result
+
+    def run_plan_virtual_limit_checks(self):
+        """Runs plan orders held in the engine until their limit is marketable, sent or filled on paper, beside today's virtual limit checks.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        accepted = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        steady = self.book_at(1000.00, 1000.05)
+        virtual_limit = {
+            'order': {
+                'presets': [
+                    {
+                        'virtual_limit': {},
+                    },
+                ],
+            },
+        }
+        paper = {
+            'order': {
+                'presets': [
+                    {
+                        'virtual_limit': {
+                            'paper': True,
+                        },
+                    },
+                ],
+            },
+        }
+        return [
+            self.plan_price_result(
+                'a_plan_virtual_limit_is_held_until_the_offer_reaches_its_price',
+                virtual_limit,
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(999.50, 999.55), 'at': 1},
+                    {
+                        'quote': self.book_at(999.40, 999.45),
+                        'estimate': {
+                            'queue_filled': 4,
+                            'filled': 4,
+                        },
+                        'at': 2,
+                    },
+                    {'quote': self.book_at(999.40, 999.45), 'at': 3},
+                ],
+                accepted,
+                body_overrides={
+                    'price': 999.50,
+                },
+            ),
+            self.plan_price_result(
+                'a_plan_virtual_limit_ignores_a_stale_quote',
+                virtual_limit,
+                [
+                    {'quote': steady, 'at': 0},
+                    {
+                        'quote': dict(self.book_at(999.40, 999.45), stale=True),
+                        'at': 1,
+                    },
+                    {'quote': self.book_at(999.40, 999.45), 'at': 2},
+                ],
+                accepted,
+                body_overrides={
+                    'price': 999.50,
+                },
+            ),
+            self.plan_price_result(
+                'a_plan_virtual_limit_must_be_a_limit_order',
+                virtual_limit,
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+                body_overrides={
+                    'order_type': 'MARKET',
+                    'price': None,
+                },
+            ),
+            self.plan_price_result(
+                'a_plan_paper_virtual_limit_fills_from_the_queue_estimate',
+                paper,
+                [
+                    {
+                        'quote': steady,
+                        'estimate': {
+                            'queue_filled': 0,
+                            'filled': 0,
+                        },
+                        'at': 0,
+                    },
+                    {
+                        'quote': steady,
+                        'estimate': {
+                            'queue_filled': 4,
+                            'filled': 4,
+                        },
+                        'at': 1,
+                    },
+                    {
+                        'quote': self.book_at(999.40, 999.45),
+                        'estimate': {
+                            'queue_filled': 4,
+                            'filled': 10,
+                        },
+                        'at': 2,
+                    },
+                ],
+                accepted,
+                body_overrides={
+                    'price': 999.50,
+                },
+            ),
+            self.plan_price_result(
+                'a_plan_paper_fill_is_not_repeated_after_a_restart',
+                paper,
+                [
+                    {
+                        'quote': steady,
+                        'estimate': {
+                            'queue_filled': 4,
+                            'filled': 4,
+                        },
+                        'at': 0,
+                    },
+                    {'quote': steady, 'at': 1},
+                ],
+                accepted,
+                restart_between_ticks=True,
+                body_overrides={
+                    'price': 999.50,
+                },
+            ),
+            self.plan_price_result(
+                'a_plan_paper_order_must_wait_on_limit_marketable',
+                {
+                    'order': {
+                        'trigger': {
+                            'price_crosses': {
+                                'level': 995,
+                            },
+                        },
+                        'venue': [
+                            {
+                                'session': 'paper',
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_paper_order_cannot_be_joined',
+                {
+                    'then': {
+                        'first': {
+                            'order': {
+                                'presets': [
+                                    {
+                                        'virtual_limit': {
+                                            'paper': True,
+                                        },
+                                    },
+                                ],
+                            },
+                        },
+                        'on_complete': {
+                            'order': {
+                                'side': 'protect',
+                            },
+                        },
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+        ]
 
     def run_plan_trigger_checks(self):
         """Runs plan orders that wait for a trigger, protect a position or are priced by a pricing rule, through price ticks.
@@ -5208,6 +5625,24 @@ class OrderEngineSuite:
             self.scenarios.answers.place_success('flattrade'),
         )
         frozen = FROZEN_NOW.timestamp()
+        opening_auction = {
+            'order': {
+                'presets': [
+                    {
+                        'opening_auction': {},
+                    },
+                ],
+            },
+        }
+        closing_price = {
+            'order': {
+                'presets': [
+                    {
+                        'closing_price': {},
+                    },
+                ],
+            },
+        }
         daily_stop = {
             'order': {
                 'presets': [
@@ -5349,6 +5784,105 @@ class OrderEngineSuite:
                 positions=10,
             ),
             self.plan_clock_result(
+                'a_plan_closing_price_order_waits_for_the_window_and_then_slices',
+                closing_price,
+                [],
+                FROZEN_NOW.replace(hour=15, minute=0).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(hour=14, minute=30),
+                body_overrides={
+                    'quantity': 60,
+                },
+            ),
+            self.plan_clock_result(
+                'a_plan_closing_price_order_inside_the_window_starts_at_once',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'closing_price': {
+                                    'slices': 4,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [],
+                FROZEN_NOW.replace(hour=15, minute=15).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(hour=15, minute=10),
+                body_overrides={
+                    'quantity': 40,
+                },
+            ),
+            self.plan_clock_result(
+                'a_plan_closing_price_order_after_the_close_is_refused',
+                closing_price,
+                [],
+                FROZEN_NOW.replace(hour=15, minute=32).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(hour=15, minute=31),
+            ),
+            self.plan_clock_result(
+                'a_plan_closing_price_window_starting_after_the_close_is_refused',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'closing_price': {
+                                    'window_start': '15:40',
+                                },
+                            },
+                        ],
+                    },
+                },
+                [],
+                frozen + 60,
+                accepted,
+            ),
+            self.plan_clock_result(
+                'a_plan_closing_price_order_taken_on_a_sunday_is_scheduled_for_monday',
+                closing_price,
+                [],
+                FROZEN_NOW.replace(day=27).replace(hour=15, minute=1).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(day=27),
+            ),
+            self.plan_clock_result(
+                'a_plan_opening_auction_order_waits_for_the_pre_open',
+                opening_auction,
+                [],
+                FROZEN_NOW.replace(hour=9, minute=0, second=30).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(hour=8, minute=45),
+            ),
+            self.plan_clock_result(
+                'a_plan_opening_auction_order_after_collection_is_refused',
+                opening_auction,
+                [],
+                frozen + 60,
+                accepted,
+            ),
+            self.plan_clock_result(
+                'a_plan_opening_auction_order_for_an_option_is_refused',
+                opening_auction,
+                [],
+                FROZEN_NOW.replace(hour=9, minute=0, second=30).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(hour=8, minute=45),
+                body_overrides={
+                    'instrument_id': order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['nifty_option'],
+                },
+            ),
+            self.plan_clock_result(
+                'a_plan_opening_auction_order_taken_on_a_sunday_joins_mondays_pre_open',
+                opening_auction,
+                [],
+                FROZEN_NOW.replace(day=28, hour=9, minute=0, second=30).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(day=27),
+            ),
+            self.plan_clock_result(
                 'a_plan_repeat_whose_child_is_a_join_is_refused',
                 {
                     'repeat': {
@@ -5473,7 +6007,101 @@ class OrderEngineSuite:
                 },
             ),
             self.plan_price_result(
-                'a_plan_attached_hedge_sized_by_delta_is_not_built_yet',
+                'a_plan_attached_hedge_sized_by_delta_sells_about_half_a_bought_call',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'attached_hedge': {
+                                    'hedge_instrument_id': identifiers['reliance_future'],
+                                    'delta_volatility': 12.5,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {
+                        'quote': steady,
+                        'at': 0,
+                        'other_quotes': {
+                            'reliance_future': self.scenarios.quote(last_price=25000),
+                        },
+                    },
+                    {
+                        'quote': steady,
+                        'at': 1,
+                        'updates': [
+                            self.update('26091500000021', 'COMPLETE', 1500),
+                        ],
+                    },
+                ],
+                accepted,
+                body_overrides={
+                    'instrument_id': identifiers['nifty_option'],
+                    'quantity': 1500,
+                    'price': 160,
+                },
+            ),
+            self.plan_price_result(
+                'a_plan_attached_hedge_sized_by_delta_buys_the_future_against_a_bought_put',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'attached_hedge': {
+                                    'hedge_instrument_id': identifiers['reliance_future'],
+                                    'delta_volatility': 12.5,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {
+                        'quote': steady,
+                        'at': 0,
+                        'other_quotes': {
+                            'reliance_future': self.scenarios.quote(last_price=82000),
+                        },
+                    },
+                    {
+                        'quote': steady,
+                        'at': 1,
+                        'updates': [
+                            self.update('26091500000021', 'COMPLETE', 2000),
+                        ],
+                    },
+                ],
+                accepted,
+                body_overrides={
+                    'instrument_id': identifiers['sensex_option'],
+                    'quantity': 2000,
+                    'price': 160,
+                },
+            ),
+            self.plan_price_result(
+                'a_plan_attached_hedge_with_both_a_ratio_and_a_delta_is_refused',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'attached_hedge': {
+                                    'hedge_instrument_id': identifiers['reliance_future'],
+                                    'ratio': 1,
+                                    'delta_volatility': 12.5,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_attached_hedge_sized_by_delta_on_a_stock_is_refused',
                 {
                     'order': {
                         'presets': [
@@ -6463,7 +7091,7 @@ class OrderEngineSuite:
         if daily_caps is not None:
             result['daily_counts'] = self.shown_daily_counts()
         synthetic = request_body.get('synthetic') or {}
-        if synthetic.get('type') == 'virtual_limit':
+        if synthetic.get('type') == 'virtual_limit' or '"virtual_limit"' in json.dumps(synthetic):
             result['held'] = [
                 {
                     'paper_filled': parent.parameters.get('paper_filled'),
@@ -6490,11 +7118,12 @@ class OrderEngineSuite:
             None: This method returns nothing.
         """
         estimates = self.fake_redis.hashes.setdefault(ESTIMATES_KEY, {})
-        for parent_order_id in self.fake_redis.hashes.get(
-            'unified:orders:parents',
-            {},
-        ):
+        stored = self.fake_redis.hashes.get('unified:orders:parents', {})
+        for parent_order_id, document in stored.items():
             estimates[parent_order_id] = json.dumps(estimate)
+            parts = (json.loads(document).get('parameters') or {}).get('parts') or {}
+            for path in parts:
+                estimates[VirtualBook.part_key(parent_order_id, path)] = json.dumps(estimate)
 
     def tick_at(self, ticker, moment):
         """Runs one tick as though it were `moment`.
@@ -8333,6 +8962,126 @@ class OrderEngineSuite:
                 accepted,
             ),
             self.price_result(
+                'a_plan_account_conditional_order_waits_for_margin_to_free_up',
+                dict(entry, synthetic={
+                    'type': 'plan',
+                    'plan': {
+                        'order': {
+                            'presets': [
+                                {
+                                    'account_conditional': {
+                                    'account_field': 'available_balance',
+                                    'account_level': 50000,
+                                    'trigger_direction': 'at_or_above',
+                                    },
+                                },
+                            ],
+                        },
+                    },
+                }),
+                [
+                    {'quote': steady, 'at': 0, 'funds': {'summary': {'available_balance': 40000.0}, 'pnl': {'realized': 0.0, 'unrealized': 0.0}}},
+                    {'quote': steady, 'at': 1, 'funds': {'summary': {'available_balance': 60000.0}, 'pnl': {'realized': 0.0, 'unrealized': 0.0}}},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_plan_account_conditional_order_is_cancelled_when_the_day_loss_is_reached',
+                dict(entry, synthetic={
+                    'type': 'plan',
+                    'plan': {
+                        'order': {
+                            'presets': [
+                                {
+                                    'account_conditional': {
+                                    'account_field': 'day_pnl',
+                                    'account_level': -5000,
+                                    'trigger_direction': 'at_or_below',
+                                    'action': 'cancel',
+                                    },
+                                },
+                            ],
+                        },
+                    },
+                }),
+                [
+                    {'quote': steady, 'at': 0, 'funds': {'summary': {'available_balance': 60000.0}, 'pnl': {'realized': -1000.0, 'unrealized': 0.0}}},
+                    {'quote': steady, 'at': 1, 'funds': {'summary': {'available_balance': 60000.0}, 'pnl': {'realized': -6000.0, 'unrealized': 0.0}}},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_plan_account_conditional_order_waits_while_a_position_is_open',
+                dict(entry, synthetic={
+                    'type': 'plan',
+                    'plan': {
+                        'order': {
+                            'presets': [
+                                {
+                                    'account_conditional': {
+                                    'account_field': 'open_positions',
+                                    'account_level': 0,
+                                    'trigger_direction': 'at_or_below',
+                                    },
+                                },
+                            ],
+                        },
+                    },
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1},
+                ],
+                accepted,
+                positions=75,
+            ),
+            self.price_result(
+                'a_plan_account_conditional_order_is_placed_once_the_book_is_flat',
+                dict(entry, synthetic={
+                    'type': 'plan',
+                    'plan': {
+                        'order': {
+                            'presets': [
+                                {
+                                    'account_conditional': {
+                                    'account_field': 'open_positions',
+                                    'account_level': 0,
+                                    'trigger_direction': 'at_or_below',
+                                    },
+                                },
+                            ],
+                        },
+                    },
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+                positions=0,
+            ),
+            self.price_result(
+                'a_plan_account_conditional_order_without_a_direction_is_refused',
+                dict(entry, synthetic={
+                    'type': 'plan',
+                    'plan': {
+                        'order': {
+                            'presets': [
+                                {
+                                    'account_conditional': {
+                                    'account_field': 'day_pnl',
+                                    'account_level': -5000,
+                                    },
+                                },
+                            ],
+                        },
+                    },
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
                 'a_grid_with_one_rung_refused_answers_partial_with_207',
                 dict(entry, synthetic={
                     'type': 'grid',
@@ -9234,6 +9983,7 @@ class OrderEngineSuite:
             results.extend(self.run_reaction_checks())
             results.extend(self.run_plan_checks())
             results.extend(self.run_plan_trigger_checks())
+            results.extend(self.run_plan_virtual_limit_checks())
             results.extend(self.run_plan_join_checks())
             results.extend(self.run_plan_trailing_checks())
             results.extend(self.run_plan_execution_checks())

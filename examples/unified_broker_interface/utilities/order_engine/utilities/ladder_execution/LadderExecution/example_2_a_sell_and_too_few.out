@@ -1,0 +1,2 @@
+Sell rungs: [Decimal('1000.00'), Decimal('1000.05'), Decimal('1000.10'), Decimal('1000.15')], quantities for 10: [3, 3, 2, 2]
+Three units over four rungs: 400 a ladder of 4 steps needs a quantity of at least 4, not 3

@@ -19,3 +19,7 @@ When the engine sends the real order it reads the estimate to record the missed 
 ## Why a changed held order starts a new estimate
 
 A held order changed through `PUT /api/orders/modify` keeps its body and gains `held_price` and `held_quantity`. `held_terms` reads those first. When they differ from the estimate being kept, `refresh` starts a fresh one, as a changed price at the exchange loses its place in the queue. A reduced quantity at an exchange keeps its place, but restarting on any change is the cautious reading, and keeps one rule.
+
+## Plans (2026-10-01)
+
+A plan can hold several orders, so each is estimated under `<parent id>/<path>` rather than the parent id. `held_documents` shapes each held order like a `virtual_limit` parent's record so the rest of the class is unchanged, and `drop_finished` reads the parent id from the part of the key before the `/`. Parent ids are UUIDs, which never contain `/`.

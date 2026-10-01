@@ -12,6 +12,12 @@ from unified_broker_interface.utilities.order_engine.base import (
 from unified_broker_interface.utilities.order_engine.utilities.either_part import (
     EitherPart,
 )
+from unified_broker_interface.utilities.order_engine.utilities.limit_marketable_condition import (
+    LimitMarketableCondition,
+)
+from unified_broker_interface.utilities.order_engine.utilities.paper_venue import (
+    PaperVenue,
+)
 from unified_broker_interface.utilities.order_engine.utilities.plan_reader import (
     PlanReader,
 )
@@ -115,12 +121,18 @@ class PlanOrder(SyntheticOrder):
                 memory = {}
                 part.prepare(self, memory)
                 record['memory'] = memory
+            if part.venue is not None:
+                part.venue.check(part.context(self))
+            if part.fill_ratio is not None:
+                part.fill_ratio.check(part.context(self))
             pricing_memory = part.prepared_pricing_memory(self)
             if pricing_memory:
                 record['pricing_memory'] = pricing_memory
             ends_at = part.lifetime_ends_at(self)
             if ends_at is not None:
                 record['ends_at'] = ends_at
+            if part.lifetime is not None and part.lifetime.when is not None:
+                record['ends_when'] = True
             if part.lifetime is not None and part.lifetime.after_days is not None:
                 carries_overnight = True
             if part.moves_on_ticks():
@@ -361,8 +373,10 @@ class PlanOrder(SyntheticOrder):
             rejected = True
         nothing_held = False
         for part in root.order_parts():
-            if self.part_record(part.path).get('reason') == 'nothing_held':
+            record = self.part_record(part.path)
+            if record.get('reason') == 'nothing_held':
                 nothing_held = True
+            traded = traded + (record.get('paper_filled') or 0)
         if traded > 0 or (nothing_held and not rejected):
             state = 'completed'
         elif rejected:
@@ -458,7 +472,7 @@ class PlanOrder(SyntheticOrder):
     def _fire_waiting(self, root, waiting_paths, quotes, now, timed_only):
         """Sends every waiting order whose trigger holds now.
 
-        An order whose join cancels before sending is sent only once every sibling's resting order has been cancelled; otherwise it tries again on the next tick.
+        An order whose join cancels before sending is sent only once every sibling's resting order has been cancelled; otherwise it tries again on the next tick. A paper order is never sent; it takes whatever more its queue estimate has filled. An order held until its limit is marketable records, as it fires, how much a resting order would have filled while it was held, as `missed_quantity`.
 
         Args:
             root (object): The root part.
@@ -468,7 +482,7 @@ class PlanOrder(SyntheticOrder):
             timed_only (bool): Whether to look only at orders whose trigger needs no prices, as on a clock tick.
 
         Returns:
-            tuple: The orders placed, as `(path, answer, status)`; whether any trigger's memory changed (bool); and whether an order fired and ended without placing anything (bool).
+            tuple: The orders placed, as `(path, answer, status)`; whether any trigger's memory changed (bool); and whether an order fired and ended without placing anything, or filled on paper (bool).
         """
         placed = []
         memory_changed = False
@@ -480,6 +494,10 @@ class PlanOrder(SyntheticOrder):
                 continue
             record = self.part_record(part.path)
             if record.get('state') != 'waiting':
+                continue
+            if isinstance(part.venue, PaperVenue):
+                if part.venue.fill(self, part):
+                    ended = True
                 continue
             memory = copy.deepcopy(record.get('memory') or {})
             triggered = part.is_triggered(self, memory, quotes or {}, now)
@@ -508,6 +526,10 @@ class PlanOrder(SyntheticOrder):
                         continue
             record = self.part_record(part.path)
             record['fired_at'] = now
+            if isinstance(part.trigger, LimitMarketableCondition):
+                missed = (part.trigger.estimate(self, part.path) or {}).get('queue_filled')
+                if isinstance(missed, int):
+                    record['missed_quantity'] = missed
             self.set_part_record(part.path, record, None)
             sent = part.send(self, None, sending_quotes, now)
             record = self.part_record(part.path)
@@ -579,7 +601,9 @@ class PlanOrder(SyntheticOrder):
         due = False
         for record in (self.parent.parameters.get('parts') or {}).values():
             ends_at = record.get('ends_at')
-            if ends_at is not None and not record.get('ended') and now >= ends_at and record.get('state') != 'done':
+            if record.get('ended') or record.get('state') == 'done':
+                continue
+            if record.get('ends_when') or (ends_at is not None and now >= ends_at):
                 due = True
         if not due:
             return False

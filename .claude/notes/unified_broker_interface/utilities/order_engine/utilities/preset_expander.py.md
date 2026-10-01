@@ -67,3 +67,27 @@ The backstop is a second order resting beside the engine-side stop, cancelled be
 ## Daily stop (2026-10-01)
 
 `daily_stop` is the `protect` side, a native stop that exits if gapped, the `daily` execution and a lifetime of `valid_days`, which also keeps the plan across days. Today's daily stop runs without a position held; a plan's standalone protecting order needs one.
+
+## Ladder and freeze slicer (2026-10-01)
+
+`ladder` and `freeze_slicer` stand for the `ladder` and `freeze_limit` executions with the same settings as today's types.
+
+## Account conditional (2026-10-01)
+
+`account_conditional` with `action: place` is an `account` trigger; with `action: cancel` it is a lifetime ending `when` the account condition holds, applying to the working order.
+
+## Closing price (2026-10-01)
+
+`closing_price` is a `time_from` trigger at the window's start and a VWAP `until` 15:30, checked to start from 09:15 and before 15:30, refusing `over_minutes`, as today's type does. A plan answers `armed` where today's answers `scheduled`, and a refusal after 15:30 comes after the parent is recorded.
+
+## Opening auction (2026-10-01)
+
+`opening_auction` is a `pre_open` venue with the caller's `at_time`, or the venue's default of 09:00:30. A plan answers `armed` where today's answers `scheduled`, and the refusals for an option, a stop order and a late order come before the parent is recorded, word for word as today's.
+
+## Virtual limit (2026-10-01)
+
+`virtual_limit` is a `limit_marketable` trigger, and with `paper` the paper venue. The plan answers `armed` without today's `paper`, `trigger_level` and `trigger_direction`, and keeps `missed_quantity` in the order's part record rather than the parent's parameters.
+
+## Delta-sized hedge (2026-10-01)
+
+`attached_hedge` with `delta_volatility` is the same Then join as with `ratio`, with the hedge's side `against_delta` and its quantity `parent_fill_delta`. Exactly one of the two is required, with today's message. A plan on a stock is refused before the parent is recorded, through `FillDelta.check`, with today's message.

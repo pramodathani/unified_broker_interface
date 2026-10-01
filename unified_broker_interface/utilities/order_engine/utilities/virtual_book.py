@@ -13,6 +13,8 @@ from unified_broker_interface.utilities.order_engine.utilities.virtual_queue imp
 ESTIMATES_KEY = 'unified:orders:virtual_queue'
 QUOTES_STREAM_KEY = 'unified:quotes:stream'
 VIRTUAL_LIMIT_TYPE = 'virtual_limit'
+PLAN_TYPE = 'plan'
+PART_KEY_SEPARATOR = '/'
 READ_COUNT = 1000
 BLOCK_MILLISECONDS = 1000
 REFRESH_SECONDS = 2.0
@@ -23,20 +25,20 @@ MAXIMUM_BACKOFF_SECONDS = 60
 class VirtualBook:
     """The synthetic limit order book: one queue estimate per held order, moved on by every quote for its instrument.
 
-    The order engine holds a `virtual_limit` order instead of sending it, and needs to know two things about it that only the tick-by-tick quote stream can tell: how much a resting order at the same price would have filled by now, and whether it would have filled at all. That is `VirtualQueue`'s arithmetic. This class keeps one per held order, feeds each the quotes for its instrument, and writes them to `unified:orders:virtual_queue`, keyed by parent id, for the engine to read.
+    The order engine holds a `virtual_limit` order instead of sending it, and needs to know two things about it that only the tick-by-tick quote stream can tell: how much a resting order at the same price would have filled by now, and whether it would have filled at all. That is `VirtualQueue`'s arithmetic. This class keeps one per held order, feeds each the quotes for its instrument, and writes them to `unified:orders:virtual_queue`, keyed by parent id, for the engine to read. A plan can hold several orders, so each of its held orders is keyed by the parent id and the order's path, as `<parent id>/root.then.0`.
 
     It runs as its own process rather than inside the engine because the stream carries every instrument's quotes, about 112,400 of them, and decoding all of them on the engine's thread would slow every order the engine handles.
 
     It reads the stream with a plain `XREAD` from the moment it starts, not as a consumer group. Old quotes are of no use to an estimate, and a consumer group would keep a backlog of every entry this process did not acknowledge. Instead every estimate read back from Redis takes its next quote as a new baseline, so the trading it missed while nothing was running is not counted as trading at its price.
 
-    Which orders are held is read from the engine's parent cache every two seconds: an open `virtual_limit` parent whose trigger has not fired. An estimate stops moving once its order fires, and is removed from Redis once its parent is no longer open.
+    Which orders are held is read from the engine's parent cache every two seconds: an open `virtual_limit` parent whose trigger has not fired, and every order of an open plan that waits on a `limit_marketable` trigger. An estimate stops moving once its order fires, and is removed from Redis once its parent is no longer open.
 
     Attributes:
         cache (redis.Redis): The Redis client.
         parent_store (ParentStore): The engine's parent cache, read only.
         logger (logging.Logger): The logger.
-        estimates (dict): Each held order's `VirtualQueue`, by parent id.
-        by_instrument (dict): The parent ids held on each instrument, by instrument id.
+        estimates (dict): Each held order's `VirtualQueue`, by its key: the parent id, or for a plan's order the parent id and path.
+        by_instrument (dict): The keys held on each instrument, by instrument id.
         last_entry_id (str): The stream id read up to.
         refreshed_at (float | None): When the held orders were last read, on the monotonic clock.
         changed (set): The parent ids whose estimates have changed since they were last written.
@@ -65,6 +67,56 @@ class VirtualBook:
         self.changed = set()
         self.quotes_read = 0
         self.quotes_used = 0
+
+    @staticmethod
+    def part_key(parent_order_id, path):
+        """The key a plan's held order is estimated under.
+
+        Args:
+            parent_order_id (str): The plan's parent id.
+            path (str): The order's path in the plan.
+
+        Returns:
+            str: The key, the parent id and the path joined by `/`.
+        """
+        return f'{parent_order_id}{PART_KEY_SEPARATOR}{path}'
+
+    def held_documents(self, document):
+        """The held orders a parent holds, each shaped as a `virtual_limit` parent's record so one estimate can be started from it.
+
+        A `virtual_limit` parent that is still held is its own record. A plan gives one record per order still waiting on a `limit_marketable` trigger, built from the terms the trigger wrote into the order's memory when the plan was placed.
+
+        Args:
+            document (dict): The parent's Redis record.
+
+        Returns:
+            list: The records, each with `parent_order_id` set to the key it is estimated under.
+        """
+        if document.get('synthetic_type') != PLAN_TYPE:
+            if self.is_held(document):
+                return [
+                    document,
+                ]
+            return []
+        parts = (document.get('parameters') or {}).get('parts') or {}
+        held = []
+        for path, record in parts.items():
+            if not isinstance(record, dict) or record.get('state') != 'waiting':
+                continue
+            terms = ((record.get('memory') or {}).get('trigger') or {}).get('held')
+            if not isinstance(terms, dict):
+                continue
+            held.append({
+                'parent_order_id': self.part_key(document.get('parent_order_id'), path),
+                'instrument_id': terms.get('instrument_id'),
+                'body': {
+                    'transaction_type': terms.get('transaction_type'),
+                    'price': terms.get('price'),
+                    'quantity': terms.get('quantity'),
+                },
+                'parameters': {},
+            })
+        return held
 
     def is_held(self, document):
         """Whether a parent is a virtual limit order that is still being held rather than sent.
@@ -182,19 +234,21 @@ class VirtualBook:
         held = {}
         for parent_order_id in open_ids:
             document = self.parent_store.parent(parent_order_id)
-            if document is None or not self.is_held(document):
+            if document is None:
                 continue
-            estimate = self.estimates.get(parent_order_id)
-            if estimate is None:
-                estimate = self.stored_estimate(parent_order_id)
-            if estimate is not None and self.has_new_terms(estimate, document):
-                estimate = None
-            if estimate is None:
-                estimate = self.new_estimate(document)
+            for held_document in self.held_documents(document):
+                key = held_document['parent_order_id']
+                estimate = self.estimates.get(key)
+                if estimate is None:
+                    estimate = self.stored_estimate(key)
+                if estimate is not None and self.has_new_terms(estimate, held_document):
+                    estimate = None
+                if estimate is None:
+                    estimate = self.new_estimate(held_document)
+                    if estimate is not None:
+                        self.changed.add(key)
                 if estimate is not None:
-                    self.changed.add(parent_order_id)
-            if estimate is not None:
-                held[parent_order_id] = estimate
+                    held[key] = estimate
         self.estimates = held
         self.by_instrument = {}
         for parent_order_id, estimate in held.items():
@@ -214,9 +268,10 @@ class VirtualBook:
         stored_ids = self.cache.hkeys(ESTIMATES_KEY) or []
         still_open = set(open_ids)
         finished = []
-        for parent_order_id in stored_ids:
+        for key in stored_ids:
+            parent_order_id = key.partition(PART_KEY_SEPARATOR)[0]
             if parent_order_id not in still_open:
-                finished.append(parent_order_id)
+                finished.append(key)
         if finished:
             self.cache.hdel(ESTIMATES_KEY, *finished)
 

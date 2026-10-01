@@ -9,6 +9,9 @@ from unified_broker_interface.utilities.order_engine.utilities.all_at_once_execu
 from unified_broker_interface.utilities.order_engine.utilities.follow_instrument_pricing import (
     FollowInstrumentPricing,
 )
+from unified_broker_interface.utilities.order_engine.utilities.ladder_execution import (
+    LadderExecution,
+)
 from unified_broker_interface.utilities.order_engine.utilities.order_context import (
     OrderContext,
 )
@@ -45,9 +48,10 @@ class OrderPart:
         lifetime (Lifetime | None): When it stops working and what is done then, or None for the body's validity.
         overrides (dict): Body values of its own, such as `instrument_id`, `quantity` or `transaction_type`, written over the caller's body; empty for an order on the body as it is.
         position (PositionQuantity | None): For the `close` side, how the position it closes is read; None for any other order.
-        fill_ratio (FillRatio | None): How the size a Then join hands it is scaled, or None to take it as it is.
+        fill_ratio (FillRatio | FillDelta | None): How the size a Then join hands it is scaled, or None to take it as it is.
         sized_by_fills (bool): Whether it is a Then join's child, sized by the first plan's fills.
         opened_by (list): The paths of the orders whose fills opened the position this order follows, for an order under a Then join; empty otherwise.
+        venue (PreOpenVenue | None): Where the order is sent other than the broker selector's continuous market, or None.
     """
 
     def __init__(self, path, presets, trigger, side, pricing, keeps_tag=True, execution=None, cap=None, post_only=None, discretion=None, lifetime=None, overrides=None, position=None):
@@ -91,6 +95,7 @@ class OrderPart:
         self.fill_ratio = None
         self.sized_by_fills = False
         self.opened_by = []
+        self.venue = None
 
     def context(self, plan_order):
         """The plan order as this order's pricing, execution and trigger see it: on this order's instrument, with its own body values.
@@ -239,7 +244,7 @@ class OrderPart:
         return opening_side
 
     def _sending_side(self, plan_order):
-        """The side this part's orders are sent on in this plan: against the position for `protect` and `close`, the named side for `buy` and `sell`, and otherwise its own body's side.
+        """The side this part's orders are sent on in this plan: against the position for `protect` and `close`, the named side for `buy` and `sell`, against the option's delta for `against_delta` (opposite the opening side for a call, the same side for a put), and otherwise its own body's side.
 
         Args:
             plan_order (PlanOrder): The plan order.
@@ -247,6 +252,11 @@ class OrderPart:
         Returns:
             str: BUY or SELL.
         """
+        if self.side == 'against_delta':
+            opening_side = self._opening_side(plan_order)
+            if self.fill_ratio.is_call(self.context(plan_order)):
+                return OPPOSITE_SIDES[opening_side]
+            return opening_side
         own_side = str(self.context(plan_order).body.get('transaction_type') or '').strip().upper()
         return self.sending_side(self._opening_side(plan_order), own_side)
 
@@ -295,7 +305,7 @@ class OrderPart:
             self._sending_side(plan_order),
         )
 
-    def order(self, plan_order, quotes, quantity=None):
+    def order(self, plan_order, quotes, quantity=None, price=None):
         """The order this part sends, priced now, or None when no price can be made yet or the post-only guard refused it.
 
         The quantity is the piece's when one is given; otherwise the target a parent join set, less what this part has already traded, or the body's quantity when no join set one. Only the plan's main order keeps the caller's tag, as today's exits do: the tag belongs to the order the caller asked for. The cap holds the priced limit, and the post-only guard then checks it against the book; a refusal ends this part as refused.
@@ -304,6 +314,7 @@ class OrderPart:
             plan_order (PlanOrder): The plan order.
             quotes (dict): The quotes to price from, by instrument id.
             quantity (int | None): The piece's quantity, or None for the whole order.
+            price (decimal.Decimal | None): A limit price of the piece's own, such as a ladder rung's, which replaces the pricing's; None to price as usual.
 
         Returns:
             PlaceOrderRequest | None: The order.
@@ -343,11 +354,15 @@ class OrderPart:
                 return None
             if priced is None:
                 return None
+        if price is not None:
+            priced['order_type'] = 'LIMIT'
+            priced['price'] = str(price)
+            priced.pop('trigger_price', None)
         if priced.get('price') != before.get('price'):
             priced.pop('price_reference', None)
         return plan_order.concrete_order(plan_order.read_order(priced))
 
-    def place(self, plan_order, started_at, quotes, quantity=None):
+    def place(self, plan_order, started_at, quotes, quantity=None, price=None, broker_name=None):
         """Places this part's order, or one piece of it, or does nothing when no price can be made yet.
 
         Args:
@@ -355,15 +370,18 @@ class OrderPart:
             started_at (float | None): `time.perf_counter()` when the engine took the intent, or None.
             quotes (dict): The quotes to price from.
             quantity (int | None): The piece's quantity, or None for the whole order.
+            price (decimal.Decimal | None): The piece's own limit price, or None.
+            broker_name (str | None): The broker the execution chose for every piece, or None for the usual choice.
 
         Returns:
             tuple | None: The broker's answer (dict) and its HTTP status (int), or None when nothing was placed.
         """
-        order = self.order(plan_order, quotes, quantity)
+        order = self.order(plan_order, quotes, quantity, price)
         if order is None:
             return None
         context = self.context(plan_order)
-        broker_name = context.body.get('broker') or plan_order.chosen_broker()
+        if broker_name is None:
+            broker_name = context.body.get('broker') or plan_order.chosen_broker()
         leg_group = None
         if broker_name is None:
             leg_group = plan_order.group_margin_legs
@@ -379,6 +397,8 @@ class OrderPart:
     def start(self, plan_order, target, started_at, quotes, now=None):
         """Starts this order: arms its trigger, or starts working and sends whatever its execution says is due now.
 
+        A trigger that needs no prices and already holds, such as a `time_from` whose time has passed, sends the order at once rather than on the next tick.
+
         Args:
             plan_order (PlanOrder): The plan order.
             target (int | None): The quantity a parent join wants traded, or None for the body's.
@@ -392,6 +412,8 @@ class OrderPart:
         record = plan_order.part_record(self.path)
         if target is not None and self.fill_ratio is not None:
             target = self.fill_ratio.scaled(self.context(plan_order), target)
+            if target is None:
+                return []
             if target <= 0:
                 record['target'] = target
                 plan_order.set_part_record(self.path, record, None)
@@ -404,9 +426,15 @@ class OrderPart:
             plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part has nothing to trade')
             return []
         if self.trigger is not None:
-            record['state'] = 'waiting'
-            plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part is waiting for its trigger')
-            return []
+            if now is None:
+                now = time.time()
+            memory = copy.deepcopy(record.get('memory') or {})
+            holds_already = not self.trigger.needs_prices() and self.is_triggered(plan_order, memory, quotes, now)
+            if not holds_already:
+                record['state'] = 'waiting'
+                plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part is waiting for its trigger')
+                return []
+            record['fired_at'] = now
         record['state'] = 'working'
         plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part is working')
         return self.send(plan_order, started_at, quotes, now)
@@ -544,15 +572,18 @@ class OrderPart:
                 record['execution_memory'] = memory
                 plan_order.set_part_record(self.path, record, None)
             return []
-        for quantity in due:
-            if self.order(plan_order, quotes, quantity) is None:
+        prices = [None] * len(due)
+        if isinstance(self.execution, LadderExecution):
+            prices = self.execution.rung_prices(self.context(plan_order), sending_side)
+        for index, quantity in enumerate(due):
+            if self.order(plan_order, quotes, quantity, prices[index]) is None:
                 return []
         if memory != stored:
             record['execution_memory'] = memory
             plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part\'s execution moved on to {memory}')
         placed = []
-        for quantity in due:
-            answer = self.place(plan_order, started_at, quotes, quantity)
+        for index, quantity in enumerate(due):
+            answer = self.place(plan_order, started_at, quotes, quantity, prices[index], memory.get('broker'))
             if answer is None:
                 continue
             body, status = answer
@@ -625,7 +656,7 @@ class OrderPart:
         return moved_any or took
 
     def end_lifetime(self, plan_order, quotes, now):
-        """Ends this order when its lifetime is up: a waiting order is done, and a working one's resting orders are cancelled, made marketable, or cancelled and what filled closed.
+        """Ends this order when its lifetime is up, or when its `when` condition holds: a waiting order is done, and a working one's resting orders are cancelled, made marketable, or cancelled and what filled closed.
 
         Args:
             plan_order (PlanOrder): The plan order.
@@ -638,12 +669,23 @@ class OrderPart:
         if self.lifetime is None:
             return False
         record = plan_order.part_record(self.path)
-        ends_at = record.get('ends_at')
-        if record.get('ended') or ends_at is None or now < ends_at:
+        if record.get('ended'):
             return False
         state = record.get('state')
         if not self.lifetime.bounds(state):
             return False
+        if self.lifetime.when is not None:
+            memory = copy.deepcopy(record.get('lifetime_memory') or {})
+            holds = self.lifetime.when.is_met(self.context(plan_order), memory, quotes, now, self._opening_side(plan_order), self._sending_side(plan_order))
+            if memory != (record.get('lifetime_memory') or {}):
+                record['lifetime_memory'] = memory
+                plan_order.set_part_record(self.path, record, None)
+            if not holds:
+                return False
+        else:
+            ends_at = record.get('ends_at')
+            if ends_at is None or now < ends_at:
+                return False
         record['ended'] = True
         if state != 'working':
             record['state'] = 'done'
@@ -772,6 +814,8 @@ class OrderPart:
         """
         if self.fill_ratio is not None:
             target = self.fill_ratio.scaled(self.context(plan_order), target)
+            if target is None:
+                return
         record = plan_order.part_record(self.path)
         state = record.get('state')
         if state == 'done':
@@ -1009,6 +1053,16 @@ class OrderPart:
             self.lifetime.described(),
         ]
 
+    def _venue_described(self):
+        """The venue, as a dry run shows it.
+
+        Returns:
+            str | dict: `selector`, or the pre-open venue's settings.
+        """
+        if self.venue is None:
+            return 'selector'
+        return self.venue.described()
+
     def expanded(self):
         """This part as it will run, with every slot's value or default written out, for a dry run's answer.
 
@@ -1032,7 +1086,7 @@ class OrderPart:
                     ],
                     'pricing': self._pricing_described(),
                     'guards': self._guards_described(),
-                    'venue': 'selector',
+                    'venue': self._venue_described(),
                     'lifetime': self._lifetime_described(),
                 },
             },

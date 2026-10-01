@@ -60,3 +60,15 @@ good_till_triggered: {'trigger': {'price_crosses': {'level': 995, 'field': 'last
   problems: []
 daily_stop: {'side': 'protect', 'pricing': [{'native_stop': {'trigger_price': 990, 'limit_price': 988, 'exit_if_gapped': True}}], 'execution': [{'daily': {}}], 'lifetime': [{'after_days': 30}]}
   problems: []
+ladder: {'execution': [{'ladder': {'from_price': 995, 'to_price': 1000, 'steps': 3}}]}
+  problems: []
+freeze_slicer: {'execution': [{'freeze_limit': {}}]}
+  problems: []
+account_conditional: {'lifetime': [{'when': {'account': {'field': 'day_pnl', 'level': -5000, 'direction': 'at_or_below'}}, 'applies_to': 'working'}]}
+  problems: []
+closing_price: {'trigger': {'time_from': '15:00'}, 'execution': [{'vwap': {'slices': 4, 'until': '15:30'}}]}
+  problems: []
+opening_auction: {'venue': [{'session': 'pre_open', 'at_time': '09:02:00'}]}
+  problems: []
+virtual_limit: {'trigger': {'limit_marketable': {}}, 'venue': [{'session': 'paper'}]}
+  problems: []

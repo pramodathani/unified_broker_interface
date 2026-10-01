@@ -1,0 +1,6 @@
+described: {'limit_marketable': {}}
+needs prices: True watches others: []
+offer above the buy limit: buy releases False, sell releases False
+offer reaches it, quote stale: buy releases False, sell releases False
+offer reaches it: buy releases True, sell releases False
+bid reaches the sell limit: buy releases False, sell releases True

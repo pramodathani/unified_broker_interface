@@ -3,18 +3,22 @@
 from unified_broker_interface.utilities.order_engine.utilities.moments import (
     Moments,
 )
+from unified_broker_interface.utilities.order_engine.utilities.trading_days import (
+    TradingDays,
+)
 
 KINDS = (
     'time_at',
     'time_after',
     'time_before',
+    'time_from',
 )
 
 
 class TimeCondition:
     """A plan order's trigger condition tied to a time of day on the instrument's next trading day.
 
-    `time_at` and `time_after` both hold from the time onwards, and `time_before` holds until it, which is how a price condition is kept to part of the day inside `all`. The time is worked out once, when the plan is placed, so a time that has already passed on a trading day is refused then, and a weekend or holiday rolls to the next trading day, as the `scheduled` type does.
+    `time_at` and `time_after` both hold from the time onwards, and `time_before` holds until it, which is how a price condition is kept to part of the day inside `all`. The time is worked out once, when the plan is placed, so a time that has already passed on a trading day is refused then, and a weekend or holiday rolls to the next trading day, as the `scheduled` type does. `time_from` is the same as `time_at` except that a time already passed today holds at once rather than being refused, as the closing price order starts at once when placed inside its window.
 
     Attributes:
         kind (str): One of `KINDS`.
@@ -63,10 +67,20 @@ class TimeCondition:
         Raises:
             RefusedRequestError: With HTTP 400 when the text is not a time, or names a time already passed on a trading day.
         """
-        moment, _ = Moments().time_on_trading_day(
+        moments = Moments()
+        segment = plan_order.trading_segment()
+        if self.kind == 'time_from':
+            now = moments.now()
+            if TradingDays().is_trading_day(segment, now.date()):
+                wanted = moments.read_time(self.text, self.kind)
+                moment = now.replace(hour=wanted.hour, minute=wanted.minute, second=wanted.second, microsecond=0)
+                if moment <= now:
+                    memory['at'] = now.timestamp()
+                    return
+        moment, _ = moments.time_on_trading_day(
             self.text,
             self.kind,
-            plan_order.trading_segment(),
+            segment,
         )
         memory['at'] = moment
 

@@ -6,3 +6,5 @@ before 15:00 falls at 2026-10-01 15:00:00+05:30
 14:59: after 10:00 True, before 15:00 True
 15:00: after 10:00 True, before 15:00 False
 As a dry run shows them: {'time_after': '10:00'} and {'time_before': '15:00'}
+time_from 09:00, asked at 09:30, falls at 09:30
+time_from 11:00, asked at 09:30, falls at 11:00

@@ -2,8 +2,12 @@
 
 import decimal
 
+from unified_broker_interface.utilities.order_engine.utilities.fill_sizing import (
+    FillSizing,
+)
 
-class FillRatio:
+
+class FillRatio(FillSizing):
     """A plan order sized at `ratio` times the quantity a Then join hands it, which is what the first plan has filled, rounded to whole lots when asked.
 
     It keeps today's attached hedge's sizing: a stock of 1,000 hedged at a ratio of 0.5 in a future whose lot is 250 wants two lots, and nothing is sent until a whole lot is missing. The lot is the order's own instrument's lot at the broker the plan's orders go to.
@@ -23,26 +27,8 @@ class FillRatio:
         Returns:
             None: This method returns nothing.
         """
+        super().__init__(whole_lots)
         self.ratio = ratio
-        self.whole_lots = whole_lots
-
-    def lot_size(self, context):
-        """The order's instrument's lot at the broker the plan's orders go to.
-
-        Args:
-            context (OrderContext): The order's view of the plan order.
-
-        Returns:
-            int: The lot, at least one.
-        """
-        broker_name = context.chosen_broker()
-        instrument, _, _ = context.placement.market_context(context.instrument_id, False, False)
-        handle = instrument.handles.get(broker_name) or {}
-        try:
-            size = int(float(handle.get('lot_size') or 1))
-        except (TypeError, ValueError):
-            size = 1
-        return max(size, 1)
 
     def scaled(self, context, filled):
         """The size for what the first plan has filled.
@@ -54,12 +40,7 @@ class FillRatio:
         Returns:
             int: The size.
         """
-        wanted = self.ratio * decimal.Decimal(filled)
-        if not self.whole_lots:
-            return int(wanted.to_integral_value(rounding=decimal.ROUND_HALF_UP))
-        lot = self.lot_size(context)
-        lots = (wanted / lot).to_integral_value(rounding=decimal.ROUND_HALF_UP)
-        return int(lots) * lot
+        return self.rounded(context, self.ratio * decimal.Decimal(filled))
 
     def described(self):
         """This sizing as a dry run shows it.

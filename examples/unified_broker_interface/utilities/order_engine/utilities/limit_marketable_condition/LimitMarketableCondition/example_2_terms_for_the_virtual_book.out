@@ -1,0 +1,5 @@
+limit price: 1498.50
+memory written: {'held': {'instrument_id': 'NSE:INFY', 'transaction_type': 'BUY', 'price': '1498.50', 'quantity': 20}}
+market order refused with 400: a virtual limit order is held at its own limit price, so it must be a LIMIT order with a price
+estimate for root: {'queue_filled': 6, 'filled': 6}
+estimate for root.then.0: None

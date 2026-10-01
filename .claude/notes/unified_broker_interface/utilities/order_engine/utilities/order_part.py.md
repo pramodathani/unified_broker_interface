@@ -65,3 +65,15 @@ A part with a `position` is a close: `send` hands it to `_close_positions`, whic
 ## Stage 5e (2026-10-01)
 
 `opened_by` holds the paths of a Then join's first plan's orders, set by the reader on every order of the child. `_opening_side` reads the side those orders filled on, so a two-sided breakout's exits protect whichever side broke; with nothing filled, or outside a Then join, it is the body's side as before. An order with no `side` now sends its own body's side through `_sending_side`, rather than the opening side, which matters once the two differ: a legged spread's second leg names SELL while the first leg filled on BUY.
+
+## Pieces with their own price and broker (2026-10-01)
+
+`order` and `place` take a piece's own `price`, which a ladder's rungs use, and `place` a `broker_name`, which `send_due` reads from the execution's memory, where the freeze-limit execution puts the broker it chose.
+
+## Triggers that already hold (2026-10-01)
+
+`start` sends an order at once when its trigger needs no prices and already holds, rather than leaving it waiting for the next tick. Before `time_from` no such trigger could hold when a plan was placed, since the time triggers refuse a passed time; now `time_from` and the `account` condition can. For an account-conditional order whose condition already holds, this places it at once where today's type answers `armed` and places it a tick later.
+
+## `against_delta` (2026-10-01)
+
+The side is worked out in `_sending_side` rather than `sending_side`, because it needs the order's context to read whether the plan's option is a call. Nothing calls `sending_side` without going through `_sending_side`.

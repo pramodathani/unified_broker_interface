@@ -63,6 +63,12 @@ PRESET_NAMES = (
     'candle_close_stop',
     'good_till_triggered',
     'daily_stop',
+    'ladder',
+    'freeze_slicer',
+    'account_conditional',
+    'closing_price',
+    'opening_auction',
+    'virtual_limit',
     'oto',
     'oco',
     'bracket',
@@ -209,6 +215,42 @@ class PresetExpander:
             return self._good_till_triggered(settings, path)
         if name == 'daily_stop':
             return self._daily_stop(settings, path)
+        if name == 'account_conditional':
+            return self._account_conditional(settings, path)
+        if name == 'closing_price':
+            return self._closing_price(settings, path)
+        if name == 'opening_auction':
+            self._refuse_unknown(settings, ('at_time',), path, 'opening_auction')
+            venue = {
+                'session': 'pre_open',
+            }
+            if 'at_time' in settings:
+                venue['at_time'] = settings['at_time']
+            return {
+                'venue': [
+                    venue,
+                ],
+            }
+        if name == 'virtual_limit':
+            return self._virtual_limit(settings, path)
+        if name == 'ladder':
+            self._refuse_unknown(settings, ('from_price', 'to_price', 'steps'), path, 'ladder')
+            return {
+                'execution': [
+                    {
+                        'ladder': dict(settings),
+                    },
+                ],
+            }
+        if name == 'freeze_slicer':
+            self._refuse_unknown(settings, (), path, 'freeze_slicer')
+            return {
+                'execution': [
+                    {
+                        'freeze_limit': {},
+                    },
+                ],
+            }
         if name == 'underlying_peg':
             return self._underlying_peg(settings, path)
         if name == 'volatility':
@@ -351,10 +393,10 @@ class PresetExpander:
         return nodes
 
     def _attached_hedge(self, settings, entry, path):
-        """The order, and as it fills a hedge in another instrument of `ratio` times what filled, in whole lots, each missing lot sent as a new order past the hedge's touch.
+        """The order, and as it fills a hedge in another instrument of `ratio` times what filled, or the option's delta at `delta_volatility` times what filled, in whole lots, each missing lot sent as a new order past the hedge's touch.
 
         Args:
-            settings (dict): `hedge_instrument_id` and `ratio`.
+            settings (dict): `hedge_instrument_id`, and exactly one of `ratio` and `delta_volatility`.
             entry (dict): The order it was named in.
             path (str): The preset's path.
 
@@ -362,21 +404,40 @@ class PresetExpander:
             dict: A Then join whose child is the hedge.
         """
         self._refuse_unknown(settings, ('hedge_instrument_id', 'ratio', 'delta_volatility'), path, 'attached_hedge')
-        if 'delta_volatility' in settings:
-            self._add_problem(path, 'not_built', 'a hedge sized by an option\'s delta is part of the design but not built yet; give ratio instead')
+        if ('ratio' in settings) == ('delta_volatility' in settings):
+            self._add_problem(path, 'bad_setting', 'an attached hedge needs exactly one of ratio and delta_volatility')
             return {}
         if self.opening_side not in OTO_SIDES:
             self._add_problem(path, 'needs_side', 'a hedge trades against the entry\'s side, so it needs to know the side of the entry')
             return {}
-        ratio = settings.get('ratio')
-        if isinstance(ratio, bool) or not isinstance(ratio, (int, float)) or ratio == 0:
-            self._add_problem(path, 'bad_setting', f'ratio must be a number other than zero, not {ratio!r}')
-            return {}
-        hedges_opposite = ratio > 0
-        if (self.opening_side == 'BUY') == hedges_opposite:
-            side = 'sell'
+        if 'delta_volatility' in settings:
+            volatility = settings['delta_volatility']
+            if isinstance(volatility, bool) or not isinstance(volatility, (int, float)) or volatility <= 0:
+                self._add_problem(path, 'bad_setting', f'delta_volatility must be a percentage above zero, not {volatility!r}')
+                return {}
+            side = 'against_delta'
+            quantity = {
+                'parent_fill_delta': {
+                    'volatility': volatility,
+                    'whole_lots': True,
+                },
+            }
         else:
-            side = 'buy'
+            ratio = settings.get('ratio')
+            if isinstance(ratio, bool) or not isinstance(ratio, (int, float)) or ratio == 0:
+                self._add_problem(path, 'bad_setting', f'ratio must be a number other than zero, not {ratio!r}')
+                return {}
+            hedges_opposite = ratio > 0
+            if (self.opening_side == 'BUY') == hedges_opposite:
+                side = 'sell'
+            else:
+                side = 'buy'
+            quantity = {
+                'parent_fill': {
+                    'ratio': abs(ratio),
+                    'whole_lots': True,
+                },
+            }
         return {
             'then': {
                 'first': {
@@ -386,12 +447,7 @@ class PresetExpander:
                     'order': {
                         'instrument_id': settings.get('hedge_instrument_id'),
                         'side': side,
-                        'quantity': {
-                            'parent_fill': {
-                                'ratio': abs(ratio),
-                                'whole_lots': True,
-                            },
-                        },
+                        'quantity': quantity,
                         'execution': [
                             {
                                 'top_up': {},
@@ -976,6 +1032,78 @@ class PresetExpander:
             ],
         }
 
+    def _closing_price(self, settings, path):
+        """A VWAP spread across the closing window, from `window_start`, 15:00 by default, until 15:30, starting at once when placed inside the window.
+
+        Args:
+            settings (dict): `window_start` and `slices`, default 6, both optional.
+            path (str): The preset's path.
+
+        Returns:
+            dict: A `time_from` trigger at the window's start and `vwap` execution until 15:30.
+        """
+        self._refuse_unknown(settings, ('window_start', 'slices', 'over_minutes'), path, 'closing_price')
+        if 'over_minutes' in settings:
+            self._add_problem(path, 'bad_setting', 'a closing_price order works out its own duration from the window, so it does not take over_minutes')
+            return {}
+        window_start = str(settings.get('window_start') or '15:00')
+        hours, _, minutes = window_start.partition(':')
+        valid = hours.isdigit() and minutes[:2].isdigit()
+        if valid:
+            moment = int(hours) * 60 + int(minutes[:2])
+            valid = 9 * 60 + 15 <= moment < 15 * 60 + 30
+        if not valid:
+            self._add_problem(path, 'bad_setting', f'window_start must be from 09:15 and before 15:30, not {window_start}')
+            return {}
+        return {
+            'trigger': {
+                'time_from': window_start,
+            },
+            'execution': [
+                {
+                    'vwap': {
+                        'slices': settings.get('slices', 6),
+                        'until': '15:30',
+                    },
+                },
+            ],
+        }
+
+    def _account_conditional(self, settings, path):
+        """Waits on an account figure: sends the order once it reaches a level, or with `action: cancel` sends it now and cancels it when the figure reaches the level.
+
+        Args:
+            settings (dict): `account_field`, `account_level` and `trigger_direction`, and optionally `action`, `place` or `cancel`.
+            path (str): The preset's path.
+
+        Returns:
+            dict: An `account` trigger, or a lifetime that ends `when` the account condition holds.
+        """
+        self._refuse_unknown(settings, ('account_field', 'account_level', 'trigger_direction', 'action'), path, 'account_conditional')
+        condition = {
+            'account': {
+                'field': settings.get('account_field'),
+                'level': settings.get('account_level'),
+                'direction': settings.get('trigger_direction'),
+            },
+        }
+        action = settings.get('action', 'place')
+        if action == 'place':
+            return {
+                'trigger': condition,
+            }
+        if action != 'cancel':
+            self._add_problem(path, 'bad_setting', f'action must be one of place, cancel, not {action!r}')
+            return {}
+        return {
+            'lifetime': [
+                {
+                    'when': condition,
+                    'applies_to': 'working',
+                },
+            ],
+        }
+
     def _daily_stop(self, settings, path):
         """A native stop placed each trading morning for a position carried overnight, exiting instead when the open has gapped past it, for `valid_days`.
 
@@ -1036,6 +1164,34 @@ class PresetExpander:
                 'time_at': settings['at_time'],
             },
         }
+
+    def _virtual_limit(self, settings, path):
+        """Holds a limit order in the engine until the other side reaches its price, or with `paper` fills it from the queue estimate instead.
+
+        Args:
+            settings (dict): Optionally `paper`, true or false.
+            path (str): Where the preset sits, for problems.
+
+        Returns:
+            dict: A `limit_marketable` trigger, and with `paper` the paper venue.
+        """
+        self._refuse_unknown(settings, ('paper',), path, 'virtual_limit')
+        paper = settings.get('paper', False)
+        if not isinstance(paper, bool):
+            self._add_problem(path, 'bad_setting', f'paper is true or false, not {paper!r}')
+            return {}
+        slots = {
+            'trigger': {
+                'limit_marketable': {},
+            },
+        }
+        if paper:
+            slots['venue'] = [
+                {
+                    'session': 'paper',
+                },
+            ]
+        return slots
 
     def _indicator_triggered(self, settings, path):
         """Sends a limit when a chosen field of the live quote crosses a level.
