@@ -25,3 +25,7 @@ A part now has a lifecycle a join drives: `start` with a target, `send` when a w
 ## Stage 2c: pricing memory and moving
 
 A part now keeps `pricing_memory` in its record for a pricing that remembers something between ticks, and passes it to `priced_body` and `moved_prices`. `move` reprices the part's one resting order when its pricing moves.
+
+## Why the opening side is upper-cased before it is compared
+
+The API accepts `transaction_type` in any case and keeps the body exactly as the caller sent it; `PlaceOrderRequest` upper-cases it only when the order is validated. The plan code read the raw body, so a body with `"buy"` failed every comparison with `'BUY'`. In the live test on 2026-10-01 three IDEA plans sent with `"buy"` had their trigger treated as a sell's, waiting for the price to rise to a level it was already above, so each fired on its first tick; the one sent with `"BUY"` waited correctly. A `protect` part would have failed outright, because `OPPOSITE_SIDES['buy']` does not exist. `_opening_side` reads the side as `PlaceOrderRequest.parse_choice` does (stripped and upper-cased), and `PlanOrder._read_plan` does the same for the reader. The offline scenarios `a_plan_buy_sent_in_lower_case_still_waits_for_the_dip` and `a_plan_hidden_stop_for_a_long_sent_in_lower_case_sells` failed before the fix.

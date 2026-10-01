@@ -42,7 +42,9 @@ class PlanOrder(SyntheticOrder):
         Raises:
             RefusedRequestError: With HTTP 400 and every problem in `problems` when the plan cannot run.
         """
-        reader = PlanReader(self.parent.body.get('transaction_type'))
+        reader = PlanReader(
+            str(self.parent.body.get('transaction_type') or '').strip().upper(),
+        )
         root = reader.read(self.parent.parameters.get('plan'))
         if root is None:
             raise RefusedRequestError.refusal(
