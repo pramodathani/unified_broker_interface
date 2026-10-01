@@ -1,6 +1,6 @@
 """Reads live prices with `/api/instruments/ltp`, `/ohlc` and `/quote`, from the quote cache or, when that is not recent enough, from a broker.
 
-The quote routes answer from `unified:quotes:live`, the hash the unified quote script keeps, when the instrument's quote there is recent enough. Otherwise they ask a broker that carries the instrument over its REST API, in the order the quote sources rank them, and answer with the first quote that comes back. `ltp` narrows the unified quote document to the last price, `ohlc` adds the day's open, high and low, and `quote` returns the whole document, market depth included. Each also takes a list of instruments by POST.
+The quote routes answer from `unified:quotes:live`, the hash the unified quote script keeps, when the instrument's quote there is recent enough. Otherwise they ask a broker that carries the instrument over its REST API, in the order the quote sources rank them, and answer with the first quote that comes back. `ltp` narrows the unified quote document to the last price, `ohlc` answers only the day's open, high, low, close and volume, where the close is the last traded price, and `quote` returns the whole document, market depth included. Each also takes a list of instruments by POST.
 
 This program pins the quote service's clock to 10:00 IST on 15 September 2026, when INFY's cached quote is a minute old and RELIANCE's is an hour old, and replaces asking a broker with a small stand-in that answers with a fixed price. The catalogue and the cached quotes come from the offline instrument route suite, `test_runs/instrument_routes.py`. Notice in the output which answers came from the cache and which brokers were asked.
 
@@ -290,7 +290,7 @@ class LiveQuotesExample:
             },
         ):
             status, answer = self.read(self.blueprint.ohlc())
-        print(f"ohlc RELIANCE: {status} last {answer['last_price']} from {answer['source']}, ohlc {json.dumps(answer['ohlc'], sort_keys=True)}, previous close {answer['previous_close']}")
+        print(f"ohlc RELIANCE: {status} {json.dumps(answer, sort_keys=True)}")
         print(f'  brokers asked: {self.brokers.asked}')
 
         self.brokers.asked = []
