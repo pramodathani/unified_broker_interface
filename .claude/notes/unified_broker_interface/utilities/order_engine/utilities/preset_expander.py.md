@@ -55,3 +55,7 @@ The backstop is a second order resting beside the engine-side stop, cancelled be
 ## Stage 5e (2026-10-01)
 
 `two_sided_breakout` is a Then join whose first plan is an Either join that cancels, with the exits of a bracket as the child. Its exits are absolute prices, as today's are, and are sent against the side that filled. `scale_out` is not a preset: its targets are tranches of one position and only the stop follows their fills, which neither Either rule expresses, so it is left with the types kept whole.
+
+## Stage 5f (2026-10-01)
+
+`candle_close_stop` is the hidden stop with a `candle_closes` trigger. Its backstop form shares `_hidden_stop_with_backstop`, which now takes the engine-side stop's own preset name. Today's candle close stop runs without a position held; a plan's standalone protecting order is refused without one, so the offline scenarios seed a position.

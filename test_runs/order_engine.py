@@ -4279,7 +4279,7 @@ class OrderEngineSuite:
         ]
 
     def run_plan_stage_stop_checks(self):
-        """Runs plans whose stop trails the recent average range or moves through profit milestones, each beside the type it stands for.
+        """Runs plans whose stop trails the recent average range, moves through profit milestones, or waits for a bar to close past its level, each beside the type it stands for.
 
         Returns:
             list: One recorded result per check.
@@ -4315,6 +4315,18 @@ class OrderEngineSuite:
                                     'trail_points': 25,
                                 },
                             ],
+                        },
+                    },
+                ],
+            },
+        }
+        candle = {
+            'order': {
+                'presets': [
+                    {
+                        'candle_close_stop': {
+                            'trigger_price': 995,
+                            'bar_minutes': 1,
                         },
                     },
                 ],
@@ -4410,6 +4422,56 @@ class OrderEngineSuite:
                 [
                     {'quote': steady, 'at': 0},
                     {'quote': self.book_at(1064.95, 1065.00), 'at': 1},
+                ],
+                accepted,
+                positions=10,
+                book_overrides=stop_book,
+            ),
+            self.plan_price_result(
+                'a_plan_candle_close_stop_sits_through_a_wick',
+                candle,
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(990.00, 990.05), 'at': 10},
+                    {'quote': steady, 'at': 50},
+                    {'quote': steady, 'at': 70},
+                ],
+                accepted,
+                positions=10,
+            ),
+            self.plan_price_result(
+                'a_plan_candle_close_stop_fires_on_a_bar_that_closed_below',
+                candle,
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(990.00, 990.05), 'at': 10},
+                    {'quote': self.book_at(990.00, 990.05), 'at': 50},
+                    {'quote': self.book_at(990.00, 990.05), 'at': 70},
+                ],
+                accepted,
+                positions=10,
+            ),
+            self.plan_price_result(
+                'a_plan_candle_close_stop_with_a_backstop_cancels_it_before_exiting',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'candle_close_stop': {
+                                    'trigger_price': 995,
+                                    'bar_minutes': 1,
+                                    'backstop_price': 980,
+                                    'backstop_limit_price': 978,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(990.00, 990.05), 'at': 10},
+                    {'quote': self.book_at(990.00, 990.05), 'at': 70},
+                    {'quote': self.book_at(990.00, 990.05), 'at': 71},
                 ],
                 accepted,
                 positions=10,

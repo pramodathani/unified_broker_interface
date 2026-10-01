@@ -53,3 +53,7 @@ The `lifetime` slot is a list holding one object, with the end and its settings 
 ## Stage 5d (2026-10-01)
 
 `quantity` may be `{"parent_fill": {...}}`; `top_up` is an execution and `from_parent_fill` a pricing. Both kinds of fill-following need the order to be a Then join's child, which `_read_then` marks and `_check_fill_sizing` checks once the whole tree is read; `from_parent_fill` also needs the first plan to be a single order, whose path it is given.
+
+## Stage 5f (2026-10-01)
+
+`candle_closes` is a trigger condition with `level`, `direction` and `bar_minutes`.

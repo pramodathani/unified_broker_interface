@@ -1,0 +1,8 @@
+Reads quotes: True, watches: [], direction for a long: at_or_below
+At 0 seconds, last 1000.0: holds False
+At 10 seconds, last 990.0: holds False
+At 50 seconds, last 1000.0: holds False
+At 70 seconds, last 990.0: holds False
+At 110 seconds, last 990.0: holds False
+At 130 seconds, last 990.0: holds True
+As a dry run shows it: {'candle_closes': {'level': '995', 'direction': 'from the opening side', 'bar_minutes': 1.0}}

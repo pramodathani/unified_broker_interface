@@ -54,3 +54,5 @@ square_off: {'trigger': {'time_at': '15:10'}, 'side': 'close', 'quantity': {'pos
   problems: []
 stop_and_reverse: {'trigger': {'price_crosses': {'level': 995, 'field': 'last', 'confirm': 'none'}}, 'side': 'close', 'quantity': {'position': {'ratio': 2}}}
   problems: []
+candle_close_stop: {'side': 'protect', 'trigger': {'candle_closes': {'level': 995, 'bar_minutes': 15}}, 'pricing': [{'marketable': {'buffer_ticks': 2}}]}
+  problems: []

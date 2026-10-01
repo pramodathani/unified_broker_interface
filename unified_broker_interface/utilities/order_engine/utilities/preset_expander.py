@@ -60,6 +60,7 @@ PRESET_NAMES = (
     'attached_hedge',
     'legged_spread',
     'two_sided_breakout',
+    'candle_close_stop',
     'oto',
     'oco',
     'bracket',
@@ -200,6 +201,8 @@ class PresetExpander:
             return self._chaser(settings, path)
         if name == 'post_only':
             return self._post_only(settings, path)
+        if name == 'candle_close_stop':
+            return self._candle_close_stop(settings, path)
         if name == 'underlying_peg':
             return self._underlying_peg(settings, path)
         if name == 'volatility':
@@ -236,7 +239,7 @@ class PresetExpander:
             return True
         if name == 'stop_and_reverse' and settings.get('method', 'sequential') == 'sequential':
             return True
-        if name == 'hidden_stop':
+        if name in ('hidden_stop', 'candle_close_stop'):
             for setting in BACKSTOP_SETTINGS:
                 if setting in settings:
                     return True
@@ -279,7 +282,7 @@ class PresetExpander:
             return self._cover(settings, entry, path)
         if name == 'stop_and_reverse':
             return self._sequential_reverse(settings, entry, path)
-        return self._hidden_stop_with_backstop(settings, entry, path)
+        return self._hidden_stop_with_backstop(settings, entry, path, name)
 
     def _candidate_orders(self, settings, entry, path, name):
         """One order per candidate, each the rest of the order it was named in with the candidate's own instrument, side, quantity and prices.
@@ -740,13 +743,14 @@ class PresetExpander:
             },
         }
 
-    def _hidden_stop_with_backstop(self, settings, entry, path):
+    def _hidden_stop_with_backstop(self, settings, entry, path, name):
         """The engine-side stop with a native backstop resting further away, where whichever acts first stops the other.
 
         Args:
             settings (dict): The hidden stop's settings with `backstop_price` and `backstop_limit_price`.
             entry (dict): The order it was named in.
             path (str): The preset's path.
+            name (str): `hidden_stop` or `candle_close_stop`, the engine-side stop's own preset.
 
         Returns:
             dict: An Either join that cancels, whose engine-side stop cancels the backstop before it is sent.
@@ -766,7 +770,7 @@ class PresetExpander:
         stop = dict(entry)
         stop['presets'] = list(entry.get('presets') or []) + [
             {
-                'hidden_stop': stop_settings,
+                name: stop_settings,
             },
         ]
         return {
@@ -1067,6 +1071,38 @@ class PresetExpander:
             'side': 'protect',
             'trigger': {
                 'price_crosses': trigger,
+            },
+            'pricing': [
+                {
+                    'marketable': {
+                        'buffer_ticks': settings.get('buffer_ticks', DEFAULT_BUFFER_TICKS),
+                    },
+                },
+            ],
+        }
+
+    def _candle_close_stop(self, settings, path):
+        """A stop kept in the engine that exits only when a whole bar closes past the level, with a limit past the touch.
+
+        Args:
+            settings (dict): `trigger_price`, and optionally `trigger_direction`, `bar_minutes` and `buffer_ticks`.
+            path (str): The preset's path.
+
+        Returns:
+            dict: The `protect` side, a `candle_closes` trigger and `marketable` pricing.
+        """
+        self._refuse_unknown(settings, ('trigger_price', 'trigger_direction', 'bar_minutes', 'buffer_ticks'), path, 'candle_close_stop')
+        trigger = {
+            'level': settings.get('trigger_price'),
+        }
+        if 'trigger_direction' in settings:
+            trigger['direction'] = settings['trigger_direction']
+        if 'bar_minutes' in settings:
+            trigger['bar_minutes'] = settings['bar_minutes']
+        return {
+            'side': 'protect',
+            'trigger': {
+                'candle_closes': trigger,
             },
             'pricing': [
                 {

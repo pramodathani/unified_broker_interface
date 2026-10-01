@@ -11,6 +11,9 @@ from unified_broker_interface.utilities.order_engine.utilities.atr_trail_pricing
 from unified_broker_interface.utilities.order_engine.utilities.book_depth_execution import (
     BookDepthExecution,
 )
+from unified_broker_interface.utilities.order_engine.utilities.candle_closes_condition import (
+    CandleClosesCondition,
+)
 from unified_broker_interface.utilities.order_engine.utilities.cap_modifier import (
     CapModifier,
 )
@@ -1202,6 +1205,8 @@ class PlanReader:
                 return self._read_price_crosses(content, f'{path}.price_crosses')
             if kind == 'trails':
                 return self._read_trails(content, f'{path}.trails')
+            if kind == 'candle_closes':
+                return self._read_candle_closes(content, f'{path}.candle_closes')
             if kind in KINDS:
                 if not isinstance(content, str):
                     self._add_problem(
@@ -1214,9 +1219,33 @@ class PlanReader:
             self._add_problem(
                 path,
                 'unknown_condition',
-                f'{kind!r} is not a trigger condition; the conditions are price_crosses, trails, {", ".join(KINDS)}, all and any',
+                f'{kind!r} is not a trigger condition; the conditions are price_crosses, trails, candle_closes, {", ".join(KINDS)}, all and any',
             )
         return None
+
+    def _read_candle_closes(self, settings, path):
+        """Reads a `candle_closes` condition.
+
+        Args:
+            settings (object): `level`, required; `direction` and `bar_minutes`, default 5, optional.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            CandleClosesCondition | None: The condition, or None when it has a problem.
+        """
+        if not isinstance(settings, dict):
+            self._add_problem(path, 'bad_setting', 'candle_closes takes an object with level, and optionally direction and bar_minutes')
+            return None
+        problems_before = len(self.problems)
+        self._refuse_unknown(settings, ('level', 'direction', 'bar_minutes'), path, 'candle_closes', 'condition')
+        level = self._price(settings.get('level'), path, 'level')
+        direction = settings.get('direction')
+        if direction is not None and direction not in DIRECTIONS:
+            self._add_problem(path, 'bad_setting', f'direction must be one of {", ".join(DIRECTIONS)}, not {direction!r}')
+        bar_minutes = self._seconds(settings.get('bar_minutes', 5), path, 'bar_minutes')
+        if len(self.problems) > problems_before:
+            return None
+        return CandleClosesCondition(level, direction, bar_minutes)
 
     def _read_condition_group(self, joiner, members, path):
         """Reads `all` or `any` and its list of conditions.

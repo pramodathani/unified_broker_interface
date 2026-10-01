@@ -152,6 +152,10 @@ class WhatEachPresetStandsForExample:
             'close_on_trigger': {
                 'trigger_price': 995,
             },
+            'candle_close_stop': {
+                'trigger_price': 995,
+                'bar_minutes': 15,
+            },
             'square_off': {
                 'at_time': '15:10',
             },
