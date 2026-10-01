@@ -31,3 +31,13 @@ They are not the same thing, and the difference is deliberate. The parent is a r
 ## Why a caller's change to one exit reduces the other, and never raises
 
 A linked pair's two exits cover the same position. When the caller reduces one, `on_leg_modified` reduces the other to match, which the user chose on 2026-09-27 over refusing a change that leaves them unequal. An exit is never raised: `outside_change_problem` refuses an increase with 409 before anything is sent, because an exit larger than the position opens a new one when it fills, which is the double fill a linked pair exists to prevent. Bracket and cover inherit both.
+
+## Why the sibling is reduced by the new part of a fill, remembered per pair of legs
+
+An order update carries an exit's total fill so far, not what is new since the last update. Until 2026-10-01, `rebalance` subtracted that total from the sibling's current quantity, but the sibling's quantity had already been reduced by the earlier fills. A second partial fill was therefore counted twice. With a stop and a target of 10, a target filling 3 and then 7 cut the stop to 7 and then cancelled it, leaving 3 of the position with no stop at all. The offline check `an_oco_takes_only_the_new_part_of_a_second_fill_off_the_sibling` in `test_runs/order_engine.py` reproduces it.
+
+`take_fill_off` now keeps `fills_taken_off` in the parent's parameters: for each exit, how much of each other exit's fill has already been taken off it. Only the difference is taken off on the next update. The amount is remembered only when the broker accepts the reduction, so a reduction refused by the rate budget, or lost to a network error, is retried whole on the next fill rather than forgotten.
+
+The alternative, reading the previous fill from the update, is not available: `OrderUpdateFollower` applies the update to the leg before the type sees it, and `changes` holds only the new values. Working from a fixed original size was also rejected, because a caller's reduction through `on_leg_modified` changes the size both exits cover.
+
+`scale_out.py` uses the same method for its stop, so the fix covers bracket, cover, OCO, scale out and two-sided breakout, which all reach it through `rebalance`.

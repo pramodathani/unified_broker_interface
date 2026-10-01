@@ -186,6 +186,39 @@ class ExposureHedge(SyntheticOrder):
             'skipped': [],
         }, 202
 
+    def remember_tick_size(self, order):
+        """Works the hedge instrument's tick size out once, and keeps it on the parent.
+
+        The hedge is the only order this type prices, and it trades `hedge_instrument_id`, which need not be the order's own instrument, so the tick size kept is the hedge instrument's.
+
+        Args:
+            order (PlaceOrderRequest): The validated order, which carries the agreement rule.
+
+        Returns:
+            decimal.Decimal: The tick size.
+
+        Raises:
+            RefusedRequestError: With HTTP 503 when the brokers do not agree on a tick size for the hedge instrument.
+        """
+        hedge_instrument, _ = self.read_hedge()
+        instrument, _, _ = self.placement.market_context(
+            hedge_instrument,
+            False,
+            False,
+        )
+        tick_size = order.agreed_tick_size(instrument.handles)
+        if tick_size is None:
+            raise RefusedRequestError.refusal(
+                'an exposure hedge prices its hedge from the live quote, which '
+                'needs a tick size the brokers agree on, and there is none for '
+                'the hedge instrument',
+                503,
+                instrument_id=hedge_instrument,
+            )
+        self.parent.parameters = dict(self.parent.parameters)
+        self.parent.parameters['tick_size'] = str(tick_size)
+        return tick_size
+
     def held(self, positions, instrument_id):
         """How much of one instrument the account is holding, signed.
 

@@ -5,10 +5,17 @@ import json
 
 import redis
 
+from unified_broker_interface.utilities.broker_orders.utilities.kill_switch import (
+    KillSwitch,
+)
 from unified_broker_interface.utilities.order_engine.utilities.market_view import (
     MarketView,
 )
+from unified_broker_interface.utilities.order_engine.utilities.reduce_only import (
+    POSITION_PRODUCTS,
+)
 
+BROKER_TOKENS_KEY = 'unified:broker_tokens'
 DEFAULT_BUFFER_TICKS = 2
 ORDER_UPDATES_KEY = 'unified:order-updates'
 OPEN_STATUSES = (
@@ -40,41 +47,101 @@ class PositionCloser:
         self.runner = runner
 
     def open_positions(self, product, wanted_instruments):
-        """The net positions held on one product, optionally only in some instruments.
+        """The net positions held on one product at each broker, optionally only in some instruments.
+
+        Each broker's own `<broker>:portfolio:positions` is read, rather than the unified positions document, because that document merges a position across brokers and a closing order has to go to the broker that actually holds it. They are read through `KillSwitch`, exactly as `POST /api/orders/flatten` reads them.
+
+        A position whose broker token does not name exactly one instrument today cannot be priced or placed through the engine. It is listed with an instrument of None when every instrument was asked for, so the caller can report it, and left out when only some instruments were asked for.
 
         Args:
             product (str): The product, on the vocabulary the positions document uses, such as `intraday`.
             wanted_instruments (set | None): The instruments to include, or None for every one.
 
         Returns:
-            list: One `(instrument_id, quantity)` per position, quantity signed.
+            list: One `(broker_name, instrument_id, quantity)` per position, where `broker_name` is a string, `instrument_id` a string or None, and `quantity` a signed decimal.Decimal.
         """
-        _, _, positions = self.runner.placement.market_context(
-            self.runner.parent.instrument_id,
-            False,
-            True,
-        )
+        broker_names = self.runner.placement.order_placement.broker_names
+        position_books = self.position_books(broker_names)
         found = []
-        if not isinstance(positions, dict):
-            return found
-        for entry in positions.get('net') or []:
-            if not isinstance(entry, dict):
+        for position in KillSwitch(broker_names).positions_to_close(position_books):
+            position_product = POSITION_PRODUCTS.get(
+                str(position.get('product') or '').upper(),
+            )
+            if position_product != product:
                 continue
-            if str(entry.get('product') or '').lower() != product:
-                continue
-            instrument_id = entry.get('instrument_id')
-            if not instrument_id:
-                continue
+            instrument_id = self.instrument_for_broker_token(
+                position['broker'],
+                position.get('instrument_token'),
+            )
             if wanted_instruments is not None and instrument_id not in wanted_instruments:
                 continue
-            try:
-                quantity = decimal.Decimal(str(entry.get('quantity', 0)))
-            except (decimal.InvalidOperation, TypeError, ValueError):
-                continue
-            if quantity == 0:
-                continue
-            found.append((instrument_id, quantity))
+            found.append((
+                position['broker'],
+                instrument_id,
+                decimal.Decimal(position['quantity']),
+            ))
         return found
+
+    def position_books(self, broker_names):
+        """Each broker's positions hash, decoded, by broker name.
+
+        Args:
+            broker_names (list): The brokers to read, in order.
+
+        Returns:
+            dict: Broker names to their decoded entries, empty when Redis cannot be read.
+        """
+        try:
+            pipeline = self.runner.placement.cache.pipeline(transaction=False)
+            for broker_name in broker_names:
+                pipeline.hgetall(f'{broker_name}:portfolio:positions')
+            replies = pipeline.execute()
+        except redis.RedisError as error:
+            self.runner.logger.error(
+                f'The brokers\' positions could not be read, so nothing was closed: {error}'
+            )
+            return {}
+        books = {}
+        for index, broker_name in enumerate(broker_names):
+            decoded = {}
+            for key, text in (replies[index] or {}).items():
+                try:
+                    entry = json.loads(text)
+                except (TypeError, ValueError):
+                    continue
+                if isinstance(entry, dict):
+                    decoded[key] = entry
+            books[broker_name] = decoded
+        return books
+
+    def instrument_for_broker_token(self, broker_name, broker_token):
+        """The one instrument a broker's token names today, or None when it is not exactly one.
+
+        Args:
+            broker_name (str): The broker.
+            broker_token (str | None): The broker's own instrument token.
+
+        Returns:
+            str | None: The instrument id.
+        """
+        if not broker_token:
+            return None
+        try:
+            stored = self.runner.placement.cache.hget(
+                BROKER_TOKENS_KEY,
+                f'{broker_name}:{broker_token}',
+            )
+        except redis.RedisError:
+            return None
+        if not stored:
+            return None
+        try:
+            instrument_ids = json.loads(stored)
+        except (TypeError, ValueError):
+            return None
+        if not isinstance(instrument_ids, list) or len(instrument_ids) != 1:
+            return None
+        return str(instrument_ids[0])
 
     def resting_orders(self, instrument_ids):
         """Every open order at every broker on some instruments.

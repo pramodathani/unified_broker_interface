@@ -11,3 +11,7 @@ The one-triggers-other order grows its child as the parent fills, which needs `r
 ## Why the reverse is built with `closing_order` again
 
 Closing a long of 75 is a sell of 75, and opening a short of 75 is also a sell of 75, so the same `PositionCloser.closing_order(instrument, 75)` builds both, priced from the book at the moment each is sent. The doubled method passes twice the quantity.
+
+## Why `reverse_from` is kept per broker
+
+Positions now come one per broker, and each broker's share is closed or doubled at that broker. In sequential mode the reverse for one broker is sent when that broker's close fills, so `reverse_from` maps broker names to the quantity each close was sent for, and a reverse already sent is recognised per broker. `reverse_quantity` still reads the single string that parents stored before 2026-10-01, so a parent that was waiting across the upgrade can still send its reverse.

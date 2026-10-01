@@ -143,13 +143,18 @@ class SquareOff(SyntheticOrder):
             self.save()
             return True
 
-        instrument_ids = {instrument_id for instrument_id, _ in positions}
+        instrument_ids = set()
+        for _, instrument_id, _ in positions:
+            if instrument_id is not None:
+                instrument_ids.add(instrument_id)
         cancelled = closer.cancel_resting(
             instrument_ids,
             'cancelled before squaring off, so it cannot re-open the position',
         )
         placed = 0
-        for instrument_id, quantity in positions:
+        for broker_name, instrument_id, quantity in positions:
+            if instrument_id is None:
+                continue
             order = closer.closing_order(instrument_id, quantity)
             if order is None:
                 continue
@@ -157,7 +162,7 @@ class SquareOff(SyntheticOrder):
                 'close',
                 order,
                 None,
-                self.chosen_broker(),
+                broker_name,
                 instrument_id,
             )
             placed = placed + 1
