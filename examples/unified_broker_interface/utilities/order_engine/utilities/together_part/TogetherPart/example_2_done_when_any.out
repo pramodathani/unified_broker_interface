@@ -1,0 +1,5 @@
+root.children.0 starts, the selector holding None
+root.children.1 starts, the selector holding None
+root.children.1 cancelled: root.children.0 is done, and the group is done when any of its plans is
+Done: True, cancelling again does nothing: True
+The group it would hand the selector: ['RELIANCE', 'KWIL']

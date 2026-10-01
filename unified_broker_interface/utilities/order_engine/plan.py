@@ -33,6 +33,7 @@ class PlanOrder(SyntheticOrder):
     SYNTHETIC_TYPE = 'plan'
     WANTS_PRICES = True
     WANTS_CLOCK = True
+    group_margin_legs = None
 
     def _read_plan(self):
         """Reads the caller's plan into its root part.
@@ -86,7 +87,7 @@ class PlanOrder(SyntheticOrder):
 
         protecting = root.standalone_protecting_parts()
         if protecting:
-            self._refuse_without_position(protecting[0], order)
+            self._refuse_without_position(protecting[0])
         records = {}
         needs_prices = False
         watched = []
@@ -116,6 +117,7 @@ class PlanOrder(SyntheticOrder):
                     watched.append(instrument_id)
         if needs_prices:
             self.remember_tick_size(order)
+            self._remember_tick_sizes(root)
         self.parent.parameters = dict(self.parent.parameters)
         self.parent.parameters['parts'] = records
         if watched:
@@ -180,6 +182,7 @@ class PlanOrder(SyntheticOrder):
             for path, body, leg_status in placed:
                 legs.append({
                     'path': path,
+                    'instrument_id': body.get('instrument_id'),
                     'outcome': body.get('outcome'),
                     'order_id': body.get('order_id'),
                     'status_message': body.get('status_message'),
@@ -203,12 +206,41 @@ class PlanOrder(SyntheticOrder):
             answer['warnings'] = warnings
         return answer, status
 
-    def _refuse_without_position(self, part, order):
-        """Refuses a part that protects a position when none is held on the caller's side.
+    def _remember_tick_sizes(self, root):
+        """Works out the tick size of every other instrument a priced order of the plan trades, and keeps them on the parent beside the parent's own.
+
+        Args:
+            root (object): The root part.
+
+        Returns:
+            None: This method returns nothing.
+
+        Raises:
+            RefusedRequestError: With HTTP 503 when the brokers do not agree on a tick size for one of them.
+        """
+        tick_sizes = {}
+        for part in root.order_parts():
+            context = part.context(self)
+            if context.is_parents_instrument() or not part.needs_prices():
+                continue
+            instrument, _, _ = self.placement.market_context(context.instrument_id, False, False)
+            tick_size = self.read_order(context.body).agreed_tick_size(instrument.handles)
+            if tick_size is None:
+                raise RefusedRequestError.refusal(
+                    'an order of this plan works its prices out from the live quote, which needs a tick size the brokers agree on, and there is none for its instrument',
+                    503,
+                    instrument_id=context.instrument_id,
+                )
+            tick_sizes[context.instrument_id] = str(tick_size)
+        if tick_sizes:
+            self.parent.parameters = dict(self.parent.parameters)
+            self.parent.parameters['tick_sizes'] = tick_sizes
+
+    def _refuse_without_position(self, part):
+        """Refuses a part that protects a position when none is held on its instrument on the side that opened it.
 
         Args:
             part (OrderPart): The protecting part.
-            order (PlaceOrderRequest): The caller's order, whose side opened the position.
 
         Returns:
             None: This method returns nothing.
@@ -216,8 +248,10 @@ class PlanOrder(SyntheticOrder):
         Raises:
             RefusedRequestError: With HTTP 409 when no position is held on that side.
         """
+        context = part.context(self)
+        order = self.read_order(context.body)
         held = ReduceOnlyCheck(self.placement).held(
-            self.parent.instrument_id,
+            context.instrument_id,
             order.product,
         )
         if order.transaction_type == 'BUY' and held > 0:

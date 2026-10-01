@@ -120,6 +120,8 @@ class StandInPlanOrder:
     Attributes:
         parent (StandInParent): The parent.
         placement (StandInPlacement): The catalogue.
+        instrument_id (str): The instrument the order trades.
+        body (dict): The caller's body.
     """
 
     def __init__(self, instrument_id, body):
@@ -134,6 +136,8 @@ class StandInPlanOrder:
         """
         self.parent = StandInParent(instrument_id, body)
         self.placement = StandInPlacement()
+        self.instrument_id = instrument_id
+        self.body = body
 
     def tick_size(self):
         """The order's tick size, five paise.

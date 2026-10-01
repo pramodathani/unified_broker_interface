@@ -49,3 +49,7 @@ Pricing memory set by `priced_body` is now recorded with an event, because the f
 ## Stage 4d (2026-10-01)
 
 A part whose lifetime has ended is marked `ended`, which stops `send_due` sending more pieces and lets `settle` mark it done once its broker orders have finished. `end_lifetime` ends a waiting part as `expired` at once; a working one is cancelled, made marketable, or cancelled and closed. A close placed by `close_filled` has the role `<path>.close`, so it is not one of the part's own legs and its fill does not count as the part's trading; the part is marked done with reason `closed` as soon as the close is sent, as today's time stop records `completed` then. A lifetime ending `marketable` makes the part read prices, so the plan remembers the tick size it needs to round the new price.
+
+## Stage 5a (2026-10-01)
+
+`overrides` holds the order's own body values. `context` builds the `OrderContext` every pricing, execution, trigger, guard, modifier and lifetime is given, and `place` places through it so the broker order carries the order's instrument. An order naming its own `tag` keeps it even when it is not the plan's main order. `instruments` lists the order's own instrument so the price ticker brings its quotes.

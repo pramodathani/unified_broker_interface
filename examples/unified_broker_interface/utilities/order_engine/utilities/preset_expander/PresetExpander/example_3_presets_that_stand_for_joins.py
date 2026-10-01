@@ -1,6 +1,6 @@
 """Expands the presets that stand for a join of several orders into the plan trees they build.
 
-Some presets are not one order's slot values but a whole join. `is_join` says which: `oto`, `oco`, `bracket` and `cover`, and `hidden_stop` once it has a backstop. `expand_join` builds the tree around the rest of the order the preset was named in, which becomes the join's main order: the entry of a bracket, a cover or an OTO, and the engine-side stop of a hidden stop with a backstop. An OCO protects a position already held, so it has no main order, and naming anything beside it is a problem.
+Some presets are not one order's slot values but a whole join. `is_join` says which: `basket`, `oca`, `oto`, `oco`, `bracket` and `cover`, and `hidden_stop` once it has a backstop. `expand_join` builds the tree around the rest of the order the preset was named in, which becomes the join's main order: the entry of a bracket, a cover or an OTO, and the engine-side stop of a hidden stop with a backstop. An OCO protects a position already held, so it has no main order, and naming anything beside it is a problem. A basket and a one-cancels-all group make one order per candidate, each the rest of the order with the candidate's own instrument, side, quantity and price, so a basket named beside `post_only` is a basket of post-only orders.
 
 Nothing is read from Redis or sent anywhere.
 
@@ -74,6 +74,27 @@ class PresetsThatStandForJoinsExample:
         self.show('oto', {'then': {'transaction_type': 'SELL', 'price': 1010}}, {})
         self.show('oco', {'stop_price': 990, 'stop_limit_price': 988}, entry)
         self.show('hidden_stop', {'trigger_price': 995, 'backstop_price': 980, 'backstop_limit_price': 978}, {})
+        candidates = [
+            {
+                'instrument_id': '11111111-1111-5111-8111-000000000001',
+                'quantity': 10,
+                'price': 1000,
+            },
+            {
+                'instrument_id': '11111111-1111-5111-8111-000000000002',
+                'transaction_type': 'SELL',
+                'quantity': 5,
+            },
+        ]
+        post_only = {
+            'presets': [
+                {
+                    'post_only': {},
+                },
+            ],
+        }
+        self.show('basket', {'candidates': candidates, 'hedge_benefit': True}, post_only)
+        self.show('oca', {'candidates': candidates}, {})
 
 
 if __name__ == '__main__':

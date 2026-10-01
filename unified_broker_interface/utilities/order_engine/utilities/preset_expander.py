@@ -51,6 +51,8 @@ PRESET_NAMES = (
     'stepped_stop',
     'good_till_time',
     'time_stop',
+    'basket',
+    'oca',
     'oto',
     'oco',
     'bracket',
@@ -79,7 +81,29 @@ STEPPED_STOP_SETTINGS = (
     'step_ticks',
     'rules',
 )
+MOST_CANDIDATES = 25
+CANDIDATE_SETTINGS = (
+    'instrument_id',
+    'transaction_type',
+    'product',
+    'order_type',
+    'validity',
+    'quantity',
+    'price',
+    'trigger_price',
+    'tag',
+)
+CANDIDATE_OVERRIDES = (
+    'instrument_id',
+    'transaction_type',
+    'product',
+    'validity',
+    'quantity',
+    'tag',
+)
 JOIN_PRESET_NAMES = (
+    'basket',
+    'oca',
     'oto',
     'oco',
     'bracket',
@@ -214,6 +238,10 @@ class PresetExpander:
             dict: The plan node, as a caller would write it; empty when there are problems.
         """
         self.problems = []
+        if name == 'basket':
+            return self._basket(settings, entry, path)
+        if name == 'oca':
+            return self._oca(settings, entry, path)
         if name == 'oto':
             return self._oto(settings, entry, path)
         if name == 'oco':
@@ -223,6 +251,114 @@ class PresetExpander:
         if name == 'cover':
             return self._cover(settings, entry, path)
         return self._hidden_stop_with_backstop(settings, entry, path)
+
+    def _candidate_orders(self, settings, entry, path, name):
+        """One order per candidate, each the rest of the order it was named in with the candidate's own instrument, side, quantity and prices.
+
+        A candidate's `price` and `order_type` become `fixed` pricing, and with a `trigger_price` a `native_stop` at that trigger and limit, replacing whatever pricing the rest of the order gave.
+
+        Args:
+            settings (dict): The preset's settings, holding `candidates`.
+            entry (dict): The order it was named in.
+            path (str): The preset's path.
+            name (str): The preset's name, for the messages.
+
+        Returns:
+            list: The plan nodes, one per candidate; empty when there are problems.
+        """
+        candidates = settings.get('candidates')
+        if not isinstance(candidates, list) or not candidates or len(candidates) > MOST_CANDIDATES:
+            self._add_problem(
+                path,
+                'missing_setting',
+                f'the {name} preset needs candidates, a list of 1 to {MOST_CANDIDATES} orders, each naming its instrument_id',
+            )
+            return []
+        nodes = []
+        for index, candidate in enumerate(candidates):
+            candidate_path = f'{path}.candidates.{index}'
+            if not isinstance(candidate, dict) or not candidate.get('instrument_id'):
+                self._add_problem(candidate_path, 'bad_setting', 'a candidate is an object naming its instrument_id')
+                continue
+            self._refuse_unknown(candidate, CANDIDATE_SETTINGS, candidate_path, 'candidate')
+            order = dict(entry)
+            for setting in CANDIDATE_OVERRIDES:
+                if setting in candidate:
+                    order[setting] = candidate[setting]
+            if candidate.get('trigger_price') is not None:
+                order['pricing'] = [
+                    {
+                        'native_stop': {
+                            'trigger_price': candidate['trigger_price'],
+                            'limit_price': candidate.get('price'),
+                        },
+                    },
+                ]
+            elif 'price' in candidate or 'order_type' in candidate:
+                fixed = {}
+                if 'price' in candidate:
+                    fixed['price'] = candidate['price']
+                if 'order_type' in candidate:
+                    fixed['order_type'] = candidate['order_type']
+                order['pricing'] = [
+                    {
+                        'fixed': fixed,
+                    },
+                ]
+            nodes.append(
+                {
+                    'order': order,
+                }
+            )
+        return nodes
+
+    def _basket(self, settings, entry, path):
+        """Several orders, usually on different instruments, placed at once at one broker that can afford them all.
+
+        Args:
+            settings (dict): `candidates`, and optionally `hedge_benefit`.
+            entry (dict): The order it was named in, whose other presets and slot values every candidate shares.
+            path (str): The preset's path.
+
+        Returns:
+            dict: A Together join that checks the group's margin.
+        """
+        self._refuse_unknown(settings, ('candidates', 'hedge_benefit'), path, 'basket')
+        nodes = self._candidate_orders(settings, entry, path, 'basket')
+        if self.problems:
+            return {}
+        return {
+            'together': {
+                'children': nodes,
+                'group_margin': True,
+                'hedge_benefit': settings.get('hedge_benefit') is True,
+            },
+        }
+
+    def _oca(self, settings, entry, path):
+        """Several candidate entries where the first to fill is the trade, and the others are cancelled.
+
+        Args:
+            settings (dict): `candidates`.
+            entry (dict): The order it was named in, whose other presets and slot values every candidate shares.
+            path (str): The preset's path.
+
+        Returns:
+            dict: An Either join that cancels.
+        """
+        self._refuse_unknown(settings, ('candidates',), path, 'oca')
+        nodes = self._candidate_orders(settings, entry, path, 'oca')
+        if self.problems:
+            return {}
+        if len(nodes) < 2:
+            self._add_problem(path, 'bad_setting', 'the oca preset needs at least two candidates, since one cancels the others')
+            return {}
+        return {
+            'either': {
+                'children': nodes,
+                'sibling_rule': 'cancel',
+            },
+        }
 
     def _oto(self, settings, entry, path):
         """Places the entry, and once it fills places the `then` order, sized to what filled and growing with it.

@@ -77,11 +77,18 @@ from unified_broker_interface.utilities.order_engine.utilities.price_crosses_con
     FIELDS,
     PriceCrossesCondition,
 )
+from unified_broker_interface.utilities.order_engine.utilities.sequence_part import (
+    SequencePart,
+)
 from unified_broker_interface.utilities.order_engine.utilities.stages_pricing import (
     StagesPricing,
 )
 from unified_broker_interface.utilities.order_engine.utilities.then_part import (
     ThenPart,
+)
+from unified_broker_interface.utilities.order_engine.utilities.together_part import (
+    DONE_WHEN,
+    TogetherPart,
 )
 from unified_broker_interface.utilities.order_engine.utilities.time_condition import (
     KINDS,
@@ -111,6 +118,26 @@ JOIN_NAMES = (
 BUILT_JOIN_NAMES = (
     'then',
     'either',
+    'together',
+    'sequence',
+)
+TOGETHER_SETTINGS = (
+    'children',
+    'group_margin',
+    'hedge_benefit',
+    'done_when',
+)
+SEQUENCE_SETTINGS = (
+    'children',
+)
+MOST_CHILDREN = 25
+OVERRIDE_SETTINGS = (
+    'instrument_id',
+    'quantity',
+    'transaction_type',
+    'product',
+    'validity',
+    'tag',
 )
 THEN_SETTINGS = (
     'first',
@@ -131,6 +158,12 @@ ORDER_SETTINGS = (
     'execution',
     'guards',
     'lifetime',
+    'instrument_id',
+    'quantity',
+    'transaction_type',
+    'product',
+    'validity',
+    'tag',
 )
 MOST_SLICES = 60
 HIGHEST_VOLATILITY_PERCENT = 500
@@ -229,6 +262,10 @@ class PlanReader:
                 return self._read_then(content, path, keeps_tag)
             if kind == 'either':
                 return self._read_either(content, path, keeps_tag)
+            if kind == 'together':
+                return self._read_together(content, path, keeps_tag)
+            if kind == 'sequence':
+                return self._read_sequence(content, path, keeps_tag)
             if kind in JOIN_NAMES:
                 self._add_problem(
                     path,
@@ -286,9 +323,128 @@ class PlanReader:
         child_key = child_keys[0]
         first = self._read_node(then['first'], f'{path}.first', keeps_tag)
         child = self._read_node(then[child_key], f'{path}.{child_key}', False)
+        if isinstance(child, (TogetherPart, SequencePart)):
+            self._add_problem(
+                child.path,
+                'join_not_sized',
+                'a Then join sizes its child to what the first plan filled, and the plans of a together or sequence join each trade their own quantity',
+            )
         if len(self.problems) > problems_before:
             return None
         return ThenPart(path, first, child, child_key, cancel_first)
+
+    def _read_children(self, content, path, keeps_tag, name, smallest):
+        """Reads the `children` list a join holds.
+
+        Args:
+            content (dict): The join's content.
+            path (str): Where the join sits in the plan.
+            keeps_tag (bool): Whether the first child's main order carries the caller's tag.
+            name (str): The join's name, for the message.
+            smallest (int): The fewest children it takes.
+
+        Returns:
+            list | None: The children read, or None when the list itself has a problem.
+        """
+        children = content.get('children')
+        if not isinstance(children, list) or len(children) < smallest or len(children) > MOST_CHILDREN:
+            self._add_problem(
+                path,
+                'join_shape',
+                f'{name} holds children, a list of {smallest} to {MOST_CHILDREN} plans',
+            )
+            return None
+        read_children = []
+        for index, child in enumerate(children):
+            read_child = self._read_node(child, f'{path}.children.{index}', keeps_tag and index == 0)
+            if read_child is not None:
+                read_children.append(read_child)
+        return read_children
+
+    def _read_together(self, together, path, keeps_tag):
+        """Reads a Together join.
+
+        Args:
+            together (object): The join's content as the caller wrote it.
+            path (str): Where the join sits in the plan.
+            keeps_tag (bool): Whether the first child's main order carries the caller's tag.
+
+        Returns:
+            TogetherPart | None: The join, or None when it has a problem.
+        """
+        if not isinstance(together, dict):
+            self._add_problem(path, 'join_shape', 'together holds an object with children')
+            return None
+        problems_before = len(self.problems)
+        for setting in together:
+            if setting not in TOGETHER_SETTINGS:
+                self._add_problem(path, 'unknown_setting', f'together takes {", ".join(TOGETHER_SETTINGS)}, not {setting!r}')
+        flags = {}
+        for name in ('group_margin', 'hedge_benefit'):
+            value = together.get(name, name == 'group_margin')
+            if not isinstance(value, bool):
+                self._add_problem(path, 'bad_setting', f'{name} must be true or false, not {value!r}')
+            flags[name] = value
+        done_when = together.get('done_when', 'all')
+        if done_when not in DONE_WHEN:
+            self._add_problem(path, 'bad_setting', f'done_when must be one of {", ".join(DONE_WHEN)}, not {done_when!r}')
+        children = self._read_children(together, path, keeps_tag, 'together', 1)
+        if children is None or len(self.problems) > problems_before:
+            return None
+        return TogetherPart(path, children, flags['group_margin'], flags['hedge_benefit'], done_when)
+
+    def _read_sequence(self, sequence, path, keeps_tag):
+        """Reads a Sequence join.
+
+        Args:
+            sequence (object): The join's content as the caller wrote it.
+            path (str): Where the join sits in the plan.
+            keeps_tag (bool): Whether the first child's main order carries the caller's tag.
+
+        Returns:
+            SequencePart | None: The join, or None when it has a problem.
+        """
+        if not isinstance(sequence, dict):
+            self._add_problem(path, 'join_shape', 'sequence holds an object with children')
+            return None
+        problems_before = len(self.problems)
+        for setting in sequence:
+            if setting not in SEQUENCE_SETTINGS:
+                self._add_problem(path, 'unknown_setting', f'sequence takes {", ".join(SEQUENCE_SETTINGS)}, not {setting!r}')
+        children = self._read_children(sequence, path, keeps_tag, 'sequence', 2)
+        if children is None or len(self.problems) > problems_before:
+            return None
+        return SequencePart(path, children)
+
+    def _read_overrides(self, order, path):
+        """Reads the body values an order gives of its own, such as another instrument or quantity.
+
+        Args:
+            order (dict): The order as the caller wrote it.
+            path (str): Where the order sits in the plan.
+
+        Returns:
+            dict: The values, checked.
+        """
+        overrides = {}
+        for name in OVERRIDE_SETTINGS:
+            if name not in order:
+                continue
+            value = order[name]
+            if name == 'quantity':
+                if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                    self._add_problem(path, 'bad_setting', f'quantity must be a whole number of at least 1, not {value!r}')
+                    continue
+            elif name == 'transaction_type':
+                if not isinstance(value, str) or value.strip().upper() not in ('BUY', 'SELL'):
+                    self._add_problem(path, 'bad_setting', f'transaction_type must be BUY or SELL, not {value!r}')
+                    continue
+                value = value.strip().upper()
+            elif not isinstance(value, str) or not value:
+                self._add_problem(path, 'bad_setting', f'{name} must be text, not {value!r}')
+                continue
+            overrides[name] = value
+        return overrides
 
     def _read_either(self, either, path, keeps_tag):
         """Reads an Either join.
@@ -388,6 +544,7 @@ class PlanReader:
                     f'an order in a plan takes {", ".join(ORDER_SETTINGS)}, not {setting!r}',
                 )
         sources = self._preset_sources(order.get('presets', []), path)
+        overrides = self._read_overrides(order, path)
         own = {}
         for slot in ('trigger', 'side', 'pricing', 'execution', 'guards', 'lifetime'):
             if slot in order:
@@ -524,7 +681,7 @@ class PlanReader:
             return None
         if lifetime is not None and not self._can_end(lifetime, pricing, side, path):
             return None
-        return OrderPart(path, preset_names, trigger, side, pricing, keeps_tag, execution, cap, post_only, discretion, lifetime)
+        return OrderPart(path, preset_names, trigger, side, pricing, keeps_tag, execution, cap, post_only, discretion, lifetime, overrides)
 
     def _can_end(self, lifetime, pricing, side, path):
         """Whether an order can end the way its lifetime says, reporting the problem when it cannot.

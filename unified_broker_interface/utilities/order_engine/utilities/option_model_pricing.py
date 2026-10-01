@@ -64,7 +64,7 @@ class OptionModelPricing(FollowInstrumentPricing):
             RefusedRequestError: With HTTP 400 when the order is not a limit on an option with a strike and an expiry, or follows its own instrument.
         """
         memory = super().prepared_memory(plan_order)
-        instrument, _, _ = plan_order.placement.market_context(plan_order.parent.instrument_id, False, False)
+        instrument, _, _ = plan_order.placement.market_context(plan_order.instrument_id, False, False)
         identity = instrument.identity
         option_type = identity.get('option_type')
         strike = identity.get('strike_price')
@@ -73,7 +73,7 @@ class OptionModelPricing(FollowInstrumentPricing):
             raise RefusedRequestError.refusal(
                 'option_model prices an option, and this instrument is not an option with a strike and an expiry',
                 400,
-                instrument_id=plan_order.parent.instrument_id,
+                instrument_id=plan_order.instrument_id,
             )
         expiry_day = datetime.date.fromisoformat(str(expiry))
         expires = datetime.datetime.combine(expiry_day, EXPIRES_AT, moments.INDIA)
@@ -108,7 +108,7 @@ class OptionModelPricing(FollowInstrumentPricing):
         """The premium the volatility gives now, no worse than the body's price, bounded and on the tick.
 
         Args:
-            plan_order (PlanOrder): The plan order, whose body's price is the worst accepted.
+            plan_order (OrderContext): The order's view of the plan order, whose body's price is the worst accepted.
             memory (dict): The pricing's memory.
             side (str): BUY or SELL.
             watched (decimal.Decimal): The underlying's price.
@@ -122,7 +122,7 @@ class OptionModelPricing(FollowInstrumentPricing):
         if model is None:
             return None
         premium = decimal.Decimal(str(round(model.price(float(self.volatility) / 100), 6)))
-        worst = decimal.Decimal(str(plan_order.parent.body['price']))
+        worst = decimal.Decimal(str(plan_order.body['price']))
         if side == 'BUY':
             premium = min(premium, worst)
         else:

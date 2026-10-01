@@ -77,3 +77,7 @@ Nothing in the plan order changed for this step; `AtrTrailPricing` and `StagesPr
 ## Stage 4d: lifetimes (2026-10-01)
 
 `PlanOrder` now sets `WANTS_CLOCK`, so the clock ticker gives every open plan `on_clock_tick` once a second and an order ends on time even when its instrument stops quoting; a plan with no lifetime returns at once, after reading only its part records. Each part's `ends_at` is worked out when the plan is placed and recorded with the received event. `_end_lifetimes` runs on both kinds of tick, before anything else on a price tick; on a clock tick it reads quotes only when an order is to be made marketable. A close sent by `close_filled` has the role `<path>.close`, which `closes_position` counts as closing, so it may use the exit reserve of a broker's daily cap.
+
+## Stage 5a: orders on several instruments, together and sequence (2026-10-01)
+
+`_remember_tick_sizes` keeps the tick size of every other instrument a priced order trades. `_refuse_without_position` checks a protecting order against the position on its own instrument and product. A multi-order answer names each leg's `instrument_id`. `group_margin_legs` is set by a together join while its children start; it is a class attribute holding None so a plan order that never builds a group has it.

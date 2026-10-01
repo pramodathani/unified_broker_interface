@@ -1177,7 +1177,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     A plan order reads and checks the whole of `plan` before anything is recorded or sent. A plan with any problem is refused with <span class="status s4">400</span>, and the answer lists every problem found, not just the first, each with the `path` of the part it is in, the `rule` it breaks and a `message`. A dry run answers with the broker request the order would be sent as and the plan as it would run in `plan`, with every slot's value or default written out.
 
-    Each node of the plan is an object holding exactly one key: `order`, `then` or `either`. An order's instrument, side, quantity, product and validity are the rest of the body; an order inside a join is sized by the join. An order in a plan takes these settings:
+    Each node of the plan is an object holding exactly one key: `order`, `then`, `either`, `together` or `sequence`. An order's instrument, side, quantity, product and validity are the rest of the body unless the order gives its own; an order inside a Then or Either join is sized by the join. An order in a plan takes these settings:
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
@@ -1188,6 +1188,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | `execution` | list | No | One execution value, which cuts the order into pieces and says when each is sent: `all_at_once`, `iceberg`, `twap`, `vwap`, `front_loaded`, `participation` or `book_depth`. Defaults to `all_at_once`. Nesting one execution inside another is not built yet. |
     | `guards` | list | No | Checks made before an order is sent or moved: `post_only` so far. |
     | `lifetime` | list | No | One object saying when the order stops and what is done then, described below. Defaults to the body's validity. |
+    | `instrument_id`, `quantity`, `transaction_type`, `product`, `validity`, `tag` | as in the body | No | The order's own values, written over the body's, so the orders of one plan can trade different instruments, sides and sizes. Every broker order of a plan still goes to the broker the first one chose. |
 
     The trigger conditions are these:
 
@@ -1272,6 +1273,8 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | `bracket` | A Then join: the order, then a `native_stop` stop and a `fixed` target that reduce each other, sized to each fill; an exit filling cancels the rest of the entry. Takes `stop_price`, `stop_limit_price` and `target_price`. |
     | `cover` | A Then join: the order, then a `native_stop` stop sized to each fill. Takes `stop_price` and `stop_limit_price`, both required. |
     | `oco` | An Either join that reduces: a stop and a target protecting a position already held. It has no order of its own, so it cannot be named beside other presets or slot values. |
+    | `basket` | A together join with `group_margin`: one order per candidate, each the rest of the order with the candidate's `instrument_id`, `transaction_type`, `product`, `validity`, `quantity` and `tag`, and its `price` and `order_type` as `fixed` pricing, or with a `trigger_price` a `native_stop`. Takes `candidates`, 1 to 25, and `hedge_benefit`. Unlike the `basket` type, an instrument may appear twice, because each order is told apart by its path. |
+    | `oca` | An Either join that cancels: one order per candidate, as for `basket`, and the first to fill cancels the rest. Takes `candidates`, at least two. |
     | `oto` | A Then join: the order, then the `then` order sized to each fill. `then` takes `transaction_type`, `order_type` (`LIMIT`, `MARKET` or `SL`), `price` and `trigger_price` so far. |
     | `market_if_touched` | A `price_crosses` trigger at `trigger_price` and `marketable` pricing. Takes `trigger_price`, `trigger_direction`, `trigger_on`, `hold_seconds` and `buffer_ticks`. |
     | `limit_if_touched` | A `price_crosses` trigger and `fixed` pricing at `limit_price`. |
@@ -1285,6 +1288,8 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | Join | Settings | What it does |
     |---|---|---|
     | `then` | `first`, and exactly one of `each_fill` or `on_complete`; `cancel_first_on_child_fill`, default false | Starts the child once the first plan fills anything, sized to what has filled, and resizes it as more fills. With `on_complete`, waits until the first plan is done. With `cancel_first_on_child_fill`, a fill on the child cancels whatever of the first plan is still working. |
+    | `together` | `children`, 1 to 25 plans; `group_margin`, default true; `hedge_benefit`, default false; `done_when`, `all` (default) or `any` | Starts every child at once, each trading its own quantity. With `group_margin`, the broker selector chooses a broker that can afford the whole group, priced as a hedged whole with `hedge_benefit`. With `done_when: any`, the rest are cancelled once one child is done. A together join cannot be a Then join's child, which is sized to fills (`join_not_sized`). |
+    | `sequence` | `children`, 2 to 25 plans | Starts each child only once the one before it is done, whether it filled or ended. It cannot be a Then join's child either. |
     | `either` | `children`, two or more plans; `sibling_rule`, `cancel` or `reduce`; `cancel_before_send`, default false | Runs the children at once. With `cancel`, the first child to fill cancels the others. With `reduce`, the children share one quantity and each is kept at that quantity less what its siblings have filled, so each child must be a single order. With `cancel_before_send`, a child whose trigger holds cancels its siblings' resting orders before it is sent. |
 
     Because the slots are independent, an order can wait for one thing and be sent another way: a `trails` trigger with `twap` execution is a trailing stop that, once it fires, sells over a minute rather than all at once, and `[iceberg, bracket]` is a bracket whose entry shows only part of its size, with exits that grow as each piece fills.

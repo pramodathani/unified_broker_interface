@@ -9,6 +9,9 @@ from unified_broker_interface.utilities.order_engine.utilities.all_at_once_execu
 from unified_broker_interface.utilities.order_engine.utilities.follow_instrument_pricing import (
     FollowInstrumentPricing,
 )
+from unified_broker_interface.utilities.order_engine.utilities.order_context import (
+    OrderContext,
+)
 
 MARKETABLE_BUFFER_TICKS = 2
 OPPOSITE_SIDES = {
@@ -40,9 +43,10 @@ class OrderPart:
         post_only (PostOnlyGuard | None): The check that keeps its limit from crossing, or None.
         discretion (DiscretionModifier | None): How far past its visible price it quietly goes, or None.
         lifetime (Lifetime | None): When it stops working and what is done then, or None for the body's validity.
+        overrides (dict): Body values of its own, such as `instrument_id`, `quantity` or `transaction_type`, written over the caller's body; empty for an order on the body as it is.
     """
 
-    def __init__(self, path, presets, trigger, side, pricing, keeps_tag=True, execution=None, cap=None, post_only=None, discretion=None, lifetime=None):
+    def __init__(self, path, presets, trigger, side, pricing, keeps_tag=True, execution=None, cap=None, post_only=None, discretion=None, lifetime=None, overrides=None):
         """Builds the part from values the plan reader has already checked.
 
         Args:
@@ -57,6 +61,7 @@ class OrderPart:
             post_only (PostOnlyGuard | None): The check that keeps its limit from crossing, or None.
             discretion (DiscretionModifier | None): How far past its visible price it quietly goes, or None.
             lifetime (Lifetime | None): When it stops working and what is done then, or None.
+            overrides (dict | None): Body values of its own, or None for none.
 
         Returns:
             None: This method returns nothing.
@@ -74,6 +79,27 @@ class OrderPart:
         self.post_only = post_only
         self.discretion = discretion
         self.lifetime = lifetime
+        if overrides is None:
+            overrides = {}
+        self.overrides = overrides
+
+    def context(self, plan_order):
+        """The plan order as this order's pricing, execution and trigger see it: on this order's instrument, with its own body values.
+
+        Args:
+            plan_order (PlanOrder): The plan order.
+
+        Returns:
+            OrderContext: The context.
+        """
+        body = dict(plan_order.parent.body)
+        instrument_id = plan_order.parent.instrument_id
+        for name, value in self.overrides.items():
+            if name == 'instrument_id':
+                instrument_id = value
+            else:
+                body[name] = value
+        return OrderContext(plan_order, instrument_id, body)
 
     def order_parts(self):
         """Every order in this part, which is itself.
@@ -130,6 +156,9 @@ class OrderPart:
         watched = []
         if self.trigger is not None:
             watched = list(self.trigger.instruments())
+        own = self.overrides.get('instrument_id')
+        if own is not None and own not in watched:
+            watched.append(own)
         if isinstance(self.pricing, FollowInstrumentPricing) and self.pricing.instrument_id not in watched:
             watched.append(self.pricing.instrument_id)
         return watched
@@ -155,7 +184,7 @@ class OrderPart:
             RefusedRequestError: When the pricing cannot work for this order.
         """
         if isinstance(self.pricing, FollowInstrumentPricing):
-            return self.pricing.prepared_memory(plan_order)
+            return self.pricing.prepared_memory(self.context(plan_order))
         return {}
 
     def closes_position(self):
@@ -177,7 +206,7 @@ class OrderPart:
         Returns:
             str: BUY or SELL.
         """
-        return str(plan_order.parent.body.get('transaction_type') or '').strip().upper()
+        return str(self.context(plan_order).body.get('transaction_type') or '').strip().upper()
 
     def sending_side(self, opening_side):
         """The side this part's orders are sent on.
@@ -211,7 +240,7 @@ class OrderPart:
             return
         if 'trigger' not in memory:
             memory['trigger'] = {}
-        self.trigger.prepare(plan_order, memory['trigger'])
+        self.trigger.prepare(self.context(plan_order), memory['trigger'])
 
     def is_triggered(self, plan_order, memory, quotes, now):
         """Whether the trigger holds on this tick.
@@ -231,7 +260,7 @@ class OrderPart:
             memory['trigger'] = {}
         opening_side = self._opening_side(plan_order)
         return self.trigger.is_met(
-            plan_order,
+            self.context(plan_order),
             memory['trigger'],
             quotes,
             now,
@@ -252,7 +281,8 @@ class OrderPart:
         Returns:
             PlaceOrderRequest | None: The order.
         """
-        body = dict(plan_order.parent.body)
+        context = self.context(plan_order)
+        body = dict(context.body)
         opening_side = self._opening_side(plan_order)
         sending_side = self.sending_side(opening_side)
         body['transaction_type'] = sending_side
@@ -263,12 +293,12 @@ class OrderPart:
         elif target is not None:
             body['quantity'] = target - self.traded(plan_order.parent)
             body.pop('quantity_reference', None)
-        if not self.keeps_tag:
+        if not self.keeps_tag and 'tag' not in self.overrides:
             body.pop('tag', None)
         before = dict(body)
         record = plan_order.part_record(self.path)
         memory = copy.deepcopy(record.get('pricing_memory') or {})
-        priced = self.pricing.priced_body(plan_order, body, sending_side, quotes, memory)
+        priced = self.pricing.priced_body(context, body, sending_side, quotes, memory)
         if priced is None:
             return None
         if memory != (record.get('pricing_memory') or {}):
@@ -277,7 +307,7 @@ class OrderPart:
         if self.cap is not None:
             priced = self.cap.capped_body(priced, sending_side)
         if self.post_only is not None:
-            priced, refusal = self.post_only.checked_body(plan_order.view(quotes), priced, sending_side)
+            priced, refusal = self.post_only.checked_body(context.view(quotes), priced, sending_side)
             if refusal is not None:
                 record = plan_order.part_record(self.path)
                 record['state'] = 'done'
@@ -306,12 +336,17 @@ class OrderPart:
         order = self.order(plan_order, quotes, quantity)
         if order is None:
             return None
-        broker_name = plan_order.parent.body.get('broker') or plan_order.chosen_broker()
-        body, status, _ = plan_order.place_leg(
+        context = self.context(plan_order)
+        broker_name = context.body.get('broker') or plan_order.chosen_broker()
+        leg_group = None
+        if broker_name is None:
+            leg_group = plan_order.group_margin_legs
+        body, status, _ = context.place_leg(
             self.path,
             order,
             started_at,
             broker_name,
+            leg_group,
         )
         return body, status
 
@@ -364,7 +399,7 @@ class OrderPart:
         was_working = record.get('state') == 'working'
         if record.get('execution_memory') is None:
             memory = {}
-            self.execution.begin(plan_order, memory, quotes, now)
+            self.execution.begin(self.context(plan_order), memory, quotes, now)
             if memory:
                 record['execution_memory'] = memory
                 plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part started its execution')
@@ -401,7 +436,7 @@ class OrderPart:
         target = plan_order.part_record(self.path).get('target')
         if target is not None:
             return target
-        return plan_order.parent.body.get('quantity') or 0
+        return self.context(plan_order).body.get('quantity') or 0
 
     def committed(self, parent):
         """How much the broker orders sent so far account for: what filled of a finished one, and the whole of a resting one.
@@ -443,7 +478,7 @@ class OrderPart:
         memory = copy.deepcopy(stored)
         pieces = self.own_legs(plan_order.parent)
         sending_side = self.sending_side(self._opening_side(plan_order))
-        due = self.execution.due_pieces(plan_order, memory, self.total(plan_order), pieces, quotes, now, sending_side=sending_side)
+        due = self.execution.due_pieces(self.context(plan_order), memory, self.total(plan_order), pieces, quotes, now, sending_side=sending_side)
         if not due:
             if memory != stored:
                 record['execution_memory'] = memory
@@ -489,7 +524,7 @@ class OrderPart:
         """
         took = False
         if self.discretion is not None:
-            took = self.discretion.take(plan_order, self, quotes)
+            took = self.discretion.take(self.context(plan_order), self, quotes)
         if not self.pricing.moves():
             return took
         resting = []
@@ -505,7 +540,7 @@ class OrderPart:
         reasons = []
         for leg in resting:
             memory = copy.deepcopy(stored)
-            moved = self.pricing.moved_prices(plan_order, memory, leg, quotes, now)
+            moved = self.pricing.moved_prices(self.context(plan_order), memory, leg, quotes, now)
             if memory != stored:
                 new_memory = memory
             if moved is None:
@@ -514,7 +549,7 @@ class OrderPart:
             if self.cap is not None:
                 limit = self.cap.capped(limit, leg.transaction_type)
             if self.post_only is not None:
-                limit = self.post_only.checked_move(plan_order.view(quotes), limit, leg.transaction_type)
+                limit = self.post_only.checked_move(self.context(plan_order).view(quotes), limit, leg.transaction_type)
                 if limit is None:
                     continue
             if plan_order.reprice_leg(leg, limit, trigger, reason):
@@ -574,7 +609,7 @@ class OrderPart:
         Returns:
             None: This method returns nothing.
         """
-        view = plan_order.view(quotes)
+        view = self.context(plan_order).view(quotes)
         for leg in self.own_legs(plan_order.parent):
             if leg.is_finished() or not leg.broker_order_id:
                 continue
@@ -606,7 +641,8 @@ class OrderPart:
             return
         record['reason'] = 'closed'
         plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part ran out of time, so the {traded} it traded is being closed')
-        body = dict(plan_order.parent.body)
+        context = self.context(plan_order)
+        body = dict(context.body)
         body.pop('price_reference', None)
         body.pop('quantity_reference', None)
         body.pop('tag', None)
@@ -616,7 +652,7 @@ class OrderPart:
         body['quantity'] = traded
         body['transaction_type'] = OPPOSITE_SIDES[self.sending_side(self._opening_side(plan_order))]
         broker_name = plan_order.chosen_broker()
-        plan_order.place_leg(f'{self.path}.close', plan_order.concrete_order(plan_order.read_order(body)), None, broker_name)
+        context.place_leg(f'{self.path}.close', plan_order.concrete_order(plan_order.read_order(body)), None, broker_name)
 
     def settle(self, plan_order):
         """Sends the next piece when the execution waits for fills, and marks this order done once every broker order has finished and no more will be sent.
@@ -877,7 +913,7 @@ class OrderPart:
         """
         if self.lifetime is None:
             return None
-        return self.lifetime.ends_at(plan_order, now)
+        return self.lifetime.ends_at(self.context(plan_order), now)
 
     def _guards_described(self):
         """The guards, as a dry run shows them.

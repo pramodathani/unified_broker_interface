@@ -37,3 +37,7 @@ A pricing list now holds at most one setter and at most one `cap`, and across pr
 ## Stage 4d (2026-10-01)
 
 The `lifetime` slot is a list holding one object, with the end and its settings in the same object rather than under a name as the other slots are, because a lifetime is one value with options rather than a choice between named kinds. `close_filled` is refused for any order but the root, and for a protecting order; `marketable` is refused for a stop. `after_days` and `when` are recognised and refused as not built.
+
+## Stage 5a (2026-10-01)
+
+`together` and `sequence` are built. An order may give `instrument_id`, `quantity`, `transaction_type`, `product`, `validity` and `tag` of its own, checked by `_read_overrides`. A together or sequence join cannot be a Then join's child, because Then sizes its child to fills and these joins' children trade their own quantities (`join_not_sized`). A join holds at most 25 children, today's basket limit.

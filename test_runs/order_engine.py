@@ -4623,6 +4623,219 @@ class OrderEngineSuite:
             ),
         ]
 
+    def run_plan_group_checks(self):
+        """Runs plans whose orders trade several instruments: a basket, a one-cancels-all group, a sequence, and a group done when any order is, beside the types they stand for.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        numbered = dict(
+            self.scenarios.answers.json_answer(
+                200,
+                self.scenarios.answers.place_success('flattrade'),
+            ),
+            number_orders=True,
+        )
+        identifiers = order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS
+        basket_candidates = [
+            {
+                'instrument_id': identifiers['reliance'],
+                'quantity': 10,
+                'price': 1000,
+            },
+            {
+                'instrument_id': identifiers['kwil'],
+                'quantity': 5,
+                'price': 250,
+            },
+            {
+                'instrument_id': identifiers['nifty_option'],
+                'transaction_type': 'SELL',
+                'quantity': 75,
+                'price': 120,
+            },
+        ]
+        return [
+            self.plan_result(
+                'a_plan_basket_places_every_leg_and_reports_each_one',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'basket': {
+                                    'candidates': basket_candidates,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [],
+                numbered,
+            ),
+            self.plan_result(
+                'a_plan_basket_may_repeat_an_instrument',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'basket': {
+                                    'candidates': [
+                                        {
+                                            'instrument_id': identifiers['reliance'],
+                                            'quantity': 10,
+                                        },
+                                        {
+                                            'instrument_id': identifiers['reliance'],
+                                            'quantity': 5,
+                                            'price': 995,
+                                        },
+                                    ],
+                                },
+                            },
+                        ],
+                    },
+                },
+                [],
+                numbered,
+            ),
+            self.plan_result(
+                'a_plan_one_cancels_all_group_calls_off_the_rest_on_the_first_fill',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'oca': {
+                                    'candidates': [
+                                        {
+                                            'instrument_id': identifiers['reliance'],
+                                            'quantity': 10,
+                                            'price': 1000,
+                                        },
+                                        {
+                                            'instrument_id': identifiers['kwil'],
+                                            'quantity': 5,
+                                            'price': 250,
+                                        },
+                                        {
+                                            'instrument_id': identifiers['sensex_option'],
+                                            'quantity': 20,
+                                            'price': 80,
+                                        },
+                                    ],
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    self.update('26091500000101', 'OPEN', 4),
+                ],
+                numbered,
+            ),
+            self.plan_result(
+                'a_plan_order_can_trade_another_instrument',
+                {
+                    'order': {
+                        'instrument_id': identifiers['kwil'],
+                        'quantity': 5,
+                        'pricing': [
+                            {
+                                'fixed': {
+                                    'price': 250,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [],
+                numbered,
+            ),
+            self.plan_result(
+                'a_plan_sequence_sends_its_second_order_once_the_first_is_done',
+                {
+                    'sequence': {
+                        'children': [
+                            {
+                                'order': {
+                                    'transaction_type': 'SELL',
+                                },
+                            },
+                            {
+                                'order': {
+                                    'instrument_id': identifiers['kwil'],
+                                    'quantity': 5,
+                                    'pricing': [
+                                        {
+                                            'fixed': {
+                                                'price': 250,
+                                            },
+                                        },
+                                    ],
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    self.update('26091500000101', 'OPEN', 4),
+                    self.update('26091500000101', 'COMPLETE', 10),
+                ],
+                numbered,
+            ),
+            self.plan_result(
+                'a_plan_group_done_when_any_order_is_cancels_the_rest',
+                {
+                    'together': {
+                        'done_when': 'any',
+                        'group_margin': False,
+                        'children': [
+                            {
+                                'order': {},
+                            },
+                            {
+                                'order': {
+                                    'instrument_id': identifiers['kwil'],
+                                    'quantity': 5,
+                                    'pricing': [
+                                        {
+                                            'fixed': {
+                                                'price': 250,
+                                            },
+                                        },
+                                    ],
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    self.update('26091500000101', 'COMPLETE', 10),
+                ],
+                numbered,
+            ),
+            self.plan_result(
+                'a_plan_then_whose_child_is_a_group_is_refused',
+                {
+                    'then': {
+                        'first': {
+                            'order': {},
+                        },
+                        'each_fill': {
+                            'together': {
+                                'children': [
+                                    {
+                                        'order': {},
+                                    },
+                                ],
+                            },
+                        },
+                    },
+                },
+                [],
+                numbered,
+            ),
+        ]
+
     def run_reaction_checks(self):
         """Runs the linked order types through a fill, which is the only way they do anything.
 
@@ -8327,6 +8540,7 @@ class OrderEngineSuite:
             results.extend(self.run_plan_followed_price_checks())
             results.extend(self.run_plan_stage_stop_checks())
             results.extend(self.run_plan_lifetime_checks())
+            results.extend(self.run_plan_group_checks())
             results.extend(self.run_clock_checks())
             results.extend(self.run_price_checks())
             results.extend(self.run_wiring_checks())

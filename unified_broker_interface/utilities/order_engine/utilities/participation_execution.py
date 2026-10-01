@@ -52,13 +52,13 @@ class ParticipationExecution:
         """The day's traded volume in the order's instrument, from the live quote.
 
         Args:
-            plan_order (PlanOrder): The plan order, whose parent names the instrument.
+            plan_order (OrderContext): The order's view of the plan order, which names its instrument.
             quotes (dict): The quotes, by instrument id.
 
         Returns:
             int | None: The volume, or None when the quote does not carry it.
         """
-        quote = (quotes or {}).get(plan_order.parent.instrument_id)
+        quote = (quotes or {}).get(plan_order.instrument_id)
         if not isinstance(quote, dict):
             return None
         value = quote.get('volume')
