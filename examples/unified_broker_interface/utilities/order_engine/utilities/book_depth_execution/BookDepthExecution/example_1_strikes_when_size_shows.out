@@ -1,0 +1,5 @@
+Reads quotes: True, paced by ticks: True, grows by changing its order: False
+Offers [(1000.15, 50)]: reachable 0, due []
+Offers [(1000.1, 4), (1000.15, 50)]: reachable 4, due []
+Offers [(1000.05, 6), (1000.1, 8), (1000.15, 50)]: reachable 14, due [14]
+As a dry run shows it: {'book_depth': {'limit_price': '1000.10', 'minimum_quantity': 10}}

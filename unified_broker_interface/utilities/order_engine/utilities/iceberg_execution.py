@@ -82,7 +82,7 @@ class IcebergExecution:
             wanted = int(round(wanted + spread * offset))
         return max(wanted, 1)
 
-    def due_pieces(self, plan_order, memory, total, pieces, quotes, now):
+    def due_pieces(self, plan_order, memory, total, pieces, quotes, now, sending_side=None):
         """The next piece, when nothing is resting and the last piece filled.
 
         Args:
@@ -92,11 +92,12 @@ class IcebergExecution:
             pieces (list): The broker orders sent so far, as legs.
             quotes (dict): Unused.
             now (float): Unused.
+            sending_side (str | None): Unused.
 
         Returns:
             list: One quantity, or nothing.
         """
-        del memory, quotes, now
+        del memory, quotes, now, sending_side
         if not self.will_send_more({}, total - self.committed(pieces), pieces):
             return []
         for piece in pieces:

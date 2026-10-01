@@ -45,7 +45,7 @@ class AllAtOnceExecution:
         """
         del plan_order, memory, quotes, now
 
-    def due_pieces(self, plan_order, memory, total, pieces, quotes, now):
+    def due_pieces(self, plan_order, memory, total, pieces, quotes, now, sending_side=None):
         """The pieces to send now: everything, while nothing has been sent.
 
         Whether the order has gone is read from its broker orders, which recovery rebuilds after a restart, rather than from memory, so a restarted engine never sends it twice.
@@ -57,11 +57,12 @@ class AllAtOnceExecution:
             pieces (list): The broker orders sent so far, as legs.
             quotes (dict): Unused.
             now (float): Unused.
+            sending_side (str | None): Unused.
 
         Returns:
             list: One quantity, or nothing once the order has been sent.
         """
-        del plan_order, memory, quotes, now
+        del plan_order, memory, quotes, now, sending_side
         if pieces or total < 1:
             return []
         return [

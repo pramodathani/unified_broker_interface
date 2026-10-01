@@ -39,6 +39,8 @@ PRESET_NAMES = (
     'twap',
     'vwap',
     'implementation_shortfall',
+    'participation',
+    'liquidity_seeking',
     'oto',
     'oco',
     'bracket',
@@ -127,6 +129,10 @@ class PresetExpander:
             return self._iceberg(settings, path)
         if name in ('twap', 'vwap', 'implementation_shortfall'):
             return self._timed(name, settings, path)
+        if name == 'participation':
+            return self._participation(settings, path)
+        if name == 'liquidity_seeking':
+            return self._liquidity_seeking(settings, path)
         return self._hidden_stop(settings, path)
 
     def is_join(self, name, settings):
@@ -759,6 +765,66 @@ class PresetExpander:
             'execution': [
                 {
                     execution_name: timed,
+                },
+            ],
+        }
+
+    def _participation(self, settings, path):
+        """Trades a share of the market's own volume, each slice a limit past the opposite touch.
+
+        Args:
+            settings (dict): `participation_percent`, and optionally `most_slices`.
+            path (str): The preset's path.
+
+        Returns:
+            dict: `participation` execution and `marketable` pricing.
+        """
+        self._refuse_unknown(settings, ('participation_percent', 'most_slices'), path, 'participation')
+        participation = {
+            'percent': settings.get('participation_percent'),
+        }
+        if 'most_slices' in settings:
+            participation['most_slices'] = settings['most_slices']
+        return {
+            'execution': [
+                {
+                    'participation': participation,
+                },
+            ],
+            'pricing': [
+                {
+                    'marketable': {
+                        'buffer_ticks': DEFAULT_BUFFER_TICKS,
+                    },
+                },
+            ],
+        }
+
+    def _liquidity_seeking(self, settings, path):
+        """Shows nothing, and strikes at its limit when enough size appears there.
+
+        Args:
+            settings (dict): `limit_price` and `minimum_quantity`.
+            path (str): The preset's path.
+
+        Returns:
+            dict: `book_depth` execution and `fixed` pricing at the limit.
+        """
+        self._refuse_unknown(settings, ('limit_price', 'minimum_quantity'), path, 'liquidity_seeking')
+        return {
+            'execution': [
+                {
+                    'book_depth': {
+                        'limit_price': settings.get('limit_price'),
+                        'minimum_quantity': settings.get('minimum_quantity'),
+                    },
+                },
+            ],
+            'pricing': [
+                {
+                    'fixed': {
+                        'price': settings.get('limit_price'),
+                    },
                 },
             ],
         }

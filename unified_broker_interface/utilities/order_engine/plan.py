@@ -356,10 +356,12 @@ class PlanOrder(SyntheticOrder):
             record['fired_at'] = now
             self.set_part_record(part.path, record, None)
             sent = part.send(self, None, quotes, now)
-            if not sent:
-                record = self.part_record(part.path)
+            record = self.part_record(part.path)
+            if not sent and record.get('state') == 'waiting':
                 record.pop('fired_at', None)
                 self.set_part_record(part.path, record, None)
+            if not sent and record.get('state') == 'working':
+                memory_changed = True
             placed = placed + sent
         for part in root.order_parts():
             if part.path in paced_paths:

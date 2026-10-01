@@ -3636,6 +3636,116 @@ class OrderEngineSuite:
             ),
         ]
 
+    def with_volume(self, quote, volume):
+        """A quote with the day's traded volume set, for an execution that follows it.
+
+        Args:
+            quote (dict): The quote.
+            volume (int): The day's traded volume.
+
+        Returns:
+            dict: A copy of the quote carrying the volume.
+        """
+        carrying = dict(quote)
+        carrying['volume'] = volume
+        return carrying
+
+    def run_plan_market_execution_checks(self):
+        """Runs plans whose pieces follow the market: participation in traded volume, and strikes on displayed size.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        numbered = dict(
+            self.scenarios.answers.json_answer(
+                200,
+                self.scenarios.answers.place_success('flattrade'),
+            ),
+            number_orders=True,
+        )
+        steady = self.book_at(1000.00, 1000.05)
+        participation = {
+            'order': {
+                'presets': [
+                    {
+                        'participation': {
+                            'participation_percent': 10,
+                        },
+                    },
+                ],
+            },
+        }
+        volume_steps = [
+            {'quote': self.with_volume(steady, 1000), 'at': 0},
+            {'quote': self.with_volume(steady, 1050), 'at': 1},
+            {'quote': self.with_volume(steady, 1060), 'at': 2},
+            {'quote': self.with_volume(steady, 1062), 'at': 3},
+            {'quote': self.with_volume(steady, 1110), 'at': 4},
+        ]
+        return [
+            self.plan_price_result(
+                'a_plan_participation_sends_ten_percent_of_the_volume_traded',
+                participation,
+                volume_steps,
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_participation_keeps_its_count_across_a_restart',
+                participation,
+                volume_steps,
+                numbered,
+                restart_between_ticks=True,
+            ),
+            self.plan_price_result(
+                'a_plan_liquidity_seeking_waits_for_size_inside_its_limit',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'liquidity_seeking': {
+                                    'limit_price': 1000.10,
+                                    'minimum_quantity': 50,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': self.book_at(999.95, 1000.20), 'at': 0},
+                    {'quote': self.book_at(999.95, 1000.20), 'at': 1},
+                    {'quote': self.book_at(1000.00, 1000.05), 'at': 2},
+                    {'quote': self.book_at(1000.00, 1000.05), 'at': 3},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_participation_that_starts_at_a_time',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'scheduled': {
+                                    'at_time': '10:00:30',
+                                },
+                            },
+                            {
+                                'participation': {
+                                    'participation_percent': 10,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': self.with_volume(steady, 1000), 'at': 0},
+                    {'quote': self.with_volume(steady, 1100), 'at': 10},
+                    {'quote': self.with_volume(steady, 1200), 'at': 40},
+                    {'quote': self.with_volume(steady, 1250), 'at': 41},
+                ],
+                numbered,
+            ),
+        ]
+
     def run_reaction_checks(self):
         """Runs the linked order types through a fill, which is the only way they do anything.
 
@@ -7335,6 +7445,7 @@ class OrderEngineSuite:
             results.extend(self.run_plan_join_checks())
             results.extend(self.run_plan_trailing_checks())
             results.extend(self.run_plan_execution_checks())
+            results.extend(self.run_plan_market_execution_checks())
             results.extend(self.run_clock_checks())
             results.extend(self.run_price_checks())
             results.extend(self.run_wiring_checks())

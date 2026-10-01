@@ -1185,7 +1185,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | `trigger` | object | No | What the order waits for: one condition, or `all` or `any` with a list of them. With no trigger the order is placed at once. |
     | `side` | string | No | `buy`, `sell`, or `protect`, which trades against the position the body's side opened: a body `BUY` with `protect` sends a sell. Defaults to the body's side. |
     | `pricing` | list | No | One pricing rule: `fixed`, `marketable`, `native_stop` or `trail`. Defaults to `fixed` with the body's own order type and price. |
-    | `execution` | list | No | One execution value, which cuts the order into pieces and says when each is sent: `all_at_once`, `iceberg`, `twap`, `vwap` or `front_loaded`. Defaults to `all_at_once`. Nesting one execution inside another is not built yet. |
+    | `execution` | list | No | One execution value, which cuts the order into pieces and says when each is sent: `all_at_once`, `iceberg`, `twap`, `vwap`, `front_loaded`, `participation` or `book_depth`. Defaults to `all_at_once`. Nesting one execution inside another is not built yet. |
 
     The trigger conditions are these:
 
@@ -1215,8 +1215,12 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | `twap` | `slices`, 2 to 60; `over_minutes`, above zero | Equal slices, one every `over_minutes × 60 / slices` seconds, the first at once. |
     | `vwap` | as `twap`, and `volume_profile`, one weight per half hour from 09:15 | Slices sized by the half hour they fall in; the default profile is today's NSE equity shape. |
     | `front_loaded` | as `twap`, and `urgency`, 0 to 1, default 0.5 | Slices each `1 - urgency × 0.5` of the one before. |
+    | `participation` | `percent`, above zero and at most 100; `most_slices`, default 60 | On each tick, `percent` of the volume traded since the last slice, counted from the live quote's `volume` when the order starts working. A share under one unit waits for more volume. The unfilled part of a cancelled slice is sent again by later slices; a rejected slice stops the order. |
+    | `book_depth` | `limit_price`, required; `minimum_quantity`, at least 1 | Nothing until the other side of the book shows at least `minimum_quantity` at or inside `limit_price`, then one strike for the smaller of what is shown and what is left. A strike that partly fills rests at its price, and later strikes are only for what is neither traded nor resting. A rejected strike stops the order. |
 
-    A resting stop, `native_stop` or `trail` pricing, cannot be split into pieces, because it protects the whole position at once; a plan that tries is refused with `stop_not_sliced`. A later preset's execution replaces an earlier one with a warning, as pricing does.
+    A resting stop, `native_stop` or `trail` pricing, cannot be split into pieces, because it protects the whole position at once; a plan that tries is refused with `stop_not_sliced`. A later preset's execution replaces an earlier one with a warning, as pricing does. An order whose execution is paced by ticks (`twap`, `vwap`, `front_loaded`, `participation` and `book_depth`) starts working as soon as its trigger holds, even when nothing is due yet, so `participation` counts volume from that moment.
+
+    There is no execution for an exchange's freeze quantity yet. Splitting at the freeze quantity needs the broker chosen first, because each broker publishes the limit in its own units, so it is planned to come with nesting, where it would be applied innermost to every piece automatically. Until then, use the `freeze_slicer` type for an order above the freeze quantity.
 
     The presets stand for slot values and take the settings of the type they are named after:
 
@@ -1229,6 +1233,8 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | `twap` | `twap` execution. Takes `slices` and `over_minutes`. |
     | `vwap` | `vwap` execution. Takes `slices`, `over_minutes` and `volume_profile`. |
     | `implementation_shortfall` | `front_loaded` execution. Takes `slices`, `over_minutes` and `urgency`. |
+    | `participation` | `participation` execution with `percent` from `participation_percent`, and `marketable` pricing two ticks past the touch. Takes `participation_percent` and `most_slices`. |
+    | `liquidity_seeking` | `book_depth` execution and `fixed` pricing at `limit_price`, so a strike that does not fill rests at the limit. Takes `limit_price` and `minimum_quantity`. |
     | `bracket` | A Then join: the order, then a `native_stop` stop and a `fixed` target that reduce each other, sized to each fill; an exit filling cancels the rest of the entry. Takes `stop_price`, `stop_limit_price` and `target_price`. |
     | `cover` | A Then join: the order, then a `native_stop` stop sized to each fill. Takes `stop_price` and `stop_limit_price`, both required. |
     | `oco` | An Either join that reduces: a stop and a target protecting a position already held. It has no order of its own, so it cannot be named beside other presets or slot values. |

@@ -33,3 +33,7 @@ The API accepts `transaction_type` in any case and keeps the body exactly as the
 ## Stage 3a: pieces
 
 An order part now sends its quantity as pieces chosen by its execution. `send` starts it working and begins the execution's clock; `send_due` prices every due piece before sending any, so a piece that cannot be priced yet holds back the rest until the next tick; `settle` sends the next piece for an execution that waits for fills, and marks the part done only when every leg has finished and the execution will send no more. `set_target` keeps resizing the one order for `all_at_once`, and for every other execution cuts resting pieces newest first, leaving growth to later pieces.
+
+## Stage 3b (2026-10-01)
+
+`send` puts a part whose execution is paced by ticks into `working` even when nothing is due on the tick its trigger holds, so the execution's start (participation's `counted_volume`, a timed schedule's `started_at`) is kept and later ticks send through `send_due`. An execution that is not paced by ticks still goes back to `waiting` when its first piece cannot be priced. `send_due` passes `sending_side` to the execution and saves changed execution memory with an event once the pieces are placed.

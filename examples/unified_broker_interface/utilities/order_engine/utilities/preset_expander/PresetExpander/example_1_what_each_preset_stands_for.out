@@ -24,3 +24,7 @@ vwap: {'execution': [{'vwap': {'slices': 6, 'over_minutes': 90}}]}
   problems: []
 implementation_shortfall: {'execution': [{'front_loaded': {'slices': 5, 'over_minutes': 10, 'urgency': 0.8}}]}
   problems: []
+participation: {'execution': [{'participation': {'percent': 10}}], 'pricing': [{'marketable': {'buffer_ticks': 2}}]}
+  problems: []
+liquidity_seeking: {'execution': [{'book_depth': {'limit_price': 1000.1, 'minimum_quantity': 10}}], 'pricing': [{'fixed': {'price': 1000.1}}]}
+  problems: []

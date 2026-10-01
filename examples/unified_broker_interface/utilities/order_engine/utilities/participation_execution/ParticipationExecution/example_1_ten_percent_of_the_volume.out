@@ -1,0 +1,14 @@
+Reads quotes: True, paced by ticks: True, grows by changing its order: False
+Counting starts from 1000
+Volume 1005: the quote reads 1005
+  due [], counted up to 1000, committed 0
+Volume 1050: the quote reads 1050
+  due [5], counted up to 1050, committed 5
+Volume 1060: the quote reads 1060
+  due [1], counted up to 1060, committed 6
+Volume 1110: the quote reads 1110
+  due [4], counted up to 1110, committed 10
+Volume 1200: the quote reads 1200
+  due [], counted up to 1110, committed 10
+More to send: False
+As a dry run shows it: {'participation': {'percent': 10.0, 'most_slices': 60}}

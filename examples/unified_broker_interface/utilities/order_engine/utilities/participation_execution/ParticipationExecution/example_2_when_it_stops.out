@@ -1,0 +1,5 @@
+After a rejected slice: last was rejected True, due []
+After a cancelled slice of 40 that filled 15: committed 15, due [5]
+After its most slices: more to send False
+A quote without volume reads None and sends []
+As a dry run shows it: {'participation': {'percent': 50.0, 'most_slices': 2}}

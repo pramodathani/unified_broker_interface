@@ -121,7 +121,7 @@ class TimedSlicesExecution:
             quantities[fractions[position % self.slices][1]] += 1
         return quantities
 
-    def due_pieces(self, plan_order, memory, total, pieces, quotes, now):
+    def due_pieces(self, plan_order, memory, total, pieces, quotes, now, sending_side=None):
         """The next slice, once its time has come.
 
         One slice is sent per tick at most, as today, so a tick that arrives late sends the slice that is due and the next tick catches up. Which slice is next is read from how many broker orders this order has placed, which recovery rebuilds after a restart; only the start time is kept in memory.
@@ -133,11 +133,12 @@ class TimedSlicesExecution:
             pieces (list): The broker orders sent so far, as legs.
             quotes (dict): Unused.
             now (float): The Unix time of the tick.
+            sending_side (str | None): Unused.
 
         Returns:
             list: One quantity, or nothing.
         """
-        del plan_order, quotes
+        del plan_order, quotes, sending_side
         index = len(pieces)
         started_at = memory.get('started_at')
         if started_at is None or index >= self.slices:

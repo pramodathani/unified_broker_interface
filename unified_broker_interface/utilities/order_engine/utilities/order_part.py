@@ -287,7 +287,7 @@ class OrderPart:
     def send(self, plan_order, started_at, quotes, now=None):
         """Starts working now, when the order's trigger held or it was waiting for a price, and sends whatever is due.
 
-        The execution's clock starts here, so a TWAP triggered at 10:30 spreads its slices from 10:30. When the first piece cannot be priced yet, the order goes back to waiting and the next tick tries again.
+        The execution's clock starts here, so a TWAP triggered at 10:30 spreads its slices from 10:30. When the first piece cannot be priced yet, an order sent all at once or by fills goes back to waiting and the next tick tries again, while an order paced by ticks starts working anyway, so its start is kept and later ticks send what falls due.
 
         Args:
             plan_order (PlanOrder): The plan order.
@@ -311,6 +311,12 @@ class OrderPart:
         placed = self.send_due(plan_order, started_at, quotes, now)
         record = plan_order.part_record(self.path)
         if not placed and not self.own_legs(plan_order.parent):
+            if self.execution.paced_by_ticks() and record.get('state') != 'working':
+                record['state'] = 'working'
+                plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part started working, and nothing is due yet')
+                return []
+            if self.execution.paced_by_ticks():
+                return []
             if record.get('state') != 'waiting':
                 record['state'] = 'waiting'
                 plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part is waiting for a price')
@@ -369,14 +375,22 @@ class OrderPart:
         if now is None:
             now = time.time()
         record = plan_order.part_record(self.path)
-        memory = copy.deepcopy(record.get('execution_memory') or {})
+        stored = record.get('execution_memory') or {}
+        memory = copy.deepcopy(stored)
         pieces = self.own_legs(plan_order.parent)
-        due = self.execution.due_pieces(plan_order, memory, self.total(plan_order), pieces, quotes, now)
+        sending_side = self.sending_side(self._opening_side(plan_order))
+        due = self.execution.due_pieces(plan_order, memory, self.total(plan_order), pieces, quotes, now, sending_side=sending_side)
         if not due:
+            if memory != stored:
+                record['execution_memory'] = memory
+                plan_order.set_part_record(self.path, record, None)
             return []
         for quantity in due:
             if self.order(plan_order, quotes, quantity) is None:
                 return []
+        if memory != stored:
+            record['execution_memory'] = memory
+            plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part\'s execution moved on to {memory}')
         placed = []
         for quantity in due:
             answer = self.place(plan_order, started_at, quotes, quantity)

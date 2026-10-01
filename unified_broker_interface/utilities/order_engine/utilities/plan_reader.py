@@ -5,6 +5,9 @@ import decimal
 from unified_broker_interface.utilities.order_engine.utilities.all_at_once_execution import (
     AllAtOnceExecution,
 )
+from unified_broker_interface.utilities.order_engine.utilities.book_depth_execution import (
+    BookDepthExecution,
+)
 from unified_broker_interface.utilities.order_engine.utilities.condition_group import (
     ConditionGroup,
 )
@@ -29,6 +32,9 @@ from unified_broker_interface.utilities.order_engine.utilities.native_stop_prici
 )
 from unified_broker_interface.utilities.order_engine.utilities.order_part import (
     OrderPart,
+)
+from unified_broker_interface.utilities.order_engine.utilities.participation_execution import (
+    ParticipationExecution,
 )
 from unified_broker_interface.utilities.order_engine.utilities.preset_expander import (
     PRESET_NAMES,
@@ -762,10 +768,14 @@ class PlanReader:
                 return self._read_iceberg(settings, f'{entry_path}.iceberg')
             if name in ('twap', 'vwap', 'front_loaded'):
                 return self._read_timed(name, settings, f'{entry_path}.{name}')
+            if name == 'participation':
+                return self._read_participation(settings, f'{entry_path}.participation')
+            if name == 'book_depth':
+                return self._read_book_depth(settings, f'{entry_path}.book_depth')
             self._add_problem(
                 entry_path,
                 'unknown_execution',
-                f'{name!r} is not an execution a plan can use yet; the executions available are all_at_once, iceberg, twap, vwap and front_loaded',
+                f'{name!r} is not an execution a plan can use yet; the executions available are all_at_once, iceberg, twap, vwap, front_loaded, participation and book_depth',
             )
         return None
 
@@ -851,6 +861,44 @@ class PlanReader:
         if name == 'vwap':
             return VwapExecution(slices, float(over_minutes), profile)
         return FrontLoadedExecution(slices, float(over_minutes), urgency)
+
+    def _read_participation(self, settings, path):
+        """Reads `participation` execution.
+
+        Args:
+            settings (dict): `percent`, and optionally `most_slices`.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            ParticipationExecution | None: The execution, or None when it has a problem.
+        """
+        problems_before = len(self.problems)
+        self._refuse_unknown(settings, ('percent', 'most_slices'), path, 'participation')
+        percent = self._price(settings.get('percent'), path, 'percent')
+        if percent is not None and percent > 100:
+            self._add_problem(path, 'bad_setting', f'percent must be above zero and at most 100, not {percent}')
+        most_slices = self._whole_number(settings.get('most_slices', 60), path, 'most_slices', 1, None)
+        if len(self.problems) > problems_before:
+            return None
+        return ParticipationExecution(float(percent), most_slices)
+
+    def _read_book_depth(self, settings, path):
+        """Reads `book_depth` execution.
+
+        Args:
+            settings (dict): `limit_price` and `minimum_quantity`.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            BookDepthExecution | None: The execution, or None when it has a problem.
+        """
+        problems_before = len(self.problems)
+        self._refuse_unknown(settings, ('limit_price', 'minimum_quantity'), path, 'book_depth')
+        limit_price = self._price(settings.get('limit_price'), path, 'limit_price')
+        minimum_quantity = self._whole_number(settings.get('minimum_quantity'), path, 'minimum_quantity', 1, None)
+        if len(self.problems) > problems_before:
+            return None
+        return BookDepthExecution(limit_price, minimum_quantity)
 
     def _read_profile(self, profile, path):
         """Reads a VWAP volume profile: relative weights, one per half hour from the open.
