@@ -30,11 +30,17 @@ from unified_broker_interface.utilities.order_engine.utilities.either_part impor
     SIBLING_RULES,
     EitherPart,
 )
+from unified_broker_interface.utilities.order_engine.utilities.fill_ratio import (
+    FillRatio,
+)
 from unified_broker_interface.utilities.order_engine.utilities.fixed_pricing import (
     FixedPricing,
 )
 from unified_broker_interface.utilities.order_engine.utilities.follow_instrument_pricing import (
     FollowInstrumentPricing,
+)
+from unified_broker_interface.utilities.order_engine.utilities.from_parent_fill_pricing import (
+    FromParentFillPricing,
 )
 from unified_broker_interface.utilities.order_engine.utilities.front_loaded_execution import (
     FrontLoadedExecution,
@@ -103,6 +109,9 @@ from unified_broker_interface.utilities.order_engine.utilities.together_part imp
 from unified_broker_interface.utilities.order_engine.utilities.time_condition import (
     KINDS,
     TimeCondition,
+)
+from unified_broker_interface.utilities.order_engine.utilities.top_up_execution import (
+    TopUpExecution,
 )
 from unified_broker_interface.utilities.order_engine.utilities.trail_pricing import (
     TrailPricing,
@@ -260,9 +269,26 @@ class PlanReader:
         self.problems = []
         self.warnings = []
         root = self._read_node(plan, 'root', True)
+        if root is not None:
+            self._check_fill_sizing(root)
         if self.problems:
             return None
         return root
+
+    def _check_fill_sizing(self, root):
+        """Reports every order sized or priced from a first plan's fills that is not the child of a Then join.
+
+        Args:
+            root (object): The root part.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        for part in root.order_parts():
+            if isinstance(part.pricing, FromParentFillPricing) and part.pricing.first_path is None:
+                self._add_problem(part.path, 'from_parent_fill_needs_then', 'from_parent_fill prices this order from the fills of a Then join\'s first order, so it must be that join\'s child, and the first plan a single order')
+            if part.fill_ratio is not None and not part.sized_by_fills:
+                self._add_problem(part.path, 'parent_fill_needs_then', 'a quantity of parent_fill scales what a Then join\'s first plan filled, so the order must be that join\'s child')
 
     def _read_node(self, node, path, keeps_tag):
         """Reads one node of the tree.
@@ -352,6 +378,10 @@ class PlanReader:
         child_key = child_keys[0]
         first = self._read_node(then['first'], f'{path}.first', keeps_tag)
         child = self._read_node(then[child_key], f'{path}.{child_key}', False)
+        if isinstance(child, OrderPart):
+            child.sized_by_fills = True
+            if isinstance(child.pricing, FromParentFillPricing) and isinstance(first, OrderPart):
+                child.pricing.first_path = first.path
         if isinstance(child, (TogetherPart, SequencePart, RepeatPart)):
             self._add_problem(
                 child.path,
@@ -765,13 +795,20 @@ class PlanReader:
         if lifetime is not None and not self._can_end(lifetime, pricing, side, path):
             return None
         position = None
-        if position_quantity is not None:
+        fill_ratio = None
+        if position_quantity is not None and 'parent_fill' in position_quantity:
+            fill_ratio = self._read_fill_ratio(position_quantity, position_path)
+            if fill_ratio is None:
+                return None
+        elif position_quantity is not None:
             position = self._read_position(position_quantity, position_path)
             if position is None:
                 return None
         if not self._closes_sensibly(side, position, pricing_path, execution, path):
             return None
-        return OrderPart(path, preset_names, trigger, side, pricing, keeps_tag, execution, cap, post_only, discretion, lifetime, overrides, position)
+        part = OrderPart(path, preset_names, trigger, side, pricing, keeps_tag, execution, cap, post_only, discretion, lifetime, overrides, position)
+        part.fill_ratio = fill_ratio
+        return part
 
     def _closes_sensibly(self, side, position, pricing_path, execution, path):
         """Whether a `close` side and a position quantity come together and with nothing they would ignore, reporting the problem when not.
@@ -800,6 +837,30 @@ class PlanReader:
             self._add_problem(path, 'close_prices_itself', 'a close sends one order per position a little past the touch, so it takes no pricing or execution of its own')
             return False
         return True
+
+    def _read_fill_ratio(self, quantity, path):
+        """Reads a quantity given as `{"parent_fill": {...}}`.
+
+        Args:
+            quantity (dict): The quantity as the caller wrote it.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            FillRatio | None: The sizing, or None when it has a problem.
+        """
+        settings = quantity.get('parent_fill')
+        if len(quantity) != 1 or not isinstance(settings, dict):
+            self._add_problem(path, 'bad_setting', 'a quantity is a whole number, or an object holding position or parent_fill and its settings')
+            return None
+        problems_before = len(self.problems)
+        self._refuse_unknown(settings, ('ratio', 'whole_lots'), f'{path}.parent_fill', 'parent_fill', 'quantity')
+        ratio = self._price(settings.get('ratio', 1), path, 'ratio')
+        whole_lots = settings.get('whole_lots', False)
+        if not isinstance(whole_lots, bool):
+            self._add_problem(path, 'bad_setting', f'whole_lots must be true or false, not {whole_lots!r}')
+        if len(self.problems) > problems_before:
+            return None
+        return FillRatio(ratio, whole_lots)
 
     def _read_position(self, quantity, path):
         """Reads a quantity given as `{"position": {...}}`.
@@ -1352,10 +1413,16 @@ class PlanReader:
             return self._read_option_model(settings, f'{entry_path}.option_model')
         if name == 'stages':
             return self._read_stages(settings, f'{entry_path}.stages')
+        if name == 'from_parent_fill':
+            self._refuse_unknown(settings, ('net_price',), f'{entry_path}.from_parent_fill', 'from_parent_fill')
+            net_price = self._number(settings.get('net_price'), f'{entry_path}.from_parent_fill', 'net_price')
+            if net_price is None:
+                return None
+            return FromParentFillPricing(net_price)
         self._add_problem(
             entry_path,
             'unknown_pricing',
-            f'{name!r} is not a pricing a plan can use yet; the pricings available are fixed, marketable, native_stop, trail, stages, peg, chase, follow_instrument and option_model, with the modifiers cap and discretion',
+            f'{name!r} is not a pricing a plan can use yet; the pricings available are fixed, marketable, native_stop, trail, stages, peg, chase, follow_instrument, option_model and from_parent_fill, with the modifiers cap and discretion',
         )
         return None
 
@@ -1673,10 +1740,13 @@ class PlanReader:
                 return self._read_participation(settings, f'{entry_path}.participation')
             if name == 'book_depth':
                 return self._read_book_depth(settings, f'{entry_path}.book_depth')
+            if name == 'top_up':
+                self._refuse_unknown(settings, (), entry_path, 'top_up', 'execution')
+                return TopUpExecution()
             self._add_problem(
                 entry_path,
                 'unknown_execution',
-                f'{name!r} is not an execution a plan can use yet; the executions available are all_at_once, iceberg, twap, vwap, front_loaded, participation and book_depth',
+                f'{name!r} is not an execution a plan can use yet; the executions available are all_at_once, iceberg, twap, vwap, front_loaded, participation, book_depth and top_up',
             )
         return None
 

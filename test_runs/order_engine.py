@@ -5205,6 +5205,136 @@ class OrderEngineSuite:
             ),
         ]
 
+    def run_plan_fill_follower_checks(self):
+        """Runs plans whose second order follows the first's fills on another instrument: a hedge in whole lots and a legged spread, beside the types they stand for.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        accepted = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        identifiers = order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS
+        steady = self.book_at(1000.00, 1000.05)
+        spread = {
+            'order': {
+                'presets': [
+                    {
+                        'legged_spread': {
+                            'net_price': 20,
+                            'candidates': [
+                                {
+                                    'instrument_id': identifiers['reliance'],
+                                    'transaction_type': 'BUY',
+                                    'quantity': 500,
+                                    'price': 1000,
+                                },
+                                {
+                                    'instrument_id': identifiers['reliance_future'],
+                                    'transaction_type': 'SELL',
+                                    'quantity': 500,
+                                    'price': 980,
+                                },
+                            ],
+                        },
+                    },
+                ],
+            },
+        }
+        return [
+            self.plan_price_result(
+                'a_plan_attached_hedge_sells_the_future_in_whole_lots_as_the_entry_fills',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'attached_hedge': {
+                                    'hedge_instrument_id': identifiers['reliance_future'],
+                                    'ratio': 1,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {
+                        'quote': steady,
+                        'at': 0,
+                        'other_quotes': {
+                            'reliance_future': self.scenarios.quote(),
+                        },
+                    },
+                    {
+                        'quote': steady,
+                        'at': 1,
+                        'updates': [
+                            self.update('26091500000021', 'OPEN', 600),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 2,
+                        'updates': [
+                            self.update('26091500000021', 'COMPLETE', 1000),
+                        ],
+                    },
+                ],
+                accepted,
+                body_overrides={
+                    'quantity': 1000,
+                },
+            ),
+            self.plan_price_result(
+                'a_plan_attached_hedge_sized_by_delta_is_not_built_yet',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'attached_hedge': {
+                                    'hedge_instrument_id': identifiers['reliance_future'],
+                                    'delta_volatility': 12.5,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.plan_result(
+                'a_plan_legged_spread_prices_its_second_leg_from_the_first_fill',
+                spread,
+                [
+                    self.update('26091500000021', 'COMPLETE', 500, average_price=1002.0),
+                ],
+                accepted,
+            ),
+            self.plan_result(
+                'a_plan_legged_spread_with_three_legs_is_refused',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'legged_spread': {
+                                    'net_price': 20,
+                                    'candidates': [
+                                        {'instrument_id': identifiers['reliance']},
+                                        {'instrument_id': identifiers['kwil']},
+                                        {'instrument_id': identifiers['nifty_option']},
+                                    ],
+                                },
+                            },
+                        ],
+                    },
+                },
+                [],
+                accepted,
+            ),
+        ]
+
     def run_reaction_checks(self):
         """Runs the linked order types through a fill, which is the only way they do anything.
 
@@ -8912,6 +9042,7 @@ class OrderEngineSuite:
             results.extend(self.run_plan_group_checks())
             results.extend(self.run_plan_close_checks())
             results.extend(self.run_plan_repeat_checks())
+            results.extend(self.run_plan_fill_follower_checks())
             results.extend(self.run_clock_checks())
             results.extend(self.run_price_checks())
             results.extend(self.run_wiring_checks())

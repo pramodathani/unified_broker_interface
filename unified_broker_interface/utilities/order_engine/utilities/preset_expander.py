@@ -57,6 +57,8 @@ PRESET_NAMES = (
     'square_off',
     'stop_and_reverse',
     'accumulation',
+    'attached_hedge',
+    'legged_spread',
     'oto',
     'oco',
     'bracket',
@@ -107,6 +109,8 @@ CANDIDATE_OVERRIDES = (
 )
 JOIN_PRESET_NAMES = (
     'accumulation',
+    'attached_hedge',
+    'legged_spread',
     'basket',
     'oca',
     'oto',
@@ -224,7 +228,7 @@ class PresetExpander:
             settings (dict): The preset's settings.
 
         Returns:
-            bool: True for `accumulation`, `basket`, `oca`, `oto`, `oco`, `bracket`, `cover`, a `hidden_stop` with a backstop, and a `stop_and_reverse` that closes before it reverses.
+            bool: True for `accumulation`, `attached_hedge`, `legged_spread`, `basket`, `oca`, `oto`, `oco`, `bracket`, `cover`, a `hidden_stop` with a backstop, and a `stop_and_reverse` that closes before it reverses.
         """
         if name in JOIN_PRESET_NAMES:
             return True
@@ -253,6 +257,10 @@ class PresetExpander:
         self.problems = []
         if name == 'accumulation':
             return self._accumulation(settings, entry, path)
+        if name == 'attached_hedge':
+            return self._attached_hedge(settings, entry, path)
+        if name == 'legged_spread':
+            return self._legged_spread(settings, entry, path)
         if name == 'basket':
             return self._basket(settings, entry, path)
         if name == 'oca':
@@ -328,6 +336,107 @@ class PresetExpander:
                 }
             )
         return nodes
+
+    def _attached_hedge(self, settings, entry, path):
+        """The order, and as it fills a hedge in another instrument of `ratio` times what filled, in whole lots, each missing lot sent as a new order past the hedge's touch.
+
+        Args:
+            settings (dict): `hedge_instrument_id` and `ratio`.
+            entry (dict): The order it was named in.
+            path (str): The preset's path.
+
+        Returns:
+            dict: A Then join whose child is the hedge.
+        """
+        self._refuse_unknown(settings, ('hedge_instrument_id', 'ratio', 'delta_volatility'), path, 'attached_hedge')
+        if 'delta_volatility' in settings:
+            self._add_problem(path, 'not_built', 'a hedge sized by an option\'s delta is part of the design but not built yet; give ratio instead')
+            return {}
+        if self.opening_side not in OTO_SIDES:
+            self._add_problem(path, 'needs_side', 'a hedge trades against the entry\'s side, so it needs to know the side of the entry')
+            return {}
+        ratio = settings.get('ratio')
+        if isinstance(ratio, bool) or not isinstance(ratio, (int, float)) or ratio == 0:
+            self._add_problem(path, 'bad_setting', f'ratio must be a number other than zero, not {ratio!r}')
+            return {}
+        hedges_opposite = ratio > 0
+        if (self.opening_side == 'BUY') == hedges_opposite:
+            side = 'sell'
+        else:
+            side = 'buy'
+        return {
+            'then': {
+                'first': {
+                    'order': entry,
+                },
+                'each_fill': {
+                    'order': {
+                        'instrument_id': settings.get('hedge_instrument_id'),
+                        'side': side,
+                        'quantity': {
+                            'parent_fill': {
+                                'ratio': abs(ratio),
+                                'whole_lots': True,
+                            },
+                        },
+                        'execution': [
+                            {
+                                'top_up': {},
+                            },
+                        ],
+                        'pricing': [
+                            {
+                                'marketable': {
+                                    'buffer_ticks': DEFAULT_BUFFER_TICKS,
+                                },
+                            },
+                        ],
+                    },
+                },
+            },
+        }
+
+    def _legged_spread(self, settings, entry, path):
+        """Two legs put on for a net price: the first candidate worked at its own price, and as it fills the second sent at whatever price makes the net.
+
+        Args:
+            settings (dict): `net_price`, and `candidates`, exactly two.
+            entry (dict): The order it was named in, whose other presets and slot values the first leg keeps.
+            path (str): The preset's path.
+
+        Returns:
+            dict: A Then join whose child is the second leg.
+        """
+        self._refuse_unknown(settings, ('net_price', 'candidates'), path, 'legged_spread')
+        nodes = self._candidate_orders(settings, entry, path, 'legged_spread')
+        if self.problems:
+            return {}
+        if len(nodes) != 2:
+            self._add_problem(path, 'bad_setting', f'a legged spread has exactly two legs, the one to work first; {len(nodes)} were given')
+            return {}
+        second = dict(nodes[1]['order'])
+        second.pop('quantity', None)
+        second.pop('presets', None)
+        second['pricing'] = [
+            {
+                'from_parent_fill': {
+                    'net_price': settings.get('net_price'),
+                },
+            },
+        ]
+        second['execution'] = [
+            {
+                'top_up': {},
+            },
+        ]
+        return {
+            'then': {
+                'first': nodes[0],
+                'each_fill': {
+                    'order': second,
+                },
+            },
+        }
 
     def _accumulation(self, settings, entry, path):
         """The order's quantity bought again and again, every `every_minutes`, `purchases` times, each purchase resting on its own side of the book no worse than the body's limit.

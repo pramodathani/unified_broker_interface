@@ -1,0 +1,6 @@
+Reads quotes: False, paced by ticks: False, grows by changing its order: False
+Target 0: committed 0, due []
+Target 500: committed 0, due [500]
+Target 500: committed 500, due []
+Target 1000: committed 500, due [500]
+As a dry run shows it: top_up

@@ -45,6 +45,8 @@ class OrderPart:
         lifetime (Lifetime | None): When it stops working and what is done then, or None for the body's validity.
         overrides (dict): Body values of its own, such as `instrument_id`, `quantity` or `transaction_type`, written over the caller's body; empty for an order on the body as it is.
         position (PositionQuantity | None): For the `close` side, how the position it closes is read; None for any other order.
+        fill_ratio (FillRatio | None): How the size a Then join hands it is scaled, or None to take it as it is.
+        sized_by_fills (bool): Whether it is a Then join's child, sized by the first plan's fills.
     """
 
     def __init__(self, path, presets, trigger, side, pricing, keeps_tag=True, execution=None, cap=None, post_only=None, discretion=None, lifetime=None, overrides=None, position=None):
@@ -85,6 +87,8 @@ class OrderPart:
             overrides = {}
         self.overrides = overrides
         self.position = position
+        self.fill_ratio = None
+        self.sized_by_fills = False
 
     def context(self, plan_order):
         """The plan order as this order's pricing, execution and trigger see it: on this order's instrument, with its own body values.
@@ -367,6 +371,12 @@ class OrderPart:
             list: One `(path, answer, status)` per broker order placed now.
         """
         record = plan_order.part_record(self.path)
+        if target is not None and self.fill_ratio is not None:
+            target = self.fill_ratio.scaled(self.context(plan_order), target)
+            if target <= 0:
+                record['target'] = target
+                plan_order.set_part_record(self.path, record, None)
+                return []
         if target is not None:
             record['target'] = target
         if target is not None and target <= 0:
@@ -741,6 +751,8 @@ class OrderPart:
         Returns:
             None: This method returns nothing.
         """
+        if self.fill_ratio is not None:
+            target = self.fill_ratio.scaled(self.context(plan_order), target)
         record = plan_order.part_record(self.path)
         state = record.get('state')
         if state == 'done':
@@ -912,6 +924,8 @@ class OrderPart:
         """
         if self.position is not None:
             return self.position.described()
+        if self.fill_ratio is not None:
+            return self.fill_ratio.described()
         if 'quantity' in self.overrides:
             return self.overrides['quantity']
         if self.keeps_tag:

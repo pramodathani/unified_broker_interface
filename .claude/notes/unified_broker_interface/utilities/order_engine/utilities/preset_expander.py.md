@@ -47,3 +47,7 @@ The backstop is a second order resting beside the engine-side stop, cancelled be
 ## Stage 5c (2026-10-01)
 
 `accumulation` is a join preset: a repeat of the rest of the order, priced with a peg to the own touch that does not follow and stays within the body's limit.
+
+## Stage 5d (2026-10-01)
+
+`attached_hedge` chooses the hedge's side from the entry's side and the ratio's sign, as today's does, and refuses `delta_volatility` as not built. `legged_spread` takes the second candidate's side and instrument but not its quantity or price, which come from the first leg's fills.

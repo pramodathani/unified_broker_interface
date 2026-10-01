@@ -57,3 +57,7 @@ A part whose lifetime has ended is marked `ended`, which stops `send_due` sendin
 ## Stage 5b (2026-10-01)
 
 A part with a `position` is a close: `send` hands it to `_close_positions`, which closes through `PositionQuantity` and records `nothing_held`, `refused` when the book gave no price, or `working`. Its closing orders carry the part's path as their role, so the part settles as done once they finish. `close` sends the side opposite to the body's for any trigger that needs a side, as `protect` does, and counts as closing a position.
+
+## Stage 5d (2026-10-01)
+
+`fill_ratio` scales the target a Then join hands the part in `start` and `set_target`; a scaled target of zero leaves the part pending. `sized_by_fills` is set by the reader on a Then join's child, so a `parent_fill` quantity anywhere else is refused.
