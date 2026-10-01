@@ -43,3 +43,7 @@ The backstop is a second order resting beside the engine-side stop, cancelled be
 ## Stage 5b (2026-10-01)
 
 `close_on_trigger` and the `double` form of `stop_and_reverse` are slot values. The default `sequential` form of `stop_and_reverse` is a join, so `is_join` depends on its `method`; it is a Then join whose child, sent `on_complete` and sized to what closed, trades the side opposite to the position, which needs the body's side. `square_off` closes every instrument on its product unless `instrument_ids` narrows it, as today.
+
+## Stage 5c (2026-10-01)
+
+`accumulation` is a join preset: a repeat of the rest of the order, priced with a peg to the own touch that does not follow and stays within the body's limit.

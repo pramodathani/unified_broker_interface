@@ -45,3 +45,7 @@ The `lifetime` slot is a list holding one object, with the end and its settings 
 ## Stage 5b (2026-10-01)
 
 `close` is a side and `quantity` may be `{"position": {...}}`, which presets can supply as a slot; a later source's position replaces an earlier one. The two must come together (`close_needs_position`, `position_needs_close`), and a close refuses pricing and execution of its own (`close_prices_itself`).
+
+## Stage 5c (2026-10-01)
+
+`repeat` is read into `times` copies of its order with `ElapsedCondition` triggers; its child must be an order node (`repeat_needs_order`), because copies are given triggers. `every_trading_day_at` and `until` are recognised and refused as not built. A repeat cannot be a Then join's child.

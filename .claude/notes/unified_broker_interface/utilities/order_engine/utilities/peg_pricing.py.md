@@ -7,3 +7,7 @@ The three references, the offset moved away from filling and the rounding onto t
 ## What it does not do yet
 
 Today's peg re-anchors its offset when the caller changes the order's price, so it follows the market from the caller's price. A plan order has no `on_leg_modified` yet, so the next tick moves a hand-moved plan peg back to its reference. The trailing stop has the same gap since stage 2c.
+
+## `follows` and `within_body_price` (stage 5c, 2026-10-01)
+
+Today's accumulation prices each purchase at the bid when it is sent, no higher than the caller's limit, at the limit when there is no bid, and never moves it. Rather than a new pricing for that one type, the peg gained two settings: `follows: false` makes `moves` false, and `within_body_price` holds the price at the body's limit. The offline scenarios `a_plan_accumulation_*` place at the same prices as `an_accumulation_*`.

@@ -2,4 +2,4 @@ Reads quotes: True, moves: True
 Sent as: {'quantity': 10, 'order_type': 'LIMIT', 'price': '999.95'}
 Bid 1000.2: move to (Decimal('1000.15'), None, 'the own_touch peg moved to 1000.15')
 Bid 999.8: move to (Decimal('999.75'), None, 'the own_touch peg moved to 999.75')
-As a dry run shows it: {'peg': {'reference': 'own_touch', 'offset_ticks': 1}}
+As a dry run shows it: {'peg': {'reference': 'own_touch', 'offset_ticks': 1, 'follows': True, 'within_body_price': False}}

@@ -1,4 +1,6 @@
 Midpoint peg, buy: 1000.05, sell: 1000.10
 Opposite touch peg, buy: 1000.15, sell: 1000.00
 With no offer, the midpoint peg sends: None
-As a dry run shows them: {'peg': {'reference': 'mid', 'offset_ticks': 0}} and {'peg': {'reference': 'opposite_touch', 'offset_ticks': 0}}
+As a dry run shows them: {'peg': {'reference': 'mid', 'offset_ticks': 0, 'follows': True, 'within_body_price': False}} and {'peg': {'reference': 'opposite_touch', 'offset_ticks': 0, 'follows': True, 'within_body_price': False}}
+A purchase that stays put moves: False; within a limit of 999.95 it bids 999.95, and with no bid 999.95
+Sent with the bid at 1000.00 and no offer: {'order_type': 'LIMIT', 'price': '999.95'}

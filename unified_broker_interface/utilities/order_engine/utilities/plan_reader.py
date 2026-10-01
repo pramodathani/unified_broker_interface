@@ -23,6 +23,9 @@ from unified_broker_interface.utilities.order_engine.utilities.condition_group i
 from unified_broker_interface.utilities.order_engine.utilities.discretion_modifier import (
     DiscretionModifier,
 )
+from unified_broker_interface.utilities.order_engine.utilities.elapsed_condition import (
+    ElapsedCondition,
+)
 from unified_broker_interface.utilities.order_engine.utilities.either_part import (
     SIBLING_RULES,
     EitherPart,
@@ -81,6 +84,9 @@ from unified_broker_interface.utilities.order_engine.utilities.price_crosses_con
     FIELDS,
     PriceCrossesCondition,
 )
+from unified_broker_interface.utilities.order_engine.utilities.repeat_part import (
+    RepeatPart,
+)
 from unified_broker_interface.utilities.order_engine.utilities.sequence_part import (
     SequencePart,
 )
@@ -124,7 +130,16 @@ BUILT_JOIN_NAMES = (
     'either',
     'together',
     'sequence',
+    'repeat',
 )
+REPEAT_SETTINGS = (
+    'child',
+    'times',
+    'every_minutes',
+    'every_trading_day_at',
+    'until',
+)
+MOST_REPEATS = 100
 TOGETHER_SETTINGS = (
     'children',
     'group_margin',
@@ -278,6 +293,8 @@ class PlanReader:
                 return self._read_together(content, path, keeps_tag)
             if kind == 'sequence':
                 return self._read_sequence(content, path, keeps_tag)
+            if kind == 'repeat':
+                return self._read_repeat(content, path, keeps_tag)
             if kind in JOIN_NAMES:
                 self._add_problem(
                     path,
@@ -335,7 +352,7 @@ class PlanReader:
         child_key = child_keys[0]
         first = self._read_node(then['first'], f'{path}.first', keeps_tag)
         child = self._read_node(then[child_key], f'{path}.{child_key}', False)
-        if isinstance(child, (TogetherPart, SequencePart)):
+        if isinstance(child, (TogetherPart, SequencePart, RepeatPart)):
             self._add_problem(
                 child.path,
                 'join_not_sized',
@@ -427,6 +444,51 @@ class PlanReader:
         if children is None or len(self.problems) > problems_before:
             return None
         return SequencePart(path, children)
+
+    def _read_repeat(self, repeat, path, keeps_tag):
+        """Reads a Repeat join into one copy of its order per time, each after the first waiting its turn.
+
+        Args:
+            repeat (object): The join's content as the caller wrote it.
+            path (str): Where the join sits in the plan.
+            keeps_tag (bool): Whether the first copy carries the caller's tag.
+
+        Returns:
+            RepeatPart | None: The join, or None when it has a problem.
+        """
+        if not isinstance(repeat, dict):
+            self._add_problem(path, 'join_shape', 'repeat holds an object with child, times and every_minutes')
+            return None
+        problems_before = len(self.problems)
+        for setting in repeat:
+            if setting not in REPEAT_SETTINGS:
+                self._add_problem(path, 'unknown_setting', f'repeat takes {", ".join(REPEAT_SETTINGS)}, not {setting!r}')
+        for name in ('every_trading_day_at', 'until'):
+            if name in repeat:
+                self._add_problem(path, 'not_built', f'{name} is part of the design but not built yet, because a plan does not yet outlive the trading day')
+        times = self._whole_number(repeat.get('times'), path, 'times', 1, MOST_REPEATS)
+        every_minutes = repeat.get('every_minutes')
+        if isinstance(every_minutes, bool) or not isinstance(every_minutes, (int, float)) or every_minutes <= 0:
+            self._add_problem(path, 'bad_setting', f'every_minutes must be a number of minutes above zero, not {every_minutes!r}')
+        child = repeat.get('child')
+        if not isinstance(child, dict) or list(child) != ['order']:
+            self._add_problem(path, 'repeat_needs_order', 'repeat sends one order again and again, so its child is an order node')
+        if len(self.problems) > problems_before:
+            return None
+        copies = []
+        for index in range(times):
+            copy_path = f'{path}.children.{index}'
+            part = self._read_node(child, copy_path, keeps_tag and index == 0)
+            if part is None:
+                return None
+            if index > 0:
+                elapsed = ElapsedCondition(every_minutes * index)
+                if part.trigger is None:
+                    part.trigger = elapsed
+                else:
+                    part.trigger = ConditionGroup('all', [part.trigger, elapsed])
+            copies.append(part)
+        return RepeatPart(path, copies, times, every_minutes)
 
     def _read_overrides(self, order, path):
         """Reads the body values an order gives of its own, such as another instrument or quantity.
@@ -1301,14 +1363,14 @@ class PlanReader:
         """Reads `peg` pricing.
 
         Args:
-            settings (dict): `reference`, default `own_touch`, and `offset_ticks`, default 0.
+            settings (dict): `reference`, default `own_touch`; `offset_ticks`, default 0; `follows`, default true; and `within_body_price`, default false.
             path (str): Where it sits in the plan.
 
         Returns:
             PegPricing | None: The pricing, or None when it has a problem.
         """
         problems_before = len(self.problems)
-        self._refuse_unknown(settings, ('reference', 'offset_ticks'), path, 'peg')
+        self._refuse_unknown(settings, ('reference', 'offset_ticks', 'follows', 'within_body_price'), path, 'peg')
         reference = settings.get('reference', 'own_touch')
         if reference not in REFERENCES:
             self._add_problem(
@@ -1323,9 +1385,15 @@ class PlanReader:
                 'bad_setting',
                 f'offset_ticks must be a whole number of ticks, not {offset!r}',
             )
+        flags = {}
+        for name, default in (('follows', True), ('within_body_price', False)):
+            value = settings.get(name, default)
+            if not isinstance(value, bool):
+                self._add_problem(path, 'bad_setting', f'{name} must be true or false, not {value!r}')
+            flags[name] = value
         if len(self.problems) > problems_before:
             return None
-        return PegPricing(reference, offset)
+        return PegPricing(reference, offset, flags['follows'], flags['within_body_price'])
 
     def _read_chase(self, settings, path):
         """Reads `chase` pricing.

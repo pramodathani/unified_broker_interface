@@ -2571,7 +2571,7 @@ class OrderEngineSuite:
             ),
         ]
 
-    def plan_clock_result(self, name, plan, fills, tick_at, answer, quote=None, taken_at=None, positions=None, resting=None):
+    def plan_clock_result(self, name, plan, fills, tick_at, answer, quote=None, taken_at=None, positions=None, resting=None, body_overrides=None, record_prices=False):
         """Places one `plan` order, optionally fills it, gives it two clock ticks, and records what it did and the state of each of its parts.
 
         Args:
@@ -2584,6 +2584,8 @@ class OrderEngineSuite:
             taken_at (datetime.datetime | None): The moment the engine takes the order, or None for `FROZEN_NOW`.
             positions (float | dict | None): A net RELIANCE position to seed, or each broker's share, or None for none.
             resting (list | None): Flattrade order ids of open RELIANCE orders placed outside the engine.
+            body_overrides (dict | None): Body fields to replace, such as the quantity and price.
+            record_prices (bool): Whether to record the price of every leg placed, as `leg_prices`.
 
         Returns:
             dict: The recorded result, with `parts`, each parent's `parts` parameter.
@@ -2598,13 +2600,20 @@ class OrderEngineSuite:
                 'plan': plan,
             },
         )
+        if body_overrides:
+            body.update(body_overrides)
         result = self.clock_result(name, body, fills, tick_at, answer, quote=quote, taken_at=taken_at, positions=positions, resting=resting)
         stored = self.fake_redis.hashes.get('unified:orders:parents', {})
         parts = []
+        prices = []
         for document in stored.values():
             parameters = json.loads(document).get('parameters') or {}
             parts.append(parameters.get('parts'))
+            for leg in ParentOrder.from_document(json.loads(document)).legs:
+                prices.append(leg.price)
         result['parts'] = parts
+        if record_prices:
+            result['leg_prices'] = prices
         return result
 
     def plan_price_result(self, name, plan, steps, answer, positions=None, restart_between_ticks=False, book_overrides=None, transaction_type='BUY', body_overrides=None, resting=None):
@@ -5081,6 +5090,118 @@ class OrderEngineSuite:
                 ],
                 accepted,
                 positions=75,
+            ),
+        ]
+
+    def run_plan_repeat_checks(self):
+        """Runs plans that send one order again on a schedule, beside the accumulation type they stand for.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        accepted = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        frozen = FROZEN_NOW.timestamp()
+        accumulation = {
+            'order': {
+                'presets': [
+                    {
+                        'accumulation': {
+                            'every_minutes': 30,
+                            'purchases': 4,
+                        },
+                    },
+                ],
+            },
+        }
+        return [
+            self.plan_clock_result(
+                'a_plan_accumulation_buys_again_when_its_gap_is_up',
+                accumulation,
+                [],
+                frozen + 2000,
+                accepted,
+                quote=self.scenarios.quote(),
+                body_overrides={
+                    'quantity': 5,
+                },
+            ),
+            self.plan_clock_result(
+                'a_plan_accumulation_never_bids_above_the_callers_limit',
+                accumulation,
+                [],
+                frozen + 60,
+                accepted,
+                quote=self.scenarios.quote(),
+                body_overrides={
+                    'quantity': 5,
+                    'price': 995,
+                },
+                record_prices=True,
+            ),
+            self.plan_clock_result(
+                'a_plan_accumulation_rests_on_the_bid_when_it_is_better_than_the_limit',
+                accumulation,
+                [],
+                frozen + 60,
+                accepted,
+                quote=self.scenarios.quote(),
+                body_overrides={
+                    'quantity': 5,
+                    'price': 1005,
+                },
+                record_prices=True,
+            ),
+            self.plan_clock_result(
+                'a_plan_accumulation_with_no_bid_rests_at_the_callers_limit',
+                accumulation,
+                [],
+                frozen + 60,
+                accepted,
+                quote=self.scenarios.quote(depth={
+                    'buy': [],
+                    'sell': [],
+                }),
+                body_overrides={
+                    'quantity': 5,
+                    'price': 995,
+                },
+                record_prices=True,
+            ),
+            self.plan_clock_result(
+                'a_plan_accumulation_waits_out_the_gap_between_purchases',
+                accumulation,
+                [],
+                frozen + 60,
+                accepted,
+                quote=self.scenarios.quote(),
+                body_overrides={
+                    'quantity': 5,
+                },
+            ),
+            self.plan_clock_result(
+                'a_plan_repeat_whose_child_is_a_join_is_refused',
+                {
+                    'repeat': {
+                        'child': {
+                            'then': {
+                                'first': {
+                                    'order': {},
+                                },
+                                'each_fill': {
+                                    'order': {},
+                                },
+                            },
+                        },
+                        'times': 2,
+                        'every_minutes': 5,
+                    },
+                },
+                [],
+                frozen + 60,
+                accepted,
             ),
         ]
 
@@ -8790,6 +8911,7 @@ class OrderEngineSuite:
             results.extend(self.run_plan_lifetime_checks())
             results.extend(self.run_plan_group_checks())
             results.extend(self.run_plan_close_checks())
+            results.extend(self.run_plan_repeat_checks())
             results.extend(self.run_clock_checks())
             results.extend(self.run_price_checks())
             results.extend(self.run_wiring_checks())

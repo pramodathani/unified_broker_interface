@@ -56,6 +56,7 @@ PRESET_NAMES = (
     'close_on_trigger',
     'square_off',
     'stop_and_reverse',
+    'accumulation',
     'oto',
     'oco',
     'bracket',
@@ -105,6 +106,7 @@ CANDIDATE_OVERRIDES = (
     'tag',
 )
 JOIN_PRESET_NAMES = (
+    'accumulation',
     'basket',
     'oca',
     'oto',
@@ -222,7 +224,7 @@ class PresetExpander:
             settings (dict): The preset's settings.
 
         Returns:
-            bool: True for `basket`, `oca`, `oto`, `oco`, `bracket`, `cover`, a `hidden_stop` with a backstop, and a `stop_and_reverse` that closes before it reverses.
+            bool: True for `accumulation`, `basket`, `oca`, `oto`, `oco`, `bracket`, `cover`, a `hidden_stop` with a backstop, and a `stop_and_reverse` that closes before it reverses.
         """
         if name in JOIN_PRESET_NAMES:
             return True
@@ -249,6 +251,8 @@ class PresetExpander:
             dict: The plan node, as a caller would write it; empty when there are problems.
         """
         self.problems = []
+        if name == 'accumulation':
+            return self._accumulation(settings, entry, path)
         if name == 'basket':
             return self._basket(settings, entry, path)
         if name == 'oca':
@@ -324,6 +328,38 @@ class PresetExpander:
                 }
             )
         return nodes
+
+    def _accumulation(self, settings, entry, path):
+        """The order's quantity bought again and again, every `every_minutes`, `purchases` times, each purchase resting on its own side of the book no worse than the body's limit.
+
+        Args:
+            settings (dict): `every_minutes` and `purchases`.
+            entry (dict): The order it was named in, which each purchase copies.
+            path (str): The preset's path.
+
+        Returns:
+            dict: A Repeat join of a peg to the own touch that does not follow.
+        """
+        self._refuse_unknown(settings, ('every_minutes', 'purchases'), path, 'accumulation')
+        purchase = dict(entry)
+        purchase['pricing'] = [
+            {
+                'peg': {
+                    'reference': 'own_touch',
+                    'follows': False,
+                    'within_body_price': True,
+                },
+            },
+        ]
+        return {
+            'repeat': {
+                'child': {
+                    'order': purchase,
+                },
+                'times': settings.get('purchases'),
+                'every_minutes': settings.get('every_minutes'),
+            },
+        }
 
     def _basket(self, settings, entry, path):
         """Several orders, usually on different instruments, placed at once at one broker that can afford them all.
