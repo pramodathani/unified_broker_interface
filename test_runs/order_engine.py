@@ -2571,7 +2571,7 @@ class OrderEngineSuite:
             ),
         ]
 
-    def plan_price_result(self, name, plan, steps, answer, positions=None, restart_between_ticks=False, book_overrides=None):
+    def plan_price_result(self, name, plan, steps, answer, positions=None, restart_between_ticks=False, book_overrides=None, transaction_type='BUY'):
         """Places one `plan` order and walks it through price ticks, recording what it did and the state of each of its parts.
 
         Args:
@@ -2582,6 +2582,7 @@ class OrderEngineSuite:
             positions (float | None): A net RELIANCE position to seed, or None for none.
             restart_between_ticks (bool): Whether to rebuild every parent from its recorded events after each tick, as recovery does.
             book_overrides (dict | None): Fields to put on every order in the broker's book, such as a stop's order type.
+            transaction_type (str): The body's side, as a caller sent it; the API accepts it in any case.
 
         Returns:
             dict: The recorded result, with `parts`, each parent's `parts` parameter.
@@ -2596,6 +2597,7 @@ class OrderEngineSuite:
                 'plan': plan,
             },
         )
+        body['transaction_type'] = transaction_type
         result = self.price_result(
             name,
             body,
@@ -2668,6 +2670,48 @@ class OrderEngineSuite:
                 ],
                 accepted,
                 restart_between_ticks=True,
+            ),
+            self.plan_price_result(
+                'a_plan_buy_sent_in_lower_case_still_waits_for_the_dip',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'market_if_touched': {
+                                    'trigger_price': 995,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1},
+                    {'quote': touched, 'at': 2},
+                ],
+                accepted,
+                transaction_type='buy',
+            ),
+            self.plan_price_result(
+                'a_plan_hidden_stop_for_a_long_sent_in_lower_case_sells',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'hidden_stop': {
+                                    'trigger_price': 995,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': touched, 'at': 1},
+                ],
+                accepted,
+                positions=10,
+                transaction_type='buy',
             ),
             self.plan_price_result(
                 'a_plan_limit_if_touched_rests_its_limit_once_touched',

@@ -107,6 +107,19 @@ class OrderPart:
         """
         return self.side == 'protect'
 
+    def _opening_side(self, plan_order):
+        """The side of the caller's body, read the way a validated order reads it.
+
+        The API accepts the side in any case and keeps the body as the caller sent it, so `buy` must be read as `BUY`. Comparing the raw value made a lower-case buy wait in the sell direction and fire at once, which a live test on 2026-10-01 caught.
+
+        Args:
+            plan_order (PlanOrder): The plan order, whose parent holds the body.
+
+        Returns:
+            str: BUY or SELL.
+        """
+        return str(plan_order.parent.body.get('transaction_type') or '').strip().upper()
+
     def sending_side(self, opening_side):
         """The side this part's orders are sent on.
 
@@ -157,7 +170,7 @@ class OrderPart:
             return True
         if 'trigger' not in memory:
             memory['trigger'] = {}
-        opening_side = plan_order.parent.body.get('transaction_type')
+        opening_side = self._opening_side(plan_order)
         return self.trigger.is_met(
             plan_order,
             memory['trigger'],
@@ -180,7 +193,7 @@ class OrderPart:
             PlaceOrderRequest | None: The order.
         """
         body = dict(plan_order.parent.body)
-        opening_side = body.get('transaction_type')
+        opening_side = self._opening_side(plan_order)
         sending_side = self.sending_side(opening_side)
         body['transaction_type'] = sending_side
         target = plan_order.part_record(self.path).get('target')
