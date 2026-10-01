@@ -186,6 +186,9 @@ class WhatEachPresetStandsForExample:
                 'steps': 3,
                 'profit_points': 4,
             },
+            'strategy_stop_exits': {
+                'loss_limit': -500,
+            },
             'scale_out_exits': {
                 'stop_price': 990,
                 'stop_limit_price': 988,

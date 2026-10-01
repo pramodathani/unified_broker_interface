@@ -23,3 +23,11 @@ The grid and the two-sided quote both measure the net position their own fills h
 ## Stopping (2026-10-02)
 
 `cancel_rest` records `stopped` for every kept-whole part before cancelling what rests. The two-sided quote and the exposure hedge end only once stopped; the grid and the scale with profit-taker stop placing anything new once stopped, so a rung that fills after its join cancelled the grid is not answered with a fresh order. `finish_when_done` is `OrderPart`'s done rule, shared by all four.
+
+## Stopped with nothing placed (2026-10-02)
+
+`OrderPart`'s done rule waits for every broker order to finish, and a part with none never finishes. A two-sided quote, exposure hedge or strategy stop's exits stopped before placing anything would then hold the plan open for the rest of the day, so `finish_when_done` ends a stopped part with no orders as cancelled.
+
+## `opened_instruments`
+
+Set by the reader on a kept-whole Then child, beside `opened_by`: the instrument each of the first plan's orders trades, None for the parent's own. The strategy stop's exits read it to know what to watch.

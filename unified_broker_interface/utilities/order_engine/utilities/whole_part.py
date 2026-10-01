@@ -17,6 +17,7 @@ class WholePart(OrderPart):
         NEEDS_THEN (bool): Whether the type only works as a Then join's child, sized by the first plan's fills; False here.
         name (str): The preset that names the type, such as `grid`.
         settings (dict): The preset's settings, as the caller wrote them.
+        opened_instruments (list): Under a Then join, the instrument each of the first plan's orders trades, None for the parent's; empty otherwise.
     """
 
     NEEDS_THEN = False
@@ -47,6 +48,7 @@ class WholePart(OrderPart):
         )
         self.name = name
         self.settings = settings
+        self.opened_instruments = []
 
     def settings_problems(self):
         """Every problem with the preset's settings, which by default is none.
@@ -192,7 +194,7 @@ class WholePart(OrderPart):
         return bool(plan_order.part_record(self.path).get('stopped'))
 
     def finish_when_done(self, plan_order):
-        """Marks this part done once every one of its broker orders has finished.
+        """Marks this part done once every one of its broker orders has finished, or as cancelled once it has been stopped without placing any.
 
         Args:
             plan_order (PlanOrder): The plan order.
@@ -204,6 +206,8 @@ class WholePart(OrderPart):
         if record.get('state') != 'working':
             return
         reason = self.done_reason(plan_order.parent)
+        if reason is None and self.is_stopped(plan_order) and not self.own_legs(plan_order.parent):
+            reason = 'cancelled'
         if reason is None:
             return
         record['state'] = 'done'

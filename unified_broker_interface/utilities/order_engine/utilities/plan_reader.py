@@ -140,6 +140,9 @@ from unified_broker_interface.utilities.order_engine.utilities.sequence_part imp
 from unified_broker_interface.utilities.order_engine.utilities.stages_pricing import (
     StagesPricing,
 )
+from unified_broker_interface.utilities.order_engine.utilities.strategy_stop_exits_part import (
+    StrategyStopExitsPart,
+)
 from unified_broker_interface.utilities.order_engine.utilities.then_part import (
     ThenPart,
 )
@@ -264,6 +267,7 @@ WHOLE_PART_CLASSES = {
     'scale_with_profit_taker': ScaleWithProfitTakerPart,
     'exposure_hedge': ExposureHedgePart,
     'scale_out_exits': ScaleOutExitsPart,
+    'strategy_stop_exits': StrategyStopExitsPart,
 }
 POSITION_SETTINGS = (
     'product',
@@ -441,8 +445,13 @@ class PlanReader:
             opened_by = []
             for part in first.order_parts():
                 opened_by.append(part.path)
+            opened_instruments = []
+            for part in first.order_parts():
+                opened_instruments.append(part.overrides.get('instrument_id'))
             for part in child.order_parts():
                 part.opened_by = opened_by
+                if isinstance(part, WholePart):
+                    part.opened_instruments = opened_instruments
         if isinstance(child, OrderPart):
             child.sized_by_fills = True
             if isinstance(child.pricing, FromParentFillPricing) and isinstance(first, OrderPart):

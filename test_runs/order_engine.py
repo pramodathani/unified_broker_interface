@@ -3030,6 +3030,39 @@ class OrderEngineSuite:
                 },
             }
 
+        condor_legs = [
+            {
+                'instrument_id': identifiers['reliance'],
+                'quantity': 10,
+                'price': 1000,
+            },
+            {
+                'instrument_id': identifiers['kwil'],
+                'transaction_type': 'SELL',
+                'quantity': 10,
+                'price': 250,
+            },
+        ]
+
+        def strategy(settings):
+            """A plan of one order with the strategy stop preset.
+
+            Args:
+                settings (dict): Its settings.
+
+            Returns:
+                dict: The plan.
+            """
+            return {
+                'order': {
+                    'presets': [
+                        {
+                            'strategy_stop': settings,
+                        },
+                    ],
+                },
+            }
+
         capped_at_twenty = {
             'levels': 2,
             'step_points': 5,
@@ -3559,6 +3592,88 @@ class OrderEngineSuite:
                     },
                 ],
                 numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_strategy_stop_closes_every_leg_when_the_total_is_past_its_limit',
+                strategy({
+                    'loss_limit': -500,
+                    'candidates': condor_legs,
+                }),
+                [
+                    {
+                        'quote': steady,
+                        'at': 0,
+                        'updates': [
+                            self.update('26091500000021', 'COMPLETE', 10, average_price=1000.0),
+                        ],
+                    },
+                    {'quote': self.book_at(900.00, 900.05), 'at': 1},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_strategy_stop_leaves_a_strategy_inside_its_limits_alone',
+                strategy({
+                    'loss_limit': -500,
+                    'candidates': condor_legs,
+                }),
+                [
+                    {
+                        'quote': steady,
+                        'at': 0,
+                        'updates': [
+                            self.update('26091500000021', 'COMPLETE', 10, average_price=1000.0),
+                        ],
+                    },
+                    {'quote': self.book_at(990.00, 990.05), 'at': 1},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_strategy_stop_takes_its_profit_closing_the_short_first',
+                strategy({
+                    'profit_target': 500,
+                    'candidates': condor_legs,
+                }),
+                [
+                    {
+                        'quote': steady,
+                        'at': 0,
+                        'updates': [
+                            self.update('26091500000101', 'COMPLETE', 10, average_price=1000.0),
+                            self.update('26091500000102', 'COMPLETE', 10, average_price=250.0),
+                        ],
+                        'other_quotes': {
+                            'kwil': self.book_at(250.00, 250.05),
+                        },
+                    },
+                    {
+                        'quote': self.book_at(1100.00, 1100.05),
+                        'at': 1,
+                        'other_quotes': {
+                            'kwil': self.book_at(250.00, 250.05),
+                        },
+                    },
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_strategy_stop_exits_alone_are_refused',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'strategy_stop_exits': {
+                                    'loss_limit': -500,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
             ),
             self.plan_price_result(
                 'a_plan_grid_beside_another_preset_is_refused',

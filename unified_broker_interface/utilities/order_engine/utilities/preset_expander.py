@@ -31,6 +31,7 @@ KEPT_WHOLE_PRESETS = (
     'scale_with_profit_taker',
     'exposure_hedge',
     'scale_out_exits',
+    'strategy_stop_exits',
 )
 PRESET_NAMES = (
     'simple',
@@ -82,6 +83,8 @@ PRESET_NAMES = (
     'exposure_hedge',
     'scale_out',
     'scale_out_exits',
+    'strategy_stop',
+    'strategy_stop_exits',
     'oto',
     'oco',
     'bracket',
@@ -142,6 +145,7 @@ JOIN_PRESET_NAMES = (
     'bracket',
     'cover',
     'scale_out',
+    'strategy_stop',
 )
 BACKSTOP_SETTINGS = (
     'backstop_price',
@@ -351,6 +355,8 @@ class PresetExpander:
             return self._cover(settings, entry, path)
         if name == 'scale_out':
             return self._scale_out(settings, entry, path)
+        if name == 'strategy_stop':
+            return self._strategy_stop(settings, entry, path)
         if name == 'stop_and_reverse':
             return self._sequential_reverse(settings, entry, path)
         return self._hidden_stop_with_backstop(settings, entry, path, name)
@@ -820,6 +826,44 @@ class PresetExpander:
                         'presets': [
                             {
                                 'scale_out_exits': settings,
+                            },
+                        ],
+                    },
+                },
+                'cancel_first_on_child_fill': True,
+            },
+        }
+
+    def _strategy_stop(self, settings, entry, path):
+        """A basket of the candidates, and once any of it fills, the strategy stop's exits kept whole, marking the whole strategy and closing it past a level.
+
+        Args:
+            settings (dict): `candidates` and `hedge_benefit` for the basket, and `loss_limit` and `profit_target`, which the exits check.
+            entry (dict): The order it was named in, whose other presets and slot values every candidate shares.
+            path (str): The preset's path.
+
+        Returns:
+            dict: A Then join of the basket and the exits.
+        """
+        self._refuse_unknown(settings, ('candidates', 'hedge_benefit', 'loss_limit', 'profit_target'), path, 'strategy_stop')
+        basket_settings = {}
+        exit_settings = {}
+        for name, value in settings.items():
+            if name in ('candidates', 'hedge_benefit'):
+                basket_settings[name] = value
+            else:
+                exit_settings[name] = value
+        basket = self._basket(basket_settings, entry, path)
+        if self.problems:
+            return {}
+        return {
+            'then': {
+                'first': basket,
+                'each_fill': {
+                    'order': {
+                        'presets': [
+                            {
+                                'strategy_stop_exits': exit_settings,
                             },
                         ],
                     },

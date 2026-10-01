@@ -1,0 +1,10 @@
+problems [], watches ['INFY'], needs prices True, moves on ticks True
+tick sizes: {'RELIANCE': '0.05', 'INFY': '0.05'}
+start places: []
+RELIANCE 990.0, INFY 1505.0: total -150.00, closed False
+RELIANCE 980.0, INFY 1520.0: total -400.00, closed False
+RELIANCE 950.0, INFY 1520.0: total -700.00, closed True
+requests: [('place', 'INFY', 'BUY', 10, '1520.15'), ('place', 'RELIANCE', 'SELL', 10, '949.85')]
+a fourth tick closes nothing more: False
+the close of the long would be: 949.85
+a view of INFY rounds to 0.05

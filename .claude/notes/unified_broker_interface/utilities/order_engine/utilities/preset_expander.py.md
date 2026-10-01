@@ -99,3 +99,7 @@ The expander does not check a kept-whole preset's settings: it hands `name` and 
 ## Scale out (2026-10-02)
 
 `scale_out` is a join preset: a Then join of the order and a `scale_out_exits` child, cancelling the rest of the entry once an exit fills, the shape `bracket` uses. The settings are handed on unchecked; the exits check them.
+
+## Strategy stop (2026-10-02)
+
+`strategy_stop` is a join preset: a Then join of the `basket` the candidates make and a `strategy_stop_exits` child, cancelling the rest of the basket once a close fills. `candidates` and `hedge_benefit` go to the basket; the levels go to the exits, which check them.
