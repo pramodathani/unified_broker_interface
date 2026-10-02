@@ -57,7 +57,9 @@ class CopiesWithTheirOwnTriggerExample:
                     },
                     'times': 2,
                     'every_minutes': 10,
-                    'until': '15:00',
+                    'until': {
+                        'time_after': '15:00',
+                    },
                 },
             }
         )

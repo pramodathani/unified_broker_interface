@@ -3676,6 +3676,31 @@ class OrderEngineSuite:
                 accepted,
             ),
             self.plan_price_result(
+                'a_plan_repeat_stops_sending_copies_once_until_holds',
+                {
+                    'repeat': {
+                        'child': {
+                            'order': {},
+                        },
+                        'times': 3,
+                        'every_minutes': 1,
+                        'until': {
+                            'price_crosses': {
+                                'level': 1010,
+                                'direction': 'at_or_above',
+                            },
+                        },
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1010.00, 1010.05), 'at': 30},
+                    {'quote': steady, 'at': 61},
+                    {'quote': steady, 'at': 121},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
                 'a_plan_grid_beside_another_preset_is_refused',
                 {
                     'order': {
@@ -3827,6 +3852,68 @@ class OrderEngineSuite:
                 ],
                 accepted,
                 restart_between_ticks=True,
+                body_overrides={
+                    'price': 999.50,
+                },
+            ),
+            self.plan_price_result(
+                'a_plan_held_limit_changed_while_held_fires_at_its_new_price_and_quantity',
+                virtual_limit,
+                [
+                    {'quote': steady, 'at': 0},
+                    {
+                        'quote': steady,
+                        'at': 1,
+                        'held_change': {
+                            'price': '1000.05',
+                            'quantity': 20,
+                        },
+                    },
+                    {
+                        'quote': steady,
+                        'at': 2,
+                        'held_change': {
+                            'price': '999',
+                        },
+                    },
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_paper_order_cannot_be_cut_below_what_it_filled',
+                paper,
+                [
+                    {
+                        'quote': steady,
+                        'estimate': {
+                            'queue_filled': 4,
+                            'filled': 4,
+                        },
+                        'at': 0,
+                    },
+                    {
+                        'quote': steady,
+                        'at': 1,
+                        'held_change': {
+                            'quantity': 4,
+                        },
+                    },
+                    {
+                        'quote': steady,
+                        'at': 2,
+                        'held_change': {
+                            'price': '999.53',
+                        },
+                    },
+                    {
+                        'quote': steady,
+                        'at': 3,
+                        'held_change': {
+                            'quantity': 20,
+                        },
+                    },
+                ],
+                accepted,
                 body_overrides={
                     'price': 999.50,
                 },
@@ -6696,6 +6783,68 @@ class OrderEngineSuite:
                         },
                         'times': 2,
                         'every_minutes': 5,
+                    },
+                },
+                [],
+                frozen + 60,
+                accepted,
+            ),
+            self.plan_clock_result(
+                'a_plan_repeat_every_trading_day_sends_its_first_copy_the_next_morning',
+                {
+                    'repeat': {
+                        'child': {
+                            'order': {},
+                        },
+                        'times': 2,
+                        'every_trading_day_at': '09:20',
+                    },
+                },
+                [],
+                FROZEN_NOW.replace(day=24, hour=9, minute=20).timestamp(),
+                accepted,
+            ),
+            self.plan_clock_result(
+                'a_plan_repeat_every_trading_day_sends_its_second_copy_the_morning_after',
+                {
+                    'repeat': {
+                        'child': {
+                            'order': {},
+                        },
+                        'times': 2,
+                        'every_trading_day_at': '09:20',
+                    },
+                },
+                [],
+                FROZEN_NOW.replace(day=25, hour=9, minute=20).timestamp(),
+                accepted,
+            ),
+            self.plan_clock_result(
+                'a_plan_repeat_every_trading_day_taken_before_its_time_starts_that_day',
+                {
+                    'repeat': {
+                        'child': {
+                            'order': {},
+                        },
+                        'times': 2,
+                        'every_trading_day_at': '09:20',
+                    },
+                },
+                [],
+                FROZEN_NOW.replace(hour=9, minute=20).timestamp(),
+                accepted,
+                taken_at=FROZEN_NOW.replace(hour=9, minute=0),
+            ),
+            self.plan_clock_result(
+                'a_plan_repeat_with_two_schedules_is_refused',
+                {
+                    'repeat': {
+                        'child': {
+                            'order': {},
+                        },
+                        'times': 2,
+                        'every_minutes': 5,
+                        'every_trading_day_at': '09:20',
                     },
                 },
                 [],

@@ -1,0 +1,10 @@
+Daily: 09:20
+  root.children.0: {'trading_day_at': {'time': '09:20', 'day_index': 0}}, spans days True
+  root.children.1: {'trading_day_at': {'time': '09:20', 'day_index': 1}}, spans days True
+  root.children.2: {'trading_day_at': {'time': '09:20', 'day_index': 2}}, spans days True
+Until: {'price_crosses': {'level': '1010', 'direction': 'at_or_above', 'field': 'last', 'confirm': 'none'}}
+  root.children.0: lifetime {'applies_to': 'waiting', 'on_end': 'cancel', 'when': {'price_crosses': {'level': '1010', 'direction': 'at_or_above', 'field': 'last', 'confirm': 'none'}}}
+  root.children.1: lifetime {'applies_to': 'waiting', 'on_end': 'cancel', 'when': {'price_crosses': {'level': '1010', 'direction': 'at_or_above', 'field': 'last', 'confirm': 'none'}}}
+  root.children.2: lifetime {'applies_to': 'waiting', 'on_end': 'cancel', 'when': {'price_crosses': {'level': '1010', 'direction': 'at_or_above', 'field': 'last', 'confirm': 'none'}}}
+  bad_setting: repeat needs exactly one of every_minutes and every_trading_day_at
+  until_with_lifetime: repeat's until ends each copy still waiting, which takes the copy's one lifetime, so the order cannot have a lifetime of its own

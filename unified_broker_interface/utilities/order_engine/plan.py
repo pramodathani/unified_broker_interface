@@ -138,6 +138,13 @@ class PlanOrder(SyntheticOrder):
                 record['ends_when'] = True
             if part.lifetime is not None and part.lifetime.after_days is not None:
                 carries_overnight = True
+            if part.spans_days:
+                carries_overnight = True
+            if part.lifetime is not None and part.lifetime.when is not None:
+                lifetime_memory = {}
+                part.lifetime.when.prepare(part.context(self), lifetime_memory)
+                if lifetime_memory:
+                    record['lifetime_memory'] = lifetime_memory
             if part.moves_on_ticks():
                 record['moves'] = True
             if part.execution.paced_by_ticks():
@@ -650,6 +657,94 @@ class PlanOrder(SyntheticOrder):
         self._finish_if_done(root)
         self.save()
         return True
+
+    def modify_held(self, price, quantity, dry_run):
+        """Changes the price or quantity of the order this plan holds in the engine on a `limit_marketable` trigger, without sending anything to a broker.
+
+        It keeps the rules of today's virtual limit type. The change is kept in the order's part record, which its context writes over the body, and in the held terms its trigger keeps, so `bin/unified/orders/virtual_book` starts a fresh queue estimate, as a changed price at the exchange goes to the back of the queue. Only a plan holding exactly one such order can be changed this way.
+
+        Args:
+            price (decimal.Decimal | None): The new limit price, or None to keep it.
+            quantity (int | None): The new quantity in units, or None to keep it.
+            dry_run (bool): Whether to check the change without making it.
+
+        Returns:
+            tuple: The answer's body (dict) and its HTTP status (int).
+
+        Raises:
+            RefusedRequestError: With HTTP 409 when the plan has finished, holds no such order or several, its order has already been sent, or a paper order would be cut below what it has filled; 400 when the price is not a whole number of ticks or the quantity is not a whole number of lots at any broker.
+        """
+        if self.parent.is_terminal():
+            raise RefusedRequestError.refusal(f'the order is already {self.parent.state}', 409, parent_id=self.parent.parent_order_id)
+        root, _ = self._read_plan()
+        held = []
+        sent = []
+        for part in root.order_parts():
+            if not isinstance(part.trigger, LimitMarketableCondition):
+                continue
+            if self.part_record(part.path).get('state') == 'waiting':
+                held.append(part)
+            else:
+                sent.append(part)
+        if not held and sent:
+            detail = {
+                'parent_id': self.parent.parent_order_id,
+            }
+            legs = sent[0].own_legs(self.parent)
+            if legs:
+                detail['broker'] = legs[-1].broker
+                detail['order_id'] = legs[-1].broker_order_id
+            raise RefusedRequestError.refusal('the order has already been sent to a broker, so change it with broker and order_id instead of parent_id', 409, **detail)
+        if len(held) != 1:
+            if not held:
+                return super().modify_held(price, quantity, dry_run)
+            raise RefusedRequestError.refusal(f'the plan holds {len(held)} orders on limit_marketable triggers, and changing one of several by parent_id is not built', 409, parent_id=self.parent.parent_order_id)
+        part = held[0]
+        context = part.context(self)
+        current = self.read_order(context.body)
+        body = dict(context.body)
+        body['price'] = str(price if price is not None else current.price)
+        body['quantity'] = quantity if quantity is not None else current.quantity
+        changed = self.read_order(body)
+        tick_size = context.tick_size()
+        if tick_size and changed.price % tick_size != 0:
+            raise RefusedRequestError.refusal(f'price must be a whole number of ticks of {format(tick_size.normalize(), "f")}', 400)
+        instrument, _, _ = self.placement.market_context(context.instrument_id, False, False)
+        problems = []
+        for handle in (instrument.handles or {}).values():
+            problems.append(changed.lot_size_problem(handle))
+        if problems and all(problems):
+            raise RefusedRequestError.refusal(problems[0], 400)
+        record = self.part_record(part.path)
+        filled = record.get('paper_filled') or 0
+        if changed.quantity <= filled:
+            raise RefusedRequestError.refusal(f'the paper order has already filled {filled}, so its quantity cannot become {changed.quantity}', 409, parent_id=self.parent.parent_order_id)
+        answer = {
+            'parent_id': self.parent.parent_order_id,
+            'synthetic_type': self.parent.synthetic_type,
+            'held': True,
+            'price': str(changed.price),
+            'quantity': changed.quantity,
+        }
+        if dry_run:
+            answer['dry_run'] = True
+            answer['status_message'] = 'the change is valid; nothing was changed'
+            return answer, 200
+        record['held_price'] = str(changed.price)
+        record['held_quantity'] = changed.quantity
+        memory = record.get('memory') or {}
+        trigger_memory = memory.get('trigger') or {}
+        terms = dict(trigger_memory.get('held') or {})
+        terms['price'] = str(changed.price)
+        terms['quantity'] = changed.quantity
+        trigger_memory['held'] = terms
+        memory['trigger'] = trigger_memory
+        record['memory'] = memory
+        self.set_part_record(part.path, record, f'the caller changed the held order to {changed.quantity} at {changed.price}')
+        self.save()
+        answer['outcome'] = 'accepted'
+        answer['status_message'] = 'changed while held in the virtual order book; nothing was sent to a broker'
+        return answer, 200
 
     def closes_position(self, role):
         """Whether a leg closes a position, which a leg of a `protect` order does, and so does the close a lifetime's `close_filled` sends.

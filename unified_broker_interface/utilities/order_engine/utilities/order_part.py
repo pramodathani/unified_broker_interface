@@ -52,6 +52,7 @@ class OrderPart:
         sized_by_fills (bool): Whether it is a Then join's child, sized by the first plan's fills.
         opened_by (list): The paths of the orders whose fills opened the position this order follows, for an order under a Then join; empty otherwise.
         venue (PreOpenVenue | None): Where the order is sent other than the broker selector's continuous market, or None.
+        spans_days (bool): Whether the order may go on a later trading day, as a daily Repeat's copies do, which keeps the plan across trading days.
     """
 
     def __init__(self, path, presets, trigger, side, pricing, keeps_tag=True, execution=None, cap=None, post_only=None, discretion=None, lifetime=None, overrides=None, position=None):
@@ -96,9 +97,10 @@ class OrderPart:
         self.sized_by_fills = False
         self.opened_by = []
         self.venue = None
+        self.spans_days = False
 
     def context(self, plan_order):
-        """The plan order as this order's pricing, execution and trigger see it: on this order's instrument, with its own body values.
+        """The plan order as this order's pricing, execution and trigger see it: on this order's instrument, with its own body values, and any price or quantity the caller changed while it was held.
 
         Args:
             plan_order (PlanOrder): The plan order.
@@ -113,6 +115,11 @@ class OrderPart:
                 instrument_id = value
             else:
                 body[name] = value
+        record = (plan_order.parent.parameters.get('parts') or {}).get(self.path) or {}
+        if record.get('held_price') is not None:
+            body['price'] = record['held_price']
+        if record.get('held_quantity') is not None:
+            body['quantity'] = record['held_quantity']
         return OrderContext(plan_order, instrument_id, body)
 
     def order_parts(self):
@@ -146,7 +153,7 @@ class OrderPart:
         return []
 
     def needs_prices(self):
-        """Whether this part reads quotes: for its trigger, its execution, its pricing or a modifier or guard, or to make its order marketable when its lifetime ends.
+        """Whether this part reads quotes: for its trigger, its execution, its pricing or a modifier or guard, for a lifetime that ends on a price, or to make its order marketable when its lifetime ends.
 
         Returns:
             bool: True when it does.
@@ -159,6 +166,8 @@ class OrderPart:
             return True
         if self.lifetime is not None and self.lifetime.on_end == 'marketable':
             return True
+        if self.lifetime is not None and self.lifetime.when is not None and self.lifetime.when.needs_prices():
+            return True
         return self.pricing.needs_prices()
 
     def instruments(self):
@@ -170,6 +179,10 @@ class OrderPart:
         watched = []
         if self.trigger is not None:
             watched = list(self.trigger.instruments())
+        if self.lifetime is not None and self.lifetime.when is not None:
+            for instrument_id in self.lifetime.when.instruments():
+                if instrument_id not in watched:
+                    watched.append(instrument_id)
         own = self.overrides.get('instrument_id')
         if own is not None and own not in watched:
             watched.append(own)
@@ -702,7 +715,10 @@ class OrderPart:
         if state != 'working':
             record['state'] = 'done'
             record['reason'] = 'expired'
-            plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part ran out of time before it was sent')
+            if self.lifetime.when is not None:
+                plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part ended before it was sent, because the condition that ends it held')
+            else:
+                plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part ran out of time before it was sent')
             return True
         plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part ran out of time, so it will {self.lifetime.on_end.replace("_", " ")}')
         if self.lifetime.on_end == 'marketable':

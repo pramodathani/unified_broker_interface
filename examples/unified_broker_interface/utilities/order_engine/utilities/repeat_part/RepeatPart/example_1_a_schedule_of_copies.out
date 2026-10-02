@@ -3,4 +3,4 @@ RepeatPart of 4, every 30 minutes, problems []
   root.children.1: {'elapsed': {'minutes': 30}}, pricing {'peg': {'reference': 'own_touch', 'offset_ticks': 0, 'follows': False, 'within_body_price': True}}
   root.children.2: {'elapsed': {'minutes': 60}}, pricing {'peg': {'reference': 'own_touch', 'offset_ticks': 0, 'follows': False, 'within_body_price': True}}
   root.children.3: {'elapsed': {'minutes': 90}}, pricing {'peg': {'reference': 'own_touch', 'offset_ticks': 0, 'follows': False, 'within_body_price': True}}
-As a dry run shows it: ['path', 'times', 'every_minutes', 'children']
+As a dry run shows it: ['path', 'times', 'children', 'every_minutes']
