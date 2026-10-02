@@ -1,6 +1,6 @@
 """Shows what every part kept whole shares: memory kept in its part record, and limit orders of its own placed at the plan's broker.
 
-`WholePart.remember` writes the part's memory into its part record with a message, so a restart replays it, and `own_memory` reads it back. `limit_order` builds a limit on the part's instrument from the body, at a side and price of the part's choosing, and `place_order` sends it with the part's path as the leg's role. `inventory` is the net position the part's own fills have built, `cancel_once` asks for one order's cancel only once, `cancel_rest` stops the part and cancels what rests, `is_stopped` says so, `finish_when_done` marks it done once every broker order has finished, `settings_problems` finds nothing for the base class, and `expanded` is how a dry run shows the part. A stand-in plays the plan order, so nothing leaves the machine.
+`WholePart.remember` writes the part's memory into its part record with a message, so a restart replays it, and `own_memory` reads it back. `limit_order` builds a limit on the part's instrument from the body, at a side and price of the part's choosing, and `place_order` sends it with the part's path as the leg's role. `inventory` is the net position the part's own fills have built, `cancel_once`, from `OrderPart`, asks for one order's cancel only once, `cancel_rest` stops the part and cancels what rests, `is_stopped` says so, `finish_when_done` marks it done once every broker order has finished, `settings_problems` finds nothing for the base class, and `expanded` is how a dry run shows the part. A stand-in plays the plan order, so nothing leaves the machine.
 
 Run it from the project root:
 
@@ -295,7 +295,8 @@ class MemoryAndItsOwnOrdersExample:
         part.finish_when_done(plan_order)
         print('done while the buy still rests:', plan_order.part_record('root')['state'])
         print('cancel_once asks for the sell:', part.cancel_once(plan_order, plan_order.parent.legs[1], 'the sell is no longer wanted'))
-        print('and does not ask again:', part.cancel_once(plan_order, plan_order.parent.legs[1], 'the sell is no longer wanted'))
+        before = len(plan_order.requests)
+        print('asked again, it answers', part.cancel_once(plan_order, plan_order.parent.legs[1], 'the sell is no longer wanted'), 'and sends', len(plan_order.requests) - before, 'requests')
         part.cancel_rest(plan_order, 'the caller cancelled the plan')
         print('stopped after:', part.is_stopped(plan_order), plan_order.requests[-1])
         part.finish_when_done(plan_order)

@@ -254,7 +254,7 @@ class TwoSidedQuotePart(WholePart):
             leg = self.live_quote(plan_order.parent, side)
             if at_cap and side == adding:
                 if leg is not None and leg.broker_order_id is not None:
-                    if plan_order.cancel_leg(leg, f'the quote is holding {net}, its whole allowance, so it stops quoting that side'):
+                    if self.cancel_once(plan_order, leg, f'the quote is holding {net}, its whole allowance, so it stops quoting that side'):
                         acted = True
                 continue
             if leg is None:

@@ -31,3 +31,7 @@ The grid and the two-sided quote both measure the net position their own fills h
 ## `opened_instruments`
 
 Set by the reader on a kept-whole Then child, beside `opened_by`: the instrument each of the first plan's orders trades, None for the parent's own. The strategy stop's exits read it to know what to watch.
+
+## `cancel_once` moved to `OrderPart` (2026-10-02)
+
+`cancel_once` started here for the scale-out's exits, keeping the leg ids in `own_memory` with an event each. Every plan part had the same repeat under a cancelling Either join, so it moved to `OrderPart`, keeps the ids in the part record as `cancel_asked` without an event, and answers True for an order already asked, as `cancel_rest`'s callers expect.

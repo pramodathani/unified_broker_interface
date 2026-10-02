@@ -142,28 +142,6 @@ class WholePart(OrderPart):
         broker_name = context.body.get('broker') or plan_order.chosen_broker()
         return context.place_leg(self.path, order, started_at, broker_name, None)
 
-    def cancel_once(self, plan_order, leg, reason):
-        """Asks the broker to cancel one of this part's orders, unless it has been asked already and has not confirmed yet.
-
-        A cancel's confirmation settles the plan again, and settling would otherwise ask again for every order whose cancel is still on its way. The leg ids asked for are kept in the part's memory.
-
-        Args:
-            plan_order (PlanOrder): The plan order.
-            leg (OrderLeg): The broker order.
-            reason (str): Why, for the event log.
-
-        Returns:
-            bool: True when a cancel was asked for now.
-        """
-        memory = self.own_memory(plan_order)
-        asked = list(memory.get('cancel_asked') or [])
-        if leg.leg_id in asked:
-            return False
-        asked.append(leg.leg_id)
-        memory['cancel_asked'] = asked
-        self.remember(plan_order, memory, f'the plan\'s {self.path} part cancels {leg.leg_id}')
-        return plan_order.cancel_leg(leg, reason)
-
     def cancel_rest(self, plan_order, reason):
         """Stops this part placing anything more and cancels what it has resting.
 

@@ -14,4 +14,4 @@ The size is the body's quantity as the order's own context sees it, with the ord
 
 ## Repeated cancels under an Either join
 
-In the scenario where an Either join cancels the quote, the quote's second order is asked to cancel twice: the first cancel's confirmation settles the plan again, and the join asks every unfinished sibling to cancel again. This is how every plan part under a cancelling Either join behaves, not something the quote adds; it was left as it is, to be raised separately.
+In the scenario where an Either join cancels the quote, the quote's second order is asked to cancel twice: the first cancel's confirmation settles the plan again, and the join asks every unfinished sibling to cancel again. This was how every plan part under a cancelling Either join behaved. On 2026-10-02 `OrderPart.cancel_once` fixed it for every part, and the scenario now sends two cancels.
