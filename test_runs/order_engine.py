@@ -4976,6 +4976,125 @@ class OrderEngineSuite:
                 numbered,
             ),
             self.plan_price_result(
+                'a_plan_using_a_ladder_gives_every_rung_its_own_bracket',
+                {
+                    'using': {
+                        'order': {
+                            'execution': [
+                                {
+                                    'ladder': {
+                                        'from_price': 1000,
+                                        'to_price': 990,
+                                        'steps': 2,
+                                    },
+                                },
+                            ],
+                        },
+                        'each_piece': {
+                            'presets': [
+                                {
+                                    'bracket': {
+                                        'stop_price': 980,
+                                        'stop_limit_price': 978,
+                                        'target_price': 1020,
+                                    },
+                                },
+                            ],
+                        },
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000102', 'COMPLETE', 5)]},
+                    {'quote': steady, 'at': 2},
+                ],
+                numbered,
+                restart_between_ticks=True,
+            ),
+            self.plan_price_result(
+                'a_plan_using_a_twap_covers_every_slice_with_its_own_stop',
+                {
+                    'using': {
+                        'order': {
+                            'execution': [
+                                {
+                                    'twap': {
+                                        'slices': 2,
+                                        'over_minutes': 1,
+                                    },
+                                },
+                            ],
+                        },
+                        'each_piece': {
+                            'presets': [
+                                {
+                                    'cover': {
+                                        'stop_price': 980,
+                                        'stop_limit_price': 978,
+                                    },
+                                },
+                            ],
+                        },
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'COMPLETE', 5)]},
+                    {'quote': steady, 'at': 30},
+                    {'quote': steady, 'at': 31, 'updates': [self.update('26091500000103', 'COMPLETE', 5)]},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_using_an_iceberg_or_a_priced_ladder_is_refused',
+                {
+                    'together': {
+                        'children': [
+                            {
+                                'using': {
+                                    'order': {
+                                        'execution': [
+                                            {
+                                                'iceberg': {
+                                                    'visible_quantity': 2,
+                                                },
+                                            },
+                                        ],
+                                    },
+                                    'each_piece': {},
+                                },
+                            },
+                            {
+                                'using': {
+                                    'order': {
+                                        'execution': [
+                                            {
+                                                'ladder': {
+                                                    'from_price': 1000,
+                                                    'to_price': 990,
+                                                    'steps': 2,
+                                                },
+                                            },
+                                        ],
+                                    },
+                                    'each_piece': {
+                                        'pricing': [
+                                            {
+                                                'marketable': {},
+                                            },
+                                        ],
+                                    },
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
                 'a_plan_with_three_nested_executions_or_a_ladder_outside_is_refused',
                 {
                     'together': {

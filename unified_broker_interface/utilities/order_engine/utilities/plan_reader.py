@@ -177,6 +177,9 @@ from unified_broker_interface.utilities.order_engine.utilities.twap_execution im
 from unified_broker_interface.utilities.order_engine.utilities.two_sided_quote_part import (
     TwoSidedQuotePart,
 )
+from unified_broker_interface.utilities.order_engine.utilities.using_part import (
+    UsingPart,
+)
 from unified_broker_interface.utilities.order_engine.utilities.vwap_execution import (
     VwapExecution,
 )
@@ -192,12 +195,14 @@ JOIN_NAMES = (
     'repeat',
     'sequence',
 )
-BUILT_JOIN_NAMES = (
-    'then',
-    'either',
-    'together',
-    'sequence',
-    'repeat',
+USING_SETTINGS = (
+    'order',
+    'each_piece',
+)
+USING_EXECUTIONS = (
+    'ladder',
+    'twap',
+    'front_loaded',
 )
 REPEAT_SETTINGS = (
     'child',
@@ -303,9 +308,9 @@ class PlanReader:
 
     A plan is a tree. Each node is an object holding exactly one key: `order` for a leaf, or the name of a join for a branch. Each part gets a path from its place in the tree, starting at `root`, which is how its broker orders and its state are told apart from every other part's.
 
-    An order takes `presets`, a list of named presets each standing for slot values, and may give slot values of its own: `trigger`, `side`, `pricing`, `execution` and `guards`. They are merged in order, presets first and the order's own values last. Triggers from several sources are joined with `all`. A later pricing setter, cap, execution or guard replaces an earlier one of the same kind, which is reported in `warnings` rather than refused, because naming a preset for its trigger and then choosing another price is a normal thing to want. Two different sides are refused, because there is no sensible way to join them, and so is a post-only guard on an order whose pricing means to trade at once.
+    An order takes `presets`, a list of named presets each standing for slot values, a whole join or a part kept whole, and may give slot values of its own: `trigger`, `side`, `quantity`, `pricing`, `execution`, `guards`, `lifetime` and `venue`. They are merged in order, presets first and the order's own values last. Triggers from several sources are joined with `all`. A later pricing setter, cap, execution or guard replaces an earlier one of the same kind, which is reported in `warnings` rather than refused, because naming a preset for its trigger and then choosing another price is a normal thing to want. Two different sides are refused, because there is no sensible way to join them, and so is a post-only guard on an order whose pricing means to trade at once.
 
-    The joins are named in the design and recognised here, so a caller who writes one is told it is not built yet rather than that it is unknown.
+    The joins are `then`, `either`, `together`, `sequence`, `repeat` and `using`, every one the design names.
 
     Attributes:
         opening_side (str | None): BUY or SELL, the side of the caller's body, which some presets need; None when it is not known.
@@ -392,13 +397,8 @@ class PlanReader:
                 return self._read_sequence(content, path, keeps_tag)
             if kind == 'repeat':
                 return self._read_repeat(content, path, keeps_tag)
-            if kind in JOIN_NAMES:
-                self._add_problem(
-                    path,
-                    'join_not_built',
-                    f'the {kind} join is part of the design but is not built yet; the joins built so far are {", ".join(BUILT_JOIN_NAMES)}',
-                )
-                return None
+            if kind == 'using':
+                return self._read_using(content, path, keeps_tag)
             self._add_problem(
                 path,
                 'unknown_node',
@@ -622,6 +622,84 @@ class PlanReader:
         repeat_part.every_trading_day_at = daily_at
         repeat_part.until = until
         return repeat_part
+
+    def _read_using(self, using, path, keeps_tag):
+        """Reads a Using join into one copy of its order per piece its execution would send, each with the `each_piece` presets and slot values written onto it.
+
+        Args:
+            using (object): The join's content as the caller wrote it.
+            path (str): Where the join sits in the plan.
+            keeps_tag (bool): Whether the first copy carries the caller's tag.
+
+        Returns:
+            UsingPart | None: The join, or None when it has a problem.
+        """
+        if not isinstance(using, dict):
+            self._add_problem(path, 'join_shape', 'using holds an object with order and each_piece')
+            return None
+        problems_before = len(self.problems)
+        for setting in using:
+            if setting not in USING_SETTINGS:
+                self._add_problem(path, 'unknown_setting', f'using takes {", ".join(USING_SETTINGS)}, not {setting!r}')
+        order = using.get('order')
+        each_piece = using.get('each_piece')
+        if not isinstance(order, dict) or not isinstance(each_piece, dict):
+            self._add_problem(path, 'join_shape', 'using needs order, the order its execution splits, and each_piece, the presets and slot values every piece is given')
+            return None
+        execution_list = order.get('execution')
+        names = []
+        if isinstance(execution_list, list) and len(execution_list) == 1 and isinstance(execution_list[0], dict):
+            names = list(execution_list[0])
+        if len(names) != 1 or names[0] not in USING_EXECUTIONS:
+            self._add_problem(f'{path}.order', 'using_needs_pieces', f'using hands each piece to a plan of its own, so its order needs one execution whose pieces are known in advance: {", ".join(USING_EXECUTIONS)}')
+            return None
+        execution = self._read_execution_list(execution_list, f'{path}.order.execution')
+        if 'execution' in each_piece:
+            self._add_problem(f'{path}.each_piece', 'using_piece_execution', 'each piece is sent whole, so each_piece takes no execution of its own')
+        for slot in each_piece:
+            if slot in order and slot != 'presets':
+                self._add_problem(f'{path}.each_piece', 'using_slot_twice', f'{slot} is given by both order and each_piece; give it once')
+        if names[0] == 'ladder':
+            for source in (order, each_piece):
+                if 'pricing' in source:
+                    self._add_problem(path, 'using_ladder_priced', 'a ladder prices every piece at its rung, so neither order nor each_piece takes a pricing')
+        if execution is not None and not isinstance(execution, LadderExecution) and execution.over_minutes is None:
+            self._add_problem(f'{path}.order.execution', 'using_needs_pieces', 'using spaces its pieces by the execution\'s interval, so a timed execution gives over_minutes rather than until')
+        if execution is None or len(self.problems) > problems_before:
+            return None
+        piece_order = {}
+        for name, value in order.items():
+            if name != 'execution':
+                piece_order[name] = value
+        for name, value in each_piece.items():
+            if name == 'presets':
+                piece_order['presets'] = list(order.get('presets') or []) + list(value)
+            else:
+                piece_order[name] = value
+        count = execution.steps if isinstance(execution, LadderExecution) else execution.slices
+        children = []
+        mains = []
+        for index in range(count):
+            copy_path = f'{path}.pieces.{index}'
+            child = self._read_node(
+                {
+                    'order': piece_order,
+                },
+                copy_path,
+                keeps_tag and index == 0,
+            )
+            if child is None:
+                return None
+            main = child.order_parts()[0]
+            if not isinstance(execution, LadderExecution) and index > 0:
+                elapsed = ElapsedCondition(execution.interval() * index / 60)
+                if main.trigger is None:
+                    main.trigger = elapsed
+                else:
+                    main.trigger = ConditionGroup('all', [main.trigger, elapsed])
+            children.append(child)
+            mains.append(main)
+        return UsingPart(path, children, execution, mains)
 
     def _read_overrides(self, order, path):
         """Reads the body values an order gives of its own, such as another instrument or quantity.

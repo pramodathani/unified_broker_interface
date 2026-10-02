@@ -1,0 +1,6 @@
+problems: []
+copies: ['ThenPart', 'ThenPart', 'ThenPart']
+entries: ['root.pieces.0.first', 'root.pieces.1.first', 'root.pieces.2.first']
+shares of 10: [4, 3, 3]
+set_target changes nothing: None
+dry run: execution {'ladder': {'from_price': '1000', 'to_price': '990', 'steps': 3}}, 3 children, the first a then join
