@@ -119,3 +119,7 @@ The preset now builds its exits with `from_fill` pricing through `_distance_exit
 An `order_type` other than `LIMIT`, `MARKET` or `SL` is now refused with `bad_setting` rather than ignored. Before, `SL-M` matched no branch and the child silently took the plain pricing path, losing its stop; the plan's only resting stop pricing, `native_stop`, needs a limit price, so a stop-market `then` cannot be expressed in a plan and is refused with a message saying to give `SL` with a price. This is narrower than the fixed type, which sent an `SL-M` child, and is the one request a routed `oto` refuses that the fixed type took.
 
 `run_plan_routing_checks` routes `oto` too and gained two scenarios: a lower-case `sell` `sl` then, which places the stop once the entry fills, and an `sl-m` then, which is refused with 400.
+
+## The `closing_price` preset takes `volume_profile`, since 2026-10-02
+
+The fixed `closing_price` type subclasses `Vwap` and so accepts a `volume_profile`, but the preset refused it as an unknown setting, so a routed closing-price order carrying one answered HTTP 400 once every type was routed on 2026-10-02. The preset now hands the profile to its `vwap` execution, which reads it as `_read_profile` does for any VWAP, so a bad profile is still refused. Without one, the VWAP keeps the default equity curve. A plan read offline with `[1, 2, 3]` gives the profile `(1.0, 2.0, 3.0)`, and `'flat'` is refused with `bad_setting`.
