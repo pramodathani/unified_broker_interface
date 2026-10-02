@@ -1,6 +1,10 @@
 """Checks an opening auction order taken at different moments, and one whose time falls outside collection.
 
-`PreOpenVenue.check` lets an order through before collection closes, and on a day the exchange does not trade, since the order then waits for the next pre-open. It refuses one taken after collection has closed on a trading day, naming the next trading day, and one whose `at_time` the pre-open would not take. The calendar is read from the exchange calendar files; nothing is read from Redis or sent anywhere.
+`PreOpenVenue.check` lets an order through before collection closes, and on a day the exchange does not trade, since the order then waits for the next pre-open. It refuses one taken after collection has closed on a trading day, naming the next trading day, and one whose `at_time` the pre-open would not take.
+
+An engine that was down at `at_time` fires the order at its first tick afterwards, and sent then it would trade in continuous trading instead of the auction. So `has_closed` is asked at that tick, with the tick's Unix time, whether collection has closed on that day: at 09:08 IST it has not, and at 09:10 IST and 09:20 IST it has, so the order must not be sent.
+
+The calendar is read from the exchange calendar files; nothing is read from Redis or sent anywhere.
 
 Run it from the project root:
 
@@ -8,6 +12,7 @@ Run it from the project root:
 """
 
 import datetime
+import zoneinfo
 
 from unified_broker_interface.utilities.broker_orders.utilities.refused_request import (
     RefusedRequestError,
@@ -110,11 +115,14 @@ class StandInContext:
         return self.placement.instrument.segment
 
 
+INDIA = zoneinfo.ZoneInfo('Asia/Kolkata')
+
+
 class TooLateForTodaysAuctionExample:
-    """Checks four moments and one bad time."""
+    """Checks four moments and one bad time, then asks at three ticks whether collection has closed."""
 
     def run(self):
-        """Prints whether each check passes.
+        """Prints whether each check passes, and whether collection has closed at each tick.
 
         Returns:
             None: This method returns nothing.
@@ -130,6 +138,13 @@ class TooLateForTodaysAuctionExample:
         for now in moments:
             self.show(venue, context, now)
         self.show(PreOpenVenue('09:12:00'), context, moments[0])
+        ticks = [
+            datetime.datetime(2026, 9, 23, 9, 8, tzinfo=INDIA),
+            datetime.datetime(2026, 9, 23, 9, 10, tzinfo=INDIA),
+            datetime.datetime(2026, 9, 23, 9, 20, tzinfo=INDIA),
+        ]
+        for tick in ticks:
+            print(f'has_closed at a tick at {tick:%H:%M} IST, Unix time {tick.timestamp():.0f}: {venue.has_closed(context, tick.timestamp())}')
 
     def show(self, venue, context, now):
         """Prints one check.

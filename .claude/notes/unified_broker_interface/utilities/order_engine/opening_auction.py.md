@@ -15,3 +15,7 @@ Only current-month futures have a pre-open, but the instrument identity does not
 ## Why `Scheduled` gained `read_place_at`
 
 `Scheduled.run` read `at_time` inline. The opening auction needs the same recording, answer and clock handling with a different rule for the time, so the time was moved into one method that this class overrides. The scheduled order's answers are unchanged, which the recorded scenarios confirm.
+
+## A late first tick (fixed 2026-10-02)
+
+The collection window was only checked when the order was taken, so an engine down at `at_time` sent the order at its first tick afterwards, into continuous trading (even at 14:00). `on_clock_tick` now cancels the order when the tick is at or past collection's close on the tick's own day. It compares against the tick's day rather than `place_at`'s, so an engine down for days also cancels rather than sending on the next morning's continuous session, and it matches the plan's `PreOpenVenue.has_closed`.

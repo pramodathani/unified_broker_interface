@@ -7,6 +7,8 @@ Nothing a `HiddenStop` keeps in the engine protects a position while the engine 
 - `child_order` builds the exit from the book when the level is reached, a buy two ticks above the best offer;
 - `fire` cancels the backstop first, so it cannot trigger later and open a new position, and only then sends the exit.
 
+A second stop is then armed the same way, and its backstop fills at the broker before the hidden level is ever reached, as it would while the engine was down. `on_leg_update`, which the engine calls with every change to a leg, sees the backstop filled and ends the parent as `completed`, because the position it protected is closed and there is nothing left to watch.
+
 Last, a backstop with only its trigger is refused with HTTP 400, because a stop-limit whose limit sits at its trigger will not fill when the price runs through it. The placement is a stand-in that chooses Zerodha and accepts every order and cancel; the event log is the `RecordingEventLog` stand-in and the parent store keeps nothing, so nothing leaves the machine.
 
 Run it from the project root:
@@ -422,7 +424,7 @@ class BackstopCancelledBeforeTheExitExample:
         return runner
 
     def run(self):
-        """Arms, builds and fires the stop, then prints the refusal.
+        """Arms, builds and fires the stop, ends a second one whose backstop filled, then prints the refusal.
 
         Returns:
             None: This method returns nothing.
@@ -467,6 +469,31 @@ class BackstopCancelledBeforeTheExitExample:
         for message in self.placement.messages:
             print(f'  {message}')
         print(f'Parent: {runner.parent.state}')
+
+        filled = self.runner({
+            'type': 'hidden_stop',
+            'trigger_price': 1520,
+            'backstop_price': 1540,
+            'backstop_limit_price': 1545,
+        })
+        filled_order = filled.read_order(filled.parent.body)
+        filled.record_received()
+        filled.arm(filled_order, time.perf_counter())
+        backstop_leg = filled.parent.legs[0]
+        changes = {
+            'leg_state': 'filled',
+            'filled_quantity': 40,
+        }
+        filled.record({
+            'event': 'leg_update',
+            'parent_state': filled.parent.state,
+            'leg_id': backstop_leg.leg_id,
+            'leg_role': backstop_leg.role,
+            'leg_state': 'filled',
+            'filled_quantity': 40,
+        })
+        filled.on_leg_update(backstop_leg, changes)
+        print(f'on_leg_update after the {backstop_leg.role} filled 40: parent {filled.parent.state}, {filled.parent.last_error}')
 
         half = self.runner({
             'type': 'hidden_stop',

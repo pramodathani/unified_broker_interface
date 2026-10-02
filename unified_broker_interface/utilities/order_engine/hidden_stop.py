@@ -200,17 +200,52 @@ class HiddenStop(PriceTrigger):
             price (decimal.Decimal): The watched price that fired it.
             level (decimal.Decimal): The level it reached.
 
+        When a backstop's cancel is not accepted, the backstop may still be resting, and an exit sent beside it could fill twice and open a new position the other way. The exit is then held back and the trigger disarmed, so the next tick tries the cancel again while the backstop goes on protecting the position.
+
         Returns:
-            bool: True, because the stop fired whatever the broker then said.
+            bool: True when the exit was sent, whatever the broker then said, and False when it was held back because a backstop's cancel was not accepted.
         """
+        all_cancelled = True
         for leg in self.parent.legs:
             if leg.role != 'backstop' or leg.is_finished():
                 continue
             if leg.broker_order_id is None:
                 continue
-            self.cancel_leg(
+            cancelled = self.cancel_leg(
                 leg,
                 'the hidden stop fired, so the backstop is no longer needed',
             )
+            if not cancelled:
+                all_cancelled = False
+        if not all_cancelled:
+            self.parent.parameters = dict(self.parent.parameters)
+            self.parent.parameters.pop('triggered_at', None)
+            self.parent.parameters.pop('triggered_price', None)
+            self.record_parameters(
+                'the hidden stop fired, but the backstop could not be cancelled, so the exit is held back and the next tick tries again'
+            )
+            self.save()
+            return False
         self.save()
         return super().fire(child, price, level)
+
+    def on_leg_update(self, leg, changes):
+        """Ends the parent once the backstop has filled, because the position it protected is closed.
+
+        Args:
+            leg (OrderLeg): The leg the update was about, already changed.
+            changes (dict): What the update changed.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        del changes
+        if leg.role != 'backstop' or self.parent.is_terminal():
+            return
+        if not leg.is_finished() or (leg.filled_quantity or 0) <= 0:
+            return
+        self.record_state(
+            'completed',
+            'the backstop filled, so the position is closed and the hidden stop stops watching',
+        )
+        self.save()

@@ -23,3 +23,7 @@ A daily stop is a statement about tomorrow morning and every morning after it. P
 ## Why a daily stop does not arm on its creation day after `arm_at`
 
 The class docstring always said a daily stop is a statement about tomorrow, but `due` compared only the time of day, so a stop created after 09:20 was placed at once; in the live test that happened on a Sunday and Dhan rejected it. `run` now works out `first_arm_on` with `first_arming_day` and, when that is not today, marks today as already armed. `due` also refuses any day the instrument's segment does not trade, reading the segment `run` stores in the parameters so a clock tick needs no Redis read. `valid_days` stays in calendar days, since it is a safety horizon rather than a count of sessions.
+
+## Stopping once the stop has traded (fixed 2026-10-02)
+
+Before this fix the type had no fill handling: after its stop filled it re-armed the next morning, and when the open was still below the stop `gapped_through` sent a marketable sell at once, opening a short. The check is in `on_clock_tick`, straight after the expiry check, rather than in an `on_leg_update`, because the clock tick runs every second, sees fills rebuilt from the event log after a restart, and is the only place that could place the next stop. It sums every leg's fill, so a partly filled stop also ends it, matching the plan's `DailyExecution.will_send_more`.

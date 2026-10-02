@@ -158,7 +158,7 @@ class BarBuilder:
             periods (int): How many bars to average.
 
         Returns:
-            decimal.Decimal | None: The average, or None when fewer than `periods` bars have closed.
+            decimal.Decimal | None: The average, or None until `periods` + 1 bars have closed, since each bar's true range needs the close of the bar before it.
         """
         bars = self.closed_bars()
         if len(bars) < periods + 1:

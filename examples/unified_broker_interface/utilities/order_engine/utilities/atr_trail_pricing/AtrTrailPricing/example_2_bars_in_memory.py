@@ -1,6 +1,6 @@
 """Shows the bars an average-range trail keeps in its memory, and the plain trail it hands each tick to.
 
-`AtrTrailPricing.bars` is a `BarBuilder` over the `bars` dictionary in the pricing's memory, so the bars survive in the part's record. `trail` builds the ordinary trail at a given distance. A buy stop, protecting a short, trails the lowest price down. Nothing is read from Redis or sent anywhere.
+`AtrTrailPricing.bars` is a `BarBuilder` over the `bars` dictionary in the pricing's memory, so the bars survive in the part's record. Each bar's true range needs the close of the bar before it, so an average over two periods needs three closed bars: with two, `distance` still answers the `points` fallback of 8, and once a third bar closes it answers the average of the last two true ranges, 5 and 9, times the multiple of 2, which is 14. `trail` builds the ordinary trail at a given distance. A buy stop, protecting a short, trails the lowest price down. Nothing is read from Redis or sent anywhere.
 
 Run it from the project root:
 
@@ -112,7 +112,11 @@ class BarsInMemoryExample:
         for now, price in ((0, '1000'), (20, '1006'), (40, '998'), (60, '1001'), (80, '1003'), (120, '1000')):
             bars.add(decimal.Decimal(price), float(now))
         print(f'Bars kept: {memory["bars"]}')
-        print(f'Distance now: {pricing.distance(memory)}')
+        print(f'Distance with two closed bars, still the points fallback: {pricing.distance(memory)}')
+        for now, price in ((150, '1009'), (180, '1004')):
+            bars.add(decimal.Decimal(price), float(now))
+        print(f'Closed bars now: {memory["bars"]["closed_bars"]}')
+        print(f'Distance with three closed bars, the average range times 2: {pricing.distance(memory)}')
         print(f'The trail it hands to: {pricing.trail(decimal.Decimal("12")).described()}')
         plan_order = StandInPlanOrder()
         body = pricing.priced_body(plan_order, {'quantity': 10}, 'BUY', StopMaker().last(990.00), {})

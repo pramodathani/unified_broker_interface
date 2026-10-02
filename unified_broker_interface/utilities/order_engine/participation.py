@@ -212,18 +212,51 @@ class Participation(SyntheticOrder):
             return False
 
         share = int(traded * self.read_percent() / 100)
-        if share < 1:
-            return False
         quantity = min(share, remaining)
+        lot = self.lot_size()
+        quantity = quantity - quantity % lot
+        if quantity < 1:
+            return False
         price = self.marketable_price(view, order.transaction_type)
         if price is None:
             return False
 
+        before = dict(self.parent.parameters)
         self.parent.parameters = dict(self.parent.parameters)
         self.parent.parameters['counted_volume'] = volume
         self.parent.parameters['placed_quantity'] = placed + quantity
         self.save()
-        return self.send_slice(order, quantity, price, traded)
+        try:
+            return self.send_slice(order, quantity, price, traded)
+        except RefusedRequestError:
+            self.parent.parameters = before
+            self.save()
+            raise
+
+    def lot_size(self):
+        """The instrument's lot at the broker the slices go to, which every slice must be a whole number of.
+
+        A share of the market's volume rarely comes to whole lots. A slice that does not would be refused when it is sent, so it is cut down to whole lots, and a share under one lot waits for more volume.
+
+        Returns:
+            int: The lot, at least one: the chosen broker's, or before any broker is chosen the largest any broker lists.
+        """
+        instrument, _, _ = self.placement.market_context(self.parent.instrument_id, False, False)
+        handles = instrument.handles or {}
+        broker_name = self.chosen_broker()
+        if broker_name is not None:
+            chosen = {
+                broker_name: handles.get(broker_name) or {},
+            }
+            handles = chosen
+        largest = 1
+        for handle in handles.values():
+            try:
+                size = int(float(handle.get('lot_size') or 1))
+            except (TypeError, ValueError):
+                size = 1
+            largest = max(largest, size)
+        return largest
 
     def marketable_price(self, view, transaction_type):
         """The price a slice is sent at, past the touch so that it trades now.

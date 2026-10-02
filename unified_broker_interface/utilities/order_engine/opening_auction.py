@@ -7,6 +7,7 @@ from unified_broker_interface.utilities.broker_orders.utilities.refused_request 
 )
 from unified_broker_interface.utilities.order_engine.scheduled import Scheduled
 from unified_broker_interface.utilities.order_engine.utilities.moments import (
+    INDIA,
     Moments,
 )
 from unified_broker_interface.utilities.order_engine.utilities.trading_days import (
@@ -116,6 +117,34 @@ class OpeningAuction(Scheduled):
             second=wanted.second,
             microsecond=0,
         )
+
+    def on_clock_tick(self, now):
+        """Places the order once its time has come, unless the pre-open has stopped taking it by then.
+
+        The collection window is checked when the order is taken, but an engine that was down at `at_time` would otherwise send the order at its first tick afterwards, into continuous trading at whatever the market then is. So a tick that comes once collection has closed on the tick's own day cancels the order instead of sending it.
+
+        Args:
+            now (float): The Unix time of the tick.
+
+        Returns:
+            bool: True when the order was placed or cancelled on this tick.
+        """
+        place_at = self.parent.parameters.get('place_at')
+        if not isinstance(place_at, (int, float)) or now < place_at:
+            return False
+        if self.parent.legs or self.parent.is_terminal():
+            return False
+        order = self.read_order(self.parent.body)
+        closes = self.collection_closes(order)
+        moment = datetime.datetime.fromtimestamp(now, INDIA)
+        if moment >= self.moment_today(closes, moment):
+            self.record_state(
+                'cancelled',
+                f'the pre-open stopped taking this order at {closes} before the engine could send it, so it was not sent into continuous trading',
+            )
+            self.save()
+            return True
+        return super().on_clock_tick(now)
 
     def read_place_at(self, order):
         """When the order is placed: at `at_time`, or at once when collection is already open.

@@ -21,3 +21,7 @@ A percentage-of-volume order in a market that stops trading stops trading too. I
 ## Why a caller's change to a slice adjusts `placed_quantity`
 
 The parent sizes each slice from what is left of the total, counted by `placed_quantity`. A slice the caller cut from 500 to 300 placed 200 less than was counted, so `on_leg_modified` takes 200 off the count and a later slice places it; a slice the caller raised takes from the later ones. The parent's total stays what the caller first asked for, and the new count is recorded with `parameters_changed` so a restart keeps it.
+
+## Whole lots (fixed 2026-10-02)
+
+A slice was never rounded to whole lots, and the counters were saved before the send, so a refused slice was counted as placed; on a NIFTY option (lot 75) the order counted all 750 as placed, sent nothing, and stayed `received`. Slices are now cut down to whole lots before anything is counted, a share under one lot leaves `counted_volume` alone so volume keeps accumulating, and any refusal from `send_slice` restores the counters. `lot_size` uses the chosen broker's lot, or the largest any broker lists before a broker has been chosen (the brokers agree on lots in practice), because `chosen_broker` is None until the first slice.

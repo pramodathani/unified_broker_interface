@@ -8683,6 +8683,319 @@ class OrderEngineSuite:
         finally:
             time.time = original
 
+    def days_result(self, name, request_body, steps, positions=None):
+        """Places one timed order at 08:45 on `FROZEN_NOW`'s day, then gives it one clock tick per step, each at its own moment and after its own order updates.
+
+        Args:
+            name (str): The check's name.
+            request_body (dict): The request body.
+            steps (list): One `{"at": datetime.datetime, "quote": dict | None, "updates": list | None}` per tick.
+            positions (float | None): A net position in RELIANCE to seed, for a plan that reads it.
+
+        Returns:
+            dict: The recorded result, with what each tick sent and the parent's state after it.
+        """
+        answer = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        taken_at = FROZEN_NOW.replace(hour=8, minute=45)
+        scenario = self.scenarios.intents(name, [request_body], answer=answer)
+        self.fake_redis = self.build_state()
+        self.seed_quote(self.scenarios.quote())
+        if positions is not None:
+            self.seed_positions(positions)
+        self.network.reset(answer)
+        self.counting_uuid.reset()
+        logger = logging.getLogger('test_runs.order_engine')
+        placement = EnginePlacement(self.fake_redis, logger)
+        event_log = engine_stand_ins.RecordingEventLog()
+        parent_store = ParentStore(self.fake_redis)
+        ticker = ClockTicker(parent_store, event_log, placement, logger, None)
+        engine = OrderEngine(
+            self.fake_redis,
+            placement,
+            EngineLock(self.fake_redis, logger),
+            logger,
+            STALE_INTENT_SECONDS,
+            RESULT_TTL_SECONDS,
+            event_log,
+            parent_store,
+        )
+        original_time = time.time
+        original_now = moments.Moments.now
+        time.time = lambda: taken_at.timestamp()
+        moments.Moments.now = lambda self: taken_at
+        try:
+            reply_keys = self.write_intents(scenario)
+            engine.run(engine_stand_ins.OnePassStop(3))
+        finally:
+            time.time = original_time
+        follower = OrderUpdateFollower(parent_store, event_log, logger, None, placement)
+        ticks = []
+        try:
+            for step in steps:
+                moment = step['at']
+                moments.Moments.now = lambda self, moment=moment: moment
+                if step.get('quote') is not None:
+                    self.seed_quote(step['quote'])
+                for update in step.get('updates') or []:
+                    book = self.fake_redis.hashes.setdefault('flattrade:orders:orders', {})
+                    book[str(update['order_id'])] = self.broker_book_entry(
+                        str(update['order_id']),
+                        status=update['status'],
+                    )
+                    changed = follower.follow({
+                        'update': json.dumps(update),
+                    })
+                    if changed is not None:
+                        parent_store.save(changed)
+                before = len(self.network.sent_requests)
+                self.tick_at(ticker, moment.timestamp())
+                sent = []
+                for request in self.network.sent_requests[before:]:
+                    sent.append({
+                        'url': request['url'].rsplit('/', 1)[-1],
+                        'quantity': self.sent_quantity(request),
+                    })
+                stored = self.fake_redis.hashes.get('unified:orders:parents', {})
+                states = []
+                for document in stored.values():
+                    states.append(json.loads(document).get('state'))
+                ticks.append({
+                    'at': moment.isoformat(),
+                    'sent': sent,
+                    'parent_states': states,
+                })
+        finally:
+            moments.Moments.now = original_now
+        return {
+            'name': name,
+            'reply': self.shown_replies(reply_keys)[0],
+            'ticks': ticks,
+        }
+
+    def run_closed_position_checks(self):
+        """Runs the types that must stop once the position they protect has closed: a hidden stop whose backstop filled or could not be cancelled, and a daily stop whose stop traded.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        accepted = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        entry = self.scenarios.bodies.market_order(
+            dry_run=None,
+            order_type='LIMIT',
+            price=1000,
+            quantity=10,
+        )
+        steady = self.book_at(1000.00, 1000.05)
+        touched = self.book_at(994.90, 995.20)
+        hidden_stop = dict(entry, synthetic={
+            'type': 'hidden_stop',
+            'trigger_price': 995,
+            'backstop_price': 990,
+            'backstop_limit_price': 988,
+        })
+        results = [
+            self.price_result(
+                'a_hidden_stop_whose_backstop_filled_stops_watching',
+                hidden_stop,
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000021', 'COMPLETE', 10)]},
+                    {'quote': touched, 'at': 2},
+                ],
+                accepted,
+            ),
+        ]
+        original_cancel = EnginePlacement.cancel
+        EnginePlacement.cancel = self.refused_cancel
+        try:
+            results.append(self.price_result(
+                'a_hidden_stop_holds_its_exit_back_while_the_backstop_cannot_be_cancelled',
+                hidden_stop,
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': touched, 'at': 1},
+                    {'quote': touched, 'at': 2},
+                ],
+                accepted,
+            ))
+        finally:
+            EnginePlacement.cancel = original_cancel
+
+        day_one_arm = FROZEN_NOW.replace(hour=9, minute=21)
+        day_two_arm = day_one_arm.replace(day=day_one_arm.day + 1)
+        stop_filled = self.update('26091500000021', 'COMPLETE', 10, average_price=988.0)
+        still_below = self.scenarios.quote(
+            last_price=985.00,
+            depth={
+                'buy': [
+                    {'price': 985.00, 'quantity': 100, 'orders': 1},
+                ],
+                'sell': [
+                    {'price': 985.05, 'quantity': 100, 'orders': 1},
+                ],
+            },
+        )
+        stop_settings = {
+            'stop_price': 990,
+            'stop_limit_price': 988,
+            'arm_at': '09:20',
+        }
+        daily_stop = dict(entry, synthetic=dict(stop_settings, type='daily_stop'))
+        plan_daily_stop = dict(entry, synthetic={
+            'type': 'plan',
+            'plan': {
+                'order': {
+                    'presets': [
+                        {
+                            'daily_stop': stop_settings,
+                        },
+                    ],
+                },
+            },
+        })
+        for label, quote in (
+            ('above', self.scenarios.quote()),
+            ('below', still_below),
+        ):
+            results.append(self.days_result(
+                f'a_daily_stop_that_traded_places_nothing_the_next_morning_{label}_the_stop',
+                daily_stop,
+                [
+                    {'at': day_one_arm},
+                    {'at': day_one_arm.replace(hour=11), 'updates': [stop_filled]},
+                    {'at': day_two_arm, 'quote': quote},
+                ],
+            ))
+        results.append(self.days_result(
+            'a_plan_daily_stop_that_traded_places_nothing_the_next_morning_below_the_stop',
+            plan_daily_stop,
+            [
+                {'at': day_one_arm},
+                {'at': day_one_arm.replace(hour=11), 'updates': [stop_filled]},
+                {'at': day_two_arm, 'quote': still_below},
+            ],
+            positions=10,
+        ))
+        return results
+
+    @staticmethod
+    def refused_cancel(placement, broker_name, broker_order_id):
+        """Stands in for `EnginePlacement.cancel` at a broker that refuses every cancel.
+
+        Args:
+            placement (EnginePlacement): The placement, unused.
+            broker_name (str): The broker.
+            broker_order_id (str): The order, unused.
+
+        Returns:
+            None: Never returns.
+
+        Raises:
+            RefusedRequestError: Always, with HTTP 400.
+        """
+        del placement, broker_order_id
+        raise RefusedRequestError.refusal(
+            'the order is already complete and cannot be cancelled',
+            400,
+            broker=broker_name,
+        )
+
+    def run_late_auction_and_whole_lot_checks(self):
+        """Runs an opening auction order whose engine was down past the pre-open, and a participation order on an instrument traded in lots, as the fixed type and as a plan.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        accepted = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        entry = self.scenarios.bodies.market_order(
+            dry_run=None,
+            order_type='LIMIT',
+            price=1000,
+            quantity=10,
+        )
+        taken_early = FROZEN_NOW.replace(hour=8, minute=45)
+        results = [
+            self.clock_result(
+                'an_opening_auction_order_is_cancelled_when_the_engine_missed_the_pre_open',
+                dict(entry, synthetic={
+                    'type': 'opening_auction',
+                }),
+                [],
+                FROZEN_NOW.replace(hour=9, minute=30).timestamp(),
+                accepted,
+                taken_at=taken_early,
+            ),
+            self.plan_clock_result(
+                'a_plan_opening_auction_order_is_cancelled_when_the_engine_missed_the_pre_open',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'opening_auction': {},
+                            },
+                        ],
+                    },
+                },
+                [],
+                FROZEN_NOW.replace(hour=9, minute=30).timestamp(),
+                accepted,
+                taken_at=taken_early,
+            ),
+        ]
+        option = order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['nifty_option']
+        steady = self.book_at(1000.00, 1000.05)
+        steps = []
+        for index, volume in enumerate((10000, 11000, 12000, 17500, 80000)):
+            quote = dict(steady)
+            quote['volume'] = volume
+            steps.append({
+                'quote': quote,
+                'other_quotes': {
+                    'nifty_option': quote,
+                },
+                'at': index,
+            })
+        results.append(self.price_result(
+            'a_participation_order_sends_whole_lots_and_counts_only_what_it_sent',
+            dict(entry, instrument_id=option, quantity=750, synthetic={
+                'type': 'participation',
+                'participation_percent': 10,
+            }),
+            steps,
+            accepted,
+        ))
+        results.append(self.plan_price_result(
+            'a_plan_participation_order_sends_whole_lots_across_a_restart',
+            {
+                'order': {
+                    'presets': [
+                        {
+                            'participation': {
+                                'participation_percent': 10,
+                            },
+                        },
+                    ],
+                },
+            },
+            steps,
+            accepted,
+            body_overrides={
+                'instrument_id': option,
+                'quantity': 750,
+            },
+            restart_between_ticks=True,
+        ))
+        return results
+
     def run_clock_checks(self):
         """Runs the types that wait for a time of day rather than for a fill.
 
@@ -11545,6 +11858,8 @@ class OrderEngineSuite:
             results.extend(self.run_plan_fill_follower_checks())
             results.extend(self.run_plan_change_checks())
             results.extend(self.run_clock_checks())
+            results.extend(self.run_closed_position_checks())
+            results.extend(self.run_late_auction_and_whole_lot_checks())
             results.extend(self.run_price_checks())
             results.extend(self.run_wiring_checks())
             results.extend(self.run_assignment_checks())

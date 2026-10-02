@@ -394,15 +394,17 @@ class PriceTrigger(SyntheticOrder):
     def has_fired(self):
         """Whether this trigger has already sent its child order.
 
-        `triggered_at` answers that while the engine keeps running. After a restart the parent is rebuilt from the event log, which does not hold it, but does hold every leg, so any leg other than the backstop a hidden stop leaves resting when it is armed means the trigger has fired.
+        `triggered_at` answers that while the engine keeps running. After a restart the parent is rebuilt from the event log, which does not hold it, but does hold every leg, so any leg other than the backstop a hidden stop leaves resting when it is armed means the trigger has fired. A backstop that has filled counts too: the position it protected is closed, so firing as well would open a new one the other way.
 
         Returns:
-            bool: True when the child order has been sent.
+            bool: True when the child order has been sent, or a hidden stop's backstop has filled.
         """
         if self.parent.parameters.get('triggered_at') is not None:
             return True
         for leg in self.parent.legs:
             if leg.role != 'backstop':
+                return True
+            if (leg.filled_quantity or 0) > 0:
                 return True
         return False
 

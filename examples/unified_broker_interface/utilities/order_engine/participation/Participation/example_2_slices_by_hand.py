@@ -7,6 +7,8 @@ A `Participation` order is made of small steps that this program calls directly 
 - `send_slice` sends one slice and marks the parent `working`;
 - `on_leg_modified`, which the engine calls after a caller changes a slice through `PUT /api/orders/modify` and the broker accepts, counts a slice cut from 300 to 200 as having placed 100 less.
 
+Every slice must be a whole number of lots, and `lot_size` says what a lot is: the lot at the broker the slices go to once one is chosen, or before that the largest any broker lists. TATAMOTORS shares trade one at a time, so its lot is 1 both before and after the first slice; a stand-in index future with a lot of 75 shows 75, and a share of the volume under 75 would wait for more.
+
 With `most_slices` of 1, a later tick sends nothing even though the market has traded plenty, because the one slice allowed has gone. Last, `read_percent` refuses zero per cent with HTTP 400. The placement is a stand-in that chooses Zerodha and accepts every order; the event log is the `RecordingEventLog` stand-in and the parent store keeps nothing, so nothing leaves the machine.
 
 Run it from the project root:
@@ -35,6 +37,7 @@ from unified_broker_interface.utilities.order_engine.utilities.market_view impor
 )
 
 INSTRUMENT_ID = '11111111-1111-5111-8111-000000000027'
+FUTURE_INSTRUMENT_ID = '11111111-1111-5111-8111-000000000029'
 
 
 class StandInAnswer:
@@ -382,7 +385,7 @@ class SlicesByHandExample:
     """
 
     def __init__(self):
-        """Builds the stand-in placement with TATAMOTORS at 700,000 traded.
+        """Builds the stand-in placement with TATAMOTORS at 700,000 traded and an index future with a lot of 75.
 
         Returns:
             None: This method returns nothing.
@@ -392,6 +395,9 @@ class SlicesByHandExample:
                 INSTRUMENT_ID: self.quote(700000),
             },
         )
+        self.placement.lot_sizes = {
+            FUTURE_INSTRUMENT_ID: 75,
+        }
 
     def quote(self, volume):
         """A quote with the day's volume so far.
@@ -423,20 +429,21 @@ class SlicesByHandExample:
             },
         }
 
-    def runner(self, synthetic):
-        """A participation order selling 2,000 TATAMOTORS, with its intent.
+    def runner(self, synthetic, instrument_id=INSTRUMENT_ID):
+        """A participation order selling 2,000 of an instrument, TATAMOTORS unless another is named, with its intent.
 
         Args:
             synthetic (dict): The order type's parameters.
+            instrument_id (str): The instrument the order sells.
 
         Returns:
             tuple: The runner (Participation) and its intent (dict).
         """
         intent = {
             'intent_id': 'intent-1',
-            'instrument_id': INSTRUMENT_ID,
+            'instrument_id': instrument_id,
             'body': {
-                'instrument_id': INSTRUMENT_ID,
+                'instrument_id': instrument_id,
                 'transaction_type': 'SELL',
                 'product': 'CNC',
                 'order_type': 'MARKET',
@@ -454,7 +461,7 @@ class SlicesByHandExample:
         return runner, intent
 
     def run(self):
-        """Calls the steps, shows the slice limit and the refusal.
+        """Calls the steps, shows the lot, the slice limit and the refusal.
 
         Returns:
             None: This method returns nothing.
@@ -464,6 +471,7 @@ class SlicesByHandExample:
             'participation_percent': 20,
             'most_slices': 1,
         })
+        print(f'lot_size before any broker is chosen: {runner.lot_size()}, chosen broker {runner.chosen_broker()}')
         runner.run(intent, time.perf_counter())
         print(f"volume_of: {runner.volume_of(self.quote(701500))}, without a volume {runner.volume_of(self.quote(None))}, negative {runner.volume_of(self.quote(-1))}")
         view = MarketView(self.quote(701500), decimal.Decimal('0.05'))
@@ -473,6 +481,15 @@ class SlicesByHandExample:
         runner.parent.parameters['placed_quantity'] = 300
         runner.send_slice(order, 300, price, 1500)
         print(f'send_slice: {self.placement.messages[-1]}, parent {runner.parent.state}, {runner.parent.last_error}')
+        print(f'lot_size once {runner.chosen_broker()} is chosen: {runner.lot_size()}')
+        future, _ = self.runner(
+            {
+                'type': 'participation',
+                'participation_percent': 20,
+            },
+            FUTURE_INSTRUMENT_ID,
+        )
+        print(f'lot_size for the index future: {future.lot_size()}')
 
         leg = runner.parent.legs[0]
         before = {
