@@ -772,18 +772,30 @@ class PresetExpander:
                 )
         side = described.get('transaction_type')
         if side is not None:
-            if side not in OTO_SIDES:
+            written_side = side
+            if isinstance(side, str):
+                written_side = side.strip().upper()
+            if written_side not in OTO_SIDES:
                 self._add_problem(
                     path,
                     'bad_setting',
                     f'then.transaction_type must be BUY or SELL, not {side!r}',
                 )
             else:
-                child['side'] = OTO_SIDES[side]
+                child['side'] = OTO_SIDES[written_side]
         for name in OTO_OVERRIDES:
             if name in described:
                 child[name] = described[name]
         order_type = described.get('order_type')
+        if isinstance(order_type, str):
+            order_type = order_type.strip().upper()
+        if order_type is not None and order_type not in ('LIMIT', 'MARKET', 'SL'):
+            self._add_problem(
+                path,
+                'bad_setting',
+                f'then.order_type must be LIMIT, MARKET or SL in a plan, not {described.get("order_type")!r}; a stop-market has no limit price for the stop that rests at the broker, so give SL with a price',
+            )
+            return {}
         if order_type == 'SL':
             child['pricing'] = [
                 {
@@ -1190,13 +1202,13 @@ class PresetExpander:
         """A VWAP spread across the closing window, from `window_start`, 15:00 by default, until 15:30, starting at once when placed inside the window.
 
         Args:
-            settings (dict): `window_start` and `slices`, default 6, both optional.
+            settings (dict): `window_start`, `slices`, default 6, and `volume_profile`, all optional.
             path (str): The preset's path.
 
         Returns:
-            dict: A `time_from` trigger at the window's start and `vwap` execution until 15:30.
+            dict: A `time_from` trigger at the window's start and `vwap` execution until 15:30, with the caller's `volume_profile` when one is given.
         """
-        self._refuse_unknown(settings, ('window_start', 'slices', 'over_minutes'), path, 'closing_price')
+        self._refuse_unknown(settings, ('window_start', 'slices', 'over_minutes', 'volume_profile'), path, 'closing_price')
         if 'over_minutes' in settings:
             self._add_problem(path, 'bad_setting', 'a closing_price order works out its own duration from the window, so it does not take over_minutes')
             return {}
@@ -1209,16 +1221,19 @@ class PresetExpander:
         if not valid:
             self._add_problem(path, 'bad_setting', f'window_start must be from 09:15 and before 15:30, not {window_start}')
             return {}
+        vwap = {
+            'slices': settings.get('slices', 6),
+            'until': '15:30',
+        }
+        if 'volume_profile' in settings:
+            vwap['volume_profile'] = settings['volume_profile']
         return {
             'trigger': {
                 'time_from': window_start,
             },
             'execution': [
                 {
-                    'vwap': {
-                        'slices': settings.get('slices', 6),
-                        'until': '15:30',
-                    },
+                    'vwap': vwap,
                 },
             ],
         }

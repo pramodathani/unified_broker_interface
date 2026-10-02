@@ -111,3 +111,15 @@ Today's OTO copies every field of `then` into the second order's body, then sets
 ## two_sided_breakout exits (2026-10-02)
 
 The preset now builds its exits with `from_fill` pricing through `_distance_exits`, and refuses the absolute exit fields as a `bad_setting` problem. `_exit_settings`, whose only caller was this preset, was removed.
+
+## The `oto` preset reads `then` in any case, since 2026-10-02
+
+`_oto` compared `then.transaction_type` with the upper-case keys of `OTO_SIDES` and `then.order_type` with `'SL'` and `'MARKET'` exactly, while the fixed `oto` type copied `then` into an ordinary order body, which `PlaceOrderRequest.parse_choice` reads in any case. tradingmachine sends both in lower case, as the API allows, so once `oto` was routed to its preset on 2026-10-02 every `OneTriggersOtherOrder` was refused with `then.transaction_type must be BUY or SELL, not 'sell'`, and a lower-case `sl` would have fallen through to a plain limit at the stop's limit price with no trigger once the side was accepted, which is the dangerous half. Both values are now stripped and upper-cased before they are compared, as `plan.py` and `order_part.py` already do for the plan's own side since commit `220138a`.
+
+An `order_type` other than `LIMIT`, `MARKET` or `SL` is now refused with `bad_setting` rather than ignored. Before, `SL-M` matched no branch and the child silently took the plain pricing path, losing its stop; the plan's only resting stop pricing, `native_stop`, needs a limit price, so a stop-market `then` cannot be expressed in a plan and is refused with a message saying to give `SL` with a price. This is narrower than the fixed type, which sent an `SL-M` child, and is the one request a routed `oto` refuses that the fixed type took.
+
+`run_plan_routing_checks` routes `oto` too and gained two scenarios: a lower-case `sell` `sl` then, which places the stop once the entry fills, and an `sl-m` then, which is refused with 400.
+
+## The `closing_price` preset takes `volume_profile`, since 2026-10-02
+
+The fixed `closing_price` type subclasses `Vwap` and so accepts a `volume_profile`, but the preset refused it as an unknown setting, so a routed closing-price order carrying one answered HTTP 400 once every type was routed on 2026-10-02. The preset now hands the profile to its `vwap` execution, which reads it as `_read_profile` does for any VWAP, so a bad profile is still refused. Without one, the VWAP keeps the default equity curve. A plan read offline with `[1, 2, 3]` gives the profile `(1.0, 2.0, 3.0)`, and `'flat'` is refused with `bad_setting`.
