@@ -11,3 +11,7 @@ Today's peg re-anchors its offset when the caller changes the order's price, so 
 ## `follows` and `within_body_price` (stage 5c, 2026-10-01)
 
 Today's accumulation prices each purchase at the bid when it is sent, no higher than the caller's limit, at the limit when there is no bid, and never moves it. Rather than a new pricing for that one type, the peg gained two settings: `follows: false` makes `moves` false, and `within_body_price` holds the price at the body's limit. The offline scenarios `a_plan_accumulation_*` place at the same prices as `an_accumulation_*`.
+
+## A caller's changes (added 2026-10-02)
+
+A caller's price is kept as `offset_ticks` in the pricing's memory rather than by changing the pricing object, because the pricing is rebuilt from the caller's plan on every event and only memory survives a restart. `wanted_price` keeps its two-argument form for the example programs and takes the offset as an optional third argument. The offset is rounded to whole ticks, as today's peg rounds it.

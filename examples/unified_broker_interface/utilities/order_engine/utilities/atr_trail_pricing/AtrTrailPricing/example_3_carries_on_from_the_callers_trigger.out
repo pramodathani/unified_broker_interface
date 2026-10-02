@@ -1,0 +1,9 @@
+No bars yet, distance 12, resting trigger 1000.0
+carry_on: the caller moved the trigger to 990.0, so the trail carries on from a best price of 1002.0
+Best price now: 1002.0
+Three bars closed, distance 9.0
+The caller moves the trigger from 990.0 to 985.0
+carry_on: the caller moved the trigger to 985.0, so the trail carries on from a best price of 994.0
+Best price now: 994.0
+At 185.0 seconds, last 993.0: best 994.0, move None
+At 190.0 seconds, last 997.0: best 997.00, move (Decimal('987.00'), Decimal('988.00'), 'the market reached 997.00, so the stop follows to 988.00')

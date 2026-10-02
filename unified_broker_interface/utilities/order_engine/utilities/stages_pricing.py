@@ -120,6 +120,26 @@ class StagesPricing:
         body['price'] = str(limit)
         return body
 
+    def carry_on(self, plan_order, memory, leg, before, quotes, now):
+        """Keeps the caller's new trigger, moving the trail's best price only once a trailing rule has taken over.
+
+        Before the trail starts the milestones are measured from `entry_price`, not from the stop, so the caller's trigger simply stands until a milestone moves the stop further. This keeps the rule of today's stepped stop.
+
+        Args:
+            plan_order (OrderContext): The plan order's context for this order.
+            memory (dict): The pricing's memory, whose `best` is set in place once trailing.
+            leg (OrderLeg): The stop, holding the caller's new trigger.
+            before (dict): What the leg held before, with `trigger_price`.
+            quotes (dict): Unused.
+            now (float): Unused.
+
+        Returns:
+            str | None: What changed, for the event log, or None when nothing did.
+        """
+        if memory.get('trail_points') is None:
+            return None
+        return self.trail(memory).carry_on(plan_order, memory, leg, before, quotes, now)
+
     def moved_prices(self, plan_order, memory, leg, quotes, now):
         """Where the stop should move on this tick: to the milestone just reached, or after the best price once trailing.
 

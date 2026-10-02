@@ -1,0 +1,12 @@
+Last 1025.0: move (Decimal('998.00'), Decimal('1000.00'), 'milestone 1 moves the stop to 1000.00')
+The caller moves the trigger from 1000.0 to 1005.0
+carry_on before the trail: None, memory {'rules_applied': 1}
+Last 1030.0: move None
+Last 1045.0: move (Decimal('1013.00'), Decimal('1015.00'), 'milestone 2 moves the stop to 1015.00')
+Last 1070.0: move (Decimal('1043.00'), Decimal('1045.00'), 'the market reached 1070.00, so the stop follows to 1045.00')
+Memory once trailing: {'rules_applied': 3, 'trail_points': '25', 'best': '1070.00'}
+The caller moves the trigger from 1045.0 to 1035.0
+carry_on while trailing: the caller moved the trigger to 1035.0, so the trail carries on from a best price of 1060.0
+Memory now: {'rules_applied': 3, 'trail_points': '25', 'best': '1060.0'}
+Last 1062.0: move (Decimal('1035.00'), Decimal('1037.00'), 'the market reached 1062.00, so the stop follows to 1037.00')
+Last 1065.0: move (Decimal('1038.00'), Decimal('1040.00'), 'the market reached 1065.00, so the stop follows to 1040.00')

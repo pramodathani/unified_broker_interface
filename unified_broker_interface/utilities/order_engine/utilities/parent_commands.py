@@ -258,23 +258,34 @@ class ParentCommands:
         }, status
 
     def modify_held(self, arguments):
-        """Changes the price or quantity of an order the engine is still holding, such as a virtual limit order.
+        """Changes an order the engine is still holding, such as a virtual limit order, or, when `part` names one, a part of a plan that has not yet been sent.
 
         Args:
-            arguments (dict): `parent_id`, and any of `price` and `quantity` (in units), with `dry_run`.
+            arguments (dict): `parent_id`, any of `price` and `quantity` (in units), with `dry_run`, and optionally `part` with `trigger_price`.
 
         Returns:
             tuple: The answer's body (dict) and its HTTP status (int).
 
         Raises:
-            RefusedRequestError: With HTTP 404 when the parent is not known, and 409 when it holds nothing that can be changed.
+            RefusedRequestError: With HTTP 404 when the parent or the part is not known, and 409 when it holds nothing that can be changed.
         """
         runner = self.runner_for(arguments.get('parent_id'))
         quantity = arguments.get('quantity')
+        if quantity is not None:
+            quantity = int(quantity)
+        dry_run = arguments.get('dry_run') is True
+        if arguments.get('part') is not None:
+            return runner.modify_part(
+                arguments['part'],
+                self.decimal_or_none(arguments.get('price')),
+                self.decimal_or_none(arguments.get('trigger_price')),
+                quantity,
+                dry_run,
+            )
         return runner.modify_held(
             self.decimal_or_none(arguments.get('price')),
-            int(quantity) if quantity is not None else None,
-            arguments.get('dry_run') is True,
+            quantity,
+            dry_run,
         )
 
     def halt(self, parent_order_id):

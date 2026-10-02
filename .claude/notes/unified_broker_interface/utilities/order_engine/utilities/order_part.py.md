@@ -89,3 +89,11 @@ Every update settles the whole plan, and an Either join that cancels its sibling
 ## A lifetime's condition reads prices (2026-10-02)
 
 `needs_prices` and `instruments` now count a lifetime's `when` condition. Before, the only `when` was the account condition, which reads no quotes; a Repeat's `until` on a price, the first one that does, never held, because the plan read no quotes and kept no tick size for it.
+
+## A caller's changes (added 2026-10-02)
+
+`caller_change` in the part record is a signed number of units the caller added to or took from the order, and `total()` and `set_target()` add it to whatever the plan works out. It is a delta rather than an absolute quantity because a Then child's target keeps rising as the first plan fills: a stop cut by 4 should stay 4 short of the fill, not freeze at one number. `set_target` still stores the join's raw target, so its "changed" comparison is unaffected.
+
+`keeps_caller_quantity` is True only for `AllAtOnceExecution`. A split execution counts what it has sent from its own broker orders, so a cut slice is made up by later slices with no bookkeeping, which matches today's iceberg, TWAP and participation types; recording a delta there as well would have counted the cut twice.
+
+`with_caller_prices` runs before the cap and the post-only guard, so the plan's own guards still check a price the caller set. A trigger is only replaced when the priced body already has one, so a `native_stop` with `exit_if_gapped` that was sent as a marketable limit stays a limit; the gap check itself still uses the pricing's own trigger, which is a known gap.

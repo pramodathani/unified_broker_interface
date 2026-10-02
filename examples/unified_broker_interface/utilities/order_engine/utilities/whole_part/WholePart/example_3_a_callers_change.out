@@ -1,0 +1,6 @@
+The grid placed: [('place', 'BUY', 5, '995.00'), ('place', 'SELL', 5, '1005.00')]
+The caller cut the buy at 995 to 3; the grid keeps the caller's quantity: False, so the change was counted: False
+The grid's record: {}, messages []
+The next rung it builds is still 5
+A GridPart, which inherits the answer, keeps the caller's quantity: False
+An order sent all at once, cut from 5 to 3: keeps the caller's quantity True, counted True, record {'caller_change': -2}

@@ -168,7 +168,7 @@ An order the engine placed is a leg of one of its parents, and the parent's orde
 | `cancel_leg` | `DELETE /api/orders/cancel` | Cancels the leg through `cancel_leg`, recording `leg_cancel_requested` and `leg_cancelled` |
 | `modify_leg` | `PUT /api/orders/modify` | Sends the change through `apply_outside_modification`, records it as a `leg_update`, and calls the type's `on_leg_modified` |
 | `cancel_parent` | `DELETE /api/orders/parents` | Cancels every resting leg and ends the parent as `cancelled` |
-| `modify_held` | `PUT /api/orders/modify` with `parent_id` | Changes the price or quantity of an order the engine is still holding, such as a `virtual_limit` order, without sending anything to a broker |
+| `modify_held` | `PUT /api/orders/modify` with `parent_id` | Changes the price or quantity of an order the engine is still holding, such as a `virtual_limit` order, or, with `part`, the price, trigger price or quantity of a plan part that has not been sent, without sending anything to a broker |
 | `halt` | `POST /api/orders/flatten` | Ends every open parent as `cancelled`, leaving its legs to flatten |
 
 ## Risk gates

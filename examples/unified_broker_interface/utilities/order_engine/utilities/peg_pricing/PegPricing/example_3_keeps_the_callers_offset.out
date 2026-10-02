@@ -1,0 +1,10 @@
+Bid 1000.0: reference 1000.00, offset 1 tick, resting at 999.95
+The caller moves the price from 999.95 to 999.75
+Without carry_on, the next tick moves it back: (Decimal('999.95'), None, 'the own_touch peg moved to 999.95')
+carry_on: the caller moved the price to 999.75, so the peg rests 5 ticks from its own_touch
+Memory: {'offset_ticks': 5}, offset now 5 ticks
+Wanted price with the caller's offset: 999.75; with the plan's own: 999.95
+Bid 1000.0: move to (Decimal('999.75'), None, 'the own_touch peg moved to 999.75')
+Bid 1000.2: move to (Decimal('999.95'), None, 'the own_touch peg moved to 999.95')
+Bid 999.8: move to (Decimal('999.55'), None, 'the own_touch peg moved to 999.55')
+A modify that leaves the price alone: None

@@ -1,6 +1,7 @@
 """An order described as a plan of parts, which the composable synthetic orders are built on."""
 
 import copy
+import time
 
 from unified_broker_interface.utilities.broker_orders.utilities.refused_request import (
     RefusedRequestError,
@@ -12,8 +13,14 @@ from unified_broker_interface.utilities.order_engine.base import (
 from unified_broker_interface.utilities.order_engine.utilities.either_part import (
     EitherPart,
 )
+from unified_broker_interface.utilities.order_engine.utilities.fixed_pricing import (
+    FixedPricing,
+)
 from unified_broker_interface.utilities.order_engine.utilities.limit_marketable_condition import (
     LimitMarketableCondition,
+)
+from unified_broker_interface.utilities.order_engine.utilities.native_stop_pricing import (
+    NativeStopPricing,
 )
 from unified_broker_interface.utilities.order_engine.utilities.paper_venue import (
     PaperVenue,
@@ -23,6 +30,9 @@ from unified_broker_interface.utilities.order_engine.utilities.plan_reader impor
 )
 from unified_broker_interface.utilities.order_engine.utilities.reduce_only import (
     ReduceOnlyCheck,
+)
+from unified_broker_interface.utilities.order_engine.utilities.whole_part import (
+    WholePart,
 )
 
 
@@ -699,22 +709,61 @@ class PlanOrder(SyntheticOrder):
             if not held:
                 return super().modify_held(price, quantity, dry_run)
             raise RefusedRequestError.refusal(f'the plan holds {len(held)} orders on limit_marketable triggers, and changing one of several by parent_id is not built', 409, parent_id=self.parent.parent_order_id)
-        part = held[0]
+        return self._change_held_part(held[0], price, quantity, dry_run)
+
+    def _check_ticks_and_lots(self, context, prices, order):
+        """Refuses prices that are not a whole number of ticks, and a quantity that is not a whole number of lots at any broker.
+
+        Args:
+            context (OrderContext): The part's context, which knows its instrument and tick size.
+            prices (dict): Each changed price's name to its value (decimal.Decimal), or None when it is not changed.
+            order (PlaceOrderRequest): The order with the new quantity, checked against each broker's lot size.
+
+        Returns:
+            None: This method returns nothing.
+
+        Raises:
+            RefusedRequestError: With HTTP 400 for a price off the tick or a quantity off the lot at every broker.
+        """
+        tick_size = context.tick_size()
+        for name, value in prices.items():
+            if tick_size and value is not None and value % tick_size != 0:
+                raise RefusedRequestError.refusal(f'{name} must be a whole number of ticks of {format(tick_size.normalize(), "f")}', 400)
+        instrument, _, _ = self.placement.market_context(context.instrument_id, False, False)
+        problems = []
+        for handle in (instrument.handles or {}).values():
+            problems.append(order.lot_size_problem(handle))
+        if problems and all(problems):
+            raise RefusedRequestError.refusal(problems[0], 400)
+
+    def _change_held_part(self, part, price, quantity, dry_run):
+        """Changes the price or quantity of one order this plan holds in the engine on a `limit_marketable` trigger.
+
+        Args:
+            part (OrderPart): The held order.
+            price (decimal.Decimal | None): The new limit price, or None to keep it.
+            quantity (int | None): The new quantity in units, or None to keep it.
+            dry_run (bool): Whether to check the change without making it.
+
+        Returns:
+            tuple: The answer's body (dict) and its HTTP status (int).
+
+        Raises:
+            RefusedRequestError: With HTTP 400 when the price is not a whole number of ticks or the quantity is not a whole number of lots at any broker, and 409 when a paper order would be cut below what it has filled.
+        """
         context = part.context(self)
         current = self.read_order(context.body)
         body = dict(context.body)
         body['price'] = str(price if price is not None else current.price)
         body['quantity'] = quantity if quantity is not None else current.quantity
         changed = self.read_order(body)
-        tick_size = context.tick_size()
-        if tick_size and changed.price % tick_size != 0:
-            raise RefusedRequestError.refusal(f'price must be a whole number of ticks of {format(tick_size.normalize(), "f")}', 400)
-        instrument, _, _ = self.placement.market_context(context.instrument_id, False, False)
-        problems = []
-        for handle in (instrument.handles or {}).values():
-            problems.append(changed.lot_size_problem(handle))
-        if problems and all(problems):
-            raise RefusedRequestError.refusal(problems[0], 400)
+        self._check_ticks_and_lots(
+            context,
+            {
+                'price': changed.price,
+            },
+            changed,
+        )
         record = self.part_record(part.path)
         filled = record.get('paper_filled') or 0
         if changed.quantity <= filled:
@@ -745,6 +794,177 @@ class PlanOrder(SyntheticOrder):
         answer['outcome'] = 'accepted'
         answer['status_message'] = 'changed while held in the virtual order book; nothing was sent to a broker'
         return answer, 200
+
+    def modify_part(self, path, price, trigger_price, quantity, dry_run):
+        """Changes the price, trigger price or quantity of one part of this plan that has not yet sent anything to a broker.
+
+        The new values are kept in the part's record and recorded with an event, so a restart keeps them. A price or trigger price is laid over what the part's pricing gives when the part is sent, so only a part whose pricing gives a fixed price can take one: a plain limit or a native stop, not a peg or a trail, which work out their price from the market when they are sent. A quantity becomes the part's total; an order that closes a position can only be reduced, and a part sized by an earlier part's fills has no total until those fills arrive. A part held on a `limit_marketable` trigger is changed as `modify_held` changes it.
+
+        Args:
+            path (str): The part's path, as `GET /api/orders/parents` shows it.
+            price (decimal.Decimal | None): The new limit price, or None to keep it.
+            trigger_price (decimal.Decimal | None): The new trigger price, or None to keep it.
+            quantity (int | None): The new quantity in units, or None to keep it.
+            dry_run (bool): Whether to check the change without making it.
+
+        Returns:
+            tuple: The answer's body (dict) and its HTTP status (int), 200 once changed or for a dry run.
+
+        Raises:
+            RefusedRequestError: With HTTP 404 when the plan has no order part at `path`; 409 when the plan has finished, the part has already sent an order (the answer then names its broker orders), it is kept whole, or a quantity cannot change; 400 when its pricing does not take the price given, a trigger price is given for an order that is not a stop, or a price or quantity is off the tick or lot.
+        """
+        parent_order_id = self.parent.parent_order_id
+        if self.parent.is_terminal():
+            raise RefusedRequestError.refusal(f'the order is already {self.parent.state}', 409, parent_id=parent_order_id)
+        root, _ = self._read_plan()
+        part = None
+        for candidate in root.order_parts():
+            if candidate.path == path:
+                part = candidate
+        if part is None:
+            raise RefusedRequestError.refusal(f'the plan has no order at part {path}', 404, parent_id=parent_order_id, part=path)
+        record = self.part_record(path)
+        if record.get('state') not in (None, 'pending', 'waiting'):
+            sent = []
+            for leg in part.own_legs(self.parent):
+                sent.append({
+                    'broker': leg.broker,
+                    'order_id': leg.broker_order_id,
+                })
+            raise RefusedRequestError.refusal(f'part {path} is already {record.get("state")}, so change its broker orders with broker and order_id instead', 409, parent_id=parent_order_id, part=path, orders=sent)
+        if isinstance(part, WholePart):
+            raise RefusedRequestError.refusal(f'part {path} is a {part.name}, which keeps its orders by its own rules, so it cannot be changed before it starts', 409, parent_id=parent_order_id, part=path)
+        if isinstance(part.trigger, LimitMarketableCondition) and record.get('state') == 'waiting':
+            if trigger_price is not None:
+                raise RefusedRequestError.refusal('a held limit order has no trigger price to change', 400, parent_id=parent_order_id, part=path)
+            answer, status = self._change_held_part(part, price, quantity, dry_run)
+            answer['part'] = path
+            return answer, status
+        if (price is not None or trigger_price is not None) and not isinstance(part.pricing, (FixedPricing, NativeStopPricing)):
+            raise RefusedRequestError.refusal(f'part {path} works out its price from the market when it is sent, so its price cannot be set beforehand', 400, parent_id=parent_order_id, part=path)
+        context = part.context(self)
+        order_type = str(context.body.get('order_type') or '').upper()
+        if isinstance(part.pricing, FixedPricing) and part.pricing.order_type is not None:
+            order_type = part.pricing.order_type
+        if trigger_price is not None and not isinstance(part.pricing, NativeStopPricing) and order_type not in ('SL', 'SL-M'):
+            raise RefusedRequestError.refusal(f'part {path} is not a stop, so it has no trigger price to change', 400, parent_id=parent_order_id, part=path)
+        total = part.total(self)
+        if quantity is not None:
+            if part.opened_by or part.sized_by_fills:
+                raise RefusedRequestError.refusal(f'part {path} is sized by what an earlier part fills, so its quantity is not known until then', 409, parent_id=parent_order_id, part=path)
+            if part.closes_position() and quantity > total:
+                raise RefusedRequestError.refusal(f'an order that closes a position can only be reduced, and {quantity} is more than its {total}', 409, parent_id=parent_order_id, part=path)
+            body = dict(context.body)
+            body['quantity'] = quantity
+            body.pop('quantity_reference', None)
+            checked = self.read_order(body)
+        else:
+            checked = self.read_order(context.body)
+        self._check_ticks_and_lots(
+            context,
+            {
+                'price': price,
+                'trigger_price': trigger_price,
+            },
+            checked,
+        )
+        answer = {
+            'parent_id': parent_order_id,
+            'synthetic_type': self.parent.synthetic_type,
+            'part': path,
+            'state': record.get('state') or 'pending',
+            'price': str(price) if price is not None else record.get('caller_price'),
+            'trigger_price': str(trigger_price) if trigger_price is not None else record.get('caller_trigger_price'),
+            'quantity': quantity if quantity is not None else total,
+        }
+        if dry_run:
+            answer['dry_run'] = True
+            answer['status_message'] = 'the change is valid; nothing was changed'
+            return answer, 200
+        changes = []
+        if price is not None:
+            record['caller_price'] = str(price)
+            changes.append(f'price {price}')
+        if trigger_price is not None:
+            record['caller_trigger_price'] = str(trigger_price)
+            changes.append(f'trigger price {trigger_price}')
+        if quantity is not None and quantity != total:
+            record['caller_change'] = (record.get('caller_change') or 0) + quantity - total
+            changes.append(f'quantity {quantity}')
+        self.set_part_record(path, record, f'the caller changed the plan\'s {path} part before it was sent: {", ".join(changes) or "nothing"}')
+        self.save()
+        answer['outcome'] = 'accepted'
+        answer['status_message'] = 'changed before it was sent; nothing was sent to a broker'
+        return answer, 200
+
+    def _part_for_leg(self, root, leg):
+        """The order part that placed a broker order, or None for an order no part placed, such as a lifetime's close.
+
+        Args:
+            root (object): The root part.
+            leg (OrderLeg): The broker order.
+
+        Returns:
+            OrderPart | None: The part.
+        """
+        for part in root.order_parts():
+            if part.path == leg.role:
+                return part
+        return None
+
+    def outside_change_problem(self, leg, quantity_units):
+        """Refuses a caller's change that would raise the quantity of an order closing a position.
+
+        An exit only ever closes what is held. Raising one could leave it larger than the position, and a stop that fills for more than is held opens a new position in the other direction. This keeps the rule of today's linked pair of exits.
+
+        Args:
+            leg (OrderLeg): The leg to be changed.
+            quantity_units (int | None): The new quantity as the caller gave it, or None when the quantity is not changing.
+
+        Returns:
+            str | None: The reason, or None.
+        """
+        if quantity_units is None or leg.quantity is None or quantity_units <= leg.quantity:
+            return None
+        if not self.closes_position(leg.role):
+            return None
+        return f'an order that closes a position can only be reduced, and {quantity_units} is more than its {leg.quantity}'
+
+    def on_leg_modified(self, leg, before):
+        """Lets the plan carry on from a change the caller made to one of its broker orders, then settles it so the rest of the plan follows.
+
+        The part that placed the order hands a new price or trigger to its pricing, so a trail, peg, chase or followed price carries on from the caller's value instead of moving it back. A new quantity on an order sent all at once becomes that order's total; under an Either join that reduces, it comes off the quantity every child shares, so the other exits follow it. An order split into pieces keeps its total, and its later pieces make up the difference.
+
+        Args:
+            leg (OrderLeg): The leg the caller changed, holding its new values.
+            before (dict): What the leg held before, with `quantity`, `price` and `trigger_price`.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        root, _ = self._read_plan()
+        part = self._part_for_leg(root, leg)
+        if part is None:
+            return
+        if leg.price != before.get('price') or leg.trigger_price != before.get('trigger_price'):
+            try:
+                quotes = self.quotes_now()
+            except RefusedRequestError as refusal:
+                self.logger.warning(f'Parent {self.parent.parent_order_id} could not read the quote to carry on from the caller\'s change: {refusal.body.get("error")}')
+                quotes = {}
+            part.carry_on(self, leg, before, quotes, time.time())
+        old_quantity = before.get('quantity')
+        if leg.quantity is not None and old_quantity is not None and leg.quantity != old_quantity and part.keeps_caller_quantity():
+            change = leg.quantity - old_quantity
+            join = self._parent_join(root, part.path)
+            if isinstance(join, EitherPart) and join.sibling_rule == 'reduce':
+                join.take_caller_change(self, change)
+            else:
+                part.take_caller_change(self, change)
+        placed = root.settle(self)
+        self._after_placing(placed)
+        self._finish_if_done(root)
+        self.save()
 
     def closes_position(self, role):
         """Whether a leg closes a position, which a leg of a `protect` order does, and so does the close a lifetime's `close_filled` sends.

@@ -1,0 +1,6 @@
+Part: root.each_fill.children.0
+Trigger price: Decimal('2440')
+Price: Decimal('2438.5')
+modify_held arguments: {'parent_id': 'P-00000000000040008000000000000001', 'price': '2438.5', 'quantity': None, 'dry_run': False, 'part': 'root.each_fill.children.0', 'trigger_price': '2440'}
+Refused: an order named by parent_id alone is still held, so only its price and quantity can change, not trigger_price; name a plan part with part to change its trigger_price
+Refused: a plan part that has not been sent can only change its price, trigger_price and quantity, not order_type

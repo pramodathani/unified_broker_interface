@@ -112,6 +112,22 @@ class AtrTrailPricing:
         """
         return self.trail(self.distance(memory)).priced_body(plan_order, body, sending_side, quotes, memory)
 
+    def carry_on(self, plan_order, memory, leg, before, quotes, now):
+        """Moves the best price so the trail carries on from the trigger the caller set, at the distance the bars give now.
+
+        Args:
+            plan_order (OrderContext): The plan order's context for this order.
+            memory (dict): The pricing's memory, holding the bars, whose `best` is set in place.
+            leg (OrderLeg): The stop, holding the caller's new trigger.
+            before (dict): What the leg held before, with `trigger_price`.
+            quotes (dict): Unused.
+            now (float): Unused.
+
+        Returns:
+            str | None: What changed, for the event log, or None when the trigger did not change.
+        """
+        return self.trail(self.distance(memory)).carry_on(plan_order, memory, leg, before, quotes, now)
+
     def moved_prices(self, plan_order, memory, leg, quotes, now):
         """Adds this tick's price to the bars, then trails at the distance they give.
 

@@ -136,6 +136,49 @@ class TrailPricing:
         body['price'] = str(limit)
         return body
 
+    def best_for_trigger(self, trigger, side):
+        """The best price whose trail lands exactly on a trigger.
+
+        Args:
+            trigger (decimal.Decimal): The trigger price.
+            side (str): BUY or SELL, the side the stop trades.
+
+        Returns:
+            decimal.Decimal: The best price.
+        """
+        if self.points is not None:
+            if side == 'SELL':
+                return trigger + self.points
+            return trigger - self.points
+        share = self.percent / HUNDRED
+        if side == 'SELL':
+            return trigger / (1 - share)
+        return trigger / (1 + share)
+
+    def carry_on(self, plan_order, memory, leg, before, quotes, now):
+        """Moves the best price so the trail carries on from the trigger the caller set, whichever way it was moved.
+
+        The trigger is worked out as the best price less the trail, and the best price only ever moves in the favourable direction. A trigger the caller loosened would be pulled straight back on the next tick unless the best price moves with it, so it is set to the price whose trail lands exactly on the caller's trigger. This keeps the rule of today's trailing stop.
+
+        Args:
+            plan_order (OrderContext): Unused.
+            memory (dict): The pricing's memory, whose `best` is set in place.
+            leg (OrderLeg): The stop, holding the caller's new trigger.
+            before (dict): What the leg held before, with `trigger_price`.
+            quotes (dict): Unused.
+            now (float): Unused.
+
+        Returns:
+            str | None: What changed, for the event log, or None when the trigger did not change.
+        """
+        del plan_order, quotes, now
+        if leg.trigger_price is None or leg.trigger_price == before.get('trigger_price'):
+            return None
+        trigger = decimal.Decimal(str(leg.trigger_price))
+        best = format(self.best_for_trigger(trigger, leg.transaction_type), 'f')
+        memory['best'] = best
+        return f'the caller moved the trigger to {trigger}, so the trail carries on from a best price of {best}'
+
     def moved_prices(self, plan_order, memory, leg, quotes, now):
         """Where the resting stop should move to on this tick, or None when it should stay.
 

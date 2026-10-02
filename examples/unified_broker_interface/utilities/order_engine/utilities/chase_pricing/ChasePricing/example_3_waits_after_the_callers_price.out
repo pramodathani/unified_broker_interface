@@ -1,0 +1,9 @@
+At 0.0 seconds: move None
+At 5.0 seconds: move (Decimal('1000.05'), None, 'the chase stepped to 1000.05')
+At 7.0 seconds the caller moves the price from 1000.05 to 1000.1
+Without carry_on, at 10.0 seconds: (Decimal('1000.15'), None, 'the chase stepped to 1000.15')
+carry_on: the caller moved the price to 1000.1, so the next step waits a full interval from now
+Memory: {'started_at': 0.0, 'stepped_at': 7.0}
+At 10.0 seconds: move None
+At 12.0 seconds: move (Decimal('1000.15'), None, 'the chase stepped to 1000.15')
+A modify that leaves the price alone: None

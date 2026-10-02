@@ -182,6 +182,32 @@ class FollowInstrumentPricing:
             return None
         return price, None, self.reason(watched, price)
 
+    def carry_on(self, plan_order, memory, leg, before, quotes, now):
+        """Re-anchors the order at the caller's new price and the followed instrument's price now, so it follows from there.
+
+        The order's price is its start price moved by `delta` times how far the followed instrument has moved since the start. Without a new start the next tick would move the order straight back. When the followed instrument has no price now, the start is left as it was. This keeps the rule of today's underlying peg.
+
+        Args:
+            plan_order (OrderContext): The plan order's context for this order, which reads quotes into prices.
+            memory (dict): The pricing's memory, whose `start_price` and `watched_start` are set in place.
+            leg (OrderLeg): The order, holding the caller's new price.
+            before (dict): What the leg held before, with `price`.
+            quotes (dict): The quotes now, by instrument id.
+            now (float): Unused.
+
+        Returns:
+            str | None: What changed, for the event log, or None when nothing did.
+        """
+        del now
+        if leg.price is None or leg.price == before.get('price'):
+            return None
+        watched = self.watched_price(plan_order, quotes)
+        if watched is None:
+            return None
+        memory['start_price'] = str(leg.price)
+        memory['watched_start'] = str(watched)
+        return f'the caller moved the price to {leg.price}, so the order follows the instrument from {watched}'
+
     def reason(self, watched, price):
         """Why the order moved, for the event log.
 

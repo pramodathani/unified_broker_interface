@@ -15,3 +15,7 @@ It is the same idea, but inside a part's own `pricing_memory` there is no other 
 ## What is not carried over yet
 
 `TrailingOrder.on_leg_modified` re-anchors the watermark when a caller changes the stop by hand. A plan part does not yet react to a caller's change to its order, so a hand-moved trailing stop in a plan will be moved back towards the trail on the next tick that calls for a move.
+
+## A caller's changes (added 2026-10-02)
+
+`best_for_trigger` is the inverse of `prices_from` before rounding, matching `TrailingStop.watermark_for_trigger`. With `percent` the result is not rounded, so `best` can carry many decimal places; it is only compared and multiplied, so this is harmless.

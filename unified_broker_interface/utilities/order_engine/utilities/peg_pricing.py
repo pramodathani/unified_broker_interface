@@ -56,8 +56,8 @@ class PegPricing:
         """
         return self.follows
 
-    def wanted_price(self, view, side):
-        """Where the order should be, given the book as it is now.
+    def reference_price(self, view, side):
+        """The reference in the book as it is now, before any offset.
 
         Args:
             view (MarketView): The order's quote.
@@ -67,15 +67,42 @@ class PegPricing:
             decimal.Decimal | None: The price, or None when the book does not carry the reference yet.
         """
         if self.reference == 'mid':
-            price = view.mid()
-        elif self.reference == 'opposite_touch':
-            price = view.opposite_touch(side)
-        else:
-            price = view.own_touch(side)
+            return view.mid()
+        if self.reference == 'opposite_touch':
+            return view.opposite_touch(side)
+        return view.own_touch(side)
+
+    def offset(self, memory):
+        """How many ticks from the reference the order rests: the offset a caller's change set, or the plan's own.
+
+        Args:
+            memory (dict): The pricing's memory, which holds `offset_ticks` once a caller has moved the order.
+
+        Returns:
+            int: The offset, positive away from filling.
+        """
+        if memory.get('offset_ticks') is not None:
+            return int(memory['offset_ticks'])
+        return self.offset_ticks
+
+    def wanted_price(self, view, side, offset_ticks=None):
+        """Where the order should be, given the book as it is now.
+
+        Args:
+            view (MarketView): The order's quote.
+            side (str): BUY or SELL, the side the order is sent on.
+            offset_ticks (int | None): The offset to use, or None for the plan's own.
+
+        Returns:
+            decimal.Decimal | None: The price, or None when the book does not carry the reference yet.
+        """
+        if offset_ticks is None:
+            offset_ticks = self.offset_ticks
+        price = self.reference_price(view, side)
         if price is None:
             return None
-        if self.offset_ticks:
-            price = view.moved(price, self.offset_ticks, side, False)
+        if offset_ticks:
+            price = view.moved(price, offset_ticks, side, False)
         price = view.rounded(price, side)
         if price is None or price <= 0:
             return None
@@ -129,7 +156,7 @@ class PegPricing:
 
         Args:
             plan_order (PlanOrder): The plan order, which reads quotes into prices.
-            memory (dict): Unused, since a peg remembers nothing.
+            memory (dict): The pricing's memory, which holds `offset_ticks` once a caller has moved the order.
             leg (OrderLeg): The resting order.
             quotes (dict): The quotes the tick carried.
             now (float): Unused.
@@ -137,14 +164,46 @@ class PegPricing:
         Returns:
             tuple | None: The new limit (decimal.Decimal), no trigger (None) and a reason (str), or None.
         """
-        del memory, now
+        del now
         view = plan_order.view(quotes)
         if not view.is_readable():
             return None
-        price = self.wanted_price(view, leg.transaction_type)
+        price = self.wanted_price(view, leg.transaction_type, self.offset(memory))
         if price is None:
             return None
         return price, None, f'the {self.reference} peg moved to {price}'
+
+    def carry_on(self, plan_order, memory, leg, before, quotes, now):
+        """Takes the offset from the reference that puts the peg at the price the caller set, so it follows the market from there.
+
+        Without a new offset the next tick would move the order straight back to where the old offset puts it. The reference is read from the quote now, and the offset is the whole number of ticks between it and the caller's price. When the quote does not carry the reference, the offset is left as it was and the next tick moves the order back. This keeps the rule of today's peg.
+
+        Args:
+            plan_order (OrderContext): The plan order's context for this order, which knows the tick size.
+            memory (dict): The pricing's memory, whose `offset_ticks` is set in place.
+            leg (OrderLeg): The pegged order, holding the caller's new price.
+            before (dict): What the leg held before, with `price`.
+            quotes (dict): The quotes now, by instrument id.
+            now (float): Unused.
+
+        Returns:
+            str | None: What changed, for the event log, or None when nothing did.
+        """
+        del now
+        if leg.price is None or leg.price == before.get('price'):
+            return None
+        reference_price = self.reference_price(plan_order.view(quotes), leg.transaction_type)
+        tick_size = plan_order.tick_size()
+        if reference_price is None or not tick_size:
+            return None
+        new_price = decimal.Decimal(str(leg.price))
+        if leg.transaction_type == 'BUY':
+            distance = reference_price - new_price
+        else:
+            distance = new_price - reference_price
+        offset = int((distance / tick_size).to_integral_value())
+        memory['offset_ticks'] = offset
+        return f'the caller moved the price to {new_price}, so the peg rests {offset} ticks from its {self.reference}'
 
     def described(self):
         """This pricing as a dry run shows it.

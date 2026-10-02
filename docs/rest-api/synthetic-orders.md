@@ -23,9 +23,12 @@ A leg of a synthetic order can be changed through [`PUT /api/orders/modify`](ord
 | `scale_out` | The other exits stay as they were; an exit cannot be raised |
 | `iceberg`, `participation`, `liquidity_seeking` | A changed slice counts against the total, so later slices place the rest |
 | `twap`, `vwap`, `implementation_shortfall` | The difference is carried into the next slice |
+| `plan` | Each order of the plan follows the rule of the type its pricing comes from: a `trail`, `stages` or `atr` trail continues from your trigger, a `peg` rests at the new distance from its reference, a `chase` waits a full step, and a `follow_instrument` or `option_model` price follows from your price and the followed instrument's price now. An order sent all at once trades your new quantity in all, and no later fill grows it back; an order split into pieces keeps its total. An order that closes a position can only be reduced, and the other exits of the same `either` join with `reduce` come down with it. |
 | Every other type | The leg simply keeps your new values |
 
 Only the price, trigger price and quantity of a synthetic order's leg can be changed.
+
+A plan's orders can also be changed before anything has been sent for them, such as a bracket's stop while its entry is still resting, through [`PUT /api/orders/modify` with `parent_id` and `part`](orders.md#a-part-of-a-plan-that-has-not-been-sent).
 
 ## How to ask for one
 
@@ -1225,7 +1228,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     The `post_only` guard takes `on_crossing`, `refuse` (default) or `rest`. Before a limit is sent it is checked against the book: one that would trade, a buy at or above the best offer or a sell at or below the best bid, is refused with `on_crossing: refuse`, which ends the order and answers <span class="status s4">409</span> when it was the plan's first order, or moved back to its own side's touch with `rest`. A move of a resting order that would cross is skipped with `refuse` and held at the own touch with `rest`. Indian exchanges have no post-only flag, so the book can still move while the order is in flight.
 
-    A price the caller changes on a plan's pegged order is not yet taken up as the `peg` type takes it up: the next tick moves the order back to its reference. A chase steps on from the caller's price, as the `chaser` type does. A post-only guard on an order whose pricing means to trade at once (`marketable`, `chase`, a `peg` to the `opposite_touch` or a `MARKET` order) is refused with `post_only_crosses`, and on a stop with `post_only_needs_limit`.
+    A price the caller changes on a plan's pegged order is taken up as the `peg` type takes it up: the peg remembers the new distance from its reference and follows the market from there. A chase waits a full step after the caller's price, as the `chaser` type does. A post-only guard on an order whose pricing means to trade at once (`marketable`, `chase`, a `peg` to the `opposite_touch` or a `MARKET` order) is refused with `post_only_crosses`, and on a stop with `post_only_needs_limit`.
 
     A lifetime is one object with `at_time`, a time of day such as `"14:30"` on the instrument's next trading day, `after_minutes`, counted from when the plan is placed, `after_days`, 1 to 365 days of 24 hours from then, or `when`, any trigger condition, checked on every tick, such as an `account` figure reaching a level; `applies_to`, `waiting`, `working` or `both` (default), saying which part of the order's life the end bounds; and `on_end`. An order still waiting for its trigger when its time comes is done as expired. An order working when its time comes ends according to `on_end`:
 
