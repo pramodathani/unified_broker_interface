@@ -722,6 +722,140 @@ class OrderEngineChangesSuite(order_routes.OrderRoutesSuite):
             'sent': self.sent(),
         }
 
+    def placed_bracket_plan(self):
+        """Places a bracket plan whose entry rests, so its stop and target have not been sent.
+
+        Returns:
+            dict: The place route's status and body.
+        """
+        return self.call('POST', '/place', self.limit_body(synthetic={
+            'type': 'plan',
+            'plan': {
+                'order': {
+                    'presets': [
+                        {
+                            'bracket': {
+                                'stop_price': 990,
+                                'stop_limit_price': 988,
+                                'target_price': 1010,
+                            },
+                        },
+                    ],
+                },
+            },
+        }))
+
+    def cancel_by_parent_id(self):
+        """Cancels a bracket plan's stop before its entry fills, then the whole plan, through `DELETE /api/orders/cancel` with `parent_id`, and shows what is refused.
+
+        Returns:
+            dict: The recorded result.
+        """
+        self.start_scenario()
+        stop_part = 'root.each_fill.children.0'
+        placed = self.placed_bracket_plan()
+        parent_order_id = placed['body']['parent_id']
+        part_dry_run = self.call('DELETE', '/cancel', {
+            'parent_id': parent_order_id,
+            'part': stop_part,
+            'dry_run': True,
+        })
+        after_dry_run = self.plan_parts(parent_order_id)
+        part_cancelled = self.call('DELETE', '/cancel', {
+            'parent_id': parent_order_id,
+            'part': stop_part,
+        })
+        after_part = self.plan_parts(parent_order_id)
+        refused = {
+            'order_id_beside_parent_id': self.call('DELETE', '/cancel', {
+                'parent_id': parent_order_id,
+                'order_id': FLATTRADE_ORDER,
+            }),
+            'empty_part': self.call('DELETE', '/cancel', {
+                'parent_id': parent_order_id,
+                'part': '',
+            }),
+            'part_already_cancelled': self.call('DELETE', '/cancel', {
+                'parent_id': parent_order_id,
+                'part': stop_part,
+            }),
+            'no_such_parent': self.call('DELETE', '/cancel', {
+                'parent_id': 'no-such-parent',
+            }),
+        }
+        whole_dry_run = self.call('DELETE', '/cancel', {
+            'parent_id': parent_order_id,
+            'dry_run': True,
+        })
+        whole_cancelled = self.call('DELETE', '/cancel', {
+            'parent_id': parent_order_id,
+        })
+        return {
+            'name': 'a_plan_part_and_then_the_whole_plan_are_cancelled_by_parent_id',
+            'placed': placed,
+            'part_dry_run': part_dry_run,
+            'after_dry_run': after_dry_run,
+            'part_cancelled': part_cancelled,
+            'after_part': after_part,
+            'refused': refused,
+            'whole_dry_run': whole_dry_run,
+            'whole_cancelled': whole_cancelled,
+            'sent': self.sent(),
+            'parent': self.parent_after(parent_order_id),
+        }
+
+    def cancel_a_mixed_list(self):
+        """Cancels a broker order, a held order and a plan part in one `orders` list, first as a dry run that must change nothing.
+
+        The stub broker answers every placement with the same order id, so the broker order the list names is the plan's resting entry, which the route hands to the engine as the plan's leg. The last item gives `broker` beside `parent_id`, which is refused on its own.
+
+        Returns:
+            dict: The recorded result.
+        """
+        self.start_scenario(hold_limits=True)
+        held = self.call('POST', '/place', self.limit_body())
+        self.call('POST', '/place', self.limit_body(synthetic={
+            'type': 'simple',
+        }))
+        plan = self.placed_bracket_plan()
+        items = [
+            {
+                'order_id': FLATTRADE_ORDER,
+            },
+            {
+                'parent_id': held['body']['parent_id'],
+            },
+            {
+                'parent_id': plan['body']['parent_id'],
+                'part': 'root.each_fill.children.1',
+            },
+            {
+                'parent_id': plan['body']['parent_id'],
+                'broker': 'flattrade',
+            },
+        ]
+        shown = self.call('DELETE', '/cancel', {
+            'dry_run': True,
+            'orders': items,
+        })
+        after_dry_run = {
+            'held': self.parent_after(held['body']['parent_id']),
+            'plan_parts': self.plan_parts(plan['body']['parent_id']),
+            'sent': self.sent(),
+        }
+        cancelled = self.call('DELETE', '/cancel', {
+            'orders': items,
+        })
+        return {
+            'name': 'a_cancel_list_cancels_broker_orders_parents_and_parts_in_the_callers_order',
+            'shown': shown,
+            'after_dry_run': after_dry_run,
+            'cancelled': cancelled,
+            'held_after': self.parent_after(held['body']['parent_id']),
+            'plan_parts_after': self.plan_parts(plan['body']['parent_id']),
+            'sent': self.sent(),
+        }
+
     def orders_combiner(self):
         """The orders combiner script, loaded as a module so its document builder can run against the stand-in.
 
@@ -768,6 +902,8 @@ class OrderEngineChangesSuite(order_routes.OrderRoutesSuite):
                 self.modify_a_plan_part(),
                 self.modify_a_mixed_list(),
                 self.modify_list_dry_run_covers_held_orders(),
+                self.cancel_by_parent_id(),
+                self.cancel_a_mixed_list(),
             ]
         finally:
             blueprint_base.get_cache = original_get_cache

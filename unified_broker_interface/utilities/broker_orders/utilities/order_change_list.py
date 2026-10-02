@@ -22,7 +22,7 @@ class OrderChangeList(OrderRequest):
     Attributes:
         dry_run (bool): Whether every order is only shown rather than sent.
         parent_class (type | None): The class that validated items naming `parent_id`, or None when the list takes none.
-        entries (list): One entry per item of `orders`, in order: the validated request, a `CancelOrderRequest` or a `ModifyOrderRequest`, for an item naming `parent_id` the `parent_class` request, such as a `HeldOrderChange`, or the `RefusedRequestError` saying why the item is not one.
+        entries (list): One entry per item of `orders`, in order: the validated request, a `CancelOrderRequest` or a `ModifyOrderRequest`, for an item naming `parent_id` a `ParentCancel` or a `HeldOrderChange`, or the `RefusedRequestError` saying why the item is not one.
     """
 
     def __init__(self, body, query_arguments, request_class, broker_names, parent_class=None):
@@ -33,7 +33,7 @@ class OrderChangeList(OrderRequest):
             query_arguments (werkzeug.datastructures.MultiDict): The query string arguments.
             request_class (type): `CancelOrderRequest` or `ModifyOrderRequest`, which validates one item.
             broker_names (list): Every broker's name, for checking `broker`.
-            parent_class (type | None): The class, such as `HeldOrderChange`, which validates an item that names `parent_id`, given the list's `dry_run`; None validates every item with `request_class`.
+            parent_class (type | None): `ParentCancel` or `HeldOrderChange`, which validates an item that names `parent_id`, given the list's `dry_run`; None validates every item with `request_class`.
 
         Returns:
             None: This method returns nothing.
@@ -71,7 +71,7 @@ class OrderChangeList(OrderRequest):
             broker_names (list): Every broker's name, for checking `broker`.
 
         Returns:
-            CancelOrderRequest | ModifyOrderRequest | HeldOrderChange | RefusedRequestError: The validated request, or the refusal saying why the item is not one.
+            CancelOrderRequest | ModifyOrderRequest | ParentCancel | HeldOrderChange | RefusedRequestError: The validated request, or the refusal saying why the item is not one.
         """
         if not isinstance(item, dict):
             return RefusedRequestError.refusal('each entry of orders must be an object', 400)
