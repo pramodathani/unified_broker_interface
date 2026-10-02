@@ -187,7 +187,7 @@ class GridPart(WholePart):
         for leg in self.own_legs(plan_order.parent):
             if leg.is_finished() or leg.transaction_type != adding or leg.broker_order_id is None:
                 continue
-            plan_order.cancel_leg(leg, f'the grid is holding {net}, which is its whole allowance, so it stops adding to that side')
+            self.cancel_once(plan_order, leg, f'the grid is holding {net}, which is its whole allowance, so it stops adding to that side')
 
     def settle(self, plan_order):
         """Places the opposite of every rung that has filled and not been answered yet, then stops adding past the cap; once stopped, it places nothing more and is done when its orders have finished.

@@ -77,3 +77,7 @@ A part with a `position` is a close: `send` hands it to `_close_positions`, whic
 ## `against_delta` (2026-10-01)
 
 The side is worked out in `_sending_side` rather than `sending_side`, because it needs the order's context to read whether the plan's option is a call. Nothing calls `sending_side` without going through `_sending_side`.
+
+## Asking each cancel once (2026-10-02)
+
+Every update settles the whole plan, and an Either join that cancels its siblings, or a set target that wants nothing more, asked again for every order whose cancel was still on its way, spending an order message each time; brokers count those against their daily limits. `cancel_once` keeps the leg ids whose cancel the broker accepted in the part record as `cancel_asked`. It writes no event of its own, because a parameters event per cancel would bury the log; the record reaches the event log with the next change that has a message, and after a restart before that, at most one cancel is asked twice. A refused cancel is not kept, so it is asked again. The discretion modifier's cancel is left alone, because it is followed at once by the order that takes its place.

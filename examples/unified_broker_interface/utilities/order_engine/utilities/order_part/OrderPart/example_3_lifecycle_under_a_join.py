@@ -1,6 +1,6 @@
 """Walks one order part through the lifecycle a join drives: start, a fill, a new target, cancelling the rest, and done.
 
-An `OrderPart` placed under a join is told how much to trade with a target. `start` places it for that much, `traded` says what has filled, `total` is how much it should trade in all and `committed` how much its broker orders account for, `send_due` sends whatever its execution says is due, which for an order sent all at once is nothing once it has gone, `set_target` changes its resting order to the filled part plus what is still wanted, or cancels it when nothing more is wanted, `cancel_rest` stops whatever is left, and `settle` marks it done once every broker order has finished. `send` is how a part left waiting, for its trigger or for a price, is placed when its tick comes, and `move` is how a working trailing stop follows the market on a tick. A part that has not been started yet only records a new target. This program also shows how the part describes its quantity, what it holds as a member of a tree, and that an ordinary order readies no memory of its own when the plan is placed.
+An `OrderPart` placed under a join is told how much to trade with a target. `start` places it for that much, `traded` says what has filled, `total` is how much it should trade in all and `committed` how much its broker orders account for, `send_due` sends whatever its execution says is due, which for an order sent all at once is nothing once it has gone, `set_target` changes its resting order to the filled part plus what is still wanted, or cancels it when nothing more is wanted, `cancel_rest` stops whatever is left, asking each broker order's cancel through `cancel_once`, which never asks twice for an order whose cancel the broker has accepted, and `settle` marks it done once every broker order has finished. `send` is how a part left waiting, for its trigger or for a price, is placed when its tick comes, and `move` is how a working trailing stop follows the market on a tick. A part that has not been started yet only records a new target. This program also shows how the part describes its quantity, what it holds as a member of a tree, and that an ordinary order readies no memory of its own when the plan is placed.
 
 A stand-in plays the plan order: it keeps the parts' records and turns every order into an acknowledged leg, so nothing leaves the machine.
 
@@ -329,6 +329,9 @@ class LifecycleUnderAJoinExample:
         self.plan_order.set_part_record(again.path, {'state': 'pending'}, None)
         again.start(self.plan_order, 5, None, {})
         again.cancel_rest(self.plan_order, 'its sibling filled')
+        cancels = len(self.plan_order.requests)
+        asked_again = again.cancel_once(self.plan_order, self.plan_order.parent.legs[-1], 'its sibling filled')
+        print(f'Asked to cancel again before settling: {asked_again}, with {len(self.plan_order.requests) - cancels} more requests')
         again.settle(self.plan_order)
         print(f'A target cancelled and settled: done {again.is_done(self.plan_order)}, record {self.plan_order.part_record(again.path)}')
         waiting = PartMaker().target('root.children.2')

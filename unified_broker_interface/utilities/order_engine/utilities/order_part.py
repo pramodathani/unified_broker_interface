@@ -852,7 +852,7 @@ class OrderPart:
                 resting.append(leg)
         for index, leg in enumerate(resting):
             if wanted <= 0:
-                plan_order.cancel_leg(leg, f'the plan\'s {self.path} part has nothing left to trade')
+                self.cancel_once(plan_order, leg, f'the plan\'s {self.path} part has nothing left to trade')
                 continue
             unfilled = (leg.quantity or 0) - (leg.filled_quantity or 0)
             share = wanted
@@ -889,7 +889,7 @@ class OrderPart:
             cut = min((leg.quantity or 0) - filled, excess)
             new_total = (leg.quantity or 0) - cut
             if new_total <= filled:
-                plan_order.cancel_leg(leg, f'the plan\'s {self.path} part should now trade {target} in all')
+                self.cancel_once(plan_order, leg, f'the plan\'s {self.path} part should now trade {target} in all')
             else:
                 plan_order.reduce_leg(leg, new_total, f'the plan\'s {self.path} part should now trade {target} in all')
             excess = excess - cut
@@ -917,9 +917,34 @@ class OrderPart:
         for leg in self.own_legs(plan_order.parent):
             if leg.is_finished() or not leg.broker_order_id:
                 continue
-            if not plan_order.cancel_leg(leg, reason):
+            if not self.cancel_once(plan_order, leg, reason):
                 all_cancelled = False
         return all_cancelled
+
+    def cancel_once(self, plan_order, leg, reason):
+        """Asks the broker to cancel one of this part's orders, unless it has already accepted a cancel for it that is not confirmed yet.
+
+        Every update settles the whole plan again, and a join that stops this part asks again on each one; without this, an order whose cancel is on its way is asked again, spending an order message each time. The leg ids whose cancel the broker accepted are kept in the part record as `cancel_asked`, without an event of their own, so after a restart at most one cancel is asked twice. A cancel the broker refused is not kept, so it is asked again.
+
+        Args:
+            plan_order (PlanOrder): The plan order.
+            leg (OrderLeg): The broker order.
+            reason (str): Why, for the event log.
+
+        Returns:
+            bool: True when the broker has accepted a cancel for it, now or before.
+        """
+        asked = plan_order.part_record(self.path).get('cancel_asked') or []
+        if leg.leg_id in asked:
+            return True
+        if not plan_order.cancel_leg(leg, reason):
+            return False
+        record = plan_order.part_record(self.path)
+        record['cancel_asked'] = list(record.get('cancel_asked') or []) + [
+            leg.leg_id,
+        ]
+        plan_order.set_part_record(self.path, record, None)
+        return True
 
     def is_started(self, plan_order):
         """Whether this order has been started.
