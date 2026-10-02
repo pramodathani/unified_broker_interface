@@ -2902,6 +2902,88 @@ class OrderEngineSuite:
         result['parts'] = parts
         return result
 
+    def run_plan_routing_checks(self):
+        """Runs today's requests for three fixed types with the switch-over routing them to plans, beside the same requests run by the fixed types.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        accepted = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        entry = self.scenarios.bodies.market_order(
+            dry_run=None,
+            order_type='LIMIT',
+            price=1000,
+            quantity=10,
+        )
+        steady = self.book_at(1000.00, 1000.05)
+        original_plan_types = api_configuration['order_plan_types']
+        api_configuration['order_plan_types'] = [
+            'grid',
+            'bracket',
+            'market_if_touched',
+        ]
+        try:
+            return [
+                self.reaction_result(
+                    'a_routed_grid_replaces_a_filled_rung_with_its_opposite',
+                    self.scenarios.bodies.market_order(
+                        dry_run=None,
+                        order_type='LIMIT',
+                        price=1000,
+                        quantity=5,
+                        synthetic={
+                            'type': 'grid',
+                            'levels': 2,
+                            'step_points': 5,
+                            'most_inventory': 20,
+                        },
+                    ),
+                    [
+                        self.update('26091500000021', 'COMPLETE', 5),
+                    ],
+                    accepted,
+                    quote=self.scenarios.quote(),
+                ),
+                self.reaction_result(
+                    'a_routed_bracket_grows_its_exits_as_the_entry_fills_further',
+                    self.scenarios.bodies.market_order(
+                        dry_run=None,
+                        order_type='LIMIT',
+                        price=1000,
+                        quantity=10,
+                        synthetic={
+                            'type': 'bracket',
+                            'stop_price': 990,
+                            'stop_limit_price': 988,
+                            'target_price': 1010,
+                        },
+                    ),
+                    [
+                        self.update('26091500000021', 'OPEN', 4),
+                        self.update('26091500000021', 'COMPLETE', 10),
+                    ],
+                    accepted,
+                ),
+                self.price_result(
+                    'a_routed_market_if_touched_order_waits_and_then_takes_the_offer',
+                    dict(entry, synthetic={
+                        'type': 'market_if_touched',
+                        'trigger_price': 995,
+                    }),
+                    [
+                        {'quote': steady, 'at': 0},
+                        {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                        {'quote': self.book_at(994.90, 994.95), 'at': 2},
+                    ],
+                    accepted,
+                ),
+            ]
+        finally:
+            api_configuration['order_plan_types'] = original_plan_types
+
     def run_plan_kept_whole_checks(self):
         """Runs plan orders kept whole, such as a grid, beside today's checks of the same types.
 
@@ -10910,6 +10992,7 @@ class OrderEngineSuite:
         original_uuid4 = uuid.uuid4
         original_excluded = api_configuration['order_excluded_brokers']
         original_selector = api_configuration['order_broker_selector']
+        original_plan_types = api_configuration['order_plan_types']
         original_now = moments.Moments.now
         requests.Session.request = self.network.request
         uuid.uuid4 = self.counting_uuid
@@ -10918,6 +11001,9 @@ class OrderEngineSuite:
             '',
         ]
         api_configuration['order_broker_selector'] = 'round_robin'
+        api_configuration['order_plan_types'] = [
+            '',
+        ]
         try:
             results = []
             for scenario in OrderEngineScenarios().build():
@@ -10932,6 +11018,7 @@ class OrderEngineSuite:
             results.extend(self.run_plan_trigger_checks())
             results.extend(self.run_plan_virtual_limit_checks())
             results.extend(self.run_plan_kept_whole_checks())
+            results.extend(self.run_plan_routing_checks())
             results.extend(self.run_plan_join_checks())
             results.extend(self.run_plan_trailing_checks())
             results.extend(self.run_plan_execution_checks())
@@ -10959,6 +11046,7 @@ class OrderEngineSuite:
             moments.Moments.now = original_now
             api_configuration['order_excluded_brokers'] = original_excluded
             api_configuration['order_broker_selector'] = original_selector
+            api_configuration['order_plan_types'] = original_plan_types
         return results
 
     def encode(self, result):
