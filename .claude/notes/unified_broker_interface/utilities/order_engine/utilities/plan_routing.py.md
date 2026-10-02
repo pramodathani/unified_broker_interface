@@ -15,3 +15,9 @@ Every fixed type's preset has the type's own name except `gtt`, whose preset was
 ## The offline suite
 
 The suite pins the setting to empty around every scenario, as it pins the broker settings, so a value in `.env` cannot change the recordings; `run_plan_routing_checks` turns it on around today's grid, bracket and market-if-touched bodies, whose broker requests match the fixed types' recordings.
+
+## The order flags stay beside the plan, since 2026-10-02
+
+`closes_position` and `reduce_only` can be given on any synthetic type, and both are read from the top of the parent's parameters: `SyntheticOrder.closes_position` in `base.py` and `ReduceOnlyCheck.is_asked_for` in `reduce_only.py`, which `PlanOrder` runs too. `routed` first copied every key of the caller's `synthetic` object except `type` into the preset's settings, and no preset lists either flag, so a routed order carrying one was refused with HTTP 400 `unknown_setting`, such as `the market_if_touched preset takes trigger_price, trigger_direction, trigger_on, hold_seconds, buffer_ticks, not 'closes_position'`. That broke the switch-over's promise that the caller's request does not change, and it would have failed every `square_off` order from tradingmachine, whose `SquareOffOrder` sends `closes_position` by default. `routed` now takes the two flags out of the settings and keeps them at the top of the plan's `synthetic` object, where the plan reads them as every fixed type does. The audit from tradingmachine that found it is recorded in that project's notes.
+
+`run_plan_routing_checks` gained two scenarios, a routed `market_if_touched` order with `closes_position` and one with `reduce_only`. Before the change both answered 400; after it the first is armed and places its order at the touch, and the second is armed and places nothing at the touch, because the scripted account holds no position for it to reduce.

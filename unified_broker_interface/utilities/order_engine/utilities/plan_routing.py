@@ -10,12 +10,18 @@ from unified_broker_interface.utilities.order_engine.utilities.registry import (
 PRESET_NAMES_BY_TYPE = {
     'gtt': 'good_till_triggered',
 }
+ORDER_FLAGS = (
+    'closes_position',
+    'reduce_only',
+)
 
 
 class PlanRouting:
     """Which of the fixed synthetic types are run as plans, and the rewriting of their intents.
 
     Each fixed type has a preset, of the same name except for `gtt`, whose preset is `good_till_triggered`, built to send the same broker requests. The switch-over moves one type at a time, after its preset has traded live: a type named in `UNIFIED_BROKER_INTERFACE_API_ORDER_PLAN_TYPES` has its intents rewritten into a `plan` whose one order names that preset with the caller's settings, so the caller's request does not change. A type not named keeps its fixed class. The setting is empty by default, so nothing moves until it is filled in, and a name that is not both a fixed type and a preset stops the engine from starting rather than being ignored.
+
+    `closes_position` and `reduce_only` are not settings of a type but flags every type reads from the top of its parameters, so they stay there beside the plan rather than going into the preset, which would refuse them as unknown settings.
 
     Attributes:
         type_names (list): The fixed types run as plans.
@@ -76,7 +82,7 @@ class PlanRouting:
             intent (dict): The intent document.
 
         Returns:
-            dict: The intent to run.
+            dict: The intent to run, with `closes_position` and `reduce_only` kept at the top of the plan's `synthetic` object.
         """
         named_type = intent.get('synthetic_type')
         if named_type not in self.type_names:
@@ -84,7 +90,11 @@ class PlanRouting:
         body = dict(intent.get('body') or {})
         settings = dict(body.get('synthetic') or {})
         settings.pop('type', None)
-        body['synthetic'] = {
+        flags = {}
+        for name in ORDER_FLAGS:
+            if name in settings:
+                flags[name] = settings.pop(name)
+        synthetic = {
             'type': 'plan',
             'plan': {
                 'order': {
@@ -97,6 +107,8 @@ class PlanRouting:
             },
             'routed_from': named_type,
         }
+        synthetic.update(flags)
+        body['synthetic'] = synthetic
         routed = dict(intent)
         routed['synthetic_type'] = 'plan'
         routed['body'] = body
