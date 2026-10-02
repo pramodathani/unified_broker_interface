@@ -1171,7 +1171,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
 === "Plans"
 
-    A plan describes an order as a tree of parts rather than naming one of the fixed types. It is the start of the composable synthetic orders, which will let any number of the other types be combined in one order. A plan's orders can wait for a trigger, protect a position and be priced by one pricing rule, built from presets or written out as slot values, and they can be joined with `then` and `either`. The other joins in the design, `together`, `using`, `repeat` and `sequence`, come in later stages, and naming one is refused as not built yet.
+    A plan describes an order as a tree of parts rather than naming one of the fixed types. It is the composable synthetic orders: any number of the other types combined in one order. A plan's orders wait for a trigger, take a side and a quantity, are priced and sent by one pricing and one execution, and can carry guards, a lifetime and a venue, all built from presets or written out as slot values; they are joined with `then`, `either`, `together`, `sequence` and `repeat`. Every one of the fixed types has a preset. The `using` join, which hands each order to a whole plan, and nesting one execution inside another are part of the design and not built, and naming either is refused.
 
     #### `plan`
 
