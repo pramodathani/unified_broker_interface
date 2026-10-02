@@ -2902,6 +2902,88 @@ class OrderEngineSuite:
         result['parts'] = parts
         return result
 
+    def run_plan_routing_checks(self):
+        """Runs today's requests for three fixed types with the switch-over routing them to plans, beside the same requests run by the fixed types.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        accepted = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        entry = self.scenarios.bodies.market_order(
+            dry_run=None,
+            order_type='LIMIT',
+            price=1000,
+            quantity=10,
+        )
+        steady = self.book_at(1000.00, 1000.05)
+        original_plan_types = api_configuration['order_plan_types']
+        api_configuration['order_plan_types'] = [
+            'grid',
+            'bracket',
+            'market_if_touched',
+        ]
+        try:
+            return [
+                self.reaction_result(
+                    'a_routed_grid_replaces_a_filled_rung_with_its_opposite',
+                    self.scenarios.bodies.market_order(
+                        dry_run=None,
+                        order_type='LIMIT',
+                        price=1000,
+                        quantity=5,
+                        synthetic={
+                            'type': 'grid',
+                            'levels': 2,
+                            'step_points': 5,
+                            'most_inventory': 20,
+                        },
+                    ),
+                    [
+                        self.update('26091500000021', 'COMPLETE', 5),
+                    ],
+                    accepted,
+                    quote=self.scenarios.quote(),
+                ),
+                self.reaction_result(
+                    'a_routed_bracket_grows_its_exits_as_the_entry_fills_further',
+                    self.scenarios.bodies.market_order(
+                        dry_run=None,
+                        order_type='LIMIT',
+                        price=1000,
+                        quantity=10,
+                        synthetic={
+                            'type': 'bracket',
+                            'stop_price': 990,
+                            'stop_limit_price': 988,
+                            'target_price': 1010,
+                        },
+                    ),
+                    [
+                        self.update('26091500000021', 'OPEN', 4),
+                        self.update('26091500000021', 'COMPLETE', 10),
+                    ],
+                    accepted,
+                ),
+                self.price_result(
+                    'a_routed_market_if_touched_order_waits_and_then_takes_the_offer',
+                    dict(entry, synthetic={
+                        'type': 'market_if_touched',
+                        'trigger_price': 995,
+                    }),
+                    [
+                        {'quote': steady, 'at': 0},
+                        {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                        {'quote': self.book_at(994.90, 994.95), 'at': 2},
+                    ],
+                    accepted,
+                ),
+            ]
+        finally:
+            api_configuration['order_plan_types'] = original_plan_types
+
     def run_plan_kept_whole_checks(self):
         """Runs plan orders kept whole, such as a grid, beside today's checks of the same types.
 
@@ -4805,6 +4887,267 @@ class OrderEngineSuite:
                 numbered,
             ),
             self.plan_price_result(
+                'a_plan_twap_whose_slices_are_icebergs_shows_two_at_a_time',
+                {
+                    'order': {
+                        'execution': [
+                            {
+                                'twap': {
+                                    'slices': 2,
+                                    'over_minutes': 1,
+                                },
+                            },
+                            {
+                                'iceberg': {
+                                    'visible_quantity': 2,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'COMPLETE', 2)]},
+                    {'quote': steady, 'at': 2, 'updates': [self.update('26091500000102', 'COMPLETE', 2)]},
+                    {'quote': steady, 'at': 30},
+                    {'quote': steady, 'at': 31, 'updates': [self.update('26091500000104', 'COMPLETE', 2)]},
+                    {'quote': steady, 'at': 32, 'updates': [self.update('26091500000105', 'COMPLETE', 2)]},
+                    {'quote': steady, 'at': 33, 'updates': [self.update('26091500000103', 'COMPLETE', 1), self.update('26091500000106', 'COMPLETE', 1)]},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_twap_whose_slices_are_icebergs_survives_restarts',
+                {
+                    'order': {
+                        'execution': [
+                            {
+                                'twap': {
+                                    'slices': 2,
+                                    'over_minutes': 1,
+                                },
+                            },
+                            {
+                                'iceberg': {
+                                    'visible_quantity': 2,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'COMPLETE', 2)]},
+                    {'quote': steady, 'at': 2, 'updates': [self.update('26091500000102', 'COMPLETE', 2)]},
+                    {'quote': steady, 'at': 30},
+                    {'quote': steady, 'at': 31, 'updates': [self.update('26091500000104', 'COMPLETE', 2)]},
+                    {'quote': steady, 'at': 32, 'updates': [self.update('26091500000105', 'COMPLETE', 2)]},
+                    {'quote': steady, 'at': 33, 'updates': [self.update('26091500000103', 'COMPLETE', 1), self.update('26091500000106', 'COMPLETE', 1)]},
+                ],
+                numbered,
+                restart_between_ticks=True,
+            ),
+            self.plan_price_result(
+                'a_plan_iceberg_whose_slices_are_twaps_releases_the_next_once_one_fills',
+                {
+                    'order': {
+                        'execution': [
+                            {
+                                'iceberg': {
+                                    'visible_quantity': 5,
+                                },
+                            },
+                            {
+                                'twap': {
+                                    'slices': 2,
+                                    'over_minutes': 1,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 30},
+                    {'quote': steady, 'at': 31, 'updates': [self.update('26091500000101', 'COMPLETE', 3), self.update('26091500000102', 'COMPLETE', 2)]},
+                    {'quote': steady, 'at': 61},
+                    {'quote': steady, 'at': 91},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_using_a_ladder_gives_every_rung_its_own_bracket',
+                {
+                    'using': {
+                        'order': {
+                            'execution': [
+                                {
+                                    'ladder': {
+                                        'from_price': 1000,
+                                        'to_price': 990,
+                                        'steps': 2,
+                                    },
+                                },
+                            ],
+                        },
+                        'each_piece': {
+                            'presets': [
+                                {
+                                    'bracket': {
+                                        'stop_price': 980,
+                                        'stop_limit_price': 978,
+                                        'target_price': 1020,
+                                    },
+                                },
+                            ],
+                        },
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000102', 'COMPLETE', 5)]},
+                    {'quote': steady, 'at': 2},
+                ],
+                numbered,
+                restart_between_ticks=True,
+            ),
+            self.plan_price_result(
+                'a_plan_using_a_twap_covers_every_slice_with_its_own_stop',
+                {
+                    'using': {
+                        'order': {
+                            'execution': [
+                                {
+                                    'twap': {
+                                        'slices': 2,
+                                        'over_minutes': 1,
+                                    },
+                                },
+                            ],
+                        },
+                        'each_piece': {
+                            'presets': [
+                                {
+                                    'cover': {
+                                        'stop_price': 980,
+                                        'stop_limit_price': 978,
+                                    },
+                                },
+                            ],
+                        },
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'COMPLETE', 5)]},
+                    {'quote': steady, 'at': 30},
+                    {'quote': steady, 'at': 31, 'updates': [self.update('26091500000103', 'COMPLETE', 5)]},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_using_an_iceberg_or_a_priced_ladder_is_refused',
+                {
+                    'together': {
+                        'children': [
+                            {
+                                'using': {
+                                    'order': {
+                                        'execution': [
+                                            {
+                                                'iceberg': {
+                                                    'visible_quantity': 2,
+                                                },
+                                            },
+                                        ],
+                                    },
+                                    'each_piece': {},
+                                },
+                            },
+                            {
+                                'using': {
+                                    'order': {
+                                        'execution': [
+                                            {
+                                                'ladder': {
+                                                    'from_price': 1000,
+                                                    'to_price': 990,
+                                                    'steps': 2,
+                                                },
+                                            },
+                                        ],
+                                    },
+                                    'each_piece': {
+                                        'pricing': [
+                                            {
+                                                'marketable': {},
+                                            },
+                                        ],
+                                    },
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_with_three_nested_executions_or_a_ladder_outside_is_refused',
+                {
+                    'together': {
+                        'children': [
+                            {
+                                'order': {
+                                    'execution': [
+                                        {
+                                            'twap': {
+                                                'slices': 2,
+                                                'over_minutes': 1,
+                                            },
+                                        },
+                                        {
+                                            'iceberg': {
+                                                'visible_quantity': 2,
+                                            },
+                                        },
+                                        {
+                                            'iceberg': {
+                                                'visible_quantity': 1,
+                                            },
+                                        },
+                                    ],
+                                },
+                            },
+                            {
+                                'order': {
+                                    'execution': [
+                                        {
+                                            'ladder': {
+                                                'from_price': 1000,
+                                                'to_price': 990,
+                                                'steps': 2,
+                                            },
+                                        },
+                                        {
+                                            'iceberg': {
+                                                'visible_quantity': 2,
+                                            },
+                                        },
+                                    ],
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
                 'a_plan_twap_keeps_its_schedule_across_a_restart',
                 {
                     'order': {
@@ -4936,7 +5279,7 @@ class OrderEngineSuite:
                 numbered,
             ),
             self.plan_price_result(
-                'a_plan_that_slices_a_resting_stop_or_nests_executions_is_refused',
+                'a_plan_that_slices_a_resting_stop_is_refused',
                 {
                     'either': {
                         'sibling_rule': 'cancel',
@@ -10910,6 +11253,7 @@ class OrderEngineSuite:
         original_uuid4 = uuid.uuid4
         original_excluded = api_configuration['order_excluded_brokers']
         original_selector = api_configuration['order_broker_selector']
+        original_plan_types = api_configuration['order_plan_types']
         original_now = moments.Moments.now
         requests.Session.request = self.network.request
         uuid.uuid4 = self.counting_uuid
@@ -10918,6 +11262,9 @@ class OrderEngineSuite:
             '',
         ]
         api_configuration['order_broker_selector'] = 'round_robin'
+        api_configuration['order_plan_types'] = [
+            '',
+        ]
         try:
             results = []
             for scenario in OrderEngineScenarios().build():
@@ -10932,6 +11279,7 @@ class OrderEngineSuite:
             results.extend(self.run_plan_trigger_checks())
             results.extend(self.run_plan_virtual_limit_checks())
             results.extend(self.run_plan_kept_whole_checks())
+            results.extend(self.run_plan_routing_checks())
             results.extend(self.run_plan_join_checks())
             results.extend(self.run_plan_trailing_checks())
             results.extend(self.run_plan_execution_checks())
@@ -10959,6 +11307,7 @@ class OrderEngineSuite:
             moments.Moments.now = original_now
             api_configuration['order_excluded_brokers'] = original_excluded
             api_configuration['order_broker_selector'] = original_selector
+            api_configuration['order_plan_types'] = original_plan_types
         return results
 
     def encode(self, result):

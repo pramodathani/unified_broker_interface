@@ -25,9 +25,13 @@ from unified_broker_interface.utilities.order_engine.utilities.parent_commands i
     HALT_EVERY_PARENT,
     ParentCommands,
 )
+from unified_broker_interface.utilities.order_engine.utilities.plan_routing import (
+    PlanRouting,
+)
 from unified_broker_interface.utilities.order_engine.utilities.registry import (
     SYNTHETIC_ORDER_CLASSES,
 )
+from utilities.configurations import api_configuration
 
 GROUP = 'engine'
 CONSUMER = 'order_engine'
@@ -63,6 +67,7 @@ class OrderEngine:
         reconciler (BookReconciler | None): What finds the order changes no socket delivered, by reading the brokers' polled order books.
         counts_lock (threading.Lock): Guards the four counts, which worker threads update.
         commands (ParentCommands): What runs a caller's change to a parent the engine owns.
+        plan_routing (PlanRouting): Which fixed synthetic types are run as plans of their presets, from `UNIFIED_BROKER_INTERFACE_API_ORDER_PLAN_TYPES`.
     """
 
     def __init__(
@@ -129,6 +134,7 @@ class OrderEngine:
         self.entries_per_read = entries_per_read
         self.reconciler = reconciler
         self.counts_lock = threading.Lock()
+        self.plan_routing = PlanRouting(api_configuration['order_plan_types'])
         self.commands = ParentCommands(
             placement,
             event_log,
@@ -673,7 +679,7 @@ class OrderEngine:
         return self.parent_store.parent_for_intent(intent_id)
 
     def synthetic_order(self, intent):
-        """The runner for the kind of order an intent asks for.
+        """The runner for the kind of order an intent asks for, or for a type the switch-over runs as a plan, a plan of that type's preset.
 
         Args:
             intent (dict): The intent document.
@@ -684,6 +690,7 @@ class OrderEngine:
         Raises:
             RefusedRequestError: With HTTP 400 when the named type is not one the engine runs, which is a caller's mistake rather than the engine's.
         """
+        intent = self.plan_routing.routed(intent)
         named_type = intent.get('synthetic_type') or 'simple'
         synthetic_order_class = SYNTHETIC_ORDER_CLASSES.get(named_type)
         if synthetic_order_class is None:

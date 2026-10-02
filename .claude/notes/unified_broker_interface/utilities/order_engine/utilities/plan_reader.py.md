@@ -69,3 +69,7 @@ A venue turns into a `time_from` trigger at its `at_time`, so the order waits in
 ## Kept-whole presets (2026-10-02)
 
 A kept-whole preset expands to a `whole` slot naming its type and settings. The reader builds that type's part from `WHOLE_PART_CLASSES` and refuses it beside another preset or any slot value as `kept_whole_alone`, as the design's table of refused combinations asks. The order's plain overrides, such as its instrument and quantity, still apply, since they only change the body the part reads.
+
+## Every join built (2026-10-02)
+
+With `using` read by `_read_using`, every join the design names is built, so the branch that answered `join_not_built` could no longer be reached and was removed with `BUILT_JOIN_NAMES`. The execution list now reads one value or two nested ones through `_read_execution_value`.

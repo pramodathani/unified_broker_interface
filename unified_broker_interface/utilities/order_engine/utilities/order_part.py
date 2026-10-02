@@ -100,7 +100,7 @@ class OrderPart:
         self.spans_days = False
 
     def context(self, plan_order):
-        """The plan order as this order's pricing, execution and trigger see it: on this order's instrument, with its own body values, and any price or quantity the caller changed while it was held.
+        """The plan order as this order's pricing, execution and trigger see it: on this order's instrument, with its own body values, a Using join's rung price, and any price or quantity the caller changed while it was held.
 
         Args:
             plan_order (PlanOrder): The plan order.
@@ -116,6 +116,11 @@ class OrderPart:
             else:
                 body[name] = value
         record = (plan_order.parent.parameters.get('parts') or {}).get(self.path) or {}
+        if record.get('piece_price') is not None:
+            body['price'] = record['piece_price']
+            body['order_type'] = 'LIMIT'
+            body.pop('price_reference', None)
+            body.pop('trigger_price', None)
         if record.get('held_price') is not None:
             body['price'] = record['held_price']
         if record.get('held_quantity') is not None:

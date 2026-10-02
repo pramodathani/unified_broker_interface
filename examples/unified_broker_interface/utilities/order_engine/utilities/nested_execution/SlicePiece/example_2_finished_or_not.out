@@ -1,0 +1,3 @@
+filled: quantity 5, filled 5, finished True, state filled
+partly filled, the rest cancelled: quantity 5, filled 3, finished True, state cancelled
+its next iceberg piece still to go: quantity 5, filled 2, finished False, state working

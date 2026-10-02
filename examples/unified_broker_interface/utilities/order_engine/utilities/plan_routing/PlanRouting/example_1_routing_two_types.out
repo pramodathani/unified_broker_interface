@@ -1,0 +1,4 @@
+routed types: ['grid', 'gtt']; gtt runs as good_till_triggered, grid as grid
+grid -> plan: {'type': 'plan', 'plan': {'order': {'presets': [{'grid': {'levels': 2, 'step_points': 5, 'most_inventory': 20}}]}}, 'routed_from': 'grid'}
+gtt -> plan: {'type': 'plan', 'plan': {'order': {'presets': [{'good_till_triggered': {'trigger_price': 995, 'limit_price': 990}}]}}, 'routed_from': 'gtt'}
+bracket -> bracket: {'type': 'bracket', 'stop_price': 990, 'stop_limit_price': 988}
