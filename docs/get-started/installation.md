@@ -44,13 +44,13 @@ The `.env` file at the project root holds the address and password of each store
 
 | Service | Image | Host port (variable, default) | Container port | Data folder on the host | Health check |
 |---|---|---|---|---|---|
-| `redis` | `redis:trixie` | `UNIFIED_BROKER_INTERFACE_REDIS_PORT`, `1002` | 6379 | `/mnt/ubi/docker-volumes/redis` | `redis-cli -a … ping` every 5 s |
+| `redis` | `redis:trixie` | `UNIFIED_BROKER_INTERFACE_REDIS_PORT`, `1002` | 6379 | `/mnt/redis/redis` | `redis-cli -a … ping` every 5 s |
 | `mongodb` | `mongo:8.0.4` | `UNIFIED_BROKER_INTERFACE_MONGODB_PORT`, `1003` | 27017 | `/mnt/ubi/docker-volumes/mongodb` | `mongosh … db.runCommand({ping:1})` every 5 s |
 | `timescaledb` | `timescale/timescaledb:latest-pg18` | `UNIFIED_BROKER_INTERFACE_POSTGRES_PORT`, `1004` | 5432 | `/mnt/ubi/docker-volumes/timescaledb` | `pg_isready` every 5 s |
 
 A few details of the compose file matter when you set it up:
 
-- Redis starts with `--requirepass` set from `UNIFIED_BROKER_INTERFACE_REDIS_PASSWORD` and with `--appendonly yes`, so its data survives a restart. It also starts with `--save ""`, which turns off its snapshots: the append-only file already restores everything on a restart, and snapshotting a dataset of over 10 GB every minute saturated the disk PostgreSQL shares, stalling its commits for seconds.
+- Redis starts with `--requirepass` set from `UNIFIED_BROKER_INTERFACE_REDIS_PASSWORD` and with `--appendonly yes`, so its data survives a restart. It also starts with `--save ""`, which turns off its snapshots: the append-only file already restores everything on a restart, and snapshotting a dataset of over 10 GB every minute saturated the disk PostgreSQL shares, stalling its commits for seconds. Since 2 October 2026 Redis also has a disk of its own, mounted at `/mnt/redis`, so its writes no longer compete with PostgreSQL's and MongoDB's on `/mnt/ubi`.
 - MongoDB's root user and password come from `UNIFIED_BROKER_INTERFACE_MONGODB_USERNAME` (default `unified_broker_interface`) and `UNIFIED_BROKER_INTERFACE_MONGODB_PASSWORD`.
 - TimescaleDB's database and user come from `UNIFIED_BROKER_INTERFACE_POSTGRES_DB` and `UNIFIED_BROKER_INTERFACE_POSTGRES_USERNAME` (both default to `unified_broker_interface`), and the container gets 4 GB of shared memory (see below).
 - Every port is published on `0.0.0.0`, so the stores are reachable from other machines unless a firewall stops them.
@@ -58,10 +58,10 @@ A few details of the compose file matter when you set it up:
 
 TimescaleDB needs the larger shared memory because PostgreSQL gives the workers of a parallel query a shared working area in `/dev/shm`, and Docker's default is only 64 MB. The tuning in the image lets one query use up to 16 parallel workers, and the price history job's `verify` step alone was measured at 527 MB there. The job failed on 26 September 2026 with `could not resize shared memory segment ... No space left on device` when the limit was 1 GB, because the broker candle services' own parallel queries were running at the same moment. `/dev/shm` is memory only while something uses it, so a 4 GB limit costs nothing when the database is quiet. Changing `shm_size` recreates the container, which restarts PostgreSQL for a few seconds.
 
-The three data folders are bind mounts with `create_host_path: false`. Docker does not create them for you, so create them first.
+The three data folders are bind mounts with `create_host_path: false`. Docker does not create them for you, so create them first. Redis's folder sits on its own disk, mounted at `/mnt/redis` through `/etc/fstab` with `nofail`; on a machine with one data disk, point its `source` in `docker-compose.yml` at a folder beside the others instead.
 
 ```bash
-sudo mkdir -p /mnt/ubi/docker-volumes/redis /mnt/ubi/docker-volumes/mongodb /mnt/ubi/docker-volumes/timescaledb
+sudo mkdir -p /mnt/redis/redis /mnt/ubi/docker-volumes/mongodb /mnt/ubi/docker-volumes/timescaledb
 docker compose up -d --wait
 ```
 

@@ -10,7 +10,7 @@ services:
       - "0.0.0.0:${UNIFIED_BROKER_INTERFACE_REDIS_PORT:-1002}:6379"
     volumes:
       - type: bind
-        source: /mnt/ubi/docker-volumes/redis
+        source: /mnt/redis/redis
         target: /data
         bind:
           create_host_path: false
