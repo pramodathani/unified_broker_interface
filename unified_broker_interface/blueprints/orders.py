@@ -875,9 +875,9 @@ class OrdersBlueprint(BaseBlueprint):
         return jsonify(answer_body), status
 
     def modify_order_list(self, access_token, body, started_at):
-        """Modifies every order of a list, answering each on its own.
+        """Modifies every order of a list, answering each on its own, in the caller's order.
 
-        An entry that names `parent_id` is a held order and is changed by the engine; the rest are found in the brokers' order books. When the list holds both, each kind is answered as its own list would be and the results are put back in the caller's order.
+        An entry that names `parent_id` is a held order or a plan part, and is changed by the engine. The rest are found in the brokers' order books: their entries and the catalogue markers are read from Redis in one round trip, each is checked as a single modification is, and those that pass are sent to their brokers, up to ORDER_SEND_THREADS at once. The list's `dry_run` covers both kinds.
 
         Args:
             access_token (str): The `access-token` header.
@@ -890,106 +890,59 @@ class OrdersBlueprint(BaseBlueprint):
         Raises:
             RefusedRequestError: With 400 for an invalid list, 401 for a wrong or expired access token, and 503 when Redis cannot be read or the engine is not running.
         """
-        items = body.get('orders')
-        held_indexes = []
-        if isinstance(items, list):
-            for request_index, item in enumerate(items):
-                if isinstance(item, dict) and 'parent_id' in item:
-                    held_indexes.append(request_index)
-        if not held_indexes:
-            return jsonify({
-                'results': self.broker_order_results(access_token, body, started_at),
-            }), 200
-
-        self.check_token(access_token)
-        answers = {}
-        entries = []
-        for request_index in held_indexes:
-            try:
-                change = HeldOrderChange(items[request_index], request.args)
-            except InvalidOrderError as error:
-                refusal = self.refuse(str(error), 400)
-                answers[request_index] = (refusal.body, refusal.status)
-                continue
-            entries.append((
-                request_index,
-                MODIFY_HELD,
-                change.command_arguments(),
-            ))
-        if entries:
-            done = self.order_handoff.command_many(
-                entries,
-                self.list_wait_seconds(len(entries)),
-                started_at,
-            )
-            for request_index, answer in done.items():
-                answers[request_index] = answer
-
-        other_indexes = []
-        for request_index in range(len(items)):
-            if request_index not in held_indexes:
-                other_indexes.append(request_index)
-        if other_indexes:
-            other_body = dict(body)
-            other_body['orders'] = []
-            for request_index in other_indexes:
-                other_body['orders'].append(items[request_index])
-            other_results = self.broker_order_results(access_token, other_body, started_at)
-            for position, result in enumerate(other_results):
-                answers[other_indexes[position]] = (result['response'], result['status'])
-
-        results = []
-        for request_index in range(len(items)):
-            answer_body, status = answers[request_index]
-            results.append({
-                'request_index': request_index,
-                'status': status,
-                'response': answer_body,
-            })
-        return jsonify({
-            'results': results,
-        }), 200
-
-    def broker_order_results(self, access_token, body, started_at):
-        """Modifies every order of a list that names orders by broker order id, answering each on its own.
-
-        Every order's entries and the catalogue markers are read from Redis in one round trip, each order is checked as a single modification is, and the modifications that pass are sent to their brokers, up to ORDER_SEND_THREADS at once.
-
-        Args:
-            access_token (str): The `access-token` header.
-            body (dict): The decoded JSON body, which holds `orders`.
-            started_at (float): `time.perf_counter()` when the request arrived.
-
-        Returns:
-            list: One result per entry, with `request_index`, `status` and `response`.
-
-        Raises:
-            RefusedRequestError: With 400 for an invalid list, 401 for a wrong or expired access token, and 503 when Redis cannot be read.
-        """
         try:
             order_list = OrderChangeList(
                 body,
                 request.args,
                 ModifyOrderRequest,
                 self.broker_names,
+                HeldOrderChange,
             )
         except InvalidOrderError as error:
             raise self.refuse(str(error), 400)
-        state = self.read_order_state(order_list.order_ids(), True)
-        self.check_access_token(access_token, state['token_document_text'])
-        self.warm_order_instruments(order_list, state)
+        answers = [None] * len(order_list.entries)
+        engine_entries = []
+        broker_indexes = []
+        for request_index, entry in enumerate(order_list.entries):
+            if isinstance(entry, HeldOrderChange):
+                engine_entries.append((
+                    request_index,
+                    MODIFY_HELD,
+                    entry.command_arguments(),
+                ))
+            else:
+                broker_indexes.append(request_index)
 
-        prepared_entries = []
-        for entry in order_list.entries:
-            if isinstance(entry, RefusedRequestError):
-                prepared_entries.append(entry)
-                continue
-            try:
-                prepared_entries.append(self.prepare_modification(entry, state))
-            except RefusedRequestError as refusal:
-                prepared_entries.append(refusal)
-        answers = self.answer_prepared_list(prepared_entries, order_list.dry_run, started_at)
-        return order_list.results(answers)
+        if engine_entries:
+            self.check_token(access_token)
+            done = self.order_handoff.command_many(
+                engine_entries,
+                self.list_wait_seconds(len(engine_entries)),
+                started_at,
+            )
+            for request_index, answer in done.items():
+                answers[request_index] = answer
+
+        if broker_indexes:
+            state = self.read_order_state(order_list.order_ids(), True)
+            self.check_access_token(access_token, state['token_document_text'])
+            self.warm_order_instruments(order_list, state)
+            prepared_entries = []
+            for request_index in broker_indexes:
+                entry = order_list.entries[request_index]
+                if isinstance(entry, RefusedRequestError):
+                    prepared_entries.append(entry)
+                    continue
+                try:
+                    prepared_entries.append(self.prepare_modification(entry, state))
+                except RefusedRequestError as refusal:
+                    prepared_entries.append(refusal)
+            broker_answers = self.answer_prepared_list(prepared_entries, order_list.dry_run, started_at)
+            for position, request_index in enumerate(broker_indexes):
+                answers[request_index] = broker_answers[position]
+        return jsonify({
+            'results': order_list.results(answers),
+        }), 200
 
     def warm_order_instruments(self, order_list, state):
         """Reads the catalogue entries of every order in a modify list into this worker's instrument cache, in at most two round trips.
@@ -1014,7 +967,7 @@ class OrdersBlueprint(BaseBlueprint):
 
         wanted_tokens = []
         for entry in order_list.entries:
-            if isinstance(entry, RefusedRequestError):
+            if isinstance(entry, RefusedRequestError) or not order_list.names_broker_order(entry):
                 continue
             try:
                 broker_name, stored_order = self.find_stored_order(entry, state['order_texts'][entry.order_id])

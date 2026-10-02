@@ -19,3 +19,7 @@ Two items that name the same order would send two changes to one order in one re
 ## No limit on the length
 
 The user asked for no cap. A list's Redis cost does not grow in round trips, and its broker requests are paced by the four send threads.
+
+## Items named by `parent_id` (added 2026-10-02)
+
+Before this, the modify route split its list by the raw `parent_id` key and built each `HeldOrderChange` from the item and the query string only. A list sent with `"dry_run": true` beside `orders` therefore really changed its held orders while only showing the others, which breaks the rule above; an offline probe on 2026-10-02 changed a held order's price to 998 that way. The list now takes an optional `parent_class` (`HeldOrderChange` for modify), builds each `parent_id` item with it, and hands it the list's `dry_run` as its query string, so the rules on keys and on `dry_run` inside an item cover both kinds of item. `parent_class` is the last argument and optional so the existing callers and example programs needed no change. `names_broker_order` tells the two kinds apart for `order_ids` and the repeated-order check, which compare broker order ids only; two items naming the same parent are not refused, as they were not before.

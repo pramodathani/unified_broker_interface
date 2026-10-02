@@ -113,8 +113,15 @@ class OrderEngineChangesSuite(order_routes.OrderRoutesSuite):
             query_string=query,
         )
         answer_body = response.get_json(silent=True)
-        if isinstance(answer_body, dict) and isinstance(answer_body.get('timing_ms'), dict):
-            answer_body['timing_ms'] = sorted(answer_body['timing_ms'])
+        shown_bodies = [
+            answer_body,
+        ]
+        if isinstance(answer_body, dict) and isinstance(answer_body.get('results'), list):
+            for result in answer_body['results']:
+                shown_bodies.append(result.get('response'))
+        for shown_body in shown_bodies:
+            if isinstance(shown_body, dict) and isinstance(shown_body.get('timing_ms'), dict):
+                shown_body['timing_ms'] = sorted(shown_body['timing_ms'])
         return {
             'status': response.status_code,
             'body': answer_body,
@@ -681,6 +688,40 @@ class OrderEngineChangesSuite(order_routes.OrderRoutesSuite):
             'sent': self.sent(),
         }
 
+    def modify_list_dry_run_covers_held_orders(self):
+        """Sends a modify list with `dry_run` beside `orders` whose only item names a held order, which must be shown and not changed.
+
+        Returns:
+            dict: The recorded result.
+        """
+        self.start_scenario(hold_limits=True)
+        held = self.call('POST', '/place', self.limit_body())
+        shown = self.call('PUT', '/modify', {
+            'dry_run': True,
+            'orders': [
+                {
+                    'parent_id': held['body']['parent_id'],
+                    'price': 998,
+                },
+            ],
+        })
+        refused = self.call('PUT', '/modify', {
+            'orders': [
+                {
+                    'parent_id': held['body']['parent_id'],
+                    'price': 998,
+                    'dry_run': True,
+                },
+            ],
+        })
+        return {
+            'name': 'a_modify_list_dry_run_shows_a_held_order_without_changing_it',
+            'shown': shown,
+            'refused_inside_an_order': refused,
+            'held_after': self.held_terms(held['body']['parent_id']),
+            'sent': self.sent(),
+        }
+
     def orders_combiner(self):
         """The orders combiner script, loaded as a module so its document builder can run against the stand-in.
 
@@ -726,6 +767,7 @@ class OrderEngineChangesSuite(order_routes.OrderRoutesSuite):
                 self.modify_a_held_order(),
                 self.modify_a_plan_part(),
                 self.modify_a_mixed_list(),
+                self.modify_list_dry_run_covers_held_orders(),
             ]
         finally:
             blueprint_base.get_cache = original_get_cache

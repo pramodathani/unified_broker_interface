@@ -1173,7 +1173,7 @@ An order placed a moment earlier may not have reached its broker's order book in
 |---|---|---|---|---|
 | `access-token` | header | string | Yes | The token from [`connect`](session.md#connect) |
 | `orders` | body | array of objects | Yes | One item per order. For `place`, an item is one order exactly as the single body gives it, including a `synthetic` object for any order type, and a list holds at most `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACE_LIST_MAXIMUM` items, 500 by default. For `modify` and `cancel`, an item carries `order_id`, an optional `broker` and, for `modify`, the fields to change, with no limit on the number. A `modify` item may instead carry `parent_id` with `price` and `quantity`, for a held order. |
-| `dry_run` | body, or query for `modify` and `cancel` | boolean | No | `true` shows every order's broker request instead of sending it. It applies to the whole list. |
+| `dry_run` | body, or query for `modify` and `cancel` | boolean | No | `true` shows every order's broker request instead of sending it. It applies to the whole list, including the items named by `parent_id`, which are checked and not changed. |
 
 The list takes no other key, in the body or the query string, so a field such as `price` or `broker` has to go inside each order. That rule is there so that nobody can put `price` beside the list expecting it to apply to every order, and it is why `dry_run` is refused inside an order: one order must never go live while its neighbours are only shown.
 
