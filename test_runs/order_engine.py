@@ -2903,7 +2903,7 @@ class OrderEngineSuite:
         return result
 
     def run_plan_routing_checks(self):
-        """Runs today's requests for three fixed types with the switch-over routing them to plans, beside the same requests run by the fixed types.
+        """Runs today's requests for three fixed types with the switch-over routing them to plans, beside the same requests run by the fixed types, and checks that the `closes_position` and `reduce_only` flags survive the routing.
 
         Returns:
             list: One recorded result per check.
@@ -2972,6 +2972,34 @@ class OrderEngineSuite:
                     dict(entry, synthetic={
                         'type': 'market_if_touched',
                         'trigger_price': 995,
+                    }),
+                    [
+                        {'quote': steady, 'at': 0},
+                        {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                        {'quote': self.book_at(994.90, 994.95), 'at': 2},
+                    ],
+                    accepted,
+                ),
+                self.price_result(
+                    'a_routed_market_if_touched_order_keeps_closes_position_beside_the_plan',
+                    dict(entry, synthetic={
+                        'type': 'market_if_touched',
+                        'trigger_price': 995,
+                        'closes_position': True,
+                    }),
+                    [
+                        {'quote': steady, 'at': 0},
+                        {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                        {'quote': self.book_at(994.90, 994.95), 'at': 2},
+                    ],
+                    accepted,
+                ),
+                self.price_result(
+                    'a_routed_market_if_touched_order_keeps_reduce_only_beside_the_plan',
+                    dict(entry, synthetic={
+                        'type': 'market_if_touched',
+                        'trigger_price': 995,
+                        'reduce_only': True,
                     }),
                     [
                         {'quote': steady, 'at': 0},
