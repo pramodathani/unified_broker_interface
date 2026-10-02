@@ -556,6 +556,97 @@ class OrderEngineChangesSuite(order_routes.OrderRoutesSuite):
             'sent': self.sent(),
         }
 
+    def plan_parts(self, parent_order_id):
+        """The part records of a plan parent as `GET /api/orders/parents` shows them.
+
+        Args:
+            parent_order_id (str): The parent's id.
+
+        Returns:
+            dict | None: Each part's path to its record.
+        """
+        read = self.call('GET', '/parents', query={
+            'parent_id': parent_order_id,
+        })
+        document = read['body'] or {}
+        return (document.get('parameters') or {}).get('parts')
+
+    def modify_a_plan_part(self):
+        """Moves the stop of a bracket plan before its entry fills, through `PUT /api/orders/modify` with `parent_id` and `part`, and shows what is refused.
+
+        Returns:
+            dict: The recorded result.
+        """
+        self.start_scenario()
+        stop_part = 'root.each_fill.children.0'
+        placed = self.call('POST', '/place', self.limit_body(synthetic={
+            'type': 'plan',
+            'plan': {
+                'order': {
+                    'presets': [
+                        {
+                            'bracket': {
+                                'stop_price': 990,
+                                'stop_limit_price': 988,
+                                'target_price': 1010,
+                            },
+                        },
+                    ],
+                },
+            },
+        }))
+        parent_order_id = placed['body']['parent_id']
+        dry_run = self.call('PUT', '/modify', {
+            'parent_id': parent_order_id,
+            'part': stop_part,
+            'trigger_price': 985,
+            'price': 983,
+            'dry_run': True,
+        })
+        after_dry_run = self.plan_parts(parent_order_id)
+        changed = self.call('PUT', '/modify', {
+            'parent_id': parent_order_id,
+            'part': stop_part,
+            'trigger_price': 985,
+            'price': 983,
+        })
+        listed = self.call('PUT', '/modify', {
+            'orders': [
+                {
+                    'parent_id': parent_order_id,
+                    'part': stop_part,
+                    'trigger_price': 984,
+                },
+            ],
+        })
+        return {
+            'name': 'a_plan_part_is_changed_by_parent_id_and_part_before_it_is_sent',
+            'placed': placed,
+            'dry_run': dry_run,
+            'after_dry_run': after_dry_run,
+            'changed': changed,
+            'listed': listed,
+            'after_change': self.plan_parts(parent_order_id),
+            'refused': {
+                'empty_part': self.call('PUT', '/modify', {
+                    'parent_id': parent_order_id,
+                    'part': '',
+                    'price': 983,
+                }),
+                'order_type': self.call('PUT', '/modify', {
+                    'parent_id': parent_order_id,
+                    'part': stop_part,
+                    'order_type': 'LIMIT',
+                }),
+                'already_sent': self.call('PUT', '/modify', {
+                    'parent_id': parent_order_id,
+                    'part': 'root.first',
+                    'price': 999,
+                }),
+            },
+            'sent': self.sent(),
+        }
+
     def modify_a_mixed_list(self):
         """Changes a held order and a sent order in one `orders` list.
 
@@ -633,6 +724,7 @@ class OrderEngineChangesSuite(order_routes.OrderRoutesSuite):
                 self.cancel_before_the_book_has_the_order(None),
                 self.limits_held_by_default(),
                 self.modify_a_held_order(),
+                self.modify_a_plan_part(),
                 self.modify_a_mixed_list(),
             ]
         finally:

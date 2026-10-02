@@ -1,0 +1,6 @@
+Budget 10; resting {'root.children.0': 10, 'root.children.1': 10}
+The caller cut the stop to 6, a change of -4; the stop keeps the caller's quantity: True
+Budget 6; the join's record {'caller_change': -4}
+Settled: requests [('change', 'root.children.1', 6)], resting {'root.children.0': 6, 'root.children.1': 6}
+Target filled 2 and settled: requests [('change', 'root.children.1', 6), ('change', 'root.children.0', 4)], resting {'root.children.0': 4, 'root.children.1': 6}
+Messages: ["the caller changed one of the plan's root children by -4, so every child shares 4 less than the plan works out", "the plan's root.children.0 part will trade 6", "the plan's root.children.1 part will trade 6", "the plan's root.children.0 part will trade 4"]

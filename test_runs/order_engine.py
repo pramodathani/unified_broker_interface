@@ -6385,6 +6385,220 @@ class OrderEngineSuite:
             ),
         ]
 
+    def run_plan_change_checks(self):
+        """Runs a caller's changes to a plan through `PUT /api/orders/modify`: to broker orders the plan placed, which it must carry on from rather than undo, and to parts it has not yet sent.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        numbered = dict(
+            self.scenarios.answers.json_answer(
+                200,
+                self.scenarios.answers.place_success('flattrade'),
+            ),
+            number_orders=True,
+        )
+        steady = self.book_at(1000.00, 1000.05)
+        stop_in_the_book = {
+            'order_type': 'SL',
+            'trigger_price': 995.05,
+        }
+        trailing = {
+            'order': {
+                'presets': [
+                    {
+                        'trailing_stop': {
+                            'trail_points': 5,
+                            'stop_limit_offset': 1,
+                        },
+                    },
+                ],
+            },
+        }
+        bracket = {
+            'order': {
+                'presets': [
+                    {
+                        'bracket': {
+                            'stop_price': 990,
+                            'stop_limit_price': 988,
+                            'target_price': 1010,
+                        },
+                    },
+                ],
+            },
+        }
+        stop_part = 'root.each_fill.children.0'
+        trailing_steps = [
+            {'quote': steady, 'at': 0},
+            {'quote': self.book_at(1005.95, 1006.00), 'at': 1},
+            {'quote': self.book_at(1001.95, 1002.00), 'at': 2, 'leg_change': {'order_id': '26091500000101', 'trigger_price': '995', 'price': '994'}},
+            {'quote': self.book_at(1001.95, 1002.00), 'at': 3},
+            {'quote': self.book_at(1003.95, 1004.00), 'at': 4},
+        ]
+        return [
+            self.plan_price_result(
+                'a_plan_trailing_stop_carries_on_from_the_trigger_the_caller_set',
+                trailing,
+                trailing_steps,
+                numbered,
+                positions=10,
+                book_overrides=stop_in_the_book,
+            ),
+            self.plan_price_result(
+                'a_plan_trailing_stop_keeps_the_callers_trigger_across_a_restart',
+                trailing,
+                trailing_steps,
+                numbered,
+                positions=10,
+                book_overrides=stop_in_the_book,
+                restart_between_ticks=True,
+            ),
+            self.plan_price_result(
+                'a_plan_peg_rests_where_the_caller_moved_it',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'peg': {
+                                    'reference': 'own_touch',
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'leg_change': {'order_id': '26091500000101', 'price': '999.50'}},
+                    {'quote': self.book_at(1000.20, 1000.25), 'at': 2},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_chase_waits_a_full_step_after_the_callers_price',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'chaser': {
+                                    'step_ticks': 1,
+                                    'step_seconds': 5,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1},
+                    {'quote': steady, 'at': 5.5, 'leg_change': {'order_id': '26091500000101', 'price': '999.00'}},
+                    {'quote': steady, 'at': 7},
+                    {'quote': steady, 'at': 11},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_bracket_exit_cut_brings_the_other_down_and_stays_cut',
+                bracket,
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'COMPLETE', 10)]},
+                    {'quote': steady, 'at': 2, 'leg_change': {'order_id': '26091500000103', 'quantity': 6}},
+                    {'quote': steady, 'at': 3, 'updates': [self.update('26091500000103', 'OPEN', 2)]},
+                    {'quote': steady, 'at': 4, 'leg_change': {'order_id': '26091500000102', 'quantity': 15}},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_iceberg_slice_change_keeps_the_total',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'iceberg': {
+                                    'slice_quantity': 4,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'leg_change': {'order_id': '26091500000101', 'quantity': 2}},
+                    {'quote': steady, 'at': 2, 'updates': [self.update('26091500000101', 'COMPLETE', 2)]},
+                    {'quote': steady, 'at': 3, 'updates': [self.update('26091500000102', 'COMPLETE', 4)]},
+                    {'quote': steady, 'at': 4, 'updates': [self.update('26091500000103', 'COMPLETE', 4)]},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_order_cut_by_the_caller_completes_at_the_new_quantity',
+                {
+                    'order': {},
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'leg_change': {'order_id': '26091500000101', 'quantity': 6}},
+                    {'quote': steady, 'at': 2, 'updates': [self.update('26091500000101', 'COMPLETE', 6)]},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_bracket_stop_moved_before_the_entry_fills',
+                bracket,
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'held_change': {'part': stop_part, 'trigger_price': '985', 'price': '983'}},
+                    {'quote': steady, 'at': 2, 'held_change': {'part': stop_part, 'quantity': 5}},
+                    {'quote': steady, 'at': 3, 'held_change': {'part': 'root.first', 'price': '999'}},
+                    {'quote': steady, 'at': 4, 'held_change': {'part': 'root.each_fill.children.1', 'trigger_price': '1012'}},
+                    {'quote': steady, 'at': 5, 'updates': [self.update('26091500000101', 'COMPLETE', 10)]},
+                    {'quote': steady, 'at': 6},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_waiting_order_cut_before_its_trigger',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'market_if_touched': {
+                                    'trigger_price': 995,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'held_change': {'part': 'root', 'quantity': 6, 'dry_run': True}},
+                    {'quote': steady, 'at': 2, 'held_change': {'part': 'root', 'quantity': 6}},
+                    {'quote': steady, 'at': 3, 'held_change': {'part': 'root', 'price': '994'}},
+                    {'quote': steady, 'at': 4, 'held_change': {'part': 'nowhere', 'price': '994'}},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 5},
+                ],
+                numbered,
+            ),
+            self.price_result(
+                'a_type_that_is_not_a_plan_has_no_parts_to_change',
+                self.scenarios.bodies.market_order(
+                    dry_run=None,
+                    order_type='MARKET',
+                    quantity=10,
+                    synthetic={
+                        'type': 'market_if_touched',
+                        'trigger_price': 995,
+                    },
+                ),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'held_change': {'part': 'root', 'quantity': 6}},
+                ],
+                numbered,
+            ),
+        ]
+
     def run_plan_group_checks(self):
         """Runs plans whose orders trade several instruments: a basket, a one-cancels-all group, a sequence, and a group done when any order is, beside the types they stand for.
 
@@ -8296,6 +8510,7 @@ class OrderEngineSuite:
 
         moves = []
         held_changes = []
+        leg_changes = []
         for step in steps:
             step_at = started + step.get('at', 0)
             time.time = lambda: step_at
@@ -8336,11 +8551,45 @@ class OrderEngineSuite:
                         answer_body, status = commands.modify_held(arguments)
                     except RefusedRequestError as refusal:
                         answer_body, status = refusal.body, refusal.status
-                    held_changes.append({
+                    shown_change = {
                         'status': status,
                         'error': answer_body.get('error'),
                         'price': answer_body.get('price'),
                         'quantity': answer_body.get('quantity'),
+                    }
+                    if step['held_change'].get('part') is not None:
+                        shown_change['part'] = answer_body.get('part')
+                        shown_change['trigger_price'] = answer_body.get('trigger_price')
+                        shown_change['orders'] = answer_body.get('orders')
+                    held_changes.append(shown_change)
+                if step.get('leg_change') is not None:
+                    commands = ParentCommands(
+                        placement,
+                        event_log,
+                        parent_store,
+                        logger,
+                        gates,
+                    )
+                    arguments = {
+                        'broker': 'flattrade',
+                        'quantity': None,
+                        'quantity_units': None,
+                        'price': None,
+                        'trigger_price': None,
+                    }
+                    arguments.update(step['leg_change'])
+                    if arguments['quantity'] is not None:
+                        arguments['quantity_units'] = arguments['quantity']
+                    for parent_order_id in self.fake_redis.hashes.get('unified:orders:parents', {}):
+                        arguments['parent_id'] = parent_order_id
+                    try:
+                        answer_body, status = commands.modify_leg(arguments)
+                    except RefusedRequestError as refusal:
+                        answer_body, status = refusal.body, refusal.status
+                    leg_changes.append({
+                        'status': status,
+                        'error': answer_body.get('error'),
+                        'outcome': answer_body.get('outcome'),
                     })
                 before = len(self.network.sent_requests)
                 self.tick_at(ticker, step_at)
@@ -8396,6 +8645,8 @@ class OrderEngineSuite:
             ]
         if held_changes:
             result['held_changes'] = held_changes
+        if leg_changes:
+            result['leg_changes'] = leg_changes
         return result
 
     def seed_estimate(self, estimate):
@@ -11292,6 +11543,7 @@ class OrderEngineSuite:
             results.extend(self.run_plan_close_checks())
             results.extend(self.run_plan_repeat_checks())
             results.extend(self.run_plan_fill_follower_checks())
+            results.extend(self.run_plan_change_checks())
             results.extend(self.run_clock_checks())
             results.extend(self.run_price_checks())
             results.extend(self.run_wiring_checks())

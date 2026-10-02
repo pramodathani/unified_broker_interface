@@ -1,0 +1,15 @@
+Answer: HTTP 200, accepted
+Exits working: stop 10 trigger 990.0, target 10 at 1010.0
+outside_change_problem raising the stop to 15: an order that closes a position can only be reduced, and 15 is more than its 10
+outside_change_problem cutting the target to 6: None
+outside_change_problem moving only a price: None
+The target after the broker accepted the cut: 6
+Exits after on_leg_modified: stop 6, target 6
+The exits' shared part: {'target': 10, 'caller_change': -4}
+Sent to the broker, in order:
+  place BUY 10 LIMIT at 1000.00 -> 260930000001
+  place SELL 10 SL at 988 trigger 990 -> 260930000002
+  place SELL 10 LIMIT at 1010 -> 260930000003
+  modify 260930000003 quantity 6
+  modify 260930000002 quantity 6
+Parent: working

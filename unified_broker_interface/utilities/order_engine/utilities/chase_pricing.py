@@ -84,6 +84,30 @@ class ChasePricing:
             return min(price, limit)
         return max(price, limit)
 
+    def carry_on(self, plan_order, memory, leg, before, quotes, now):
+        """Restarts the wait before the next step, so the chase carries on from the price the caller set.
+
+        The chase already steps from the order's own price, which now holds the caller's. Without a fresh wait the next tick could step straight away, moving the caller's price a moment after it was set. This keeps the rule of today's chaser.
+
+        Args:
+            plan_order (OrderContext): Unused.
+            memory (dict): The pricing's memory, whose `stepped_at` is set in place.
+            leg (OrderLeg): The chasing order, holding the caller's new price.
+            before (dict): What the leg held before, with `price`.
+            quotes (dict): Unused.
+            now (float): The Unix time of the change.
+
+        Returns:
+            str | None: What changed, for the event log, or None when the price did not change.
+        """
+        del plan_order, quotes
+        if leg.price == before.get('price'):
+            return None
+        if memory.get('started_at') is None:
+            memory['started_at'] = now
+        memory['stepped_at'] = now
+        return f'the caller moved the price to {leg.price}, so the next step waits a full interval from now'
+
     def moved_prices(self, plan_order, memory, leg, quotes, now):
         """The step to take on this tick, the cross when the time is up, or None when it should wait.
 

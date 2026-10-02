@@ -664,7 +664,7 @@ This route changes one open order at the broker that holds it. You name the orde
 
 ### An order the engine placed
 
-When the order is a leg of one of the [order engine's](order-engine.md) parents, which the route finds in `unified:orders:children`, the route still checks the change as above, and then hands it to the worker that owns the parent instead of sending it itself. The order type records the change and carries on from the new price or quantity: a trailing stop ratchets from the trigger you set, a chaser steps on from the price you set, and a linked pair of exits stays sized to the open position. The change cannot race the type's own repricing, because only that worker touches the parent. The answer carries `parent_id` and `synthetic_type`, and the change passes the engine's re-pricing throttle, daily cap and rate budget.
+When the order is a leg of one of the [order engine's](order-engine.md) parents, which the route finds in `unified:orders:children`, the route still checks the change as above, and then hands it to the worker that owns the parent instead of sending it itself. The order type records the change and carries on from the new price or quantity: a trailing stop ratchets from the trigger you set, a chaser steps on from the price you set, and a linked pair of exits stays sized to the open position. A [`plan`](synthetic-orders.md#changing-a-synthetic-order) carries on in the same way, through the part that placed the order, and refuses to raise an order that closes a position with <span class="status s4">409</span> `an order that closes a position can only be reduced, and <quantity> is more than its <current>`. The change cannot race the type's own repricing, because only that worker touches the parent. The answer carries `parent_id` and `synthetic_type`, and the change passes the engine's re-pricing throttle, daily cap and rate budget.
 
 Only `price`, `trigger_price` and `quantity` can be changed on such an order. Changing `order_type`, `validity` or `disclosed_quantity` is refused with <span class="status s4">409</span> `this order belongs to an order the engine manages, which can only have its price, trigger_price or quantity changed, not <field>`, because the type would then be managing an order that is not the one it placed. A dry run is answered by the route as for any other order.
 
@@ -677,6 +677,46 @@ An order the engine is still holding, such as a [held limit order](#limit-orders
 ```
 
 The answer is <span class="status s2">200</span> with `parent_id`, `synthetic_type`, `held: true`, the new `price` and `quantity`, and `outcome: accepted`. A change is refused with <span class="status s4">400</span> when it names any other field or neither, when the price is not a whole number of ticks, or when the quantity is not a whole number of lots at any broker; with <span class="status s4">404</span> when the engine holds no such parent; and with <span class="status s4">409</span> when the order has already been sent (the answer then names its `broker` and `order_id`, which the ordinary form takes), has finished, is a type that holds no order of its own, or is a paper order that has already filled the new quantity.
+
+### A part of a plan that has not been sent
+
+A [`plan`](synthetic-orders.md) is a tree of parts, and a part sends nothing until its turn comes: a bracket's stop and target wait for the entry to fill, and an order on a trigger waits for the trigger. Such a part has no broker order id yet, so you name it by the plan's `parent_id` and the part's path in `part`, as [`GET /api/orders/parents`](#the-engines-parents) shows it under `parameters.parts`, such as `root.each_fill.children.0` for a bracket's stop. Its `price`, `trigger_price` and `quantity` can change, and nothing is sent to a broker: the part keeps the new values and sends them when its turn comes. `dry_run` checks the change without making it, and the list form takes the same items.
+
+```json
+{"parent_id": "00000000-0000-4000-8000-000000000002", "part": "root.each_fill.children.0", "trigger_price": 985, "price": 983}
+```
+
+These rules decide what a part can take.
+
+- A `price` or `trigger_price` replaces what the part's pricing gives when it is sent, so only a part with a fixed price can take one: a plain limit or a `native_stop`. A part priced from the market when it is sent, such as `marketable`, `peg` or `trail`, is refused with <span class="status s4">400</span>. A `trigger_price` needs a stop. A `MARKET` order given a price is sent as a `LIMIT`, and an `SL-M` as an `SL`.
+- A `quantity` becomes the part's total. An order that closes a position can only be reduced. A part sized by what an earlier part fills, such as a bracket's exits, has no quantity until those fills arrive, so it is refused with <span class="status s4">409</span>; change its broker order once it is sent instead.
+- A part held on a `limit_marketable` trigger is changed as [a held order](#a-held-order) is.
+- A part kept whole, such as a `grid`, keeps its orders by its own rules and is refused with <span class="status s4">409</span>.
+
+The answer below is a real recording from the offline suite.
+
+```json
+{
+  "parent_id": "00000000-0000-4000-8000-000000000002",
+  "synthetic_type": "plan",
+  "part": "root.each_fill.children.0",
+  "state": "pending",
+  "price": "983",
+  "trigger_price": "985",
+  "quantity": 10,
+  "outcome": "accepted",
+  "status_message": "changed before it was sent; nothing was sent to a broker",
+  "intent_id": "00000000000040008000000000000006"
+}
+```
+
+| Status | When |
+|---|---|
+| <span class="status s2">200</span> | The part was changed, or this was a dry run. |
+| <span class="status s4">400</span> | `part must name a part of the plan, such as root.first`, `a plan part that has not been sent can only change its price, trigger_price and quantity, not <field>`, `give price, trigger_price or quantity to change`, `part <path> works out its price from the market when it is sent, so its price cannot be set beforehand`, `part <path> is not a stop, so it has no trigger price to change`, or a price or quantity off the tick or lot. |
+| <span class="status s4">404</span> | `the order engine holds no parent with this id`, or `the plan has no order at part <path>`. |
+| <span class="status s4">409</span> | `part <path> is already <state>, so change its broker orders with broker and order_id instead`, with `orders` listing each `broker` and `order_id`; `part <path> is sized by what an earlier part fills, so its quantity is not known until then`; `an order that closes a position can only be reduced, ...`; a part kept whole; a plan that has finished; or `a <type> order has no parts, ...` for any other type. |
+| <span class="status s5">503</span> | The order engine is not running. |
 
 ### Request parameters
 
@@ -847,7 +887,7 @@ A price-only change never needs the instrument, so it goes ahead even when the i
 
 <div class="endpoint" markdown><span class="method put">PUT</span> `/api/orders/modify`<span class="auth">access-token</span></div>
 
-A body with an `orders` list changes each order in it. Each item carries what the single body carries, `order_id`, an optional `broker` and the fields to change, or `parent_id` with `price` and `quantity` for [a held order](#a-held-order), and each order is checked exactly as a single modification is. Held and sent orders can be mixed in one list, and the results come back in the list's own order. [Several orders in one request](#several-orders-in-one-request) describes the list, its answer and its statuses.
+A body with an `orders` list changes each order in it. Each item carries what the single body carries, `order_id`, an optional `broker` and the fields to change, or `parent_id` with `price` and `quantity` for [a held order](#a-held-order), and also `part` and `trigger_price` for [a part of a plan](#a-part-of-a-plan-that-has-not-been-sent), and each order is checked exactly as a single modification is. Held and sent orders can be mixed in one list, and the results come back in the list's own order. [Several orders in one request](#several-orders-in-one-request) describes the list, its answer and its statuses.
 
 === "curl"
 

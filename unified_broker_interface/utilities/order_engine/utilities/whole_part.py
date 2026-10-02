@@ -50,6 +50,14 @@ class WholePart(OrderPart):
         self.settings = settings
         self.opened_instruments = []
 
+    def keeps_caller_quantity(self):
+        """Whether a caller's change to one of this part's broker orders changes how much it trades in all, which it does not, because the type keeps its orders by its own rules.
+
+        Returns:
+            bool: False.
+        """
+        return False
+
     def settings_problems(self):
         """Every problem with the preset's settings, which by default is none.
 

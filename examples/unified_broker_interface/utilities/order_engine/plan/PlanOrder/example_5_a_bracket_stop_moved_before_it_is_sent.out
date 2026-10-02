@@ -1,0 +1,15 @@
+Answer: HTTP 200, accepted, entry root.first order id 260930000001
+A dry run moving the stop to trigger 985, limit 983: HTTP 200, 10 trigger 985 at 983, the change is valid; nothing was changed
+  The stop part's record after the dry run: {'state': 'pending', 'target': 10}
+The stop moved to trigger 985, limit 983: HTTP 200, 10 trigger 985 at 983, changed before it was sent; nothing was sent to a broker
+  The stop part's record now: {'state': 'pending', 'target': 10, 'caller_price': '983', 'caller_trigger_price': '985'}
+The stop cut to 5: HTTP 409, part root.each_fill.children.0 is sized by what an earlier part fills, so its quantity is not known until then
+The entry moved to 999: HTTP 409, part root.first is already working, so change its broker orders with broker and order_id instead
+  Its broker orders: [{'broker': 'zerodha', 'order_id': '260930000001'}]
+A trigger of 1,012 for the target: HTTP 400, part root.each_fill.children.1 is not a stop, so it has no trigger price to change
+A part the plan does not have: HTTP 404, the plan has no order at part root.nowhere
+Sent to the broker, in order:
+  place BUY 10 LIMIT at 1000.00 -> 260930000001
+  place SELL 10 SL at 983 trigger 985 -> 260930000002
+  place SELL 10 LIMIT at 1010 -> 260930000003
+Parent: working

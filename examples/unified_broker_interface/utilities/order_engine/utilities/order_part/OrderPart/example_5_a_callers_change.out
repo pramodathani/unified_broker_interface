@@ -1,0 +1,18 @@
+Sent all at once: [('place', 'root', 'BUY', 10, 'LIMIT', 'None', '1000.00')], total 10
+The caller cut its broker order from 10 to 6; keeps the caller's quantity: True
+Recorded: caller_change -4, total now 6
+2 filled, then a join sets the target to 10: total 6, broker order still 6, requests after the placement []
+Messages: ["the caller changed the plan's root part by -4, so it now trades 4 less than the plan works out", "the plan's root part will trade 6"]
+Sent as an iceberg of 3 at a time: keeps the caller's quantity False, total stays 10
+Priced {'order_type': 'SL', 'trigger_price': '990.00', 'price': '988.00'} with the caller at 980 and 978: {'order_type': 'SL', 'trigger_price': '980.00', 'price': '978.00'}
+Priced {'order_type': 'SL-M', 'trigger_price': '990.00'} with the caller at 980 and 978: {'order_type': 'SL', 'trigger_price': '980.00', 'price': '978.00'}
+Priced {'order_type': 'MARKET'} with the caller at 980 and 978: {'order_type': 'LIMIT', 'price': '978.00'}
+Priced {'order_type': 'LIMIT', 'price': '985.00'} with the caller at 980 and 978: {'order_type': 'LIMIT', 'price': '978.00'}
+The waiting stop's order: SELL 10 SL, trigger 980.00, limit 978.00
+Trailing stop placed: ('place', 'root.children.0', 'SELL', 10, 'SL', '995.05', '994.05'), memory {'best': '1000.05'}
+The caller loosened it to 990: memory {'best': '995'}
+Message: the plan's root.children.0 part: the caller moved the trigger to 990, so the trail carries on from a best price of 995
+A tick at 996: moved True, ('move', 'root.children.0', '991.00', '990.00')
+A target that does not move records 0 messages
+A total change of -4 reads as: 4 less
+A total change of 2 reads as: 2 more

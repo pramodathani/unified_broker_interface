@@ -19,3 +19,7 @@ A hidden stop whose trigger holds must not exit while its native backstop can st
 ## Why a child's budget defaults to the body's quantity
 
 An Either at the root, such as an OCO, has no parent join to set a target, so its children share the caller's quantity: the position being protected.
+
+## A caller's changes (added 2026-10-02)
+
+`take_caller_change` puts a caller's cut on the join's shared budget rather than on one child, so every child of a `reduce` join comes down by the same amount and the next settle cannot grow the cut exit back. It mirrors today's OCO, where cutting one exit brings the other down to match. Under the `cancel` rule the children are different trades, so `PlanOrder.on_leg_modified` only routes a change here for `reduce`.

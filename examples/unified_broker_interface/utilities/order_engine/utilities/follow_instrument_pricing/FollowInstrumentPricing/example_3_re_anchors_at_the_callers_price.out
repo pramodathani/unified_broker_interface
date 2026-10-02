@@ -1,0 +1,10 @@
+Sent at 200, remembering {'start_price': '200', 'watched_start': '25000.00'}
+Index 25040: move (Decimal('220.00'), None, 'the followed instrument is at 25040.00, so the order moved to 220.00')
+The caller moves the price from 220.0 to 210.0
+Without carry_on, index 25040: (Decimal('220.00'), None, 'the followed instrument is at 25040.00, so the order moved to 220.00')
+With no index price: None, memory {'start_price': '200', 'watched_start': '25000.00'}
+carry_on: the caller moved the price to 210.0, so the order follows the instrument from 25040.00
+Memory now: {'start_price': '210.0', 'watched_start': '25040.00'}
+Index 25040: move None
+Index 25080: move (Decimal('230.00'), None, 'the followed instrument is at 25080.00, so the order moved to 230.00')
+A modify that leaves the price alone: None

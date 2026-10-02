@@ -371,6 +371,7 @@ class OrderPart:
         if memory != (record.get('pricing_memory') or {}):
             record['pricing_memory'] = memory
             plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part\'s pricing remembers {memory}')
+        priced = self.with_caller_prices(priced, record)
         if self.cap is not None:
             priced = self.cap.capped_body(priced, sending_side)
         if self.post_only is not None:
@@ -391,6 +392,28 @@ class OrderPart:
         if priced.get('price') != before.get('price'):
             priced.pop('price_reference', None)
         return plan_order.concrete_order(plan_order.read_order(priced))
+
+    def with_caller_prices(self, priced, record):
+        """The priced body with the price and trigger price a caller set before this part was sent, through `PUT /api/orders/modify` with `parent_id` and `part`.
+
+        A market order given a price becomes a limit, and a stop-market becomes a stop-limit. A trigger price only replaces one the priced body already has, so a stop that the pricing sent as a limit because the market had gapped past it stays a limit.
+
+        Args:
+            priced (dict): The body as the pricing gave it, changed in place.
+            record (dict): The part's record, which holds `caller_price` and `caller_trigger_price` once a caller has set them.
+
+        Returns:
+            dict: The body.
+        """
+        if record.get('caller_price') is not None:
+            priced['price'] = record['caller_price']
+            if priced.get('order_type') == 'MARKET':
+                priced['order_type'] = 'LIMIT'
+            if priced.get('order_type') == 'SL-M':
+                priced['order_type'] = 'SL'
+        if record.get('caller_trigger_price') is not None and priced.get('trigger_price') is not None:
+            priced['trigger_price'] = record['caller_trigger_price']
+        return priced
 
     def place(self, plan_order, started_at, quotes, quantity=None, price=None, broker_name=None):
         """Places this part's order, or one piece of it, or does nothing when no price can be made yet.
@@ -551,10 +574,11 @@ class OrderPart:
         Returns:
             int: The quantity.
         """
-        target = plan_order.part_record(self.path).get('target')
-        if target is not None:
-            return target
-        return self.context(plan_order).body.get('quantity') or 0
+        record = plan_order.part_record(self.path)
+        total = record.get('target')
+        if total is None:
+            total = self.context(plan_order).body.get('quantity') or 0
+        return total + (record.get('caller_change') or 0)
 
     def committed(self, parent):
         """How much the broker orders sent so far account for: what filled of a finished one, and the whole of a resting one.
@@ -684,6 +708,73 @@ class OrderPart:
                 message = f'the plan\'s {self.path} part\'s pricing remembers {new_memory}'
             plan_order.set_part_record(self.path, record, message)
         return moved_any or took
+
+    def carry_on(self, plan_order, leg, before, quotes, now):
+        """Lets this order's pricing carry on from a price or trigger the caller set on one of its broker orders, instead of moving it back.
+
+        Only a pricing that moves keeps a copy of where the order should be, such as a trail's best price or a peg's offset, so only it has anything to bring in line. Its memory is recorded with an event, so a restart keeps the caller's values.
+
+        Args:
+            plan_order (PlanOrder): The plan order.
+            leg (OrderLeg): The broker order the caller changed, holding its new values.
+            before (dict): What the leg held before, with `quantity`, `price` and `trigger_price`.
+            quotes (dict): The quotes now, by instrument id, empty when they could not be read.
+            now (float): The Unix time of the change.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        if not self.pricing.moves():
+            return
+        record = plan_order.part_record(self.path)
+        memory = copy.deepcopy(record.get('pricing_memory') or {})
+        message = self.pricing.carry_on(self.context(plan_order), memory, leg, before, quotes, now)
+        if message is None:
+            return
+        record['pricing_memory'] = memory
+        plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part: {message}')
+
+    def keeps_caller_quantity(self):
+        """Whether a caller's change to the quantity of one of this order's broker orders changes how much the order trades in all.
+
+        An order sent all at once is that one broker order, so the caller's change is the new total. An execution that splits the order, such as an iceberg, sizes each later piece from what is still to trade, so the total stays what the plan asked for and the later pieces make up the difference, as today's iceberg and time-sliced types do.
+
+        Returns:
+            bool: True for an order sent all at once.
+        """
+        return isinstance(self.execution, AllAtOnceExecution)
+
+    def take_caller_change(self, plan_order, change):
+        """Counts a caller's change to this order's quantity, so a later fill or target cannot undo it.
+
+        Args:
+            plan_order (PlanOrder): The plan order.
+            change (int): How much the caller added, negative for a cut.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        record = plan_order.part_record(self.path)
+        record['caller_change'] = (record.get('caller_change') or 0) + change
+        plan_order.set_part_record(
+            self.path,
+            record,
+            f'the caller changed the plan\'s {self.path} part by {change}, so it now trades {self.difference_described(record["caller_change"])} than the plan works out',
+        )
+
+    @staticmethod
+    def difference_described(difference):
+        """A caller's total change in words, such as `4 less` or `2 more`.
+
+        Args:
+            difference (int): The caller's total change, negative for a cut.
+
+        Returns:
+            str: The words.
+        """
+        if difference < 0:
+            return f'{-difference} less'
+        return f'{difference} more'
 
     def end_lifetime(self, plan_order, quotes, now):
         """Ends this order when its lifetime is up, or when its `when` condition holds: a waiting order is done, and a working one's resting orders are cancelled, made marketable, or cancelled and what filled closed.
@@ -855,6 +946,7 @@ class OrderPart:
             return
         changed = record.get('target') != target
         record['target'] = target
+        target = target + (record.get('caller_change') or 0)
         if state in ('pending', 'waiting'):
             if changed:
                 plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part will trade {target}')

@@ -476,6 +476,29 @@ class SyntheticOrder:
             parent_id=self.parent.parent_order_id,
         )
 
+    def modify_part(self, path, price, trigger_price, quantity, dry_run):
+        """Changes one part of a plan before it is sent, which only a plan has.
+
+        Args:
+            path (str): The part's path.
+            price (decimal.Decimal | None): The new limit price, or None to keep it.
+            trigger_price (decimal.Decimal | None): The new trigger price, or None to keep it.
+            quantity (int | None): The new quantity in units, or None to keep it.
+            dry_run (bool): Whether to check the change without making it.
+
+        Returns:
+            tuple: Never returns in this class.
+
+        Raises:
+            RefusedRequestError: With HTTP 409, always, because only a plan order has parts.
+        """
+        del price, trigger_price, quantity, dry_run
+        raise RefusedRequestError.refusal(
+            f'a {self.parent.synthetic_type} order has no parts, so part {path} cannot be changed; only a plan order has parts',
+            409,
+            parent_id=self.parent.parent_order_id,
+        )
+
     def apply_outside_modification(
         self,
         leg,

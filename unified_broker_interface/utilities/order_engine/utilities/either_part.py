@@ -1,5 +1,9 @@
 """The Either join: several plans running at once, where a fill on one changes the others."""
 
+from unified_broker_interface.utilities.order_engine.utilities.order_part import (
+    OrderPart,
+)
+
 SIBLING_RULES = (
     'cancel',
     'reduce',
@@ -77,9 +81,30 @@ class EitherPart:
             int: The quantity.
         """
         record = plan_order.part_record(self.path)
-        if record.get('target') is not None:
-            return record['target']
-        return plan_order.parent.body.get('quantity') or 0
+        budget = record.get('target')
+        if budget is None:
+            budget = plan_order.parent.body.get('quantity') or 0
+        return budget + (record.get('caller_change') or 0)
+
+    def take_caller_change(self, plan_order, change):
+        """Counts a caller's change to one child's quantity against the quantity every child shares, so the other exits follow it and no later fill undoes it.
+
+        Under the `reduce` rule the children are exits on one position. Cutting one and not the others would leave them covering different amounts, so the cut comes off the shared quantity, as today's linked pair of exits brings the other exit down to the quantity the caller set.
+
+        Args:
+            plan_order (PlanOrder): The plan order.
+            change (int): How much the caller added, negative for a cut.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        record = plan_order.part_record(self.path)
+        record['caller_change'] = (record.get('caller_change') or 0) + change
+        plan_order.set_part_record(
+            self.path,
+            record,
+            f'the caller changed one of the plan\'s {self.path} children by {change}, so every child shares {OrderPart.difference_described(record["caller_change"])} than the plan works out',
+        )
 
     def start(self, plan_order, target, started_at, quotes):
         """Starts every child, each with the shared quantity.
