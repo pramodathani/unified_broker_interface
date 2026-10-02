@@ -656,7 +656,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `hidden_stop`
 
-    A hidden stop lives in the engine and answers `202 armed`. It watches the **bid** when protecting a long and the **offer** when protecting a short, rather than the last trade, and falls back to the last trade when that side of the book is empty. When it fires, it cancels the backstop first and sends an exit priced `buffer_ticks` past the touch. By default a long's stop fires when the price falls to the level. It takes `trigger_price` and `trigger_direction` as the price triggers do.
+    A hidden stop lives in the engine and answers `202 armed`. It watches the **bid** when protecting a long and the **offer** when protecting a short, rather than the last trade, and falls back to the last trade when that side of the book is empty. When it fires, it cancels the backstop first and sends an exit priced `buffer_ticks` past the touch; if the broker does not accept the backstop's cancel, the exit is held back and the next tick tries again, so the two can never both fill. Once the backstop fills, the parent ends `completed` and stops watching, because the position is closed. By default a long's stop fires when the price falls to the level. It takes `trigger_price` and `trigger_direction` as the price triggers do.
 
     With a backstop, the backstop is a real stop-limit order placed at once, and the armed answer says so: it carries a `backstop` object with the `broker`, `order_id`, `outcome`, `trigger_price` and `price` of that order, and its `status_message` names the broker. `candle_close_stop` answers the same way.
 
@@ -758,7 +758,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `daily_stop`
 
-    A daily stop places a fresh native stop every trading morning at `arm_at` for a position held overnight, and answers `202 scheduled` with `first_arm_on`, the first date it will place one. It never arms on a weekend or an exchange holiday, and an order sent after that day's `arm_at` first arms on the next trading day. If the market has already gapped through the stop, no stop is placed; the position is exited with a limit priced past the touch instead. It stops re-arming after `valid_days`, counted in calendar days.
+    A daily stop places a fresh native stop every trading morning at `arm_at` for a position held overnight, and answers `202 scheduled` with `first_arm_on`, the first date it will place one. It never arms on a weekend or an exchange holiday, and an order sent after that day's `arm_at` first arms on the next trading day. If the market has already gapped through the stop, no stop is placed; the position is exited with a limit priced past the touch instead. It stops re-arming after `valid_days`, counted in calendar days, and ends `completed` as soon as any stop has traded, because the position it protected is then closed.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
@@ -953,7 +953,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `participation`
 
-    A percentage-of-volume order answers `202 armed` and then, on each price tick, sends `participation_percent` of the volume traded since its last slice, as a limit priced 2 ticks past the opposite touch. A share smaller than one unit is carried forward. It has no deadline.
+    A percentage-of-volume order answers `202 armed` and then, on each price tick, sends `participation_percent` of the volume traded since its last slice, as a limit priced 2 ticks past the opposite touch. Each slice is rounded down to whole lots, and a share smaller than one lot is carried forward until enough volume has traded. It has no deadline.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
@@ -1075,7 +1075,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `opening_auction`
 
-    An opening-auction order (the Atlas's G1, market-on-open or limit-on-open) is placed while the pre-open session collects orders, so it takes part in the opening call auction and fills at the single price the auction discovers. It answers `202 scheduled` and is placed at `at_time`, or on the next clock tick when collection is already open.
+    An opening-auction order (the Atlas's G1, market-on-open or limit-on-open) is placed while the pre-open session collects orders, so it takes part in the opening call auction and fills at the single price the auction discovers. It answers `202 scheduled` and is placed at `at_time`, or on the next clock tick when collection is already open. If the engine was not running at `at_time` and its first tick comes after collection has closed, the order ends `cancelled` instead of being sent into continuous trading.
 
     The pre-open takes only some orders, and this type refuses the rest with `400` rather than sending them into continuous trading:
 

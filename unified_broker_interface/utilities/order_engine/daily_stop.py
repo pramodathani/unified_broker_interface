@@ -253,7 +253,7 @@ class DailyStop(SyntheticOrder):
         return when >= arm_time
 
     def on_clock_tick(self, now):
-        """Arms today's stop, or exits the position if the market has already gone past it.
+        """Arms today's stop, exits the position if the market has already gone past it, or ends the parent once a stop has traded, since the position it protected is then closed.
 
         Args:
             now (float): The Unix time of the tick.
@@ -268,6 +268,18 @@ class DailyStop(SyntheticOrder):
                     'completed',
                     f'the stop was re-armed for {self.read_valid_days()} days '
                     'and has now finished',
+                )
+                self.save()
+                return True
+            return False
+        traded = 0
+        for leg in self.parent.legs:
+            traded = traded + (leg.filled_quantity or 0)
+        if traded > 0:
+            if not self.parent.is_terminal():
+                self.record_state(
+                    'completed',
+                    'the stop traded, so the position is closed and no more stops are placed',
                 )
                 self.save()
                 return True

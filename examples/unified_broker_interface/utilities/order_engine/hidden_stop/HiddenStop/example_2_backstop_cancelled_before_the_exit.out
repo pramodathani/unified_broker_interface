@@ -6,4 +6,5 @@ fire sent, in order:
   cancel 260930000001
   place BUY 40 LIMIT at 1521.10 -> 260930000002
 Parent: protecting
+on_leg_update after the backstop filled 40: parent completed, the backstop filled, so the position is closed and the hidden stop stops watching
 Backstop without a limit: HTTP 400, a backstop needs both backstop_price and backstop_limit_price: a stop-limit whose limit sits at its trigger will not fill when the price runs through it, which is what a backstop is for

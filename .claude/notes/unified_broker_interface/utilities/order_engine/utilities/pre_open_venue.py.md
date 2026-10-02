@@ -15,3 +15,7 @@ An order taken on a weekend or holiday is meant for the next trading day's pre-o
 ## The futures cut-off
 
 NSE closes futures collection at a random moment between 09:07 and 09:08, so 09:07 is the last safe time, the same choice today's type makes. Only current-month futures have a pre-open, and like today's type this does not check the month.
+
+## has_closed (added 2026-10-02)
+
+`check` only runs when the plan is placed. `PlanOrder._fire_waiting` now asks `has_closed` before sending a pre-open part, and ends the part as `expired` when collection has closed, so a late restart never sends into continuous trading; the parent then ends `cancelled` because nothing traded. `has_closed` deliberately ignores trading days: a tick on a non-trading day after the close also ends the order, which is safer than sending it.

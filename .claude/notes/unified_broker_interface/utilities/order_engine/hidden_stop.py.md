@@ -25,3 +25,9 @@ The same rule the kill switch follows. A resting stop left alone while the exit 
 ## Why the armed answer reports the backstop
 
 `arm` placed a real stop-limit order at a broker, but `PriceTrigger.run` answered `202 armed` with `order_id: None` whatever `arm` did. In the live test of 2026-09-27 a hidden stop and a candle-close stop left backstops at Kotak and Shoonya that no answer mentioned; they were found only when their parents were cancelled. `arm` now returns a summary of the order it placed, and the armed answer carries it as `backstop`. The base `arm` returns None, so every other trigger's answer is unchanged.
+
+## Backstop fills and refused cancels (fixed 2026-10-02)
+
+Two bugs from the design doc's appendix were reproduced offline and fixed. A backstop that filled left the parent `protecting`, so a later touch of the hidden level sent a second exit and opened the opposite position; `on_leg_update` now completes the parent, and `PriceTrigger.has_fired` counts a filled backstop so a restart cannot re-arm it. `fire` used to ignore what `cancel_leg` returned and send the exit beside a backstop that might still rest; it now holds the exit back, pops `triggered_at` so the next tick retries, and records why, which is what the plan preset's `cancel_before_send` Either already did.
+
+A normal exit fill still leaves the legacy parent `protecting`; that belongs to the wider "types never finish" finding, which waits for a decision on fixing the old types or retiring them through the switch-over.

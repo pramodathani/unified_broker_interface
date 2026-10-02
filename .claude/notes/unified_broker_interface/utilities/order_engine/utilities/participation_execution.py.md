@@ -15,3 +15,7 @@ Today's type would send a fresh slice on every tick after a rejection, which rep
 ## A quote without volume
 
 When `begin` ran on a quote with no `volume`, `counted_volume` is None, and the first tick that carries a volume starts the count instead of treating the whole day's volume as traded since the start.
+
+## Whole lots (fixed 2026-10-02)
+
+The plan execution never lost quantity, because it reads what it has sent from its legs, but it did not round to lots, so it only sent once a share happened to be whole lots, and across a restart the logged `counted_volume` lost that volume credit. `due_pieces` now rounds the share down to whole lots and leaves `counted_volume` alone when that comes to nothing, using the same lot rule as the fixed type.

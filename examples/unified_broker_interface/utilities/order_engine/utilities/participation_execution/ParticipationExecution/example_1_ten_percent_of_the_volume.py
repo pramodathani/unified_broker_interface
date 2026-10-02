@@ -34,12 +34,51 @@ class StandInParent:
         self.instrument_id = INSTRUMENT_ID
 
 
+class StandInInstrument:
+    """Stands in for a catalogue instrument, which only needs its brokers' handles here.
+
+    Attributes:
+        handles (dict): Each broker's handle, holding its `lot_size`.
+    """
+
+    def __init__(self):
+        """Builds an instrument traded one share at a time at Zerodha.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.handles = {
+            'zerodha': {
+                'lot_size': 1,
+            },
+        }
+
+
+class StandInPlacement:
+    """Stands in for the engine's placement, which only needs to find the instrument here."""
+
+    def market_context(self, instrument_id, with_quote, with_settings):
+        """Answers with the instrument and nothing else.
+
+        Args:
+            instrument_id (str): The instrument, unused.
+            with_quote (bool): Unused.
+            with_settings (bool): Unused.
+
+        Returns:
+            tuple: The instrument (StandInInstrument), no quote (None) and no settings (None).
+        """
+        del instrument_id, with_quote, with_settings
+        return StandInInstrument(), None, None
+
+
 class StandInPlanOrder:
     """Stands in for the plan order an execution is asked about.
 
     Attributes:
         parent (StandInParent): The parent.
         instrument_id (str): The instrument the order trades.
+        placement (StandInPlacement): Where the lot size is looked up.
     """
 
     def __init__(self):
@@ -50,6 +89,15 @@ class StandInPlanOrder:
         """
         self.parent = StandInParent()
         self.instrument_id = INSTRUMENT_ID
+        self.placement = StandInPlacement()
+
+    def chosen_broker(self):
+        """The broker the plan's orders go to.
+
+        Returns:
+            str: Zerodha.
+        """
+        return 'zerodha'
 
 
 class TenPercentOfTheVolumeExample:

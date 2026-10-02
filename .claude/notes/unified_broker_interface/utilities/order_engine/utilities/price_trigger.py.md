@@ -37,3 +37,7 @@ The legs are in the event log, so `has_fired` also treats any leg as proof of fi
 The count is kept per price tick, and a price tick is whatever the price ticker delivers, so two ticks carrying the same quote count as two. That is the nearest the engine can come to "two consecutive trades" without reading the trade stream itself.
 
 Four subclasses override `watched_price` for reasons of their own, and set `TAKES_TRIGGER_ON` to False so that `read_trigger_on` refuses the parameter instead of ignoring it. `CandleCloseStop` inherits the flag from `HiddenStop`. The flag is a plain class attribute rather than a check of whether `watched_price` was overridden, which would need reflection.
+
+## A filled backstop counts as fired (2026-10-02)
+
+`has_fired` treats a backstop with a fill as fired. Without it a hidden stop whose backstop filled would arm again after a restart, because the event log does not keep `triggered_at`, and then exit a position that no longer exists.

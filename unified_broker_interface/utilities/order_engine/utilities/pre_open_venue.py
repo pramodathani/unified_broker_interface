@@ -6,6 +6,7 @@ from unified_broker_interface.utilities.broker_orders.utilities.refused_request 
     RefusedRequestError,
 )
 from unified_broker_interface.utilities.order_engine.utilities.moments import (
+    INDIA,
     Moments,
 )
 from unified_broker_interface.utilities.order_engine.utilities.trading_days import (
@@ -116,6 +117,23 @@ class PreOpenVenue:
                 f'the pre-open stopped taking this order at {closes}, so it can no longer join today\'s opening auction; the next is on {next_day.isoformat()}',
                 400,
             )
+
+    def has_closed(self, context, now):
+        """Whether the pre-open has already stopped taking this order on the day of a moment, which an order that fires late must not miss.
+
+        The collection window is checked when the plan is placed, but an engine that was down at `at_time` fires the order at its first tick afterwards. Sent then, it would trade in continuous trading at whatever the market is, which is not what the caller asked for.
+
+        Args:
+            context (OrderContext): The order's view of the plan order.
+            now (float): The Unix time of the tick.
+
+        Returns:
+            bool: True when collection has closed on that day.
+        """
+        closes = self.collection_closes(context)
+        moment = datetime.datetime.fromtimestamp(now, INDIA)
+        closes_at = moment.replace(hour=closes.hour, minute=closes.minute, second=closes.second, microsecond=0)
+        return moment >= closes_at
 
     def described(self):
         """This venue as a dry run shows it.

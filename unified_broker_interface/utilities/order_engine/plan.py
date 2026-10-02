@@ -28,6 +28,9 @@ from unified_broker_interface.utilities.order_engine.utilities.paper_venue impor
 from unified_broker_interface.utilities.order_engine.utilities.plan_reader import (
     PlanReader,
 )
+from unified_broker_interface.utilities.order_engine.utilities.pre_open_venue import (
+    PreOpenVenue,
+)
 from unified_broker_interface.utilities.order_engine.utilities.reduce_only import (
     ReduceOnlyCheck,
 )
@@ -545,6 +548,14 @@ class PlanOrder(SyntheticOrder):
                 self.set_part_record(part.path, record, None)
                 memory_changed = True
             if not triggered:
+                continue
+            if isinstance(part.venue, PreOpenVenue) and part.venue.has_closed(part.context(self), now):
+                record = self.part_record(part.path)
+                record['state'] = 'done'
+                record['reason'] = 'expired'
+                record['message'] = 'the pre-open stopped taking this order before the engine could send it, so it was not sent into continuous trading'
+                self.set_part_record(part.path, record, f'the plan\'s {part.path} part is done: {record["message"]}')
+                ended = True
                 continue
             join = self._parent_join(root, part.path)
             if isinstance(join, EitherPart) and join.cancel_before_send:

@@ -3,3 +3,6 @@ at_time 09:00:30, taken Wed 2026-09-23 09:08: taken
 at_time 09:00:30, taken Wed 2026-09-23 10:00: refused (the pre-open stopped taking this order at 09:10:00, so it can no longer join today's opening auction; the next is on 2026-09-24)
 at_time 09:00:30, taken Sun 2026-09-27 10:00: taken
 at_time 09:12:00, taken Wed 2026-09-23 08:45: refused (at_time must be from 09:00:00 and before 09:10:00, while the pre-open takes this order, not 09:12:00)
+has_closed at a tick at 09:08 IST, Unix time 1790134680: False
+has_closed at a tick at 09:10 IST, Unix time 1790134800: True
+has_closed at a tick at 09:20 IST, Unix time 1790135400: True
