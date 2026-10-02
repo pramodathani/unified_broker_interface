@@ -138,6 +138,13 @@ class PlanOrder(SyntheticOrder):
                 record['ends_when'] = True
             if part.lifetime is not None and part.lifetime.after_days is not None:
                 carries_overnight = True
+            if part.spans_days:
+                carries_overnight = True
+            if part.lifetime is not None and part.lifetime.when is not None:
+                lifetime_memory = {}
+                part.lifetime.when.prepare(part.context(self), lifetime_memory)
+                if lifetime_memory:
+                    record['lifetime_memory'] = lifetime_memory
             if part.moves_on_ticks():
                 record['moves'] = True
             if part.execution.paced_by_ticks():

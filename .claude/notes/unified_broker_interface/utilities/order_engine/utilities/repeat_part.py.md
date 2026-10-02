@@ -11,3 +11,7 @@ Each copy after the first gets an `ElapsedCondition` of `every_minutes × n`, jo
 ## Not built
 
 `every_trading_day_at` and `until` need a plan to outlive the trading day, as `after_days` lifetimes do, and wait for the same recovery change; today's daily stop and scale with profit taker are not presets yet for that reason.
+
+## `every_trading_day_at` and `until` (2026-10-02)
+
+Both stay inside the copies-in-advance model. A daily copy's trigger is a `TradingDayTimeCondition` for its own trading day, and the reader marks it `spans_days`, which `PlanOrder.run` reads to carry the plan overnight, as a lifetime of days does. `until` becomes each copy's lifetime, ending a copy only while it waits and cancelling it, which is the existing `when` lifetime; that is why a copy with `until` cannot also have a lifetime of its own. `PlanOrder.run` now prepares a lifetime's condition, so `until` can be a time, and `OrderPart.needs_prices` counts a lifetime's condition, so an `until` on a price makes the plan read quotes and remember the tick size.

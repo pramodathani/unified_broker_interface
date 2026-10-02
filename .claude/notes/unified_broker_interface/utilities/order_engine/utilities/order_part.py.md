@@ -85,3 +85,7 @@ Every update settles the whole plan, and an Either join that cancels its sibling
 ## Held changes in the context (2026-10-02)
 
 `context` writes a caller's `held_price` and `held_quantity` from the part record over the body, so every reader of the order's body, its trigger, pricing and the order sent, sees the change. It reads the record without copying it, since the context is built on every tick.
+
+## A lifetime's condition reads prices (2026-10-02)
+
+`needs_prices` and `instruments` now count a lifetime's `when` condition. Before, the only `when` was the account condition, which reads no quotes; a Repeat's `until` on a price, the first one that does, never held, because the plan read no quotes and kept no tick size for it.

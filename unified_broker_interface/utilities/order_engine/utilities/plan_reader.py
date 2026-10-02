@@ -157,6 +157,9 @@ from unified_broker_interface.utilities.order_engine.utilities.time_condition im
 from unified_broker_interface.utilities.order_engine.utilities.top_up_execution import (
     TopUpExecution,
 )
+from unified_broker_interface.utilities.order_engine.utilities.trading_day_time_condition import (
+    TradingDayTimeCondition,
+)
 from unified_broker_interface.utilities.order_engine.utilities.trail_pricing import (
     TrailPricing,
 )
@@ -567,13 +570,21 @@ class PlanReader:
         for setting in repeat:
             if setting not in REPEAT_SETTINGS:
                 self._add_problem(path, 'unknown_setting', f'repeat takes {", ".join(REPEAT_SETTINGS)}, not {setting!r}')
-        for name in ('every_trading_day_at', 'until'):
-            if name in repeat:
-                self._add_problem(path, 'not_built', f'{name} is part of the design but not built yet, because a plan does not yet outlive the trading day')
         times = self._whole_number(repeat.get('times'), path, 'times', 1, MOST_REPEATS)
         every_minutes = repeat.get('every_minutes')
-        if isinstance(every_minutes, bool) or not isinstance(every_minutes, (int, float)) or every_minutes <= 0:
+        daily_at = repeat.get('every_trading_day_at')
+        if ('every_minutes' in repeat) == ('every_trading_day_at' in repeat):
+            self._add_problem(path, 'bad_setting', 'repeat needs exactly one of every_minutes and every_trading_day_at')
+        elif 'every_minutes' in repeat and (isinstance(every_minutes, bool) or not isinstance(every_minutes, (int, float)) or every_minutes <= 0):
             self._add_problem(path, 'bad_setting', f'every_minutes must be a number of minutes above zero, not {every_minutes!r}')
+        elif 'every_trading_day_at' in repeat:
+            try:
+                datetime.time.fromisoformat(str(daily_at))
+            except ValueError:
+                self._add_problem(path, 'bad_setting', f'every_trading_day_at must be a time of day such as 09:20, not {daily_at!r}')
+        until = None
+        if 'until' in repeat:
+            until = self._read_condition(repeat['until'], f'{path}.until')
         child = repeat.get('child')
         if not isinstance(child, dict) or list(child) != ['order']:
             self._add_problem(path, 'repeat_needs_order', 'repeat sends one order again and again, so its child is an order node')
@@ -585,14 +596,27 @@ class PlanReader:
             part = self._read_node(child, copy_path, keeps_tag and index == 0)
             if part is None:
                 return None
-            if index > 0:
-                elapsed = ElapsedCondition(every_minutes * index)
+            schedule = None
+            if daily_at is not None:
+                schedule = TradingDayTimeCondition(str(daily_at), index)
+                part.spans_days = True
+            elif index > 0:
+                schedule = ElapsedCondition(every_minutes * index)
+            if schedule is not None:
                 if part.trigger is None:
-                    part.trigger = elapsed
+                    part.trigger = schedule
                 else:
-                    part.trigger = ConditionGroup('all', [part.trigger, elapsed])
+                    part.trigger = ConditionGroup('all', [part.trigger, schedule])
+            if until is not None:
+                if part.lifetime is not None:
+                    self._add_problem(copy_path, 'until_with_lifetime', 'repeat\'s until ends each copy still waiting, which takes the copy\'s one lifetime, so the order cannot have a lifetime of its own')
+                    return None
+                part.lifetime = Lifetime(None, None, 'waiting', 'cancel', None, until)
             copies.append(part)
-        return RepeatPart(path, copies, times, every_minutes)
+        repeat_part = RepeatPart(path, copies, times, every_minutes)
+        repeat_part.every_trading_day_at = daily_at
+        repeat_part.until = until
+        return repeat_part
 
     def _read_overrides(self, order, path):
         """Reads the body values an order gives of its own, such as another instrument or quantity.

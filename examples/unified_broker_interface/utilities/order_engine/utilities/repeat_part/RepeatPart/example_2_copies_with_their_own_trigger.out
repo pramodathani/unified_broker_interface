@@ -1,6 +1,5 @@
 A repeat: True
   root.children.0: {'price_crosses': {'level': '995', 'direction': 'from the opening side', 'field': 'last', 'confirm': 'none'}}
   root.children.1: {'all': [{'price_crosses': {'level': '995', 'direction': 'from the opening side', 'field': 'last', 'confirm': 'none'}}, {'elapsed': {'minutes': 10}}]}
-  not_built: until is part of the design but not built yet, because a plan does not yet outlive the trading day
   repeat_needs_order: repeat sends one order again and again, so its child is an order node
-Built by hand: {'repeat': {'path': 'root', 'times': 3, 'every_minutes': 5, 'children': []}}
+Built by hand: {'repeat': {'path': 'root', 'times': 3, 'children': [], 'every_minutes': 5}}

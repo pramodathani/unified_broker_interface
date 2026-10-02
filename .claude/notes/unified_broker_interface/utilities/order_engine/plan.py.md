@@ -111,3 +111,7 @@ An exposure hedge places its first order from `move` on a tick, not from `start`
 ## Changing a held order (2026-10-02)
 
 `modify_held` is today's virtual limit rule for a plan: it finds the one order waiting on a `limit_marketable` trigger, checks the change as today's type does, and keeps the new price and quantity as `held_price` and `held_quantity` in the part record, which `OrderPart.context` writes over the body, so the trigger's limit and the order sent both use them. The held terms in the trigger's memory change too, for the virtual book. A request names only the parent, so a plan holding several such orders is refused with 409 rather than guessing which one is meant.
+
+## Daily repeats and lifetime conditions (2026-10-02)
+
+A part marked `spans_days`, a daily Repeat's copy, carries the plan overnight as a lifetime of days does. `run` also prepares a lifetime's `when` condition and keeps its memory as `lifetime_memory` when there is any, so a time condition used as a Repeat's `until` works out its moment; the account condition keeps nothing, so plans that had one are unchanged.
