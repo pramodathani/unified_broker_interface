@@ -1,0 +1,6 @@
+nse_equities             calendar equity     opens at 09:15:00
+nse_index_options        calendar equity     opens at 09:15:00
+nse_currency_futures     calendar currency   opens at 09:00:00
+mcx_commodity_futures    calendar commodity  opens at 09:00:00
+bse_commodity_futures    calendar commodity  opens at 09:00:00
+ncdex_futures            calendar commodity  opens at 10:00:00

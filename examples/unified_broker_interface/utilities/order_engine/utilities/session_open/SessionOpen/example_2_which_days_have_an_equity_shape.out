@@ -1,0 +1,5 @@
+nse_equities             equity True  -> a VWAP with no profile uses the equity volume shape, half hours from 09:15:00
+bse_equities             equity True  -> a VWAP with no profile uses the equity volume shape, half hours from 09:15:00
+nse_currency_futures     equity False -> a VWAP with no profile uses even slices, half hours from 09:00:00
+mcx_commodity_options    equity False -> a VWAP with no profile uses even slices, half hours from 09:00:00
+(no segment)             equity True  -> a VWAP with no profile uses the equity volume shape, half hours from 09:15:00

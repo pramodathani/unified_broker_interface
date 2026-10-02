@@ -5193,6 +5193,32 @@ class OrderEngineSuite:
                 numbered,
             ),
             self.plan_price_result(
+                'a_plan_vwap_on_a_commodity_with_no_profile_of_its_own_sends_even_slices',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'vwap': {
+                                    'slices': 4,
+                                    'over_minutes': 60,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 900},
+                    {'quote': steady, 'at': 1800},
+                    {'quote': steady, 'at': 2700},
+                ],
+                numbered,
+                body_overrides={
+                    'instrument_id': order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['crudeoil_future'],
+                    'quantity': 400,
+                },
+            ),
+            self.plan_price_result(
                 'a_plan_implementation_shortfall_front_loads_its_slices',
                 {
                     'order': {
@@ -7435,8 +7461,8 @@ class OrderEngineSuite:
                             'buy_limit': 1012,
                             'sell_trigger': 990,
                             'sell_limit': 988,
-                            'stop_price': 985,
-                            'stop_limit_price': 983,
+                            'stop_distance': 25,
+                            'stop_limit_offset': 2,
                         },
                     },
                 ],
@@ -7635,7 +7661,7 @@ class OrderEngineSuite:
                 'a_plan_two_sided_breakout_cancels_the_side_that_did_not_fire',
                 breakout,
                 [
-                    self.update('26091500000101', 'OPEN', 10),
+                    self.update('26091500000101', 'OPEN', 10, average_price=1010.0),
                 ],
                 numbered,
             ),
@@ -7643,7 +7669,7 @@ class OrderEngineSuite:
                 'a_plan_two_sided_breakout_that_breaks_down_protects_the_short',
                 breakout,
                 [
-                    self.update('26091500000102', 'OPEN', 10),
+                    self.update('26091500000102', 'OPEN', 10, average_price=990.0),
                 ],
                 numbered,
             ),
@@ -8089,12 +8115,12 @@ class OrderEngineSuite:
                         'buy_limit': 1012,
                         'sell_trigger': 990,
                         'sell_limit': 988,
-                        'stop_price': 985,
-                        'stop_limit_price': 983,
+                        'stop_distance': 25,
+                        'stop_limit_offset': 2,
                     },
                 ),
                 [
-                    self.update('26091500000021', 'OPEN', 10),
+                    self.update('26091500000021', 'OPEN', 10, average_price=1010.0),
                 ],
                 accepted,
             ),
@@ -8996,6 +9022,122 @@ class OrderEngineSuite:
         ))
         return results
 
+    def sent_terms(self):
+        """The side, order type, prices and quantity of every broker request sent so far, read from Flattrade's form.
+
+        Returns:
+            list: One dict per request, holding the fields it carries.
+        """
+        shown = []
+        for request in self.network.sent_requests:
+            form = request.get('data') or ''
+            terms = {
+                'url': request['url'].rsplit('/', 1)[-1],
+            }
+            for name in ('trantype', 'prctyp', 'prc', 'trgprc', 'qty'):
+                found = re.search(r'"%s": "([^"]*)"' % name, form)
+                if found:
+                    terms[name] = found.group(1)
+            shown.append(terms)
+        return shown
+
+    def run_breakout_exit_checks(self):
+        """Runs a two-sided breakout whose exits are distances from the fill, broken upwards and downwards, as the fixed type and as a plan, and the old absolute exits refused.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        numbered = dict(
+            self.scenarios.answers.json_answer(
+                200,
+                self.scenarios.answers.place_success('flattrade'),
+            ),
+            number_orders=True,
+        )
+        accepted = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        settings = {
+            'buy_trigger': 1010,
+            'buy_limit': 1012,
+            'sell_trigger': 990,
+            'sell_limit': 988,
+            'stop_distance': 25,
+            'stop_limit_offset': 2,
+            'target_distance': 20,
+        }
+        plan = {
+            'order': {
+                'presets': [
+                    {
+                        'two_sided_breakout': settings,
+                    },
+                ],
+            },
+        }
+        results = []
+        for direction, order_id, filled_at in (
+            ('up', '26091500000101', 1010.0),
+            ('down', '26091500000102', 990.0),
+        ):
+            result = self.plan_result(
+                f'a_plan_two_sided_breakout_sets_its_exits_from_the_fill_when_it_breaks_{direction}',
+                plan,
+                [
+                    self.update(order_id, 'COMPLETE', 10, average_price=filled_at),
+                ],
+                numbered,
+            )
+            result['terms'] = self.sent_terms()
+            results.append(result)
+        result = self.reaction_result(
+            'a_two_sided_breakout_sets_its_exits_from_the_fill_when_it_breaks_down',
+            self.scenarios.bodies.market_order(
+                dry_run=None,
+                order_type='LIMIT',
+                price=1000,
+                quantity=10,
+                synthetic=dict(settings, type='two_sided_breakout'),
+            ),
+            [
+                self.update('26091500000102', 'COMPLETE', 10, average_price=990.0),
+            ],
+            numbered,
+        )
+        result['terms'] = self.sent_terms()
+        results.append(result)
+        absolute = dict(settings)
+        absolute.pop('stop_distance')
+        absolute['stop_price'] = 985
+        results.append(self.reaction_result(
+            'a_two_sided_breakout_with_absolute_exits_is_refused',
+            self.scenarios.bodies.market_order(
+                dry_run=None,
+                order_type='LIMIT',
+                price=1000,
+                quantity=10,
+                synthetic=dict(absolute, type='two_sided_breakout'),
+            ),
+            [],
+            accepted,
+        ))
+        results.append(self.plan_result(
+            'a_plan_two_sided_breakout_with_absolute_exits_is_refused',
+            {
+                'order': {
+                    'presets': [
+                        {
+                            'two_sided_breakout': absolute,
+                        },
+                    ],
+                },
+            },
+            [],
+            numbered,
+        ))
+        return results
+
     def run_clock_checks(self):
         """Runs the types that wait for a time of day rather than for a fill.
 
@@ -9475,6 +9617,17 @@ class OrderEngineSuite:
                     'slices': 4,
                     'over_minutes': 240,
                     'volume_profile': [1, 1, 1, 9, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+                }),
+                [],
+                frozen + 20000,
+                accepted,
+            ),
+            self.clock_result(
+                'a_vwap_on_a_commodity_with_no_profile_of_its_own_sends_even_slices',
+                dict(entry, quantity=400, instrument_id=order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['crudeoil_future'], synthetic={
+                    'type': 'vwap',
+                    'slices': 4,
+                    'over_minutes': 240,
                 }),
                 [],
                 frozen + 20000,
@@ -11860,6 +12013,7 @@ class OrderEngineSuite:
             results.extend(self.run_clock_checks())
             results.extend(self.run_closed_position_checks())
             results.extend(self.run_late_auction_and_whole_lot_checks())
+            results.extend(self.run_breakout_exit_checks())
             results.extend(self.run_price_checks())
             results.extend(self.run_wiring_checks())
             results.extend(self.run_assignment_checks())

@@ -106,7 +106,7 @@ The master table below lists every type registered in `SYNTHETIC_ORDER_CLASSES`,
 | `oco` | Linked orders | Rests a stop and a target on a position you hold, each shrinking as the other fills. | `stop_price`, `stop_limit_price`, `target_price` | 200 |
 | `bracket` | Linked orders | Places an entry, then arms a stop and a target on the first partial fill. | `stop_price`, `stop_limit_price`, `target_price` | 200 |
 | `scale_out` | Linked orders | A bracket with several targets that take the position off in tranches. | `target_prices`, `stop_price`, `stop_limit_price`, `breakeven_after` | 200 |
-| `two_sided_breakout` | Linked orders | Rests a buy stop above a range and a sell stop below it, and cancels the side that did not fire. | `buy_trigger`, `buy_limit`, `sell_trigger`, `sell_limit` | 200 |
+| `two_sided_breakout` | Linked orders | Rests a buy stop above a range and a sell stop below it, cancels the side that did not fire, and sets exits a distance from the fill. | `buy_trigger`, `buy_limit`, `sell_trigger`, `sell_limit`, `stop_distance`, `stop_limit_offset`, `target_distance` | 200 |
 | `scheduled` | Time-based | Holds the order until a time of day, then places it. | `at_time` | 202 |
 | `good_till_time` | Time-based | Places the order now and, at a time of day, cancels whatever has not filled or makes it marketable. | `until_time`, `at_expiry` | 200 |
 | `time_stop` | Time-based | Places an entry and closes what filled at a time of day or after some minutes. | `until_time` or `minutes` | 200 |
@@ -468,7 +468,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `two_sided_breakout`
 
-    A two-sided breakout rests a buy stop above a range and a sell stop below it, both as stop-limit orders for the order's `quantity`. The first fill cancels the other side. Once an entry has filled, a stop and a target are armed on the side that filled, from the same `stop_price`, `stop_limit_price` and `target_price` fields a bracket uses.
+    A two-sided breakout rests a buy stop above a range and a sell stop below it, both as stop-limit orders for the order's `quantity`. The first fill cancels the other side. Once an entry has filled, a stop and a target are armed on the side that filled, each a distance from the entry's average fill: a long's stop sits `stop_distance` below it with its limit `stop_limit_offset` further down and its target `target_distance` above, and a short's the other way round. Prices are rounded to the nearest tick. The exits are distances, not prices, because one absolute stop or target cannot suit a break either way: after a break downwards, a target above the range would buy straight back. `stop_price`, `stop_limit_price` and `target_price` are refused with <span class="status s4">400</span>.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
@@ -476,10 +476,12 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | `buy_limit` | number | Yes | Above zero. |
     | `sell_trigger` | number | Yes | Above zero, and below `buy_trigger`. |
     | `sell_limit` | number | Yes | Above zero. |
-    | `stop_price`, `stop_limit_price`, `target_price` | number | When an entry fills | The exits armed after the break, read as for `oco`. |
+    | `stop_distance` | number | `stop_distance` or `target_distance` | How far from the fill the stop triggers. Above zero. |
+    | `stop_limit_offset` | number | With `stop_distance` | How far past its trigger the stop's limit sits. Above zero. |
+    | `target_distance` | number | `stop_distance` or `target_distance` | How far from the fill the target rests. Above zero. |
 
     ```json
-    {"type": "two_sided_breakout", "buy_trigger": 1010, "buy_limit": 1012, "sell_trigger": 990, "sell_limit": 988, "stop_price": 1000, "stop_limit_price": 998, "target_price": 1030}
+    {"type": "two_sided_breakout", "buy_trigger": 1010, "buy_limit": 1012, "sell_trigger": 990, "sell_limit": 988, "stop_distance": 10, "stop_limit_offset": 2, "target_distance": 20}
     ```
 
     #### `oca`
@@ -911,7 +913,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `vwap`
 
-    A volume-weighted order is a TWAP whose slice sizes follow the day's volume, while slices still go out on an even clock. The default profile is an ordinary Indian equity day in half-hour buckets from 09:15 to 15:30.
+    A volume-weighted order is a TWAP whose slice sizes follow the day's volume, while slices still go out on an even clock. The half hours count from the instrument's own open on the day the order starts: 09:15 for equity, 09:00 for currency and MCX, 10:00 for NCDEX. The default profile is an ordinary Indian equity day in half-hour buckets from 09:15 to 15:30, used only for equity; a currency or commodity order with no `volume_profile` of its own gets even slices, as a TWAP does.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
@@ -1223,6 +1225,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | `follow_instrument` | `instrument_id` and `delta`, required; `lowest`, `highest`, `step_ticks` (default 1) | The body's own limit, moved by `delta` times how far `instrument_id` has moved since the order was sent: a call bid with a delta of 0.5 rises 20 when the index rises 40. The price stays inside `lowest` and `highest`, never goes below a tick, and moves only by at least `step_ticks`. The body must be a `LIMIT` with a price, and the instrument another one, or the plan is refused with <span class="status s4">400</span>. |
     | `option_model` | `instrument_id` (the underlying) and `volatility` (a percentage, at most 500), required; `interest_rate` (a percentage, default 0), `lowest`, `highest`, `step_ticks` | An option's premium at that implied volatility, from the Black-76 model, with the option's strike and expiry read from the catalogue when the plan is placed, re-priced as the underlying moves and expiry nears. A future as the underlying is the forward; otherwise the spot is grown by the interest rate. The body's own price is the worst accepted. An instrument that is not an option is refused with <span class="status s4">400</span>. |
     | `from_parent_fill` | `net_price`, required, the net debit per unit (negative for a credit) | For a Then join's child only: the price that makes this order and the first plan's average fill add up to `net_price`, the first leg's side signing its fill and this order's side signing the result. A price at or below zero is not sent. The first plan must be one order (`from_parent_fill_needs_then`). |
+    | `from_fill` | `stop_distance` with `stop_limit_offset` for a stop, or `target_distance` for a target | For an order under a Then join's child only (`from_fill_needs_then`): an exit a distance from the average fill of the orders that opened the position, in the direction that suits the side it is sent on. A stop is a native stop-limit, `stop_distance` beyond the fill against the position with its limit `stop_limit_offset` further; a target is a limit `target_distance` beyond the fill in the position's favour. Prices are rounded to the tick, and nothing is sent until the opening order has filled. |
     | `discretion` | `points`, required; `quantity`, optional | A modifier: the visible limit rests where the setter priced it, and when the other side comes within `points` of it, `quantity` (default all that rests) is taken with a limit two ticks past the touch, never past the visible price plus `points`. The visible order is reduced or cancelled before the taking order is sent. It needs one visible limit, so it is refused on a stop (`discretion_needs_limit`) and with an execution other than `all_at_once` (`discretion_not_sliced`). |
     | `cap` | `worst_price`, required | Not a setter but a limit on one: whatever the setter works out, when the order is sent and every time it moves, a buy's limit is held at or below `worst_price` and a sell's at or above it. A market order has no limit to cap. |
 
@@ -1249,7 +1252,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | `all_at_once` | none | The whole quantity as one broker order. Under a join, a change of size changes that order. |
     | `iceberg` | `visible_quantity`, required; `randomise_percent`, 0 to 99, default 0 | One piece at a time, the next only once the last has filled; each piece may vary by up to `randomise_percent`. A piece cancelled or rejected stops the iceberg. |
     | `twap` | `slices`, 2 to 60; `over_minutes`, above zero | Equal slices, one every `over_minutes × 60 / slices` seconds, the first at once. |
-    | `vwap` | as `twap`, and `volume_profile`, one weight per half hour from 09:15; or `until`, a time of day, instead of `over_minutes` | Slices sized by the half hour they fall in; the default profile is today's NSE equity shape. With `until`, the slices are spread from when the order starts until that time, and an order starting after it is refused. |
+    | `vwap` | as `twap`, and `volume_profile`, one weight per half hour from the session's open; or `until`, a time of day, instead of `over_minutes` | Slices sized by the half hour they fall in, counted from the segment's open (09:15 for equity, 09:00 for currency and MCX) on the day the order starts working; the default profile is today's NSE equity shape, used only for equity, and a currency or commodity order with no profile gets even slices. With `until`, the slices are spread from when the order starts until that time, and an order starting after it is refused. |
     | `front_loaded` | as `twap`, and `urgency`, 0 to 1, default 0.5 | Slices each `1 - urgency × 0.5` of the one before. |
     | `participation` | `percent`, above zero and at most 100; `most_slices`, default 60 | On each tick, `percent` of the volume traded since the last slice, counted from the live quote's `volume` when the order starts working. A share under one unit waits for more volume. The unfilled part of a cancelled slice is sent again by later slices; a rejected slice stops the order. |
     | `book_depth` | `limit_price`, required; `minimum_quantity`, at least 1 | Nothing until the other side of the book shows at least `minimum_quantity` at or inside `limit_price`, then one strike for the smaller of what is shown and what is left. A strike that partly fills rests at its price, and later strikes are only for what is neither traded nor resting. A rejected strike stops the order. |
@@ -1302,7 +1305,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | `account_conditional` | An `account` trigger, or with `action: cancel` a lifetime ending `when` the account condition holds, which sends the order at once and cancels it then. Takes `account_field`, `account_level`, `trigger_direction` (required) and `action`. |
     | `daily_stop` | The `protect` side, a `native_stop` at `stop_price` and `stop_limit_price` that exits if gapped, `daily` execution at `arm_at`, and a lifetime of `valid_days` (default 30). Takes those four settings. |
     | `good_till_triggered` | `limit_if_touched`, kept waiting across trading days for `valid_days` (default 30, at most 365) by a lifetime in `after_days` that bounds only the wait; once triggered, its limit lives as any order does. Takes the `limit_if_touched` settings and `valid_days`. |
-    | `two_sided_breakout` | A Then join: an Either join that cancels, of a buy stop-limit at `buy_trigger` and `buy_limit` and a sell stop-limit at `sell_trigger` and `sell_limit`, then the bracket's exits, which protect whichever side filled. Takes those four prices, `stop_price` and `stop_limit_price`, and `target_price`. |
+    | `two_sided_breakout` | A Then join: an Either join that cancels, of a buy stop-limit at `buy_trigger` and `buy_limit` and a sell stop-limit at `sell_trigger` and `sell_limit`, then exits priced with `from_fill`, which protect whichever side filled. Takes those four prices, `stop_distance` and `stop_limit_offset`, and `target_distance`; the absolute `stop_price`, `stop_limit_price` and `target_price` are refused. |
     | `accumulation` | A repeat join of the order every `every_minutes`, `purchases` times (at most 100), each purchase a `peg` to the own touch that does not follow, within the body's limit. Takes `every_minutes` and `purchases`. |
     | `close_on_trigger` | A `price_crosses` trigger, the `close` side and the position on the order's own instrument. Takes `trigger_price`, `trigger_direction`, `trigger_on` and `hold_seconds`. |
     | `square_off` | A `time_at` trigger at `at_time`, the `close` side and every position on `product` (default `intraday`), or on `instrument_ids`. Takes `at_time`, `product` and `instrument_ids`. |

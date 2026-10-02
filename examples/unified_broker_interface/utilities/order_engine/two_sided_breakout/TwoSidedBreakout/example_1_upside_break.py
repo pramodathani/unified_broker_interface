@@ -2,7 +2,7 @@
 
 A `TwoSidedBreakout` places two native stop-limit entries, one above the range and one below, so whichever way the range breaks is caught at exchange speed. When one side fills, the engine cancels the other, because being long and short at once is not a position anybody asked for, and arms a stop and a target on the side that filled.
 
-This program puts a buy stop at 1,010 (limit 1,012) and a sell stop at 990 (limit 988) around RELIANCE, for 20 shares, with a stop at 1,000 (limit 998) and a target at 1,030 for the long. The buy side fills: the sell stop is cancelled, then a sell stop at 1,000 and a sell target at 1,030 are placed for the 20 shares. Because the exits here are absolute prices, they are the right way round only for an upside break.
+This program puts a buy stop at 1,010 (limit 1,012) and a sell stop at 990 (limit 988) around RELIANCE, for 20 shares. The exits are given as distances from the fill rather than as prices, because the program cannot know in advance which way the range will break: a stop 10 away with its limit 2 further on, and a target 20 away. `read_exit_distances` shows the three distances the breakout read. The buy side fills at an average of 1,011.42: the sell stop is cancelled, then a sell stop 10 below the fill and a sell target 20 above it are placed for the 20 shares. Those come to 1,001.42 and 1,031.42, which are not on RELIANCE's 0.05 tick, so they are rounded to the nearest tick: a trigger of 1,001.40 with a limit of 999.40, and a target of 1,031.40.
 
 Fills normally arrive from a broker's order updates; here the program records the `leg_update` event through the runner and calls `on_leg_update`, as the engine's order update follower does. The placement is a stand-in that chooses Zerodha and accepts every order and cancel; the event log is the `RecordingEventLog` stand-in and the parent store keeps nothing, so nothing leaves the machine.
 
@@ -374,7 +374,7 @@ class UpsideBreakExample:
     """
 
     def __init__(self):
-        """Builds the runner around a range of 990 to 1,010.
+        """Builds the runner around a range of 990 to 1,010, with exits given as distances from the fill.
 
         Returns:
             None: This method returns nothing.
@@ -396,9 +396,9 @@ class UpsideBreakExample:
                     'buy_limit': 1012,
                     'sell_trigger': 990,
                     'sell_limit': 988,
-                    'stop_price': 1000,
-                    'stop_limit_price': 998,
-                    'target_price': 1030,
+                    'stop_distance': 10,
+                    'stop_limit_offset': 2,
+                    'target_distance': 20,
                 },
             },
         }
@@ -420,10 +420,13 @@ class UpsideBreakExample:
         print(f"Run: HTTP {status}, outcome {body['outcome']}, parent {self.runner.parent.state}")
         for side in body['sides']:
             print(f"  {side['transaction_type']}: {side['order_id']} {side['outcome']}")
+        stop_distance, stop_limit_offset, target_distance = self.runner.read_exit_distances()
+        print(f'read_exit_distances: stop {stop_distance}, limit offset {stop_limit_offset}, target {target_distance}, tick size {self.runner.tick_size()}')
         buy = self.runner.parent.legs[0]
         changes = {
             'leg_state': 'filled',
             'filled_quantity': 20,
+            'average_price': 1011.42,
         }
         self.runner.record({
             'event': 'leg_update',
@@ -432,9 +435,10 @@ class UpsideBreakExample:
             'leg_role': buy.role,
             'leg_state': 'filled',
             'filled_quantity': 20,
+            'average_price': 1011.42,
         })
         self.runner.on_leg_update(buy, changes)
-        print(f'The buy side filled: parent {self.runner.parent.state}')
+        print(f'The buy side filled at an average of {buy.average_price}: parent {self.runner.parent.state}')
         for leg in self.runner.parent.legs:
             print(f'  {leg.role:<6} {leg.transaction_type} {leg.quantity} {leg.order_type} at {leg.price} trigger {leg.trigger_price}')
         print('Sent to the broker, in order:')

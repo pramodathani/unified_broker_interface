@@ -1,6 +1,6 @@
 """Expands the presets that stand for a join of several orders into the plan trees they build.
 
-Some presets are not one order's slot values but a whole join. `is_join` says which: `accumulation`, `attached_hedge`, `legged_spread`, `two_sided_breakout`, `basket`, `oca`, `oto`, `oco`, `bracket`, `cover`, `scale_out` and `strategy_stop`, and `hidden_stop` once it has a backstop. `expand_join` builds the tree around the rest of the order the preset was named in, which becomes the join's main order: the entry of a bracket, a cover, a scale-out or an OTO, and the engine-side stop of a hidden stop with a backstop. An OCO protects a position already held, so it has no main order, and naming anything beside it is a problem. A basket and a one-cancels-all group make one order per candidate, each the rest of the order with the candidate's own instrument, side, quantity and price, so a basket named beside `post_only` is a basket of post-only orders. A two-sided breakout is a Then join whose first plan is an Either join of a buy stop and a sell stop, so the exits it arms are against whichever side broke. A hedge and a legged spread are Then joins whose child follows the entry's fills on another instrument, topped up with a new order as each fill arrives; a hedge sized by `delta_volatility` trades `against_delta`, so whether it buys or sells depends on whether the option is a call or a put. An accumulation is a Repeat join of the order, each purchase resting on the bid no worse than the body's limit and left there. A stop and reverse is a join only with its default `sequential` method, and needs the side of the order that opened the position, so it is shown with an expander for a long: it closes the position held when the price is reached, and once the close is done opens the other side for what closed.
+Some presets are not one order's slot values but a whole join. `is_join` says which: `accumulation`, `attached_hedge`, `legged_spread`, `two_sided_breakout`, `basket`, `oca`, `oto`, `oco`, `bracket`, `cover`, `scale_out` and `strategy_stop`, and `hidden_stop` once it has a backstop. `expand_join` builds the tree around the rest of the order the preset was named in, which becomes the join's main order: the entry of a bracket, a cover, a scale-out or an OTO, and the engine-side stop of a hidden stop with a backstop. An OCO protects a position already held, so it has no main order, and naming anything beside it is a problem. A basket and a one-cancels-all group make one order per candidate, each the rest of the order with the candidate's own instrument, side, quantity and price, so a basket named beside `post_only` is a basket of post-only orders. A two-sided breakout is a Then join whose first plan is an Either join of a buy stop and a sell stop, so the exits it arms are against whichever side broke; they are `from_fill` pricings, a stop `stop_distance` from that side's fill with its limit `stop_limit_offset` further on and a target `target_distance` from it, because one absolute price cannot suit a break either way. A hedge and a legged spread are Then joins whose child follows the entry's fills on another instrument, topped up with a new order as each fill arrives; a hedge sized by `delta_volatility` trades `against_delta`, so whether it buys or sells depends on whether the option is a call or a put. An accumulation is a Repeat join of the order, each purchase resting on the bid no worse than the body's limit and left there. A stop and reverse is a join only with its default `sequential` method, and needs the side of the order that opened the position, so it is shown with an expander for a long: it closes the position held when the price is reached, and once the close is done opens the other side for what closed.
 
 Nothing is read from Redis or sent anywhere.
 
@@ -141,7 +141,19 @@ class PresetsThatStandForJoinsExample:
             },
             {},
         )
-        self.show('two_sided_breakout', {'buy_trigger': 1010, 'buy_limit': 1012, 'sell_trigger': 990, 'sell_limit': 988, 'stop_price': 985, 'stop_limit_price': 983}, {})
+        self.show(
+            'two_sided_breakout',
+            {
+                'buy_trigger': 1010,
+                'buy_limit': 1012,
+                'sell_trigger': 990,
+                'sell_limit': 988,
+                'stop_distance': 10,
+                'stop_limit_offset': 2,
+                'target_distance': 20,
+            },
+            {},
+        )
 
 
 if __name__ == '__main__':

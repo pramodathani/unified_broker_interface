@@ -7,9 +7,13 @@ from unified_broker_interface.utilities.broker_orders.utilities.refused_request 
 )
 from unified_broker_interface.utilities.order_engine.twap import Twap
 from unified_broker_interface.utilities.order_engine.utilities import moments
+from unified_broker_interface.utilities.order_engine.utilities.session_open import (
+    EQUITY_OPENS_AT,
+)
+from unified_broker_interface.utilities.order_engine.utilities.session_open import (
+    SessionOpen,
+)
 
-SESSION_OPENS_AT = datetime.time(9, 15)
-SESSION_CLOSES_AT = datetime.time(15, 30)
 BUCKET_MINUTES = 30
 # Fractions of an ordinary NSE equity day's volume, per half hour from the open. The shape is the
 # well-known one: a burst at the open, a quiet middle, and a heavier close as the day's positions
@@ -39,7 +43,7 @@ class Vwap(Twap):
 
     The name is what it aims at: the volume weighted average price, which is the benchmark most execution is measured against, because it is roughly what the average participant paid. An order that trades in proportion to the market's own volume gets roughly that price by construction.
 
-    **The default profile is a shape, not a measurement.** It is the ordinary Indian equity day — heavy in the first half hour, quiet across lunch, heavy again into the close — and it is a good approximation for a liquid stock and a poor one for an instrument with its own rhythm, such as a commodity that moves when a foreign market opens. Somebody who has measured their instrument passes `volume_profile`, a list of relative weights for consecutive half hours from the open, and that is used instead.
+    **The default profile is a shape, not a measurement.** It is the ordinary Indian equity day — heavy in the first half hour, quiet across lunch, heavy again into the close — and it is a good approximation for a liquid stock and a poor one for an instrument with its own rhythm, such as a commodity that moves when a foreign market opens. So it is used only for equity; a currency or commodity order with no profile of its own gets even slices, as a time-weighted order does. Somebody who has measured their instrument passes `volume_profile`, a list of relative weights for consecutive half hours from the open, and that is used instead. The half hours count from the segment's own open, 09:15 for equity and 09:00 for currency and MCX, on the day the schedule started, so an evening commodity slice is not taken for a morning one.
 
     Slices still go out on an even clock. Only their sizes differ, which keeps the whole schedule visible in advance and keeps this a small change from the type it subclasses rather than a second scheduler.
     """
@@ -87,21 +91,26 @@ class Vwap(Twap):
             )
         return tuple(weights)
 
-    def bucket_of(self, moment):
+    def bucket_of(self, moment, opens_at=EQUITY_OPENS_AT, anchored_at=None):
         """Which half hour of the session a moment falls in.
 
         A moment before the open counts as the first bucket and one after the close as the last, so an order placed before the bell or running past it is weighted by the nearest part of the day rather than refused.
 
         Args:
             moment (float): The Unix time.
+            opens_at (datetime.time): When the session opens, 09:15 for equity unless told otherwise.
+            anchored_at (float | None): A Unix time on the day whose open is counted from, such as when the schedule started, or None for the moment's own day.
 
         Returns:
             int: The bucket, counting from zero at the open.
         """
         when = datetime.datetime.fromtimestamp(moment, moments.INDIA)
-        opens = when.replace(
-            hour=SESSION_OPENS_AT.hour,
-            minute=SESSION_OPENS_AT.minute,
+        anchor = when
+        if anchored_at is not None:
+            anchor = datetime.datetime.fromtimestamp(anchored_at, moments.INDIA)
+        opens = anchor.replace(
+            hour=opens_at.hour,
+            minute=opens_at.minute,
             second=0,
             microsecond=0,
         )
@@ -111,7 +120,7 @@ class Vwap(Twap):
         return int(minutes // BUCKET_MINUTES)
 
     def slice_weights(self, slices):
-        """The share of the order each slice takes, from where in the day it falls.
+        """The share of the order each slice takes, from where in the day it falls, or even shares for a currency or commodity order with no profile of its own.
 
         Args:
             slices (int): How many slices there are.
@@ -126,9 +135,13 @@ class Vwap(Twap):
             return [1.0] * slices
         if not isinstance(interval, (int, float)):
             return [1.0] * slices
+        session = SessionOpen(self.trading_segment())
+        if self.parent.parameters.get('volume_profile') is None and not session.is_equity():
+            return [1.0] * slices
+        opens_at = session.opens_at()
         weights = []
         for index in range(slices):
-            bucket = self.bucket_of(started_at + interval * index)
+            bucket = self.bucket_of(started_at + interval * index, opens_at, started_at)
             bucket = min(bucket, len(profile) - 1)
             weights.append(profile[bucket])
         return weights

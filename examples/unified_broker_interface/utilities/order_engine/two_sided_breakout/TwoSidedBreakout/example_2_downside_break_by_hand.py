@@ -1,20 +1,24 @@
-"""Calls a two-sided breakout's steps by hand for a downside break, and shows the ranges it refuses.
+"""Calls a two-sided breakout's steps by hand for a downside break, and shows the short's exits landing on the right side of its fill, and the settings it refuses.
 
-A `TwoSidedBreakout` is built from steps that this program calls directly on INFY around a range of 1,480 to 1,520, for 30 shares, with exits written for a short: a stop at 1,500 (limit 1,502) and a target at 1,450.
+A `TwoSidedBreakout` is built from steps that this program calls directly on INFY around a range of 1,480 to 1,520, for 30 shares. Its exits are given as distances from the fill: a stop 20 away with its limit 3 further on, and a target 50 away. Before distances, one absolute stop and target served both sides, so after a break downwards the short's buy target sat above the range and would have bought straight back; the distances fix that by measuring from the fill in whichever direction the position was opened.
 
 - `entry_orders` builds the two stop-limit entries, a buy above the range and a sell below;
 - `answer` turns the brokers' answers into the one answer the caller gets, listing each side;
-- `cancel_other_side` cancels the buy entry once the sell side has filled;
-- `arm_exits` places the stop and target on the side that actually filled, as buys, because the position is short;
+- `cancel_other_side` cancels the buy entry once the sell side has filled at an average of 1,478.60;
+- `arm_exits` places the stop and target on the side that actually filled, as buys, because the position is short: the buy stop triggers at 1,498.60, 20 above the fill, with its limit at 1,501.60, and the buy target rests at 1,428.60, 50 below it;
+- `read_exit_distances` returns the three distances the breakout read;
+- `exit_prices` works the absolute prices out for either side, so the same distances give a long opened at 1,521.30 a sell stop below its fill and a sell target above it, and a fill with no average price is measured from its trigger;
+- `on_tick` rounds a price to INFY's 0.05 tick, so 1,498.62 becomes 1,498.60;
 - `on_entry_update` with the sell side cancelled by the broker without a fill does nothing to the other side.
 
-Last, `entry_orders` refuses two ranges with HTTP 400: one missing its limits, and one whose sell trigger is not below its buy trigger. The placement is a stand-in that chooses Zerodha and accepts every order and cancel; the event log is the `RecordingEventLog` stand-in and the parent store keeps nothing, so nothing leaves the machine. Fills are recorded as the `leg_update` events the engine's order update follower writes.
+Last, `entry_orders` refuses four sets of settings with HTTP 400: exits given as absolute prices with `stop_price`, a stop with no `stop_limit_offset`, a range missing its limits, and a range whose sell trigger is not below its buy trigger. The placement is a stand-in that chooses Zerodha and accepts every order and cancel; the event log is the `RecordingEventLog` stand-in and the parent store keeps nothing, so nothing leaves the machine. Fills are recorded as the `leg_update` events the engine's order update follower writes.
 
 Run it from the project root:
 
     python examples/unified_broker_interface/utilities/order_engine/two_sided_breakout/TwoSidedBreakout/example_2_downside_break_by_hand.py
 """
 
+import decimal
 import logging
 import time
 
@@ -449,13 +453,14 @@ class DownsideBreakByHandExample:
             'buy_limit': 1522,
             'sell_trigger': 1480,
             'sell_limit': 1478,
-            'stop_price': 1500,
-            'stop_limit_price': 1502,
-            'target_price': 1450,
+            'stop_distance': 20,
+            'stop_limit_offset': 3,
+            'target_distance': 50,
         })
         order = runner.read_order(runner.parent.body)
         for role, entry in runner.entry_orders(order):
             print(f'entry_orders: {role} {entry.transaction_type} {entry.quantity} {entry.order_type} at {entry.price} trigger {entry.trigger_price}')
+        runner.remember_tick_size(order)
         runner.record_received()
         answers = []
         for role, entry in runner.entry_orders(order):
@@ -475,16 +480,33 @@ class DownsideBreakByHandExample:
             {
                 'leg_state': 'filled',
                 'filled_quantity': 30,
+                'average_price': 1478.6,
             },
         )
         runner.cancel_other_side(sell)
         runner.arm_exits(sell, 30)
-        print(f'After the sell side filled: parent {runner.parent.state}')
+        print(f'After the sell side filled at an average of {sell.average_price}: parent {runner.parent.state}')
         for leg in runner.exit_legs():
             print(f'  {leg.role:<6} {leg.transaction_type} {leg.quantity} {leg.order_type} at {leg.price} trigger {leg.trigger_price}')
         print('Sent to the broker, in order:')
         for message in self.placement.messages:
             print(f'  {message}')
+
+        stop_distance, stop_limit_offset, target_distance = runner.read_exit_distances()
+        print(f'read_exit_distances: stop {stop_distance}, limit offset {stop_limit_offset}, target {target_distance}')
+        print(f"exit_prices for the short opened at {sell.average_price}: {runner.exit_prices(sell, 'SELL')}")
+        self.record(
+            runner,
+            buy,
+            {
+                'average_price': 1521.3,
+            },
+        )
+        print(f"exit_prices for a long opened at {buy.average_price}: {runner.exit_prices(buy, 'BUY')}")
+        buy.average_price = None
+        print(f"exit_prices for a long with no average price, from its trigger {buy.trigger_price}: {runner.exit_prices(buy, 'BUY')}")
+        for price in ('1498.62', '1498.63', '1428.6'):
+            print(f'on_tick({price}): {runner.on_tick(decimal.Decimal(price))}')
 
         quiet, quiet_intent = self.runner({
             'type': 'two_sided_breakout',
@@ -492,8 +514,8 @@ class DownsideBreakByHandExample:
             'buy_limit': 1522,
             'sell_trigger': 1480,
             'sell_limit': 1478,
-            'stop_price': 1500,
-            'stop_limit_price': 1502,
+            'stop_distance': 20,
+            'stop_limit_offset': 3,
         })
         quiet.run(quiet_intent, time.perf_counter())
         sent_before = len(self.placement.messages)
@@ -507,11 +529,36 @@ class DownsideBreakByHandExample:
 
         mistakes = [
             (
+                'Absolute exits',
+                {
+                    'type': 'two_sided_breakout',
+                    'buy_trigger': 1520,
+                    'buy_limit': 1522,
+                    'sell_trigger': 1480,
+                    'sell_limit': 1478,
+                    'stop_price': 1500,
+                    'stop_limit_price': 1502,
+                    'target_price': 1450,
+                },
+            ),
+            (
+                'A stop without its limit offset',
+                {
+                    'type': 'two_sided_breakout',
+                    'buy_trigger': 1520,
+                    'buy_limit': 1522,
+                    'sell_trigger': 1480,
+                    'sell_limit': 1478,
+                    'stop_distance': 20,
+                },
+            ),
+            (
                 'Missing the limits',
                 {
                     'type': 'two_sided_breakout',
                     'buy_trigger': 1520,
                     'sell_trigger': 1480,
+                    'target_distance': 50,
                 },
             ),
             (
@@ -522,6 +569,7 @@ class DownsideBreakByHandExample:
                     'buy_limit': 1482,
                     'sell_trigger': 1520,
                     'sell_limit': 1518,
+                    'target_distance': 50,
                 },
             ),
         ]
@@ -531,7 +579,6 @@ class DownsideBreakByHandExample:
                 careless.entry_orders(careless.read_order(careless.parent.body))
             except RefusedRequestError as refusal:
                 print(f"{heading}: HTTP {refusal.status}, {refusal.body['error']}")
-
 
 if __name__ == '__main__':
     DownsideBreakByHandExample().run()

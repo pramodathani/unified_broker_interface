@@ -107,3 +107,7 @@ The expander does not check a kept-whole preset's settings: it hands `name` and 
 ## OTO's `then` (2026-10-02)
 
 Today's OTO copies every field of `then` into the second order's body, then sets the quantity from the fill and drops the tag. The preset used to accept only the side, order type and prices; it now also hands `instrument_id`, `product` and `validity` on as the child order's own values, so a plan's OTO places what today's would. `quantity` and `tag` are still refused, since the fills size the child and it carries no tag.
+
+## two_sided_breakout exits (2026-10-02)
+
+The preset now builds its exits with `from_fill` pricing through `_distance_exits`, and refuses the absolute exit fields as a `bad_setting` problem. `_exit_settings`, whose only caller was this preset, was removed.

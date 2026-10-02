@@ -1,15 +1,24 @@
 entry_orders: entry BUY 30 SL at 1522 trigger 1520
 entry_orders: entry SELL 30 SL at 1478 trigger 1480
 answer: HTTP 200, outcome accepted, sides [{'transaction_type': 'BUY', 'order_id': '260930000001', 'outcome': 'accepted'}, {'transaction_type': 'SELL', 'order_id': '260930000002', 'outcome': 'accepted'}]
-After the sell side filled: parent protecting
-  stop   BUY 30 SL at 1502.0 trigger 1500.0
-  target BUY 30 LIMIT at 1450.0 trigger None
+After the sell side filled at an average of 1478.6: parent protecting
+  stop   BUY 30 SL at 1501.6 trigger 1498.6
+  target BUY 30 LIMIT at 1428.6 trigger None
 Sent to the broker, in order:
   place BUY 30 SL at 1522 trigger 1520 -> 260930000001
   place SELL 30 SL at 1478 trigger 1480 -> 260930000002
   cancel 260930000001
-  place BUY 30 SL at 1502 trigger 1500 -> 260930000003
-  place BUY 30 LIMIT at 1450 -> 260930000004
+  place BUY 30 SL at 1501.60 trigger 1498.60 -> 260930000003
+  place BUY 30 LIMIT at 1428.60 -> 260930000004
+read_exit_distances: stop 20, limit offset 3, target 50
+exit_prices for the short opened at 1478.6: {'stop_price': '1498.60', 'stop_limit_price': '1501.60', 'target_price': '1428.60'}
+exit_prices for a long opened at 1521.3: {'stop_price': '1501.30', 'stop_limit_price': '1498.30', 'target_price': '1571.30'}
+exit_prices for a long with no average price, from its trigger 1520.0: {'stop_price': '1500.00', 'stop_limit_price': '1497.00', 'target_price': '1570.00'}
+on_tick(1498.62): 1498.60
+on_tick(1498.63): 1498.65
+on_tick(1428.6): 1428.60
 on_entry_update for a side cancelled unfilled: orders sent 0, parent working
+Absolute exits: HTTP 400, a two_sided_breakout takes its exits as distances from the fill, stop_distance with stop_limit_offset and target_distance, because one absolute price cannot suit a break either way; it was given stop_price, stop_limit_price, target_price
+A stop without its limit offset: HTTP 400, a stop needs stop_limit_offset as well as stop_distance: a stop-limit whose limit sits at its trigger will not fill when the price runs through it
 Missing the limits: HTTP 400, a two_sided_breakout needs buy_trigger, buy_limit, sell_trigger and sell_limit: both sides are stop-limit orders and each needs its own two prices
 A range upside down: HTTP 400, sell_trigger must be below buy_trigger; they are the two sides of a range and a range has a top and a bottom
