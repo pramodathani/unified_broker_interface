@@ -1,0 +1,7 @@
+Answer: HTTP 202, armed
+A dry run of 20 at 1,401.00: HTTP 200, 20 at 1401.00, the change is valid; nothing was changed
+A price between ticks: HTTP 400, price must be a whole number of ticks of 0.1
+20 at 1,401.00: HTTP 200, 20 at 1401.00, changed while held in the virtual order book; nothing was sent to a broker
+Held terms the virtual book follows: {'instrument_id': '11111111-1111-5111-8111-000000000001', 'transaction_type': 'BUY', 'price': '1401.00', 'quantity': 20}
+The offer reaches 1,401.00: placed True, sent [('zerodha', 'BUY', 20, '1401.00')]
+Another change once sent: HTTP 409, the order has already been sent to a broker, so change it with broker and order_id instead of parent_id

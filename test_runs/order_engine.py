@@ -3832,6 +3832,68 @@ class OrderEngineSuite:
                 },
             ),
             self.plan_price_result(
+                'a_plan_held_limit_changed_while_held_fires_at_its_new_price_and_quantity',
+                virtual_limit,
+                [
+                    {'quote': steady, 'at': 0},
+                    {
+                        'quote': steady,
+                        'at': 1,
+                        'held_change': {
+                            'price': '1000.05',
+                            'quantity': 20,
+                        },
+                    },
+                    {
+                        'quote': steady,
+                        'at': 2,
+                        'held_change': {
+                            'price': '999',
+                        },
+                    },
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_paper_order_cannot_be_cut_below_what_it_filled',
+                paper,
+                [
+                    {
+                        'quote': steady,
+                        'estimate': {
+                            'queue_filled': 4,
+                            'filled': 4,
+                        },
+                        'at': 0,
+                    },
+                    {
+                        'quote': steady,
+                        'at': 1,
+                        'held_change': {
+                            'quantity': 4,
+                        },
+                    },
+                    {
+                        'quote': steady,
+                        'at': 2,
+                        'held_change': {
+                            'price': '999.53',
+                        },
+                    },
+                    {
+                        'quote': steady,
+                        'at': 3,
+                        'held_change': {
+                            'quantity': 20,
+                        },
+                    },
+                ],
+                accepted,
+                body_overrides={
+                    'price': 999.50,
+                },
+            ),
+            self.plan_price_result(
                 'a_plan_paper_order_must_wait_on_limit_marketable',
                 {
                     'order': {

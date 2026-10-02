@@ -98,7 +98,7 @@ class OrderPart:
         self.venue = None
 
     def context(self, plan_order):
-        """The plan order as this order's pricing, execution and trigger see it: on this order's instrument, with its own body values.
+        """The plan order as this order's pricing, execution and trigger see it: on this order's instrument, with its own body values, and any price or quantity the caller changed while it was held.
 
         Args:
             plan_order (PlanOrder): The plan order.
@@ -113,6 +113,11 @@ class OrderPart:
                 instrument_id = value
             else:
                 body[name] = value
+        record = (plan_order.parent.parameters.get('parts') or {}).get(self.path) or {}
+        if record.get('held_price') is not None:
+            body['price'] = record['held_price']
+        if record.get('held_quantity') is not None:
+            body['quantity'] = record['held_quantity']
         return OrderContext(plan_order, instrument_id, body)
 
     def order_parts(self):

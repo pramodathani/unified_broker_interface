@@ -12,6 +12,6 @@ The condition compares the other side with the body's price, and the virtual boo
 
 The held side is the body's `transaction_type`, while `is_met` reads the sending side. They are the same for the `virtual_limit` preset. With `side: protect` they would differ and the queue estimate would be for the wrong side; nothing refuses that yet, since no preset does it.
 
-## Not built
+## Changing a held order (2026-10-02)
 
-Today's type lets a caller change a held order's price and quantity through `PUT /api/orders/modify` (`modify_held`). A plan order has no such route yet, so the held terms are fixed when the plan is placed.
+`PlanOrder.modify_held` changes the held terms in this condition's memory, beside the order's part record, so the virtual book sees new terms and starts its estimate again.
