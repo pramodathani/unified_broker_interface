@@ -103,3 +103,7 @@ The expander does not check a kept-whole preset's settings: it hands `name` and 
 ## Strategy stop (2026-10-02)
 
 `strategy_stop` is a join preset: a Then join of the `basket` the candidates make and a `strategy_stop_exits` child, cancelling the rest of the basket once a close fills. `candidates` and `hedge_benefit` go to the basket; the levels go to the exits, which check them.
+
+## OTO's `then` (2026-10-02)
+
+Today's OTO copies every field of `then` into the second order's body, then sets the quantity from the fill and drops the tag. The preset used to accept only the side, order type and prices; it now also hands `instrument_id`, `product` and `validity` on as the child order's own values, so a plan's OTO places what today's would. `quantity` and `tag` are still refused, since the fills size the child and it carries no tag.

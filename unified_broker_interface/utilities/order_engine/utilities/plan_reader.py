@@ -2022,7 +2022,7 @@ class PlanReader:
         return guard
 
     def _read_execution_list(self, execution, path):
-        """Reads an order's execution, which in this stage is exactly one value.
+        """Reads an order's execution, which is exactly one value, since nesting one execution inside another is not built.
 
         Args:
             execution (object): The list as the caller wrote it.

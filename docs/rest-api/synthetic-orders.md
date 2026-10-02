@@ -1171,7 +1171,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
 === "Plans"
 
-    A plan describes an order as a tree of parts rather than naming one of the fixed types. It is the start of the composable synthetic orders, which will let any number of the other types be combined in one order. A plan's orders can wait for a trigger, protect a position and be priced by one pricing rule, built from presets or written out as slot values, and they can be joined with `then` and `either`. The other joins in the design, `together`, `using`, `repeat` and `sequence`, come in later stages, and naming one is refused as not built yet.
+    A plan describes an order as a tree of parts rather than naming one of the fixed types. It is the composable synthetic orders: any number of the other types combined in one order. A plan's orders wait for a trigger, take a side and a quantity, are priced and sent by one pricing and one execution, and can carry guards, a lifetime and a venue, all built from presets or written out as slot values; they are joined with `then`, `either`, `together`, `sequence` and `repeat`. Every one of the fixed types has a preset. The `using` join, which hands each order to a whole plan, and nesting one execution inside another are part of the design and not built, and naming either is refused.
 
     #### `plan`
 
@@ -1305,7 +1305,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | `square_off` | A `time_at` trigger at `at_time`, the `close` side and every position on `product` (default `intraday`), or on `instrument_ids`. Takes `at_time`, `product` and `instrument_ids`. |
     | `stop_and_reverse` | With `method: double`, a close of twice the position. With `sequential`, the default, a Then join: the close on the trigger, then once it is done an order the other way for what it closed, priced two ticks past the touch. Takes the trigger's settings and `method`. |
     | `oca` | An Either join that cancels: one order per candidate, as for `basket`, and the first to fill cancels the rest. Takes `candidates`, at least two. |
-    | `oto` | A Then join: the order, then the `then` order sized to each fill. `then` takes `transaction_type`, `order_type` (`LIMIT`, `MARKET` or `SL`), `price` and `trigger_price` so far. |
+    | `oto` | A Then join: the order, then the `then` order sized to each fill. `then` takes `transaction_type`, `order_type` (`LIMIT`, `MARKET` or `SL`), `price`, `trigger_price`, `instrument_id`, `product` and `validity`, as today's type does; its quantity follows the fills and it carries no tag. |
     | `market_if_touched` | A `price_crosses` trigger at `trigger_price` and `marketable` pricing. Takes `trigger_price`, `trigger_direction`, `trigger_on`, `hold_seconds` and `buffer_ticks`. |
     | `limit_if_touched` | A `price_crosses` trigger and `fixed` pricing at `limit_price`. |
     | `scheduled` | A `time_at` trigger at `at_time`. |
