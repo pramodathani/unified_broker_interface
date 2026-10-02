@@ -161,13 +161,13 @@ The engine writes each transition to the database and commits it before acting o
 
 An order the engine placed is a leg of one of its parents, and the parent's order type may be about to move it, reduce it or cancel it in reaction to a fill or a tick. So the order routes never change one behind the engine's back. `PUT /api/orders/modify` and `DELETE /api/orders/cancel` look each order up in `unified:orders:children`, in the Redis read they already make, and hand an order the engine owns to the worker that owns its parent as a command intent: `cancel_leg` or `modify_leg`. The worker runs it through the order type, which records it and carries on from it; see [Modify an order](orders.md#an-order-the-engine-placed).
 
-`DELETE /api/orders/parents` sends `cancel_parent`, which cancels every leg still resting and ends the parent as `cancelled`. `POST /api/orders/flatten` sends `halt` before it cancels anything: the main thread hands every open parent's owner a halt, which ends the parent as `cancelled` without touching its legs, and answers at once with how many there were. Each worker runs its halts before any fill or tick handed to it afterwards.
+`DELETE /api/orders/parents`, and `DELETE /api/orders/cancel` with `parent_id`, send `cancel_parent`, which cancels every leg still resting and ends the parent as `cancelled`; with `part` it cancels only that part of a plan, and with `dry_run` it says what would be cancelled. `POST /api/orders/flatten` sends `halt` before it cancels anything: the main thread hands every open parent's owner a halt, which ends the parent as `cancelled` without touching its legs, and answers at once with how many there were. Each worker runs its halts before any fill or tick handed to it afterwards.
 
 | Command | Sent by | What the worker does |
 |---|---|---|
 | `cancel_leg` | `DELETE /api/orders/cancel` | Cancels the leg through `cancel_leg`, recording `leg_cancel_requested` and `leg_cancelled` |
 | `modify_leg` | `PUT /api/orders/modify` | Sends the change through `apply_outside_modification`, records it as a `leg_update`, and calls the type's `on_leg_modified` |
-| `cancel_parent` | `DELETE /api/orders/parents` | Cancels every resting leg and ends the parent as `cancelled` |
+| `cancel_parent` | `DELETE /api/orders/parents`, or `DELETE /api/orders/cancel` with `parent_id` | Cancels every resting leg and ends the parent as `cancelled`, or with `part` stops one part of a plan through `PlanOrder.cancel_part` |
 | `modify_held` | `PUT /api/orders/modify` with `parent_id` | Changes the price or quantity of an order the engine is still holding, such as a `virtual_limit` order, or, with `part`, the price, trigger price or quantity of a plan part that has not been sent, without sending anything to a broker |
 | `halt` | `POST /api/orders/flatten` | Ends every open parent as `cancelled`, leaving its legs to flatten |
 

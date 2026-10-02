@@ -499,6 +499,26 @@ class SyntheticOrder:
             parent_id=self.parent.parent_order_id,
         )
 
+    def cancel_part(self, path, dry_run):
+        """Cancels one part of a plan, which only a plan has.
+
+        Args:
+            path (str): The part's path.
+            dry_run (bool): Whether to check the cancel without making it.
+
+        Returns:
+            tuple: Never returns in this class.
+
+        Raises:
+            RefusedRequestError: With HTTP 409, always, because only a plan order has parts.
+        """
+        del dry_run
+        raise RefusedRequestError.refusal(
+            f'a {self.parent.synthetic_type} order has no parts, so part {path} cannot be cancelled; only a plan order has parts',
+            409,
+            parent_id=self.parent.parent_order_id,
+        )
+
     def apply_outside_modification(
         self,
         leg,

@@ -1,0 +1,25 @@
+The whole parent:
+  Parent: P-00000000000040008000000000000001
+  Part: None
+  Dry run: False
+  cancel_parent arguments: {'parent_id': 'P-00000000000040008000000000000001'}
+The stop of the plan:
+  Parent: P-00000000000040008000000000000001
+  Part: root.each_fill.children.0
+  Dry run: False
+  cancel_parent arguments: {'parent_id': 'P-00000000000040008000000000000001', 'part': 'root.each_fill.children.0'}
+The stop, as a dry run named in the body:
+  Parent: P-00000000000040008000000000000001
+  Part: root.each_fill.children.0
+  Dry run: True
+  cancel_parent arguments: {'parent_id': 'P-00000000000040008000000000000001', 'part': 'root.each_fill.children.0', 'dry_run': True}
+The whole parent, as a dry run named in the query string:
+  Parent: P-00000000000040008000000000000001
+  Part: None
+  Dry run: True
+  cancel_parent arguments: {'parent_id': 'P-00000000000040008000000000000001', 'dry_run': True}
+The body says false and the query string says true, so the body wins:
+  Parent: P-00000000000040008000000000000001
+  Part: None
+  Dry run: False
+  cancel_parent arguments: {'parent_id': 'P-00000000000040008000000000000001'}

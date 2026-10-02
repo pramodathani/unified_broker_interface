@@ -1,0 +1,10 @@
+cancel of a parent the engine does not hold: 404 {"error": "the order engine holds no parent with this id", "intent_id": "00000000000040008000000000000002", "parent_id": "P-9"}
+cancel_named_parent, one part as a dry run: 404 {"error": "the order engine holds no parent with this id", "intent_id": "00000000000040008000000000000004", "parent_id": "P-9"}
+cancel_named_parent with order_id beside parent_id: 400 {"error": "name the order either by parent_id or by order_id, not both; order_id cannot be given with parent_id"}
+cancel of a mixed list, as a dry run: 200
+  request 0: 200 zerodha 250915000000011 dry_run True
+  request 1: 404 the order engine holds no parent with this id
+  request 2: 200 flattrade 26091500000021 dry_run True
+  request 3: 404 the order engine holds no parent with this id
+  request 4: 400 name the order either by parent_id or by order_id, not both; broker cannot be given with parent_id
+Requests sent to a broker: 0

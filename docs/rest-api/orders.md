@@ -915,23 +915,71 @@ A body with an `orders` list changes each order in it. Each item carries what th
 
 <div class="endpoint" markdown><span class="method delete">DELETE</span> `/api/orders/cancel`<span class="auth">access-token</span></div>
 
-This route cancels one open order at the broker that holds it. It reads Redis once, finds the broker by the order id, and sends one cancel request. An order can be cancelled only after the broker's order poller or order websocket has recorded it in Redis.
+This route cancels one open order at the broker that holds it. It reads Redis once, finds the broker by the order id, and sends one cancel request. An order can be cancelled only after the broker's order poller or order websocket has recorded it in Redis. An order the [order engine](order-engine.md) manages can instead be named by its `parent_id`, which cancels the whole parent or, with `part`, one part of a plan, as [`modify`](#modify-an-order) names a held order or a plan part.
 
 !!! danger "A cancel cannot be taken back"
     `outcome: accepted` means the broker took the cancel request. The order may still fill in the moment before the exchange acts on it, so read the [order book](#order-book) to see the final status.
 
-When the order is a leg of one of the [order engine's](order-engine.md) parents, the cancel is handed to the worker that owns the parent, which records it and lets the order type react to a cancel it knows about. The answer then carries `parent_id` and `synthetic_type`. Cancelling one leg does not cancel the parent; [cancel the parent](#cancel-a-parent) to stop it placing anything more. The engine also reads the order from the broker's order book, so an order it has only just placed can be cancelled once the broker's poller or websocket has recorded it, as for any other order.
+### An order the engine placed
+
+When the order is a leg of one of the [order engine's](order-engine.md) parents, the cancel is handed to the worker that owns the parent, which records it and lets the order type react to a cancel it knows about. The answer then carries `parent_id` and `synthetic_type`. Cancelling one leg does not cancel the parent; [cancel the parent](#a-whole-parent) to stop it placing anything more. The engine also reads the order from the broker's order book, so an order it has only just placed can be cancelled once the broker's poller or websocket has recorded it, as for any other order.
+
+A [`plan`](synthetic-orders.md) does not send again what you cancelled, and it reacts as the older order types do. A TWAP's cancelled slice is skipped and the later slices go out on time, an iceberg whose slice you cancel shows no more, a bracket whose entry you cancel drops its exits, and a cancelled bracket stop leaves the target resting. To stop a part sending its later pieces as well, cancel [the part](#a-part-of-a-plan).
+
+### A whole parent
+
+A body with `parent_id` and no `part` cancels the whole parent, exactly as [`DELETE /api/orders/parents`](#cancel-a-parent) does: every leg still resting at a broker is cancelled, and the parent ends as `cancelled`, so it places, moves and cancels nothing more. This is the only way to cancel a parent that has placed nothing yet, such as an armed trigger or a [held limit order](#limit-orders-are-held-until-they-can-fill). With `dry_run` the answer lists the legs a cancel would be sent for under `resting_legs`, and nothing is cancelled.
+
+```json
+{"parent_id": "00000000-0000-4000-8000-000000000002"}
+```
+
+The answer is the one [`DELETE /api/orders/parents`](#cancel-a-parent) gives, with its <span class="status s2">207</span> when a leg's cancel was refused.
+
+### A part of a plan
+
+A [`plan`](synthetic-orders.md) is a tree of parts, and you name one by the plan's `parent_id` and the part's path in `part`, as [`GET /api/orders/parents`](#the-engines-parents) shows it under `parameters.parts`, such as `root.each_fill.children.0` for a bracket's stop. Cancelling a part stops it sending anything more, whether or not its turn has come.
+
+- **A part whose turn has not come**, such as a bracket's stop before the entry fills, is not sent when its turn comes, and is marked done as `cancelled` then. Nothing is sent to a broker. The rest of the plan carries on: when the entry fills, the bracket's target is still sent.
+- **A part waiting on its trigger** is marked done as `cancelled` at once.
+- **A part that has sent orders** sends no further piece, such as a TWAP's later slices or a peg's next move, and each of its orders still resting is cancelled. It is marked done once the brokers confirm. Each order in the answer's `orders` says whether its broker accepted the cancel in `cancel_accepted`.
+
+The plan then reacts as it does to that part finishing: a bracket whose entry you cancel before it fills drops its exits. `dry_run` lists the part's resting `orders` and changes nothing. The answer below is a real recording from the offline suite.
+
+```json
+{
+  "parent_id": "00000000-0000-4000-8000-000000000002",
+  "synthetic_type": "plan",
+  "part": "root.each_fill.children.0",
+  "state": "pending",
+  "orders": [],
+  "outcome": "accepted",
+  "status_message": "it will not be sent when its turn comes; nothing was sent to a broker",
+  "intent_id": "00000000000040008000000000000006"
+}
+```
+
+| Status | When |
+|---|---|
+| <span class="status s2">200</span> | The part is cancelled and every resting order's cancel was accepted, or none was resting, or this was a dry run. |
+| <span class="status s2">207</span> | A broker did not accept the cancel of one of the part's orders, which may still be resting. `outcome` is `partial`, or `rejected` when no cancel was accepted. The part still sends nothing more, and asking again retries the cancels. |
+| <span class="status s4">400</span> | `part must name a part of the plan, such as root.first`, or `name the order either by parent_id or by order_id, not both; <field> cannot be given with parent_id`. |
+| <span class="status s4">404</span> | `the order engine holds no parent with this id`, or `the plan has no order at part <path>`. |
+| <span class="status s4">409</span> | `part <path> is already done: <reason>`; `part <path> is already cancelled, and will not be sent when its turn comes`; a part kept whole, such as a `scale_out`, that has not started, which keeps its orders by its own rules (cancel it once it has started, or cancel the whole parent); a plan that has finished; or `a <type> order has no parts, ...` for any other type. |
+| <span class="status s5">503</span> | The order engine is not running. |
 
 ### Request parameters
 
-All three parameters may come from the JSON body or the query string, and the body wins when both are given.
+`order_id`, `broker` and `dry_run` may come from the JSON body or the query string, and the body wins when both are given. `parent_id` and `part` come from the body only.
 
 | Name | In | Type | Required | Description |
 |---|---|---|:---:|---|
 | `access-token` | header | string | yes | The day's token. |
-| `order_id` | body or query | string | yes | The broker's order id: 1 to 64 letters, digits, hyphens or underscores. A JSON integer is accepted; a boolean is not. |
-| `broker` | body or query | string | no | One of the ten broker names, needed only when two brokers hold the same id. |
-| `dry_run` | body or query | boolean | no | Returns the request without sending it. |
+| `order_id` | body or query | string | one of `order_id` and `parent_id` | The broker's order id: 1 to 64 letters, digits, hyphens or underscores. A JSON integer is accepted; a boolean is not. |
+| `broker` | body or query | string | no | One of the ten broker names, needed only when two brokers hold the same id. Not taken with `parent_id`. |
+| `parent_id` | body | string | one of `order_id` and `parent_id` | The parent the place route answered with, to cancel [the whole parent](#a-whole-parent). |
+| `part` | body | string | no | With `parent_id`, the path of [one part of a plan](#a-part-of-a-plan) to cancel. |
+| `dry_run` | body or query | boolean | no | Returns the request without sending it, or, with `parent_id`, says what would be cancelled. |
 
 === "curl"
 
@@ -1063,7 +1111,7 @@ sequenceDiagram
 
 <div class="endpoint" markdown><span class="method delete">DELETE</span> `/api/orders/cancel`<span class="auth">access-token</span></div>
 
-A body with an `orders` list cancels each order in it. Each item carries `order_id` and an optional `broker`, and each order is checked exactly as a single cancel is. [Several orders in one request](#several-orders-in-one-request) describes the list, its answer and its statuses.
+A body with an `orders` list cancels each order in it. Each item carries what the single body carries, `order_id` and an optional `broker`, or `parent_id` for [a whole parent](#a-whole-parent) and also `part` for [a part of a plan](#a-part-of-a-plan), and each order is checked exactly as a single cancel is. Broker orders and parents can be mixed in one list, and the results come back in the list's own order. [Several orders in one request](#several-orders-in-one-request) describes the list, its answer and its statuses.
 
 === "curl"
 
@@ -1111,8 +1159,8 @@ A body with an `orders` list cancels each order in it. Each item carries `order_
 ??? note "Under the hood"
     - **Redis keys read:** `last_login`, `settings`, `<broker>:orders:orders` for every broker, and `unified:orders:children`, which says whether the order engine owns the order.
     - **Why the stored order matters:** several brokers' cancel requests need values only their own order book carries, such as Zerodha's variety (the `amo` in the URL above comes from the stored order), Kotak's after-market flag or Wisdom Capital's identifier.
-    - **Class:** [`CancelOrderRequest`][unified_broker_interface.utilities.broker_orders.utilities.cancel_order_request.CancelOrderRequest].
-    - **A list:** `cancel_order_list` reads every order's entries in the same single pipeline, however many orders it has, and prepares each with `prepare_cancel` into a [`PreparedCancel`][unified_broker_interface.utilities.broker_orders.utilities.prepared_cancel.PreparedCancel].
+    - **Classes:** [`CancelOrderRequest`][unified_broker_interface.utilities.broker_orders.utilities.cancel_order_request.CancelOrderRequest] validates a cancel named by `order_id`, and [`ParentCancel`][unified_broker_interface.utilities.broker_orders.utilities.parent_cancel.ParentCancel] one named by `parent_id`, which is handed to the engine as a `cancel_parent` command and runs [`PlanOrder.cancel_part`][unified_broker_interface.utilities.order_engine.plan.PlanOrder.cancel_part] for a part.
+    - **A list:** `cancel_order_list` reads every broker order's entries in the same single pipeline, however many orders it has, and prepares each with `prepare_cancel` into a [`PreparedCancel`][unified_broker_interface.utilities.broker_orders.utilities.prepared_cancel.PreparedCancel]. The `parent_id` items are handed to the engine together, as the modify list hands its held orders.
 
 ## The engine's parents
 
@@ -1131,7 +1179,7 @@ The answer is the parent as the engine holds it in `unified:orders:parents`: `pa
 
 <div class="endpoint" markdown><span class="method delete">DELETE</span> `/api/orders/parents`<span class="auth">access-token</span></div>
 
-This route cancels one parent, named by `parent_id` in the body, or each of a list given as `parents`, an array of objects each holding `parent_id`. The worker that owns the parent cancels every leg still resting at a broker and ends the parent as `cancelled`, so it places, moves and cancels nothing more.
+This route cancels one parent, named by `parent_id` in the body, or each of a list given as `parents`, an array of objects each holding `parent_id`. The worker that owns the parent cancels every leg still resting at a broker and ends the parent as `cancelled`, so it places, moves and cancels nothing more. [`DELETE /api/orders/cancel`](#a-whole-parent) with `parent_id` does the same, and also takes `part`, `dry_run` and a list mixing parents with broker orders; this route is kept for the programs that already call it.
 
 An order placed a moment earlier may not have reached its broker's order book in Redis yet, and a cancel is built from that book, so the engine waits up to 3 seconds for it to appear before giving up. When it still has not appeared, that leg's cancel is `rejected` with the reason, because nothing was sent. When a broker refuses a leg's cancel, or its outcome is unknown, the answer is <span class="status s2">207</span> and the parent's `state` is `cancelling`, not `cancelled`, because that leg may still be live. Each entry of `cancelled_legs` gives its own `outcome` and `status_message`, so you can see which leg is still resting. The parent no longer acts, becomes `cancelled` on its own once the broker reports the leg finished, and sending the same cancel again retries the legs still resting. In the live test of 2026-09-27, INDmoney refused one cancel for its rate limit, and before this rule the parent was reported cancelled while the order stayed pending at the broker.
 
@@ -1172,8 +1220,8 @@ An order placed a moment earlier may not have reached its broker's order book in
 | Name | In | Type | Required | Description |
 |---|---|---|---|---|
 | `access-token` | header | string | Yes | The token from [`connect`](session.md#connect) |
-| `orders` | body | array of objects | Yes | One item per order. For `place`, an item is one order exactly as the single body gives it, including a `synthetic` object for any order type, and a list holds at most `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACE_LIST_MAXIMUM` items, 500 by default. For `modify` and `cancel`, an item carries `order_id`, an optional `broker` and, for `modify`, the fields to change, with no limit on the number. A `modify` item may instead carry `parent_id` with `price` and `quantity`, for a held order. |
-| `dry_run` | body, or query for `modify` and `cancel` | boolean | No | `true` shows every order's broker request instead of sending it. It applies to the whole list. |
+| `orders` | body | array of objects | Yes | One item per order. For `place`, an item is one order exactly as the single body gives it, including a `synthetic` object for any order type, and a list holds at most `UNIFIED_BROKER_INTERFACE_API_ORDER_PLACE_LIST_MAXIMUM` items, 500 by default. For `modify` and `cancel`, an item carries `order_id`, an optional `broker` and, for `modify`, the fields to change, with no limit on the number. An item may instead carry `parent_id`: for `modify` with `price` and `quantity`, for a held order, and with `part` for a plan part; for `cancel` alone for a whole parent, or with `part` for a plan part. |
+| `dry_run` | body, or query for `modify` and `cancel` | boolean | No | `true` shows every order's broker request instead of sending it. It applies to the whole list, including the items named by `parent_id`, which are checked and not changed. |
 
 The list takes no other key, in the body or the query string, so a field such as `price` or `broker` has to go inside each order. That rule is there so that nobody can put `price` beside the list expecting it to apply to every order, and it is why `dry_run` is refused inside an order: one order must never go live while its neighbours are only shown.
 

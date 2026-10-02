@@ -1,0 +1,12 @@
+Dry run of the list: True
+request 0: CancelOrderRequest 250915000000011 at zerodha
+  names_broker_order: True
+request 1: ParentCancel P-00000000000040008000000000000001 part None, dry_run True, cancel_parent arguments {'parent_id': 'P-00000000000040008000000000000001', 'dry_run': True}
+  names_broker_order: False
+request 2: ParentCancel P-00000000000040008000000000000002 part root.each_fill.children.1, dry_run True, cancel_parent arguments {'parent_id': 'P-00000000000040008000000000000002', 'part': 'root.each_fill.children.1', 'dry_run': True}
+  names_broker_order: False
+request 3: CancelOrderRequest 112509150000012 at None
+  names_broker_order: True
+request 4: RefusedRequestError 400: dry_run applies to the whole list, so give it beside orders rather than inside an order
+request 5: RefusedRequestError 400: name the order either by parent_id or by order_id, not both; broker cannot be given with parent_id
+Order ids to look up: ['250915000000011', '112509150000012']

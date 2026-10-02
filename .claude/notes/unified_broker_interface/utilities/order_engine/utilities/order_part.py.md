@@ -97,3 +97,7 @@ Every update settles the whole plan, and an Either join that cancels its sibling
 `keeps_caller_quantity` is True only for `AllAtOnceExecution`. A split execution counts what it has sent from its own broker orders, so a cut slice is made up by later slices with no bookkeeping, which matches today's iceberg, TWAP and participation types; recording a delta there as well would have counted the cut twice.
 
 `with_caller_prices` runs before the cap and the post-only guard, so the plan's own guards still check a price the caller set. A trigger is only replaced when the priced body already has one, so a `native_stop` with `exit_if_gapped` that was sent as a marketable limit stays a limit; the gap check itself still uses the pricing's own trigger, which is a known gap.
+
+## `cancel_for_caller` (added 2026-10-02)
+
+It reuses `ended`, which a lifetime sets, instead of a new flag, so every place that already stops an ended part stops a cancelled one too. See `plan.py.md` for why a part whose turn has not come stays `pending` rather than being marked done, and why `start` checks `ended` first.

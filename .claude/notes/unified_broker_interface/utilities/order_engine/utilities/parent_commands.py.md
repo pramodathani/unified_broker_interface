@@ -21,3 +21,7 @@ After an accepted cancel, the leg is still recorded as it was until the broker's
 ## Why a halt answers before it has run
 
 Flatten must not wait for every worker to reach its halt, because a worker may be in the middle of a slow broker call. The main thread hands each open parent's owner a halt and answers at once. Each worker runs work in arrival order, so a fill or a tick that reaches it after the halt finds the parent already cancelled, which is the guarantee flatten needs.
+
+## `part` and `dry_run` on `cancel_parent` (added 2026-10-02)
+
+`cancel_parent` with `part` hands the cancel to `runner.cancel_part`, which only a plan implements; every other type refuses with 409, as `modify_part` does. A whole-parent dry run is answered by `cancel_parent_dry_run`, which lists the legs a cancel would be sent for under `resting_legs` and changes nothing. The reason recorded for a whole-parent cancel became `cancelled by the caller`, because the command is now sent by two routes and the old text named only `DELETE /api/orders/parents`.

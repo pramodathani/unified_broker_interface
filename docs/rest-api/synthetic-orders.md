@@ -30,6 +30,16 @@ Only the price, trigger price and quantity of a synthetic order's leg can be cha
 
 A plan's orders can also be changed before anything has been sent for them, such as a bracket's stop while its entry is still resting, through [`PUT /api/orders/modify` with `parent_id` and `part`](orders.md#a-part-of-a-plan-that-has-not-been-sent).
 
+## Cancelling a synthetic order
+
+[`DELETE /api/orders/cancel`](orders.md#cancel-an-order) names what to cancel in the same three ways that `modify` names what to change.
+
+| You name | What is cancelled |
+|---|---|
+| `order_id`, one of its broker orders | [That order only](orders.md#an-order-the-engine-placed). The order type reacts as it does to any cancelled leg, and a `plan` does not send it again: a TWAP's slice is skipped, an iceberg shows no more, a bracket whose entry you cancel drops its exits. |
+| `parent_id` | [The whole parent](orders.md#a-whole-parent), with every leg still resting, including a parent that has placed nothing yet. |
+| `parent_id` and `part` | [One part of a plan](orders.md#a-part-of-a-plan), whether or not its turn has come. It sends nothing more, its resting orders are cancelled, and the rest of the plan carries on: a bracket whose stop you cancel before the entry fills still sends its target. |
+
 ## How to ask for one
 
 The request body is an ordinary order body, and the `synthetic` object sits beside the other fields. The engine reads the type from `synthetic.type`, and the rest of the object holds that type's own settings. The example below asks for a bracket: a limit buy of 10 that, once it fills, is protected by a stop and a target.

@@ -1,0 +1,8 @@
+['not', 'an object'] -> HTTP 400: the request body must be a JSON object
+{'part': 'root.first'} -> HTTP 400: parent_id must name a parent
+{'parent_id': ''} -> HTTP 400: parent_id must name a parent
+{'parent_id': 'P-1', 'part': ''} -> HTTP 400: part must name a part of the plan, such as root.first
+{'parent_id': 'P-1', 'order_id': '250915000000011'} -> HTTP 400: name the order either by parent_id or by order_id, not both; order_id cannot be given with parent_id
+{'parent_id': 'P-1', 'broker': 'zerodha'} -> HTTP 400: name the order either by parent_id or by order_id, not both; broker cannot be given with parent_id
+{'parent_id': 'P-1', 'dry_run': 'perhaps'} -> HTTP 400: dry_run must be true or false
+{'parent_id': 'P-1', 'part': 'root.first'} -> {'parent_id': 'P-1', 'part': 'root.first'}

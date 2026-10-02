@@ -307,4 +307,12 @@ Flatten used to close positions one after another, each close handed to the engi
 
 ## How the modify route takes held orders
 
-A single body with `parent_id` goes to `modify_held_order`, which checks the token with `self.tokens.check` (there is no order state to read it with) and hands a `modify_held` command to the engine. A list is split: entries with `parent_id` become commands, the rest go through `broker_order_results`, the former body of `modify_order_list`, and the answers are put back in the list's order.
+A single body with `parent_id` goes to `modify_held_order`, which checks the token with `self.tokens.check` (there is no order state to read it with) and hands a `modify_held` command to the engine. A list is validated whole by `OrderChangeList`, which builds a `HeldOrderChange` for each `parent_id` item; those become commands, the rest are read, prepared and sent as before, and the answers are put back in the list's order (see the next section for why this changed on 2026-10-02).
+
+## How the cancel route takes parents and plan parts (2026-10-02)
+
+The user asked for `DELETE /api/orders/cancel` to work like `PUT /api/orders/modify` after the plan work, and chose on 2026-10-02 to keep `DELETE /api/orders/parents` working unchanged and to let `parent_id` + `part` cancel a part even after it has sent orders. A single body with `parent_id` goes to `cancel_named_parent`, which mirrors `modify_held_order`: the token is checked with `self.tokens.check`, the body is validated by `ParentCancel`, and a `cancel_parent` command goes to the engine. The engine command already existed for the parents route, so it was extended with `part` and `dry_run` rather than a new command added, as `modify_held` was extended with `part` in PR #47.
+
+`cancel_order_list` and `modify_order_list` now have the same shape: one `OrderChangeList` validates the whole list, `parent_id` items go to the engine in one `command_many`, and broker items are read in one pipeline, prepared and sent. Before, `modify_order_list` split the raw body by the `parent_id` key, built a second body for the broker items and called `broker_order_results`; that is why the `parent_id` items never saw the list's `dry_run` (see `order_change_list.py.md`). `broker_order_results` was folded back into `modify_order_list`, and no `broker_cancel_results` was kept. Every recording in `order_routes`, `order_change_lists`, `order_engine_changes` and `order_engine_routes` matched unchanged after the rewrite, which also pins the round trips of broker-only lists.
+
+A refused `parent_id` item is kept with the broker items, so the list still reads the order state and checks the token once, as a list of only refused items did before.

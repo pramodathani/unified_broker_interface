@@ -238,7 +238,7 @@ class ModifyingAListExample:
 
 
     def through_the_route(self):
-        """Sends a list through the route and through `modify_order_list`, a repeated order through `broker_order_results`, and a held order's change.
+        """Sends a list through the route and through `modify_order_list`, a repeated order as a dry run, and a held order's change.
 
         Returns:
             None: This method returns nothing.
@@ -291,8 +291,8 @@ class ModifyingAListExample:
             'dry_run': True,
         }
         with self.request('PUT', 'modify', body=repeated_list):
-            results = self.blueprint.broker_order_results(API_TOKEN, repeated_list, time.perf_counter())
-        self.show_results('broker_order_results, one order named twice, as a dry run:', results)
+            response, status = self.blueprint.modify_order_list(API_TOKEN, repeated_list, time.perf_counter())
+        self.show_results(f'modify_order_list, one order named twice, as a dry run: {status}', response.get_json()['results'])
 
         held_change = {
             'parent_id': 'P-9',

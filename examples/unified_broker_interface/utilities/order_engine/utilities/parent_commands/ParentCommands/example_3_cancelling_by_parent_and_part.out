@@ -1,0 +1,13 @@
+Placed: HTTP 200, accepted, entry root.first order id 260930000001
+A dry run of cancelling the whole parent: HTTP 200, {'parent_id': 'parent-1', 'synthetic_type': 'plan', 'state': 'working', 'resting_legs': [{'leg_id': 'parent-1:1', 'broker': 'zerodha', 'order_id': '260930000001'}], 'dry_run': True, 'status_message': 'the cancel is valid; nothing was cancelled'}
+cancel_parent_dry_run called directly: HTTP 200, resting legs [{'leg_id': 'parent-1:1', 'broker': 'zerodha', 'order_id': '260930000001'}]
+A dry run of cancelling the stop part: HTTP 200, {'parent_id': 'parent-1', 'synthetic_type': 'plan', 'part': 'root.each_fill.children.0', 'state': 'pending', 'orders': [], 'dry_run': True, 'status_message': 'the cancel is valid; nothing was cancelled'}
+The stop part cancelled: HTTP 200, {'parent_id': 'parent-1', 'synthetic_type': 'plan', 'part': 'root.each_fill.children.0', 'state': 'pending', 'orders': [], 'outcome': 'accepted', 'status_message': 'it will not be sent when its turn comes; nothing was sent to a broker'}
+  The stored stop part's record: {'state': 'pending', 'target': 10, 'ended': True}
+A part the plan does not have: HTTP 404, the plan has no order at part root.nowhere
+The whole parent cancelled: HTTP 200, state cancelled, 1 leg cancelled
+The stop part cancelled once the parent is cancelled: HTTP 409, the order is already cancelled
+Sent to the broker, in order:
+  place BUY 10 LIMIT at 1000.00 -> 260930000001
+  cancel zerodha 260930000001
+Stored parent: cancelled

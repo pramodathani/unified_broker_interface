@@ -15,7 +15,7 @@ modify_order_list, the same list again: 200
   request 1: 200 dhan 112509150000012 accepted
   request 2: 404 no broker order book in Redis holds this order_id
   request 3: 404 the order engine holds no parent with this id
-broker_order_results, one order named twice, as a dry run:
+modify_order_list, one order named twice, as a dry run: 200
   request 0: 200 zerodha 250915000000011 None
   request 1: 400 this order is already named at request_index 0
 modify_held_order, a parent the engine does not hold: 404 {"error": "the order engine holds no parent with this id", "intent_id": "00000000000040008000000000000006", "parent_id": "P-9"}
