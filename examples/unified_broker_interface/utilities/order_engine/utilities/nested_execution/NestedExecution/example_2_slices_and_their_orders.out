@@ -1,0 +1,5 @@
+slice 0: orders of [2]
+slice 1: orders of [2]
+slice 0 to the outer execution: quantity 5, filled 2, finished False, state working
+slice 1 to the outer execution: quantity 5, filled 0, finished False, state working
+more to send: True

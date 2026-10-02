@@ -88,6 +88,11 @@ from unified_broker_interface.utilities.order_engine.utilities.marketable_pricin
 from unified_broker_interface.utilities.order_engine.utilities.native_stop_pricing import (
     NativeStopPricing,
 )
+from unified_broker_interface.utilities.order_engine.utilities.nested_execution import (
+    INNER_NAMES as NESTED_INNER_NAMES,
+    OUTER_NAMES as NESTED_OUTER_NAMES,
+    NestedExecution,
+)
 from unified_broker_interface.utilities.order_engine.utilities.option_model_pricing import (
     OptionModelPricing,
 )
@@ -2022,7 +2027,7 @@ class PlanReader:
         return guard
 
     def _read_execution_list(self, execution, path):
-        """Reads an order's execution, which is exactly one value, since nesting one execution inside another is not built.
+        """Reads an order's execution: one value, or two that nest, the first splitting the order into slices and the second working each slice.
 
         Args:
             execution (object): The list as the caller wrote it.
@@ -2032,17 +2037,41 @@ class PlanReader:
             object | None: The execution, or None when it has a problem.
         """
         if not isinstance(execution, list) or not execution:
-            self._add_problem(path, 'execution_shape', 'execution is a list holding one execution value')
+            self._add_problem(path, 'execution_shape', 'execution is a list holding one execution value, or two that nest')
             return None
-        if len(execution) > 1:
-            self._add_problem(
-                path,
-                'nesting_not_built',
-                'an order takes one execution value so far; nesting one inside another is part of the design but not built yet',
-            )
+        if len(execution) > 2:
+            self._add_problem(path, 'nesting_too_deep', 'execution nests at most two values: the first splits the order into slices and the second works each slice')
             return None
-        entry = execution[0]
-        entry_path = f'{path}.0'
+        values = []
+        for index, entry in enumerate(execution):
+            value = self._read_execution_value(entry, f'{path}.{index}')
+            if value is None:
+                return None
+            values.append(value)
+        if len(values) == 1:
+            return values[0]
+        names = []
+        for entry in execution:
+            for name in entry:
+                names.append(name)
+        if names[0] not in NESTED_OUTER_NAMES:
+            self._add_problem(f'{path}.0', 'bad_nesting', f'the first of two nested executions splits the order into slices, which {", ".join(NESTED_OUTER_NAMES)} do, not {names[0]}')
+            return None
+        if names[1] not in NESTED_INNER_NAMES:
+            self._add_problem(f'{path}.1', 'bad_nesting', f'the second of two nested executions works each slice as a whole order, which {", ".join(NESTED_INNER_NAMES)} do, not {names[1]}')
+            return None
+        return NestedExecution(values[0], values[1])
+
+    def _read_execution_value(self, entry, entry_path):
+        """Reads one execution value.
+
+        Args:
+            entry (object): The value as the caller wrote it.
+            entry_path (str): Where it sits in the plan.
+
+        Returns:
+            object | None: The execution, or None when it has a problem.
+        """
         if not isinstance(entry, dict) or len(entry) != 1:
             self._add_problem(entry_path, 'execution_shape', 'an execution value is an object holding exactly one execution name and its settings')
             return None

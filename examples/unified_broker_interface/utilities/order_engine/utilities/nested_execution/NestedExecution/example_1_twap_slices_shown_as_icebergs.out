@@ -1,0 +1,9 @@
+needs prices False, paced True, grows by changing an order False
+described: {'nested': [{'twap': {'slices': 2, 'over_minutes': 1.0}}, {'iceberg': {'visible_quantity': 2, 'randomise_percent': 0}}]}
+at  0.0s: send [2], slices [5], leg slices [0]
+at  1.0s: send [2], slices [5], leg slices [0, 0]
+at  2.0s: send [1], slices [5], leg slices [0, 0, 0]
+at 30.0s: send [2], slices [5, 5], leg slices [0, 0, 0, 1]
+at 31.0s: send [2], slices [5, 5], leg slices [0, 0, 0, 1, 1]
+at 32.0s: send [1], slices [5, 5], leg slices [0, 0, 0, 1, 1, 1]
+every slice worked: will send more False

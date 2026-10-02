@@ -1,0 +1,4 @@
+slice of 5: filled 5, finished True
+slice of 5: filled 2, finished False
+due at 45s: []
+will send more: False

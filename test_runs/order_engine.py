@@ -4887,6 +4887,148 @@ class OrderEngineSuite:
                 numbered,
             ),
             self.plan_price_result(
+                'a_plan_twap_whose_slices_are_icebergs_shows_two_at_a_time',
+                {
+                    'order': {
+                        'execution': [
+                            {
+                                'twap': {
+                                    'slices': 2,
+                                    'over_minutes': 1,
+                                },
+                            },
+                            {
+                                'iceberg': {
+                                    'visible_quantity': 2,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'COMPLETE', 2)]},
+                    {'quote': steady, 'at': 2, 'updates': [self.update('26091500000102', 'COMPLETE', 2)]},
+                    {'quote': steady, 'at': 30},
+                    {'quote': steady, 'at': 31, 'updates': [self.update('26091500000104', 'COMPLETE', 2)]},
+                    {'quote': steady, 'at': 32, 'updates': [self.update('26091500000105', 'COMPLETE', 2)]},
+                    {'quote': steady, 'at': 33, 'updates': [self.update('26091500000103', 'COMPLETE', 1), self.update('26091500000106', 'COMPLETE', 1)]},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_twap_whose_slices_are_icebergs_survives_restarts',
+                {
+                    'order': {
+                        'execution': [
+                            {
+                                'twap': {
+                                    'slices': 2,
+                                    'over_minutes': 1,
+                                },
+                            },
+                            {
+                                'iceberg': {
+                                    'visible_quantity': 2,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'COMPLETE', 2)]},
+                    {'quote': steady, 'at': 2, 'updates': [self.update('26091500000102', 'COMPLETE', 2)]},
+                    {'quote': steady, 'at': 30},
+                    {'quote': steady, 'at': 31, 'updates': [self.update('26091500000104', 'COMPLETE', 2)]},
+                    {'quote': steady, 'at': 32, 'updates': [self.update('26091500000105', 'COMPLETE', 2)]},
+                    {'quote': steady, 'at': 33, 'updates': [self.update('26091500000103', 'COMPLETE', 1), self.update('26091500000106', 'COMPLETE', 1)]},
+                ],
+                numbered,
+                restart_between_ticks=True,
+            ),
+            self.plan_price_result(
+                'a_plan_iceberg_whose_slices_are_twaps_releases_the_next_once_one_fills',
+                {
+                    'order': {
+                        'execution': [
+                            {
+                                'iceberg': {
+                                    'visible_quantity': 5,
+                                },
+                            },
+                            {
+                                'twap': {
+                                    'slices': 2,
+                                    'over_minutes': 1,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 30},
+                    {'quote': steady, 'at': 31, 'updates': [self.update('26091500000101', 'COMPLETE', 3), self.update('26091500000102', 'COMPLETE', 2)]},
+                    {'quote': steady, 'at': 61},
+                    {'quote': steady, 'at': 91},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_with_three_nested_executions_or_a_ladder_outside_is_refused',
+                {
+                    'together': {
+                        'children': [
+                            {
+                                'order': {
+                                    'execution': [
+                                        {
+                                            'twap': {
+                                                'slices': 2,
+                                                'over_minutes': 1,
+                                            },
+                                        },
+                                        {
+                                            'iceberg': {
+                                                'visible_quantity': 2,
+                                            },
+                                        },
+                                        {
+                                            'iceberg': {
+                                                'visible_quantity': 1,
+                                            },
+                                        },
+                                    ],
+                                },
+                            },
+                            {
+                                'order': {
+                                    'execution': [
+                                        {
+                                            'ladder': {
+                                                'from_price': 1000,
+                                                'to_price': 990,
+                                                'steps': 2,
+                                            },
+                                        },
+                                        {
+                                            'iceberg': {
+                                                'visible_quantity': 2,
+                                            },
+                                        },
+                                    ],
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
                 'a_plan_twap_keeps_its_schedule_across_a_restart',
                 {
                     'order': {
@@ -5018,7 +5160,7 @@ class OrderEngineSuite:
                 numbered,
             ),
             self.plan_price_result(
-                'a_plan_that_slices_a_resting_stop_or_nests_executions_is_refused',
+                'a_plan_that_slices_a_resting_stop_is_refused',
                 {
                     'either': {
                         'sibling_rule': 'cancel',
