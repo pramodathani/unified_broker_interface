@@ -1,0 +1,12 @@
+Working: record {'state': 'working'}
+Cancelled for the caller: True, record {'state': 'working', 'ended': True, 'cancel_asked': ['parent-1:1']}
+Settled before the broker confirms: state working, leg acknowledged
+Settled after the broker confirms: record {'state': 'done', 'ended': True, 'cancel_asked': ['parent-1:1'], 'reason': 'cancelled'}
+Requests: [('place', 'root', 'BUY', 10, 'LIMIT', '1000.00'), ('cancel', 'root')]
+Messages: ["the plan's root part is working", "the plan's root part sends nothing more, because the caller cancelled the plan's root part", "the plan's root part is done: cancelled"]
+Turn not come, cancelled for the caller: True, record {'state': 'pending', 'ended': True}
+Started when its turn comes: placed [], record {'state': 'done', 'ended': True, 'reason': 'cancelled'}
+Requests: []
+Messages: ["the plan's root part will not be sent when its turn comes, because the caller cancelled the plan's root part", "the plan's root part is done: cancelled by the caller before its turn came"]
+Waiting: record {'state': 'waiting'}
+Cancelled for the caller: True, record {'state': 'done', 'reason': 'cancelled'}, requests []

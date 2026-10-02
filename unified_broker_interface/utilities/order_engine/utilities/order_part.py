@@ -463,6 +463,11 @@ class OrderPart:
             list: One `(path, answer, status)` per broker order placed now.
         """
         record = plan_order.part_record(self.path)
+        if record.get('ended'):
+            record['state'] = 'done'
+            record['reason'] = 'cancelled'
+            plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part is done: cancelled by the caller before its turn came')
+            return []
         if target is not None and self.fill_ratio is not None:
             target = self.fill_ratio.scaled(self.context(plan_order), target)
             if target is None:
@@ -1033,6 +1038,29 @@ class OrderPart:
             if not self.cancel_once(plan_order, leg, reason):
                 all_cancelled = False
         return all_cancelled
+
+    def cancel_for_caller(self, plan_order, reason):
+        """Stops this order because a caller cancelled it: it sends nothing more, and whatever of it is resting is cancelled.
+
+        An order whose turn has not come is marked `ended` and left where it is, so its join still starts its siblings as before, and `start` marks it done as `cancelled` without sending it; marking it done at once would tell the join that its branch had already started. A waiting order is marked done as `cancelled`. A working order is marked `ended`, as a lifetime that runs out marks it, so its execution sends no further piece and the next settle marks it done once the broker confirms the cancels.
+
+        Args:
+            plan_order (PlanOrder): The plan order.
+            reason (str): Why, for the event log.
+
+        Returns:
+            bool: True when every resting broker order was cancelled, or none was resting.
+        """
+        record = plan_order.part_record(self.path)
+        if record.get('state') in (None, 'pending'):
+            if not record.get('ended'):
+                record['ended'] = True
+                plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part will not be sent when its turn comes, because {reason}')
+            return True
+        if record.get('state') == 'working' and not record.get('ended'):
+            record['ended'] = True
+            plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part sends nothing more, because {reason}')
+        return self.cancel_rest(plan_order, reason)
 
     def cancel_once(self, plan_order, leg, reason):
         """Asks the broker to cancel one of this part's orders, unless it has already accepted a cancel for it that is not confirmed yet.

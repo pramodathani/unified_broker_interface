@@ -25,7 +25,7 @@ HALT_EVERY_PARENT = 'halt'
 class ParentCommands:
     """Runs a caller's change to a parent on the worker that owns it, through the parent's own order type.
 
-    `PUT /api/orders/modify` and `DELETE /api/orders/cancel` hand a change to an order the engine placed here rather than sending it themselves, so the order type records it and carries on from it, and the change cannot race the type's own repricing. `DELETE /api/orders/parents` cancels a whole parent, including one that has placed nothing yet, and flatten halts every open parent before it cancels and closes.
+    `PUT /api/orders/modify` and `DELETE /api/orders/cancel` hand a change to an order the engine placed here rather than sending it themselves, so the order type records it and carries on from it, and the change cannot race the type's own repricing. `DELETE /api/orders/cancel` with `parent_id`, and `DELETE /api/orders/parents`, cancel a whole parent, including one that has placed nothing yet, or with `part` one part of a plan, and flatten halts every open parent before it cancels and closes.
 
     Attributes:
         placement (EnginePlacement): What an order type uses to reach a broker.
@@ -226,26 +226,31 @@ class ParentCommands:
         return self.answered(runner, leg, outcome, status_message, broker_response)
 
     def cancel_parent(self, arguments):
-        """Cancels a whole parent: every leg still resting at a broker, and the parent itself.
+        """Cancels a whole parent: every leg still resting at a broker, and the parent itself; or, when `part` names one, only that part of a plan.
 
         Args:
-            arguments (dict): `parent_id`.
+            arguments (dict): `parent_id`, and optionally `part` and `dry_run`.
 
         Returns:
-            tuple: The answer's body (dict) and its HTTP status (int): 200 once the parent is cancelled, and 207 when a leg's cancel was refused or unknown, which leaves the parent `cancelling` until that leg finishes.
+            tuple: The answer's body (dict) and its HTTP status (int): 200 once the parent is cancelled, or for a dry run, and 207 when a leg's cancel was refused or unknown, which leaves the parent `cancelling` until that leg finishes.
 
         Raises:
-            RefusedRequestError: With HTTP 409 when the parent has already finished.
+            RefusedRequestError: With HTTP 404 when the plan has no such part, and 409 when the parent or the part has already finished, or a part is named on an order that is not a plan.
         """
         runner = self.runner_for(arguments.get('parent_id'))
+        dry_run = arguments.get('dry_run') is True
+        if arguments.get('part') is not None:
+            return runner.cancel_part(arguments['part'], dry_run)
         if runner.parent.is_terminal():
             raise RefusedRequestError.refusal(
                 f'the parent is already {runner.parent.state}',
                 409,
                 parent_id=runner.parent.parent_order_id,
             )
+        if dry_run:
+            return self.cancel_parent_dry_run(runner)
         cancelled_legs = runner.cancel_by_caller(
-            'cancelled through DELETE /api/orders/parents',
+            'cancelled by the caller',
         )
         status = 200
         if runner.parent.state == 'cancelling':
@@ -256,6 +261,33 @@ class ParentCommands:
             'state': runner.parent.state,
             'cancelled_legs': cancelled_legs,
         }, status
+
+    def cancel_parent_dry_run(self, runner):
+        """The answer to a dry run of cancelling a whole parent: the legs a cancel would be sent for, with nothing sent or changed.
+
+        Args:
+            runner (SyntheticOrder): The parent's order type.
+
+        Returns:
+            tuple: The answer's body (dict) and the HTTP status 200.
+        """
+        resting_legs = []
+        for leg in runner.parent.legs:
+            if leg.is_finished() or not leg.broker_order_id:
+                continue
+            resting_legs.append({
+                'leg_id': leg.leg_id,
+                'broker': leg.broker,
+                'order_id': leg.broker_order_id,
+            })
+        return {
+            'parent_id': runner.parent.parent_order_id,
+            'synthetic_type': runner.parent.synthetic_type,
+            'state': runner.parent.state,
+            'resting_legs': resting_legs,
+            'dry_run': True,
+            'status_message': 'the cancel is valid; nothing was cancelled',
+        }, 200
 
     def modify_held(self, arguments):
         """Changes an order the engine is still holding, such as a virtual limit order, or, when `part` names one, a part of a plan that has not yet been sent.

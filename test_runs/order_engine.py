@@ -6625,6 +6625,196 @@ class OrderEngineSuite:
             ),
         ]
 
+    def run_plan_cancel_checks(self):
+        """Runs a caller's cancels of a plan through `DELETE /api/orders/cancel`: of one part, sent or not, which must stop it sending anything more, and of one broker order, which the plan must not send again.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        numbered = dict(
+            self.scenarios.answers.json_answer(
+                200,
+                self.scenarios.answers.place_success('flattrade'),
+            ),
+            number_orders=True,
+        )
+        steady = self.book_at(1000.00, 1000.05)
+        bracket = {
+            'order': {
+                'presets': [
+                    {
+                        'bracket': {
+                            'stop_price': 990,
+                            'stop_limit_price': 988,
+                            'target_price': 1010,
+                        },
+                    },
+                ],
+            },
+        }
+        twap = {
+            'order': {
+                'presets': [
+                    {
+                        'twap': {
+                            'slices': 4,
+                            'over_minutes': 2,
+                        },
+                    },
+                ],
+            },
+        }
+        stop_part = 'root.each_fill.children.0'
+        return [
+            self.plan_price_result(
+                'a_plan_bracket_stop_cancelled_before_the_entry_fills_is_never_sent',
+                bracket,
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'part_cancel': {'part': stop_part, 'dry_run': True}},
+                    {'quote': steady, 'at': 2, 'part_cancel': {'part': stop_part}},
+                    {'quote': steady, 'at': 3, 'part_cancel': {'part': stop_part}},
+                    {'quote': steady, 'at': 4, 'updates': [self.update('26091500000101', 'COMPLETE', 10)]},
+                    {'quote': steady, 'at': 5},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_bracket_entry_cancelled_while_it_rests_drops_its_exits',
+                bracket,
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'part_cancel': {'part': 'root.first'}},
+                    {'quote': steady, 'at': 2, 'updates': [self.update('26091500000101', 'CANCELLED', 0)]},
+                    {'quote': steady, 'at': 3},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_twap_cancelled_by_part_sends_no_more_slices',
+                twap,
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 30},
+                    {'quote': steady, 'at': 31, 'updates': [self.update('26091500000101', 'COMPLETE', 3)]},
+                    {'quote': steady, 'at': 40, 'part_cancel': {'part': 'root'}},
+                    {'quote': steady, 'at': 41, 'updates': [self.update('26091500000102', 'CANCELLED', 0)]},
+                    {'quote': steady, 'at': 60},
+                    {'quote': steady, 'at': 90},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_twap_slice_cancelled_by_order_id_is_skipped_and_the_rest_carry_on',
+                twap,
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 10, 'leg_cancel': '26091500000101'},
+                    {'quote': steady, 'at': 11, 'updates': [self.update('26091500000101', 'CANCELLED', 0)]},
+                    {'quote': steady, 'at': 30},
+                    {'quote': steady, 'at': 60},
+                    {'quote': steady, 'at': 90},
+                    {'quote': steady, 'at': 91, 'updates': [self.update('26091500000102', 'COMPLETE', 3), self.update('26091500000103', 'COMPLETE', 2), self.update('26091500000104', 'COMPLETE', 2)]},
+                    {'quote': steady, 'at': 150},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_iceberg_slice_cancelled_by_order_id_shows_no_more',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'iceberg': {
+                                    'slice_quantity': 4,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'leg_cancel': '26091500000101'},
+                    {'quote': steady, 'at': 2, 'updates': [self.update('26091500000101', 'CANCELLED', 0)]},
+                    {'quote': steady, 'at': 3},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_peg_cancelled_by_part_is_not_moved_while_the_cancel_is_confirmed',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'peg': {
+                                    'reference': 'own_touch',
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'part_cancel': {'part': 'root'}},
+                    {'quote': self.book_at(1000.20, 1000.25), 'at': 2},
+                    {'quote': self.book_at(1000.20, 1000.25), 'at': 3, 'updates': [self.update('26091500000101', 'CANCELLED', 0)]},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_whole_parent_cancel_dry_run_names_its_resting_orders',
+                bracket,
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'COMPLETE', 10)]},
+                    {'quote': steady, 'at': 2, 'part_cancel': {'dry_run': True}},
+                    {'quote': steady, 'at': 3, 'part_cancel': {'part': 'nowhere'}},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_kept_whole_exits_cannot_be_cancelled_before_they_start',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'scale_out': {
+                                    'stop_price': 990,
+                                    'stop_limit_price': 988,
+                                    'target_prices': [
+                                        1010,
+                                        1020,
+                                    ],
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'part_cancel': {'part': 'root.each_fill'}},
+                ],
+                numbered,
+            ),
+            self.price_result(
+                'a_type_that_is_not_a_plan_has_no_parts_to_cancel',
+                self.scenarios.bodies.market_order(
+                    dry_run=None,
+                    order_type='MARKET',
+                    quantity=10,
+                    synthetic={
+                        'type': 'market_if_touched',
+                        'trigger_price': 995,
+                    },
+                ),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'part_cancel': {'part': 'root'}},
+                ],
+                numbered,
+            ),
+        ]
+
     def run_plan_group_checks(self):
         """Runs plans whose orders trade several instruments: a basket, a one-cancels-all group, a sequence, and a group done when any order is, beside the types they stand for.
 
@@ -8424,7 +8614,7 @@ class OrderEngineSuite:
         Args:
             name (str): The check's name.
             request_body (dict): The request body.
-            steps (list): One `{"quote": dict | None, "at": float}` per tick, where `at` is seconds after the order was placed, and optionally `other_quotes` for other instruments, `updates`, order updates applied before the tick, and `funds`, the combined funds document.
+            steps (list): One `{"quote": dict | None, "at": float}` per tick, where `at` is seconds after the order was placed, and optionally `other_quotes` for other instruments, `updates`, order updates applied before the tick, `funds`, the combined funds document, and a caller's change or cancel run through the engine's commands before the tick: `held_change` and `part_cancel` name a parent's part, `leg_change` and `leg_cancel` one of its broker orders.
             answer (dict | None): The stubbed broker answer.
             throttle_seconds (float): The shortest gap the re-pricing throttle allows between two moves of one order.
             book_overrides (dict | None): Fields to replace on the broker's order book entry, for a type whose order is not a plain limit.
@@ -8537,6 +8727,7 @@ class OrderEngineSuite:
         moves = []
         held_changes = []
         leg_changes = []
+        part_cancels = []
         for step in steps:
             step_at = started + step.get('at', 0)
             time.time = lambda: step_at
@@ -8588,6 +8779,53 @@ class OrderEngineSuite:
                         shown_change['trigger_price'] = answer_body.get('trigger_price')
                         shown_change['orders'] = answer_body.get('orders')
                     held_changes.append(shown_change)
+                if step.get('part_cancel') is not None:
+                    commands = ParentCommands(
+                        placement,
+                        event_log,
+                        parent_store,
+                        logger,
+                        gates,
+                    )
+                    arguments = dict(step['part_cancel'])
+                    for parent_order_id in self.fake_redis.hashes.get('unified:orders:parents', {}):
+                        arguments['parent_id'] = parent_order_id
+                    try:
+                        answer_body, status = commands.cancel_parent(arguments)
+                    except RefusedRequestError as refusal:
+                        answer_body, status = refusal.body, refusal.status
+                    part_cancels.append({
+                        'status': status,
+                        'error': answer_body.get('error'),
+                        'outcome': answer_body.get('outcome'),
+                        'state': answer_body.get('state'),
+                        'orders': answer_body.get('orders'),
+                        'resting_legs': answer_body.get('resting_legs'),
+                        'status_message': answer_body.get('status_message'),
+                    })
+                if step.get('leg_cancel') is not None:
+                    commands = ParentCommands(
+                        placement,
+                        event_log,
+                        parent_store,
+                        logger,
+                        gates,
+                    )
+                    arguments = {
+                        'broker': 'flattrade',
+                        'order_id': step['leg_cancel'],
+                    }
+                    for parent_order_id in self.fake_redis.hashes.get('unified:orders:parents', {}):
+                        arguments['parent_id'] = parent_order_id
+                    try:
+                        answer_body, status = commands.cancel_leg(arguments)
+                    except RefusedRequestError as refusal:
+                        answer_body, status = refusal.body, refusal.status
+                    leg_changes.append({
+                        'status': status,
+                        'error': answer_body.get('error'),
+                        'outcome': answer_body.get('outcome'),
+                    })
                 if step.get('leg_change') is not None:
                     commands = ParentCommands(
                         placement,
@@ -8673,6 +8911,8 @@ class OrderEngineSuite:
             result['held_changes'] = held_changes
         if leg_changes:
             result['leg_changes'] = leg_changes
+        if part_cancels:
+            result['part_cancels'] = part_cancels
         return result
 
     def seed_estimate(self, estimate):
@@ -12010,6 +12250,7 @@ class OrderEngineSuite:
             results.extend(self.run_plan_repeat_checks())
             results.extend(self.run_plan_fill_follower_checks())
             results.extend(self.run_plan_change_checks())
+            results.extend(self.run_plan_cancel_checks())
             results.extend(self.run_clock_checks())
             results.extend(self.run_closed_position_checks())
             results.extend(self.run_late_auction_and_whole_lot_checks())

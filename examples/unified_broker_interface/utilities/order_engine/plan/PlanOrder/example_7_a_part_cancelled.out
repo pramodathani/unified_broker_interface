@@ -1,0 +1,14 @@
+Answer: HTTP 200, accepted, entry root.first order id 260930000001
+A dry run cancelling the stop: HTTP 200, part root.each_fill.children.0 was pending, orders [], the cancel is valid; nothing was cancelled
+  The stop part's record after the dry run: {'state': 'pending', 'target': 10}
+The stop cancelled: HTTP 200, part root.each_fill.children.0 was pending, orders [], it will not be sent when its turn comes; nothing was sent to a broker
+  The stop part's record now: {'state': 'pending', 'target': 10, 'ended': True}
+The stop cancelled again: HTTP 409, part root.each_fill.children.0 is already cancelled, and will not be sent when its turn comes
+A part the plan does not have: HTTP 404, the plan has no order at part root.nowhere
+Sent to the broker, in order:
+  place BUY 10 LIMIT at 1000.00 -> 260930000001
+  place SELL 10 LIMIT at 1010 -> 260930000002
+The stop part's record after the fill: {'state': 'done', 'target': 10, 'ended': True, 'reason': 'cancelled'}
+The target part's state: working
+The stop cancelled once it is done: HTTP 409, part root.each_fill.children.0 is already done: cancelled
+Parent: working

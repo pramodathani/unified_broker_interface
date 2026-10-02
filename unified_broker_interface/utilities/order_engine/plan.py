@@ -489,7 +489,7 @@ class PlanOrder(SyntheticOrder):
         for path, record in records.items():
             if record.get('state') == 'waiting':
                 waiting_paths.append(path)
-            if record.get('state') == 'working' and record.get('moves'):
+            if record.get('state') == 'working' and record.get('moves') and not record.get('ended'):
                 moving_paths.append(path)
             if record.get('state') == 'working' and record.get('paced'):
                 paced_paths.append(path)
@@ -850,6 +850,8 @@ class PlanOrder(SyntheticOrder):
             raise RefusedRequestError.refusal(f'part {path} is already {record.get("state")}, so change its broker orders with broker and order_id instead', 409, parent_id=parent_order_id, part=path, orders=sent)
         if isinstance(part, WholePart):
             raise RefusedRequestError.refusal(f'part {path} is a {part.name}, which keeps its orders by its own rules, so it cannot be changed before it starts', 409, parent_id=parent_order_id, part=path)
+        if record.get('ended'):
+            raise RefusedRequestError.refusal(f'part {path} has been cancelled, so it cannot be changed', 409, parent_id=parent_order_id, part=path)
         if isinstance(part.trigger, LimitMarketableCondition) and record.get('state') == 'waiting':
             if trigger_price is not None:
                 raise RefusedRequestError.refusal('a held limit order has no trigger price to change', 400, parent_id=parent_order_id, part=path)
@@ -911,6 +913,93 @@ class PlanOrder(SyntheticOrder):
         self.save()
         answer['outcome'] = 'accepted'
         answer['status_message'] = 'changed before it was sent; nothing was sent to a broker'
+        return answer, 200
+
+    def cancel_part(self, path, dry_run):
+        """Cancels one part of this plan and stops it sending anything more, whether or not it has already sent orders.
+
+        A part whose turn has not come is kept from being sent when it comes, and a part waiting on its trigger is marked done as `cancelled`. A part that has sent orders sends no further piece, such as a TWAP's later slices, and each of its orders still resting is cancelled; it is marked done once the brokers confirm. The plan is then settled, so the rest of it reacts as it does to that part finishing: a bracket whose entry is cancelled before it fills drops its exits. Asking again retries any cancel a broker did not accept.
+
+        Args:
+            path (str): The part's path, as `GET /api/orders/parents` shows it.
+            dry_run (bool): Whether to check the cancel without making it.
+
+        Returns:
+            tuple: The answer's body (dict) and its HTTP status (int): 200 once every resting order's cancel was accepted, when none was resting, or for a dry run, and 207 when a broker did not accept a cancel, which leaves that order resting.
+
+        Raises:
+            RefusedRequestError: With HTTP 404 when the plan has no order part at `path`, and 409 when the plan or the part has already finished, a part whose turn has not come is already cancelled, or it is a kept-whole part that has not started.
+        """
+        parent_order_id = self.parent.parent_order_id
+        if self.parent.is_terminal():
+            raise RefusedRequestError.refusal(f'the order is already {self.parent.state}', 409, parent_id=parent_order_id)
+        root, _ = self._read_plan()
+        part = None
+        for candidate in root.order_parts():
+            if candidate.path == path:
+                part = candidate
+        if part is None:
+            raise RefusedRequestError.refusal(f'the plan has no order at part {path}', 404, parent_id=parent_order_id, part=path)
+        record = self.part_record(path)
+        state = record.get('state') or 'pending'
+        if state == 'done':
+            raise RefusedRequestError.refusal(f'part {path} is already done: {record.get("reason")}', 409, parent_id=parent_order_id, part=path)
+        if state == 'pending' and record.get('ended'):
+            raise RefusedRequestError.refusal(f'part {path} is already cancelled, and will not be sent when its turn comes', 409, parent_id=parent_order_id, part=path)
+        if state == 'pending' and isinstance(part, WholePart):
+            raise RefusedRequestError.refusal(f'part {path} is a {part.name}, which keeps its orders by its own rules, so it cannot be cancelled before it starts; cancel it once it has started, or cancel the whole parent', 409, parent_id=parent_order_id, part=path)
+        resting = []
+        for leg in part.own_legs(self.parent):
+            if not leg.is_finished() and leg.broker_order_id:
+                resting.append(leg)
+        answer = {
+            'parent_id': parent_order_id,
+            'synthetic_type': self.parent.synthetic_type,
+            'part': path,
+            'state': state,
+        }
+        if dry_run:
+            orders = []
+            for leg in resting:
+                orders.append({
+                    'broker': leg.broker,
+                    'order_id': leg.broker_order_id,
+                })
+            answer['orders'] = orders
+            answer['dry_run'] = True
+            answer['status_message'] = 'the cancel is valid; nothing was cancelled'
+            return answer, 200
+        part.cancel_for_caller(self, f'the caller cancelled the plan\'s {path} part')
+        asked = self.part_record(path).get('cancel_asked') or []
+        orders = []
+        not_accepted = 0
+        for leg in resting:
+            accepted = leg.leg_id in asked
+            if not accepted:
+                not_accepted = not_accepted + 1
+            orders.append({
+                'broker': leg.broker,
+                'order_id': leg.broker_order_id,
+                'cancel_accepted': accepted,
+            })
+        placed = root.settle(self)
+        self._after_placing(placed)
+        self._finish_if_done(root)
+        self.save()
+        answer['orders'] = orders
+        if not_accepted:
+            answer['outcome'] = 'partial'
+            if not_accepted == len(resting):
+                answer['outcome'] = 'rejected'
+            answer['status_message'] = f'the broker did not accept the cancel of {not_accepted} of its orders, which may still be resting; ask again to retry'
+            return answer, 207
+        answer['outcome'] = 'accepted'
+        if resting:
+            answer['status_message'] = 'its resting orders are being cancelled, and it sends nothing more'
+        elif state == 'pending':
+            answer['status_message'] = 'it will not be sent when its turn comes; nothing was sent to a broker'
+        else:
+            answer['status_message'] = 'cancelled before it was sent; nothing was sent to a broker'
         return answer, 200
 
     def _part_for_leg(self, root, leg):
