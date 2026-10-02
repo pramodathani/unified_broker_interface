@@ -59,6 +59,9 @@ from unified_broker_interface.utilities.order_engine.utilities.follow_instrument
 from unified_broker_interface.utilities.order_engine.utilities.freeze_limit_execution import (
     FreezeLimitExecution,
 )
+from unified_broker_interface.utilities.order_engine.utilities.from_fill_pricing import (
+    FromFillPricing,
+)
 from unified_broker_interface.utilities.order_engine.utilities.from_parent_fill_pricing import (
     FromParentFillPricing,
 )
@@ -361,6 +364,8 @@ class PlanReader:
         for part in root.order_parts():
             if isinstance(part.pricing, FromParentFillPricing) and part.pricing.first_path is None:
                 self._add_problem(part.path, 'from_parent_fill_needs_then', 'from_parent_fill prices this order from the fills of a Then join\'s first order, so it must be that join\'s child, and the first plan a single order')
+            if isinstance(part.pricing, FromFillPricing) and not part.pricing.opened_by:
+                self._add_problem(part.path, 'from_fill_needs_then', 'from_fill prices this exit from the fill that opened its position, so it must sit under a Then join\'s child')
             if isinstance(part, WholePart) and part.NEEDS_THEN and not part.sized_by_fills:
                 self._add_problem(part.path, 'needs_then', f'{part.name} protects what a Then join\'s first plan filled, so it must be that join\'s child')
             if part.fill_ratio is not None and not part.sized_by_fills:
@@ -458,6 +463,8 @@ class PlanReader:
                 opened_instruments.append(part.overrides.get('instrument_id'))
             for part in child.order_parts():
                 part.opened_by = opened_by
+                if isinstance(part.pricing, FromFillPricing):
+                    part.pricing.opened_by = opened_by
                 if isinstance(part, WholePart):
                     part.opened_instruments = opened_instruments
         if isinstance(child, OrderPart):
@@ -978,7 +985,7 @@ class PlanReader:
             return None
         if execution is None:
             execution = AllAtOnceExecution()
-        if isinstance(pricing, STOP_PRICINGS):
+        if isinstance(pricing, STOP_PRICINGS) or (isinstance(pricing, FromFillPricing) and pricing.is_stop()):
             if not isinstance(execution, (AllAtOnceExecution, DailyExecution)):
                 self._add_problem(
                     path,
@@ -1823,10 +1830,12 @@ class PlanReader:
             if net_price is None:
                 return None
             return FromParentFillPricing(net_price)
+        if name == 'from_fill':
+            return self._read_from_fill(settings, f'{entry_path}.from_fill')
         self._add_problem(
             entry_path,
             'unknown_pricing',
-            f'{name!r} is not a pricing a plan can use yet; the pricings available are fixed, marketable, native_stop, trail, stages, peg, chase, follow_instrument, option_model and from_parent_fill, with the modifiers cap and discretion',
+            f'{name!r} is not a pricing a plan can use yet; the pricings available are fixed, marketable, native_stop, trail, stages, peg, chase, follow_instrument, option_model, from_parent_fill and from_fill, with the modifiers cap and discretion',
         )
         return None
 
@@ -2427,6 +2436,40 @@ class PlanReader:
             )
             return None
         return MarketablePricing(value)
+
+    def _read_from_fill(self, settings, path):
+        """Reads `from_fill` pricing: a stop with `stop_distance` and `stop_limit_offset`, or a target with `target_distance`, each measured from the fill that opened the position.
+
+        Args:
+            settings (dict): `stop_distance` and `stop_limit_offset`, or `target_distance`.
+            path (str): Where it sits in the plan.
+
+        Returns:
+            FromFillPricing | None: The pricing, or None when it has a problem.
+        """
+        problems_before = len(self.problems)
+        self._refuse_unknown(
+            settings,
+            ('stop_distance', 'stop_limit_offset', 'target_distance'),
+            path,
+            'from_fill',
+        )
+        if 'stop_distance' in settings and 'target_distance' in settings:
+            self._add_problem(path, 'bad_setting', 'from_fill prices one exit, so give stop_distance with stop_limit_offset for a stop, or target_distance for a target, not both')
+            return None
+        if 'stop_distance' not in settings and 'target_distance' not in settings:
+            self._add_problem(path, 'missing_setting', 'from_fill needs stop_distance with stop_limit_offset for a stop, or target_distance for a target')
+            return None
+        if 'target_distance' in settings:
+            target_distance = self._price(settings.get('target_distance'), path, 'target_distance')
+            if len(self.problems) > problems_before:
+                return None
+            return FromFillPricing(None, None, target_distance)
+        stop_distance = self._price(settings.get('stop_distance'), path, 'stop_distance')
+        stop_limit_offset = self._price(settings.get('stop_limit_offset'), path, 'stop_limit_offset')
+        if len(self.problems) > problems_before:
+            return None
+        return FromFillPricing(stop_distance, stop_limit_offset, None)
 
     def _read_native_stop(self, settings, path):
         """Reads `native_stop` pricing.

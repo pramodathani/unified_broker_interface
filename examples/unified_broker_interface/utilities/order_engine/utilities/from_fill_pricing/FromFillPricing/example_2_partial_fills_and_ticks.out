@@ -1,0 +1,7 @@
+Nothing filled yet: opening fill None, sent as None
+Two partial fills, 100 at 1008.0 and 300 at 1012.17: opening fill 1011.1275
+on_tick(1003.6275) with a 0.05 tick: 1003.65
+on_tick(1003.6275) with no tick size: 1003.6275
+Stop sent with a 0.05 tick: {'order_type': 'SL', 'trigger_price': '1003.65', 'price': '1002.15'}
+Stop sent with no tick size: {'order_type': 'SL', 'trigger_price': '1003.6275', 'price': '1002.1275'}
+A target 50 below a short opened at 40.0: None

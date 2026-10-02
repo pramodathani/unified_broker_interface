@@ -13,3 +13,7 @@ So the default is the ordinary Indian equity day: heavy in the first half hour, 
 Only the sizes are weighted. The slices still go out at even intervals, which keeps the schedule visible in advance and keeps this a small subclass of the timed order rather than a second scheduler with its own bugs.
 
 A more sophisticated build would also bunch the slices in time. The gain would be small next to the gain from sizing them, and the cost would be a second thing to reason about when a slice does not go out when expected.
+
+## The segment's own open (2026-10-02)
+
+`SESSION_OPENS_AT` and the never-used `SESSION_CLOSES_AT` are gone. `slice_weights` asks `SessionOpen` for the segment's open and anchors every bucket on the day the schedule started (`anchored_at`), and gives even weights to a currency or commodity order with no `volume_profile`. `bucket_of` keeps its one-argument form through defaults (09:15, the moment's own day), so existing callers and examples are unchanged. Equity recordings did not move.

@@ -545,17 +545,26 @@ class PresetExpander:
         }
 
     def _two_sided_breakout(self, settings, entry, path):
-        """A buy stop above a range and a sell stop below it; the first to fill cancels the other, and exits are armed against the side that filled.
+        """A buy stop above a range and a sell stop below it; the first to fill cancels the other, and exits are set distances from the fill on the side that filled.
+
+        One absolute stop and target cannot suit both directions: after a break downwards a target above the range would buy straight back. So the exits are distances, measured from the fill in whichever direction the position was opened.
 
         Args:
-            settings (dict): `buy_trigger`, `buy_limit`, `sell_trigger` and `sell_limit`, and the exits' `stop_price` and `stop_limit_price`, `target_price`, or both.
+            settings (dict): `buy_trigger`, `buy_limit`, `sell_trigger` and `sell_limit`, and the exits' `stop_distance` and `stop_limit_offset`, `target_distance`, or both.
             entry (dict): The order it was named in, which each side copies.
             path (str): The preset's path.
 
         Returns:
             dict: A Then join: an Either join of the two sides that cancels, then the exits.
         """
-        self._refuse_unknown(settings, ('buy_trigger', 'buy_limit', 'sell_trigger', 'sell_limit', 'stop_price', 'stop_limit_price', 'target_price'), path, 'two_sided_breakout')
+        absolute = []
+        for name in ('stop_price', 'stop_limit_price', 'target_price'):
+            if name in settings:
+                absolute.append(name)
+        if absolute:
+            self._add_problem(path, 'bad_setting', f'a two_sided_breakout takes its exits as distances from the fill, stop_distance with stop_limit_offset and target_distance, because one absolute price cannot suit a break either way; it was given {", ".join(absolute)}')
+            return {}
+        self._refuse_unknown(settings, ('buy_trigger', 'buy_limit', 'sell_trigger', 'sell_limit', 'stop_distance', 'stop_limit_offset', 'target_distance'), path, 'two_sided_breakout')
         for name in ('buy_trigger', 'buy_limit', 'sell_trigger', 'sell_limit'):
             if name not in settings:
                 self._add_problem(path, 'missing_setting', 'a two_sided_breakout needs buy_trigger, buy_limit, sell_trigger and sell_limit: both sides are stop-limit orders and each needs its own two prices')
@@ -567,7 +576,7 @@ class PresetExpander:
         if not in_order:
             self._add_problem(path, 'bad_setting', 'sell_trigger must be below buy_trigger; they are the two sides of a range and a range has a top and a bottom')
             return {}
-        exits = self._exits(self._exit_settings(settings), path, 'two_sided_breakout')
+        exits = self._distance_exits(settings, path)
         if self.problems:
             return {}
         sides = []
@@ -600,20 +609,58 @@ class PresetExpander:
             },
         }
 
-    def _exit_settings(self, settings):
-        """The exits' settings out of a preset's settings.
+    def _distance_exits(self, settings, path):
+        """The stop and target of a two-sided breakout, each a distance from the fill on the side that broke.
 
         Args:
-            settings (dict): The preset's settings.
+            settings (dict): `stop_distance` and `stop_limit_offset`, `target_distance`, or both.
+            path (str): The preset's path.
 
         Returns:
-            dict: `stop_price`, `stop_limit_price` and `target_price`, where given.
+            dict: One order, or an Either join that reduces when there are two.
         """
-        exits = {}
-        for name in ('stop_price', 'stop_limit_price', 'target_price'):
-            if name in settings:
-                exits[name] = settings[name]
-        return exits
+        exits = []
+        if 'stop_distance' in settings:
+            if 'stop_limit_offset' not in settings:
+                self._add_problem(path, 'missing_setting', 'a stop needs stop_limit_offset as well as stop_distance: a stop-limit whose limit sits at its trigger will not fill when the price runs through it')
+                return {}
+            exits.append({
+                'order': {
+                    'side': 'protect',
+                    'pricing': [
+                        {
+                            'from_fill': {
+                                'stop_distance': settings['stop_distance'],
+                                'stop_limit_offset': settings['stop_limit_offset'],
+                            },
+                        },
+                    ],
+                },
+            })
+        if 'target_distance' in settings:
+            exits.append({
+                'order': {
+                    'side': 'protect',
+                    'pricing': [
+                        {
+                            'from_fill': {
+                                'target_distance': settings['target_distance'],
+                            },
+                        },
+                    ],
+                },
+            })
+        if not exits:
+            self._add_problem(path, 'missing_setting', 'the two_sided_breakout preset needs a stop_distance, a target_distance, or both')
+            return {}
+        if len(exits) == 1:
+            return exits[0]
+        return {
+            'either': {
+                'sibling_rule': 'reduce',
+                'children': exits,
+            },
+        }
 
     def _accumulation(self, settings, entry, path):
         """The order's quantity bought again and again, every `every_minutes`, `purchases` times, each purchase resting on its own side of the book no worse than the body's limit.

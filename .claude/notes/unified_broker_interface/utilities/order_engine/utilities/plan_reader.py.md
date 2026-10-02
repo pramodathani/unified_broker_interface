@@ -73,3 +73,7 @@ A kept-whole preset expands to a `whole` slot naming its type and settings. The 
 ## Every join built (2026-10-02)
 
 With `using` read by `_read_using`, every join the design names is built, so the branch that answered `join_not_built` could no longer be reached and was removed with `BUILT_JOIN_NAMES`. The execution list now reads one value or two nested ones through `_read_execution_value`.
+
+## from_fill (2026-10-02)
+
+`from_fill` is read by `_read_from_fill`: exactly one of a stop (`stop_distance` with `stop_limit_offset`) or a target (`target_distance`). The Then join copies its `opened_by` list into the pricing, and a `from_fill` part with no `opened_by` is refused as `from_fill_needs_then`. Its stop variant joins `STOP_PRICINGS` in the `stop_not_sliced` rule.

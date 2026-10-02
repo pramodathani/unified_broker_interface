@@ -51,6 +51,14 @@ class StandInPlanOrder:
         """
         self.parent = StandInParent()
 
+    def trading_segment(self):
+        """The segment the order trades in, which sets when the session opens.
+
+        Returns:
+            str: NSE equities, which open at 09:15.
+        """
+        return 'nse_equities'
+
 
 class PieceMaker:
     """Builds broker orders as the engine records them, in a chosen state."""

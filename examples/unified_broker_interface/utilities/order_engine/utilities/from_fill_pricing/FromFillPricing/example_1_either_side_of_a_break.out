@@ -1,0 +1,11 @@
+Stop: is_stop True, reads quotes False, moves False
+Target: is_stop False, reads quotes False, moves False
+Opened by: ['root.first.children.0', 'root.first.children.1']
+The buy side broke, a long: opening fill 1010.0
+  stop sent as:   {'transaction_type': 'SELL', 'quantity': 20, 'order_type': 'SL', 'trigger_price': '1000.00', 'price': '998.00'}
+  target sent as: {'transaction_type': 'SELL', 'quantity': 20, 'order_type': 'LIMIT', 'price': '1030.00'}
+The sell side broke, a short: opening fill 990.0
+  stop sent as:   {'transaction_type': 'BUY', 'quantity': 20, 'order_type': 'SL', 'trigger_price': '1000.00', 'price': '1002.00'}
+  target sent as: {'transaction_type': 'BUY', 'quantity': 20, 'order_type': 'LIMIT', 'price': '970.00'}
+As a dry run shows the stop: {'from_fill': {'stop_distance': '10', 'stop_limit_offset': '2'}}
+As a dry run shows the target: {'from_fill': {'target_distance': '20'}}

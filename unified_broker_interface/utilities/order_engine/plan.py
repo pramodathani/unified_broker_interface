@@ -16,6 +16,9 @@ from unified_broker_interface.utilities.order_engine.utilities.either_part impor
 from unified_broker_interface.utilities.order_engine.utilities.fixed_pricing import (
     FixedPricing,
 )
+from unified_broker_interface.utilities.order_engine.utilities.from_fill_pricing import (
+    FromFillPricing,
+)
 from unified_broker_interface.utilities.order_engine.utilities.limit_marketable_condition import (
     LimitMarketableCondition,
 )
@@ -164,6 +167,8 @@ class PlanOrder(SyntheticOrder):
                 record['paced'] = True
             records[part.path] = record
             if part.needs_prices():
+                needs_prices = True
+            if isinstance(part.pricing, FromFillPricing):
                 needs_prices = True
             for instrument_id in part.instruments():
                 if instrument_id not in watched:

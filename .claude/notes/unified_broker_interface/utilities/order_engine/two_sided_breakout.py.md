@@ -17,3 +17,7 @@ So the exits are built against the entry that actually filled, using its own `tr
 A spike through both triggers inside one tick fills both before any cancel can leave the machine. The account is then flat, having paid the spread twice and two lots of charges.
 
 Nothing here prevents that, and the Atlas is clear that nothing could: the exchange offers no order that links two entries. What the engine does is notice immediately and record it, so it is visible rather than discovered later from a statement.
+
+## Exits as distances (2026-10-02)
+
+The exits used to be the bracket's absolute `stop_price`, `stop_limit_price` and `target_price`, flipped only in side, so after a downward break the target was a buy at 1030 that closed the short at once and the buy stop's limit sat below its trigger. The user chose distances from the fill. `read_exit_distances` refuses the absolute fields with a 400 naming the new ones rather than guessing what they meant; `exit_prices` measures from the entry's average fill, or its trigger when the broker gave none, and hands `ExitLegs.build` the absolute prices it already understands, so the exit legs themselves are built as before. `run` now calls `remember_tick_size`, since `on_tick` needs it.
