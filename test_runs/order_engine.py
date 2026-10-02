@@ -2924,6 +2924,7 @@ class OrderEngineSuite:
             'grid',
             'bracket',
             'market_if_touched',
+            'oto',
         ]
         try:
             return [
@@ -2992,6 +2993,47 @@ class OrderEngineSuite:
                         {'quote': self.book_at(994.90, 994.95), 'at': 1},
                         {'quote': self.book_at(994.90, 994.95), 'at': 2},
                     ],
+                    accepted,
+                ),
+                self.reaction_result(
+                    'a_routed_oto_reads_a_lower_case_then_as_a_stop_sell',
+                    self.scenarios.bodies.market_order(
+                        dry_run=None,
+                        order_type='LIMIT',
+                        price=1000,
+                        quantity=10,
+                        synthetic={
+                            'type': 'oto',
+                            'then': {
+                                'transaction_type': 'sell',
+                                'order_type': 'sl',
+                                'trigger_price': 990,
+                                'price': 988,
+                            },
+                        },
+                    ),
+                    [
+                        self.update('26091500000021', 'COMPLETE', 10),
+                    ],
+                    accepted,
+                ),
+                self.reaction_result(
+                    'a_routed_oto_refuses_a_stop_market_then',
+                    self.scenarios.bodies.market_order(
+                        dry_run=None,
+                        order_type='LIMIT',
+                        price=1000,
+                        quantity=10,
+                        synthetic={
+                            'type': 'oto',
+                            'then': {
+                                'transaction_type': 'sell',
+                                'order_type': 'sl-m',
+                                'trigger_price': 990,
+                            },
+                        },
+                    ),
+                    [],
                     accepted,
                 ),
                 self.price_result(

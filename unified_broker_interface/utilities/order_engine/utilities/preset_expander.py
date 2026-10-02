@@ -772,18 +772,30 @@ class PresetExpander:
                 )
         side = described.get('transaction_type')
         if side is not None:
-            if side not in OTO_SIDES:
+            written_side = side
+            if isinstance(side, str):
+                written_side = side.strip().upper()
+            if written_side not in OTO_SIDES:
                 self._add_problem(
                     path,
                     'bad_setting',
                     f'then.transaction_type must be BUY or SELL, not {side!r}',
                 )
             else:
-                child['side'] = OTO_SIDES[side]
+                child['side'] = OTO_SIDES[written_side]
         for name in OTO_OVERRIDES:
             if name in described:
                 child[name] = described[name]
         order_type = described.get('order_type')
+        if isinstance(order_type, str):
+            order_type = order_type.strip().upper()
+        if order_type is not None and order_type not in ('LIMIT', 'MARKET', 'SL'):
+            self._add_problem(
+                path,
+                'bad_setting',
+                f'then.order_type must be LIMIT, MARKET or SL in a plan, not {described.get("order_type")!r}; a stop-market has no limit price for the stop that rests at the broker, so give SL with a price',
+            )
+            return {}
         if order_type == 'SL':
             child['pricing'] = [
                 {
