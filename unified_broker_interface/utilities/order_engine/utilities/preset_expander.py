@@ -156,6 +156,14 @@ OTO_SETTINGS = (
     'order_type',
     'price',
     'trigger_price',
+    'instrument_id',
+    'product',
+    'validity',
+)
+OTO_OVERRIDES = (
+    'instrument_id',
+    'product',
+    'validity',
 )
 OTO_SIDES = {
     'BUY': 'buy',
@@ -712,8 +720,8 @@ class PresetExpander:
             if setting not in OTO_SETTINGS:
                 self._add_problem(
                     path,
-                    'not_built',
-                    f'an oto preset\'s then takes {", ".join(OTO_SETTINGS)} so far, not {setting!r}',
+                    'unknown_setting',
+                    f'an oto preset\'s then takes {", ".join(OTO_SETTINGS)}, not {setting!r}; its quantity follows the first order\'s fills and it carries no tag',
                 )
         side = described.get('transaction_type')
         if side is not None:
@@ -725,6 +733,9 @@ class PresetExpander:
                 )
             else:
                 child['side'] = OTO_SIDES[side]
+        for name in OTO_OVERRIDES:
+            if name in described:
+                child[name] = described[name]
         order_type = described.get('order_type')
         if order_type == 'SL':
             child['pricing'] = [

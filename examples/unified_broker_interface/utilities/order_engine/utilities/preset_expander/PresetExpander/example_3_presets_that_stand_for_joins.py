@@ -84,6 +84,18 @@ class PresetsThatStandForJoinsExample:
             {},
         )
         self.show('oto', {'then': {'transaction_type': 'SELL', 'price': 1010}}, {})
+        self.show(
+            'oto',
+            {
+                'then': {
+                    'transaction_type': 'SELL',
+                    'price': 1010,
+                    'product': 'CNC',
+                    'validity': 'IOC',
+                },
+            },
+            {},
+        )
         self.show('oco', {'stop_price': 990, 'stop_limit_price': 988}, entry)
         self.show('hidden_stop', {'trigger_price': 995, 'backstop_price': 980, 'backstop_limit_price': 978}, {})
         candidates = [

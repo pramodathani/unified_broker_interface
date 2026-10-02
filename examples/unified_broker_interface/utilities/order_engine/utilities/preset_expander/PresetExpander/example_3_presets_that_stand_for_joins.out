@@ -6,6 +6,7 @@ bracket: {"then": {"cancel_first_on_child_fill": true, "each_fill": {"either": {
 cover: {"then": {"cancel_first_on_child_fill": true, "each_fill": {"order": {"pricing": [{"native_stop": {"limit_price": 988, "trigger_price": 990}}], "side": "protect"}}, "first": {"order": {}}}}
 scale_out: {"then": {"cancel_first_on_child_fill": true, "each_fill": {"order": {"presets": [{"scale_out_exits": {"stop_limit_price": 988, "stop_price": 990, "target_prices": [1010, 1020]}}]}}, "first": {"order": {}}}}
 oto: {"then": {"each_fill": {"order": {"pricing": [{"fixed": {"price": 1010}}], "side": "sell"}}, "first": {"order": {}}}}
+oto: {"then": {"each_fill": {"order": {"pricing": [{"fixed": {"price": 1010}}], "product": "CNC", "side": "sell", "validity": "IOC"}}, "first": {"order": {}}}}
 oco: {"order": {"pricing": [{"native_stop": {"limit_price": 988, "trigger_price": 990}}], "side": "protect"}}
   root.presets.1 [nothing_to_merge_into]: the oco preset protects a position already held, so it has no order of its own for other presets or slot values to change
 hidden_stop: {"either": {"cancel_before_send": true, "children": [{"order": {"presets": [{"hidden_stop": {"trigger_price": 995}}]}}, {"order": {"pricing": [{"native_stop": {"limit_price": 978, "trigger_price": 980}}], "side": "protect"}}], "sibling_rule": "cancel"}}
