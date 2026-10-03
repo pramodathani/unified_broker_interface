@@ -69,7 +69,7 @@ Three fields can appear in any `synthetic` object. The table below lists them.
 |---|---|:---:|---|
 | `type` | string | Yes | One of the 54 names in the table below. A body with no `synthetic` object, or no `type`, runs as `simple`. An unknown name is refused with `400` and the message `the order engine does not run '<name>' orders; it runs <list>`. |
 | `closes_position` | boolean | No | `true` says every leg of this order closes a position, so it may use the part of a broker's daily order cap kept for exits. Only the literal `true` counts. |
-| `hold_limits` | boolean | No | For an order run as a plan, `true` holds each of its orders that would rest at the body's own limit price in the engine's virtual order book until the market reaches it, and `false` sends them as they come, as described under [`plan`](#plan). A type run as a plan that does not say takes its default when it arrives: `true` for `ladder` while `UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS` is on, `false` for every other type so far. A type the engine does not run as a plan refuses `true` with `400`. Anything other than `true` or `false` is refused with `400`. |
+| `hold_limits` | boolean | No | For an order run as a plan, `true` holds each of its orders that would rest at the broker at a fixed limit price in the engine's virtual order book until the market reaches it, and `false` sends them as they come, as described under [`plan`](#plan). A type run as a plan that does not say takes its default when it arrives: `true` for `ladder`, `scheduled`, `good_till_time`, `time_stop`, `account_conditional`, `limit_if_touched`, `indicator_triggered`, `cross_instrument` and `gtt` while `UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS` is on, `false` for every other type so far. A type the engine does not run as a plan refuses `true` with `400`. Anything other than `true` or `false` is refused with `400`. |
 
 The engine also writes its own working values into the parent's copy of the `synthetic` object, such as `tick_size`, `triggered_at`, `watermark`, `placed_quantity`, `started_at` and `expires_at`. These are internal, so do not send them.
 
@@ -119,8 +119,8 @@ The master table below lists every type registered in `SYNTHETIC_ORDER_CLASSES`,
 | `scale_out` | Linked orders | A bracket with several targets that take the position off in tranches. | `target_prices`, `stop_price`, `stop_limit_price`, `breakeven_after` | 200 |
 | `two_sided_breakout` | Linked orders | Rests a buy stop above a range and a sell stop below it, cancels the side that did not fire, and sets exits a distance from the fill. | `buy_trigger`, `buy_limit`, `sell_trigger`, `sell_limit`, `stop_distance`, `stop_limit_offset`, `target_distance` | 200 |
 | `scheduled` | Time-based | Holds the order until a time of day, then places it. | `at_time` | 202 |
-| `good_till_time` | Time-based | Places the order now and, at a time of day, cancels whatever has not filled or makes it marketable. | `until_time`, `at_expiry` | 200 |
-| `time_stop` | Time-based | Places an entry and closes what filled at a time of day or after some minutes. | `until_time` or `minutes` | 200 |
+| `good_till_time` | Time-based | Places the order now and, at a time of day, cancels whatever has not filled or makes it marketable; run as a plan, holds a limit until the market reaches it. | `until_time`, `at_expiry` | 200, or 202 when it is held |
+| `time_stop` | Time-based | Places an entry and closes what filled at a time of day or after some minutes; run as a plan, holds a limit entry until the market reaches it. | `until_time` or `minutes` | 200, or 202 when it is held |
 | `twap` | Execution algorithms | Sends equal slices at even intervals over a period. | `slices`, `over_minutes` | 200 |
 | `peg` | Book-following limits | Keeps a limit order re-priced to the bid, the offer or the midpoint. | `reference`, `offset_ticks`, `cap_price` | 200 |
 | `chaser` | Book-following limits | Starts on its own side of the book and steps towards the other until it fills. | `step_ticks`, `step_seconds`, `cap_price`, `cross_after_seconds` | 200 |
@@ -1219,13 +1219,26 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     | Order | Held by the request's `hold_limits: true`? |
     |---|---|
-    | A `LIMIT` order at the body's own price, sent whole, as a `DAY` or other validity than `IOC` | Yes |
+    | A `LIMIT` order at the body's own price or a `fixed` pricing's price, sent whole, with any validity but `IOC` | Yes |
     | A follow-on order in a Then join's child, such as an OTO's second order or a bracket's exits | No; only by its own `hold_limits` |
     | An order on the `protect` side | No; only by its own `hold_limits` |
     | A leg of a Together join with `group_margin`, as in a basket | Never; asking for it on the leg is refused |
-    | A `MARKET` order, an `IOC` or after-market order, or one priced by a pricing other than `fixed` without a price of its own | No; asking for it on the order is refused with the reason |
-    | An order sent in pieces, with a post-only guard or discretion, in the pre-open or on paper, or whose lifetime ends `marketable` | No; asking for it on the order is refused with the reason |
+    | A `MARKET` order, an `IOC` or after-market order, or one priced by a pricing other than `fixed` | No; asking for it on the order is refused with the reason |
+    | An order sent in pieces, with a post-only guard or discretion, in the pre-open or on paper, whose lifetime ends `marketable`, or whose lifetime bounds it only once it is `working` | No; asking for it on the order is refused with the reason |
     | A `ladder` preset in a held order | Each rung is held at its own price, as under [`ladder`](#ladder) |
+
+    These types are held by default when they are run as plans, because each sends one limit order whose only job is to rest until the market reaches it. Each one is held from the moment it would have been sent:
+
+    | Type | Held from | Left to rest at the broker when |
+    |---|---|---|
+    | `scheduled` | Its time | The body is not a `LIMIT` with a price |
+    | `good_till_time` | Placing | `at_expiry` is `market`, since a held order cannot be made marketable at the deadline |
+    | `time_stop` | Placing | The body is not a `LIMIT` with a price |
+    | `account_conditional` | The account figure reaching its level, even if it moves back | `action` is `cancel`, whose lifetime bounds only a working order |
+    | `limit_if_touched`, `indicator_triggered`, `cross_instrument` | The touch, even if the price moves back | Never; the limit is the type's own |
+    | `gtt` | The touch, across days until `valid_days` runs out | Never; the limit is the type's own |
+
+    A held `gtt` differs in one way from today's: once touched, today's sends a `DAY` limit that the exchange cancels at the close, while a held one keeps waiting in the engine for its limit, across days, until its `valid_days` runs out.
 
     The trigger conditions are these:
 

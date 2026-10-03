@@ -761,7 +761,7 @@ class PlanOrder(SyntheticOrder):
     def _change_held_part(self, part, price, quantity, dry_run):
         """Changes the price or quantity of one order this plan holds in the engine on a `limit_marketable` trigger.
 
-        A held rung of a Using join was given its share as its target, and a Using join is never resized, so a new quantity becomes the rung's target as well; otherwise the rung would still send the share it was given. An order held after a trigger of its own that has not fired yet has no held terms for the virtual book yet; they are worked out from the new price and quantity when the trigger fires.
+        A held rung of a Using join was given its share as its target, and a Using join is never resized, so a new quantity becomes the rung's target as well; otherwise the rung would still send the share it was given. An order held after a trigger of its own that has not fired yet has no held terms for the virtual book yet; they are worked out from the new price and quantity when the trigger fires. A new price is also kept as the caller's price, which is laid over the pricing when the order is sent, so an order with a `fixed` price of its own is sent at the new one.
 
         Args:
             part (OrderPart): The held order.
@@ -805,6 +805,8 @@ class PlanOrder(SyntheticOrder):
             return answer, 200
         record['held_price'] = str(changed.price)
         record['held_quantity'] = changed.quantity
+        if price is not None:
+            record['caller_price'] = str(changed.price)
         if record.get('piece_quantity') is not None:
             record['target'] = changed.quantity
         memory = record.get('memory') or {}
