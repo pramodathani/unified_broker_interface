@@ -1,15 +1,63 @@
-"""Sending orders of chosen synthetic types to the plan engine, as a plan of that type's preset, for the switch-over from the fixed types."""
+"""Running every named synthetic order type as a plan of that type's preset."""
 
 from unified_broker_interface.utilities.broker_orders.utilities.refused_request import (
     RefusedRequestError,
 )
-from unified_broker_interface.utilities.order_engine.utilities.preset_expander import (
-    PRESET_NAMES,
-)
-from unified_broker_interface.utilities.order_engine.utilities.registry import (
-    SYNTHETIC_ORDER_CLASSES,
-)
 
+ROUTED_TYPES = (
+    'account_conditional',
+    'accumulation',
+    'atr_trail',
+    'attached_hedge',
+    'basket',
+    'bracket',
+    'candle_close_stop',
+    'chaser',
+    'close_on_trigger',
+    'closing_price',
+    'cover',
+    'cross_instrument',
+    'daily_stop',
+    'discretionary',
+    'exposure_hedge',
+    'freeze_slicer',
+    'good_till_time',
+    'grid',
+    'gtt',
+    'hidden_stop',
+    'iceberg',
+    'implementation_shortfall',
+    'indicator_triggered',
+    'ladder',
+    'legged_spread',
+    'limit_if_touched',
+    'liquidity_seeking',
+    'market_if_touched',
+    'oca',
+    'oco',
+    'opening_auction',
+    'oto',
+    'participation',
+    'peg',
+    'post_only',
+    'scale_out',
+    'scale_with_profit_taker',
+    'scheduled',
+    'square_off',
+    'stepped_stop',
+    'stop_and_reverse',
+    'strategy_stop',
+    'time_stop',
+    'trailing_entry',
+    'trailing_stop',
+    'twap',
+    'two_sided_breakout',
+    'two_sided_quote',
+    'underlying_peg',
+    'virtual_limit',
+    'volatility',
+    'vwap',
+)
 PRESET_NAMES_BY_TYPE = {
     'gtt': 'good_till_triggered',
 }
@@ -40,73 +88,43 @@ HOLDING_TYPES = (
 
 
 class PlanRouting:
-    """Which of the fixed synthetic types are run as plans, and the rewriting of their intents.
+    """The rewriting of an intent for a named synthetic type into a plan of that type's preset.
 
-    Each fixed type has a preset, of the same name except for `gtt`, whose preset is `good_till_triggered`, built to send the same broker requests. The switch-over moves one type at a time, after its preset has traded live: a type named in `UNIFIED_BROKER_INTERFACE_API_ORDER_PLAN_TYPES` has its intents rewritten into a `plan` whose one order names that preset with the caller's settings, so the caller's request does not change. A type not named keeps its fixed class. The setting is empty by default, so nothing moves until it is filled in, and a name that is not both a fixed type and a preset stops the engine from starting rather than being ignored.
+    A caller names an order type, such as `bracket`, and the engine runs it as a `plan` whose one order names the type's preset with the caller's settings, so the caller's request is the same whichever way the engine runs it. Every type in `ROUTED_TYPES` has a preset of its own name, except `gtt`, whose preset is `good_till_triggered`. `simple` and `plan` are the only types the engine runs with classes of their own. The parent keeps the type's name as `routed_from`.
 
-    `closes_position` and `reduce_only` are not settings of a type but flags every type reads from the top of its parameters, so they stay there beside the plan rather than going into the preset, which would refuse them as unknown settings.
+    `closes_position` and `reduce_only` are not settings of a type but flags the plan reads from the top of its parameters, so they stay beside the plan rather than going into the preset, which would refuse them as unknown settings.
 
-    A plan the caller wrote is given `hold_limits` too, by `with_hold_limits`: the master switch's value when the caller did not say.
-
-    `hold_limits` is also taken out of the caller's settings and put beside the plan, where the plan reader reads it for the whole request. A routed order that does not say is given a value when it arrives: true for a type in `HOLDING_TYPES` while `UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS` is on, and false otherwise. Writing the value into the order means the plan read again after a restart holds the same orders, even if the setting or `HOLDING_TYPES` has changed since. A type that is not run as a plan cannot hold its orders, so `check_unrouted` refuses `hold_limits: true` for it rather than ignoring it.
+    `hold_limits` is taken out of the caller's settings and put beside the plan too, where the plan reader reads it for the whole request. An intent that does not say is given a value when it arrives: for a named type, true when it is in `HOLDING_TYPES` and `UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS` is on; for a plan the caller wrote, the switch's own value. Writing the value into the order means the plan read again after a restart holds the same orders, even if the setting or `HOLDING_TYPES` has changed since. A `simple` order cannot be held, so `check_unrouted` refuses `hold_limits: true` for it rather than ignoring it.
 
     Attributes:
-        type_names (list): The fixed types run as plans.
-        hold_limits (bool): Whether routed types may hold their limit orders, from `UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS`.
+        hold_limits (bool): Whether orders may be held in the virtual order book, from `UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS`.
     """
 
-    def __init__(self, type_names, hold_limits=True):
-        """Builds the routing, checking every name.
+    def __init__(self, hold_limits=True):
+        """Builds the routing.
 
         Args:
-            type_names (list): The fixed types to run as plans; empty strings are ignored.
-            hold_limits (bool): Whether routed types may hold their limit orders in the virtual order book.
+            hold_limits (bool): Whether orders may be held in the virtual order book.
 
         Returns:
             None: This method returns nothing.
-
-        Raises:
-            ValueError: When a name is not both a fixed synthetic type and a preset.
         """
         self.hold_limits = hold_limits
-        self.type_names = []
-        for name in type_names:
-            if not name:
-                continue
-            if name not in self.routable_names():
-                routable = ', '.join(self.routable_names())
-                raise ValueError(f'UNIFIED_BROKER_INTERFACE_API_ORDER_PLAN_TYPES names {name!r}, which is not a synthetic type with a plan preset; the types that can be run as plans are {routable}')
-            self.type_names.append(name)
 
     @staticmethod
     def preset_name(type_name):
-        """The preset a fixed type is run as.
+        """The preset a named type is run as.
 
         Args:
-            type_name (str): The fixed type.
+            type_name (str): The type.
 
         Returns:
             str: The preset's name, the type's own except where `PRESET_NAMES_BY_TYPE` says otherwise.
         """
         return PRESET_NAMES_BY_TYPE.get(type_name, type_name)
 
-    @staticmethod
-    def routable_names():
-        """Every fixed synthetic type that has a preset to run it as.
-
-        Returns:
-            list: The names, sorted.
-        """
-        names = []
-        for name in SYNTHETIC_ORDER_CLASSES:
-            if name in ('plan', 'simple'):
-                continue
-            if PlanRouting.preset_name(name) in PRESET_NAMES:
-                names.append(name)
-        return sorted(names)
-
     def routed(self, intent):
-        """The intent to run: unchanged for a type not routed, and for a routed one a copy whose order is a plan of that type's preset.
+        """The intent to run: a copy whose order is a plan of the type's preset for a routed type, a plan with its `hold_limits` written in for a plan, and otherwise the intent unchanged.
 
         Args:
             intent (dict): The intent document.
@@ -117,7 +135,7 @@ class PlanRouting:
         named_type = intent.get('synthetic_type')
         if named_type == 'plan':
             return self.with_hold_limits(intent)
-        if named_type not in self.type_names:
+        if named_type not in ROUTED_TYPES:
             return intent
         body = dict(intent.get('body') or {})
         settings = dict(body.get('synthetic') or {})
@@ -174,9 +192,9 @@ class PlanRouting:
         return stamped
 
     def check_unrouted(self, intent):
-        """Refuses `hold_limits: true` for an order the engine runs with a fixed type rather than as a plan.
+        """Refuses `hold_limits: true` for a `simple` order, which is sent at once by definition.
 
-        Only a plan can hold its orders in the virtual order book, so a fixed type asked to hold would otherwise send them at once without saying so. `hold_limits: false` asks for what a fixed type does anyway, and a plain limit order held as a `virtual_limit` is held whatever it says.
+        `hold_limits: false` asks for what a simple order does anyway.
 
         Args:
             intent (dict): The intent document, after `routed`.
@@ -185,10 +203,10 @@ class PlanRouting:
             None: This method returns nothing.
 
         Raises:
-            RefusedRequestError: With HTTP 400 when `hold_limits` is true for a fixed type, or is not true or false.
+            RefusedRequestError: With HTTP 400 when `hold_limits` is true for a simple order, or is not true or false.
         """
         named_type = intent.get('synthetic_type') or 'simple'
-        if named_type in ('plan', 'virtual_limit'):
+        if named_type != 'simple':
             return
         synthetic = (intent.get('body') or {}).get('synthetic')
         if not isinstance(synthetic, dict) or 'hold_limits' not in synthetic:
@@ -198,7 +216,7 @@ class PlanRouting:
             return
         if hold_limits is True:
             raise RefusedRequestError.refusal(
-                f'hold_limits asks for the orders to be held until the market reaches them, which only an order run as a plan can do; {named_type} is not, so name it in UNIFIED_BROKER_INTERFACE_API_ORDER_PLAN_TYPES or send it without hold_limits',
+                'hold_limits asks for the order to be held until the market reaches it, but a simple order is sent at once; send it as a plain limit order or a plan to hold it',
                 400,
                 intent_id=intent.get('intent_id'),
             )

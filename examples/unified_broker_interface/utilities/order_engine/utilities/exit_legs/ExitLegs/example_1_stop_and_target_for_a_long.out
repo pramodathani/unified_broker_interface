@@ -1,7 +1,0 @@
-Entry: BUY 100 LIMIT at 1000.00, tag swing42
-stop: SELL 100 MIS SL price 988.00 trigger 990.00 instrument 11111111-1111-5111-8111-000000000001 tag None
-target: SELL 100 MIS LIMIT price 1010.00 trigger 0 instrument 11111111-1111-5111-8111-000000000001 tag None
-Entry still: BUY 100, tag swing42
-exit_order for half at 1005: SELL 50 LIMIT price 1005.0 trigger 0.0
-price of target_price: Decimal('1010.00')
-price of a missing field: None

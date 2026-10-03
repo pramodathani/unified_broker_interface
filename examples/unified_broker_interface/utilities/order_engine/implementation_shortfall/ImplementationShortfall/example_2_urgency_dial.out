@@ -1,8 +1,0 @@
-Urgency 0.0: weights [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
-  quantities [150, 150, 150, 150, 150, 150]
-Urgency 0.5: weights [1.0, 0.75, 0.5625, 0.4219, 0.3164, 0.2373]
-  quantities [274, 205, 154, 115, 87, 65]
-Urgency 1.0: weights [1.0, 0.5, 0.25, 0.125, 0.0625, 0.0312]
-  quantities [457, 229, 114, 57, 29, 14]
-With no quote yet, arrival_price is None
-Urgency 1.5: HTTP 400, urgency must be between 0 and 1, not 1.5

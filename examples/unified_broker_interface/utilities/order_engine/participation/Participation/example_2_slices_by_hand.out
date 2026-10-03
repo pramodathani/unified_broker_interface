@@ -1,9 +1,0 @@
-lot_size before any broker is chosen: 1, chosen broker None
-volume_of: 701500, without a volume None, negative None
-marketable_price for a sell: 712.25
-send_slice: place SELL 300 LIMIT at 712.25 -> 260930000001, parent working, the market traded 1500, so 300 went out with it
-lot_size once zerodha is chosen: 1
-lot_size for the index future: 75
-The caller cut the slice to 200: placed so far 200
-A tick after 60,000 more traded, with most_slices 1: sent False
-Zero per cent: HTTP 400, participation_percent must be above zero and at most 100, not 0.0

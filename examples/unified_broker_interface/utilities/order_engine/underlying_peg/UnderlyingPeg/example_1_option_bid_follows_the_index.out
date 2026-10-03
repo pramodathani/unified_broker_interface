@@ -1,8 +1,0 @@
-Run: HTTP 200, outcome accepted, index at start 25000.00, following 12
-Index 25000.1: moved False, bid 120.0
-Index 25040.0: moved True, bid 135.0
-Index 24980.0: moved True, bid 110.0
-Sent to the broker:
-  place BUY 75 LIMIT at 120.00 -> 260930000001
-  modify 260930000001 price 135.00
-  modify 260930000001 price 110.00

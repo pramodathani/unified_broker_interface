@@ -1,3 +1,0 @@
-Buy at 999.95 (on_crossing refuse): HTTP 200, outcome accepted, parent working
-Buy at 1000.10 (on_crossing refuse): HTTP 409, a post-only BUY at 1000.10 would take liquidity against a book of 1000.00 bid and 1000.05 offered, so nothing was sent
-Sent to the broker: ['place BUY 10 LIMIT at 999.95 -> 260930000001']

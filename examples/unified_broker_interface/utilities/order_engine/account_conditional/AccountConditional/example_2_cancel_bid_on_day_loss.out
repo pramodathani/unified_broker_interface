@@ -1,9 +1,0 @@
-Run: HTTP 200, outcome accepted, order id 260930000001, parent working
-Tick 1: day profit -2000.0
-  acted: False, parent working
-Tick 2: day profit -5350.0
-  acted: True, parent cancelled
-  Why: day_pnl reached -5350.0, past the level of -5000, so the order is cancelled
-Sent to the broker: ['place BUY 50 LIMIT at 1470.00 -> 260930000001', 'cancel 260930000001']
-Open positions counted: 2
-default_direction refused with HTTP 400: an account-conditional order needs trigger_direction, at_or_above or at_or_below

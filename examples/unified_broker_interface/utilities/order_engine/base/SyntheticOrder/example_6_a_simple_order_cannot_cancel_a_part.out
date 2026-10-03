@@ -1,0 +1,6 @@
+Answer: HTTP 200, accepted: None
+A dry run cancelling part root: HTTP 409, a simple order has no parts, so part root cannot be cancelled; only a plan order has parts
+Part root cancelled: HTTP 409, a simple order has no parts, so part root cannot be cancelled; only a plan order has parts
+Part root.first cancelled: HTTP 409, a simple order has no parts, so part root.first cannot be cancelled; only a plan order has parts
+Events recorded by the refusals: 0, orders sent: 1
+Parent: working

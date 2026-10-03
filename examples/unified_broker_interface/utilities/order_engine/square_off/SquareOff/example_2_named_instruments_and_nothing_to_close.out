@@ -1,7 +1,0 @@
-Only INFY: product intraday, instruments {'11111111-1111-5111-8111-000000000002'}
-  sent ['place BUY 15 LIMIT at 1488.15 -> 260930000001']
-  parent working, 0 resting orders cancelled, 1 of 1 positions closed
-The delivery product: product delivery, instruments None
-  sent []
-  parent completed, there were no delivery positions to close
-instrument_ids as a single id: HTTP 400, instrument_ids must be a list of instrument ids

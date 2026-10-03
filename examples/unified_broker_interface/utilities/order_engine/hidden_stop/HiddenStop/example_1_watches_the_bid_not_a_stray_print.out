@@ -1,6 +1,0 @@
-Run: HTTP 202, outcome armed, fires at_or_below 1690
-A long fires at_or_below, a short at_or_above; the exit is priced 2 ticks past the touch
-Last trade 1684.0, bid 1695.4: watched 1695.40, fired False
-Last trade 1690.1, bid 1689.8: watched 1689.80, fired True
-Sent to the broker: ['place SELL 25 LIMIT at 1689.70 -> 260930000001']
-Parent: working, 1689.80 reached the trigger at 1690; accepted

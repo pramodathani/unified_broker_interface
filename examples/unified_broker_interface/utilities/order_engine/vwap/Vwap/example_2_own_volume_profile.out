@@ -1,8 +1,0 @@
-Profile (4.0, 1.0, 1.0, 2.0): weights [4.0, 1.0, 1.0, 2.0], sizes [500, 125, 125, 250]
-bucket_of(08:30): 0
-bucket_of(09:44): 0
-bucket_of(15:29): 12
-bucket_of(16:00): 13
-An empty profile: HTTP 400, volume_profile must be a list of relative weights, one per half hour from the open
-A negative weight: HTTP 400, volume_profile weights cannot be negative, not -1.0
-Weights adding up to nothing: HTTP 400, volume_profile weights must add up to more than zero

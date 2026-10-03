@@ -1,5 +1,0 @@
-Run: HTTP 200, outcome accepted, sent place BUY 100 LIMIT at 1200.00 -> 260930000001
-60 filled: parent protecting, sent place SELL 60 LIMIT at 1230.00 -> 260930000002
-100 filled: parent protecting, sent modify 260930000002 quantity 100
-Leg entry BUY 100 at 1200.0
-Leg child SELL 100 at 1230.0

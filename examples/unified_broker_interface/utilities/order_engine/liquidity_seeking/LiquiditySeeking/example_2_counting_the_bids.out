@@ -1,4 +1,0 @@
-Bids at 48.00 or better: 350
-strike: ['place SELL 350 LIMIT at 48.00 -> 260930000001'], parent working
-The caller cut the strike to 250: placed so far 250, so 350 is still to do
-No minimum_quantity: HTTP 400, a liquidity-seeking order needs minimum_quantity, the size that has to be showing before it strikes

@@ -1,6 +1,6 @@
 """Shows the synthetic limit order book following the held orders of a plan, each under its own key.
 
-A plan can hold several orders at once, so `VirtualBook.held_documents` turns each order still waiting on a `limit_marketable` trigger into a record of its own, built from the terms the trigger wrote into the order's memory, and keyed by `VirtualBook.part_key`: the parent id and the order's path. A held rung of a scale with profit-taker is keyed by `VirtualBook.rung_path` beneath its part's path. This program gives the book a plan with two held orders, one order that has already been sent and one waiting on a price, and a plain `virtual_limit` parent beside it. Redis is a small stand-in, and the parent cache is a dictionary.
+A plan can hold several orders at once, so `VirtualBook.held_documents` turns each order still waiting on a `limit_marketable` trigger into a record of its own, built from the terms the trigger wrote into the order's memory, and keyed by `VirtualBook.part_key`: the parent id and the order's path. A held rung of a scale with profit-taker is keyed by `VirtualBook.rung_path` beneath its part's path. This program gives the book a plan with two held orders, one order that has already been sent and one waiting on a price. Redis is a small stand-in, and the parent cache is a dictionary.
 
 Notice that the sent order and the one waiting on a price are not followed, and that when the plan closes both of its estimates are removed, because each key starts with the plan's parent id.
 
@@ -207,22 +207,6 @@ class PlansHeldOrdersExample:
         """
         self.documents = {
             'plan': self.plan(),
-            'single': {
-                'parent_order_id': 'single',
-                'synthetic_type': 'virtual_limit',
-                'state': 'received',
-                'instrument_id': 'NSE:INFY',
-                'body': {
-                    'transaction_type': 'BUY',
-                    'order_type': 'LIMIT',
-                    'price': 1500,
-                    'quantity': 10,
-                },
-                'parameters': {
-                    'type': 'virtual_limit',
-                },
-                'legs': [],
-            },
         }
         self.cache = StandInRedis()
         self.book = VirtualBook(

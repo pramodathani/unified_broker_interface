@@ -40,16 +40,10 @@ OUTCOME_PARENT_STATES = {
     'rejected': 'rejected',
     'unknown': 'failed',
 }
-EXIT_ROLES = (
-    'stop',
-    'target',
-    'close',
-    'backstop',
-)
 
 
 class SyntheticOrder:
-    """One parent order being run, whatever kind it is.
+    """One parent order being run: a `simple` order or a `plan`, the two kinds the engine runs.
 
     A subclass sets `SYNTHETIC_TYPE` and implements `run`, which is called once with the intent that started it, and may implement `on_leg_update` for a type that reacts to fills. Everything a type shares is here: creating the parent, recording a leg before its request leaves, reading the broker's answer into the parent's state, and keeping Redis in step.
 
@@ -61,7 +55,6 @@ class SyntheticOrder:
         WANTS_PRICES (bool): Whether this type is watching the market, and so wants the live quote about once a second.
         FINISHES_WITH_LEGS (bool): Whether the parent is done once every leg has finished, for a type that places everything at once and does nothing afterwards.
         CARRIES_OVERNIGHT (bool): Whether a parent of this type outlives the trading day, so that recovery reads its events from further back than this morning.
-        CLOSES_POSITIONS (bool): Whether every leg this type places closes a position, whatever the leg's role is called, so that it may use the part of a broker's daily cap kept for exits.
         parent (ParentOrder): The parent being run.
         placement (EnginePlacement): What reads Redis, chooses a broker and sends.
         event_log (SyntheticOrderEventLog): Where transitions are recorded.
@@ -74,7 +67,6 @@ class SyntheticOrder:
     WANTS_PRICES = False
     FINISHES_WITH_LEGS = False
     CARRIES_OVERNIGHT = False
-    CLOSES_POSITIONS = False
 
     def __init__(
         self,
@@ -261,7 +253,7 @@ class SyntheticOrder:
 
         Only types that set `WANTS_PRICES` are given this, and only while their parent is open. A quote is the instrument's whole entry in `unified:quotes:live`, read once for every parent watching that instrument, so two parents can never act on two different pictures of the same moment.
 
-        It is a dictionary rather than one quote because a few types deliberately watch something other than what they trade: a cross-instrument conditional exits an option when the index moves. Most types want `own_quote` and nothing else.
+        It is a dictionary rather than one quote because a few types deliberately watch something other than what they trade: a plan's order may watch the index while it trades an option.
 
         A quote is None when the feed has not carried that instrument yet, which is normal early in the morning and after a feed restart. A type that cannot act without a price returns False and waits for the next tick rather than guessing.
 
@@ -347,17 +339,6 @@ class SyntheticOrder:
             if leg.broker:
                 return leg.broker
         return None
-
-    def own_quote(self, quotes):
-        """This parent's own instrument's quote, out of the ones a tick carried.
-
-        Args:
-            quotes (dict): The quotes the tick carried.
-
-        Returns:
-            dict | None: The quote, or None when the feed has not carried this instrument.
-        """
-        return quotes.get(self.parent.instrument_id)
 
     def cancel_leg(self, leg, reason):
         """Cancels one leg at its broker and records both the asking and the answer.
@@ -1356,18 +1337,15 @@ class SyntheticOrder:
     def closes_position(self, role):
         """Whether a leg closes a position, and so may use the part of a broker's daily cap kept for exits.
 
-        A leg closes a position when its role says so, when its type only ever places exits, or when the caller said so with `closes_position` in the order's parameters. The last is how a plain order sent to get out of a position is told apart from one sent to get into it, which nothing else can tell.
+        Here a leg closes a position when the caller said so with `closes_position` in the order's parameters, which is how a plain order sent to get out of a position is told apart from one sent to get into it, since nothing else can tell. A plan adds the legs its own parts send to close or protect a position.
 
         Args:
-            role (str): The leg's role.
+            role (str): The leg's role, unused here.
 
         Returns:
             bool: True when the leg closes a position.
         """
-        if role in EXIT_ROLES:
-            return True
-        if self.CLOSES_POSITIONS:
-            return True
+        del role
         return self.parent.parameters.get('closes_position') is True
 
     def save(self):

@@ -31,7 +31,6 @@ from test_runs import order_routes
 from test_runs import redis_stand_ins
 from unified_broker_interface.utilities.order_engine.utilities import engine_lock
 from unified_broker_interface.utilities.order_engine.utilities import moments
-from unified_broker_interface.utilities.order_engine.utilities import plan_routing
 from unified_broker_interface.utilities.order_engine.utilities.book_reconciler import (
     BookReconciler,
 )
@@ -2530,6 +2529,7 @@ class OrderEngineSuite:
         answer=None,
         gated=False,
         quote=None,
+        positions=None,
     ):
         """Places one order through the engine, then feeds it order updates and records what it does.
 
@@ -2544,6 +2544,7 @@ class OrderEngineSuite:
             answer (dict | None): The stubbed broker answer.
             gated (int | bool): How many requests a second the rate budget allows, or False for no budget.
             quote (dict | None): A live quote to seed, for a type that reads the book when it is placed.
+            positions (float | None): A net position in RELIANCE to seed, for an order that protects one.
 
         Returns:
             dict: The recorded result.
@@ -2552,6 +2553,8 @@ class OrderEngineSuite:
         self.fake_redis = self.build_state()
         if quote is not None:
             self.seed_quote(quote)
+        if positions is not None:
+            self.seed_positions(positions)
         self.network.reset(answer)
         self.counting_uuid.reset()
         reply_keys = self.write_intents(scenario)
@@ -2921,14 +2924,7 @@ class OrderEngineSuite:
             quantity=10,
         )
         steady = self.book_at(1000.00, 1000.05)
-        original_plan_types = api_configuration['order_plan_types']
         original_hold_limits = api_configuration['order_hold_limits']
-        api_configuration['order_plan_types'] = [
-            'grid',
-            'bracket',
-            'market_if_touched',
-            'oto',
-        ]
         api_configuration['order_hold_limits'] = False
         try:
             return [
@@ -3056,7 +3052,6 @@ class OrderEngineSuite:
                 ),
             ]
         finally:
-            api_configuration['order_plan_types'] = original_plan_types
             api_configuration['order_hold_limits'] = original_hold_limits
 
     def run_plan_held_ladder_checks(self):
@@ -3193,19 +3188,15 @@ class OrderEngineSuite:
         )
         results.append(
             self.price_result(
-                'a_fixed_ladder_refuses_hold_limits_true',
-                dict(entry, synthetic=dict(ladder_settings, type='ladder', hold_limits=True)),
+                'a_simple_order_refuses_hold_limits_true',
+                dict(entry, synthetic={'type': 'simple', 'hold_limits': True}),
                 [
                     {'quote': steady, 'at': 0},
                 ],
                 accepted,
             )
         )
-        original_plan_types = api_configuration['order_plan_types']
         original_hold_limits = api_configuration['order_hold_limits']
-        api_configuration['order_plan_types'] = [
-            'ladder',
-        ]
         api_configuration['order_hold_limits'] = True
         try:
             results.append(
@@ -3237,7 +3228,6 @@ class OrderEngineSuite:
                 )
             )
         finally:
-            api_configuration['order_plan_types'] = original_plan_types
             api_configuration['order_hold_limits'] = original_hold_limits
         return results
 
@@ -3463,9 +3453,7 @@ class OrderEngineSuite:
                 'unrealized': 0.0,
             },
         }
-        original_plan_types = api_configuration['order_plan_types']
         original_hold_limits = api_configuration['order_hold_limits']
-        api_configuration['order_plan_types'] = list(plan_routing.HOLDING_TYPES)
         api_configuration['order_hold_limits'] = True
         try:
             return [
@@ -3640,7 +3628,6 @@ class OrderEngineSuite:
                 ),
             ]
         finally:
-            api_configuration['order_plan_types'] = original_plan_types
             api_configuration['order_hold_limits'] = original_hold_limits
 
     def run_holding_joins_checks(self):
@@ -3732,9 +3719,7 @@ class OrderEngineSuite:
                 ],
             },
         }
-        original_plan_types = api_configuration['order_plan_types']
         original_hold_limits = api_configuration['order_hold_limits']
-        api_configuration['order_plan_types'] = list(plan_routing.HOLDING_TYPES)
         api_configuration['order_hold_limits'] = True
         try:
             return [
@@ -3777,9 +3762,9 @@ class OrderEngineSuite:
                                 'price': 1000,
                             },
                             {
-                                'instrument_id': identifiers['reliance'],
+                                'instrument_id': identifiers['kwil'],
                                 'quantity': 10,
-                                'price': 995,
+                                'price': 250,
                             },
                         ],
                     }),
@@ -3885,7 +3870,6 @@ class OrderEngineSuite:
                 ),
             ]
         finally:
-            api_configuration['order_plan_types'] = original_plan_types
             api_configuration['order_hold_limits'] = original_hold_limits
 
     def held_plan_body(self, plan, hold_limits):
@@ -7529,14 +7513,13 @@ class OrderEngineSuite:
                 numbered,
             ),
             self.price_result(
-                'a_type_that_is_not_a_plan_has_no_parts_to_change',
+                'a_simple_order_has_no_parts_to_change',
                 self.scenarios.bodies.market_order(
                     dry_run=None,
                     order_type='MARKET',
                     quantity=10,
                     synthetic={
-                        'type': 'market_if_touched',
-                        'trigger_price': 995,
+                        'type': 'simple',
                     },
                 ),
                 [
@@ -7719,14 +7702,13 @@ class OrderEngineSuite:
                 numbered,
             ),
             self.price_result(
-                'a_type_that_is_not_a_plan_has_no_parts_to_cancel',
+                'a_simple_order_has_no_parts_to_cancel',
                 self.scenarios.bodies.market_order(
                     dry_run=None,
                     order_type='MARKET',
                     quantity=10,
                     synthetic={
-                        'type': 'market_if_touched',
-                        'trigger_price': 995,
+                        'type': 'simple',
                     },
                 ),
                 [
@@ -7787,7 +7769,7 @@ class OrderEngineSuite:
                 numbered,
             ),
             self.plan_result(
-                'a_plan_basket_may_repeat_an_instrument',
+                'a_plan_basket_refuses_a_repeated_instrument',
                 {
                     'order': {
                         'presets': [
@@ -8867,6 +8849,7 @@ class OrderEngineSuite:
                     self.update('26091500000021', 'OPEN', 4),
                 ],
                 accepted,
+                positions=10,
             ),
             self.reaction_result(
                 'an_oco_takes_only_the_new_part_of_a_second_fill_off_the_sibling',
@@ -8888,6 +8871,7 @@ class OrderEngineSuite:
                     self.update('26091500000102', 'OPEN', 7),
                 ],
                 dict(accepted, number_orders=True),
+                positions=10,
             ),
             self.reaction_result(
                 'a_scale_out_takes_only_the_new_part_of_a_targets_second_fill_off_the_stop',
@@ -10001,6 +9985,7 @@ class OrderEngineSuite:
                     {'quote': touched, 'at': 2},
                 ],
                 accepted,
+                positions=10,
             ),
         ]
         original_cancel = EnginePlacement.cancel
@@ -10015,6 +10000,7 @@ class OrderEngineSuite:
                     {'quote': touched, 'at': 2},
                 ],
                 accepted,
+                positions=10,
             ))
         finally:
             EnginePlacement.cancel = original_cancel
@@ -10063,6 +10049,7 @@ class OrderEngineSuite:
                     {'at': day_one_arm.replace(hour=11), 'updates': [stop_filled]},
                     {'at': day_two_arm, 'quote': quote},
                 ],
+                positions=10,
             ))
         results.append(self.days_result(
             'a_plan_daily_stop_that_traded_places_nothing_the_next_morning_below_the_stop',
@@ -10526,6 +10513,7 @@ class OrderEngineSuite:
                 accepted,
                 taken_at=FROZEN_NOW.replace(day=27).replace(hour=8, minute=45),
                 quote=self.scenarios.quote(),
+                positions=10,
             ),
             self.clock_result(
                 'a_daily_stop_taken_after_its_time_waits_for_the_next_trading_morning',
@@ -10535,6 +10523,7 @@ class OrderEngineSuite:
                 accepted,
                 taken_at=FROZEN_NOW,
                 quote=self.scenarios.quote(),
+                positions=10,
             ),
             self.clock_result(
                 'a_closing_price_order_taken_on_a_sunday_is_scheduled_for_monday',
@@ -10633,6 +10622,7 @@ class OrderEngineSuite:
                 accepted,
                 taken_at=FROZEN_NOW.replace(hour=8, minute=45),
                 quote=self.scenarios.quote(),
+                positions=10,
             ),
             self.clock_result(
                 'a_daily_stop_closes_the_position_when_the_open_gapped_past_it',
@@ -10657,6 +10647,7 @@ class OrderEngineSuite:
                         ],
                     },
                 ),
+                positions=10,
             ),
             self.clock_result(
                 'a_square_off_cancels_what_is_resting_and_closes_what_is_held',
@@ -11342,6 +11333,7 @@ class OrderEngineSuite:
                     {'quote': steady, 'at': 70},
                 ],
                 accepted,
+                positions=10,
             ),
             self.price_result(
                 'a_candle_close_stop_fires_on_a_bar_that_closed_below',
@@ -11357,6 +11349,7 @@ class OrderEngineSuite:
                     {'quote': self.book_at(990.00, 990.05), 'at': 70},
                 ],
                 accepted,
+                positions=10,
             ),
             self.price_result(
                 'an_average_range_trail_uses_its_fixed_fallback_until_it_has_bars',
@@ -11376,6 +11369,7 @@ class OrderEngineSuite:
                     'order_type': 'SL',
                     'trigger_price': 990.05,
                 },
+                positions=10,
             ),
             self.price_result(
                 'an_average_range_trail_widens_once_enough_bars_have_closed',
@@ -11399,6 +11393,7 @@ class OrderEngineSuite:
                     'order_type': 'SL',
                     'trigger_price': 990.05,
                 },
+                positions=10,
             ),
             self.price_result(
                 'a_trailing_stop_follows_a_rising_market_and_not_a_falling_one',
@@ -11418,6 +11413,7 @@ class OrderEngineSuite:
                     'order_type': 'SL',
                     'trigger_price': 990.05,
                 },
+                positions=10,
             ),
             self.price_result(
                 'a_trailing_stop_measured_as_a_percentage_widens_as_it_goes',
@@ -11435,6 +11431,7 @@ class OrderEngineSuite:
                     'order_type': 'SL',
                     'trigger_price': 990.05,
                 },
+                positions=10,
             ),
             self.price_result(
                 'a_trailing_stop_ignores_a_move_smaller_than_its_step',
@@ -11454,6 +11451,7 @@ class OrderEngineSuite:
                     'order_type': 'SL',
                     'trigger_price': 990.05,
                 },
+                positions=10,
             ),
             self.price_result(
                 'a_trailing_entry_follows_a_falling_market_down',
@@ -11508,6 +11506,7 @@ class OrderEngineSuite:
                     'order_type': 'SL',
                     'trigger_price': 1025.05,
                 },
+                positions=10,
             ),
             self.price_result(
                 'a_trailing_take_profit_places_nothing_below_its_level',
@@ -11523,6 +11522,7 @@ class OrderEngineSuite:
                     {'quote': self.book_at(990.00, 990.05), 'at': 2},
                 ],
                 accepted,
+                positions=10,
             ),
             self.price_result(
                 'a_trailing_take_profit_with_a_level_below_zero_is_refused',
@@ -11572,6 +11572,7 @@ class OrderEngineSuite:
                     'order_type': 'SL',
                     'trigger_price': 990.0,
                 },
+                positions=10,
             ),
             self.price_result(
                 'a_stepped_stop_that_jumps_past_every_milestone_starts_trailing',
@@ -11604,6 +11605,7 @@ class OrderEngineSuite:
                     'order_type': 'SL',
                     'trigger_price': 990.0,
                 },
+                positions=10,
             ),
             self.price_result(
                 'a_stepped_stop_with_a_trail_before_its_last_rule_is_refused',
@@ -12436,6 +12438,7 @@ class OrderEngineSuite:
                     {'quote': self.book_at(994.90, 995.20), 'at': 1},
                 ],
                 accepted,
+                positions=10,
             ),
             self.price_result(
                 'a_hidden_stop_is_not_fired_by_a_last_trade_the_book_never_reached',
@@ -12453,6 +12456,7 @@ class OrderEngineSuite:
                     },
                 ],
                 accepted,
+                positions=10,
             ),
             self.price_result(
                 'a_cross_instrument_order_is_fired_by_the_instrument_it_watches',
@@ -12752,15 +12756,15 @@ class OrderEngineSuite:
         recorder = ModifyRecorder()
         placement.modify_leg = recorder.modify_leg
         parent = ParentOrder('crude-parent')
-        parent.synthetic_type = 'oco'
+        parent.synthetic_type = 'plan'
         parent.instrument_id = crude
         parent.body = {}
-        leg = OrderLeg('crude-parent:1', 'stop')
+        leg = OrderLeg('crude-parent:1', 'root.each_fill.children.0')
         leg.broker = 'zerodha'
         leg.broker_order_id = '2104110000000001'
         leg.quantity = 300
         parent.legs.append(leg)
-        runner = SYNTHETIC_ORDER_CLASSES['oco'](
+        runner = SYNTHETIC_ORDER_CLASSES['plan'](
             parent,
             placement,
             engine_stand_ins.RecordingEventLog(),
@@ -13136,7 +13140,6 @@ class OrderEngineSuite:
         original_uuid4 = uuid.uuid4
         original_excluded = api_configuration['order_excluded_brokers']
         original_selector = api_configuration['order_broker_selector']
-        original_plan_types = api_configuration['order_plan_types']
         original_now = moments.Moments.now
         requests.Session.request = self.network.request
         uuid.uuid4 = self.counting_uuid
@@ -13145,9 +13148,6 @@ class OrderEngineSuite:
             '',
         ]
         api_configuration['order_broker_selector'] = 'round_robin'
-        api_configuration['order_plan_types'] = [
-            '',
-        ]
         original_hold_limits = api_configuration['order_hold_limits']
         api_configuration['order_hold_limits'] = False
         try:
@@ -13201,7 +13201,6 @@ class OrderEngineSuite:
             moments.Moments.now = original_now
             api_configuration['order_excluded_brokers'] = original_excluded
             api_configuration['order_broker_selector'] = original_selector
-            api_configuration['order_plan_types'] = original_plan_types
             api_configuration['order_hold_limits'] = original_hold_limits
         return results
 

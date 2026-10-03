@@ -64,7 +64,7 @@ Two more packages follow the same layout, but their "cases" are not brokers. The
 | `unified_broker_interface/utilities/broker_selection/` | `BrokerSelector` | selection algorithm (`lowest_cost.py`, `round_robin.py`, `fixed_priority.py`) | `NAME` and `ranked_brokers`; overrides `queue_redis_commands` when it needs Redis, `record_passed_over` when it counts the brokers passed over, `record_chosen` when it tracks its own choices and `record_outcome` when it learns from answers |
 | `unified_broker_interface/utilities/order_engine/` | `SyntheticOrder` | synthetic order type (54 of them, from `simple.py` to `plan.py`) | `SYNTHETIC_TYPE` and `run`; may implement `on_leg_update`, `on_clock_tick` or `on_price_tick` |
 
-The selectors are registered in `BROKER_SELECTOR_CLASSES` in `broker_selection/utilities/registry.py`, and the order types in `SYNTHETIC_ORDER_CLASSES` in `order_engine/utilities/registry.py`.
+The selectors are registered in `BROKER_SELECTOR_CLASSES` in `broker_selection/utilities/registry.py`, and the two order classes the engine runs, `simple` and `plan`, in `SYNTHETIC_ORDER_CLASSES` in `order_engine/utilities/registry.py`, with every other order type in `ROUTED_TYPES` in `order_engine/utilities/plan_routing.py`.
 
 ## Class hierarchies
 

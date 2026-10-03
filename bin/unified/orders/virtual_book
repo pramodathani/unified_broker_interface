@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
-Keep the synthetic limit order book: a queue estimate for every held `virtual_limit` order, moved on by every quote
+Keep the synthetic limit order book: a queue estimate for every order the engine holds, moved on by every quote
 for its instrument, in the Redis hash `unified:orders:virtual_queue`, until stopped.
 
     bin/unified/orders/virtual_book
-    redis-cli HGET unified:orders:virtual_queue <parent order id>
+    redis-cli HGET unified:orders:virtual_queue <parent order id>/root
 
-Nothing here calls a broker or places an order. The order engine holds a `virtual_limit` order instead of sending it,
-and sends a real limit at the caller's price only when the other side of the book reaches that price. What it cannot
+Nothing here calls a broker or places an order. The order engine holds a plan's limit order, such as a plain limit
+order or a ladder's rung, instead of sending it, and sends a real limit at its price only when the other side of the
+book reaches that price. What it cannot
 see from the one quote it reads a second is how the order would have fared resting at the exchange. This script
 works that out from `unified:quotes:stream`, which `bin/unified/instruments/websocket_quotes` writes, one estimate per
 held order: how much is ahead of it in the queue at its price (`ahead`), how much the queue would have filled
@@ -15,9 +16,10 @@ held order: how much is ahead of it in the queue at its price (`ahead`), how muc
 `queue_filled` at the moment it is sent is the cost of holding it back; for a paper order, `filled` is what the engine
 fills it with.
 
-**Which orders.** Every open `virtual_limit` parent in the engine's parent cache whose trigger has not fired, and
-every order of an open plan still waiting on a `limit_marketable` trigger, read every two seconds. A plan's order is
-keyed by the parent id and its path, as `<parent id>/root`. A fired order's last estimate stays in the hash, unchanged,
+**Which orders.** Every order of an open plan still waiting on a `limit_marketable` trigger, and every pending rung of
+a scale with profit-taker that holds its rungs, read from the engine's parent cache every two seconds. An order is
+keyed by the parent id and its path, as `<parent id>/root`, and a rung by its part's path, `/rung`, its position and
+its cycle, as `<parent id>/root/rung0.0`. A fired order's last estimate stays in the hash, unchanged,
 until its parent is no longer open, and is then removed.
 
 **Reading the stream.** A plain `XREAD` from the moment the script starts, 1,000 entries at a time, blocking for one

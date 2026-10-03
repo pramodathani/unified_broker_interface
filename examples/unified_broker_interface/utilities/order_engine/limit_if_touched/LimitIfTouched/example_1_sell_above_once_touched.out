@@ -1,5 +1,0 @@
-Run: HTTP 202, outcome armed, fires at_or_above 1510, rests at 1512.00
-Last 1505.4: fired False
-Last 1510.2: fired True
-Sent to the broker: ['place SELL 50 LIMIT at 1512.00 -> 260930000001']
-Parent: working, 1510.20 reached the trigger at 1510; accepted

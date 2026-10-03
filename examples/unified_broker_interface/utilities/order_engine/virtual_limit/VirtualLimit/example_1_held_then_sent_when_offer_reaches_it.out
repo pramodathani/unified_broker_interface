@@ -1,8 +1,0 @@
-Run: HTTP 202, outcome armed, paper False (is_paper False), held at 1000.00
-Offer at 1000.2: sent False
-modify_held dry run: HTTP 200, the change is valid; nothing was changed
-modify_held: HTTP 200, accepted, now 100 at 1000.10; orders sent so far 0
-held_order: BUY 100 at 1000.10
-Offer at 1000.1: sent True
-Sent to the broker: ['place BUY 100 LIMIT at 1000.10 -> 260930000001']; missed_quantity 40
-modify_held after sending: HTTP 409, the order has already been sent to a broker, so change it with broker and order_id instead of parent_id; change broker zerodha order 260930000001 instead

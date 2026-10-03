@@ -199,7 +199,7 @@ class PlanOrder(SyntheticOrder):
     def _answer(self, root, placed, warnings):
         """The answer to the caller once the plan has started.
 
-        A plan that placed exactly one order at its root answers with that order's broker answer, as a plain order does. A plan whose order a guard refused, such as a post-only limit that would have crossed, answers `409` with the guard's reason. A plan that placed nothing else answers `202 armed`. Any other answers with `legs`, one entry per order placed, and an outcome combined as today's types combine several orders: `accepted` when all were, `partial` with 207 when some were, and otherwise `rejected` or `unknown`.
+        A plan that placed exactly one order at its root answers with that order's broker answer, as a plain order does. A plan whose order a guard refused, such as a post-only limit that would have crossed, answers `409` with the guard's reason. A plan that placed nothing else answers `202 armed`. Any other answers with `legs`, one entry per order placed, an outcome combined from theirs, `accepted` when all were, `partial` with 207 when some were, and otherwise `rejected` or `unknown`, and the first order's `timing_ms`.
 
         Args:
             root (object): The root part.
@@ -262,6 +262,7 @@ class PlanOrder(SyntheticOrder):
                 'legs': legs,
                 'status_message': None,
                 'skipped': [],
+                'timing_ms': placed[0][1].get('timing_ms') or {},
             }
         answer['parent_id'] = self.parent.parent_order_id
         if warnings:

@@ -3,7 +3,7 @@
 Besides placing and changing legs, the base class gives every order type a few readers and defaults that this program calls directly:
 
 - `remember_tick_size` works out the tick size the brokers agree on and keeps it on the parent as text, and `tick_size` reads it back; when the brokers disagree it refuses with HTTP 503, because a type that computes prices cannot run without one.
-- `trading_segment` names the instrument's segment, `own_quote` picks the parent's own quote out of a tick, and `view` wraps a quote with the tick size.
+- `trading_segment` names the instrument's segment, and `view` wraps a quote with the tick size.
 - `on_leg_update`, `on_clock_tick` and `on_price_tick` do nothing in the base class; a type overrides the ones it needs.
 - `combined_answer` turns several orders' outcomes into one answer: all accepted is 200, none accepted is `unknown` or `rejected`, and a mix is `partial` with 207.
 - `finish_with_legs` ends a type that is done once its legs are: `completed` when anything traded and `cancelled` when nothing did, and nothing while a leg is still resting.
@@ -545,7 +545,7 @@ class MarketReadersAndFinishingExample:
             INSTRUMENT_ID: self.placement.quotes[INSTRUMENT_ID],
             OTHER_ID: None,
         }
-        print(f"own_quote last price: {runner.own_quote(quotes)['last_price']}; view: bid {runner.view(quotes).best_bid()}, offer {runner.view(quotes).best_offer()}, other instrument readable {runner.view(quotes, OTHER_ID).is_readable()}")
+        print(f"view: bid {runner.view(quotes).best_bid()}, offer {runner.view(quotes).best_offer()}, other instrument readable {runner.view(quotes, OTHER_ID).is_readable()}")
         print(f'on_clock_tick: {runner.on_clock_tick(1790000000.0)}, on_price_tick: {runner.on_price_tick(quotes, 1790000000.0)}, on_leg_update: {runner.on_leg_update(None, {})}')
         disagreeing = self.runner(SyntheticOrder, DisagreeingPlacement(), StandInParentStore())
         try:

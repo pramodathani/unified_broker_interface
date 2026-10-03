@@ -378,7 +378,7 @@ class PresetExpander:
     def _candidate_orders(self, settings, entry, path, name):
         """One order per candidate, each the rest of the order it was named in with the candidate's own instrument, side, quantity and prices.
 
-        A candidate's `price` and `order_type` become `fixed` pricing, and with a `trigger_price` a `native_stop` at that trigger and limit, replacing whatever pricing the rest of the order gave.
+        A candidate's `price` and `order_type` become `fixed` pricing, and with a `trigger_price` a `native_stop` at that trigger and limit, replacing whatever pricing the rest of the order gave. Two candidates on the same instrument are refused, as the basket, OCA, strategy stop and legged spread types always refused them.
 
         Args:
             settings (dict): The preset's settings, holding `candidates`.
@@ -398,11 +398,16 @@ class PresetExpander:
             )
             return []
         nodes = []
+        seen = []
         for index, candidate in enumerate(candidates):
             candidate_path = f'{path}.candidates.{index}'
             if not isinstance(candidate, dict) or not candidate.get('instrument_id'):
                 self._add_problem(candidate_path, 'bad_setting', 'a candidate is an object naming its instrument_id')
                 continue
+            if candidate['instrument_id'] in seen:
+                self._add_problem(candidate_path, 'repeated_instrument', f'candidate {index + 1} repeats instrument {candidate["instrument_id"]}, and two orders on one instrument in the same group cannot be told apart afterwards')
+                continue
+            seen.append(candidate['instrument_id'])
             self._refuse_unknown(candidate, CANDIDATE_SETTINGS, candidate_path, 'candidate')
             order = dict(entry)
             for setting in CANDIDATE_OVERRIDES:

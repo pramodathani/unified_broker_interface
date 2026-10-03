@@ -1,6 +1,0 @@
-Answer: HTTP 202, armed: the order is recorded and will be placed when the price touches the level
-A dry run cutting part root to 6: HTTP 409, a market_if_touched order has no parts, so part root cannot be changed; only a plan order has parts
-Part root cut to 6: HTTP 409, a market_if_touched order has no parts, so part root cannot be changed; only a plan order has parts
-Part root.first moved to 994: HTTP 409, a market_if_touched order has no parts, so part root.first cannot be changed; only a plan order has parts
-Events recorded by the refusals: 0, orders sent: 0
-Parent: received

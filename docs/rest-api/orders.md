@@ -165,8 +165,8 @@ The document has four top-level keys. Each order in `orders` follows the order c
 | `orders[].order_timestamp`, `exchange_timestamp` | string | ISO timestamps with the IST offset |
 | `orders[].instrument_id` | string or null | The unified instrument id, or null when the order could not be resolved to one |
 | `orders[].engine_parent_id` | string or null | The order engine parent that placed this order, or null for an order placed elsewhere |
-| `orders[].leg_role` | string or null | The order's role in that parent, such as `entry`, `stop`, `target` or `slice` |
-| `orders[].synthetic_type` | string or null | The parent's order type, such as `bracket` |
+| `orders[].leg_role` | string or null | The order's role in that parent: its part's path in the plan, such as `root` or `root.each_fill.children.0`, or `entry` for a `simple` order; parents placed before 2026-10-03 also show the roles of the retired classes, such as `stop` or `slice` |
+| `orders[].synthetic_type` | string or null | The parent's order type: `plan` for every type but `simple`, since every other type runs as a plan; the type asked for is the parent's `routed_from` |
 | `orders[].intent_id` | string or null | The intent the parent was placed for, as the place answer named it |
 | `summary.count` | number | How many orders there are in the day, whatever the filters |
 | `summary.by_status` | object | How many orders there are in each status |

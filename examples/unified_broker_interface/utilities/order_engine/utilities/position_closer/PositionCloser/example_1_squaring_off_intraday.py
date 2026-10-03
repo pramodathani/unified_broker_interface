@@ -1,6 +1,6 @@
 """Walks through the three steps a square-off takes: find the open positions, cancel the orders resting on them, and build a closing order for each.
 
-A `PositionCloser` works through the order type that owns it, here a real `SquareOff`, so every cancel is recorded on that type's parent. Its three steps are always taken in the same order. First `open_positions` reads each broker's net positions on one product, from that broker's own positions hash, so every position comes with the broker that holds it, and the closing order can be sent there. Then `cancel_resting` cancels every open order at every broker on those instruments, because a stop or target left live would fill after the close and open a new position the other way. Finally `closing_order` builds a limit order for each position, priced two ticks past the other side's best price so it fills at once.
+A `PositionCloser` works through the order type that owns it, here a real `PlanOrder` running a square-off, so every cancel is recorded on that type's parent. Its three steps are always taken in the same order. First `open_positions` reads each broker's net positions on one product, from that broker's own positions hash, so every position comes with the broker that holds it, and the closing order can be sent there. Then `cancel_resting` cancels every open order at every broker on those instruments, because a stop or target left live would fill after the close and open a new position the other way. Finally `closing_order` builds a limit order for each position, priced two ticks past the other side's best price so it fills at once.
 
 The program holds a long intraday position of 50 in one share and a short intraday position of 75 in another, plus a delivery position that the square-off leaves alone. `unified:order-updates` holds two open orders on those instruments, one at Zerodha and one at Dhan, and one completed order that needs no cancel. `resting_orders` lists the open ones, which `cancel_resting` then cancels.
 
@@ -14,8 +14,8 @@ Run it from the project root:
 import json
 import logging
 
-from unified_broker_interface.utilities.order_engine.square_off import (
-    SquareOff,
+from unified_broker_interface.utilities.order_engine.plan import (
+    PlanOrder,
 )
 from unified_broker_interface.utilities.order_engine.utilities.parent_order import (
     ParentOrder,
@@ -407,7 +407,7 @@ class SquaringOffIntradayExample:
         )
         self.event_log = ListEventLog()
         parent = ParentOrder('0f5e2c1a-7b3d-4e9f-8a21-6c4d2b1e9f00')
-        parent.synthetic_type = 'square_off'
+        parent.synthetic_type = 'plan'
         parent.state = 'working'
         parent.instrument_id = INFY
         parent.body = {
@@ -417,10 +417,11 @@ class SquaringOffIntradayExample:
             'order_type': 'MARKET',
             'quantity': 1,
             'synthetic': {
-                'type': 'square_off',
+                'type': 'plan',
+                'routed_from': 'square_off',
             },
         }
-        runner = SquareOff(
+        runner = PlanOrder(
             parent,
             self.placement,
             self.event_log,

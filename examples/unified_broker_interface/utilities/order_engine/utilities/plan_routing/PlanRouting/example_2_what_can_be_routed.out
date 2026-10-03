@@ -1,3 +1,0 @@
-52 types can be routed, from account_conditional to vwap; simple among them: False
-with the setting empty, a grid intent is left alone: True
-refused: UNIFIED_BROKER_INTERFACE_API_ORDER_PLAN_TYPES names 'grdi', which is not a synthetic type with a plan preset; the types ...

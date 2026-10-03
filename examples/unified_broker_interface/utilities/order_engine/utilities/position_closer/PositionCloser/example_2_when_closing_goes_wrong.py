@@ -1,6 +1,6 @@
 """Shows how a position closer behaves when the data it needs is missing or a broker says no.
 
-Closing positions has to keep going when something is wrong, because leaving a position open is usually the worse mistake. This program runs a `PositionCloser`, owned by a real `SquareOff`, through five awkward cases:
+Closing positions has to keep going when something is wrong, because leaving a position open is usually the worse mistake. This program runs a `PositionCloser`, owned by a real `PlanOrder` running a square-off, through five awkward cases:
 
 1. `open_positions` is asked for only one instrument, so a second open position is left out, and a position of zero is skipped. Positions are read from each broker's own positions hash, so each comes with the broker that holds it.
 2. `resting_orders` cannot read Redis the first time. The error is logged and an empty list comes back, so nothing is cancelled and the closing still goes ahead.
@@ -22,8 +22,8 @@ import redis
 from unified_broker_interface.utilities.broker_orders.utilities.refused_request import (
     RefusedRequestError,
 )
-from unified_broker_interface.utilities.order_engine.square_off import (
-    SquareOff,
+from unified_broker_interface.utilities.order_engine.plan import (
+    PlanOrder,
 )
 from unified_broker_interface.utilities.order_engine.utilities.parent_order import (
     ParentOrder,
@@ -437,7 +437,7 @@ class WhenClosingGoesWrongExample:
         self.event_log = ListEventLog()
         self.logger = RecordingLogger()
         parent = ParentOrder('5a1c9e20-3d4b-4f6a-9b8c-7e2d1f0a3b4c')
-        parent.synthetic_type = 'square_off'
+        parent.synthetic_type = 'plan'
         parent.state = 'working'
         parent.instrument_id = SBIN
         parent.body = {
@@ -447,7 +447,7 @@ class WhenClosingGoesWrongExample:
             'order_type': 'MARKET',
             'quantity': 1,
         }
-        runner = SquareOff(
+        runner = PlanOrder(
             parent,
             StandInPlacement(quotes, positions),
             self.event_log,

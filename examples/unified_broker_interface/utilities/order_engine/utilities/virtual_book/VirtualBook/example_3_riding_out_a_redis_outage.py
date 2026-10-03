@@ -182,14 +182,31 @@ class StandInParentStore:
         """
         self.document = {
             'parent_order_id': 'parent-1',
-            'synthetic_type': 'virtual_limit',
+            'synthetic_type': 'plan',
             'instrument_id': 'NSE:INFY',
             'body': {
                 'transaction_type': 'BUY',
                 'price': 98,
                 'quantity': 500,
             },
-            'parameters': {},
+            'parameters': {
+                'type': 'plan',
+                'parts': {
+                    'root': {
+                        'state': 'waiting',
+                        'memory': {
+                            'trigger': {
+                                'held': {
+                                    'instrument_id': 'NSE:INFY',
+                                    'transaction_type': 'BUY',
+                                    'price': '98',
+                                    'quantity': 500,
+                                },
+                            },
+                        },
+                    },
+                },
+            },
             'legs': [],
         }
 
@@ -312,14 +329,14 @@ class RedisOutageExample:
             None: This method returns nothing.
         """
         self.book.refresh()
-        estimate = self.book.estimates['parent-1']
+        estimate = self.book.estimates['parent-1/root']
         estimate.needs_baseline = False
         self.book.rebase_everything()
         print(f'After rebase_everything, the estimate takes a new baseline: {estimate.needs_baseline}')
         exit_code = self.book.run(CountingStop(5))
         print(f'Exit code: {exit_code}')
         print(f'XREAD asked to read after: {self.cache.read_after}')
-        estimate = self.book.estimates['parent-1']
+        estimate = self.book.estimates['parent-1/root']
         print(f'Estimate: ahead={estimate.ahead} last_volume={estimate.last_volume} updates={estimate.updates}')
 
 

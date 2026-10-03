@@ -1,10 +1,10 @@
 """Shows how the synthetic limit order book decides which open orders to follow, and when it starts an estimate again.
 
-Every two seconds a `VirtualBook` reads the engine's open parents and keeps an estimate only for a `virtual_limit` order that is still held: one whose trigger has not fired and which has no leg other than a backstop. This program gives it five open parents and one stored estimate for a parent that has since closed, then asks each question `refresh` asks, one at a time, before calling `refresh` itself.
+Every two seconds a `VirtualBook` reads the engine's open parents and keeps an estimate only for an order still held: a plan's order waiting on a `limit_marketable` trigger, whose trigger wrote the terms it is held at. `held_documents` turns each such order into a record of its own, keyed by the parent id and the order's path. This program gives it five open plans and one stored estimate for a plan that has since closed, then asks each question `refresh` asks, one at a time, before calling `refresh` itself.
 
-The five parents are a plain held buy, one that has already sent its entry leg, one of a different synthetic type, one whose price was changed through `PUT /api/orders/modify` after the book had started following it, and one with no side, which cannot be followed. Redis is a small stand-in holding the stored estimates, the parent cache is a dictionary, and the logger prints its warnings so they appear in the output.
+The five plans are a plain held buy, one whose order has already been sent, one waiting on a price rather than held, one whose price was changed through `PUT /api/orders/modify` after the book had started following it, and one with no side, which cannot be followed. Redis is a small stand-in holding the stored estimates, the parent cache is a dictionary, and the logger prints its warnings so they appear in the output.
 
-Notice that the stored estimate for the changed order is thrown away because its price no longer matches, that the closed parent's estimate is removed from Redis, and that only the two held orders end up followed.
+Notice that the stored estimate for the changed order is thrown away because its price no longer matches, that the closed plan's estimate is removed from Redis, and that only the two held orders end up followed.
 
 Run it from the project root:
 
@@ -134,7 +134,7 @@ class PrintingLogger:
 
 
 class DecidingWhichOrdersAreHeldExample:
-    """Asks the book about five open parents and then lets it refresh.
+    """Asks the book about five open plans and then lets it refresh.
 
     Attributes:
         documents (dict): The open parents, by id.
@@ -148,29 +148,21 @@ class DecidingWhichOrdersAreHeldExample:
         Returns:
             None: This method returns nothing.
         """
-        fired = self.parent('fired', 'virtual_limit', 'BUY', 98, 500)
-        fired['legs'] = [
-            {
-                'role': 'entry',
-            },
-        ]
-        changed = self.parent('changed', 'virtual_limit', 'SELL', 101, 300)
-        changed['parameters']['held_price'] = '100.5'
         self.documents = {
-            'held': self.parent('held', 'virtual_limit', 'BUY', 98, 500),
-            'fired': fired,
-            'touched': self.parent('touched', 'limit_if_touched', 'BUY', 98, 500),
-            'changed': changed,
-            'no_side': self.parent('no_side', 'virtual_limit', None, 98, 500),
+            'held': self.parent('held', 'BUY', '98', 500),
+            'fired': self.parent('fired', 'BUY', '98', 500, part_state='working'),
+            'priced': self.parent('priced', 'BUY', '98', 500, held=False),
+            'changed': self.parent('changed', 'SELL', '100.5', 300),
+            'no_side': self.parent('no_side', None, '98', 500),
         }
-        old_changed = VirtualQueue('changed', 'NSE:INFY', 'SELL', 101, 300)
+        old_changed = VirtualQueue('changed/root', 'NSE:INFY', 'SELL', 101, 300)
         old_changed.ahead = 2500
-        closed = VirtualQueue('closed', 'NSE:INFY', 'BUY', 97, 100)
+        closed = VirtualQueue('closed/root', 'NSE:INFY', 'BUY', 97, 100)
         self.cache = StandInRedis(
             {
                 ESTIMATES_KEY: {
-                    'changed': json.dumps(old_changed.document()),
-                    'closed': json.dumps(closed.document()),
+                    'changed/root': json.dumps(old_changed.document()),
+                    'closed/root': json.dumps(closed.document()),
                 },
             },
         )
@@ -180,22 +172,31 @@ class DecidingWhichOrdersAreHeldExample:
             PrintingLogger(),
         )
 
-    def parent(self, parent_order_id, synthetic_type, side, price, quantity):
-        """Builds one open parent as the engine's cache holds it.
+    def parent(self, parent_order_id, side, price, quantity, part_state='waiting', held=True):
+        """Builds one open plan of one order as the engine's cache holds it.
 
         Args:
             parent_order_id (str): The parent's id.
-            synthetic_type (str): The synthetic order type.
             side (str | None): BUY, SELL or None.
-            price (int): The limit price.
+            price (str): The price the order is held at.
             quantity (int): The quantity.
+            part_state (str): The order's state: `waiting` while held, `working` once sent.
+            held (bool): Whether the order's trigger wrote held terms, which an order waiting on a price does not.
 
         Returns:
             dict: The document.
         """
+        trigger_memory = {}
+        if held:
+            trigger_memory['held'] = {
+                'instrument_id': 'NSE:INFY',
+                'transaction_type': side,
+                'price': price,
+                'quantity': quantity,
+            }
         return {
             'parent_order_id': parent_order_id,
-            'synthetic_type': synthetic_type,
+            'synthetic_type': 'plan',
             'state': 'received',
             'instrument_id': 'NSE:INFY',
             'body': {
@@ -205,7 +206,15 @@ class DecidingWhichOrdersAreHeldExample:
                 'quantity': quantity,
             },
             'parameters': {
-                'type': synthetic_type,
+                'type': 'plan',
+                'parts': {
+                    'root': {
+                        'state': part_state,
+                        'memory': {
+                            'trigger': trigger_memory,
+                        },
+                    },
+                },
             },
             'legs': [],
         }
@@ -217,15 +226,20 @@ class DecidingWhichOrdersAreHeldExample:
             None: This method returns nothing.
         """
         for parent_order_id, document in self.documents.items():
-            price, quantity = self.book.held_terms(document)
-            print(f'{parent_order_id}: held={self.book.is_held(document)} terms=({price}, {quantity})')
-        stored = self.book.stored_estimate('changed')
-        print(f'Stored estimate for changed: price {stored.price}, ahead {stored.ahead}, rebased on next quote {stored.needs_baseline}')
-        print(f'Its terms have changed since: {self.book.has_new_terms(stored, self.documents["changed"])}')
-        fresh = self.book.new_estimate(self.documents['changed'])
+            records = self.book.held_documents(document)
+            shown = []
+            for record in records:
+                price, quantity = self.book.held_terms(record)
+                shown.append(f'{record["parent_order_id"]} at ({price}, {quantity})')
+            print(f'{parent_order_id}: followed as {shown}')
+        changed = self.book.held_documents(self.documents['changed'])[0]
+        stored = self.book.stored_estimate('changed/root')
+        print(f'Stored estimate for changed/root: price {stored.price}, ahead {stored.ahead}, rebased on next quote {stored.needs_baseline}')
+        print(f'Its terms have changed since: {self.book.has_new_terms(stored, changed)}')
+        fresh = self.book.new_estimate(changed)
         print(f'A fresh estimate: {fresh.side} {fresh.quantity} at {fresh.price}, ahead {fresh.ahead}')
-        print(f'No side gives: {self.book.new_estimate(self.documents["no_side"])}')
-        print(f'Nothing stored for held: {self.book.stored_estimate("held")}')
+        print(f'No side gives: {self.book.new_estimate(self.book.held_documents(self.documents["no_side"])[0])}')
+        print(f'Nothing stored for held/root: {self.book.stored_estimate("held/root")}')
         self.book.refresh()
         print(f'Followed after refresh: {sorted(self.book.estimates)}')
         print(f'Waiting to be written: {sorted(self.book.changed)}')
