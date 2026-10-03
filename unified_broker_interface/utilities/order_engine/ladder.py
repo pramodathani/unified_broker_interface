@@ -19,7 +19,7 @@ class Ladder(SyntheticOrder):
 
     The caller's `quantity` is the whole order and is divided between the rungs as evenly as whole units allow, so a ladder of 100 over three rungs is 34, 33 and 33 rather than three of 100.
 
-    This class sends every rung at once. Holding the rungs in the engine's virtual order book until the market reaches each one is done by the `ladder` plan preset, so `hold_limits: true` is refused here until `ladder` is named in `UNIFIED_BROKER_INTERFACE_API_ORDER_PLAN_TYPES`, rather than quietly sending the rungs anyway.
+    This class sends every rung at once. Holding the rungs in the engine's virtual order book until the market reaches each one is done by the `ladder` plan preset, and the engine refuses `hold_limits: true` for a ladder it runs with this class instead.
     """
 
     SYNTHETIC_TYPE = 'ladder'
@@ -93,9 +93,8 @@ class Ladder(SyntheticOrder):
             list: One `PlaceOrderRequest` per rung, cheapest first for a buy.
 
         Raises:
-            RefusedRequestError: With HTTP 400 when the range or the number of steps is not usable, or when `hold_limits` asks for held rungs.
+            RefusedRequestError: With HTTP 400 when the range or the number of steps is not usable.
         """
-        self.check_hold_limits(parameters.get('hold_limits'))
         steps = self.whole(parameters.get('steps'), 'steps')
         if steps < 2 or steps > self.MOST_STEPS:
             raise RefusedRequestError.refusal(
@@ -135,30 +134,6 @@ class Ladder(SyntheticOrder):
             rung.price_number = float(price)
             rungs.append(rung)
         return rungs
-
-    def check_hold_limits(self, hold_limits):
-        """Refuses a request to hold the rungs, which this class cannot do.
-
-        Args:
-            hold_limits (object): The caller's `hold_limits`, or None when not given.
-
-        Returns:
-            None: This method returns nothing.
-
-        Raises:
-            RefusedRequestError: With HTTP 400 when `hold_limits` is true or is not true or false.
-        """
-        if hold_limits is None or hold_limits is False:
-            return
-        if hold_limits is True:
-            raise RefusedRequestError.refusal(
-                'this ladder sends every rung at once; holding the rungs until the market reaches each one needs ladder to be run as a plan, by naming it in UNIFIED_BROKER_INTERFACE_API_ORDER_PLAN_TYPES, or a plan with the ladder preset',
-                400,
-            )
-        raise RefusedRequestError.refusal(
-            f'hold_limits is true or false, not {hold_limits!r}',
-            400,
-        )
 
     def price(self, parameters, field_name):
         """One end of the ladder's range.

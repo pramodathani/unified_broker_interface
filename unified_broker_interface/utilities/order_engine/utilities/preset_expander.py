@@ -184,19 +184,22 @@ class PresetExpander:
 
     Attributes:
         opening_side (str | None): BUY or SELL, the side of the caller's body, which a trailing stop's activation needs; None when it is not known.
+        hold_limits (bool): Whether the order the presets are named in is to be held in the virtual order book, which decides the shape of a ladder that does not say for itself.
         problems (list): The problems found by the last `expand`, each a dictionary with `path`, `rule` and `message`.
     """
 
-    def __init__(self, opening_side=None):
+    def __init__(self, opening_side=None, hold_limits=False):
         """Builds an expander that has found no problems.
 
         Args:
             opening_side (str | None): BUY or SELL, the side of the caller's body, or None when it is not known.
+            hold_limits (bool): Whether the order is to be held in the virtual order book.
 
         Returns:
             None: This method returns nothing.
         """
         self.opening_side = opening_side
+        self.hold_limits = hold_limits
         self.problems = []
 
     def expand(self, name, settings, path):
@@ -317,7 +320,7 @@ class PresetExpander:
         """
         if name in JOIN_PRESET_NAMES:
             return True
-        if name == 'ladder' and settings.get('hold_limits', True) is not False:
+        if name == 'ladder' and settings.get('hold_limits', self.hold_limits) is not False:
             return True
         if name == 'stop_and_reverse' and settings.get('method', 'sequential') == 'sequential':
             return True
@@ -1807,7 +1810,7 @@ class PresetExpander:
     def _ladder(self, settings, path):
         """Sends every rung of the ladder at once, which is what `hold_limits: false` asks for.
 
-        A ladder that holds its rungs is a join built by `expand_join`.
+        A ladder that holds its rungs is a join built by `expand_join`. Without `hold_limits` of its own, a ladder holds when the order it is named in is held, which the plan reader tells the expander.
 
         Args:
             settings (dict): `from_price`, `to_price`, `steps` and `hold_limits: false`.
@@ -1829,8 +1832,8 @@ class PresetExpander:
         """Splits the order into its rungs and holds each rung in the engine until the other side of the book reaches the rung's own price.
 
         Args:
-            settings (dict): `from_price`, `to_price` and `steps`, and optionally `hold_limits: true`.
-            entry (dict): The order it was named in, which every rung copies.
+            settings (dict): `from_price`, `to_price` and `steps`, and optionally `hold_limits: true`; without it, the order is held because the expander was told so.
+            entry (dict): The order it was named in, which every rung copies, less its own `hold_limits`, which the rungs' `virtual_limit` carries out.
             path (str): The preset's path.
 
         Returns:
@@ -1855,7 +1858,7 @@ class PresetExpander:
             )
         if self.problems:
             return {}
-        order = dict(entry)
+        order = self._without(entry, 'hold_limits')
         order['execution'] = [
             {
                 'ladder': self._without(settings, 'hold_limits'),

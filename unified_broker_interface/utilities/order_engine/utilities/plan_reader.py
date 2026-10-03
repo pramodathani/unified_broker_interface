@@ -74,6 +74,9 @@ from unified_broker_interface.utilities.order_engine.utilities.iceberg_execution
 from unified_broker_interface.utilities.order_engine.utilities.ladder_execution import (
     LadderExecution,
 )
+from unified_broker_interface.utilities.order_engine.utilities.held_after_condition import (
+    HeldAfterCondition,
+)
 from unified_broker_interface.utilities.order_engine.utilities.lifetime import (
     APPLIES_TO,
     ON_END,
@@ -260,6 +263,7 @@ ORDER_SETTINGS = (
     'product',
     'validity',
     'tag',
+    'hold_limits',
 )
 MOST_SLICES = 60
 HIGHEST_VOLATILITY_PERCENT = 500
@@ -315,24 +319,34 @@ class PlanReader:
 
     The joins are `then`, `either`, `together`, `sequence`, `repeat` and `using`, every one the design names.
 
+    An order that would rest at the broker at the body's own limit price is held in the engine's virtual order book when `hold_limits` asks for it, so it is sent only once the other side of the book reaches its price: an order with no trigger is given a `limit_marketable` trigger, and an order with one is given a `HeldAfterCondition` around it, which holds the order once its own trigger has fired. `hold_limits` is read from the order itself, or else from the request, the `hold_limits` beside the plan. The request's value covers an order only where holding cannot change what the order is for: not a follow-on order in a Then join's child, such as a profit target, not an order that protects a position, and never a leg of a Together join that checks the group's margin, whose legs have to go out together. An order that cannot be held is left as it is when the request asks, and refused when the order itself asks.
+
     Attributes:
         opening_side (str | None): BUY or SELL, the side of the caller's body, which some presets need; None when it is not known.
+        body (dict | None): The caller's body, whose order type, price, validity and after-market flag decide whether an order can be held; None when it is not known, which leaves those to be checked when the plan is placed.
+        hold_limits (object): The request's `hold_limits`, True, False or None when it was not given.
         problems (list): Every problem found by the last `read`, each a dictionary with `path`, `rule` and `message`.
         warnings (list): Every warning from the last `read`, in the same form.
     """
 
-    def __init__(self, opening_side=None):
+    def __init__(self, opening_side=None, body=None, hold_limits=None):
         """Builds a reader that has found no problems.
 
         Args:
             opening_side (str | None): BUY or SELL, the side of the caller's body, or None when it is not known.
+            body (dict | None): The caller's body, or None when it is not known.
+            hold_limits (object): The request's `hold_limits`, or None when it was not given.
 
         Returns:
             None: This method returns nothing.
         """
         self.opening_side = opening_side
+        self.body = body
+        self.hold_limits = hold_limits
         self.problems = []
         self.warnings = []
+        self._follow_on = False
+        self._grouped = False
 
     def read(self, plan):
         """Reads a whole plan.
@@ -345,6 +359,10 @@ class PlanReader:
         """
         self.problems = []
         self.warnings = []
+        self._follow_on = False
+        self._grouped = False
+        if self.hold_limits is not None and not isinstance(self.hold_limits, bool):
+            self._add_problem('hold_limits', 'bad_setting', f'hold_limits is true or false, not {self.hold_limits!r}')
         root = self._read_node(plan, 'root', True)
         if root is not None:
             self._check_fill_sizing(root)
@@ -453,7 +471,10 @@ class PlanReader:
             )
         child_key = child_keys[0]
         first = self._read_node(then['first'], f'{path}.first', keeps_tag)
+        follow_on_before = self._follow_on
+        self._follow_on = True
         child = self._read_node(then[child_key], f'{path}.{child_key}', False)
+        self._follow_on = follow_on_before
         if child is not None and first is not None:
             opened_by = []
             for part in first.order_parts():
@@ -536,7 +557,11 @@ class PlanReader:
         done_when = together.get('done_when', 'all')
         if done_when not in DONE_WHEN:
             self._add_problem(path, 'bad_setting', f'done_when must be one of {", ".join(DONE_WHEN)}, not {done_when!r}')
+        grouped_before = self._grouped
+        if flags['group_margin'] is True:
+            self._grouped = True
         children = self._read_children(together, path, keeps_tag, 'together', 1)
+        self._grouped = grouped_before
         if children is None or len(self.problems) > problems_before:
             return None
         return TogetherPart(path, children, flags['group_margin'], flags['hedge_benefit'], done_when)
@@ -981,10 +1006,20 @@ class PlanReader:
             return None
         if pricing is None:
             pricing = FixedPricing(None, None)
-        if self._holds_at_its_limit(trigger) and not self._held_at_the_body_price(pricing, path):
-            return None
         if execution is None:
             execution = AllAtOnceExecution()
+        if self._wants_holding(order, side, path):
+            reason = self._why_not_held(trigger, side, pricing, execution, post_only, discretion, lifetime, venue, position_quantity, overrides)
+            if reason is None:
+                if trigger is None:
+                    trigger = LimitMarketableCondition()
+                elif not self._holds_at_its_limit(trigger):
+                    trigger = HeldAfterCondition(trigger)
+            elif order.get('hold_limits') is True:
+                self._add_problem(path, 'not_holdable', f'hold_limits asks for this order to be held until the market reaches its price, but {reason}')
+                return None
+        if self._holds_at_its_limit(trigger) and not self._held_at_the_body_price(pricing, path):
+            return None
         if isinstance(pricing, STOP_PRICINGS) or (isinstance(pricing, FromFillPricing) and pricing.is_stop()):
             if not isinstance(execution, (AllAtOnceExecution, DailyExecution)):
                 self._add_problem(
@@ -1208,6 +1243,74 @@ class PlanReader:
             return False
         return True
 
+    def _wants_holding(self, order, side, path):
+        """Whether an order is asked to be held in the virtual order book, by itself or by the request.
+
+        Args:
+            order (dict): The order as the caller wrote it.
+            side (str | None): The order's side from its presets and slot values.
+            path (str): Where the order sits in the plan.
+
+        Returns:
+            bool: True when the order or the request asks for holding and the request's value covers this order.
+        """
+        own = order.get('hold_limits')
+        if own is not None and not isinstance(own, bool):
+            self._add_problem(path, 'bad_setting', f'hold_limits is true or false, not {own!r}')
+            return False
+        if own is not None:
+            return own
+        if self.hold_limits is not True or self._follow_on or self._grouped:
+            return False
+        return side != 'protect'
+
+    def _why_not_held(self, trigger, side, pricing, execution, post_only, discretion, lifetime, venue, position_quantity, overrides):
+        """Why an order cannot be held until the market reaches its price, or None when it can.
+
+        Args:
+            trigger (object | None): The order's trigger.
+            side (str | None): The order's side.
+            pricing (object): The order's pricing.
+            execution (object): The order's execution.
+            post_only (object | None): The order's post-only guard.
+            discretion (object | None): The order's discretion modifier.
+            lifetime (Lifetime | None): The order's lifetime.
+            venue (object | None): The order's venue.
+            position_quantity (dict | None): The order's quantity when it is sized from a position or from fills.
+            overrides (dict): The order's own instrument, quantity, side, product, validity and tag.
+
+        Returns:
+            str | None: The reason, as the end of a sentence, or None when the order can be held.
+        """
+        if self._grouped:
+            return 'it is a leg of a together join that checks the group\'s margin, whose legs go out together'
+        if venue is not None:
+            return 'it is sent in the pre-open or on paper'
+        if side in ('close', 'against_delta') or (isinstance(position_quantity, dict) and 'position' in position_quantity):
+            return 'it closes or hedges a position at once'
+        if not isinstance(pricing, FixedPricing):
+            return 'its pricing sets or moves its own price'
+        if pricing.price is not None or pricing.order_type is not None:
+            return 'it is priced at a fixed price of its own rather than the body\'s'
+        if not isinstance(execution, AllAtOnceExecution):
+            return 'its execution sends it in pieces'
+        if post_only is not None:
+            return 'a post-only guard refuses an order that would trade at once, which is when a held order is sent'
+        if discretion is not None:
+            return 'it takes a worse price at discretion while it rests'
+        if lifetime is not None and lifetime.on_end == 'marketable':
+            return 'its lifetime makes it marketable at the end, which an order still held cannot be'
+        if self.body is None:
+            return None
+        if str(self.body.get('order_type') or '').strip().upper() != 'LIMIT' or self.body.get('price') is None:
+            return 'it is not a LIMIT order with a price'
+        validity = overrides.get('validity', self.body.get('validity'))
+        if str(validity or 'DAY').strip().upper() == 'IOC':
+            return 'an IOC order trades now or never'
+        if str(self.body.get('after_market')).strip().lower() in ('true', '1', 'yes'):
+            return 'an after-market order is queued for a session that sends no prices to release it'
+        return None
+
     def _holds_at_its_limit(self, trigger):
         """Whether an order's trigger is, or includes, a `limit_marketable` condition.
 
@@ -1420,7 +1523,10 @@ class PlanReader:
         presets = order.get('presets')
         if not isinstance(presets, list):
             return None
-        expander = PresetExpander(self.opening_side)
+        hold_limits = order.get('hold_limits')
+        if not isinstance(hold_limits, bool):
+            hold_limits = self.hold_limits is True and not self._follow_on and not self._grouped
+        expander = PresetExpander(self.opening_side, hold_limits)
         found = []
         for index, preset in enumerate(presets):
             if not isinstance(preset, dict) or len(preset) != 1:

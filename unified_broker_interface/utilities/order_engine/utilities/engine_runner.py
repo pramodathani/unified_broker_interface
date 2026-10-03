@@ -691,9 +691,10 @@ class OrderEngine:
             SyntheticOrder: The runner, with its parent built but nothing recorded yet.
 
         Raises:
-            RefusedRequestError: With HTTP 400 when the named type is not one the engine runs, which is a caller's mistake rather than the engine's.
+            RefusedRequestError: With HTTP 400 when the named type is not one the engine runs, which is a caller's mistake rather than the engine's, or when a type not run as a plan is asked to hold its orders.
         """
         intent = self.plan_routing.routed(intent)
+        self.plan_routing.check_unrouted(intent)
         named_type = intent.get('synthetic_type') or 'simple'
         synthetic_order_class = SYNTHETIC_ORDER_CLASSES.get(named_type)
         if synthetic_order_class is None:

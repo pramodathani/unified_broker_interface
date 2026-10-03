@@ -1,6 +1,8 @@
-held by default: join=True
+the order is held: join=True
   {'using': {'order': {'execution': [{'ladder': {'from_price': 1000, 'to_price': 995, 'steps': 3}}]}, 'each_piece': {'presets': [{'virtual_limit': {}}]}}}
-sent at once: join=False
+the order is not held: join=False
+  {'execution': [{'ladder': {'from_price': 1000, 'to_price': 995, 'steps': 3}}]}
+the ladder says false in a held order: join=False
   {'execution': [{'ladder': {'from_price': 1000, 'to_price': 995, 'steps': 3}}]}
 held beside a twap: join=True
   refused, held_ladder_execution: a ladder that holds its rungs sends each rung as an order of its own, so the order takes no other execution; set hold_limits to false to send the rungs at once instead

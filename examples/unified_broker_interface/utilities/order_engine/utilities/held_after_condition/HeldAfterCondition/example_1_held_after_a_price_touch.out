@@ -1,0 +1,5 @@
+described: {'held_after': {'price_crosses': {'level': '1005', 'direction': 'at_or_above', 'field': 'last', 'confirm': 'none'}}}
+needs prices: True watches others: []
+offer 1000.05, below the trigger: held after releases False, plain all releases False, fired False
+offer 1005.00, the trigger fires: held after releases False, plain all releases False, fired True
+offer 1000.00, back at the limit: held after releases True, plain all releases False, fired True
