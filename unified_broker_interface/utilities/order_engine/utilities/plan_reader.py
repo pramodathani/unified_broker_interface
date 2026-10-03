@@ -727,6 +727,8 @@ class PlanReader:
                 elapsed = ElapsedCondition(execution.interval() * index / 60)
                 if main.trigger is None:
                     main.trigger = elapsed
+                elif type(main.trigger) is LimitMarketableCondition:
+                    main.trigger = HeldAfterCondition(elapsed)
                 else:
                     main.trigger = ConditionGroup('all', [main.trigger, elapsed])
             children.append(child)
@@ -854,6 +856,9 @@ class PlanReader:
             if not tree:
                 return None
             return self._read_node(tree, path, keeps_tag)
+        held_pieces = self._held_pieces_tree(order)
+        if held_pieces is not None:
+            return self._read_node(held_pieces, path, keeps_tag)
         problems_before = len(self.problems)
         for setting in order:
             if setting not in ORDER_SETTINGS:
@@ -1252,6 +1257,82 @@ class PlanReader:
             return False
         return True
 
+    def _held_pieces_tree(self, order):
+        """The Using join a held order sent in pieces stands for, or None when it is not one.
+
+        An order whose execution is one `ladder`, `twap` or `front_loaded`, given by the order itself or by one of its presets, would be held as one order and then send its pieces as before. Held piece by piece instead, as the `ladder` preset holds its rungs, each piece waits in the engine for the market to reach it: a rung for its own price, a timed slice from its turn onwards. Only an order with nothing that a held piece could not take is turned into the join: no pricing, guards, venue, other execution or kept-whole preset, and a preset giving the execution that gives nothing else; otherwise it is read as it stands, and the holding rule says why it is not held. A join preset has already been read as its join.
+
+        Args:
+            order (dict): The order as the caller wrote it.
+
+        Returns:
+            dict | None: The Using join, as a caller would write it, or None.
+        """
+        if isinstance(order.get('hold_limits'), bool):
+            wanted = order['hold_limits']
+        else:
+            wanted = self.hold_limits is True and not self._follow_on and order.get('side') != 'protect'
+        if not wanted or self._grouped:
+            return None
+        pieces_order = dict(order)
+        pieces_order.pop('hold_limits', None)
+        execution = pieces_order.pop('execution', None)
+        expander = PresetExpander(self.opening_side, False)
+        presets = pieces_order.get('presets')
+        if isinstance(presets, list):
+            kept = []
+            for preset in presets:
+                slots = {}
+                if isinstance(preset, dict) and len(preset) == 1:
+                    for name, settings in preset.items():
+                        if name in PRESET_NAMES and isinstance(settings, dict) and not expander.is_join(name, settings):
+                            slots = expander.expand(name, settings, '')
+                            if expander.problems:
+                                slots = {}
+                if 'execution' in slots and execution is None and list(slots) == ['execution']:
+                    execution = slots['execution']
+                else:
+                    kept.append(preset)
+            if kept:
+                pieces_order['presets'] = kept
+            else:
+                pieces_order.pop('presets', None)
+        if not isinstance(execution, list) or len(execution) != 1 or not isinstance(execution[0], dict):
+            return None
+        names = list(execution[0])
+        if len(names) != 1 or names[0] not in USING_EXECUTIONS:
+            return None
+        slot_names = expander.slot_names(pieces_order)
+        for slot in ('pricing', 'guards', 'venue', 'execution', 'whole'):
+            if slot in slot_names:
+                return None
+        pieces_order['execution'] = execution
+        return {
+            'using': {
+                'order': pieces_order,
+                'each_piece': {
+                    'presets': [
+                        {
+                            'virtual_limit': {},
+                        },
+                    ],
+                },
+            },
+        }
+
+    def _without_execution(self, order):
+        """A copy of an order without its execution.
+
+        Args:
+            order (dict): The order.
+
+        Returns:
+            dict: The copy.
+        """
+        copied = dict(order)
+        copied.pop('execution', None)
+        return copied
+
     def _wants_holding(self, order, side, path):
         """Whether an order is asked to be held in the virtual order book, by itself or by the request.
 
@@ -1301,7 +1382,7 @@ class PlanReader:
             return 'its pricing sets or moves its own price'
         if pricing.order_type == 'MARKET':
             return 'its pricing sends it as a MARKET order'
-        if not isinstance(execution, AllAtOnceExecution):
+        if not isinstance(execution, (AllAtOnceExecution, FreezeLimitExecution)):
             return 'its execution sends it in pieces'
         if post_only is not None:
             return 'a post-only guard refuses an order that would trade at once, which is when a held order is sent'

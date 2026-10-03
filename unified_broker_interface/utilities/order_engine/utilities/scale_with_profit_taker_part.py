@@ -8,8 +8,14 @@ from unified_broker_interface.utilities.broker_orders.utilities.refused_request 
 from unified_broker_interface.utilities.order_engine.utilities.ladder_execution import (
     LadderExecution,
 )
+from unified_broker_interface.utilities.order_engine.utilities.limit_marketable_condition import (
+    LimitMarketableCondition,
+)
 from unified_broker_interface.utilities.order_engine.utilities.market_view import (
     MarketView,
+)
+from unified_broker_interface.utilities.order_engine.utilities.virtual_book import (
+    VirtualBook,
 )
 from unified_broker_interface.utilities.order_engine.utilities.whole_part import (
     WholePart,
@@ -36,7 +42,7 @@ class ScaleWithProfitTakerPart(WholePart):
 
     Its memory holds each rung's price, quantity and cycles, which rung each of its broker orders belongs to, and which fills it has answered, so a restart answers nothing twice. A rung is told from a profit-taker by its side. Unlike today's type, it is done once every one of its broker orders has finished, which happens only after the last cycle allowed has been taken.
 
-    When the plan reader sets `holds_rungs`, every rung, the first time and each time it is placed again, waits in the engine as pending until the other side of the book reaches its price, as a virtual limit does, and only then goes to the broker; a quote marked stale releases nothing. The profit-takers are targets and rest at the broker as soon as their rung fills. The part is not done while a rung is pending.
+    When the plan reader sets `holds_rungs`, every rung, the first time and each time it is placed again, waits in the engine as pending until the other side of the book reaches its price, as a virtual limit does, and only then goes to the broker; a quote marked stale releases nothing. The profit-takers are targets and rest at the broker as soon as their rung fills. The part is not done while a rung is pending. Its memory then holds the instrument and side under `held`, from which the virtual book follows every pending rung, and a rung placed records the book's estimate of what a resting rung would have filled as its `missed_quantity`.
 
     Attributes:
         holds_rungs (bool): Whether the rungs are held in the engine until the market reaches them.
@@ -171,10 +177,16 @@ class ScaleWithProfitTakerPart(WholePart):
         """
         memory = self.own_memory(plan_order)
         rung = memory['rungs'][rung_index]
+        missed = None
+        if self.holds_rungs:
+            estimate = LimitMarketableCondition().estimate(plan_order, VirtualBook.rung_path(self.path, rung_index, rung.get('cycles') or 0))
+            missed = (estimate or {}).get('queue_filled')
         body, status, leg_id = self.place_order(plan_order, self.limit_order(plan_order, side, decimal.Decimal(rung['price']), rung['quantity']), started_at)
         memory = self.own_memory(plan_order)
         rungs = [dict(each) for each in memory['rungs']]
         rungs[rung_index]['pending'] = False
+        if isinstance(missed, int):
+            rungs[rung_index]['missed_quantity'] = missed
         rung_of_leg = dict(memory.get('rung_of_leg') or {})
         rung_of_leg[leg_id] = rung_index
         memory['rungs'] = rungs
@@ -275,13 +287,19 @@ class ScaleWithProfitTakerPart(WholePart):
                 'cycles': 0,
                 'pending': True,
             })
+        memory = {
+            'rungs': rungs,
+            'rung_of_leg': {},
+            'handled': [],
+        }
+        if self.holds_rungs:
+            memory['held'] = {
+                'instrument_id': context.instrument_id,
+                'transaction_type': side,
+            }
         self.remember(
             plan_order,
-            {
-                'rungs': rungs,
-                'rung_of_leg': {},
-                'handled': [],
-            },
+            memory,
             f'the plan\'s {self.path} ladder laid out {len(rungs)} rungs',
         )
         placed = []

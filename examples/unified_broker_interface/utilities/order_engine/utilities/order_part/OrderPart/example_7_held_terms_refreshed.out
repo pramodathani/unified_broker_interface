@@ -1,0 +1,3 @@
+held terms before: {'instrument_id': 'RELIANCE', 'transaction_type': 'BUY', 'price': '1000', 'quantity': 9}
+held terms after:  {'instrument_id': 'RELIANCE', 'transaction_type': 'BUY', 'price': '997.50', 'quantity': 3}
+an order with no held terms: {'piece_price': '995.00'}

@@ -84,7 +84,7 @@ class VirtualBook:
     def held_documents(self, document):
         """The held orders a parent holds, each shaped as a `virtual_limit` parent's record so one estimate can be started from it.
 
-        A `virtual_limit` parent that is still held is its own record. A plan gives one record per order still waiting on a `limit_marketable` trigger, built from the terms the trigger wrote into the order's memory when the plan was placed.
+        A `virtual_limit` parent that is still held is its own record. A plan gives one record per order still waiting on a `limit_marketable` trigger, built from the terms the trigger wrote into the order's memory when the plan was placed, and one per pending rung of a scale with profit-taker that holds its rungs, keyed by its path, `/rung`, its position and its cycle, so a rung held again after its profit is taken starts a fresh estimate.
 
         Args:
             document (dict): The parent's Redis record.
@@ -116,7 +116,41 @@ class VirtualBook:
                 },
                 'parameters': {},
             })
+        for path, record in parts.items():
+            if not isinstance(record, dict) or record.get('state') != 'working':
+                continue
+            own_memory = record.get('own_memory') or {}
+            terms = own_memory.get('held')
+            if not isinstance(terms, dict):
+                continue
+            for index, rung in enumerate(own_memory.get('rungs') or []):
+                if not isinstance(rung, dict) or not rung.get('pending'):
+                    continue
+                held.append({
+                    'parent_order_id': self.part_key(document.get('parent_order_id'), self.rung_path(path, index, rung.get('cycles') or 0)),
+                    'instrument_id': terms.get('instrument_id'),
+                    'body': {
+                        'transaction_type': terms.get('transaction_type'),
+                        'price': rung.get('price'),
+                        'quantity': rung.get('quantity'),
+                    },
+                    'parameters': {},
+                })
         return held
+
+    @staticmethod
+    def rung_path(path, index, cycles):
+        """The path a held rung of a scale with profit-taker is estimated under.
+
+        Args:
+            path (str): The part's path in the plan.
+            index (int): The rung's position in the ladder, from 0.
+            cycles (int): How many times the rung has been placed again.
+
+        Returns:
+            str: The path, as `root/rung1.0`.
+        """
+        return f'{path}{PART_KEY_SEPARATOR}rung{index}.{cycles}'
 
     def is_held(self, document):
         """Whether a parent is a virtual limit order that is still being held rather than sent.

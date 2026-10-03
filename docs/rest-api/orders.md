@@ -342,7 +342,7 @@ The table below shows which orders are held.
 | `LIMIT` with `"synthetic": {"type": "simple"}` | No, sent at once |
 | `LIMIT` with `IOC` validity, which means trade now or never | No, sent at once |
 | `MARKET`, `SL`, `SL-M`, or a `LIMIT` priced only by `price_reference` | No, sent at once |
-| A `plan`, or a `ladder`, `scheduled`, `good_till_time`, `time_stop`, `account_conditional`, `limit_if_touched`, `indicator_triggered`, `cross_instrument`, `gtt`, `bracket`, `cover`, `scale_out`, `oto`, `oca` or `scale_with_profit_taker` order run as a plan, unless it gives `hold_limits: false` | Its limit orders, entry, every OCA candidate or each ladder rung is held until the market reaches it, while exits and profit-takers rest at the broker; [Holding orders until the market reaches them](synthetic-orders.md#plan) lists the exceptions |
+| A `plan`, or a `ladder`, `scheduled`, `good_till_time`, `time_stop`, `account_conditional`, `limit_if_touched`, `indicator_triggered`, `cross_instrument`, `gtt`, `bracket`, `cover`, `scale_out`, `oto`, `oca`, `scale_with_profit_taker`, `freeze_slicer`, `twap` or `implementation_shortfall` order run as a plan, unless it gives `hold_limits: false` | Its limit orders, entry, every OCA candidate, each ladder rung or each timed slice is held until the market reaches it, while exits and profit-takers rest at the broker; [Holding orders until the market reaches them](synthetic-orders.md#plan) lists the exceptions |
 | Any order naming another `synthetic` type | Run as that type |
 
 The setting `UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS`, on by default, turns this off for every order, and for the rungs of a `ladder` run as a plan.

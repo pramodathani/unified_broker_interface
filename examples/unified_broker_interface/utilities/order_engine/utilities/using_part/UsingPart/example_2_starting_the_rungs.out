@@ -1,5 +1,6 @@
 root.pieces.0: 5 at 1000.00
 root.pieces.1: 5 at 990.00
 rung prices kept: ['1000.00', '990.00']
+a held rung's terms after refresh_held_terms: 5 at 1000.00
 root.pieces.0: at once
 root.pieces.1: {'elapsed': {'minutes': 0.5}}

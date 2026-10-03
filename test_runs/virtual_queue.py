@@ -384,6 +384,7 @@ class VirtualQueueSuite:
         self.the_book_forgets_a_parent_that_has_closed()
         self.the_book_starts_again_when_a_held_order_is_changed()
         self.the_book_follows_a_plans_held_orders()
+        self.the_book_follows_a_scale_with_profit_takers_pending_rungs()
 
         total = self.passed + len(self.failed)
         print(f'{self.passed}/{total} checks passed.')
@@ -932,6 +933,56 @@ class VirtualQueueSuite:
         book.parent_store.documents = {}
         book.refresh()
         self.check('it is removed once the plan is no longer open', sorted(cache.hashes[ESTIMATES_KEY]), [])
+
+    def the_book_follows_a_scale_with_profit_takers_pending_rungs(self):
+        """A scale with profit-taker holding its rungs has each pending rung followed under its path, position and cycle, and a placed rung dropped.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        document = {
+            'parent_order_id': 'scale',
+            'synthetic_type': 'plan',
+            'state': 'working',
+            'instrument_id': INSTRUMENT_ID,
+            'body': {},
+            'parameters': {
+                'parts': {
+                    'root': {
+                        'state': 'working',
+                        'own_memory': {
+                            'held': {
+                                'instrument_id': INSTRUMENT_ID,
+                                'transaction_type': 'BUY',
+                            },
+                            'rungs': [
+                                {
+                                    'price': '98',
+                                    'quantity': 3,
+                                    'cycles': 0,
+                                    'pending': False,
+                                },
+                                {
+                                    'price': '97',
+                                    'quantity': 3,
+                                    'cycles': 2,
+                                    'pending': True,
+                                },
+                            ],
+                        },
+                    },
+                },
+            },
+            'legs': [],
+        }
+        book, cache = self.book_with({
+            'scale': document,
+        })
+        book.refresh()
+        key = 'scale/root/rung1.2'
+        self.check('only the pending rung is followed, keyed by its position and cycle', sorted(book.estimates), [key])
+        self.check('it is held at the rung\'s own price and quantity', (book.estimates[key].price, book.estimates[key].quantity), (97, 3))
+        self.check('its key names the rung as rung_path does', VirtualBook.rung_path('root', 1, 2), 'root/rung1.2')
 
     def the_book_starts_again_when_a_held_order_is_changed(self):
         """A held order whose price or quantity was changed through the modify route gets a fresh estimate at its new terms.

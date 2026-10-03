@@ -33,6 +33,9 @@ HOLDING_TYPES = (
     'oto',
     'oca',
     'scale_with_profit_taker',
+    'freeze_slicer',
+    'twap',
+    'implementation_shortfall',
 )
 
 
