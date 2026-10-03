@@ -57,7 +57,7 @@ class OrderEngineChangesSuite(order_routes.OrderRoutesSuite):
         self.client = None
 
     def start_scenario(self, hold_limits=False):
-        """Resets the stand-ins and builds a client whose orders all go to Flattrade.
+        """Resets the stand-ins and builds a client whose orders all go to Flattrade, with no fixed type routed to a plan, whatever `.env` routes.
 
         Args:
             hold_limits (bool): Whether plain limit orders are held in the virtual order book.
@@ -77,6 +77,9 @@ class OrderEngineChangesSuite(order_routes.OrderRoutesSuite):
         api_configuration['order_rate_per_second'] = 0
         api_configuration['order_rate_per_broker_per_second'] = 10
         api_configuration['order_hold_limits'] = hold_limits
+        api_configuration['order_plan_types'] = [
+            '',
+        ]
         answers = order_routes.OrderRoutesAnswers()
         self.network.reset({
             'by_url': [
@@ -723,13 +726,14 @@ class OrderEngineChangesSuite(order_routes.OrderRoutesSuite):
         }
 
     def placed_bracket_plan(self):
-        """Places a bracket plan whose entry rests, so its stop and target have not been sent.
+        """Places a bracket plan whose entry rests at the broker, asking for no holding, so its stop and target have not been sent.
 
         Returns:
             dict: The place route's status and body.
         """
         return self.call('POST', '/place', self.limit_body(synthetic={
             'type': 'plan',
+            'hold_limits': False,
             'plan': {
                 'order': {
                     'presets': [

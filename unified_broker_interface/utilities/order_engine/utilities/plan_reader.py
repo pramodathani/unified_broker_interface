@@ -1071,7 +1071,7 @@ class PlanReader:
             overrides (dict): The order's own values written over the body's.
 
         Returns:
-            WholePart | None: The part, or None when it has a problem.
+            WholePart | None: The part, or None when it has a problem. A scale with profit-taker asked to hold, by the order or the request, holds its rungs; any other type kept whole asked to hold by its own order is refused, since it keeps its orders at the broker by its own rules.
         """
         name = whole['name']
         if len(order.get('presets') or []) != 1 or own:
@@ -1083,6 +1083,15 @@ class PlanReader:
             self._add_problem(source_path, 'bad_setting', message)
         if problems:
             return None
+        if self._wants_holding(order, None, path):
+            if isinstance(part, ScaleWithProfitTakerPart) and not self._grouped:
+                part.holds_rungs = True
+            elif order.get('hold_limits') is True:
+                reason = f'{name} keeps its orders at the broker by rules of its own'
+                if self._grouped:
+                    reason = 'it is a leg of a together join that checks the group\'s margin, whose legs go out together'
+                self._add_problem(path, 'not_holdable', f'hold_limits asks for this order to be held until the market reaches its price, but {reason}')
+                return None
         return part
 
     def _closes_sensibly(self, side, position, pricing_path, execution, path):

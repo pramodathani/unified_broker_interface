@@ -2905,7 +2905,7 @@ class OrderEngineSuite:
         return result
 
     def run_plan_routing_checks(self):
-        """Runs today's requests for three fixed types with the switch-over routing them to plans, beside the same requests run by the fixed types, and checks that the `closes_position` and `reduce_only` flags survive the routing.
+        """Runs today's requests for three fixed types with the switch-over routing them to plans, beside the same requests run by the fixed types, and checks that the `closes_position` and `reduce_only` flags survive the routing; holding is turned off, so the routed orders send what the fixed types send.
 
         Returns:
             list: One recorded result per check.
@@ -2922,12 +2922,14 @@ class OrderEngineSuite:
         )
         steady = self.book_at(1000.00, 1000.05)
         original_plan_types = api_configuration['order_plan_types']
+        original_hold_limits = api_configuration['order_hold_limits']
         api_configuration['order_plan_types'] = [
             'grid',
             'bracket',
             'market_if_touched',
             'oto',
         ]
+        api_configuration['order_hold_limits'] = False
         try:
             return [
                 self.reaction_result(
@@ -3055,6 +3057,7 @@ class OrderEngineSuite:
             ]
         finally:
             api_configuration['order_plan_types'] = original_plan_types
+            api_configuration['order_hold_limits'] = original_hold_limits
 
     def run_plan_held_ladder_checks(self):
         """Runs ladders whose rungs are held in the engine until the offer reaches each one, as plans and as the routed `ladder` type, with holding on and off.
@@ -3203,6 +3206,7 @@ class OrderEngineSuite:
         api_configuration['order_plan_types'] = [
             'ladder',
         ]
+        api_configuration['order_hold_limits'] = True
         try:
             results.append(
                 self.price_result(
@@ -3579,6 +3583,225 @@ class OrderEngineSuite:
                     ],
                     accepted,
                     restart_between_ticks=True,
+                ),
+            ]
+        finally:
+            api_configuration['order_plan_types'] = original_plan_types
+            api_configuration['order_hold_limits'] = original_hold_limits
+
+    def run_holding_joins_checks(self):
+        """Runs today's requests for the joined types whose entry is held by default, routed to plans, with their exits resting at the broker as the entry fills, and a target held only because its own order asks.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        accepted = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        numbered = dict(accepted, number_orders=True)
+        steady = self.book_at(1000.00, 1000.05)
+        touched = self.book_at(999.95, 1000.00)
+        identifiers = order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS
+        entry = self.scenarios.bodies.market_order(
+            dry_run=None,
+            order_type='LIMIT',
+            price=1000,
+            quantity=10,
+        )
+        released_then_filled = [
+            {'quote': steady, 'at': 0},
+            {'quote': touched, 'at': 1},
+            {'quote': touched, 'at': 2, 'updates': [self.update('26091500000101', 'COMPLETE', 10)]},
+        ]
+        target_held = {
+            'then': {
+                'first': {
+                    'order': {},
+                },
+                'each_fill': {
+                    'either': {
+                        'children': [
+                            {
+                                'order': {
+                                    'side': 'protect',
+                                    'pricing': [
+                                        {
+                                            'native_stop': {
+                                                'trigger_price': 990,
+                                                'limit_price': 988,
+                                            },
+                                        },
+                                    ],
+                                },
+                            },
+                            {
+                                'order': {
+                                    'side': 'protect',
+                                    'pricing': [
+                                        {
+                                            'fixed': {
+                                                'price': 1010,
+                                            },
+                                        },
+                                    ],
+                                    'hold_limits': True,
+                                },
+                            },
+                        ],
+                        'sibling_rule': 'reduce',
+                    },
+                },
+            },
+        }
+        legged = {
+            'order': {
+                'presets': [
+                    {
+                        'legged_spread': {
+                            'net_price': 20,
+                            'candidates': [
+                                {
+                                    'instrument_id': identifiers['reliance'],
+                                    'transaction_type': 'BUY',
+                                    'quantity': 10,
+                                    'price': 1000,
+                                },
+                                {
+                                    'instrument_id': identifiers['reliance_future'],
+                                    'transaction_type': 'SELL',
+                                    'quantity': 10,
+                                },
+                            ],
+                        },
+                    },
+                ],
+            },
+        }
+        original_plan_types = api_configuration['order_plan_types']
+        original_hold_limits = api_configuration['order_hold_limits']
+        api_configuration['order_plan_types'] = list(plan_routing.HOLDING_TYPES)
+        api_configuration['order_hold_limits'] = True
+        try:
+            return [
+                self.price_result(
+                    'a_routed_bracket_holds_its_entry_and_rests_its_exits_once_it_fills',
+                    dict(entry, synthetic={'type': 'bracket', 'stop_price': 990, 'stop_limit_price': 988, 'target_price': 1010}),
+                    released_then_filled,
+                    numbered,
+                    book_every_order=True,
+                ),
+                self.price_result(
+                    'a_routed_cover_holds_its_entry_and_rests_its_stop_once_it_fills',
+                    dict(entry, synthetic={'type': 'cover', 'stop_price': 990, 'stop_limit_price': 988}),
+                    released_then_filled,
+                    numbered,
+                    book_every_order=True,
+                ),
+                self.price_result(
+                    'a_routed_scale_out_holds_its_entry_and_rests_its_exits_once_it_fills',
+                    dict(entry, synthetic={'type': 'scale_out', 'stop_price': 990, 'stop_limit_price': 988, 'target_prices': [1010, 1020]}),
+                    released_then_filled,
+                    numbered,
+                    book_every_order=True,
+                ),
+                self.price_result(
+                    'a_routed_oto_holds_its_first_order_and_sends_its_second_once_it_fills',
+                    dict(entry, synthetic={'type': 'oto', 'then': {'transaction_type': 'sell', 'price': 1010}}),
+                    released_then_filled,
+                    numbered,
+                    book_every_order=True,
+                ),
+                self.price_result(
+                    'a_routed_oca_holds_every_candidate_and_ends_the_others_without_a_message',
+                    dict(entry, synthetic={
+                        'type': 'oca',
+                        'candidates': [
+                            {
+                                'instrument_id': identifiers['reliance'],
+                                'quantity': 10,
+                                'price': 1000,
+                            },
+                            {
+                                'instrument_id': identifiers['reliance'],
+                                'quantity': 10,
+                                'price': 995,
+                            },
+                        ],
+                    }),
+                    released_then_filled,
+                    numbered,
+                    book_every_order=True,
+                ),
+                self.plan_price_result(
+                    'a_plan_target_is_held_only_because_its_own_order_asks',
+                    target_held,
+                    [
+                        {'quote': steady, 'at': 0},
+                        {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'COMPLETE', 10)]},
+                        {'quote': self.book_at(1010.00, 1010.05), 'at': 2},
+                    ],
+                    numbered,
+                ),
+                self.price_result(
+                    'a_routed_scale_with_profit_taker_holds_each_rung_and_holds_it_again_after_its_profit',
+                    dict(entry, quantity=9, synthetic={
+                        'type': 'scale_with_profit_taker',
+                        'from_price': 1000,
+                        'to_price': 990,
+                        'steps': 3,
+                        'profit_points': 4,
+                    }),
+                    [
+                        {'quote': steady, 'at': 0},
+                        {'quote': touched, 'at': 1},
+                        {'quote': touched, 'at': 2, 'updates': [self.update('26091500000101', 'COMPLETE', 3)]},
+                        {'quote': self.book_at(1003.95, 1004.00), 'at': 3, 'updates': [self.update('26091500000102', 'COMPLETE', 3)]},
+                        {'quote': touched, 'at': 4},
+                    ],
+                    numbered,
+                    book_every_order=True,
+                ),
+                self.plan_price_result(
+                    'a_plan_grid_asked_to_hold_by_its_own_order_is_refused',
+                    {
+                        'order': {
+                            'presets': [
+                                {
+                                    'grid': {
+                                        'levels': 2,
+                                        'step_points': 5,
+                                        'most_inventory': 20,
+                                    },
+                                },
+                            ],
+                            'hold_limits': True,
+                        },
+                    },
+                    [
+                        {'quote': steady, 'at': 0},
+                    ],
+                    numbered,
+                ),
+                self.plan_price_result(
+                    'a_plan_that_says_nothing_is_held_while_holding_is_on',
+                    {
+                        'order': {},
+                    },
+                    [
+                        {'quote': steady, 'at': 0},
+                        {'quote': touched, 'at': 1},
+                    ],
+                    numbered,
+                ),
+                self.plan_price_result(
+                    'a_plan_legged_spread_works_its_first_leg_at_the_broker_even_when_the_request_holds',
+                    legged,
+                    [
+                        {'quote': steady, 'at': 0},
+                    ],
+                    numbered,
+                    body_overrides=self.held_plan_body(legged, True),
                 ),
             ]
         finally:
@@ -12841,6 +13064,8 @@ class OrderEngineSuite:
         api_configuration['order_plan_types'] = [
             '',
         ]
+        original_hold_limits = api_configuration['order_hold_limits']
+        api_configuration['order_hold_limits'] = False
         try:
             results = []
             for scenario in OrderEngineScenarios().build():
@@ -12857,6 +13082,7 @@ class OrderEngineSuite:
             results.extend(self.run_plan_held_ladder_checks())
             results.extend(self.run_plan_hold_limits_checks())
             results.extend(self.run_holding_types_checks())
+            results.extend(self.run_holding_joins_checks())
             results.extend(self.run_plan_kept_whole_checks())
             results.extend(self.run_plan_routing_checks())
             results.extend(self.run_plan_join_checks())
@@ -12892,6 +13118,7 @@ class OrderEngineSuite:
             api_configuration['order_excluded_brokers'] = original_excluded
             api_configuration['order_broker_selector'] = original_selector
             api_configuration['order_plan_types'] = original_plan_types
+            api_configuration['order_hold_limits'] = original_hold_limits
         return results
 
     def encode(self, result):

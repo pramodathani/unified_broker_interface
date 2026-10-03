@@ -35,7 +35,14 @@ class ScaleWithProfitTakerPart(WholePart):
     The rungs are placed as a ladder places them: `steps` limits on the body's side from `from_price` to `to_price`, sharing the body's quantity. When a rung has filled, a profit-taking limit for the same quantity goes out `profit_points` better: a sell above a filled buy, a buy below a filled sell. When that profit-taker fills, the rung is placed again at its own price, at most `most_cycles` times, or without a limit until the plan is cancelled. The position therefore never exceeds the ladder's own quantity.
 
     Its memory holds each rung's price, quantity and cycles, which rung each of its broker orders belongs to, and which fills it has answered, so a restart answers nothing twice. A rung is told from a profit-taker by its side. Unlike today's type, it is done once every one of its broker orders has finished, which happens only after the last cycle allowed has been taken.
+
+    When the plan reader sets `holds_rungs`, every rung, the first time and each time it is placed again, waits in the engine as pending until the other side of the book reaches its price, as a virtual limit does, and only then goes to the broker; a quote marked stale releases nothing. The profit-takers are targets and rest at the broker as soon as their rung fills. The part is not done while a rung is pending.
+
+    Attributes:
+        holds_rungs (bool): Whether the rungs are held in the engine until the market reaches them.
     """
+
+    holds_rungs = False
 
     def settings_problems(self):
         """Every problem with the settings, in today's words.
@@ -122,6 +129,101 @@ class ScaleWithProfitTakerPart(WholePart):
         """
         return True
 
+    def moves_on_ticks(self):
+        """Whether this part is looked at on every tick, which it is when it holds its rungs, to release each one the market reaches.
+
+        Returns:
+            bool: True when the rungs are held.
+        """
+        return self.holds_rungs
+
+    def reached(self, view, side, price):
+        """Whether the other side of the book has reached a held rung's price on a quote that is not stale.
+
+        Args:
+            view (MarketView): The instrument's quote.
+            side (str): BUY or SELL, the rung's side.
+            price (decimal.Decimal): The rung's price.
+
+        Returns:
+            bool: True when the rung would fill straight away.
+        """
+        if view.is_stale():
+            return False
+        touch = view.opposite_touch(side)
+        if touch is None:
+            return False
+        if side == 'BUY':
+            return touch <= price
+        return touch >= price
+
+    def place_rung(self, plan_order, side, rung_index, started_at):
+        """Places one rung at its own price and remembers which rung the broker order belongs to.
+
+        Args:
+            plan_order (PlanOrder): The plan order.
+            side (str): BUY or SELL, the ladder's side.
+            rung_index (int): The rung's position in the ladder.
+            started_at (float | None): When the engine took the intent, or None.
+
+        Returns:
+            tuple: The answer's body (dict) and its HTTP status (int).
+        """
+        memory = self.own_memory(plan_order)
+        rung = memory['rungs'][rung_index]
+        body, status, leg_id = self.place_order(plan_order, self.limit_order(plan_order, side, decimal.Decimal(rung['price']), rung['quantity']), started_at)
+        memory = self.own_memory(plan_order)
+        rungs = [dict(each) for each in memory['rungs']]
+        rungs[rung_index]['pending'] = False
+        rung_of_leg = dict(memory.get('rung_of_leg') or {})
+        rung_of_leg[leg_id] = rung_index
+        memory['rungs'] = rungs
+        memory['rung_of_leg'] = rung_of_leg
+        self.remember(plan_order, memory, f'the plan\'s {self.path} order {leg_id} belongs to rung {rung_index + 1}')
+        return body, status
+
+    def move(self, plan_order, quotes, now):
+        """Places every held rung the other side of the book has reached.
+
+        Args:
+            plan_order (PlanOrder): The plan order.
+            quotes (dict): The quotes the tick carried.
+            now (float): Unused.
+
+        Returns:
+            bool: True when a rung was placed.
+        """
+        del now
+        if not self.holds_rungs or plan_order.part_record(self.path).get('state') != 'working' or self.is_stopped(plan_order):
+            return False
+        context = self.context(plan_order)
+        side = plan_order.read_order(context.body).transaction_type
+        view = context.view(quotes)
+        placed = False
+        for rung_index, rung in enumerate(self.own_memory(plan_order).get('rungs') or []):
+            if not rung.get('pending'):
+                continue
+            if not self.reached(view, side, decimal.Decimal(rung['price'])):
+                continue
+            self.place_rung(plan_order, side, rung_index, None)
+            placed = True
+        return placed
+
+    def finish_when_done(self, plan_order):
+        """Marks this part done as every kept-whole part is, except while a held rung is still pending and the part has not been stopped.
+
+        Args:
+            plan_order (PlanOrder): The plan order.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        if not self.is_stopped(plan_order):
+            for rung in self.own_memory(plan_order).get('rungs') or []:
+                if rung.get('pending'):
+                    return
+        super().finish_when_done(plan_order)
+
     def prepared_own_memory(self, plan_order):
         """Checks, when the plan is placed, that the quantity covers one unit per rung.
 
@@ -144,7 +246,7 @@ class ScaleWithProfitTakerPart(WholePart):
         return {}
 
     def start(self, plan_order, target, started_at, quotes, now=None):
-        """Places every rung and remembers which broker order is which rung.
+        """Lays out the rungs and places every one, or, when the rungs are held, leaves every one pending for `move` to place.
 
         Args:
             plan_order (PlanOrder): The plan order.
@@ -166,30 +268,32 @@ class ScaleWithProfitTakerPart(WholePart):
         record['state'] = 'working'
         plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} ladder is working')
         rungs = []
-        rung_of_leg = {}
-        placed = []
         for index in range(len(prices)):
             rungs.append({
                 'price': str(prices[index]),
                 'quantity': quantities[index],
                 'cycles': 0,
+                'pending': True,
             })
-            body, status, leg_id = self.place_order(plan_order, self.limit_order(plan_order, side, prices[index], quantities[index]), started_at)
-            rung_of_leg[leg_id] = index
-            placed.append((self.path, body, status))
         self.remember(
             plan_order,
             {
                 'rungs': rungs,
-                'rung_of_leg': rung_of_leg,
+                'rung_of_leg': {},
                 'handled': [],
             },
-            f'the plan\'s {self.path} ladder placed {len(rungs)} rungs',
+            f'the plan\'s {self.path} ladder laid out {len(rungs)} rungs',
         )
+        placed = []
+        if self.holds_rungs:
+            return placed
+        for index in range(len(rungs)):
+            body, status = self.place_rung(plan_order, side, index, started_at)
+            placed.append((self.path, body, status))
         return placed
 
     def settle(self, plan_order):
-        """Sends a profit-taker for every rung that has filled, places a rung again once its profit-taker has filled, and is done once every order has finished; once stopped, it places nothing more.
+        """Sends a profit-taker for every rung that has filled, places a rung again once its profit-taker has filled, or holds it again when the rungs are held, and is done once every order has finished; once stopped, it places nothing more.
 
         Args:
             plan_order (PlanOrder): The plan order.
@@ -233,6 +337,10 @@ class ScaleWithProfitTakerPart(WholePart):
                     continue
                 rung['cycles'] = rung['cycles'] + 1
                 memory['rungs'] = rungs
+                if self.holds_rungs:
+                    rung['pending'] = True
+                    self.remember(plan_order, memory, f'the profit on rung {rung_index + 1} was taken, so the rung is held again at {rung_price} until the market reaches it')
+                    continue
                 order = self.limit_order(plan_order, side, rung_price, rung['quantity'])
                 message = f'the profit on rung {rung_index + 1} was taken, so the rung is placed again at {rung_price}'
             self.remember(plan_order, memory, message)
