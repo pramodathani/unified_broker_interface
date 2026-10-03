@@ -1,5 +1,8 @@
 """Sending orders of chosen synthetic types to the plan engine, as a plan of that type's preset, for the switch-over from the fixed types."""
 
+from unified_broker_interface.utilities.broker_orders.utilities.refused_request import (
+    RefusedRequestError,
+)
 from unified_broker_interface.utilities.order_engine.utilities.preset_expander import (
     PRESET_NAMES,
 )
@@ -14,7 +17,7 @@ ORDER_FLAGS = (
     'closes_position',
     'reduce_only',
 )
-HOLDING_PRESETS = (
+HOLDING_TYPES = (
     'ladder',
 )
 
@@ -26,7 +29,7 @@ class PlanRouting:
 
     `closes_position` and `reduce_only` are not settings of a type but flags every type reads from the top of its parameters, so they stay there beside the plan rather than going into the preset, which would refuse them as unknown settings.
 
-    A preset in `HOLDING_PRESETS` holds its limit orders in the engine's virtual order book unless its `hold_limits` setting is false. With `UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS` turned off, a routed order of such a type that does not say is given `hold_limits: false`, so the switch turns holding off for routed types as it does for plain limit orders. It is written into the order when the order arrives, so the plan read again after a restart has the same shape even if the setting has changed since.
+    `hold_limits` is also taken out of the caller's settings and put beside the plan, where the plan reader reads it for the whole request. A routed order that does not say is given a value when it arrives: true for a type in `HOLDING_TYPES` while `UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS` is on, and false otherwise. Writing the value into the order means the plan read again after a restart holds the same orders, even if the setting or `HOLDING_TYPES` has changed since. A type that is not run as a plan cannot hold its orders, so `check_unrouted` refuses `hold_limits: true` for it rather than ignoring it.
 
     Attributes:
         type_names (list): The fixed types run as plans.
@@ -90,7 +93,7 @@ class PlanRouting:
             intent (dict): The intent document.
 
         Returns:
-            dict: The intent to run, with `closes_position` and `reduce_only` kept at the top of the plan's `synthetic` object, and `hold_limits: false` given to a holding preset when holding is turned off and the caller did not say.
+            dict: The intent to run, with `closes_position`, `reduce_only` and `hold_limits` at the top of the plan's `synthetic` object, `hold_limits` given its default when the caller did not say.
         """
         named_type = intent.get('synthetic_type')
         if named_type not in self.type_names:
@@ -102,9 +105,11 @@ class PlanRouting:
         for name in ORDER_FLAGS:
             if name in settings:
                 flags[name] = settings.pop(name)
+        if 'hold_limits' in settings:
+            flags['hold_limits'] = settings.pop('hold_limits')
+        else:
+            flags['hold_limits'] = self.hold_limits and named_type in HOLDING_TYPES
         preset_name = self.preset_name(named_type)
-        if not self.hold_limits and preset_name in HOLDING_PRESETS and 'hold_limits' not in settings:
-            settings['hold_limits'] = False
         synthetic = {
             'type': 'plan',
             'plan': {
@@ -124,3 +129,38 @@ class PlanRouting:
         routed['synthetic_type'] = 'plan'
         routed['body'] = body
         return routed
+
+    def check_unrouted(self, intent):
+        """Refuses `hold_limits: true` for an order the engine runs with a fixed type rather than as a plan.
+
+        Only a plan can hold its orders in the virtual order book, so a fixed type asked to hold would otherwise send them at once without saying so. `hold_limits: false` asks for what a fixed type does anyway, and a plain limit order held as a `virtual_limit` is held whatever it says.
+
+        Args:
+            intent (dict): The intent document, after `routed`.
+
+        Returns:
+            None: This method returns nothing.
+
+        Raises:
+            RefusedRequestError: With HTTP 400 when `hold_limits` is true for a fixed type, or is not true or false.
+        """
+        named_type = intent.get('synthetic_type') or 'simple'
+        if named_type in ('plan', 'virtual_limit'):
+            return
+        synthetic = (intent.get('body') or {}).get('synthetic')
+        if not isinstance(synthetic, dict) or 'hold_limits' not in synthetic:
+            return
+        hold_limits = synthetic.get('hold_limits')
+        if hold_limits is False:
+            return
+        if hold_limits is True:
+            raise RefusedRequestError.refusal(
+                f'hold_limits asks for the orders to be held until the market reaches them, which only an order run as a plan can do; {named_type} is not, so name it in UNIFIED_BROKER_INTERFACE_API_ORDER_PLAN_TYPES or send it without hold_limits',
+                400,
+                intent_id=intent.get('intent_id'),
+            )
+        raise RefusedRequestError.refusal(
+            f'hold_limits is true or false, not {hold_limits!r}',
+            400,
+            intent_id=intent.get('intent_id'),
+        )

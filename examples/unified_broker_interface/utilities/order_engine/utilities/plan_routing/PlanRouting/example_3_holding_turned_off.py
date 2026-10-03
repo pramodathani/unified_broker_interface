@@ -1,6 +1,6 @@
-"""Routes the ladder type with holding on and off, and shows when `hold_limits: false` is written into the routed order.
+"""Routes a ladder and a bracket with holding on and off, and shows the `hold_limits` written beside each routed plan.
 
-`PlanRouting` takes `UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS` as `hold_limits`. With it on, a routed ladder keeps the caller's settings, so its preset holds each rung. With it off, a routed ladder that does not say is given `hold_limits: false`, so its rungs are sent at once, and a caller who says `true` keeps it. The value is written into the order when it arrives, so the plan read again after a restart has the same shape. Nothing is read from Redis or sent anywhere.
+`PlanRouting` takes `UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS` as `hold_limits`. A routed order's `hold_limits` is moved from its settings to beside the plan, where the plan reader reads it for the whole request. When the caller does not say, it is true only for a type in `HOLDING_TYPES`, which is the ladder alone so far, and only while holding is on. The value is written into the order when it arrives, so the plan read again after a restart holds the same orders. Nothing is read from Redis or sent anywhere.
 
 Run it from the project root:
 
@@ -13,7 +13,7 @@ from unified_broker_interface.utilities.order_engine.utilities.plan_routing impo
 
 
 class HoldingTurnedOffExample:
-    """Routes three ladder intents with holding on and with it off."""
+    """Routes ladder and bracket intents with holding on and with it off."""
 
     def intent(self, settings):
         """An intent for a buy of nine RELIANCE with the given synthetic settings.
@@ -38,7 +38,7 @@ class HoldingTurnedOffExample:
         }
 
     def run(self):
-        """Prints the preset settings each routed intent ends up with.
+        """Prints the request's hold_limits and the preset settings each routed intent ends up with.
 
         Returns:
             None: This method returns nothing.
@@ -62,18 +62,29 @@ class HoldingTurnedOffExample:
                 'says true',
                 dict(ladder, hold_limits=True),
             ),
+            (
+                'sends a bracket',
+                {
+                    'type': 'bracket',
+                    'stop_price': 990,
+                    'stop_limit_price': 988,
+                    'target_price': 1010,
+                },
+            ),
         ]
         for hold_limits in (True, False):
             routing = PlanRouting(
                 [
                     'ladder',
+                    'bracket',
                 ],
                 hold_limits,
             )
             for label, settings in cases:
                 routed = routing.routed(self.intent(settings))
-                preset = routed['body']['synthetic']['plan']['order']['presets'][0]['ladder']
-                print(f'holding {"on" if hold_limits else "off"}, caller {label}: {preset}')
+                synthetic = routed['body']['synthetic']
+                preset = synthetic['plan']['order']['presets'][0]
+                print(f'holding {"on" if hold_limits else "off"}, caller {label}: hold_limits={synthetic["hold_limits"]}, preset {preset}')
 
 
 if __name__ == '__main__':

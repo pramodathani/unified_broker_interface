@@ -1,6 +1,8 @@
-holding on, caller says nothing: {'from_price': 1000, 'to_price': 995, 'steps': 3}
-holding on, caller says false: {'from_price': 1000, 'to_price': 995, 'steps': 3, 'hold_limits': False}
-holding on, caller says true: {'from_price': 1000, 'to_price': 995, 'steps': 3, 'hold_limits': True}
-holding off, caller says nothing: {'from_price': 1000, 'to_price': 995, 'steps': 3, 'hold_limits': False}
-holding off, caller says false: {'from_price': 1000, 'to_price': 995, 'steps': 3, 'hold_limits': False}
-holding off, caller says true: {'from_price': 1000, 'to_price': 995, 'steps': 3, 'hold_limits': True}
+holding on, caller says nothing: hold_limits=True, preset {'ladder': {'from_price': 1000, 'to_price': 995, 'steps': 3}}
+holding on, caller says false: hold_limits=False, preset {'ladder': {'from_price': 1000, 'to_price': 995, 'steps': 3}}
+holding on, caller says true: hold_limits=True, preset {'ladder': {'from_price': 1000, 'to_price': 995, 'steps': 3}}
+holding on, caller sends a bracket: hold_limits=False, preset {'bracket': {'stop_price': 990, 'stop_limit_price': 988, 'target_price': 1010}}
+holding off, caller says nothing: hold_limits=False, preset {'ladder': {'from_price': 1000, 'to_price': 995, 'steps': 3}}
+holding off, caller says false: hold_limits=False, preset {'ladder': {'from_price': 1000, 'to_price': 995, 'steps': 3}}
+holding off, caller says true: hold_limits=True, preset {'ladder': {'from_price': 1000, 'to_price': 995, 'steps': 3}}
+holding off, caller sends a bracket: hold_limits=False, preset {'bracket': {'stop_price': 990, 'stop_limit_price': 988, 'target_price': 1010}}

@@ -83,6 +83,8 @@ class PlanOrder(SyntheticOrder):
         """
         reader = PlanReader(
             str(self.parent.body.get('transaction_type') or '').strip().upper(),
+            self.parent.body,
+            self.parent.parameters.get('hold_limits'),
         )
         root = reader.read(self.parent.parameters.get('plan'))
         if root is None:

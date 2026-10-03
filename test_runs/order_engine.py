@@ -3078,6 +3078,7 @@ class OrderEngineSuite:
                         'ladder': dict(ladder_settings),
                     },
                 ],
+                'hold_limits': True,
             },
         }
         falling = [
@@ -3153,6 +3154,7 @@ class OrderEngineSuite:
                                 'ladder': dict(ladder_settings),
                             },
                         ],
+                        'hold_limits': True,
                     },
                 },
                 [
@@ -3233,6 +3235,155 @@ class OrderEngineSuite:
             api_configuration['order_plan_types'] = original_plan_types
             api_configuration['order_hold_limits'] = original_hold_limits
         return results
+
+    def run_plan_hold_limits_checks(self):
+        """Runs plans asked to hold their orders in the virtual order book, by the request or by one order, and the orders the rule leaves alone or refuses.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        accepted = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        steady = self.book_at(1000.00, 1000.05)
+        touched = self.book_at(999.95, 1000.00)
+        plain = {
+            'order': {},
+        }
+        follow_on = {
+            'then': {
+                'first': {
+                    'order': {},
+                },
+                'each_fill': {
+                    'order': {
+                        'side': 'sell',
+                    },
+                },
+            },
+        }
+        grouped = {
+            'together': {
+                'children': [
+                    {
+                        'order': {},
+                    },
+                    {
+                        'order': {
+                            'transaction_type': 'SELL',
+                        },
+                    },
+                ],
+            },
+        }
+        grouped_and_asked = {
+            'together': {
+                'children': [
+                    {
+                        'order': {
+                            'hold_limits': True,
+                        },
+                    },
+                ],
+            },
+        }
+        return [
+            self.plan_price_result(
+                'a_plan_held_by_the_requests_hold_limits_waits_for_the_offer',
+                plain,
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': touched, 'at': 1},
+                ],
+                accepted,
+                body_overrides=self.held_plan_body(plain, True),
+            ),
+            self.plan_price_result(
+                'a_plan_requests_hold_limits_leaves_a_market_order_alone',
+                plain,
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+                body_overrides=dict(
+                    self.held_plan_body(plain, True),
+                    order_type='MARKET',
+                    price=None,
+                ),
+            ),
+            self.plan_price_result(
+                'a_plan_order_asking_to_hold_a_market_order_is_refused',
+                {
+                    'order': {
+                        'hold_limits': True,
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+                body_overrides={
+                    'order_type': 'MARKET',
+                    'price': None,
+                },
+            ),
+            self.plan_price_result(
+                'a_plan_requests_hold_limits_holds_the_entry_but_not_its_follow_on_order',
+                follow_on,
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': touched, 'at': 1},
+                    {'quote': touched, 'at': 2, 'updates': [self.update('26091500000021', 'COMPLETE', 10)]},
+                ],
+                accepted,
+                body_overrides=self.held_plan_body(follow_on, True),
+            ),
+            self.plan_price_result(
+                'a_plan_requests_hold_limits_sends_a_margin_checked_group_at_once',
+                grouped,
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+                body_overrides=self.held_plan_body(grouped, True),
+            ),
+            self.plan_price_result(
+                'a_plan_order_asking_to_hold_inside_a_margin_checked_group_is_refused',
+                grouped_and_asked,
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_requests_hold_limits_must_be_true_or_false',
+                plain,
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+                body_overrides=self.held_plan_body(plain, 'yes'),
+            ),
+        ]
+
+    def held_plan_body(self, plan, hold_limits):
+        """Body fields giving a plan order a request-level `hold_limits`.
+
+        Args:
+            plan (dict): The `plan` object.
+            hold_limits (object): The request's `hold_limits`.
+
+        Returns:
+            dict: The `synthetic` body field, to lay over the body.
+        """
+        return {
+            'synthetic': {
+                'type': 'plan',
+                'plan': plan,
+                'hold_limits': hold_limits,
+            },
+        }
 
     def run_plan_kept_whole_checks(self):
         """Runs plan orders kept whole, such as a grid, beside today's checks of the same types.
@@ -12486,6 +12637,7 @@ class OrderEngineSuite:
             results.extend(self.run_plan_trigger_checks())
             results.extend(self.run_plan_virtual_limit_checks())
             results.extend(self.run_plan_held_ladder_checks())
+            results.extend(self.run_plan_hold_limits_checks())
             results.extend(self.run_plan_kept_whole_checks())
             results.extend(self.run_plan_routing_checks())
             results.extend(self.run_plan_join_checks())

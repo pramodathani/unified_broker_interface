@@ -1,6 +1,6 @@
 """Shows the two shapes of the ladder preset: holding each rung until the market reaches it, and sending every rung at once.
 
-By default the `ladder` preset stands for a join: a Using join of the `ladder` execution whose every rung is a `virtual_limit`, so each rung waits in the engine until the other side of the book reaches its own price. With `hold_limits: false` it stands for the `ladder` execution alone, which sends every rung at once. A held ladder refuses another execution and a post-only guard beside it, and `hold_limits` must be true or false. Nothing is read from Redis or sent anywhere.
+The plan reader tells the expander whether the order the ladder is named in is held. When it is, or when the ladder's own `hold_limits` is true, the `ladder` preset stands for a join: a Using join of the `ladder` execution whose every rung is a `virtual_limit`, so each rung waits in the engine until the other side of the book reaches its own price. Otherwise, or with `hold_limits: false`, it stands for the `ladder` execution alone, which sends every rung at once. A held ladder refuses another execution and a post-only guard beside it, and `hold_limits` must be true or false. Nothing is read from Redis or sent anywhere.
 
 Run it from the project root:
 
@@ -27,18 +27,19 @@ class LadderThatHoldsItsRungsExample:
             'steps': 3,
         }
 
-    def show(self, label, settings, entry):
+    def show(self, label, settings, entry, held):
         """Prints whether the preset is a join and what it expands to.
 
         Args:
             label (str): What the case shows.
             settings (dict): The preset's settings.
             entry (dict): The rest of the order the preset is named in.
+            held (bool): Whether the plan reader holds the order the preset is named in.
 
         Returns:
             None: This method returns nothing.
         """
-        expander = PresetExpander('BUY')
+        expander = PresetExpander('BUY', held)
         if expander.is_join('ladder', settings):
             tree = expander.expand_join('ladder', settings, entry, 'root.presets.0')
         else:
@@ -51,13 +52,14 @@ class LadderThatHoldsItsRungsExample:
         print(f'  {tree}')
 
     def run(self):
-        """Expands the five cases.
+        """Expands the six cases.
 
         Returns:
             None: This method returns nothing.
         """
-        self.show('held by default', dict(self.rungs), {})
-        self.show('sent at once', dict(self.rungs, hold_limits=False), {})
+        self.show('the order is held', dict(self.rungs), {}, True)
+        self.show('the order is not held', dict(self.rungs), {}, False)
+        self.show('the ladder says false in a held order', dict(self.rungs, hold_limits=False), {}, True)
         self.show(
             'held beside a twap',
             dict(self.rungs),
@@ -71,6 +73,7 @@ class LadderThatHoldsItsRungsExample:
                     },
                 ],
             },
+            True,
         )
         self.show(
             'held beside post_only',
@@ -82,8 +85,9 @@ class LadderThatHoldsItsRungsExample:
                     },
                 ],
             },
+            True,
         )
-        self.show('hold_limits of no', dict(self.rungs, hold_limits='no'), {})
+        self.show('hold_limits of no', dict(self.rungs, hold_limits='no'), {}, False)
 
 
 if __name__ == '__main__':
