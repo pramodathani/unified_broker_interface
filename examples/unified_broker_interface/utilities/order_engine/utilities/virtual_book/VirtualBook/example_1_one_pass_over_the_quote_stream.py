@@ -1,6 +1,6 @@
 """Runs the synthetic limit order book over a short quote stream and shows the queue estimate it writes for one held order.
 
-A `VirtualBook` keeps one queue estimate for every held `virtual_limit` order, moves it with each quote for that order's instrument, and writes it to the Redis hash `unified:orders:virtual_queue` for the order engine to read. This program holds one buy of 500 INFY at 98.00 and puts three quotes on the stream: one for INFY that sets the baseline, one for another instrument that the book skips, and one for INFY that shows 3,000 traded at 98.00.
+A `VirtualBook` keeps one queue estimate for every order the engine holds, keyed by its parent id and its path in the plan, moves it with each quote for that order's instrument, and writes it to the Redis hash `unified:orders:virtual_queue` for the order engine to read. This program holds one buy of 500 INFY at 98.00, a plain limit order the engine runs as a plan of one order at `root`, and puts three quotes on the stream: one for INFY that sets the baseline, one for another instrument that the book skips, and one for INFY that shows 3,000 traded at 98.00.
 
 The first pass uses `run_once`, which reads the held orders, reads the stream and writes what changed. The second pass does the same three steps by hand with `read_quotes` and `write_changed`, after two more quotes arrive, one of them an entry whose `quote` field is not JSON and is skipped by `apply_entry`. Finally it hands `apply_entry` a quote for an instrument nobody holds, which it ignores. Two small stand-ins replace Redis and the engine's parent cache, so nothing is sent anywhere: the Redis stand-in keeps hashes in dictionaries and hands out stream entries from a list.
 
@@ -212,7 +212,7 @@ class OnePassExample:
         self.cache = StandInRedis()
         held_buy = {
             'parent_order_id': 'parent-1',
-            'synthetic_type': 'virtual_limit',
+            'synthetic_type': 'plan',
             'state': 'received',
             'instrument_id': 'NSE:INFY',
             'body': {
@@ -222,7 +222,22 @@ class OnePassExample:
                 'quantity': 500,
             },
             'parameters': {
-                'type': 'virtual_limit',
+                'type': 'plan',
+                'parts': {
+                    'root': {
+                        'state': 'waiting',
+                        'memory': {
+                            'trigger': {
+                                'held': {
+                                    'instrument_id': 'NSE:INFY',
+                                    'transaction_type': 'BUY',
+                                    'price': '98',
+                                    'quantity': 500,
+                                },
+                            },
+                        },
+                    },
+                },
             },
             'legs': [],
         }
@@ -283,7 +298,7 @@ class OnePassExample:
         Returns:
             None: This method returns nothing.
         """
-        stored = json.loads(self.cache.hget(ESTIMATES_KEY, 'parent-1'))
+        stored = json.loads(self.cache.hget(ESTIMATES_KEY, 'parent-1/root'))
         print(f'{label}: read {self.book.quotes_read}, used {self.book.quotes_used}, read up to {self.book.last_entry_id}')
         print(f'  stored estimate: ahead={stored["ahead"]} queue_filled={stored["queue_filled"]} updates={stored["updates"]}')
 

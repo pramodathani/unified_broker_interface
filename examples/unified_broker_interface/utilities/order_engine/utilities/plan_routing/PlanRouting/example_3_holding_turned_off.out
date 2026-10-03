@@ -10,5 +10,5 @@ holding off, caller says true: hold_limits=True, preset {'ladder': {'from_price'
 holding off, caller sends a bracket: hold_limits=False, preset {'bracket': {'stop_price': 990, 'stop_limit_price': 988, 'target_price': 1010}}
 holding off, a plan the caller wrote: hold_limits=False
 holding off, a plan that says false: hold_limits=False
-a peg not run as a plan, hold_limits=False: accepted
-a peg not run as a plan, hold_limits=True: 400 hold_limits asks for the orders to be held until the market reaches them, which only an order run as a plan can do; peg is not, so name it in UNIFIED_BROKER_INTERFACE_API_ORDER_PLAN_TYPES or send it without hold_limits
+a simple order, hold_limits=False: accepted
+a simple order, hold_limits=True: 400 hold_limits asks for the order to be held until the market reaches it, but a simple order is sent at once; send it as a plain limit order or a plan to hold it

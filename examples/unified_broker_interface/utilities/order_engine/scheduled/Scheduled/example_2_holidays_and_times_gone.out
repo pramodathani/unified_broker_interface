@@ -1,3 +1,0 @@
-Friday holiday at 10:00, for 15:10: read_place_at 15:10 on 2026-10-05; run answered HTTP 202 scheduled
-Thursday at 15:30, for 15:10: HTTP 400, at_time of 15:10 has already passed today, and an order is not held overnight on the strength of a time that has gone
-Thursday at 10:00, for ten past three: HTTP 400, at_time must be a time of day such as 15:10, not 'ten past three'

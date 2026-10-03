@@ -1,7 +1,0 @@
-Run at 11:00 on the holiday: HTTP 202, outcome scheduled, placed at 09:00:30 on 2026-10-05
-A limit order is taken until 09:10:00
-A market order is taken until 09:05:00
-moment_today(09:10) on Monday: 2026-10-05 09:10:00+05:30
-Tick at 09:00:29: placed False, parent received
-Tick at 09:00:30: placed True, parent working
-Sent to the broker: ['place BUY 20 LIMIT at 1380.00 -> 260930000001']

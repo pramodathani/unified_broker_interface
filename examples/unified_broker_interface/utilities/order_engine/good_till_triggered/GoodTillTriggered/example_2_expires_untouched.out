@@ -1,6 +1,0 @@
-Run: HTTP 202, outcome armed, valid for 10 days
-10 Oct 11:00 at 4150.0: acted False, parent received
-12 Oct 09:15 at 4215.0: acted True, parent cancelled
-Why: the trigger was not touched within 10 days, so it has expired
-Sent to the broker: []
-400 days: HTTP 400, valid_days must be between 1 and 365, not 400

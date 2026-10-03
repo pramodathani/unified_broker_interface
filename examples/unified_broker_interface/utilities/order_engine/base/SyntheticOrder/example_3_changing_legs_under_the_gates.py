@@ -4,7 +4,7 @@ Every change an order type makes to a resting leg passes the same checks: a move
 
 1. `moves_the_price` tells a real move from one to where the order already is.
 2. `reprice_leg` moves the entry; moving it again at once is refused by `allowed_to_reprice`, because the throttle wants two seconds between moves of one order.
-3. With the day's cap nearly used, `has_room_today` refuses to move the entry but allows the stop, which closes a position and may use the part of the cap kept for exits.
+3. With the day's cap nearly used, `has_room_today` refuses to move either leg, since neither is marked as closing a position; once the order's parameters say `closes_position`, as an order sent to get out of a position does, it allows them to use the part of the cap kept for exits.
 4. With the rate budget empty, `take_rate_token` refuses; once it refills, `reduce_leg` cuts the entry to 6.
 5. `release_daily_place` gives back the cap place counted for a message that was not sent.
 6. `apply_outside_modification` sends a caller's change to the stop's trigger, which the base class allows (`outside_change_problem` has no objection) and then hands to `on_leg_modified`, which the base class leaves alone. `record_parameters` records the parameters so a restart keeps them.
@@ -566,6 +566,9 @@ class ChangingLegsUnderTheGatesExample:
 
         self.gates.capped = True
         print(f"has_room_today with the cap nearly used: entry {self.runner.has_room_today(entry, 'following the bid')}, stop {self.runner.has_room_today(stop, 'trailing')}")
+        self.runner.parent.parameters = dict(self.runner.parent.parameters, closes_position=True)
+        print(f"has_room_today once the order closes a position: entry {self.runner.has_room_today(entry, 'following the bid')}, stop {self.runner.has_room_today(stop, 'trailing')}")
+        self.runner.parent.parameters = dict(self.runner.parent.parameters, closes_position=False)
         self.gates.capped = False
 
         self.gates.tokens_left = 0

@@ -12,7 +12,6 @@ from unified_broker_interface.utilities.order_engine.utilities.virtual_queue imp
 
 ESTIMATES_KEY = 'unified:orders:virtual_queue'
 QUOTES_STREAM_KEY = 'unified:quotes:stream'
-VIRTUAL_LIMIT_TYPE = 'virtual_limit'
 PLAN_TYPE = 'plan'
 PART_KEY_SEPARATOR = '/'
 READ_COUNT = 1000
@@ -25,13 +24,13 @@ MAXIMUM_BACKOFF_SECONDS = 60
 class VirtualBook:
     """The synthetic limit order book: one queue estimate per held order, moved on by every quote for its instrument.
 
-    The order engine holds a `virtual_limit` order instead of sending it, and needs to know two things about it that only the tick-by-tick quote stream can tell: how much a resting order at the same price would have filled by now, and whether it would have filled at all. That is `VirtualQueue`'s arithmetic. This class keeps one per held order, feeds each the quotes for its instrument, and writes them to `unified:orders:virtual_queue`, keyed by parent id, for the engine to read. A plan can hold several orders, so each of its held orders is keyed by the parent id and the order's path, as `<parent id>/root.then.0`.
+    The order engine holds a plan's limit order instead of sending it, and needs to know two things about it that only the tick-by-tick quote stream can tell: how much a resting order at the same price would have filled by now, and whether it would have filled at all. That is `VirtualQueue`'s arithmetic. This class keeps one per held order, feeds each the quotes for its instrument, and writes them to `unified:orders:virtual_queue`, keyed by parent id, for the engine to read. A plan can hold several orders, so each of its held orders is keyed by the parent id and the order's path, as `<parent id>/root.then.0`.
 
     It runs as its own process rather than inside the engine because the stream carries every instrument's quotes, about 112,400 of them, and decoding all of them on the engine's thread would slow every order the engine handles.
 
     It reads the stream with a plain `XREAD` from the moment it starts, not as a consumer group. Old quotes are of no use to an estimate, and a consumer group would keep a backlog of every entry this process did not acknowledge. Instead every estimate read back from Redis takes its next quote as a new baseline, so the trading it missed while nothing was running is not counted as trading at its price.
 
-    Which orders are held is read from the engine's parent cache every two seconds: an open `virtual_limit` parent whose trigger has not fired, and every order of an open plan that waits on a `limit_marketable` trigger. An estimate stops moving once its order fires, and is removed from Redis once its parent is no longer open.
+    Which orders are held is read from the engine's parent cache every two seconds: every order of an open plan that waits on a `limit_marketable` trigger, and every pending rung of a scale with profit-taker that holds its rungs. An estimate stops moving once its order fires, and is removed from Redis once its parent is no longer open.
 
     Attributes:
         cache (redis.Redis): The Redis client.
@@ -82,9 +81,9 @@ class VirtualBook:
         return f'{parent_order_id}{PART_KEY_SEPARATOR}{path}'
 
     def held_documents(self, document):
-        """The held orders a parent holds, each shaped as a `virtual_limit` parent's record so one estimate can be started from it.
+        """The held orders a parent holds, each shaped as a record with the order's instrument, side, price and quantity so one estimate can be started from it.
 
-        A `virtual_limit` parent that is still held is its own record. A plan gives one record per order still waiting on a `limit_marketable` trigger, built from the terms the trigger wrote into the order's memory when the plan was placed, and one per pending rung of a scale with profit-taker that holds its rungs, keyed by its path, `/rung`, its position and its cycle, so a rung held again after its profit is taken starts a fresh estimate.
+        Only a plan holds orders: a plain limit order the engine holds is a plan of one order. A plan gives one record per order still waiting on a `limit_marketable` trigger, built from the terms the trigger wrote into the order's memory when the plan was placed, and one per pending rung of a scale with profit-taker that holds its rungs, keyed by its path, `/rung`, its position and its cycle, so a rung held again after its profit is taken starts a fresh estimate.
 
         Args:
             document (dict): The parent's Redis record.
@@ -93,10 +92,6 @@ class VirtualBook:
             list: The records, each with `parent_order_id` set to the key it is estimated under.
         """
         if document.get('synthetic_type') != PLAN_TYPE:
-            if self.is_held(document):
-                return [
-                    document,
-                ]
             return []
         parts = (document.get('parameters') or {}).get('parts') or {}
         held = []
@@ -152,43 +147,17 @@ class VirtualBook:
         """
         return f'{path}{PART_KEY_SEPARATOR}rung{index}.{cycles}'
 
-    def is_held(self, document):
-        """Whether a parent is a virtual limit order that is still being held rather than sent.
-
-        Args:
-            document (dict): The parent's Redis record.
-
-        Returns:
-            bool: True when its queue should be followed.
-        """
-        if document.get('synthetic_type') != VIRTUAL_LIMIT_TYPE:
-            return False
-        parameters = document.get('parameters') or {}
-        if parameters.get('triggered_at') is not None:
-            return False
-        for leg in document.get('legs') or []:
-            if leg.get('role') != 'backstop':
-                return False
-        return True
-
     def held_terms(self, document):
-        """The price and quantity a held parent is held at: the caller's body, with any change made since through `PUT /api/orders/modify`.
+        """The price and quantity a held order is held at, from the record `held_documents` built out of its trigger's terms.
 
         Args:
-            document (dict): The parent's Redis record.
+            document (dict): The held order's record.
 
         Returns:
             tuple: The price (object, as stored) and the quantity (object, as stored).
         """
         body = document.get('body') or {}
-        parameters = document.get('parameters') or {}
-        price = parameters.get('held_price')
-        if price is None:
-            price = body.get('price')
-        quantity = parameters.get('held_quantity')
-        if quantity is None:
-            quantity = body.get('quantity')
-        return price, quantity
+        return body.get('price'), body.get('quantity')
 
     def has_new_terms(self, estimate, document):
         """Whether a held parent's price or quantity has changed since its estimate was started.
@@ -209,10 +178,10 @@ class VirtualBook:
         return not (same_price and same_quantity)
 
     def new_estimate(self, document):
-        """A fresh estimate for a held parent, or None when its order cannot be read.
+        """A fresh estimate for a held order, or None when its order cannot be read.
 
         Args:
-            document (dict): The parent's Redis record.
+            document (dict): The held order's record, as `held_documents` builds it.
 
         Returns:
             VirtualQueue | None: The estimate.
@@ -229,8 +198,7 @@ class VirtualBook:
             )
         except (KeyError, TypeError, ValueError) as error:
             self.logger.warning(
-                f'Parent {document.get("parent_order_id")} is a virtual '
-                f'limit order whose queue cannot be followed: {error}'
+                f'Held order {document.get("parent_order_id")} has a queue that cannot be followed: {error}'
             )
             return None
 

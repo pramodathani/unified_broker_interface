@@ -1,6 +1,6 @@
 """Routes a ladder and a bracket with holding on and off, and shows the `hold_limits` written beside each routed plan.
 
-`PlanRouting` takes `UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS` as `hold_limits`. A routed order's `hold_limits` is moved from its settings to beside the plan, where the plan reader reads it for the whole request. When the caller does not say, it is true only for a type in `HOLDING_TYPES`, which the bracket is among, and only while holding is on. A plan the caller wrote that does not say gets the switch's value from `with_hold_limits`, and one that says keeps its own. `check_unrouted` refuses `hold_limits: true` for a type the engine still runs with its fixed class, which cannot hold. The value is written into the order when it arrives, so the plan read again after a restart holds the same orders. Nothing is read from Redis or sent anywhere.
+`PlanRouting` takes `UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS` as `hold_limits`. A routed order's `hold_limits` is moved from its settings to beside the plan, where the plan reader reads it for the whole request. When the caller does not say, it is true only for a type in `HOLDING_TYPES`, which the bracket is among, and only while holding is on. A plan the caller wrote that does not say gets the switch's value from `with_hold_limits`, and one that says keeps its own. `check_unrouted` refuses `hold_limits: true` for a `simple` order, which is sent at once. The value is written into the order when it arrives, so the plan read again after a restart holds the same orders. Nothing is read from Redis or sent anywhere.
 
 Run it from the project root:
 
@@ -76,13 +76,7 @@ class HoldingTurnedOffExample:
             ),
         ]
         for hold_limits in (True, False):
-            routing = PlanRouting(
-                [
-                    'ladder',
-                    'bracket',
-                ],
-                hold_limits,
-            )
+            routing = PlanRouting(hold_limits)
             for label, settings in cases:
                 routed = routing.routed(self.intent(settings))
                 synthetic = routed['body']['synthetic']
@@ -92,13 +86,13 @@ class HoldingTurnedOffExample:
             print(f'holding {"on" if hold_limits else "off"}, a plan the caller wrote: hold_limits={written["body"]["synthetic"]["hold_limits"]}')
             kept = routing.with_hold_limits(self.intent({'type': 'plan', 'plan': {'order': {}}, 'hold_limits': False}))
             print(f'holding {"on" if hold_limits else "off"}, a plan that says false: hold_limits={kept["body"]["synthetic"]["hold_limits"]}')
-        unrouted = PlanRouting([], True)
+        routing = PlanRouting(True)
         for value in (False, True):
             try:
-                unrouted.check_unrouted(self.intent({'type': 'peg', 'hold_limits': value}))
-                print(f'a peg not run as a plan, hold_limits={value}: accepted')
+                routing.check_unrouted(self.intent({'type': 'simple', 'hold_limits': value}))
+                print(f'a simple order, hold_limits={value}: accepted')
             except RefusedRequestError as refusal:
-                print(f'a peg not run as a plan, hold_limits={value}: {refusal.status} {refusal.body.get("error")}')
+                print(f'a simple order, hold_limits={value}: {refusal.status} {refusal.body.get("error")}')
 
 
 if __name__ == '__main__':

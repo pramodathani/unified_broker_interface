@@ -1,12 +1,12 @@
 """Rebuilds a good-till-triggered order placed last week alongside today's orders, without counting any of its rows twice.
 
-Recovery reads the record twice. The first read covers everything since the last 06:00 IST. The second reaches thirty days further back, but only for the order types that live overnight, which `carried_types` names. A GTT order placed on Friday that fired this morning shows up in both reads, because its newest row is from today.
+Recovery reads the record twice. The first read covers everything since the last 06:00 IST. The second reaches thirty days further back, but only for the order types that live overnight, which `carried_types` names. A GTT order placed on Friday, which the engine runs as a plan marked `carries_overnight`, fired this morning, so it shows up in both reads, because its newest row is from today.
 
-`merged` joins the two reads by parent and sequence number, drops the repeated rows and puts each parent's rows back in order. `replay` does that merge itself and then rebuilds each parent, so the GTT order comes back `working` with its Friday parameters intact, next to today's plain order.
+`merged` joins the two reads by parent and sequence number, drops the repeated rows and puts each parent's rows back in order. `replay` does that merge itself and then rebuilds each parent, so the GTT order's plan comes back `working` with its Friday parameters intact, next to today's plain order.
 
 The event log is a stand-in class holding the rows each of the two reads would return, since the real one is a TimescaleDB table. Redis is only needed for the recovery window, so the in-memory `FakeEngineStoreRedis` from `test_runs/redis_stand_ins.py` is enough.
 
-A parent found only in the second read is rebuilt only when its type carries it, which `carries` asks the type: every GTT order, but only a plan marked `carries_overnight`, because it has a lifetime of days, so yesterday's ordinary plans stay gone.
+A parent found only in the second read is rebuilt only when its type carries it, which `carries` asks the type: only a plan marked `carries_overnight`, because it has a lifetime of days, as a GTT order's plan has, so yesterday's ordinary plans and simple orders stay gone.
 
 Notice that the two reads return five rows between them, the merge keeps four, and the GTT parent's sequence numbers run 1, 2, 3 even though row 3 came from the first read and rows 1 and 2 from the second.
 
@@ -103,7 +103,7 @@ class OrderKeptOverTheWeekendExample:
             'parent_order_id': GTT_PARENT_ID,
             'sequence': 3,
             'event': 'parent_state_changed',
-            'synthetic_type': 'gtt',
+            'synthetic_type': 'plan',
             'parent_state': 'working',
         }
         today_rows = [
@@ -124,13 +124,13 @@ class OrderKeptOverTheWeekendExample:
                 'parent_order_id': GTT_PARENT_ID,
                 'sequence': 1,
                 'event': 'parent_received',
-                'synthetic_type': 'gtt',
+                'synthetic_type': 'plan',
                 'parent_state': 'received',
                 'instrument_id': INSTRUMENT_ID,
                 'detail': {
                     'parameters': {
-                        'type': 'gtt',
-                        'trigger_price': '1050',
+                        'type': 'plan',
+                        'routed_from': 'gtt',
                     },
                 },
             },
@@ -139,13 +139,13 @@ class OrderKeptOverTheWeekendExample:
                 'parent_order_id': GTT_PARENT_ID,
                 'sequence': 2,
                 'event': 'parameters_changed',
-                'synthetic_type': 'gtt',
+                'synthetic_type': 'plan',
                 'parent_state': 'received',
                 'detail': {
                     'parameters': {
-                        'type': 'gtt',
-                        'trigger_price': '1050',
-                        'armed_on': '2026-09-18',
+                        'type': 'plan',
+                        'routed_from': 'gtt',
+                        'carries_overnight': True,
                     },
                 },
             },
@@ -183,7 +183,7 @@ class OrderKeptOverTheWeekendExample:
         for parent in parents:
             print(f'Rebuilt {parent.parent_order_id[:8]}: {parent.synthetic_type}, {parent.state}, sequence {parent.sequence}, parameters {parent.parameters}')
 
-        for synthetic_type, parameters in (('gtt', {}), ('plan', {'carries_overnight': True}), ('plan', {})):
+        for synthetic_type, parameters in (('plan', {'carries_overnight': True}), ('plan', {}), ('simple', {})):
             parent = ParentOrder('from-last-week')
             parent.synthetic_type = synthetic_type
             parent.parameters = parameters

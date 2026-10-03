@@ -265,10 +265,6 @@ class OrderPlaceListSuite(order_routes.OrderRoutesSuite):
             original_maximum,
         )
         api_configuration['order_hold_limits'] = scenario.get('hold_limits', False)
-        original_plan_types = api_configuration['order_plan_types']
-        api_configuration['order_plan_types'] = [
-            '',
-        ]
         try:
             request = dict(scenario)
             request['answer'] = self.place_answers()
@@ -287,7 +283,6 @@ class OrderPlaceListSuite(order_routes.OrderRoutesSuite):
             return result
         finally:
             api_configuration['order_place_list_maximum'] = original_maximum
-            api_configuration['order_plan_types'] = original_plan_types
 
     def build_client(self):
         """Builds a Flask test client over a fresh order blueprint, keeping it for a later read.

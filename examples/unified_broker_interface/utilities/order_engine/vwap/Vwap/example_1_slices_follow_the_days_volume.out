@@ -1,8 +1,0 @@
-Default profile: 13 half hours, first 0.145, lunch 0.048, last 0.143
-From 09:15: buckets [0, 1, 2, 3, 4, 5]
-  weights [0.145, 0.095, 0.075, 0.065, 0.058, 0.052]
-  sizes [888, 582, 459, 398, 355, 318]
-From 12:30: buckets [6, 7, 8, 9, 10, 11]
-  weights [0.048, 0.048, 0.052, 0.058, 0.068, 0.093]
-  sizes [393, 392, 425, 474, 556, 760]
-Sent at 12:30 and 13:00: ['place SELL 393 MARKET -> 260930000001', 'place SELL 392 MARKET -> 260930000002']

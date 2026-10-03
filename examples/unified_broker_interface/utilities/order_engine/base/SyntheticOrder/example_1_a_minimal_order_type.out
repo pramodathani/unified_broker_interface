@@ -6,7 +6,7 @@ Run: HTTP 200, outcome accepted, order 260930000001, parent working, tick size k
 chosen_broker after it: zerodha
 Events: ['parent_received', 'leg_requested', 'leg_answered', 'parent_state_changed']
 json_number(Decimal('1000.10')): 1000.1, json_number(None): None
-closes_position('entry'): False, closes_position('stop'): True
+closes_position('entry'): False, closes_position('stop'): False
 now() is timezone-aware in UTC
 release_daily_place without gates: nothing to release
 record_and_send_leg: HTTP 200, accepted, leg 2 of the parent

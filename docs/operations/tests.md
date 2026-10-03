@@ -26,7 +26,6 @@ The table below lists all nineteen. "Fixture" is the recording a suite compares 
 | `python -m test_runs.broker_selection` | The lowest-cost broker selector's rankings from the cost table, its pacing through the day, the rate budget and daily order count it shares, and how the table is loaded, against scripted table rows, scripted Redis counts and a stand-in database connection | none | no | 0.4 s |
 | `python -m test_runs.order_flatten` | The panic button, including that every cancel is sent and confirmed before any close, and that `flat` waits for the positions to show zero | `test_runs/fixtures/order_flatten.jsonl` (12) | rewrites the whole file | 3.5 s |
 | `python -m test_runs.instrument_routes` | `/details`, `/additional_details`, `/ltp`, `/ohlc`, `/quote`, `/prices` and `/ticks`, by `GET` for one instrument and by `POST` for a list: status, body, Redis round trips, the broker quotes asked for and the tick queries run | `test_runs/fixtures/instrument_routes.jsonl` (52) | rewrites the whole file | 1.3 s |
-| `python -m test_runs.leg_modifications` | That each order type carries on from a caller's change to one of its legs: a trailing stop's watermark, a peg's offset, a chaser's wait, a linked pair's other exit, and a slicer's remaining quantity, including after a replay | none | no | 0.4 s |
 | `python -m test_runs.contract_sizes` | The rule that decides whether a currency or commodity contract size is trusted | none | no | 0.3 s |
 | `python -m test_runs.price_cache` | The Redis copy of candles behind `/api/instruments/prices`: slicing, widening, and every reason a copy is thrown away | none | no | 0.4 s |
 | `python -m test_runs.virtual_queue` | The queue estimate behind the synthetic limit order book, and the process that keeps it | none | no | 0.1 s |
@@ -65,8 +64,6 @@ The output below is the last lines of each suite from one run on 2026-09-27, wit
 12 of 12 scenarios match the recording, 0 differ
 ===== instrument_routes
 52 of 52 scenarios match the recording, 0 differ
-===== leg_modifications
-9/9 checks passed.
 ===== contract_sizes
 14/14 checks passed.
 ===== price_cache
@@ -135,7 +132,7 @@ None of the suites connects to anything, but most of them import `utilities.conf
 
 | Loads `utilities.configurations` on import | Does not |
 |---|---|
-| `candle_parse`, `order_routes`, `order_engine_routes`, `order_place_lists`, `order_engine_changes`, `order_change_lists`, `order_engine`, `order_engine_throughput`, `broker_selection`, `order_flatten`, `instrument_routes`, `leg_modifications`, `contract_sizes`, `price_cache`, `connection_warming` | `unified_ticks_sessions`, `virtual_queue`, `websocket_feeds` (the package itself) |
+| `candle_parse`, `order_routes`, `order_engine_routes`, `order_place_lists`, `order_engine_changes`, `order_change_lists`, `order_engine`, `order_engine_throughput`, `broker_selection`, `order_flatten`, `instrument_routes`, `contract_sizes`, `price_cache`, `connection_warming` | `unified_ticks_sessions`, `virtual_queue`, `websocket_feeds` (the package itself) |
 
 Settings in `.env` can change what the API code does, so a failing suite is worth checking against `.env` before assuming the code is wrong.
 

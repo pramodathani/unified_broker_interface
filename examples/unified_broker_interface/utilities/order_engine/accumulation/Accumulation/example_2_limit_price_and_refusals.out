@@ -1,5 +1,0 @@
-Bid 1460.2, caller limit 1465.00: HTTP 200, place BUY 5 LIMIT at 1460.20 -> 260930000001
-Bid 1469.95, caller limit 1465.00: HTTP 200, place BUY 5 LIMIT at 1465.00 -> 260930000002
-No bids and no price: HTTP 503, an accumulation rests on its own side of the book and the live quote does not carry that side yet
-No every_minutes: HTTP 400, an accumulation needs every_minutes, how long to wait between purchases
-250 purchases: HTTP 400, purchases must be between 1 and 100, not 250

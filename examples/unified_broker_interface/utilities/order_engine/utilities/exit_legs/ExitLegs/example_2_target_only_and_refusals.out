@@ -1,5 +1,0 @@
-Exits built: 1
-target: BUY 50 NRML LIMIT price 2450.50 trigger 0
-no exit named: refused with 400: this order type needs a stop_price, a target_price, or both
-stop without its limit: refused with 400: a stop needs stop_limit_price as well as stop_price: a stop-limit whose limit sits at its trigger will not fill when the price runs through it, which is what a stop is for
-target of zero: refused with 400: target_price must be a price above zero

@@ -31,3 +31,7 @@ Replaying `orphan_abandoned` sets the parent to `failed`, not only the leg to `u
 ## Carrying some parents of a type and not others (2026-10-01)
 
 `replay` notes which parents had events since this morning. A parent found only in the carried read is kept only when `carries` says so, which asks the type's `carries_parent_overnight`. Every type before plans answers with its `CARRIES_OVERNIGHT`, so nothing changes for them; a plan answers with its own `carries_overnight` mark.
+
+## Parents of retired types (2026-10-03)
+
+When the fixed classes were retired, a parent recorded under one of their names lost its runner: the tickers, the follower and the commands look the class up by the recorded type and quietly skip a missing one, so such a parent would sit open with live broker orders and nothing reacting to them. None was open when they were retired (29 parents recovered, 0 open), but `warn_if_unrun` logs each such parent that recovery finds open, naming its unfinished broker orders, so they can be looked after by hand rather than discovered later. It warns rather than cancels, because cancelling a stop that protects a real position is not something recovery should decide alone.

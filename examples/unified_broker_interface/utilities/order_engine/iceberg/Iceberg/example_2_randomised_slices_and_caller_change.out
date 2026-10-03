@@ -1,6 +1,0 @@
-Run: HTTP 200, first slice 461, hidden 2539, varied by 20.0 per cent
-next_size for slice 2 would be 540
-The caller cut slice 1 from 461 to 300: placed so far is now 300
-Recorded: parameters_changed, the caller changed a slice from 461 to 300, so the rest of the total is placed in later slices
-Sent to the broker: ['place SELL 461 LIMIT at 826.00 -> 260930000001']
-A slice of 3,000: HTTP 400, slice_quantity of 3000 is not smaller than the order of 3000, so nothing would be hidden

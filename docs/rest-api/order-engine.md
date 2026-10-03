@@ -187,7 +187,7 @@ The rate budget covers every message: the engine's placements and its own change
 
 ## Parents, legs and where they are kept
 
-The engine thinks in parents and legs. A parent is one order you asked for; a leg is one real broker order the engine sends on its behalf. A plain order has one leg, while a bracket has an entry, a stop and a target.
+The engine thinks in parents and legs. A parent is one order you asked for; a leg is one real broker order the engine sends on its behalf. A plain order has one leg, while a bracket has an entry, a stop and a target. The engine runs a `simple` order with a class of its own and every other type as a [plan](synthetic-orders.md#plan) of that type's preset.
 
 ```mermaid
 stateDiagram-v2
@@ -214,7 +214,7 @@ stateDiagram-v2
     failed --> [*]
 ```
 
-A parent's state moves only along the arrows above. `cancelling` means you cancelled the parent but a broker refused one of its legs' cancels, so a leg may still be live; the parent stops acting and becomes `cancelled` once every leg has finished. `failed` means a person has to look: the engine never retries out of it and never arms protective legs for a parent in it. A leg has its own states: `planned`, `sending`, `sent`, `acknowledged`, `partially_filled`, `filled`, `rejected`, `cancelled` and `unknown`.
+A parent's state moves only along the arrows above. `cancelling` means you cancelled the parent but a broker refused one of its legs' cancels, so a leg may still be live; the parent stops acting and becomes `cancelled` once every leg has finished. `failed` means a person has to look: the engine never retries out of it and never arms protective legs for a parent in it. A leg has its own states: `planned`, `sending`, `sent`, `acknowledged`, `partially_filled`, `filled`, `rejected`, `cancelled` and `unknown`. No parent reaches `protecting` any more: since 2026-10-03 every type runs as a plan, which shows `working` while it guards a position, and the state stays only so that older parents replay correctly.
 
 The engine keeps the same state in two places, and they have different jobs.
 
@@ -285,6 +285,6 @@ The table below lists every environment variable the engine reads, with its defa
 SEBI's retail algorithmic trading framework treats more than ten orders a second as an algorithm that needs registration. The limit is kept per broker, so the default of 10 messages a second (5 for Zerodha and INDmoney) applies to each broker separately, and adding brokers raises what the system can send in total. The budget counts a sliding window rather than refilling a token bucket, because a bucket that holds ten and earns ten a second can send nineteen within one second; the window never lets an eleventh message into any one-second span. The window counts when each message is given room, and the request leaves a few milliseconds later, so a broker counting arrivals can occasionally see eleven within one second when one request is delayed more than its neighbour: the load test below saw that in two runs of six. Setting `UNIFIED_BROKER_INTERFACE_API_ORDER_RATE_WINDOW_SECONDS` a little above 1, such as `1.05`, keeps a margin for that at about 9.5 messages a second.
 
 ??? note "Under the hood"
-    - **Files:** `bin/unified/orders/order_engine`, `bin/unified/orders/virtual_book`, and `unified_broker_interface/utilities/order_engine/`, whose `utilities/` folder holds the runner, the handoff, the gates, the stores and the registry.
+    - **Files:** `bin/unified/orders/order_engine`, `bin/unified/orders/virtual_book`, and `unified_broker_interface/utilities/order_engine/`, whose `utilities/` folder holds the runner, the handoff, the gates, the stores, the registry of the two classes the engine runs (`simple` and `plan`) and the routing that runs every other type as a plan.
     - **Classes:** [`IntentHandoff`][unified_broker_interface.utilities.order_engine.utilities.intent_handoff.IntentHandoff] writes an intent and waits; [`OrderIntent`][unified_broker_interface.utilities.order_engine.utilities.order_intent.OrderIntent] is the intent; [`OrderEngine`][unified_broker_interface.utilities.order_engine.utilities.engine_runner.OrderEngine] is the loop; [`RiskGates`][unified_broker_interface.utilities.order_engine.utilities.risk_gates.RiskGates] holds the limits; [`ParentStore`][unified_broker_interface.utilities.order_engine.utilities.parent_store.ParentStore] is the Redis cache; [`VirtualBook`][unified_broker_interface.utilities.order_engine.utilities.virtual_book.VirtualBook] keeps the queue estimates.
     - **Offline checks:** `python -m test_runs.order_engine_routes` records the hand-over against a stubbed engine, `python -m test_runs.order_routes` runs the real engine behind the route for every broker, `python -m test_runs.order_engine` runs the daemon against scripted intents and stubbed brokers, and `python -m test_runs.virtual_queue` checks the queue estimate, and `python -m test_runs.order_engine_throughput` measures the lanes under load.

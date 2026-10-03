@@ -1,6 +1,0 @@
-Run: HTTP 200, outcome accepted, broker zerodha
-  34 at 1000.0: 260930000001
-  33 at 997.5: 260930000002
-  33 at 995.0: 260930000003
-Parent: working
-After every rung filled: completed, every order has finished, with 100 traded

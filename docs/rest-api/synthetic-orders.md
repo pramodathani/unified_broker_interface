@@ -2,7 +2,7 @@
 
 A synthetic order is an order that no Indian exchange offers, built by the order engine out of ordinary broker orders. You ask for one by adding a `synthetic` object to the body of [`POST /api/orders/place`](orders.md#place-an-order), and the engine places, watches, moves and cancels the real orders it is made of.
 
-This page is the glossary of all 54 types the engine runs. It lists every field each type reads from the `synthetic` object, with the defaults and limits taken from the code.
+This page is the glossary of all 54 types you can ask for. The engine runs `simple` and `plan` with classes of their own and every other type as a [`plan`](#plan) of that type's preset, so a request for a `bracket` is answered as a plan is. It lists every field each type reads from the `synthetic` object, with the defaults and limits taken from the code.
 
 !!! danger "Synthetic orders place real orders, sometimes long after you asked"
     A synthetic order can place, modify or cancel orders at a broker minutes, hours or even days after your request, with nobody watching. Triggers, trailing stops, grids and schedules all act on their own. Send `"dry_run": true` first, which builds the first broker request without recording or sending anything.
@@ -16,15 +16,16 @@ A leg of a synthetic order can be changed through [`PUT /api/orders/modify`](ord
 
 | Type | After you change a leg |
 |---|---|
-| `trailing_stop`, `trailing_entry`, `atr_trail` | The trail continues from the trigger you set, whichever way you moved it |
+| `trailing_stop`, `trailing_entry`, `atr_trail`, `stepped_stop` | The trail continues from the trigger you set, whichever way you moved it |
 | `peg` | The peg follows the market at the new distance from its reference |
-| `chaser` | The chase continues from your price after a full step interval |
-| `oco`, `bracket`, `cover` | Reducing one exit reduces the other to match; an exit cannot be raised |
+| `chaser` | The chase waits a full step interval after your price, then continues from it |
+| `underlying_peg`, `volatility` | The price follows from your price and the followed instrument's price now |
+| `oco`, `bracket`, `cover`, `two_sided_breakout` | An exit can only be reduced, and the other exit comes down with it |
 | `scale_out` | The other exits stay as they were; an exit cannot be raised |
-| `iceberg`, `participation`, `liquidity_seeking` | A changed slice counts against the total, so later slices place the rest |
-| `twap`, `vwap`, `implementation_shortfall` | The difference is carried into the next slice |
-| `plan` | Each order of the plan follows the rule of the type its pricing comes from: a `trail`, `stages` or `atr` trail continues from your trigger, a `peg` rests at the new distance from its reference, a `chase` waits a full step, and a `follow_instrument` or `option_model` price follows from your price and the followed instrument's price now. An order sent all at once trades your new quantity in all, and no later fill grows it back; an order split into pieces keeps its total. An order that closes a position can only be reduced, and the other exits of the same `either` join with `reduce` come down with it. |
-| Every other type | The leg simply keeps your new values |
+| `iceberg`, `twap`, `vwap`, `implementation_shortfall`, `participation`, `closing_price` | An order split into pieces keeps its total, so later pieces place the rest |
+| Every other type, and a `plan` | An order sent all at once trades your new quantity in all, and no later fill grows it back; a plan's other orders follow the rule of the type their pricing comes from, as above |
+
+Every type but `simple` runs as a plan of its preset, so these are the plan's rules: a `trail`, `stages` or `atr` pricing continues from your trigger, a `peg` rests at the new distance from its reference, a `chase` waits a full step, a `follow_instrument` or `option_model` price follows from your price, and an order that closes a position can only be reduced, the other exits of the same `either` join with `reduce` coming down with it.
 
 Only the price, trigger price and quantity of a synthetic order's leg can be changed.
 
@@ -69,7 +70,7 @@ Three fields can appear in any `synthetic` object. The table below lists them.
 |---|---|:---:|---|
 | `type` | string | Yes | One of the 54 names in the table below. A body with no `synthetic` object, or no `type`, runs as `simple`. An unknown name is refused with `400` and the message `the order engine does not run '<name>' orders; it runs <list>`. |
 | `closes_position` | boolean | No | `true` says every leg of this order closes a position, so it may use the part of a broker's daily order cap kept for exits. Only the literal `true` counts. |
-| `hold_limits` | boolean | No | For an order run as a plan, `true` holds each of its orders that would rest at the broker at a fixed limit price in the engine's virtual order book until the market reaches it, and `false` sends them as they come, as described under [`plan`](#plan). A type run as a plan that does not say takes its default when it arrives: `true` for `ladder`, `scheduled`, `good_till_time`, `time_stop`, `account_conditional`, `limit_if_touched`, `indicator_triggered`, `cross_instrument`, `gtt`, `bracket`, `cover`, `scale_out`, `oto`, `oca`, `scale_with_profit_taker`, `freeze_slicer`, `twap` and `implementation_shortfall` while `UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS` is on, `false` for every other type. A `plan` written by the caller that does not say takes the switch's own value: `true` while it is on. A plan recorded before plans were held by default carries no value and is read as not held. A type the engine does not run as a plan refuses `true` with `400`. Anything other than `true` or `false` is refused with `400`. |
+| `hold_limits` | boolean | No | `true` holds each of its orders that would rest at the broker at a fixed limit price in the engine's virtual order book until the market reaches it, and `false` sends them as they come, as described under [`plan`](#plan). A type that does not say takes its default when it arrives: `true` for `ladder`, `scheduled`, `good_till_time`, `time_stop`, `account_conditional`, `limit_if_touched`, `indicator_triggered`, `cross_instrument`, `gtt`, `bracket`, `cover`, `scale_out`, `oto`, `oca`, `scale_with_profit_taker`, `freeze_slicer`, `twap` and `implementation_shortfall` while `UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS` is on, `false` for every other type. A `plan` written by the caller that does not say takes the switch's own value: `true` while it is on. A plan recorded before plans were held by default carries no value and is read as not held. A `simple` order, which is sent at once, refuses `true` with `400`. Anything other than `true` or `false` is refused with `400`. |
 
 The engine also writes its own working values into the parent's copy of the `synthetic` object, such as `tick_size`, `triggered_at`, `watermark`, `placed_quantity`, `started_at` and `expires_at`. These are internal, so do not send them.
 
@@ -106,7 +107,7 @@ Keep the `parent_id`. It is the only handle on an order that has not reached a b
 
 ## All 54 types
 
-The master table below lists every type registered in `SYNTHETIC_ORDER_CLASSES`, in the order the registry holds them. The "First answer" column says whether a broker order goes out when you ask (`200`, the broker's own answer) or whether the engine waits (`202`).
+The master table below lists every type you can name in `synthetic.type`. `simple` and `plan` are run by classes of their own, registered in `SYNTHETIC_ORDER_CLASSES`; every other type is in `ROUTED_TYPES` in `order_engine/utilities/plan_routing.py` and runs as a plan of its preset, keeping its own name as `routed_from`. The "First answer" column says whether a broker order goes out when you ask (`200`, the broker's own answer) or whether the engine waits (`202`).
 
 | Type | Family | What it does | Key fields in `synthetic` | First answer |
 |---|---|---|---|:---:|
@@ -233,14 +234,14 @@ The states mean the following.
 |---|---|
 | `received` | The parent is recorded. An armed or scheduled order stays here until its trigger fires or its time comes. |
 | `working` | At least one leg is live at a broker. |
-| `protecting` | A position exists and exit legs are guarding it, as in a bracket after its entry has filled. A hidden stop with a backstop is also here from the moment it is armed. |
+| `protecting` | No order reaches this state any more: it belonged to the order classes retired on 2026-10-03, when every type became a plan, and stays only so that a parent recorded before then is replayed correctly. A plan guarding a position shows `working`. |
 | `cancelling` | You cancelled the parent, but a broker refused the cancel of one of its legs, or its outcome is unknown, so that leg may still be live. The order type no longer acts on the parent. It becomes `cancelled` once every leg has finished, and cancelling it again retries the legs still resting. |
 | `completed` | The parent has nothing left to do. |
 | `cancelled` | The parent was called off, for example a `good_till_time` order whose time ran out. |
 | `rejected` | No request reached a broker, or the broker refused it. |
 | `failed` | The engine does not know what the broker has, so a person must look. The engine never retries out of this state and never arms protective legs for a parent in it. |
 
-A `simple`, `freeze_slicer`, `ladder`, `basket`, `oca` or `post_only` parent places everything at once and does nothing afterwards, so it finishes on its own once every order has: `completed` when any of them traded, `cancelled` when none did. That includes an order cancelled through `DELETE /api/orders/cancel`. Every other type decides for itself when it is done.
+A `simple` parent places its order and does nothing afterwards, so it finishes on its own once the order has: `completed` when it traded, `cancelled` when it did not, including an order cancelled through `DELETE /api/orders/cancel`. A plan, which every other type runs as, ends when every one of its parts is done, as described under [`plan`](#plan); a part waiting for a broker to confirm a cancel or a close keeps the parent `working` until the confirmation arrives.
 
 `completed`, `cancelled`, `rejected` and `failed` are final. A leg has its own state as well: it starts as `sending` when the request is recorded and becomes `acknowledged`, `rejected` or `unknown` from the broker's answer.
 
@@ -249,7 +250,7 @@ A `simple`, `freeze_slicer`, `ladder`, `basket`, `oca` or `post_only` parent pla
 
 ## Rules every type shares
 
-A few rules come from the shared base class rather than from any one type, and they explain behavior you will see across the whole list.
+A few rules hold for every type, and they explain behavior you will see across the whole list.
 
 - **Every leg of one parent goes to the same broker.** The first leg lets the broker selector choose, and every later leg is sent to that broker. A stop at one broker cannot protect a position held at another. The three types that close positions they did not open, `square_off`, `close_on_trigger` and `stop_and_reverse`, are the exception: they read each broker's own positions, as [`POST /api/orders/flatten`](flatten.md) does, and send each closing order to the broker that holds that position.
 - **A linked leg is reduced, not cancelled and replaced.** When one of two exits fills, the other is modified down by what filled, so the position is never unprotected and the order keeps its place in the queue.
@@ -310,9 +311,9 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     A ladder places `steps` limit orders evenly spaced from `from_price` to `to_price`. The order's `quantity` is the whole ladder and is shared out as evenly as whole units allow, so 100 over three rungs is 34, 33 and 33. Each rung's price is rounded to the tick towards the passive side.
 
-    When `ladder` is named in `UNIFIED_BROKER_INTERFACE_API_ORDER_PLAN_TYPES`, the ladder runs as a plan of its preset and holds its rungs by default. Nothing is sent when you ask: the answer is <span class="status s2">202</span> with an `outcome` of `armed`, and each rung waits in the engine's virtual order book, like a [`virtual_limit`](#virtual_limit) order, until the other side of the book reaches that rung's own price. For a buy ladder from 1000 down to 995, the 1000 rung is sent when the best offer reaches 1000 and the 995 rung only when it reaches 995, so a rung the market never reaches costs no order message at all. A rung the market is already past is sent on the first price tick. The rungs are the plan's parts `root.pieces.0`, `root.pieces.1` and so on, and every one goes to the broker the first one sent chose. A rung that is still held can be changed through [`PUT /api/orders/modify` with `parent_id` and `part`](orders.md#a-part-of-a-plan-that-has-not-been-sent) and cancelled with `parent_id` and `part`, without a broker message.
+    A ladder runs as a plan of its preset and holds its rungs by default. Nothing is sent when you ask: the answer is <span class="status s2">202</span> with an `outcome` of `armed`, and each rung waits in the engine's virtual order book, like a [`virtual_limit`](#virtual_limit) order, until the other side of the book reaches that rung's own price. For a buy ladder from 1000 down to 995, the 1000 rung is sent when the best offer reaches 1000 and the 995 rung only when it reaches 995, so a rung the market never reaches costs no order message at all. A rung the market is already past is sent on the first price tick. The rungs are the plan's parts `root.pieces.0`, `root.pieces.1` and so on, and every one goes to the broker the first one sent chose. A rung that is still held can be changed through [`PUT /api/orders/modify` with `parent_id` and `part`](orders.md#a-part-of-a-plan-that-has-not-been-sent) and cancelled with `parent_id` and `part`, without a broker message.
 
-    With `hold_limits: false`, or with `UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS` turned off, every rung is sent at once and rests at the broker, as it does when `ladder` is not run as a plan. A ladder that is not run as a plan refuses `hold_limits: true` with <span class="status s4">400</span> rather than sending the rungs anyway.
+    With `hold_limits: false`, or with `UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS` turned off, every rung is sent at once and rests at the broker.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
@@ -705,7 +706,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `trailing_stop`
 
-    A trailing stop is a real stop-loss limit order at the broker. Its trigger follows the best last traded price seen since it was placed, at a fixed or proportional distance, and never moves back. Each move is a modify request. The parent is `protecting` once the stop rests.
+    A trailing stop is a real stop-loss limit order at the broker. Its trigger follows the best last traded price seen since it was placed, at a fixed or proportional distance, and never moves back. Each move is a modify request. The parent is `working` once the stop rests.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
@@ -1401,7 +1402,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     Some types run by rules no join expresses, so their presets are kept whole: the order is one part that places and follows several broker orders of its own, remembering what it has answered in its part record so a restart repeats nothing. A kept-whole preset sits in a plan like any order and can be a join's child, but it takes no other preset and no slot value beside it (`kept_whole_alone`); the order's own instrument, quantity, product, validity and tag still apply.
 
-    The fixed types move to plans one at a time. A type named in `UNIFIED_BROKER_INTERFACE_API_ORDER_PLAN_TYPES` is run by the engine as a plan of its preset, with the caller's settings, so the request does not change, and `closes_position`, `reduce_only` and `hold_limits` stay beside the plan rather than going into the preset, `hold_limits` written in with its default when the caller did not give it; its broker requests are the fixed type's, while its answer is the plan's (a parent shows `working` rather than `protecting`, and its legs carry plan paths as roles) and its parameters keep the original name as `routed_from`. The setting is empty until a type's preset has traded live.
+    Every type other than `simple` and `plan` is run by the engine as a plan of its preset, with the caller's settings, so the request does not change. `closes_position`, `reduce_only` and `hold_limits` stay beside the plan rather than going into the preset, `hold_limits` written in with its default when the caller did not give it. The broker requests are the ones each type always sent; the answer is the plan's (a parent shows `working` where an order guarding a position once showed `protecting`, and its legs carry plan paths as roles), and the parameters keep the type's name as `routed_from`. Three things differ from the classes the types had until 2026-10-03, when those classes were retired: an order that protects a position is refused with `409` (`protect_needs_position`) when no position is held on its side, since it would open one; a refusal is worded as a plan's, with the details in `problems`; and an answer carries `legs` and a `status_message` in place of each type's own fields, such as a ladder's `rungs` or a trigger's `trigger_level`.
 
     Presets and the order's own slot values are merged in order, presets first. Triggers from several sources are joined with `all`, so naming `scheduled` and `market_if_touched` waits until after the time and until the price is touched. A later pricing rule replaces an earlier one, and the answer carries a `warnings` entry saying so. Two different sides are refused.
 

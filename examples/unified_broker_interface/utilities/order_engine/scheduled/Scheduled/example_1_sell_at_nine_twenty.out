@@ -1,6 +1,0 @@
-read_place_at: 09:20, 2026-10-01T09:20:00+05:30
-Run at 08:50: HTTP 202, outcome scheduled, the order is recorded and will be placed at 09:20
-Tick at 09:19:59: placed False, parent received
-Tick at 09:20:00: placed True, parent working
-Tick at 09:20:01: placed False, parent working
-Sent to the broker: ['place SELL 75 LIMIT at 142.00 -> 260930000001']

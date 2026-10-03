@@ -1,6 +1,6 @@
 tick_size before remembering: None; remember_tick_size: 0.05; kept as {'tick_size': '0.05'}
 trading_segment: nse_equities
-own_quote last price: 1000.1; view: bid 1000.00, offer 1000.20, other instrument readable False
+view: bid 1000.00, offer 1000.20, other instrument readable False
 on_clock_tick: False, on_price_tick: False, on_leg_update: None
 remember_tick_size when brokers disagree: HTTP 503, this order type works its prices out from the live quote, which needs a tick size the brokers agree on, and there is none for this instrument
 combined_answer ['accepted', 'accepted']: ('accepted', 200)

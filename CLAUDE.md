@@ -32,12 +32,11 @@ There is no `pyproject.toml`, no build step and no pytest suite. The project roo
 | Offline order engine load test | `python -m test_runs.order_engine_throughput` (broker lanes against ten stub brokers that take 200 ms; about 11 seconds) |
 | Offline flatten route tests | `python -m test_runs.order_flatten` (the panic button; pins that cancels are sent before closes) |
 | Offline instrument route tests | `python -m test_runs.instrument_routes` (`/details` to `/ticks` against a stubbed mapping cache, quote cache, brokers and tick table; its own fixture) |
-| Offline leg modification checks | `python -m test_runs.leg_modifications` (each order type carrying on from a caller's modify) |
 | Offline contract size rule tests | `python -m test_runs.contract_sizes` |
 | Offline candle cache tests | `python -m test_runs.price_cache` |
 | Offline synthetic order book tests | `python -m test_runs.virtual_queue` (the queue estimate and the process that keeps it) |
 | Offline websocket feed tests | `python -m test_runs.websocket_feeds` (every broker's quotes and order sockets against scripted connections; name brokers to run only those, and `--record` rewrites only their lines) |
-| Run the synthetic limit order book | `bin/unified/orders/virtual_book` (beside the order engine; follows held `virtual_limit` orders) |
+| Run the synthetic limit order book | `bin/unified/orders/virtual_book` (beside the order engine; follows every order the engine holds) |
 | Decide a date's currency and commodity contract sizes | `python -m stock_brokers.instruments.mapping.utilities.contract_sizes --date 2026-09-15` (the daily mapping run does this itself) |
 | Decide which instrument every live derivative is written on | `python -m stock_brokers.instruments.mapping.utilities.underlyings --date 2026-09-28` (the daily mapping run does this itself; `--dry-run` prints the decisions without writing `unified.underlyings`) |
 | Offline example program tests | `python -m test_runs.examples` (runs every program under `examples/` and compares its output with the `.out` beside it; name folders to run only those, `--record` rewrites their `.out` files, `--coverage` lists classes with fewer than two programs and public methods no program calls) |
@@ -130,6 +129,12 @@ The cost table is held in memory by `BrokerCostTable` in `broker_selection/utili
 The lowest-cost selector also passes over any broker that cannot afford the order. `FundsCheck` in `broker_selection/utilities/funds_check.py` estimates the exchange margin from `unified.margin_rates` and live quotes, multiplies it by the broker's measured surcharge (the `margin_multiplier_*` columns of `unified.broker_order_costs`), and compares it with that broker's free cash in `unified:portfolio:funds`, without calling a broker; a basket hands all its legs to the first leg's placement so the whole strategy is checked, optionally with hedge benefit. The check is off until `MarginRateTable.start` has loaded rows, so the offline suites never see it. The surcharges are measured each weekday morning by `bin/unified/orders/margin_calibration`, through one class per broker in `unified_broker_interface/utilities/margin_calculators/` (Stoxkart has no calculator); like the order engine, it is a `bin/unified/` script that calls brokers, but only their read-only margin endpoints. `docs/architecture/broker-selection.md` has the rules and the broker numbers they were checked against.
 
 A selector reads Redis by queueing commands onto the pipeline the order engine already sends to read the instrument (`read_instrument` in `order_engine/utilities/engine_placement.py`), through `queue_redis_commands`, instead of opening a round trip of its own. `docs/rest-api/orders.md` counts the round trips each one costs.
+
+### Order types and holding
+
+The order engine (`unified_broker_interface/utilities/order_engine/`) runs only two classes, `SimpleOrder` and `PlanOrder`, registered in `SYNTHETIC_ORDER_CLASSES`. Every other `synthetic.type` a caller names, all 52 of them in `ROUTED_TYPES` in `utilities/plan_routing.py`, is rewritten on arrival into a `plan` whose one order names that type's preset (`utilities/preset_expander.py`), keeping the name as `routed_from`. A behaviour change to a type is therefore a change to its preset or to the plan engine, never to a class of its own; the fixed classes were retired on 2026-10-03.
+
+Limit orders that would rest at the broker are held in the engine's virtual order book by default and sent only once the other side of the book reaches their price, which saves order messages from each broker's daily cap. `hold_limits` on the request or on one order of a plan decides; a routed type defaults to true when it is in `HOLDING_TYPES`, a hand-written plan to the `UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS` switch, and the decision is written into the order on arrival so a restart reads it the same way. Exits and profit targets rest at the broker. `docs/rest-api/synthetic-orders.md` under `plan` has the rule and its exceptions.
 
 ### Sessions and logins
 

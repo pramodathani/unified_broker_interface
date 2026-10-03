@@ -1,5 +1,0 @@
-Run: HTTP 202, outcome armed, fires at_or_below 990, 2 ticks past the touch
-Last 996.0: fired False
-Last 989.85: fired True
-Sent to the broker: ['place BUY 10 LIMIT at 990.10 -> 260930000001']
-Parent: working, 989.85 reached the trigger at 990; accepted

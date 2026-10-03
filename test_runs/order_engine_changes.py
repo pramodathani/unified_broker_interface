@@ -77,9 +77,6 @@ class OrderEngineChangesSuite(order_routes.OrderRoutesSuite):
         api_configuration['order_rate_per_second'] = 0
         api_configuration['order_rate_per_broker_per_second'] = 10
         api_configuration['order_hold_limits'] = hold_limits
-        api_configuration['order_plan_types'] = [
-            '',
-        ]
         answers = order_routes.OrderRoutesAnswers()
         self.network.reset({
             'by_url': [
@@ -399,6 +396,8 @@ class OrderEngineChangesSuite(order_routes.OrderRoutesSuite):
         Args:
             parent_order_id (str): The parent's id.
 
+        A held limit order is a plan of one order, which keeps a held change in its root part's record.
+
         Returns:
             dict: `synthetic_type`, `state`, `held_price` and `held_quantity`.
         """
@@ -407,11 +406,12 @@ class OrderEngineChangesSuite(order_routes.OrderRoutesSuite):
         })
         document = read['body'] or {}
         parameters = document.get('parameters') or {}
+        root = (parameters.get('parts') or {}).get('root') or {}
         return {
             'synthetic_type': document.get('synthetic_type'),
             'state': document.get('state'),
-            'held_price': parameters.get('held_price'),
-            'held_quantity': parameters.get('held_quantity'),
+            'held_price': root.get('held_price'),
+            'held_quantity': root.get('held_quantity'),
         }
 
     def parent_cancel_refused_at_the_broker(self):

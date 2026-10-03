@@ -1,8 +1,0 @@
-last_price     reads 3602.30
-average_price  reads 3597.90
-previous_close reads 3570.00
-best_bid       reads 3602.10
-best_offer     reads 3602.60
-mid            reads 3602.40
-child_order: SELL 30 LIMIT at 3610.00 (limit_price 3610.00)
-watch_field rsi_14: HTTP 400, watch_field must be one of last_price, average_price, previous_close, best_bid, best_offer, mid, not 'rsi_14'

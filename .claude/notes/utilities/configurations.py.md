@@ -9,3 +9,5 @@ The pollers read it inside `main`, after importing this module, because `.env` i
 ## `order_plan_types` (2026-10-02)
 
 Read like `order_excluded_brokers`: spaces removed, lower-cased and split on commas, so an empty variable gives `['']`, which `PlanRouting` skips. It names the fixed synthetic types the engine runs as plans during the switch-over; see the note on `plan_routing.py`.
+
+Removed on 2026-10-03, when the fixed classes were retired: every named type is now always run as a plan, so there is nothing left to choose. A `.env` that still sets `UNIFIED_BROKER_INTERFACE_API_ORDER_PLAN_TYPES` is harmless, since nothing reads it.

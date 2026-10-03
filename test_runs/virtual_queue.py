@@ -379,7 +379,7 @@ class VirtualQueueSuite:
         self.a_sell_is_the_mirror_image()
         self.a_stored_estimate_reads_back_and_rebases()
         self.the_queue_never_fills_more_than_the_order()
-        self.the_book_follows_only_held_virtual_limits()
+        self.the_book_follows_only_held_orders()
         self.the_book_moves_estimates_on_their_own_instrument()
         self.the_book_forgets_a_parent_that_has_closed()
         self.the_book_starts_again_when_a_held_order_is_changed()
@@ -727,19 +727,28 @@ class VirtualQueueSuite:
         ))
         self.check('and no more afterwards', estimate.queue_filled, 500)
 
-    def parent_document(self, parent_order_id, **overrides):
-        """A parent as the engine's cache holds it: a held virtual limit buy of 500 at 98.
+    def parent_document(self, parent_order_id, part_state='waiting', held=True):
+        """A parent as the engine's cache holds it: a plain limit buy of 500 at 98, held as a plan of one order waiting on `limit_marketable`.
 
         Args:
             parent_order_id (str): The parent's id.
-            **overrides: Top-level fields to replace.
+            part_state (str): The root part's state: `waiting` while held, `working` once sent.
+            held (bool): Whether the root part's trigger wrote held terms, which an order waiting on a price instead does not.
 
         Returns:
             dict: The document.
         """
-        document = {
+        trigger_memory = {}
+        if held:
+            trigger_memory['held'] = {
+                'instrument_id': INSTRUMENT_ID,
+                'transaction_type': 'BUY',
+                'price': '98',
+                'quantity': 500,
+            }
+        return {
             'parent_order_id': parent_order_id,
-            'synthetic_type': 'virtual_limit',
+            'synthetic_type': 'plan',
             'state': 'received',
             'instrument_id': INSTRUMENT_ID,
             'body': {
@@ -749,12 +758,18 @@ class VirtualQueueSuite:
                 'quantity': 500,
             },
             'parameters': {
-                'type': 'virtual_limit',
+                'type': 'plan',
+                'parts': {
+                    'root': {
+                        'state': part_state,
+                        'memory': {
+                            'trigger': trigger_memory,
+                        },
+                    },
+                },
             },
             'legs': [],
         }
-        document.update(overrides)
-        return document
 
     def book_with(self, documents):
         """A virtual book over a stand-in Redis and the given open parents.
@@ -790,29 +805,20 @@ class VirtualQueueSuite:
             },
         )
 
-    def the_book_follows_only_held_virtual_limits(self):
-        """Only an open virtual limit that has not fired gets an estimate.
+    def the_book_follows_only_held_orders(self):
+        """Only an order still waiting on `limit_marketable` gets an estimate: not one already sent, nor one waiting on a price.
 
         Returns:
             None: This method returns nothing.
         """
-        fired = self.parent_document('fired')
-        fired['legs'] = [
-            {
-                'role': 'entry',
-            },
-        ]
         book, _ = self.book_with({
             'held': self.parent_document('held'),
-            'fired': fired,
-            'other_type': self.parent_document(
-                'other_type',
-                synthetic_type='limit_if_touched',
-            ),
+            'fired': self.parent_document('fired', part_state='working'),
+            'priced': self.parent_document('priced', held=False),
         })
         book.refresh()
-        self.check('only the held virtual limit is followed', sorted(book.estimates), ['held'])
-        self.check('it is filed under its instrument', book.by_instrument, {INSTRUMENT_ID: ['held']})
+        self.check('only the held order is followed', sorted(book.estimates), ['held/root'])
+        self.check('it is filed under its instrument', book.by_instrument, {INSTRUMENT_ID: ['held/root']})
 
     def the_book_moves_estimates_on_their_own_instrument(self):
         """A quote for the held order's instrument moves its estimate and is written; another instrument's is skipped.
@@ -842,7 +848,7 @@ class VirtualQueueSuite:
             self.stream_entry('3-0', traded),
         ]
         book.run_once()
-        stored = json.loads(cache.hashes[ESTIMATES_KEY]['held'])
+        stored = json.loads(cache.hashes[ESTIMATES_KEY]['held/root'])
         self.check('the book reads all three entries', book.quotes_read, 3)
         self.check('only two are for a held order', book.quotes_used, 2)
         self.check('the stored estimate has 9,000 ahead', stored['ahead'], 9000)
@@ -863,7 +869,7 @@ class VirtualQueueSuite:
         book.refresh()
         self.check('the closed parent\'s estimate is removed', sorted(cache.hashes[ESTIMATES_KEY]), [])
         book.write_changed()
-        self.check('the held parent\'s new estimate is written', sorted(cache.hashes[ESTIMATES_KEY]), ['held'])
+        self.check('the held parent\'s new estimate is written', sorted(cache.hashes[ESTIMATES_KEY]), ['held/root'])
 
     def plan_document(self, parent_order_id):
         """A plan as the engine's cache holds it: one order waiting on `limit_marketable`, a buy of 500 at 98, one already sent and one waiting on a price.
@@ -995,23 +1001,21 @@ class VirtualQueueSuite:
             'held': document,
         })
         book.refresh()
-        first = book.estimates['held']
+        first = book.estimates['held/root']
         first.ahead = 3000
         book.changed.clear()
         book.refresh()
-        self.check('unchanged terms keep the estimate', book.estimates['held'] is first, True)
-        document['parameters'] = {
-            'type': 'virtual_limit',
-            'held_price': '97.5',
-            'held_quantity': 800,
-        }
+        self.check('unchanged terms keep the estimate', book.estimates['held/root'] is first, True)
+        terms = document['parameters']['parts']['root']['memory']['trigger']['held']
+        terms['price'] = '97.5'
+        terms['quantity'] = 800
         book.refresh()
-        fresh = book.estimates['held']
+        fresh = book.estimates['held/root']
         self.check('a changed order gets a new estimate', fresh is first, False)
         self.check('the new estimate is at the new price', fresh.price == decimal.Decimal('97.5'), True)
         self.check('and for the new quantity', fresh.quantity, 800)
         self.check('it has no place in the queue yet', fresh.ahead, None)
-        self.check('it is written on the next pass', sorted(book.changed), ['held'])
+        self.check('it is written on the next pass', sorted(book.changed), ['held/root'])
 
 
 if __name__ == '__main__':

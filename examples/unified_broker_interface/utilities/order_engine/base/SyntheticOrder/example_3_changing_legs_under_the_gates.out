@@ -2,7 +2,8 @@ moves_the_price to 1000.00: False, to 999.50: True
 reprice_leg to 999.50: True
 reprice_leg again at once: False; following the bid; not sent: this order was moved less than 2.0 seconds ago
 allowed_to_reprice for the stop: True
-has_room_today with the cap nearly used: entry False, stop True
+has_room_today with the cap nearly used: entry False, stop False
+has_room_today once the order closes a position: entry True, stop True
 take_rate_token with the budget empty: False; reducing; not sent: the order rate budget for zerodha is full this second
 reduce_leg to 6: True, entry now 6
 release_daily_place: places given back 1

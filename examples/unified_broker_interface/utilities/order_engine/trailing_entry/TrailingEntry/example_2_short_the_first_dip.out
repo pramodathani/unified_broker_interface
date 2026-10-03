@@ -1,7 +1,0 @@
-The stop trades SELL, starting at trigger 696.5 limit 695.5
-Last 706.0: moved True, stop trigger 702.5 limit 701.5
-Last 712.0: moved True, stop trigger 708.45 limit 707.45
-Last 710.0: moved False, stop trigger 708.45 limit 707.45
-Sent to the broker: ['place SELL 30 SL at 695.50 trigger 696.50 -> 260930000001', 'modify 260930000001 price 701.50 trigger 702.50', 'modify 260930000001 price 707.45 trigger 708.45']
-Both trail_points and trail_percent: HTTP 400, a trailing order takes trail_points or trail_percent, not both
-No stop_limit_offset: HTTP 400, a trailing order needs stop_limit_offset: a stop-limit whose limit sits at its trigger will not fill when the price runs through it, which is what a stop is for

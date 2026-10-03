@@ -1,8 +1,0 @@
-Run: HTTP 200, outcome accepted, the stop trades BUY
-Defaults: bars of 5.0 minutes, 14 periods, multiple 2.0
-Last 1244.4: trail 8, stop trigger 1252.4 limit 1253.9
-Last 1238.9: trail 8, stop trigger 1246.9 limit 1248.4
-Sent to the broker: ['place BUY 20 SL at 1259.50 trigger 1258.00 -> 260930000001', 'modify 260930000001 price 1253.90 trigger 1252.40', 'modify 260930000001 price 1248.40 trigger 1246.90']
-Without trail_points: HTTP 400, an average-range trail needs trail_points as well: the bars it measures are built from this order onwards, so there is nothing to average until enough of them have closed
-One period: HTTP 400, periods must be at least two bars, not 1
-Bars of zero minutes: HTTP 400, bar_minutes must be above zero, not 0.0

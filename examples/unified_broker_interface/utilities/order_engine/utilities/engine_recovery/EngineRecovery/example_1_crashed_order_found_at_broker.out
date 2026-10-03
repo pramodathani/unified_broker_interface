@@ -1,5 +1,5 @@
 Window starts at 06:00 IST
-Carried types: ['daily_stop', 'gtt', 'plan']
+Carried types: ['plan']
 Carried types are read from 30 days earlier
 Counts: {'parents': 1, 'open': 1, 'attributed': 1, 'abandoned': 0, 'missing': 0}
 Parent state: received

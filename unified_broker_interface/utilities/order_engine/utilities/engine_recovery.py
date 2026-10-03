@@ -55,7 +55,7 @@ class EngineRecovery:
         self.matcher = OrphanMatcher(logger)
 
     def recover(self):
-        """Rebuilds every parent, brings its legs up to date and resolves what a crash left behind.
+        """Rebuilds every parent, brings its legs up to date and resolves what a crash left behind, warning about any open parent of a type the engine no longer runs.
 
         Returns:
             dict: What was found: `parents`, `open`, `attributed`, `abandoned` and `missing` counts.
@@ -78,6 +78,8 @@ class EngineRecovery:
             claimed = self.claimed_order_ids(parents)
             for parent in open_parents:
                 self.reconcile(parent, books, polled_at, claimed, counts)
+        for parent in open_parents:
+            self.warn_if_unrun(parent)
 
         self.parent_store.rebuild(parents)
         self.logger.info(
@@ -88,6 +90,27 @@ class EngineRecovery:
             f'{counts["abandoned"]} abandoned.'
         )
         return counts
+
+    def warn_if_unrun(self, parent):
+        """Warns about an open parent recorded under a type the engine no longer runs, such as `bracket` from before every type ran as a plan.
+
+        Such a parent is rebuilt and reconciled like any other, but nothing reacts to its fills or ticks any more, and it cannot be changed or cancelled by its parent id, so its broker orders have to be looked after by hand. The warning names them.
+
+        Args:
+            parent (ParentOrder): An open parent.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        if parent.synthetic_type in SYNTHETIC_ORDER_CLASSES:
+            return
+        orders = []
+        for leg in parent.legs:
+            if not leg.is_finished():
+                orders.append(f'{leg.broker}:{leg.broker_order_id}')
+        self.logger.warning(
+            f'Parent {parent.parent_order_id} is open but recorded as a {parent.synthetic_type!r} order, which the engine no longer runs; nothing will react to it, so look after its open broker orders by hand: {", ".join(orders) or "none"}.'
+        )
 
     def window_start(self):
         """The moment the recovery scan reads from, which is the last 06:00 IST.

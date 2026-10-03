@@ -1,7 +1,0 @@
-Run: HTTP 207, outcome partial
-  01: accepted, None
-  02: accepted, None
-  10: rejected, the stand-in broker refused the order
-Parent: working, 2 of 3 legs were accepted
-Sent to the broker: ['place BUY 10 MARKET -> 260930000001', 'place BUY 7 MARKET -> 260930000002', 'place BUY 3 MARKET -> refused']
-Settled by hand: HTTP 207, outcome partial, parent failed, 1 of 2 legs were accepted
