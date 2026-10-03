@@ -3593,6 +3593,36 @@ class OrderEngineSuite:
                     accepted,
                 ),
                 self.price_result(
+                    'a_routed_twap_holds_each_slice_from_its_turn_until_the_offer_reaches_it',
+                    dict(entry, synthetic={'type': 'twap', 'slices': 2, 'over_minutes': 1}),
+                    [
+                        {'quote': steady, 'at': 0},
+                        {'quote': touched, 'at': 1},
+                        {'quote': steady, 'at': 31},
+                        {'quote': touched, 'at': 40},
+                    ],
+                    accepted,
+                ),
+                self.price_result(
+                    'a_routed_implementation_shortfall_holds_each_slice_from_its_turn',
+                    dict(entry, synthetic={'type': 'implementation_shortfall', 'slices': 2, 'over_minutes': 1, 'urgency': 0.5}),
+                    [
+                        {'quote': steady, 'at': 0},
+                        {'quote': steady, 'at': 31},
+                        {'quote': touched, 'at': 40},
+                    ],
+                    accepted,
+                ),
+                self.price_result(
+                    'a_routed_freeze_slicer_holds_the_whole_order_until_the_offer_reaches_it',
+                    dict(entry, synthetic={'type': 'freeze_slicer'}),
+                    [
+                        {'quote': steady, 'at': 0},
+                        {'quote': touched, 'at': 1},
+                    ],
+                    accepted,
+                ),
+                self.price_result(
                     'a_routed_gtt_order_is_held_after_its_touch_until_the_offer_reaches_its_limit',
                     dict(entry, synthetic={
                         'type': 'gtt',

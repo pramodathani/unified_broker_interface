@@ -1,6 +1,6 @@
 """Starts a Using join of a two-step ladder, each rung a plain order, and shows each rung sent at its own price and share; then reads a TWAP Using whose second copy waits its turn.
 
-`UsingPart.start` works out the rung prices with the ladder's own arithmetic, writes each into its copy's part record as `piece_price`, which the copy's context writes over the body, and starts each copy with its share. For a TWAP the plan reader gives every copy after the first an `elapsed` trigger for its slice's turn. A stand-in plays the plan order, so nothing leaves the machine.
+`UsingPart.start` works out the rung prices with the ladder's own arithmetic, writes each into its copy's part record as `piece_price`, which the copy's context writes over the body, and starts each copy with its share. When a rung is held on a `limit_marketable` trigger, `OrderPart.refresh_held_terms` rewrites the terms its trigger wrote for the virtual book to the rung's own price and share. For a TWAP the plan reader gives every copy after the first an `elapsed` trigger for its slice's turn. A stand-in plays the plan order, so nothing leaves the machine.
 
 Run it from the project root:
 
@@ -181,6 +181,20 @@ class StartingTheRungsExample:
         for role, quantity, price in plan_order.placed:
             print(f'{role}: {quantity} at {price}')
         print(f"rung prices kept: {[plan_order.part_record(main.path)['piece_price'] for main in ladder.mains]}")
+        first = ladder.mains[0]
+        record = plan_order.part_record(first.path)
+        record['memory'] = {
+            'trigger': {
+                'held': {
+                    'price': 'the whole order\'s',
+                    'quantity': 'the whole order\'s',
+                },
+            },
+        }
+        plan_order.set_part_record(first.path, record, None)
+        first.refresh_held_terms(plan_order)
+        terms = plan_order.part_record(first.path)['memory']['trigger']['held']
+        print(f"a held rung's terms after refresh_held_terms: {terms['quantity']} at {terms['price']}")
         twap = PlanReader('BUY').read(
             {
                 'using': {

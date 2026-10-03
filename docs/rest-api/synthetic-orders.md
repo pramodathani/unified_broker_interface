@@ -69,7 +69,7 @@ Three fields can appear in any `synthetic` object. The table below lists them.
 |---|---|:---:|---|
 | `type` | string | Yes | One of the 54 names in the table below. A body with no `synthetic` object, or no `type`, runs as `simple`. An unknown name is refused with `400` and the message `the order engine does not run '<name>' orders; it runs <list>`. |
 | `closes_position` | boolean | No | `true` says every leg of this order closes a position, so it may use the part of a broker's daily order cap kept for exits. Only the literal `true` counts. |
-| `hold_limits` | boolean | No | For an order run as a plan, `true` holds each of its orders that would rest at the broker at a fixed limit price in the engine's virtual order book until the market reaches it, and `false` sends them as they come, as described under [`plan`](#plan). A type run as a plan that does not say takes its default when it arrives: `true` for `ladder`, `scheduled`, `good_till_time`, `time_stop`, `account_conditional`, `limit_if_touched`, `indicator_triggered`, `cross_instrument`, `gtt`, `bracket`, `cover`, `scale_out`, `oto`, `oca` and `scale_with_profit_taker` while `UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS` is on, `false` for every other type. A `plan` written by the caller that does not say takes the switch's own value: `true` while it is on. A plan recorded before plans were held by default carries no value and is read as not held. A type the engine does not run as a plan refuses `true` with `400`. Anything other than `true` or `false` is refused with `400`. |
+| `hold_limits` | boolean | No | For an order run as a plan, `true` holds each of its orders that would rest at the broker at a fixed limit price in the engine's virtual order book until the market reaches it, and `false` sends them as they come, as described under [`plan`](#plan). A type run as a plan that does not say takes its default when it arrives: `true` for `ladder`, `scheduled`, `good_till_time`, `time_stop`, `account_conditional`, `limit_if_touched`, `indicator_triggered`, `cross_instrument`, `gtt`, `bracket`, `cover`, `scale_out`, `oto`, `oca`, `scale_with_profit_taker`, `freeze_slicer`, `twap` and `implementation_shortfall` while `UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS` is on, `false` for every other type. A `plan` written by the caller that does not say takes the switch's own value: `true` while it is on. A plan recorded before plans were held by default carries no value and is read as not held. A type the engine does not run as a plan refuses `true` with `400`. Anything other than `true` or `false` is refused with `400`. |
 
 The engine also writes its own working values into the parent's copy of the `synthetic` object, such as `tick_size`, `triggered_at`, `watermark`, `placed_quantity`, `started_at` and `expires_at`. These are internal, so do not send them.
 
@@ -111,7 +111,7 @@ The master table below lists every type registered in `SYNTHETIC_ORDER_CLASSES`,
 | Type | Family | What it does | Key fields in `synthetic` | First answer |
 |---|---|---|---|:---:|
 | `simple` | Plain and laddered | Sends one order to one broker and does nothing afterwards. | none | 200 |
-| `freeze_slicer` | Plain and laddered | Splits an order above the exchange's freeze quantity into even orders that each fit. | none | 200 |
+| `freeze_slicer` | Plain and laddered | Splits an order above the exchange's freeze quantity into even orders that each fit; run as a plan, holds the whole order until the market reaches it. | none | 200, or 202 when it is held |
 | `ladder` | Plain and laddered | Places several limit orders evenly spaced between two prices; run as a plan, holds each rung until the market reaches it. | `from_price`, `to_price`, `steps`, `hold_limits` | 200, or 202 when its rungs are held |
 | `oto` | Linked orders | Places a second order, sized to what actually filled, once the first one fills; run as a plan, holds a limit first order until the market reaches it. | `then` | 200, or 202 when its first order is held |
 | `oco` | Linked orders | Rests a stop and a target on a position you hold, each shrinking as the other fills. | `stop_price`, `stop_limit_price`, `target_price` | 200 |
@@ -121,7 +121,7 @@ The master table below lists every type registered in `SYNTHETIC_ORDER_CLASSES`,
 | `scheduled` | Time-based | Holds the order until a time of day, then places it. | `at_time` | 202 |
 | `good_till_time` | Time-based | Places the order now and, at a time of day, cancels whatever has not filled or makes it marketable; run as a plan, holds a limit until the market reaches it. | `until_time`, `at_expiry` | 200, or 202 when it is held |
 | `time_stop` | Time-based | Places an entry and closes what filled at a time of day or after some minutes; run as a plan, holds a limit entry until the market reaches it. | `until_time` or `minutes` | 200, or 202 when it is held |
-| `twap` | Execution algorithms | Sends equal slices at even intervals over a period. | `slices`, `over_minutes` | 200 |
+| `twap` | Execution algorithms | Sends equal slices at even intervals over a period; run as a plan, holds each slice from its turn until the market reaches it. | `slices`, `over_minutes` | 200, or 202 when its slices are held |
 | `peg` | Book-following limits | Keeps a limit order re-priced to the bid, the offer or the midpoint. | `reference`, `offset_ticks`, `cap_price` | 200 |
 | `chaser` | Book-following limits | Starts on its own side of the book and steps towards the other until it fills. | `step_ticks`, `step_seconds`, `cap_price`, `cross_after_seconds` | 200 |
 | `market_if_touched` | Price triggers | Waits unseen for the price to touch a level, then sends a marketable limit. | `trigger_price`, `trigger_direction`, `buffer_ticks` | 202 |
@@ -134,7 +134,7 @@ The master table below lists every type registered in `SYNTHETIC_ORDER_CLASSES`,
 | `post_only` | Book-following limits | Checks that a limit would rest rather than trade before sending it. | `on_crossing` | 200 |
 | `discretionary` | Book-following limits | Shows one limit price and quietly takes a slightly worse one when it comes within reach. | `discretion_points`, `discretion_quantity` | 200 |
 | `vwap` | Execution algorithms | A TWAP whose slice sizes follow the shape of the day's volume. | `slices`, `over_minutes`, `volume_profile` | 200 |
-| `implementation_shortfall` | Execution algorithms | A TWAP whose slices shrink, so most of the order trades early. | `slices`, `over_minutes`, `urgency` | 200 |
+| `implementation_shortfall` | Execution algorithms | A TWAP whose slices shrink, so most of the order trades early; run as a plan, holds each slice from its turn until the market reaches it. | `slices`, `over_minutes`, `urgency` | 200, or 202 when its slices are held |
 | `participation` | Execution algorithms | Trades a fixed share of the volume the market itself trades. | `participation_percent`, `most_slices` | 202 |
 | `liquidity_seeking` | Execution algorithms | Shows nothing and strikes only when enough size appears at an acceptable price. | `limit_price`, `minimum_quantity` | 202 |
 | `iceberg` | Execution algorithms | Rests one slice at a time and places the next when that slice fills. | `slice_quantity`, `randomise_percent` | 200 |
@@ -1224,8 +1224,9 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | An order on the `protect` side | No; only by its own `hold_limits` |
     | A leg of a Together join with `group_margin`, as in a basket | Never; asking for it on the leg is refused |
     | A `MARKET` order, an `IOC` or after-market order, or one priced by a pricing other than `fixed` | No; asking for it on the order is refused with the reason |
-    | An order sent in pieces, with a post-only guard or discretion, in the pre-open or on paper, whose lifetime ends `marketable`, or whose lifetime bounds it only once it is `working` | No; asking for it on the order is refused with the reason |
-    | A `ladder` preset in a held order, or an order whose own execution is one `ladder` with no pricing, guards or venue | Each rung is held at its own price, as under [`ladder`](#ladder) |
+    | An order sent in other pieces (`vwap`, `iceberg`, `participation`, `book_depth`, two nested executions), with a post-only guard or discretion, in the pre-open or on paper, whose lifetime ends `marketable`, or whose lifetime bounds it only once it is `working` | No; asking for it on the order is refused with the reason |
+    | A `ladder` preset in a held order, or an order whose execution is one `ladder`, `twap` or `front_loaded`, given by the order or by a preset that gives nothing else, with no pricing, guards or venue | Each piece is held: a rung at its own price, as under [`ladder`](#ladder), and a timed slice from its turn onwards |
+    | An order sent as `freeze_limit` slices | The whole order is held, and every slice goes out together when the market reaches its price |
 
     These types are held by default when they are run as plans, because each sends one limit order whose only job is to rest until the market reaches it. Each one is held from the moment it would have been sent:
 
@@ -1245,6 +1246,10 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | `bracket`, `cover`, `scale_out`, `oto` | Placing | Every exit and the OTO's second order |
     | `oca` | Placing | Nothing; every candidate is held |
     | `scale_with_profit_taker` | Placing, and again each time a rung's profit has been taken | Every profit-taker |
+    | `twap`, `implementation_shortfall` | Each slice from its turn | Nothing; every slice is held |
+    | `freeze_slicer` | Placing, the whole order | Nothing; every slice goes out together once the market reaches the price |
+
+    A `vwap` or `closing_price` order is not held, since its volume-shaped slices are not split piece by piece yet, and an `iceberg` is not held, since keeping a small size in the queue is what it is for.
 
     A held `scale_with_profit_taker` keeps each rung pending in the engine and places it when the other side of the book reaches the rung's price, on a quote that is not stale; its profit-takers rest at the broker as soon as their rung fills, and a rung whose profit is taken is held again rather than placed again at once. It answers <span class="status s2">202</span> with nothing placed, is not done while a rung is pending, and a rung the market never reaches costs nothing. The virtual book follows each pending rung, and a rung placed records what a resting rung would have filled as `missed_quantity` beside it in the part's `own_memory`. A `grid` or `two_sided_quote` whose own order asks for holding is refused with `not_holdable`, since resting at the broker is what they are for.
 
