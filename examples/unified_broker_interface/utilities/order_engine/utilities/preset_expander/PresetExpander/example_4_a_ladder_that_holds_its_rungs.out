@@ -1,0 +1,10 @@
+held by default: join=True
+  {'using': {'order': {'execution': [{'ladder': {'from_price': 1000, 'to_price': 995, 'steps': 3}}]}, 'each_piece': {'presets': [{'virtual_limit': {}}]}}}
+sent at once: join=False
+  {'execution': [{'ladder': {'from_price': 1000, 'to_price': 995, 'steps': 3}}]}
+held beside a twap: join=True
+  refused, held_ladder_execution: a ladder that holds its rungs sends each rung as an order of its own, so the order takes no other execution; set hold_limits to false to send the rungs at once instead
+held beside post_only: join=True
+  refused, held_ladder_post_only: a ladder that holds its rungs sends a rung only once it would trade at once, which a post-only guard refuses; set hold_limits to false to rest the rungs at the broker instead
+hold_limits of no: join=True
+  refused, bad_setting: hold_limits is true or false, not 'no'

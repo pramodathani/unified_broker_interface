@@ -111,7 +111,7 @@ The master table below lists every type registered in `SYNTHETIC_ORDER_CLASSES`,
 |---|---|---|---|:---:|
 | `simple` | Plain and laddered | Sends one order to one broker and does nothing afterwards. | none | 200 |
 | `freeze_slicer` | Plain and laddered | Splits an order above the exchange's freeze quantity into even orders that each fit. | none | 200 |
-| `ladder` | Plain and laddered | Places several limit orders evenly spaced between two prices. | `from_price`, `to_price`, `steps` | 200 |
+| `ladder` | Plain and laddered | Places several limit orders evenly spaced between two prices; run as a plan, holds each rung until the market reaches it. | `from_price`, `to_price`, `steps`, `hold_limits` | 200, or 202 when its rungs are held |
 | `oto` | Linked orders | Places a second order, sized to what actually filled, once the first one fills. | `then` | 200 |
 | `oco` | Linked orders | Rests a stop and a target on a position you hold, each shrinking as the other fills. | `stop_price`, `stop_limit_price`, `target_price` | 200 |
 | `bracket` | Linked orders | Places an entry, then arms a stop and a target on the first partial fill. | `stop_price`, `stop_limit_price`, `target_price` | 200 |
@@ -309,15 +309,22 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     A ladder places `steps` limit orders evenly spaced from `from_price` to `to_price`. The order's `quantity` is the whole ladder and is shared out as evenly as whole units allow, so 100 over three rungs is 34, 33 and 33. Each rung's price is rounded to the tick towards the passive side.
 
+    When `ladder` is named in `UNIFIED_BROKER_INTERFACE_API_ORDER_PLAN_TYPES`, the ladder runs as a plan of its preset and holds its rungs by default. Nothing is sent when you ask: the answer is <span class="status s2">202</span> with an `outcome` of `armed`, and each rung waits in the engine's virtual order book, like a [`virtual_limit`](#virtual_limit) order, until the other side of the book reaches that rung's own price. For a buy ladder from 1000 down to 995, the 1000 rung is sent when the best offer reaches 1000 and the 995 rung only when it reaches 995, so a rung the market never reaches costs no order message at all. A rung the market is already past is sent on the first price tick. The rungs are the plan's parts `root.pieces.0`, `root.pieces.1` and so on, and every one goes to the broker the first one sent chose. A rung that is still held can be changed through [`PUT /api/orders/modify` with `parent_id` and `part`](orders.md#a-part-of-a-plan-that-has-not-been-sent) and cancelled with `parent_id` and `part`, without a broker message.
+
+    With `hold_limits: false`, or with `UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS` turned off, every rung is sent at once and rests at the broker, as it does when `ladder` is not run as a plan. A ladder that is not run as a plan refuses `hold_limits: true` with <span class="status s4">400</span> rather than sending the rungs anyway.
+
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
     | `from_price` | number | Yes | Above zero. |
     | `to_price` | number | Yes | Above zero, and different from `from_price`. |
     | `steps` | integer | Yes | From 2 to 20. The order's `quantity` must be at least `steps`. |
+    | `hold_limits` | boolean | No | Run as a plan, `true` (the default) holds each rung until the market reaches it and `false` sends every rung at once. Anything else is refused with `400`. |
 
     ```json
     {"type": "ladder", "from_price": 995, "to_price": 1000, "steps": 5}
     ```
+
+    Holding a rung gives up its place in the queue: a resting buy at 1000 can fill from sellers trading at the bid while the offer stays above 1000, and a held one is not sent until the offer itself comes down. The virtual order book's estimate of what a resting rung would have filled is kept as `missed_quantity` when the rung is sent. Send `"hold_limits": false` when the place in the queue matters more than the order messages.
 
     #### `grid`
 
@@ -1307,7 +1314,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | `attached_hedge` | A Then join: the order, then a hedge on `hedge_instrument_id` of `ratio` times what filled in whole lots, opposite to the entry for a positive ratio, `top_up` execution, two ticks past the hedge's touch. Takes `hedge_instrument_id` and exactly one of `ratio` and `delta_volatility`; with `delta_volatility` the hedge is `against_delta` with a `parent_fill_delta` quantity in whole lots. |
     | `legged_spread` | A Then join: the first candidate, worked at its own price, then the second candidate sized to each fill and priced `from_parent_fill` at `net_price`, `top_up` execution. Takes `net_price` and exactly two `candidates`. |
     | `candle_close_stop` | As `hidden_stop`, with a `candle_closes` trigger instead of a touch: the `protect` side and `marketable` pricing, and with `backstop_price` and `backstop_limit_price` the same Either join with a native backstop. Takes `trigger_price`, `trigger_direction`, `bar_minutes`, `buffer_ticks` and the backstop's two prices. |
-    | `ladder` | `ladder` execution. Takes `from_price`, `to_price` and `steps`. |
+    | `ladder` | A Using join of the `ladder` execution whose every rung is a `virtual_limit`, so each rung is held in the engine and sent only once the other side of the book reaches its own price. With `hold_limits: false`, the `ladder` execution alone, which sends every rung at once. Takes `from_price`, `to_price`, `steps` and `hold_limits` (default true). A held ladder takes no other execution (`held_ladder_execution`) and no post-only guard (`held_ladder_post_only`). |
     | `freeze_slicer` | `freeze_limit` execution. Takes no settings. |
     | `closing_price` | A `time_from` trigger at `window_start` (default 15:00, from 09:15 and before 15:30) and `vwap` execution of `slices` (default 6) `until` 15:30, so it starts at once when placed inside the window. Takes `window_start`, `slices` and `volume_profile`, which goes to the `vwap` as it would for today's type. |
     | `opening_auction` | A `pre_open` venue at `at_time` (default 09:00:30). Takes `at_time`. |

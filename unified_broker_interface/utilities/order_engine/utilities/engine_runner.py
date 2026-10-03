@@ -134,7 +134,10 @@ class OrderEngine:
         self.entries_per_read = entries_per_read
         self.reconciler = reconciler
         self.counts_lock = threading.Lock()
-        self.plan_routing = PlanRouting(api_configuration['order_plan_types'])
+        self.plan_routing = PlanRouting(
+            api_configuration['order_plan_types'],
+            api_configuration['order_hold_limits'],
+        )
         self.commands = ParentCommands(
             placement,
             event_log,

@@ -82,7 +82,15 @@ class LadderExecution:
 
         Returns:
             list: One quantity per rung.
+
+        Raises:
+            RefusedRequestError: With HTTP 400 when the quantity is smaller than the number of rungs.
         """
+        if total < self.steps:
+            raise RefusedRequestError.refusal(
+                f'a ladder of {self.steps} steps needs a quantity of at least {self.steps}, not {total}',
+                400,
+            )
         each = total // self.steps
         remainder = total - each * self.steps
         quantities = []
@@ -135,11 +143,6 @@ class LadderExecution:
         del plan_order, quotes, now, sending_side
         if not self.will_send_more(memory, total, pieces):
             return []
-        if total < self.steps:
-            raise RefusedRequestError.refusal(
-                f'a ladder of {self.steps} steps needs a quantity of at least {self.steps}, not {total}',
-                400,
-            )
         return self.quantities(total)
 
     def will_send_more(self, memory, remaining, pieces):

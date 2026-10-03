@@ -1220,6 +1220,7 @@ class OrderEngineScenarios:
                                                 'from_price': 995,
                                                 'to_price': 1000,
                                                 'steps': 3,
+                                                'hold_limits': False,
                                             },
                                         },
                                     ],
@@ -3053,6 +3054,185 @@ class OrderEngineSuite:
             ]
         finally:
             api_configuration['order_plan_types'] = original_plan_types
+
+    def run_plan_held_ladder_checks(self):
+        """Runs ladders whose rungs are held in the engine until the offer reaches each one, as plans and as the routed `ladder` type, with holding on and off.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        accepted = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        steady = self.book_at(1000.00, 1000.05)
+        ladder_settings = {
+            'from_price': 1000,
+            'to_price': 995,
+            'steps': 3,
+        }
+        held_ladder = {
+            'order': {
+                'presets': [
+                    {
+                        'ladder': dict(ladder_settings),
+                    },
+                ],
+            },
+        }
+        falling = [
+            {'quote': steady, 'at': 0},
+            {'quote': self.book_at(999.95, 1000.00), 'at': 1},
+            {'quote': self.book_at(997.45, 997.50), 'at': 2},
+            {'quote': self.book_at(997.40, 997.45), 'at': 3},
+        ]
+        nine = {
+            'quantity': 9,
+        }
+        results = [
+            self.plan_price_result(
+                'a_plan_ladder_holds_each_rung_until_the_offer_reaches_its_price',
+                held_ladder,
+                falling,
+                accepted,
+                body_overrides=nine,
+            ),
+            self.plan_price_result(
+                'a_plan_held_ladder_keeps_its_rungs_across_a_restart',
+                held_ladder,
+                falling,
+                accepted,
+                restart_between_ticks=True,
+                body_overrides=nine,
+            ),
+            self.plan_price_result(
+                'a_plan_held_ladder_sends_at_once_the_rungs_the_offer_is_already_past',
+                held_ladder,
+                [
+                    {'quote': self.book_at(995.95, 996.00), 'at': 0},
+                    {'quote': self.book_at(995.95, 996.00), 'at': 1},
+                ],
+                accepted,
+                body_overrides=nine,
+            ),
+            self.plan_price_result(
+                'a_plan_held_ladder_rung_changed_while_held_sends_its_new_price_and_quantity',
+                held_ladder,
+                [
+                    {'quote': steady, 'at': 0},
+                    {
+                        'quote': steady,
+                        'at': 1,
+                        'held_change': {
+                            'part': 'root.pieces.1',
+                            'price': '998',
+                        },
+                    },
+                    {
+                        'quote': self.book_at(997.95, 998.00),
+                        'at': 2,
+                        'held_change': {
+                            'part': 'root.pieces.2',
+                            'quantity': 5,
+                        },
+                    },
+                    {'quote': self.book_at(994.95, 995.00), 'at': 3},
+                ],
+                accepted,
+                body_overrides=nine,
+            ),
+            self.plan_price_result(
+                'a_plan_held_ladder_refuses_a_post_only_guard',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'post_only': {},
+                            },
+                            {
+                                'ladder': dict(ladder_settings),
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+                body_overrides=nine,
+            ),
+            self.plan_price_result(
+                'a_plan_ladder_refuses_a_hold_limits_that_is_not_true_or_false',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'ladder': dict(ladder_settings, hold_limits='no'),
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+                body_overrides=nine,
+            ),
+        ]
+        entry = self.scenarios.bodies.market_order(
+            dry_run=None,
+            order_type='LIMIT',
+            price=1000,
+            quantity=9,
+        )
+        results.append(
+            self.price_result(
+                'a_fixed_ladder_refuses_hold_limits_true',
+                dict(entry, synthetic=dict(ladder_settings, type='ladder', hold_limits=True)),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            )
+        )
+        original_plan_types = api_configuration['order_plan_types']
+        original_hold_limits = api_configuration['order_hold_limits']
+        api_configuration['order_plan_types'] = [
+            'ladder',
+        ]
+        try:
+            results.append(
+                self.price_result(
+                    'a_routed_ladder_holds_each_rung_until_the_offer_reaches_its_price',
+                    dict(entry, synthetic=dict(ladder_settings, type='ladder')),
+                    falling,
+                    accepted,
+                    book_every_order=True,
+                )
+            )
+            results.append(
+                self.price_result(
+                    'a_routed_ladder_sends_every_rung_at_once_with_hold_limits_false',
+                    dict(entry, synthetic=dict(ladder_settings, type='ladder', hold_limits=False)),
+                    falling,
+                    accepted,
+                    book_every_order=True,
+                )
+            )
+            api_configuration['order_hold_limits'] = False
+            results.append(
+                self.price_result(
+                    'a_routed_ladder_sends_every_rung_at_once_when_holding_is_turned_off',
+                    dict(entry, synthetic=dict(ladder_settings, type='ladder')),
+                    falling,
+                    accepted,
+                    book_every_order=True,
+                )
+            )
+        finally:
+            api_configuration['order_plan_types'] = original_plan_types
+            api_configuration['order_hold_limits'] = original_hold_limits
+        return results
 
     def run_plan_kept_whole_checks(self):
         """Runs plan orders kept whole, such as a grid, beside today's checks of the same types.
@@ -12305,6 +12485,7 @@ class OrderEngineSuite:
             results.extend(self.run_plan_checks())
             results.extend(self.run_plan_trigger_checks())
             results.extend(self.run_plan_virtual_limit_checks())
+            results.extend(self.run_plan_held_ladder_checks())
             results.extend(self.run_plan_kept_whole_checks())
             results.extend(self.run_plan_routing_checks())
             results.extend(self.run_plan_join_checks())
