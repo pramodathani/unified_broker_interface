@@ -1,0 +1,3 @@
+after prepare: {'first': {}}
+after the trigger fires at 994: {'first': {}, 'fired': True, 'held': {'instrument_id': 'NSE:INFY', 'transaction_type': 'BUY', 'price': '990', 'quantity': 10}} released False
+a market order: 400 a virtual limit order is held at its own limit price, so it must be a LIMIT order with a price

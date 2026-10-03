@@ -7,7 +7,7 @@ the request says nothing:
 the order asks to hold a market order:
   refused at root, not_holdable: hold_limits asks for this order to be held until the market reaches its price, but it is not a LIMIT order with a price
 the request holds an entry, not its follow-on order:
-  root.first: {'all': [{'time_at': '10:00'}, {'limit_marketable': {}}]}
+  root.first: {'held_after': {'time_at': '10:00'}}
   root.each_fill: at_once
 the request reaches no leg of a margin-checked group:
   root.children.0: at_once

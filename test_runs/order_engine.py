@@ -3288,6 +3288,22 @@ class OrderEngineSuite:
                 ],
             },
         }
+        after_a_rise = {
+            'order': {
+                'trigger': {
+                    'price_crosses': {
+                        'level': 1005,
+                        'direction': 'at_or_above',
+                    },
+                },
+                'hold_limits': True,
+            },
+        }
+        rise_then_fall = [
+            {'quote': steady, 'at': 0},
+            {'quote': self.book_at(1004.95, 1005.00), 'at': 1},
+            {'quote': touched, 'at': 2},
+        ]
         return [
             self.plan_price_result(
                 'a_plan_held_by_the_requests_hold_limits_waits_for_the_offer',
@@ -3355,6 +3371,19 @@ class OrderEngineSuite:
                     {'quote': steady, 'at': 0},
                 ],
                 accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_order_held_after_its_trigger_is_sent_once_the_offer_comes_even_after_the_trigger_stops_holding',
+                after_a_rise,
+                rise_then_fall,
+                accepted,
+            ),
+            self.plan_price_result(
+                'a_plan_order_held_after_its_trigger_remembers_the_trigger_across_a_restart',
+                after_a_rise,
+                rise_then_fall,
+                accepted,
+                restart_between_ticks=True,
             ),
             self.plan_price_result(
                 'a_plan_requests_hold_limits_must_be_true_or_false',

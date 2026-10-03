@@ -74,6 +74,9 @@ from unified_broker_interface.utilities.order_engine.utilities.iceberg_execution
 from unified_broker_interface.utilities.order_engine.utilities.ladder_execution import (
     LadderExecution,
 )
+from unified_broker_interface.utilities.order_engine.utilities.held_after_condition import (
+    HeldAfterCondition,
+)
 from unified_broker_interface.utilities.order_engine.utilities.lifetime import (
     APPLIES_TO,
     ON_END,
@@ -316,7 +319,7 @@ class PlanReader:
 
     The joins are `then`, `either`, `together`, `sequence`, `repeat` and `using`, every one the design names.
 
-    An order that would rest at the broker at the body's own limit price is held in the engine's virtual order book when `hold_limits` asks for it, by adding a `limit_marketable` condition to its trigger, so it is sent only once the other side of the book reaches its price. `hold_limits` is read from the order itself, or else from the request, the `hold_limits` beside the plan. The request's value covers an order only where holding cannot change what the order is for: not a follow-on order in a Then join's child, such as a profit target, not an order that protects a position, and never a leg of a Together join that checks the group's margin, whose legs have to go out together. An order that cannot be held is left as it is when the request asks, and refused when the order itself asks.
+    An order that would rest at the broker at the body's own limit price is held in the engine's virtual order book when `hold_limits` asks for it, so it is sent only once the other side of the book reaches its price: an order with no trigger is given a `limit_marketable` trigger, and an order with one is given a `HeldAfterCondition` around it, which holds the order once its own trigger has fired. `hold_limits` is read from the order itself, or else from the request, the `hold_limits` beside the plan. The request's value covers an order only where holding cannot change what the order is for: not a follow-on order in a Then join's child, such as a profit target, not an order that protects a position, and never a leg of a Together join that checks the group's margin, whose legs have to go out together. An order that cannot be held is left as it is when the request asks, and refused when the order itself asks.
 
     Attributes:
         opening_side (str | None): BUY or SELL, the side of the caller's body, which some presets need; None when it is not known.
@@ -1011,7 +1014,7 @@ class PlanReader:
                 if trigger is None:
                     trigger = LimitMarketableCondition()
                 elif not self._holds_at_its_limit(trigger):
-                    trigger = ConditionGroup('all', [trigger, LimitMarketableCondition()])
+                    trigger = HeldAfterCondition(trigger)
             elif order.get('hold_limits') is True:
                 self._add_problem(path, 'not_holdable', f'hold_limits asks for this order to be held until the market reaches its price, but {reason}')
                 return None

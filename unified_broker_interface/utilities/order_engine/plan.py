@@ -521,7 +521,7 @@ class PlanOrder(SyntheticOrder):
     def _fire_waiting(self, root, waiting_paths, quotes, now, timed_only):
         """Sends every waiting order whose trigger holds now.
 
-        An order whose join cancels before sending is sent only once every sibling's resting order has been cancelled; otherwise it tries again on the next tick. A paper order is never sent; it takes whatever more its queue estimate has filled. An order held until its limit is marketable records, as it fires, how much a resting order would have filled while it was held, as `missed_quantity`.
+        An order whose join cancels before sending is sent only once every sibling's resting order has been cancelled; otherwise it tries again on the next tick. A paper order is never sent; it takes whatever more its queue estimate has filled. An order held after a trigger of its own records an event when that trigger fires, so a restart keeps it held rather than waiting for the trigger again; other changes to a trigger's memory are kept only in the parameters. An order held until its limit is marketable records, as it fires, how much a resting order would have filled while it was held, as `missed_quantity`.
 
         Args:
             root (object): The root part.
@@ -549,10 +549,14 @@ class PlanOrder(SyntheticOrder):
                     ended = True
                 continue
             memory = copy.deepcopy(record.get('memory') or {})
+            fired_before = ((record.get('memory') or {}).get('trigger') or {}).get('fired') is True
             triggered = part.is_triggered(self, memory, quotes or {}, now)
             if memory != (record.get('memory') or {}):
                 record['memory'] = memory
-                self.set_part_record(part.path, record, None)
+                message = None
+                if not fired_before and (memory.get('trigger') or {}).get('fired') is True:
+                    message = f'the plan\'s {part.path} part\'s own trigger fired, so it is held until the other side of the book reaches its price'
+                self.set_part_record(part.path, record, message)
                 memory_changed = True
             if not triggered:
                 continue
@@ -757,7 +761,7 @@ class PlanOrder(SyntheticOrder):
     def _change_held_part(self, part, price, quantity, dry_run):
         """Changes the price or quantity of one order this plan holds in the engine on a `limit_marketable` trigger.
 
-        A held rung of a Using join was given its share as its target, and a Using join is never resized, so a new quantity becomes the rung's target as well; otherwise the rung would still send the share it was given.
+        A held rung of a Using join was given its share as its target, and a Using join is never resized, so a new quantity becomes the rung's target as well; otherwise the rung would still send the share it was given. An order held after a trigger of its own that has not fired yet has no held terms for the virtual book yet; they are worked out from the new price and quantity when the trigger fires.
 
         Args:
             part (OrderPart): The held order.
@@ -805,12 +809,13 @@ class PlanOrder(SyntheticOrder):
             record['target'] = changed.quantity
         memory = record.get('memory') or {}
         trigger_memory = memory.get('trigger') or {}
-        terms = dict(trigger_memory.get('held') or {})
-        terms['price'] = str(changed.price)
-        terms['quantity'] = changed.quantity
-        trigger_memory['held'] = terms
-        memory['trigger'] = trigger_memory
-        record['memory'] = memory
+        if 'held' in trigger_memory:
+            terms = dict(trigger_memory['held'])
+            terms['price'] = str(changed.price)
+            terms['quantity'] = changed.quantity
+            trigger_memory['held'] = terms
+            memory['trigger'] = trigger_memory
+            record['memory'] = memory
         self.set_part_record(part.path, record, f'the caller changed the held order to {changed.quantity} at {changed.price}')
         self.save()
         answer['outcome'] = 'accepted'
