@@ -1,0 +1,11 @@
+moves on ticks: True
+placed at start: []
+rungs pending: [True, True]
+offer 1001.00 reaches 1000: False
+move at offer 1001.00 places: False
+move at offer 1000.00 places: True [('place', 'BUY', 10, '1000.00')]
+first rung remembers: {'price': '1000.00', 'quantity': 10, 'cycles': 0, 'pending': False, 'missed_quantity': 3}
+after the rung fills, sent: ('place', 'SELL', 10, '1004.00')
+after the profit is taken, rung pending again: True
+part state while a rung is pending: working
+placing the 995 rung by hand sends: [('place', 'BUY', 10, '995.00')]
