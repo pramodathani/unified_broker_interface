@@ -517,7 +517,7 @@ class PresetExpander:
             path (str): The preset's path.
 
         Returns:
-            dict: A Then join whose child is the second leg.
+            dict: A Then join whose child is the second leg; the first leg is given `hold_limits: false` unless the order says otherwise, since working it passively at the broker is what it is for.
         """
         self._refuse_unknown(settings, ('net_price', 'candidates'), path, 'legged_spread')
         nodes = self._candidate_orders(settings, entry, path, 'legged_spread')
@@ -526,9 +526,12 @@ class PresetExpander:
         if len(nodes) != 2:
             self._add_problem(path, 'bad_setting', f'a legged spread has exactly two legs, the one to work first; {len(nodes)} were given')
             return {}
+        if 'hold_limits' not in nodes[0]['order']:
+            nodes[0]['order']['hold_limits'] = False
         second = dict(nodes[1]['order'])
         second.pop('quantity', None)
         second.pop('presets', None)
+        second.pop('hold_limits', None)
         second['pricing'] = [
             {
                 'from_parent_fill': {

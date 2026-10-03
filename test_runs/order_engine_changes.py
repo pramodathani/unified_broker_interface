@@ -726,13 +726,14 @@ class OrderEngineChangesSuite(order_routes.OrderRoutesSuite):
         }
 
     def placed_bracket_plan(self):
-        """Places a bracket plan whose entry rests, so its stop and target have not been sent.
+        """Places a bracket plan whose entry rests at the broker, asking for no holding, so its stop and target have not been sent.
 
         Returns:
             dict: The place route's status and body.
         """
         return self.call('POST', '/place', self.limit_body(synthetic={
             'type': 'plan',
+            'hold_limits': False,
             'plan': {
                 'order': {
                     'presets': [

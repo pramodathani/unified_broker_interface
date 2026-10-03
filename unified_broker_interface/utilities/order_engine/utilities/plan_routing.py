@@ -27,6 +27,12 @@ HOLDING_TYPES = (
     'indicator_triggered',
     'cross_instrument',
     'gtt',
+    'bracket',
+    'cover',
+    'scale_out',
+    'oto',
+    'oca',
+    'scale_with_profit_taker',
 )
 
 
@@ -36,6 +42,8 @@ class PlanRouting:
     Each fixed type has a preset, of the same name except for `gtt`, whose preset is `good_till_triggered`, built to send the same broker requests. The switch-over moves one type at a time, after its preset has traded live: a type named in `UNIFIED_BROKER_INTERFACE_API_ORDER_PLAN_TYPES` has its intents rewritten into a `plan` whose one order names that preset with the caller's settings, so the caller's request does not change. A type not named keeps its fixed class. The setting is empty by default, so nothing moves until it is filled in, and a name that is not both a fixed type and a preset stops the engine from starting rather than being ignored.
 
     `closes_position` and `reduce_only` are not settings of a type but flags every type reads from the top of its parameters, so they stay there beside the plan rather than going into the preset, which would refuse them as unknown settings.
+
+    A plan the caller wrote is given `hold_limits` too, by `with_hold_limits`: the master switch's value when the caller did not say.
 
     `hold_limits` is also taken out of the caller's settings and put beside the plan, where the plan reader reads it for the whole request. A routed order that does not say is given a value when it arrives: true for a type in `HOLDING_TYPES` while `UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS` is on, and false otherwise. Writing the value into the order means the plan read again after a restart holds the same orders, even if the setting or `HOLDING_TYPES` has changed since. A type that is not run as a plan cannot hold its orders, so `check_unrouted` refuses `hold_limits: true` for it rather than ignoring it.
 
@@ -104,6 +112,8 @@ class PlanRouting:
             dict: The intent to run, with `closes_position`, `reduce_only` and `hold_limits` at the top of the plan's `synthetic` object, `hold_limits` given its default when the caller did not say.
         """
         named_type = intent.get('synthetic_type')
+        if named_type == 'plan':
+            return self.with_hold_limits(intent)
         if named_type not in self.type_names:
             return intent
         body = dict(intent.get('body') or {})
@@ -137,6 +147,28 @@ class PlanRouting:
         routed['synthetic_type'] = 'plan'
         routed['body'] = body
         return routed
+
+    def with_hold_limits(self, intent):
+        """A plan written by the caller, with `hold_limits` given its default when the caller did not say.
+
+        A plan that does not say holds what it can while `UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS` is on. Writing the value in when the plan arrives means a plan recorded before plans were held by default, which has none, is still read as not held.
+
+        Args:
+            intent (dict): A `plan` intent.
+
+        Returns:
+            dict: The intent, or a copy with `hold_limits` beside the plan.
+        """
+        body = dict(intent.get('body') or {})
+        synthetic = body.get('synthetic')
+        if not isinstance(synthetic, dict) or 'hold_limits' in synthetic:
+            return intent
+        synthetic = dict(synthetic)
+        synthetic['hold_limits'] = self.hold_limits
+        body['synthetic'] = synthetic
+        stamped = dict(intent)
+        stamped['body'] = body
+        return stamped
 
     def check_unrouted(self, intent):
         """Refuses `hold_limits: true` for an order the engine runs with a fixed type rather than as a plan.
