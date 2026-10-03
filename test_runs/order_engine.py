@@ -31,6 +31,7 @@ from test_runs import order_routes
 from test_runs import redis_stand_ins
 from unified_broker_interface.utilities.order_engine.utilities import engine_lock
 from unified_broker_interface.utilities.order_engine.utilities import moments
+from unified_broker_interface.utilities.order_engine.utilities import plan_routing
 from unified_broker_interface.utilities.order_engine.utilities.book_reconciler import (
     BookReconciler,
 )
@@ -3395,6 +3396,194 @@ class OrderEngineSuite:
                 body_overrides=self.held_plan_body(plain, 'yes'),
             ),
         ]
+
+    def run_holding_types_checks(self):
+        """Runs today's requests for the single-order types that hold by default, routed to plans, each held until the offer reaches its limit, and the variants that are left to rest.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        accepted = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        steady = self.book_at(1000.00, 1000.05)
+        touched = self.book_at(999.95, 1000.00)
+        below_trigger = self.book_at(994.90, 994.95)
+        at_the_limit = self.book_at(989.95, 990.00)
+        entry = self.scenarios.bodies.market_order(
+            dry_run=None,
+            order_type='LIMIT',
+            price=1000,
+            quantity=10,
+        )
+        funds_low = {
+            'summary': {
+                'available_balance': 40000.0,
+            },
+            'pnl': {
+                'realized': 0.0,
+                'unrealized': 0.0,
+            },
+        }
+        funds_high = {
+            'summary': {
+                'available_balance': 60000.0,
+            },
+            'pnl': {
+                'realized': 0.0,
+                'unrealized': 0.0,
+            },
+        }
+        original_plan_types = api_configuration['order_plan_types']
+        original_hold_limits = api_configuration['order_hold_limits']
+        api_configuration['order_plan_types'] = list(plan_routing.HOLDING_TYPES)
+        api_configuration['order_hold_limits'] = True
+        try:
+            return [
+                self.price_result(
+                    'a_routed_scheduled_order_is_held_from_its_time_until_the_offer_reaches_it',
+                    dict(entry, synthetic={'type': 'scheduled', 'at_time': '10:00:30'}),
+                    [
+                        {'quote': steady, 'at': 0},
+                        {'quote': steady, 'at': 40},
+                        {'quote': touched, 'at': 50},
+                    ],
+                    accepted,
+                ),
+                self.price_result(
+                    'a_routed_good_till_time_order_is_held_until_the_offer_reaches_it',
+                    dict(entry, synthetic={'type': 'good_till_time', 'until_time': '14:30'}),
+                    [
+                        {'quote': steady, 'at': 0},
+                        {'quote': touched, 'at': 1},
+                    ],
+                    accepted,
+                ),
+                self.price_result(
+                    'a_routed_good_till_time_order_made_marketable_at_its_time_rests_at_once',
+                    dict(entry, synthetic={'type': 'good_till_time', 'until_time': '14:30', 'at_expiry': 'market'}),
+                    [
+                        {'quote': steady, 'at': 0},
+                    ],
+                    accepted,
+                ),
+                self.price_result(
+                    'a_routed_time_stop_entry_is_held_until_the_offer_reaches_it',
+                    dict(entry, synthetic={'type': 'time_stop', 'minutes': 20}),
+                    [
+                        {'quote': steady, 'at': 0},
+                        {'quote': touched, 'at': 1},
+                    ],
+                    accepted,
+                ),
+                self.price_result(
+                    'a_routed_account_conditional_order_is_held_after_margin_frees_up_even_if_it_falls_again',
+                    dict(entry, synthetic={
+                        'type': 'account_conditional',
+                        'account_field': 'available_balance',
+                        'account_level': 50000,
+                        'trigger_direction': 'at_or_above',
+                    }),
+                    [
+                        {'quote': steady, 'at': 0, 'funds': funds_low},
+                        {'quote': steady, 'at': 1, 'funds': funds_high},
+                        {'quote': touched, 'at': 2, 'funds': funds_low},
+                    ],
+                    accepted,
+                ),
+                self.price_result(
+                    'a_routed_account_conditional_cancel_rests_at_once_since_its_lifetime_only_bounds_a_working_order',
+                    dict(entry, synthetic={
+                        'type': 'account_conditional',
+                        'account_field': 'day_pnl',
+                        'account_level': -5000,
+                        'trigger_direction': 'at_or_below',
+                        'action': 'cancel',
+                    }),
+                    [
+                        {'quote': steady, 'at': 0, 'funds': funds_high},
+                    ],
+                    accepted,
+                ),
+                self.price_result(
+                    'a_routed_limit_if_touched_order_is_held_after_the_touch_until_the_offer_reaches_its_limit',
+                    dict(entry, synthetic={'type': 'limit_if_touched', 'trigger_price': 995, 'limit_price': 990}),
+                    [
+                        {'quote': steady, 'at': 0},
+                        {'quote': below_trigger, 'at': 1},
+                        {'quote': below_trigger, 'at': 2},
+                        {'quote': at_the_limit, 'at': 3},
+                    ],
+                    accepted,
+                ),
+                self.price_result(
+                    'a_routed_limit_if_touched_order_changed_while_held_is_sent_at_its_new_price',
+                    dict(entry, synthetic={'type': 'limit_if_touched', 'trigger_price': 995, 'limit_price': 990}),
+                    [
+                        {'quote': steady, 'at': 0},
+                        {'quote': below_trigger, 'at': 1},
+                        {'quote': below_trigger, 'at': 2},
+                        {
+                            'quote': self.book_at(991.95, 992.00),
+                            'at': 3,
+                            'held_change': {
+                                'price': '992',
+                            },
+                        },
+                    ],
+                    accepted,
+                ),
+                self.price_result(
+                    'a_routed_indicator_triggered_order_is_held_after_its_field_crosses',
+                    dict(entry, synthetic={
+                        'type': 'indicator_triggered',
+                        'watch_field': 'average_price',
+                        'trigger_price': 999,
+                        'limit_price': 995,
+                    }),
+                    [
+                        {'quote': steady, 'at': 0},
+                        {'quote': self.book_at(1000.00, 1000.05) | {'average_price': 998.50}, 'at': 1},
+                        {'quote': self.book_at(994.95, 995.00) | {'average_price': 999.50}, 'at': 2},
+                    ],
+                    accepted,
+                ),
+                self.price_result(
+                    'a_routed_cross_instrument_order_is_held_after_the_watched_instrument_fires',
+                    dict(entry, synthetic={
+                        'type': 'cross_instrument',
+                        'watch_instrument_id': order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['reliance'],
+                        'trigger_price': 995,
+                        'limit_price': 990,
+                    }),
+                    [
+                        {'quote': steady, 'at': 0},
+                        {'quote': below_trigger, 'at': 1},
+                        {'quote': at_the_limit, 'at': 2},
+                    ],
+                    accepted,
+                ),
+                self.price_result(
+                    'a_routed_gtt_order_is_held_after_its_touch_until_the_offer_reaches_its_limit',
+                    dict(entry, synthetic={
+                        'type': 'gtt',
+                        'trigger_price': 995,
+                        'limit_price': 990,
+                        'valid_days': 30,
+                    }),
+                    [
+                        {'quote': steady, 'at': 0},
+                        {'quote': below_trigger, 'at': 1},
+                        {'quote': at_the_limit, 'at': 2},
+                    ],
+                    accepted,
+                    restart_between_ticks=True,
+                ),
+            ]
+        finally:
+            api_configuration['order_plan_types'] = original_plan_types
+            api_configuration['order_hold_limits'] = original_hold_limits
 
     def held_plan_body(self, plan, hold_limits):
         """Body fields giving a plan order a request-level `hold_limits`.
@@ -12667,6 +12856,7 @@ class OrderEngineSuite:
             results.extend(self.run_plan_virtual_limit_checks())
             results.extend(self.run_plan_held_ladder_checks())
             results.extend(self.run_plan_hold_limits_checks())
+            results.extend(self.run_holding_types_checks())
             results.extend(self.run_plan_kept_whole_checks())
             results.extend(self.run_plan_routing_checks())
             results.extend(self.run_plan_join_checks())

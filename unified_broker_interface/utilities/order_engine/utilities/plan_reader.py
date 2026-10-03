@@ -1290,8 +1290,8 @@ class PlanReader:
             return 'it closes or hedges a position at once'
         if not isinstance(pricing, FixedPricing):
             return 'its pricing sets or moves its own price'
-        if pricing.price is not None or pricing.order_type is not None:
-            return 'it is priced at a fixed price of its own rather than the body\'s'
+        if pricing.order_type == 'MARKET':
+            return 'its pricing sends it as a MARKET order'
         if not isinstance(execution, AllAtOnceExecution):
             return 'its execution sends it in pieces'
         if post_only is not None:
@@ -1300,9 +1300,12 @@ class PlanReader:
             return 'it takes a worse price at discretion while it rests'
         if lifetime is not None and lifetime.on_end == 'marketable':
             return 'its lifetime makes it marketable at the end, which an order still held cannot be'
+        if lifetime is not None and lifetime.applies_to == 'working':
+            return 'its lifetime only bounds it once it is working, so it would not end while held'
         if self.body is None:
             return None
-        if str(self.body.get('order_type') or '').strip().upper() != 'LIMIT' or self.body.get('price') is None:
+        priced_by_itself = pricing.price is not None
+        if not priced_by_itself and (str(self.body.get('order_type') or '').strip().upper() != 'LIMIT' or self.body.get('price') is None):
             return 'it is not a LIMIT order with a price'
         validity = overrides.get('validity', self.body.get('validity'))
         if str(validity or 'DAY').strip().upper() == 'IOC':
@@ -1329,7 +1332,7 @@ class PlanReader:
         return False
 
     def _held_at_the_body_price(self, pricing, path):
-        """Checks an order held until its limit is marketable is priced at the body's own limit price.
+        """Checks an order held until its limit is marketable is priced by a fixed limit: the body's own, or a `fixed` pricing's price.
 
         Args:
             pricing (object): The order's pricing.
@@ -1338,9 +1341,9 @@ class PlanReader:
         Returns:
             bool: True when it is, otherwise False with the problem recorded.
         """
-        if isinstance(pricing, FixedPricing) and pricing.price is None and pricing.order_type is None:
+        if isinstance(pricing, FixedPricing) and pricing.order_type != 'MARKET':
             return True
-        self._add_problem(path, 'held_at_the_body_price', 'a limit_marketable order is held at the body\'s own LIMIT price, so it takes no pricing of its own')
+        self._add_problem(path, 'held_at_the_body_price', 'a limit_marketable order is held at a fixed limit price, the body\'s own or a fixed pricing\'s, so it takes no other pricing')
         return False
 
     def _can_fill_on_paper(self, trigger, path):

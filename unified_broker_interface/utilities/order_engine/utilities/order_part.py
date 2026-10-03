@@ -6,6 +6,9 @@ import time
 from unified_broker_interface.utilities.order_engine.utilities.all_at_once_execution import (
     AllAtOnceExecution,
 )
+from unified_broker_interface.utilities.order_engine.utilities.fixed_pricing import (
+    FixedPricing,
+)
 from unified_broker_interface.utilities.order_engine.utilities.follow_instrument_pricing import (
     FollowInstrumentPricing,
 )
@@ -100,7 +103,7 @@ class OrderPart:
         self.spans_days = False
 
     def context(self, plan_order):
-        """The plan order as this order's pricing, execution and trigger see it: on this order's instrument, with its own body values, a Using join's rung price and share, and any price or quantity the caller changed while it was held.
+        """The plan order as this order's pricing, execution and trigger see it: on this order's instrument, with its own body values, a Using join's rung price and share, the limit price of a `fixed` pricing that gives one, and any price or quantity the caller changed while it was held.
 
         Args:
             plan_order (PlanOrder): The plan order.
@@ -123,6 +126,9 @@ class OrderPart:
             body.pop('trigger_price', None)
         if record.get('piece_quantity') is not None:
             body['quantity'] = record['piece_quantity']
+        if isinstance(self.pricing, FixedPricing) and self.pricing.price is not None and self.pricing.order_type != 'MARKET':
+            body['price'] = str(self.pricing.price)
+            body['order_type'] = 'LIMIT'
         if record.get('held_price') is not None:
             body['price'] = record['held_price']
         if record.get('held_quantity') is not None:

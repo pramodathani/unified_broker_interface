@@ -19,6 +19,14 @@ ORDER_FLAGS = (
 )
 HOLDING_TYPES = (
     'ladder',
+    'scheduled',
+    'good_till_time',
+    'time_stop',
+    'account_conditional',
+    'limit_if_touched',
+    'indicator_triggered',
+    'cross_instrument',
+    'gtt',
 )
 
 
