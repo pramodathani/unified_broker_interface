@@ -14,6 +14,9 @@ ORDER_FLAGS = (
     'closes_position',
     'reduce_only',
 )
+HOLDING_PRESETS = (
+    'ladder',
+)
 
 
 class PlanRouting:
@@ -23,15 +26,19 @@ class PlanRouting:
 
     `closes_position` and `reduce_only` are not settings of a type but flags every type reads from the top of its parameters, so they stay there beside the plan rather than going into the preset, which would refuse them as unknown settings.
 
+    A preset in `HOLDING_PRESETS` holds its limit orders in the engine's virtual order book unless its `hold_limits` setting is false. With `UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS` turned off, a routed order of such a type that does not say is given `hold_limits: false`, so the switch turns holding off for routed types as it does for plain limit orders. It is written into the order when the order arrives, so the plan read again after a restart has the same shape even if the setting has changed since.
+
     Attributes:
         type_names (list): The fixed types run as plans.
+        hold_limits (bool): Whether routed types may hold their limit orders, from `UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS`.
     """
 
-    def __init__(self, type_names):
+    def __init__(self, type_names, hold_limits=True):
         """Builds the routing, checking every name.
 
         Args:
             type_names (list): The fixed types to run as plans; empty strings are ignored.
+            hold_limits (bool): Whether routed types may hold their limit orders in the virtual order book.
 
         Returns:
             None: This method returns nothing.
@@ -39,6 +46,7 @@ class PlanRouting:
         Raises:
             ValueError: When a name is not both a fixed synthetic type and a preset.
         """
+        self.hold_limits = hold_limits
         self.type_names = []
         for name in type_names:
             if not name:
@@ -82,7 +90,7 @@ class PlanRouting:
             intent (dict): The intent document.
 
         Returns:
-            dict: The intent to run, with `closes_position` and `reduce_only` kept at the top of the plan's `synthetic` object.
+            dict: The intent to run, with `closes_position` and `reduce_only` kept at the top of the plan's `synthetic` object, and `hold_limits: false` given to a holding preset when holding is turned off and the caller did not say.
         """
         named_type = intent.get('synthetic_type')
         if named_type not in self.type_names:
@@ -94,13 +102,16 @@ class PlanRouting:
         for name in ORDER_FLAGS:
             if name in settings:
                 flags[name] = settings.pop(name)
+        preset_name = self.preset_name(named_type)
+        if not self.hold_limits and preset_name in HOLDING_PRESETS and 'hold_limits' not in settings:
+            settings['hold_limits'] = False
         synthetic = {
             'type': 'plan',
             'plan': {
                 'order': {
                     'presets': [
                         {
-                            self.preset_name(named_type): settings,
+                            preset_name: settings,
                         },
                     ],
                 },

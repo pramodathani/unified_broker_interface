@@ -342,9 +342,10 @@ The table below shows which orders are held.
 | `LIMIT` with `"synthetic": {"type": "simple"}` | No, sent at once |
 | `LIMIT` with `IOC` validity, which means trade now or never | No, sent at once |
 | `MARKET`, `SL`, `SL-M`, or a `LIMIT` priced only by `price_reference` | No, sent at once |
+| A `ladder` run as a plan, unless it gives `hold_limits: false` | Each rung is held until the market reaches it |
 | Any order naming another `synthetic` type | Run as that type |
 
-The setting `UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS`, on by default, turns this off for every order.
+The setting `UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS`, on by default, turns this off for every order, and for the rungs of a `ladder` run as a plan.
 
 ### Request parameters
 

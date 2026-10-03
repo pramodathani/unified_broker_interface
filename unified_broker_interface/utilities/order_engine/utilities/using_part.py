@@ -48,7 +48,7 @@ class UsingPart(TogetherPart):
         return self.execution.slice_quantities(total, {})
 
     def start(self, plan_order, target, started_at, quotes):
-        """Starts every copy with its piece's share, and for a ladder its rung's price.
+        """Starts every copy with its piece's share, and for a ladder its rung's price and share, which a rung held on a `limit_marketable` trigger is then held at.
 
         Args:
             plan_order (PlanOrder): The plan order.
@@ -73,7 +73,9 @@ class UsingPart(TogetherPart):
                 main = self.mains[index]
                 record = plan_order.part_record(main.path)
                 record['piece_price'] = str(prices[index])
-                plan_order.set_part_record(main.path, record, f'the plan\'s {main.path} part is rung {index + 1}, at {prices[index]}')
+                record['piece_quantity'] = shares[index]
+                plan_order.set_part_record(main.path, record, f'the plan\'s {main.path} part is rung {index + 1}, {shares[index]} at {prices[index]}')
+                main.refresh_held_terms(plan_order)
             placed = placed + child.start(plan_order, shares[index], started_at, quotes)
         return placed
 

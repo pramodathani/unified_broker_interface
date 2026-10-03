@@ -1,0 +1,6 @@
+holding on, caller says nothing: {'from_price': 1000, 'to_price': 995, 'steps': 3}
+holding on, caller says false: {'from_price': 1000, 'to_price': 995, 'steps': 3, 'hold_limits': False}
+holding on, caller says true: {'from_price': 1000, 'to_price': 995, 'steps': 3, 'hold_limits': True}
+holding off, caller says nothing: {'from_price': 1000, 'to_price': 995, 'steps': 3, 'hold_limits': False}
+holding off, caller says false: {'from_price': 1000, 'to_price': 995, 'steps': 3, 'hold_limits': False}
+holding off, caller says true: {'from_price': 1000, 'to_price': 995, 'steps': 3, 'hold_limits': True}

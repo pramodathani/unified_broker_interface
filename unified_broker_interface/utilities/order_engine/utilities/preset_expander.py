@@ -147,6 +147,12 @@ JOIN_PRESET_NAMES = (
     'scale_out',
     'strategy_stop',
 )
+LADDER_SETTINGS = (
+    'from_price',
+    'to_price',
+    'steps',
+    'hold_limits',
+)
 BACKSTOP_SETTINGS = (
     'backstop_price',
     'backstop_limit_price',
@@ -267,14 +273,7 @@ class PresetExpander:
         if name == 'virtual_limit':
             return self._virtual_limit(settings, path)
         if name == 'ladder':
-            self._refuse_unknown(settings, ('from_price', 'to_price', 'steps'), path, 'ladder')
-            return {
-                'execution': [
-                    {
-                        'ladder': dict(settings),
-                    },
-                ],
-            }
+            return self._ladder(settings, path)
         if name == 'freeze_slicer':
             self._refuse_unknown(settings, (), path, 'freeze_slicer')
             return {
@@ -314,9 +313,11 @@ class PresetExpander:
             settings (dict): The preset's settings.
 
         Returns:
-            bool: True for `accumulation`, `attached_hedge`, `legged_spread`, `two_sided_breakout`, `basket`, `oca`, `oto`, `oco`, `bracket`, `cover`, a `hidden_stop` with a backstop, and a `stop_and_reverse` that closes before it reverses.
+            bool: True for `accumulation`, `attached_hedge`, `legged_spread`, `two_sided_breakout`, `basket`, `oca`, `oto`, `oco`, `bracket`, `cover`, a `hidden_stop` with a backstop, a `stop_and_reverse` that closes before it reverses, and a `ladder` that holds its rungs.
         """
         if name in JOIN_PRESET_NAMES:
+            return True
+        if name == 'ladder' and settings.get('hold_limits', True) is not False:
             return True
         if name == 'stop_and_reverse' and settings.get('method', 'sequential') == 'sequential':
             return True
@@ -367,6 +368,8 @@ class PresetExpander:
             return self._strategy_stop(settings, entry, path)
         if name == 'stop_and_reverse':
             return self._sequential_reverse(settings, entry, path)
+        if name == 'ladder':
+            return self._held_ladder(settings, entry, path)
         return self._hidden_stop_with_backstop(settings, entry, path, name)
 
     def _candidate_orders(self, settings, entry, path, name):
@@ -1800,6 +1803,105 @@ class PresetExpander:
                 },
             },
         }
+
+    def _ladder(self, settings, path):
+        """Sends every rung of the ladder at once, which is what `hold_limits: false` asks for.
+
+        A ladder that holds its rungs is a join built by `expand_join`.
+
+        Args:
+            settings (dict): `from_price`, `to_price`, `steps` and `hold_limits: false`.
+            path (str): The preset's path.
+
+        Returns:
+            dict: A `ladder` execution with the rung settings.
+        """
+        self._refuse_unknown(settings, LADDER_SETTINGS, path, 'ladder')
+        return {
+            'execution': [
+                {
+                    'ladder': self._without(settings, 'hold_limits'),
+                },
+            ],
+        }
+
+    def _held_ladder(self, settings, entry, path):
+        """Splits the order into its rungs and holds each rung in the engine until the other side of the book reaches the rung's own price.
+
+        Args:
+            settings (dict): `from_price`, `to_price` and `steps`, and optionally `hold_limits: true`.
+            entry (dict): The order it was named in, which every rung copies.
+            path (str): The preset's path.
+
+        Returns:
+            dict: A Using join of the ladder whose every piece is a virtual limit; empty when there are problems.
+        """
+        self._refuse_unknown(settings, LADDER_SETTINGS, path, 'ladder')
+        hold_limits = settings.get('hold_limits', True)
+        if hold_limits is not True:
+            self._add_problem(path, 'bad_setting', f'hold_limits is true or false, not {hold_limits!r}')
+        slot_names = self._slot_names(entry)
+        if 'execution' in slot_names:
+            self._add_problem(
+                path,
+                'held_ladder_execution',
+                'a ladder that holds its rungs sends each rung as an order of its own, so the order takes no other execution; set hold_limits to false to send the rungs at once instead',
+            )
+        if 'guards' in slot_names:
+            self._add_problem(
+                path,
+                'held_ladder_post_only',
+                'a ladder that holds its rungs sends a rung only once it would trade at once, which a post-only guard refuses; set hold_limits to false to rest the rungs at the broker instead',
+            )
+        if self.problems:
+            return {}
+        order = dict(entry)
+        order['execution'] = [
+            {
+                'ladder': self._without(settings, 'hold_limits'),
+            },
+        ]
+        return {
+            'using': {
+                'order': order,
+                'each_piece': {
+                    'presets': [
+                        {
+                            'virtual_limit': {},
+                        },
+                    ],
+                },
+            },
+        }
+
+    def _slot_names(self, entry):
+        """The slots an order sets, by its own values and through every preset it names that is not a join.
+
+        Args:
+            entry (dict): The order, with its other presets under `presets`.
+
+        Returns:
+            set: The slot names, such as `execution` and `guards`.
+        """
+        names = set()
+        for name in entry:
+            if name != 'presets':
+                names.add(name)
+        presets = entry.get('presets')
+        if not isinstance(presets, list):
+            return names
+        for preset in presets:
+            if not isinstance(preset, dict):
+                continue
+            for name, settings in preset.items():
+                if name not in PRESET_NAMES or not isinstance(settings, dict):
+                    continue
+                if self.is_join(name, settings):
+                    continue
+                slots = PresetExpander(self.opening_side).expand(name, settings, '')
+                for slot_name in slots:
+                    names.add(slot_name)
+        return names
 
     def _without(self, settings, name):
         """A copy of settings without one of them.

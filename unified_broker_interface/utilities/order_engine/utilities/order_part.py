@@ -100,7 +100,7 @@ class OrderPart:
         self.spans_days = False
 
     def context(self, plan_order):
-        """The plan order as this order's pricing, execution and trigger see it: on this order's instrument, with its own body values, a Using join's rung price, and any price or quantity the caller changed while it was held.
+        """The plan order as this order's pricing, execution and trigger see it: on this order's instrument, with its own body values, a Using join's rung price and share, and any price or quantity the caller changed while it was held.
 
         Args:
             plan_order (PlanOrder): The plan order.
@@ -121,6 +121,8 @@ class OrderPart:
             body['order_type'] = 'LIMIT'
             body.pop('price_reference', None)
             body.pop('trigger_price', None)
+        if record.get('piece_quantity') is not None:
+            body['quantity'] = record['piece_quantity']
         if record.get('held_price') is not None:
             body['price'] = record['held_price']
         if record.get('held_quantity') is not None:
@@ -308,6 +310,34 @@ class OrderPart:
         if 'trigger' not in memory:
             memory['trigger'] = {}
         self.trigger.prepare(self.context(plan_order), memory['trigger'])
+
+    def refresh_held_terms(self, plan_order):
+        """Rewrites the terms a `limit_marketable` trigger holds this order at, after a Using join has given it a rung's price and share.
+
+        The trigger writes its terms when the plan is placed, before the join has divided the order into rungs, so without this every rung would be held at the whole order's price and quantity in the virtual order book's queue estimate.
+
+        Args:
+            plan_order (PlanOrder): The plan order.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        record = plan_order.part_record(self.path)
+        memory = record.get('memory') or {}
+        trigger_memory = memory.get('trigger') or {}
+        terms = trigger_memory.get('held')
+        if not isinstance(terms, dict):
+            return
+        body = self.context(plan_order).body
+        terms = dict(terms)
+        terms['price'] = str(body.get('price'))
+        terms['quantity'] = body.get('quantity')
+        trigger_memory = dict(trigger_memory)
+        trigger_memory['held'] = terms
+        memory = dict(memory)
+        memory['trigger'] = trigger_memory
+        record['memory'] = memory
+        plan_order.set_part_record(self.path, record, None)
 
     def is_triggered(self, plan_order, memory, quotes, now):
         """Whether the trigger holds on this tick.
