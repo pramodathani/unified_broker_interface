@@ -1,6 +1,6 @@
 """Shows the two shapes of the ladder preset: holding each rung until the market reaches it, and sending every rung at once.
 
-The plan reader tells the expander whether the order the ladder is named in is held. When it is, or when the ladder's own `hold_limits` is true, the `ladder` preset stands for a join: a Using join of the `ladder` execution whose every rung is a `virtual_limit`, so each rung waits in the engine until the other side of the book reaches its own price. Otherwise, or with `hold_limits: false`, it stands for the `ladder` execution alone, which sends every rung at once. A held ladder refuses another execution and a post-only guard beside it, and `hold_limits` must be true or false. Nothing is read from Redis or sent anywhere.
+The plan reader tells the expander whether the order the ladder is named in is held. When it is, or when the ladder's own `hold_limits` is true, the `ladder` preset stands for a join: a Using join of the `ladder` execution whose every rung is a `virtual_limit`, so each rung waits in the engine until the other side of the book reaches its own price. Otherwise, or with `hold_limits: false`, it stands for the `ladder` execution alone, which sends every rung at once. A held ladder refuses another execution and a post-only guard beside it, which `slot_names` finds among the order's own values and its other presets, and `hold_limits` must be true or false. Nothing is read from Redis or sent anywhere.
 
 Run it from the project root:
 
@@ -88,6 +88,17 @@ class LadderThatHoldsItsRungsExample:
             True,
         )
         self.show('hold_limits of no', dict(self.rungs, hold_limits='no'), {}, False)
+        twap_entry = {
+            'presets': [
+                {
+                    'twap': {
+                        'slices': 2,
+                        'over_minutes': 1,
+                    },
+                },
+            ],
+        }
+        print('slots the order beside the ladder sets:', sorted(PresetExpander('BUY').slot_names(twap_entry)))
 
 
 if __name__ == '__main__':

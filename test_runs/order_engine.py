@@ -3304,6 +3304,19 @@ class OrderEngineSuite:
                 'hold_limits': True,
             },
         }
+        direct_ladder = {
+            'order': {
+                'execution': [
+                    {
+                        'ladder': {
+                            'from_price': 1000,
+                            'to_price': 995,
+                            'steps': 3,
+                        },
+                    },
+                ],
+            },
+        }
         rise_then_fall = [
             {'quote': steady, 'at': 0},
             {'quote': self.book_at(1004.95, 1005.00), 'at': 1},
@@ -3389,6 +3402,17 @@ class OrderEngineSuite:
                 rise_then_fall,
                 accepted,
                 restart_between_ticks=True,
+            ),
+            self.plan_price_result(
+                'a_plan_order_with_a_ladder_execution_of_its_own_is_held_rung_by_rung',
+                direct_ladder,
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': touched, 'at': 1},
+                    {'quote': self.book_at(997.45, 997.50), 'at': 2},
+                ],
+                accepted,
+                body_overrides=dict(self.held_plan_body(direct_ladder, True), quantity=9),
             ),
             self.plan_price_result(
                 'a_plan_requests_hold_limits_must_be_true_or_false',
@@ -3761,6 +3785,32 @@ class OrderEngineSuite:
                     ],
                     numbered,
                     book_every_order=True,
+                ),
+                self.plan_price_result(
+                    'a_plan_scale_with_profit_taker_records_what_a_resting_rung_would_have_filled',
+                    {
+                        'order': {
+                            'presets': [
+                                {
+                                    'scale_with_profit_taker': {
+                                        'from_price': 1000,
+                                        'to_price': 990,
+                                        'steps': 3,
+                                        'profit_points': 4,
+                                    },
+                                },
+                            ],
+                            'hold_limits': True,
+                        },
+                    },
+                    [
+                        {'quote': steady, 'at': 0, 'estimate': {'queue_filled': 2, 'filled': 2}},
+                        {'quote': touched, 'at': 1},
+                    ],
+                    numbered,
+                    body_overrides={
+                        'quantity': 9,
+                    },
                 ),
                 self.plan_price_result(
                     'a_plan_grid_asked_to_hold_by_its_own_order_is_refused',
@@ -9758,7 +9808,7 @@ class OrderEngineSuite:
         return result
 
     def seed_estimate(self, estimate):
-        """Writes a queue estimate for every parent, as `bin/unified/orders/virtual_book` would.
+        """Writes a queue estimate for every parent, every part of a plan and every rung of a scale with profit-taker, as `bin/unified/orders/virtual_book` would.
 
         Args:
             estimate (dict): The estimate's fields.
@@ -9771,8 +9821,12 @@ class OrderEngineSuite:
         for parent_order_id, document in stored.items():
             estimates[parent_order_id] = json.dumps(estimate)
             parts = (json.loads(document).get('parameters') or {}).get('parts') or {}
-            for path in parts:
+            for path, record in parts.items():
                 estimates[VirtualBook.part_key(parent_order_id, path)] = json.dumps(estimate)
+                rungs = ((record or {}).get('own_memory') or {}).get('rungs') or []
+                for index, rung in enumerate(rungs):
+                    rung_key = VirtualBook.part_key(parent_order_id, VirtualBook.rung_path(path, index, rung.get('cycles') or 0))
+                    estimates[rung_key] = json.dumps(estimate)
 
     def tick_at(self, ticker, moment):
         """Runs one tick as though it were `moment`.

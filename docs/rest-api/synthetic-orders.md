@@ -1225,7 +1225,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | A leg of a Together join with `group_margin`, as in a basket | Never; asking for it on the leg is refused |
     | A `MARKET` order, an `IOC` or after-market order, or one priced by a pricing other than `fixed` | No; asking for it on the order is refused with the reason |
     | An order sent in pieces, with a post-only guard or discretion, in the pre-open or on paper, whose lifetime ends `marketable`, or whose lifetime bounds it only once it is `working` | No; asking for it on the order is refused with the reason |
-    | A `ladder` preset in a held order | Each rung is held at its own price, as under [`ladder`](#ladder) |
+    | A `ladder` preset in a held order, or an order whose own execution is one `ladder` with no pricing, guards or venue | Each rung is held at its own price, as under [`ladder`](#ladder) |
 
     These types are held by default when they are run as plans, because each sends one limit order whose only job is to rest until the market reaches it. Each one is held from the moment it would have been sent:
 
@@ -1246,7 +1246,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | `oca` | Placing | Nothing; every candidate is held |
     | `scale_with_profit_taker` | Placing, and again each time a rung's profit has been taken | Every profit-taker |
 
-    A held `scale_with_profit_taker` keeps each rung pending in the engine and places it when the other side of the book reaches the rung's price, on a quote that is not stale; its profit-takers rest at the broker as soon as their rung fills, and a rung whose profit is taken is held again rather than placed again at once. It answers <span class="status s2">202</span> with nothing placed, is not done while a rung is pending, and a rung the market never reaches costs nothing. Its rungs have no queue estimate, so no `missed_quantity` is recorded for them. A `grid` or `two_sided_quote` whose own order asks for holding is refused with `not_holdable`, since resting at the broker is what they are for.
+    A held `scale_with_profit_taker` keeps each rung pending in the engine and places it when the other side of the book reaches the rung's price, on a quote that is not stale; its profit-takers rest at the broker as soon as their rung fills, and a rung whose profit is taken is held again rather than placed again at once. It answers <span class="status s2">202</span> with nothing placed, is not done while a rung is pending, and a rung the market never reaches costs nothing. The virtual book follows each pending rung, and a rung placed records what a resting rung would have filled as `missed_quantity` beside it in the part's `own_memory`. A `grid` or `two_sided_quote` whose own order asks for holding is refused with `not_holdable`, since resting at the broker is what they are for.
 
     A held `gtt` differs in one way from today's: once touched, today's sends a `DAY` limit that the exchange cancels at the close, while a held one keeps waiting in the engine for its limit, across days, until its `valid_days` runs out.
 

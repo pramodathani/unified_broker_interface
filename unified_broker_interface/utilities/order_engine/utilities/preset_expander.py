@@ -1846,7 +1846,7 @@ class PresetExpander:
         hold_limits = settings.get('hold_limits', True)
         if hold_limits is not True:
             self._add_problem(path, 'bad_setting', f'hold_limits is true or false, not {hold_limits!r}')
-        slot_names = self._slot_names(entry)
+        slot_names = self.slot_names(entry)
         if 'execution' in slot_names:
             self._add_problem(
                 path,
@@ -1880,7 +1880,7 @@ class PresetExpander:
             },
         }
 
-    def _slot_names(self, entry):
+    def slot_names(self, entry):
         """The slots an order sets, by its own values and through every preset it names that is not a join.
 
         Args:

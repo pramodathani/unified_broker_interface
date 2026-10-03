@@ -10,3 +10,4 @@ held beside post_only: join=True
   refused, held_ladder_post_only: a ladder that holds its rungs sends a rung only once it would trade at once, which a post-only guard refuses; set hold_limits to false to rest the rungs at the broker instead
 hold_limits of no: join=True
   refused, bad_setting: hold_limits is true or false, not 'no'
+slots the order beside the ladder sets: ['execution']

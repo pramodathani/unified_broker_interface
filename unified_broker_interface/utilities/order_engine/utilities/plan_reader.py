@@ -854,6 +854,9 @@ class PlanReader:
             if not tree:
                 return None
             return self._read_node(tree, path, keeps_tag)
+        held_ladder = self._held_ladder_tree(order, path)
+        if held_ladder is not None:
+            return self._read_node(held_ladder, path, keeps_tag)
         problems_before = len(self.problems)
         for setting in order:
             if setting not in ORDER_SETTINGS:
@@ -1251,6 +1254,66 @@ class PlanReader:
             )
             return False
         return True
+
+    def _held_ladder_tree(self, order, path):
+        """The Using join a held order with a `ladder` execution of its own stands for, or None when it is not one.
+
+        A ladder sent as one order would be held at the body's price and then send every rung at once. Held rung by rung, as the `ladder` preset holds them, each rung waits for the market to reach its own price. Only an order with nothing that a held rung could not take is turned into the join: one `ladder` execution, and no pricing, guards, venue, other execution or kept-whole preset (a join preset has already been read as its join); otherwise it is read as it stands, and the holding rule says why it is not held.
+
+        Args:
+            order (dict): The order as the caller wrote it.
+            path (str): Where the order sits in the plan.
+
+        Returns:
+            dict | None: The Using join, as a caller would write it, or None.
+        """
+        execution = order.get('execution')
+        if not isinstance(execution, list) or len(execution) != 1:
+            return None
+        if not isinstance(execution[0], dict) or list(execution[0]) != ['ladder']:
+            return None
+        if isinstance(order.get('hold_limits'), bool):
+            wanted = order['hold_limits']
+        else:
+            wanted = self.hold_limits is True and not self._follow_on and not self._grouped and order.get('side') != 'protect'
+        if not wanted or self._grouped:
+            return None
+        for slot in ('pricing', 'guards', 'venue'):
+            if slot in order:
+                return None
+        expander = PresetExpander(self.opening_side, False)
+        slot_names = expander.slot_names(self._without_execution(order))
+        for slot in ('pricing', 'guards', 'venue', 'execution', 'whole'):
+            if slot in slot_names:
+                return None
+        rungs_order = self._without_execution(order)
+        rungs_order.pop('hold_limits', None)
+        rungs_order['execution'] = execution
+        return {
+            'using': {
+                'order': rungs_order,
+                'each_piece': {
+                    'presets': [
+                        {
+                            'virtual_limit': {},
+                        },
+                    ],
+                },
+            },
+        }
+
+    def _without_execution(self, order):
+        """A copy of an order without its execution.
+
+        Args:
+            order (dict): The order.
+
+        Returns:
+            dict: The copy.
+        """
+        copied = dict(order)
+        copied.pop('execution', None)
+        return copied
 
     def _wants_holding(self, order, side, path):
         """Whether an order is asked to be held in the virtual order book, by itself or by the request.
