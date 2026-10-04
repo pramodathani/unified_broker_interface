@@ -112,3 +112,9 @@ A sequential `stop_and_reverse` used to name its reverse side from the body: a B
 `set_target` used to ignore a part that was `done`. An OTO's second order or a bracket's exits that had filled, or been cut to nothing, stayed done when the entry filled further, which happens when an entry fill beats the entry's cancel, so the extra quantity had no exit. `_grow_finished` reopens such a part for the difference between the new target and what it has traded. It only reopens a part that has sent a broker order before: the exits of an entry cancelled before it filled are `done` with reason `cancelled` and their target set, and reopening them sent exits for a position that never existed (`a_plan_bracket_entry_cancelled_while_it_rests_drops_its_exits`).
 
 `_opening_side` reads the net side of the opening legs, because a breakout's first part has a buy and a sell, and the side of whichever was listed first is not the side of the position.
+
+## Stop types (2026-10-04)
+
+`settle` marks a working part that is `ended` and has no broker orders done as `cancelled`. `done_reason` answers None when there are no legs, so a daily stop cancelled before its first morning stayed working and its parent stayed `received` for ever.
+
+`move` also writes the pricing memory with an event when a new bar starts, so an average range trail keeps its closed bars across a restart (see `bar_builder.py.md`).

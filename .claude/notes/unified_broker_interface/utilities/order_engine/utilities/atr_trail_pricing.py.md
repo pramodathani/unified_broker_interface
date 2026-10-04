@@ -11,3 +11,7 @@ The bars change on every tick and are recorded with an event only when the stop 
 ## The design's `trail` with `atr`
 
 The design lists `atr` as a third way to give a trail's distance. The reader keeps that shape: `trail` with an `atr` object, which needs `points` as the fallback and refuses `percent`.
+
+## 2026-10-04
+
+The restart limitation above is fixed: the pricing memory is now written with an event whenever a new bar starts (see `bar_builder.py.md`). The trigger can no longer move through the market as the range shrinks (see `trail_pricing.py.md`).

@@ -152,3 +152,11 @@ A part that closes positions refuses a change to its price or quantity with 409.
 `_pin_to_holding_broker` exists because an OCO's exits were sent to whichever broker the selector picked. A sell at a broker that holds nothing opens a short there rather than closing the long elsewhere. A position split across brokers cannot be protected by one order at one broker, and an order larger than the share held could fill past flat, so both are refused with 409 rather than sent. It sets `body['broker']` only when the caller named none.
 
 A plan whose only order was accepted and then rejected by the exchange stayed `working` for ever, because `ALLOWED_CHANGES` had no `working` to `rejected` step and `_finish_if_done` could not move it. See `parent_order.py.md`.
+
+## Stop types (2026-10-04)
+
+`_send_paced` wraps `send_due` on both tick paths. A daily stop sends on a clock tick, and a refusal from the placement there used to reach `ClockTicker`, which logged "failed on a clock tick" and retried every second for ever while the parent sat in `received` and the position was unprotected. A permanent refusal now ends the part through `_end_refused`, as `_fire_waiting` already did for triggered parts.
+
+`_refuse_off_tick_prices` now also checks parts whose execution is paced by ticks, so the daily stop's off-tick price is caught on arrival with 400 rather than at 09:20 the next morning.
+
+`_fire_waiting` writes the trigger memory with an event in two more cases: when a new bar starts (`BarBuilder.started_another`) and when a candle close trigger's bar in progress moves to the other side of its level (`closing_past`). Recovery rebuilds parents from events only, so without these a restart lost every bar. Writing on every tick would cost an event a second per order; once per bar plus once per crossing is enough, because a candle stop judges only the bar in progress and that bar's close is on the side last recorded.

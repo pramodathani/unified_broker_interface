@@ -10,7 +10,7 @@ from unified_broker_interface.utilities.order_engine.utilities.bar_builder impor
 class CandleClosesCondition:
     """A plan order's trigger condition that holds when a bar built from the engine's own ticks closes past `level`, rather than when any tick touches it.
 
-    It keeps the rules of today's candle close stop. A spike through a level on a thin book is not the market settling past it, so the condition answers at most once per bar, at its close, and does nothing on the ticks between. The bars are `bar_minutes` long, built from the last traded price, aligned to the clock, and kept in the condition's memory, so nothing is known until the first bar after the order rests has closed. With no direction, a long, opened with a BUY, waits for a close at or below the level, and a short for one at or above it.
+    It keeps the rules of today's candle close stop. A spike through a level on a thin book is not the market settling past it, so the condition answers at most once per bar, at its close, and does nothing on the ticks between. The bars are `bar_minutes` long, built from the last traded price, aligned to the clock, and kept in the condition's memory. The bar the order is placed in counts as a bar, though it holds only the ticks since then, so the first answer comes at the next clock boundary, which can be seconds away. With no direction, a long, opened with a BUY, waits for a close at or below the level, and a short for one at or above it.
 
     Attributes:
         level (decimal.Decimal): The level a close must reach.
@@ -79,6 +79,8 @@ class CandleClosesCondition:
     def is_met(self, plan_order, memory, quotes, now, opening_side, sending_side):
         """Whether the bar that has just closed closed past the level.
 
+        It also keeps `closing_past`, whether the bar in progress would hold if it closed at this price. The plan records the memory with an event when that changes, so an engine restarted late in a bar still knows which side of the level the bar was closing on, without an event on every tick.
+
         Args:
             plan_order (OrderContext): The order's view of the plan order, which reads quotes into prices.
             memory (dict): The condition's memory, holding the bars, changed in place.
@@ -96,13 +98,26 @@ class CandleClosesCondition:
             return False
         if 'bars' not in memory:
             memory['bars'] = {}
+        direction = self.effective_direction(opening_side)
         closed = BarBuilder(memory['bars'], self.bar_minutes * 60).add(price, now)
+        memory['closing_past'] = self.is_past(price, direction)
         if closed is None:
             return False
-        close = decimal.Decimal(str(closed['close']))
-        if self.effective_direction(opening_side) == 'at_or_above':
-            return close >= self.level
-        return close <= self.level
+        return self.is_past(decimal.Decimal(str(closed['close'])), direction)
+
+    def is_past(self, price, direction):
+        """Whether a price is at or past the level, the way a close has to be.
+
+        Args:
+            price (decimal.Decimal): The price.
+            direction (str): `at_or_above` or `at_or_below`.
+
+        Returns:
+            bool: True when it is.
+        """
+        if direction == 'at_or_above':
+            return price >= self.level
+        return price <= self.level
 
     def described(self):
         """This condition as a dry run shows it.

@@ -11,6 +11,9 @@ from unified_broker_interface.utilities.order_engine.base import (
     OUTCOME_PARENT_STATES,
     SyntheticOrder,
 )
+from unified_broker_interface.utilities.order_engine.utilities.bar_builder import (
+    BarBuilder,
+)
 from unified_broker_interface.utilities.order_engine.utilities.either_part import (
     EitherPart,
 )
@@ -260,7 +263,7 @@ class PlanOrder(SyntheticOrder):
     def _refuse_off_tick_prices(self, root):
         """Refuses a price on the parent's instrument that is not a whole number of ticks, when it belongs to an order sent later, before anything is recorded.
 
-        An order sent at once is refused by the placement straight away, but one behind a trigger, or an exit that follows an entry, would be refused only when its turn came: long after the caller was told it was armed, and for an exit, after the position it should protect is open. Fixed limits, stop triggers and limits, and a scale out's targets and stop are checked. The tick size is the one `remember_tick_size` read, or, when the plan reads no prices, the brokers' agreed tick read once here and kept on the parent the same way, so a price worked out later, such as a scale out's breakeven stop, can be rounded to it.
+        An order sent at once is refused by the placement straight away, but one behind a trigger, an exit that follows an entry, or one paced over later ticks, such as a daily stop, would be refused only when its turn came: long after the caller was told it was armed, and for an exit, after the position it should protect is open. Fixed limits, stop triggers and limits, and a scale out's targets and stop are checked. The tick size is the one `remember_tick_size` read, or, when the plan reads no prices, the brokers' agreed tick read once here and kept on the parent the same way, so a price worked out later, such as a scale out's breakeven stop, can be rounded to it.
 
         Args:
             root (object): The root part.
@@ -273,7 +276,7 @@ class PlanOrder(SyntheticOrder):
         """
         tick_size = self.tick_size()
         for part in root.order_parts():
-            if part.trigger is None and not part.opened_by:
+            if part.trigger is None and not part.opened_by and not part.execution.paced_by_ticks():
                 continue
             if not part.context(self).is_parents_instrument():
                 continue
@@ -700,7 +703,10 @@ class PlanOrder(SyntheticOrder):
         placed, memory_changed, ended = self._fire_waiting(root, waiting_paths, quotes, now, False)
         for part in root.order_parts():
             if part.path in paced_paths:
-                placed = placed + part.send_due(self, None, quotes, now)
+                sent, refused = self._send_paced(part, quotes, now)
+                placed = placed + sent
+                if refused:
+                    ended = True
         moved = False
         for part in root.order_parts():
             if part.path in moving_paths and part.move(self, quotes, now):
@@ -717,10 +723,34 @@ class PlanOrder(SyntheticOrder):
         self.save()
         return True
 
+    def _send_paced(self, part, quotes, now):
+        """Sends what a paced part has due on this tick, ending the part when the placement refuses it for good.
+
+        A paced part, such as a daily stop, sends on a later tick rather than when it starts. A refusal that sending again cannot cure, such as a price off the tick or a product the broker does not offer, used to escape to the ticker, which logged it and tried again a second later, for ever, while the order the caller was told was armed never reached a broker.
+
+        Args:
+            part (object): The order part.
+            quotes (dict): The quotes the tick carried.
+            now (float): The tick's time.
+
+        Returns:
+            tuple: The `(path, answer, status)` entries placed (list), and whether the part was ended by a refusal (bool).
+
+        Raises:
+            RefusedRequestError: For a refusal that may pass on a later tick.
+        """
+        try:
+            return part.send_due(self, None, quotes, now), False
+        except RefusedRequestError as refusal:
+            if refusal.status not in PERMANENT_REFUSAL_STATUSES:
+                raise
+            self._end_refused(part, refusal)
+            return [], True
+
     def _fire_waiting(self, root, waiting_paths, quotes, now, timed_only):
         """Sends every waiting order whose trigger holds now.
 
-        An order whose join cancels before sending is sent only once every sibling's resting order has been cancelled; otherwise it tries again on the next tick. A paper order is never sent; it takes whatever more its queue estimate has filled. An order held after a trigger of its own records an event when that trigger fires, so a restart keeps it held rather than waiting for the trigger again; other changes to a trigger's memory are kept only in the parameters. An order held until its limit is marketable records, as it fires, how much a resting order would have filled while it was held, as `missed_quantity`.
+        An order whose join cancels before sending is sent only once every sibling's resting order has been cancelled; otherwise it tries again on the next tick. A paper order is never sent; it takes whatever more its queue estimate has filled. An order held after a trigger of its own records an event when that trigger fires, so a restart keeps it held rather than waiting for the trigger again; so does a trigger whose bars start a new bar, once per bar, and a candle close trigger whose bar in progress moves to the other side of its level; other changes to a trigger's memory are kept only in the parameters. An order held until its limit is marketable records, as it fires, how much a resting order would have filled while it was held, as `missed_quantity`.
 
         Args:
             root (object): The root part.
@@ -747,14 +777,21 @@ class PlanOrder(SyntheticOrder):
                 if part.venue.fill(self, part):
                     ended = True
                 continue
-            memory = copy.deepcopy(record.get('memory') or {})
-            fired_before = ((record.get('memory') or {}).get('trigger') or {}).get('fired') is True
+            record_memory_before = record.get('memory') or {}
+            memory = copy.deepcopy(record_memory_before)
+            fired_before = (record_memory_before.get('trigger') or {}).get('fired') is True
             triggered = part.is_triggered(self, memory, quotes or {}, now)
-            if memory != (record.get('memory') or {}):
+            if memory != record_memory_before:
                 record['memory'] = memory
+                trigger_before = record_memory_before.get('trigger') or {}
+                trigger_now = memory.get('trigger') or {}
                 message = None
-                if not fired_before and (memory.get('trigger') or {}).get('fired') is True:
+                if not fired_before and trigger_now.get('fired') is True:
                     message = f'the plan\'s {part.path} part\'s own trigger fired, so it is held until the other side of the book reaches its price'
+                elif BarBuilder.started_another(trigger_before.get('bars'), trigger_now.get('bars')):
+                    message = f'the plan\'s {part.path} part\'s trigger started a new bar'
+                elif trigger_before.get('closing_past') != trigger_now.get('closing_past'):
+                    message = f'the plan\'s {part.path} part\'s bar in progress is now closing on the other side of its level'
                 self.set_part_record(part.path, record, message)
                 memory_changed = True
             if not triggered:
@@ -844,7 +881,10 @@ class PlanOrder(SyntheticOrder):
                 except RefusedRequestError as refusal:
                     self.logger.warning(f'Parent {self.parent.parent_order_id} could not read the quotes to send {part.path}: {refusal.body.get("error")}')
                     continue
-            placed = placed + part.send_due(self, None, quotes, now)
+            sent, refused = self._send_paced(part, quotes, now)
+            placed = placed + sent
+            if refused:
+                ended = True
         if not placed and not ended:
             if memory_changed:
                 self.save()

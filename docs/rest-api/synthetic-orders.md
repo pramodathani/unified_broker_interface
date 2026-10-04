@@ -782,7 +782,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `daily_stop`
 
-    A daily stop places a fresh native stop every trading morning at `arm_at` for a position held overnight, and answers `202 armed` with `first_arm_on`, the first date it will place one. It never arms on a weekend or an exchange holiday, and an order sent after that day's `arm_at` first arms on the next trading day. If the market has already gapped through the stop, no stop is placed; the position is exited with a limit priced past the touch instead. It stops re-arming after `valid_days`, counted in calendar days, and ends `completed` as soon as any stop has traded, because the position it protected is then closed.
+    A daily stop places a fresh native stop every trading morning at `arm_at` for a position held overnight, and answers `202 armed`. It never arms on a weekend or an exchange holiday, and an order sent after that day's `arm_at` first arms on the next trading day. If the market has already gapped through the stop, no stop is placed; the position is exited with a limit priced past the touch instead. It stops re-arming after `valid_days`, counted in 24-hour periods from when the order was placed, and ends `completed` as soon as any stop has traded, because the position it protected is then closed; a stop that fills only partly therefore leaves the rest unprotected from the next morning. A change you make to the day's stop lasts that day only, since the next morning's stop is placed at `stop_price` again. A stop price off the tick is refused with <span class="status s4">400</span> when the order is placed.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
