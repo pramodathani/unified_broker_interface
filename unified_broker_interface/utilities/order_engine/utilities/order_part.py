@@ -946,10 +946,30 @@ class OrderPart:
         reason = self.done_reason(plan_order.parent)
         if reason is None:
             return placed
+        if self.waits_to_close_filled(record, reason):
+            return placed
         record['state'] = 'done'
         record['reason'] = reason
         plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part is done: {reason}')
         return placed
+
+    def waits_to_close_filled(self, record, reason):
+        """Whether this order stays working after its broker orders finished, because its lifetime will close what they filled.
+
+        An order whose lifetime ends by closing what filled, such as a time stop's entry, must still be working when that time comes, or the lifetime, which only ends an order that is not done, would never close a position the entry filled completely. An order a caller cancelled, or whose lifetime has already ended, is marked `ended` and finishes as before.
+
+        Args:
+            record (dict): The order's part record.
+            reason (str): Why its broker orders finished, from `done_reason`.
+
+        Returns:
+            bool: True when the order is left working for its lifetime to close.
+        """
+        if self.lifetime is None or self.lifetime.on_end != 'close_filled':
+            return False
+        if record.get('ended'):
+            return False
+        return reason in ('filled', 'partly_filled')
 
     def traded(self, parent):
         """How much this order's broker orders have filled.

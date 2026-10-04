@@ -90,7 +90,8 @@ class PositionQuantity:
             tuple: The orders placed, as `(path, answer, status)`, and the positions found (int), and the resting orders cancelled (int).
         """
         closer = PositionCloser(plan_order)
-        positions = closer.open_positions(self.product_of(context), self.wanted_instruments(context))
+        product = self.product_of(context)
+        positions = closer.open_positions(product, self.wanted_instruments(context))
         cancelled = 0
         if self.cancel_resting_first:
             instrument_ids = self.wanted_instruments(context)
@@ -104,7 +105,7 @@ class PositionQuantity:
         for broker_name, instrument_id, quantity in positions:
             if instrument_id is None:
                 continue
-            closing = closer.closing_order(instrument_id, quantity * decimal.Decimal(self.ratio))
+            closing = closer.closing_order(instrument_id, quantity * decimal.Decimal(self.ratio), product)
             if closing is None:
                 continue
             body, status, _ = plan_order.place_leg(path, closing, None, broker_name, instrument_id)

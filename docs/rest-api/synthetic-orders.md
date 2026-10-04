@@ -86,7 +86,7 @@ Types that act at once answer with the broker's answer plus a `parent_id`; types
 
 When a combined answer is refused and does not already carry an `error` or `status_message`, the engine adds `status_message` holding each distinct reason its brokers gave, joined by `; `. Not every type lists a reason beside each of its orders, so this top-level field is where to read why the order was refused.
 
-Types that wait for a price or a time send nothing at first, and answer <span class="status s2">202</span> with an `outcome` of `armed` or `scheduled`. The answer below was recorded by the offline suite `test_runs/order_engine.py` against stubbed brokers, for a `market_if_touched` buy waiting for 995.
+Types that wait for a price or a time send nothing at first, and answer <span class="status s2">202</span> with an `outcome` of `armed`. The answer below was recorded by the offline suite `test_runs/order_engine.py` against stubbed brokers, for a `market_if_touched` buy waiting for 995.
 
 ```json
 {
@@ -148,7 +148,7 @@ The master table below lists every type you can name in `synthetic.type`. `simpl
 | `exposure_hedge` | Multi-instrument | Trades a hedge when the account's net exposure leaves a band. | `watched`, `lower_band`, `upper_band`, `hedge_instrument_id` | 202 |
 | `candle_close_stop` | Stops and trailing | A hidden stop that fires only when a whole bar closes past the level. | `trigger_price`, `bar_minutes`, `backstop_price`, `backstop_limit_price` | 202 |
 | `atr_trail` | Stops and trailing | A trailing stop whose distance is a multiple of the recent average true range. | `trail_points`, `stop_limit_offset`, `bar_minutes`, `periods`, `atr_multiple` | 200 |
-| `square_off` | Time-based | At a time of day, cancels resting orders and closes the day's positions with limits. | `at_time`, `product`, `instrument_ids` | 202 |
+| `square_off` | Time-based | At a time of day, cancels resting orders and closes the net positions held on one product with limits. | `at_time`, `product`, `instrument_ids` | 202 |
 | `accumulation` | Execution algorithms | Buys a fixed quantity at a fixed interval, each purchase resting on its own side. | `every_minutes`, `purchases` | 200 |
 | `gtt` | Price triggers | A limit-if-touched order that keeps waiting across days until it expires. | `trigger_price`, `limit_price`, `valid_days` | 202 |
 | `daily_stop` | Stops and trailing | Places a fresh native stop every morning for a position held overnight. | `stop_price`, `stop_limit_price`, `arm_at`, `valid_days` | 202 |
@@ -779,7 +779,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `daily_stop`
 
-    A daily stop places a fresh native stop every trading morning at `arm_at` for a position held overnight, and answers `202 scheduled` with `first_arm_on`, the first date it will place one. It never arms on a weekend or an exchange holiday, and an order sent after that day's `arm_at` first arms on the next trading day. If the market has already gapped through the stop, no stop is placed; the position is exited with a limit priced past the touch instead. It stops re-arming after `valid_days`, counted in calendar days, and ends `completed` as soon as any stop has traded, because the position it protected is then closed.
+    A daily stop places a fresh native stop every trading morning at `arm_at` for a position held overnight, and answers `202 armed` with `first_arm_on`, the first date it will place one. It never arms on a weekend or an exchange holiday, and an order sent after that day's `arm_at` first arms on the next trading day. If the market has already gapped through the stop, no stop is placed; the position is exited with a limit priced past the touch instead. It stops re-arming after `valid_days`, counted in calendar days, and ends `completed` as soon as any stop has traded, because the position it protected is then closed.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
@@ -947,7 +947,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     A closing-price order (the Atlas's G2, market-on-close or limit-on-close) aims to pay close to the day's official closing price. NSE and BSE compute an equity's closing price as the volume-weighted average of trades from 15:00 to 15:30, so this type is a `vwap` spread across that window. The cash segment's post-closing session fills at the closing price exactly, but it takes only delivery orders; for futures, options and intraday orders this is the nearest there is.
 
-    An order that arrives before the window answers `202 scheduled`, and its first slice goes out when the window opens. One that arrives inside the window sends its first slice at once and spreads the rest over what is left until 15:30. One that arrives after 15:30 is refused with `400`. The duration is worked out from the window, so `over_minutes` is refused.
+    An order that arrives before the window answers `202 armed`, and its first slice goes out when the window opens. One that arrives inside the window sends its first slice at once and spreads the rest over what is left until 15:30. One that arrives after 15:30 is refused with `400`. The duration is worked out from the window, so `over_minutes` is refused.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
@@ -1034,15 +1034,15 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | On a trading day, after that time | Nothing: the order is refused with `400`, rather than taken to mean tomorrow |
     | On a weekend or an exchange holiday | That time on the next trading day |
 
-    The trading calendar is the one the tick pipeline uses, read from the exchanges' published holiday lists for the instrument's calendar (equity, currency or commodity), including special sessions such as Muhurat trading. When the time falls on a later day, the answer names the date, as in `"place_at": "15:00 on 2026-09-28"`. The same rule applies to `closing_price`'s window, `opening_auction`'s pre-open and `daily_stop`'s arming time. A `time_stop` given in `minutes` is refused on a closed day, because minutes from now mean nothing until the market opens; give `until_time` instead.
+    The trading calendar is the one the tick pipeline uses, read from the exchanges' published holiday lists for the instrument's calendar (equity, currency or commodity), including special sessions such as Muhurat trading. The time is worked out once, when the order is placed, and kept with it, so a restart does not move it; the answer does not name the date. An order whose time falls after the next 06:00 IST, such as one sent on a weekend for Monday, is marked to carry overnight, so the engine's 06:00 rebuild keeps it. The same rule applies to `closing_price`'s window, `opening_auction`'s pre-open and `daily_stop`'s arming time. A `time_stop` given in `minutes` is refused on a closed day, because minutes from now mean nothing until the market opens; give `until_time` instead.
 
     #### `scheduled`
 
-    A scheduled order is held until `at_time` and then placed. It answers `202 scheduled`.
+    A scheduled order is held until `at_time` and then placed. It answers `202 armed`. A limit order is then held in the virtual order book until the other side of the book reaches its price, unless `hold_limits` is false; a market order is placed on the clock tick.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
-    | `at_time` | string | Yes | A time later today. |
+    | `at_time` | string | Yes | A time of day, read as the table above says. |
 
     ```json
     {"type": "scheduled", "at_time": "09:20"}
@@ -1050,11 +1050,11 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `good_till_time`
 
-    This type places the order now and, at `until_time`, cancels whatever part is still resting. What has filled is kept.
+    This type places the order and, at `until_time`, cancels whatever part is still resting. What has filled is kept. A limit order is held in the virtual order book until the other side of the book reaches its price, unless `hold_limits` is false or `at_expiry` is `market`; one still held at `until_time` is never sent.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
-    | `until_time` | string | Yes | A time later today. |
+    | `until_time` | string | Yes | A time of day, read as the table above says. |
     | `at_expiry` | string | No | `cancel` or `market`. Defaults to `cancel`. |
 
     ```json
@@ -1069,11 +1069,11 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `time_stop`
 
-    A time stop places an entry and, at `until_time` or `minutes` after it was placed, cancels whatever is still resting and then closes what filled with a `MARKET` order in the closing direction. It closes only the position this order opened, not the account's whole position. If both fields are given, `until_time` is used.
+    A time stop places an entry and, at `until_time` or `minutes` after it was placed, cancels whatever is still resting and then closes what filled with a `MARKET` order in the closing direction. It closes only the position this order opened, not the account's whole position. It closes what filled whether the entry filled in part or completely. Give exactly one of the two fields; both, or neither, is refused with `400`.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
-    | `until_time` | string | One of the two | A time later today. |
+    | `until_time` | string | One of the two | A time of day, read as the table above says. |
     | `minutes` | number | One of the two | Above zero. |
 
     ```json
@@ -1082,11 +1082,11 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `square_off`
 
-    A square-off answers `202 scheduled` and, at `at_time`, cancels every open order on each instrument it is closing and then closes the positions with limit orders priced 2 ticks past the touch. Positions are read from each broker's own positions, and each closing order goes to the broker that holds that position, so a position split across two brokers is closed with one order at each. A position whose broker token does not name exactly one instrument today is left open and counted in the parent's status message. Each of those cancels takes a rate token and is recorded on the square-off's own parent, as `outside_cancel_requested` and `outside_cancelled`, because the order it cancels may not be one the engine placed. Unlike [`POST /api/orders/flatten`](flatten.md), it leaves other products and other instruments alone.
+    A square-off answers `202 armed` and, at `at_time`, cancels every open order on each instrument it is closing, including stops still waiting for their trigger, and then closes the positions with limit orders priced 2 ticks past the touch, each on the product of the position it closes. Positions are read from each broker's own positions, and each closing order goes to the broker that holds that position, so a position split across two brokers is closed with one order at each. A position whose broker token does not name exactly one instrument today is left open and counted in the parent's status message. Each of those cancels takes a rate token and is recorded on the square-off's own parent, as `outside_cancel_requested` and `outside_cancelled`, because the order it cancels may not be one the engine placed. Unlike [`POST /api/orders/flatten`](flatten.md), it leaves other products and other instruments alone.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
-    | `at_time` | string | Yes | A time later today, well before the broker's own square-off. |
+    | `at_time` | string | Yes | A time of day, read as the table above says, well before the broker's own square-off. |
     | `product` | string | No | The product to close, as the positions route spells it. Defaults to `intraday`. |
     | `instrument_ids` | list of strings | No | Limits the square-off to these instruments. |
 
@@ -1096,7 +1096,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `opening_auction`
 
-    An opening-auction order (the Atlas's G1, market-on-open or limit-on-open) is placed while the pre-open session collects orders, so it takes part in the opening call auction and fills at the single price the auction discovers. It answers `202 scheduled` and is placed at `at_time`, or on the next clock tick when collection is already open. If the engine was not running at `at_time` and its first tick comes after collection has closed, the order ends `cancelled` instead of being sent into continuous trading.
+    An opening-auction order (the Atlas's G1, market-on-open or limit-on-open) is placed while the pre-open session collects orders, so it takes part in the opening call auction and fills at the single price the auction discovers. It answers `202 armed` and is placed at `at_time`; when collection is already open, it is placed at once and answers with the broker's answer. If the engine was not running at `at_time` and its first tick comes after collection has closed, the order ends `cancelled` instead of being sent into continuous trading.
 
     The pre-open takes only some orders, and this type refuses the rest with `400` rather than sending them into continuous trading:
 

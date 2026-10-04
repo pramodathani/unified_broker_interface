@@ -396,7 +396,7 @@ class SquaringOffIntradayExample:
             TCS: self.quote(TCS, '3411.10', '3411.35', '3411.20'),
         }
         updates = {
-            'zerodha:250930000123': self.update('zerodha', '250930000123', INFY, 'TRIGGER_PENDING'),
+            'zerodha:250930000123': self.update('zerodha', '250930000123', INFY, 'PENDING'),
             'dhan:52250930456': self.update('dhan', '52250930456', TCS, 'OPEN'),
             'dhan:52250930400': self.update('dhan', '52250930400', TCS, 'COMPLETE'),
         }

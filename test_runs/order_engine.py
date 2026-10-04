@@ -5734,13 +5734,14 @@ class OrderEngineSuite:
             ),
         ]
 
-    def seed_positions(self, quantity):
-        """Seeds a net intraday position in RELIANCE, held at Flattrade or split across brokers.
+    def seed_positions(self, quantity, product='MIS'):
+        """Seeds a net position in RELIANCE, intraday unless told otherwise, held at Flattrade or split across brokers.
 
         The unified positions document is what reduce-only orders and quantity references read, and it holds one row for the whole position, as the real document merges a position across brokers. The types that close positions read each broker's own hash instead, and find the instrument from the broker's token in `unified:broker_tokens`, so each broker's share is seeded there too.
 
         Args:
             quantity (float | dict): The net quantity, signed, held at Flattrade; or broker names to each one's signed quantity.
+            product (str): The product each broker holds it on, such as `MIS` or `NRML`.
 
         Returns:
             None: This method returns nothing.
@@ -5761,12 +5762,12 @@ class OrderEngineSuite:
         broker_tokens = {}
         for broker_name, broker_quantity in held.items():
             self.fake_redis.hashes[f'{broker_name}:portfolio:positions'] = {
-                'NET:NSE:2885:MIS': json.dumps({
+                f'NET:NSE:2885:{product}': json.dumps({
                     'position': {
                         'instrument_token': '2885',
                         'tradingsymbol': 'RELIANCE-EQ',
                         'exchange': 'NSE',
-                        'product': 'MIS',
+                        'product': product,
                         'quantity': broker_quantity,
                         'day_or_net': 'NET',
                     },
@@ -9329,6 +9330,8 @@ class OrderEngineSuite:
         positions=None,
         resting=None,
         taken_at=None,
+        resting_status='OPEN',
+        position_product='MIS',
     ):
         """Places one timed order, optionally fills it, then gives it a clock tick.
 
@@ -9344,6 +9347,8 @@ class OrderEngineSuite:
             positions (float | None): A net position in RELIANCE to seed, for a type that reads the account's holdings.
             resting (list | None): Flattrade order ids of open RELIANCE orders placed outside the engine, for a type that cancels what is resting.
             taken_at (datetime.datetime | None): The moment the engine takes the order, or None for `FROZEN_NOW`.
+            resting_status (str): The status the order feed holds the resting orders in, such as `PENDING` for a stop waiting for its trigger.
+            position_product (str): The product the seeded positions are held on, such as `NRML`.
 
         Returns:
             dict: The recorded result.
@@ -9359,8 +9364,8 @@ class OrderEngineSuite:
         if quote is not None:
             self.seed_quote(quote)
         if positions is not None:
-            self.seed_positions(positions)
-        self.seed_resting(resting)
+            self.seed_positions(positions, position_product)
+        self.seed_resting(resting, resting_status)
         self.network.reset(answer)
         self.counting_uuid.reset()
         original_time = time.time
@@ -9506,11 +9511,12 @@ class OrderEngineSuite:
             return
         quotes[instrument_id] = json.dumps(quote)
 
-    def seed_resting(self, resting):
+    def seed_resting(self, resting, status='OPEN'):
         """Puts open RELIANCE orders placed outside the engine where the order updates and the broker's book hold them.
 
         Args:
             resting (list | None): Flattrade order ids.
+            status (str): The status the order feed holds them in, on the shared vocabulary.
 
         Returns:
             None: This method returns nothing.
@@ -9522,7 +9528,7 @@ class OrderEngineSuite:
                 'broker': 'flattrade',
                 'order_id': order_id,
                 'instrument_id': order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['reliance'],
-                'status': 'OPEN',
+                'status': status,
             })
             self.fake_redis.hashes.setdefault('flattrade:orders:orders', {})[
                 order_id
@@ -10623,6 +10629,18 @@ class OrderEngineSuite:
                 accepted,
             ),
             self.clock_result(
+                'a_time_stop_closes_an_entry_that_filled_completely',
+                dict(entry, synthetic={
+                    'type': 'time_stop',
+                    'until_time': '10:30',
+                }),
+                [
+                    self.update('26091500000021', 'COMPLETE', 10),
+                ],
+                frozen + 1900,
+                accepted,
+            ),
+            self.clock_result(
                 'a_time_stop_that_filled_nothing_just_cancels',
                 dict(entry, synthetic={
                     'type': 'time_stop',
@@ -10735,6 +10753,36 @@ class OrderEngineSuite:
                     'flattrade': 5,
                     'zerodha': 3,
                 },
+            ),
+            self.clock_result(
+                'a_square_off_cancels_a_resting_stop_before_closing',
+                dict(entry, synthetic={
+                    'type': 'square_off',
+                    'at_time': '15:10',
+                }),
+                [],
+                frozen + 20000,
+                accepted,
+                quote=self.scenarios.quote(),
+                positions=8,
+                resting=[
+                    '26091500000078',
+                ],
+                resting_status='PENDING',
+            ),
+            self.clock_result(
+                'a_square_off_closes_a_carry_position_with_a_carry_order',
+                dict(entry, synthetic={
+                    'type': 'square_off',
+                    'at_time': '15:10',
+                    'product': 'carry',
+                }),
+                [],
+                frozen + 20000,
+                accepted,
+                quote=self.scenarios.quote(),
+                positions=8,
+                position_product='NRML',
             ),
             self.clock_result(
                 'a_square_off_with_nothing_held_closes_nothing',
@@ -13035,6 +13083,51 @@ class OrderEngineSuite:
             },
         ]
 
+    def run_overnight_carry_checks(self):
+        """Checks which timed orders are marked to outlive the 06:00 rebuild: those whose time falls on a later trading day, and not those due later the same day.
+
+        At 06:00 IST the engine rebuilds its open orders from that day's record, and brings back an older parent only when it was marked `carries_overnight`. An order taken on a Sunday for Monday has no record on Monday until its time comes, so without the mark it would be dropped before it fired.
+
+        Returns:
+            list: One recorded result per check, with the stored parent's `carries_overnight`.
+        """
+        accepted = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        entry = self.scenarios.bodies.market_order(
+            dry_run=None,
+            order_type='LIMIT',
+            price=1000,
+            quantity=10,
+        )
+        sunday = FROZEN_NOW.replace(day=27)
+        holiday = FROZEN_NOW.replace(month=10, day=2)
+        cases = [
+            ('a_scheduled_order_taken_on_a_sunday_carries_overnight', {'type': 'scheduled', 'at_time': '15:00'}, sunday),
+            ('a_scheduled_order_taken_on_a_holiday_carries_overnight', {'type': 'scheduled', 'at_time': '15:00'}, holiday),
+            ('a_scheduled_order_for_later_today_does_not_carry_overnight', {'type': 'scheduled', 'at_time': '15:00'}, FROZEN_NOW),
+            ('a_good_till_time_order_taken_on_a_sunday_carries_overnight', {'type': 'good_till_time', 'until_time': '14:30'}, sunday),
+            ('a_square_off_taken_on_a_sunday_carries_overnight', {'type': 'square_off', 'at_time': '15:10'}, sunday),
+        ]
+        results = []
+        for name, synthetic, taken_at in cases:
+            result = self.clock_result(
+                name,
+                dict(entry, synthetic=synthetic),
+                [],
+                taken_at.timestamp() + 60,
+                accepted,
+                taken_at=taken_at,
+            )
+            carries = []
+            for document in self.fake_redis.hashes.get('unified:orders:parents', {}).values():
+                parameters = json.loads(document).get('parameters') or {}
+                carries.append(parameters.get('carries_overnight') is True)
+            result['carries_overnight'] = carries
+            results.append(result)
+        return results
+
     def run_recovery_checks(self):
         """Replays a crash and checks what recovery decides about the order it may have left behind.
 
@@ -13203,6 +13296,7 @@ class OrderEngineSuite:
             results.extend(self.run_lock_checks())
             results.extend(self.run_parent_checks())
             results.extend(self.run_recovery_checks())
+            results.extend(self.run_overnight_carry_checks())
             results.extend(self.run_follower_checks())
             results.extend(self.run_reaction_checks())
             results.extend(self.run_plan_checks())
