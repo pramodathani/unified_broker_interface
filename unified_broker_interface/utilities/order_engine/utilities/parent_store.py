@@ -34,7 +34,8 @@ class ParentStore:
         """
         self.cache = cache
 
-    def reset_epochs(self, now=None):
+    @staticmethod
+    def reset_epochs(now=None):
         """The latest 06:00 IST and the next one.
 
         Args:

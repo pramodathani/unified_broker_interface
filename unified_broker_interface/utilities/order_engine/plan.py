@@ -22,11 +22,17 @@ from unified_broker_interface.utilities.order_engine.utilities.from_fill_pricing
 from unified_broker_interface.utilities.order_engine.utilities.limit_marketable_condition import (
     LimitMarketableCondition,
 )
+from unified_broker_interface.utilities.order_engine.utilities.moments import (
+    Moments,
+)
 from unified_broker_interface.utilities.order_engine.utilities.native_stop_pricing import (
     NativeStopPricing,
 )
 from unified_broker_interface.utilities.order_engine.utilities.paper_venue import (
     PaperVenue,
+)
+from unified_broker_interface.utilities.order_engine.utilities.parent_store import (
+    ParentStore,
 )
 from unified_broker_interface.utilities.order_engine.utilities.plan_reader import (
     PlanReader,
@@ -158,6 +164,8 @@ class PlanOrder(SyntheticOrder):
                 carries_overnight = True
             if part.spans_days:
                 carries_overnight = True
+            if self._outlives_the_next_reset(record):
+                carries_overnight = True
             if part.lifetime is not None and part.lifetime.when is not None:
                 lifetime_memory = {}
                 part.lifetime.when.prepare(part.context(self), lifetime_memory)
@@ -195,6 +203,43 @@ class PlanOrder(SyntheticOrder):
         self._finish_if_done(root)
         self.save()
         return self._answer(root, placed, warnings)
+
+    def _outlives_the_next_reset(self, record):
+        """Whether one of a part's times falls after the next 06:00 IST, when the engine rebuilds its open orders from the day's record.
+
+        An order placed on a weekend or holiday for a time on the next trading day has no record of its own on that day until the time comes, so the rebuild at 06:00 would leave it out unless the plan is marked to carry overnight.
+
+        Args:
+            record (dict): The part's record, with its trigger's memory and its lifetime's `ends_at`.
+
+        Returns:
+            bool: True when its trigger time or its end is at or after the next reset.
+        """
+        _, next_reset = ParentStore.reset_epochs(Moments().now())
+        moments = self._trigger_moments(record.get('memory') or {})
+        if record.get('ends_at') is not None:
+            moments.append(record['ends_at'])
+        for moment in moments:
+            if moment >= next_reset:
+                return True
+        return False
+
+    def _trigger_moments(self, memory):
+        """Every Unix time a trigger's memory holds under `at`, however deeply its conditions nest.
+
+        Args:
+            memory (dict): The trigger's memory.
+
+        Returns:
+            list: The times (float).
+        """
+        found = []
+        for key, value in memory.items():
+            if key == 'at' and isinstance(value, (int, float)):
+                found.append(value)
+            elif isinstance(value, dict):
+                found.extend(self._trigger_moments(value))
+        return found
 
     def _answer(self, root, placed, warnings):
         """The answer to the caller once the plan has started.

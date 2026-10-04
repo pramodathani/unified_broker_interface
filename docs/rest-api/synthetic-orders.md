@@ -1034,15 +1034,15 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | On a trading day, after that time | Nothing: the order is refused with `400`, rather than taken to mean tomorrow |
     | On a weekend or an exchange holiday | That time on the next trading day |
 
-    The trading calendar is the one the tick pipeline uses, read from the exchanges' published holiday lists for the instrument's calendar (equity, currency or commodity), including special sessions such as Muhurat trading. When the time falls on a later day, the answer names the date, as in `"place_at": "15:00 on 2026-09-28"`. The same rule applies to `closing_price`'s window, `opening_auction`'s pre-open and `daily_stop`'s arming time. A `time_stop` given in `minutes` is refused on a closed day, because minutes from now mean nothing until the market opens; give `until_time` instead.
+    The trading calendar is the one the tick pipeline uses, read from the exchanges' published holiday lists for the instrument's calendar (equity, currency or commodity), including special sessions such as Muhurat trading. The time is worked out once, when the order is placed, and kept with it, so a restart does not move it; the answer does not name the date. An order whose time falls after the next 06:00 IST, such as one sent on a weekend for Monday, is marked to carry overnight, so the engine's 06:00 rebuild keeps it. The same rule applies to `closing_price`'s window, `opening_auction`'s pre-open and `daily_stop`'s arming time. A `time_stop` given in `minutes` is refused on a closed day, because minutes from now mean nothing until the market opens; give `until_time` instead.
 
     #### `scheduled`
 
-    A scheduled order is held until `at_time` and then placed. It answers `202 scheduled`.
+    A scheduled order is held until `at_time` and then placed. It answers `202 armed`. A limit order is then held in the virtual order book until the other side of the book reaches its price, unless `hold_limits` is false; a market order is placed on the clock tick.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
-    | `at_time` | string | Yes | A time later today. |
+    | `at_time` | string | Yes | A time of day, read as the table above says. |
 
     ```json
     {"type": "scheduled", "at_time": "09:20"}

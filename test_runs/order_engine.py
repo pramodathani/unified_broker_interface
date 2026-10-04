@@ -13038,6 +13038,51 @@ class OrderEngineSuite:
             },
         ]
 
+    def run_overnight_carry_checks(self):
+        """Checks which timed orders are marked to outlive the 06:00 rebuild: those whose time falls on a later trading day, and not those due later the same day.
+
+        At 06:00 IST the engine rebuilds its open orders from that day's record, and brings back an older parent only when it was marked `carries_overnight`. An order taken on a Sunday for Monday has no record on Monday until its time comes, so without the mark it would be dropped before it fired.
+
+        Returns:
+            list: One recorded result per check, with the stored parent's `carries_overnight`.
+        """
+        accepted = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        entry = self.scenarios.bodies.market_order(
+            dry_run=None,
+            order_type='LIMIT',
+            price=1000,
+            quantity=10,
+        )
+        sunday = FROZEN_NOW.replace(day=27)
+        holiday = FROZEN_NOW.replace(month=10, day=2)
+        cases = [
+            ('a_scheduled_order_taken_on_a_sunday_carries_overnight', {'type': 'scheduled', 'at_time': '15:00'}, sunday),
+            ('a_scheduled_order_taken_on_a_holiday_carries_overnight', {'type': 'scheduled', 'at_time': '15:00'}, holiday),
+            ('a_scheduled_order_for_later_today_does_not_carry_overnight', {'type': 'scheduled', 'at_time': '15:00'}, FROZEN_NOW),
+            ('a_good_till_time_order_taken_on_a_sunday_carries_overnight', {'type': 'good_till_time', 'until_time': '14:30'}, sunday),
+            ('a_square_off_taken_on_a_sunday_carries_overnight', {'type': 'square_off', 'at_time': '15:10'}, sunday),
+        ]
+        results = []
+        for name, synthetic, taken_at in cases:
+            result = self.clock_result(
+                name,
+                dict(entry, synthetic=synthetic),
+                [],
+                taken_at.timestamp() + 60,
+                accepted,
+                taken_at=taken_at,
+            )
+            carries = []
+            for document in self.fake_redis.hashes.get('unified:orders:parents', {}).values():
+                parameters = json.loads(document).get('parameters') or {}
+                carries.append(parameters.get('carries_overnight') is True)
+            result['carries_overnight'] = carries
+            results.append(result)
+        return results
+
     def run_recovery_checks(self):
         """Replays a crash and checks what recovery decides about the order it may have left behind.
 
@@ -13206,6 +13251,7 @@ class OrderEngineSuite:
             results.extend(self.run_lock_checks())
             results.extend(self.run_parent_checks())
             results.extend(self.run_recovery_checks())
+            results.extend(self.run_overnight_carry_checks())
             results.extend(self.run_follower_checks())
             results.extend(self.run_reaction_checks())
             results.extend(self.run_plan_checks())
