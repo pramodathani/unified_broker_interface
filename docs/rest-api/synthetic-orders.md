@@ -76,7 +76,7 @@ The engine also writes its own working values into the parent's copy of the `syn
 
 ## What the first answer looks like
 
-Types that act at once answer with the broker's answer plus a `parent_id`; types that send several orders at once, such as `freeze_slicer` and `ladder`, combine them into one answer with a list of `order_ids`. The combined answer follows one rule for `freeze_slicer`, `ladder`, `grid`, `two_sided_quote`, `basket`, `oco`, `bracket` and `two_sided_breakout`, and each order's own outcome is listed in it:
+Types that act at once answer with the broker's answer plus a `parent_id`; types that send several orders at once, such as `freeze_slicer` and `ladder`, combine them into one answer with a `legs` list, one entry per order with its `path`, `instrument_id`, `outcome`, `order_id` and `status_message`. The combined answer follows one rule for `freeze_slicer`, `ladder`, `grid`, `two_sided_quote`, `basket`, `oco`, `bracket` and `two_sided_breakout`, and each order's own outcome is listed in it:
 
 | The orders' outcomes | `outcome` | HTTP status |
 |---|---|---|
@@ -112,7 +112,7 @@ The master table below lists every type you can name in `synthetic.type`. `simpl
 | Type | Family | What it does | Key fields in `synthetic` | First answer |
 |---|---|---|---|:---:|
 | `simple` | Plain and laddered | Sends one order to one broker and does nothing afterwards. | none | 200 |
-| `freeze_slicer` | Plain and laddered | Splits an order above the exchange's freeze quantity into even orders that each fit; run as a plan, holds the whole order until the market reaches it. | none | 200, or 202 when it is held |
+| `freeze_slicer` | Plain and laddered | Splits an order above the exchange's freeze quantity into orders of whole lots that each fit; run as a plan, holds the whole order until the market reaches it. | none | 200, or 202 when it is held |
 | `ladder` | Plain and laddered | Places several limit orders evenly spaced between two prices; run as a plan, holds each rung until the market reaches it. | `from_price`, `to_price`, `steps`, `hold_limits` | 200, or 202 when its rungs are held |
 | `oto` | Linked orders | Places a second order, sized to what actually filled, once the first one fills; run as a plan, holds a limit first order until the market reaches it. | `then` | 200, or 202 when its first order is held |
 | `oco` | Linked orders | Rests a stop and a target on a position you hold, each shrinking as the other fills. | `stop_price`, `stop_limit_price`, `target_price` | 200 |
@@ -299,7 +299,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `freeze_slicer`
 
-    An exchange rejects any single derivative order above its freeze quantity. This type reads the freeze quantity that the chosen broker publishes, compares it with the quantity in that broker's own terms, and splits the order evenly into as many orders as it needs. Every slice goes to the same broker. When the broker publishes no freeze quantity, the order is sent whole. An order that would need more than 20 slices is refused with `400`.
+    An exchange rejects any single derivative order above its freeze quantity. This type reads the freeze quantity that the chosen broker publishes, compares it with the quantity in that broker's own terms, and splits the order into as few orders as fit below it. The slices are cut in whole lots, as evenly as whole lots allow, because each one is placed as an order of its own and the lot check refuses an order for part of a lot: 55 NIFTY lots of 65 under a freeze quantity of 3,511 go as 28 and 27 lots, not as 1,788 and 1,787 units. Every slice goes to the same broker. When the broker publishes no freeze quantity, the order is sent whole. An order whose single lot is already above the freeze quantity is refused with `400` (`one lot of <lot> is above the freeze limit of <freeze>, so the order cannot be split into orders below it`), and so is an order that would need more than 20 slices. When the broker's lot size is not known, the slices are as even as whole units allow.
 
     It reads no fields besides `type`.
 
@@ -1319,7 +1319,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | `top_up` | none | One new broker order for whatever the order's target is missing, each time a join raises it, never resizing a resting one. A cancelled order's unfilled part is sent again; a rejection stops it. |
     | `daily` | `arm_at`, a time of day, default `09:20` | The whole order again each trading day at `arm_at`, for an order the exchange ends at the close such as a native stop, and not on the day of placing when that time has passed. Once anything trades, no more is sent. A stop may be renewed this way, unlike being split into pieces. Pair it with a lifetime in `after_days`, which ends it and keeps the plan across days. |
     | `ladder` | `from_price` and `to_price`, which differ; `steps`, 2 to 20 | Every rung at once, as limits evenly spaced from `from_price` to `to_price`, each rounded to the tick on the passive side, the quantity shared as evenly as whole units allow. The rung prices replace the pricing's. A quantity smaller than `steps` is refused. |
-    | `freeze_limit` | none | The broker is chosen first, then the order is split evenly into orders each within that broker's published freeze quantity, compared in the broker's own units, and every slice is sent to it at once. A broker that publishes none gets the order whole; more than 20 slices is refused. |
+    | `freeze_limit` | none | The broker is chosen first, then the order is split into orders each within that broker's published freeze quantity, compared in the broker's own units, as evenly as whole lots allow, and every slice is sent to it at once. A broker that publishes none gets the order whole; a single lot above the freeze quantity, or more than 20 slices, is refused. |
 
     A pricing that moves its order moves every piece still resting, so a `twap` with a `peg` keeps each slice on the bid. A resting stop, `native_stop`, `trail` or `stages` pricing, cannot be split into pieces, because it protects the whole position at once; a plan that tries is refused with `stop_not_sliced`. A later preset's execution replaces an earlier one with a warning, as pricing does. An order whose execution is paced by ticks (`twap`, `vwap`, `front_loaded`, `participation` and `book_depth`) starts working as soon as its trigger holds, even when nothing is due yet, so `participation` counts volume from that moment.
 

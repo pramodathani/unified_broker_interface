@@ -438,6 +438,7 @@ class OrderPlacement:
             skipped,
             identifier_sent,
             quantity,
+            broker_orders.units_per_lot(instrument, handle),
         )
 
     def dry_run_answer(self, prepared_placement, started_at):

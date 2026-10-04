@@ -16,11 +16,12 @@ from unified_broker_interface.utilities.order_engine.utilities.freeze_limit_exec
 
 
 class StandInPrepared:
-    """Stands in for a prepared placement: the broker chosen and the quantity in its terms.
+    """Stands in for a prepared placement: the broker chosen, the quantity in its terms, and a lot size that is not known, so the order is split in units.
 
     Attributes:
         broker_name (str): The broker.
         broker_quantity (int): The quantity in the broker's own units.
+        units_per_lot (None): The units in one lot, not known here.
     """
 
     def __init__(self, broker_name, broker_quantity):
@@ -35,6 +36,7 @@ class StandInPrepared:
         """
         self.broker_name = broker_name
         self.broker_quantity = broker_quantity
+        self.units_per_lot = None
 
 
 class StandInPlacement:

@@ -1002,6 +1002,50 @@ class OrderEngineScenarios:
                 },
             ),
             self.intents(
+                'an_order_above_the_freeze_limit_is_split_in_whole_lots',
+                [
+                    self.bodies.market_order(
+                        dry_run=None,
+                        order_type='LIMIT',
+                        price=120,
+                        quantity=4125,
+                        synthetic={
+                            'type': 'freeze_slicer',
+                        },
+                    ),
+                ],
+                instrument_id=order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['nifty_option'],
+                attributes={
+                    'flattrade': {
+                        'freeze_quantity': '3511',
+                    },
+                },
+                answer=self.answers.json_answer(
+                    200,
+                    self.answers.place_success('flattrade'),
+                ),
+            ),
+            self.intents(
+                'an_order_whose_lot_is_above_the_freeze_limit_is_refused',
+                [
+                    self.bodies.market_order(
+                        dry_run=None,
+                        order_type='LIMIT',
+                        price=120,
+                        quantity=150,
+                        synthetic={
+                            'type': 'freeze_slicer',
+                        },
+                    ),
+                ],
+                instrument_id=order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['nifty_option'],
+                attributes={
+                    'flattrade': {
+                        'freeze_quantity': '50',
+                    },
+                },
+            ),
+            self.intents(
                 'a_ladder_spreads_its_rungs_across_the_range',
                 [
                     self.bodies.market_order(
@@ -1519,9 +1563,10 @@ class OrderEngineSuite:
                 f'unified:catalogue:{order_routes.MAPPING_DATE}:'
                 'additional_attributes'
             ] = {
-                order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS[
-                    'reliance'
-                ]: json.dumps(scenario['attributes']),
+                scenario.get(
+                    'instrument_id',
+                    order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['reliance'],
+                ): json.dumps(scenario['attributes']),
             }
         if scenario.get('positions') is not None:
             self.fake_redis.strings['unified:portfolio:positions'] = json.dumps(

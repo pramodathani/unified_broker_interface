@@ -1,0 +1,6 @@
+54 lots (3510 units): slices [3510], which are [54] lots
+55 lots (3575 units): slices [1820, 1755], which are [28, 27] lots
+150 lots (9750 units): slices [3250, 3250, 3250], which are [50, 50, 50] lots
+154 lots (10010 units): slices [3380, 3315, 3315], which are [52, 51, 51] lots
+55 lots with no lot size known: [1788, 1787]
+150 units in lots of 75 under a limit of 50: refused, one lot of 75 is above the freeze limit of 50, so the order cannot be split into orders below it
