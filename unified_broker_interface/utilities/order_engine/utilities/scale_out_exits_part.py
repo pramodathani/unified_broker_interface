@@ -2,6 +2,9 @@
 
 import decimal
 
+from unified_broker_interface.utilities.order_engine.utilities.market_view import (
+    MarketView,
+)
 from unified_broker_interface.utilities.order_engine.utilities.whole_part import (
     WholePart,
 )
@@ -280,6 +283,8 @@ class ScaleOutExitsPart(WholePart):
     def move_to_breakeven(self, plan_order):
         """Moves the stop to the entry's average price once enough targets have filled, once.
 
+        An average over several fills often falls between ticks, so the price is rounded to the tick on the stop's passive side: up for a sell stop protecting a long and down for a buy stop protecting a short, which keeps the trade unable to lose.
+
         Args:
             plan_order (PlanOrder): The plan order.
 
@@ -300,6 +305,11 @@ class ScaleOutExitsPart(WholePart):
         stop = self.stop_leg(plan_order)
         if price is None or stop is None or stop.is_finished():
             return
+        tick_size = self.context(plan_order).tick_size()
+        if tick_size:
+            rounded = MarketView(None, tick_size).rounded(price, stop.transaction_type)
+            if rounded is not None:
+                price = rounded
         if plan_order.reprice_leg(stop, price, price, f'{wanted} target(s) have filled, so the stop moves to the entry price and the trade can no longer lose'):
             memory['at_breakeven'] = True
             self.remember(plan_order, memory, f'the plan\'s {self.path} stop is at the entry price')

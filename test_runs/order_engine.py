@@ -5729,7 +5729,109 @@ class OrderEngineSuite:
             'stop_limit_price': 988,
             'target_price': 1010,
         }
+        oco = {
+            'stop_price': 990,
+            'stop_limit_price': 988,
+            'target_price': 1010,
+        }
+        two_targets = {
+            'stop_price': 990,
+            'stop_limit_price': 988,
+            'target_prices': [
+                1010,
+                1020,
+            ],
+        }
         return [
+            self.plan_price_result(
+                'a_bracket_stop_off_the_tick_is_refused_when_placed',
+                preset_plan('bracket', dict(bracket, stop_price=990.03)),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_scale_out_target_off_the_tick_is_refused_when_placed',
+                preset_plan('scale_out', dict(two_targets, target_prices=[1010, 1020.02])),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_scale_out_moves_its_stop_to_the_entry_price_rounded_to_the_tick',
+                preset_plan('scale_out', two_targets),
+                [
+                    {'quote': steady, 'at': 0},
+                    {
+                        'quote': steady,
+                        'at': 1,
+                        'updates': [
+                            self.update('26091500000101', 'COMPLETE', 10, average_price=1000.03),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 2,
+                        'updates': [
+                            self.update('26091500000102', 'OPEN', 0, order_type='SL'),
+                            self.update('26091500000103', 'OPEN', 0),
+                            self.update('26091500000104', 'OPEN', 0),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 3,
+                        'updates': [
+                            self.update('26091500000103', 'COMPLETE', 5),
+                        ],
+                    },
+                ],
+                numbered,
+                book_overrides={
+                    'order_type': 'SL',
+                    'trigger_price': 990,
+                },
+            ),
+            self.plan_price_result(
+                'an_oco_is_sent_to_the_broker_that_holds_the_position',
+                preset_plan('oco', oco),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                dict(
+                    self.scenarios.answers.json_answer(
+                        200,
+                        self.scenarios.answers.place_success('zerodha'),
+                    ),
+                    number_orders=True,
+                ),
+                positions={
+                    'zerodha': 10,
+                },
+            ),
+            self.plan_price_result(
+                'an_oco_on_a_position_held_at_two_brokers_is_refused',
+                preset_plan('oco', oco),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                numbered,
+                positions={
+                    'flattrade': 6,
+                    'zerodha': 4,
+                },
+            ),
+            self.plan_price_result(
+                'an_oco_larger_than_the_position_is_refused',
+                preset_plan('oco', oco),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                numbered,
+                positions=6,
+            ),
             self.plan_price_result(
                 'a_plan_whose_only_order_is_rejected_after_it_was_accepted_ends_rejected',
                 preset_plan('bracket', bracket),
