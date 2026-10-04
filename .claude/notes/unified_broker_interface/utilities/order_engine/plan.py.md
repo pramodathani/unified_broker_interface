@@ -153,6 +153,8 @@ A part that closes positions refuses a change to its price or quantity with 409.
 
 A plan whose only order was accepted and then rejected by the exchange stayed `working` for ever, because `ALLOWED_CHANGES` had no `working` to `rejected` step and `_finish_if_done` could not move it. See `parent_order.py.md`.
 
+`refused_beside_live_orders` exists because the group 4 research placed an OCA whose third candidate, a SENSEX option without a quantity, took the body's 10 against a lot of 20. The refusal escaped from `root.start` after two candidates were at the broker: the caller got 400 with no parent id, the parent was stored as rejected with two acknowledged legs, and a later fill cancelled nothing. A first version of the PR #64 docs said such a candidate leaves the others working with 207, which was only true of a broker rejection. Now `OrderPart.start` hands such a refusal here; with live orders it ends the part as `refused` and returns a leg entry so `_answer` says 207, and with none it lets the refusal escape, so a single bad order is still refused with no parent.
+
 ## Stop types (2026-10-04)
 
 `_send_paced` wraps `send_due` on both tick paths. A daily stop sends on a clock tick, and a refusal from the placement there used to reach `ClockTicker`, which logged "failed on a clock tick" and retried every second for ever while the parent sat in `received` and the position was unprotected. A permanent refusal now ends the part through `_end_refused`, as `_fire_waiting` already did for triggered parts.
