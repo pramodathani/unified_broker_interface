@@ -6,6 +6,7 @@ import json
 import redis
 
 from unified_broker_interface.utilities.broker_orders.utilities.kill_switch import (
+    OPEN_STATUSES,
     KillSwitch,
 )
 from unified_broker_interface.utilities.order_engine.utilities.market_view import (
@@ -18,10 +19,11 @@ from unified_broker_interface.utilities.order_engine.utilities.reduce_only impor
 BROKER_TOKENS_KEY = 'unified:broker_tokens'
 DEFAULT_BUFFER_TICKS = 2
 ORDER_UPDATES_KEY = 'unified:order-updates'
-OPEN_STATUSES = (
-    'OPEN',
-    'TRIGGER_PENDING',
-)
+ORDER_PRODUCTS = {
+    'intraday': 'MIS',
+    'delivery': 'CNC',
+    'carry': 'NRML',
+}
 
 
 class PositionCloser:
@@ -203,14 +205,15 @@ class PositionCloser:
                 cancelled = cancelled + 1
         return cancelled
 
-    def closing_order(self, instrument_id, quantity):
+    def closing_order(self, instrument_id, quantity, product=None):
         """The limit order that closes one position, priced two ticks past the other side's best price.
 
-        The price is rounded with the tick size the brokers agree on for that instrument, which is not always the parent's own.
+        The price is rounded with the tick size the brokers agree on for that instrument, which is not always the parent's own. The order takes the product of the position it closes, because a close on another product would open a new position there instead.
 
         Args:
             instrument_id (str): The instrument.
             quantity (decimal.Decimal): The net position, signed.
+            product (str | None): The position's product on the positions vocabulary, such as `carry`, or None to keep the parent body's.
 
         Returns:
             PlaceOrderRequest | None: The order, or None when the book gives nothing to price against or the instrument has no agreed tick size.
@@ -243,4 +246,6 @@ class PositionCloser:
         body['quantity'] = int(abs(quantity))
         body['transaction_type'] = side
         body['price'] = str(price)
+        if product in ORDER_PRODUCTS:
+            body['product'] = ORDER_PRODUCTS[product]
         return self.runner.read_order(body)

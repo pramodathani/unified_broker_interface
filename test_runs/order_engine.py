@@ -5689,13 +5689,14 @@ class OrderEngineSuite:
             ),
         ]
 
-    def seed_positions(self, quantity):
-        """Seeds a net intraday position in RELIANCE, held at Flattrade or split across brokers.
+    def seed_positions(self, quantity, product='MIS'):
+        """Seeds a net position in RELIANCE, intraday unless told otherwise, held at Flattrade or split across brokers.
 
         The unified positions document is what reduce-only orders and quantity references read, and it holds one row for the whole position, as the real document merges a position across brokers. The types that close positions read each broker's own hash instead, and find the instrument from the broker's token in `unified:broker_tokens`, so each broker's share is seeded there too.
 
         Args:
             quantity (float | dict): The net quantity, signed, held at Flattrade; or broker names to each one's signed quantity.
+            product (str): The product each broker holds it on, such as `MIS` or `NRML`.
 
         Returns:
             None: This method returns nothing.
@@ -5716,12 +5717,12 @@ class OrderEngineSuite:
         broker_tokens = {}
         for broker_name, broker_quantity in held.items():
             self.fake_redis.hashes[f'{broker_name}:portfolio:positions'] = {
-                'NET:NSE:2885:MIS': json.dumps({
+                f'NET:NSE:2885:{product}': json.dumps({
                     'position': {
                         'instrument_token': '2885',
                         'tradingsymbol': 'RELIANCE-EQ',
                         'exchange': 'NSE',
-                        'product': 'MIS',
+                        'product': product,
                         'quantity': broker_quantity,
                         'day_or_net': 'NET',
                     },
@@ -9284,6 +9285,8 @@ class OrderEngineSuite:
         positions=None,
         resting=None,
         taken_at=None,
+        resting_status='OPEN',
+        position_product='MIS',
     ):
         """Places one timed order, optionally fills it, then gives it a clock tick.
 
@@ -9299,6 +9302,8 @@ class OrderEngineSuite:
             positions (float | None): A net position in RELIANCE to seed, for a type that reads the account's holdings.
             resting (list | None): Flattrade order ids of open RELIANCE orders placed outside the engine, for a type that cancels what is resting.
             taken_at (datetime.datetime | None): The moment the engine takes the order, or None for `FROZEN_NOW`.
+            resting_status (str): The status the order feed holds the resting orders in, such as `PENDING` for a stop waiting for its trigger.
+            position_product (str): The product the seeded positions are held on, such as `NRML`.
 
         Returns:
             dict: The recorded result.
@@ -9314,8 +9319,8 @@ class OrderEngineSuite:
         if quote is not None:
             self.seed_quote(quote)
         if positions is not None:
-            self.seed_positions(positions)
-        self.seed_resting(resting)
+            self.seed_positions(positions, position_product)
+        self.seed_resting(resting, resting_status)
         self.network.reset(answer)
         self.counting_uuid.reset()
         original_time = time.time
@@ -9461,11 +9466,12 @@ class OrderEngineSuite:
             return
         quotes[instrument_id] = json.dumps(quote)
 
-    def seed_resting(self, resting):
+    def seed_resting(self, resting, status='OPEN'):
         """Puts open RELIANCE orders placed outside the engine where the order updates and the broker's book hold them.
 
         Args:
             resting (list | None): Flattrade order ids.
+            status (str): The status the order feed holds them in, on the shared vocabulary.
 
         Returns:
             None: This method returns nothing.
@@ -9477,7 +9483,7 @@ class OrderEngineSuite:
                 'broker': 'flattrade',
                 'order_id': order_id,
                 'instrument_id': order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['reliance'],
-                'status': 'OPEN',
+                'status': status,
             })
             self.fake_redis.hashes.setdefault('flattrade:orders:orders', {})[
                 order_id
@@ -10702,6 +10708,36 @@ class OrderEngineSuite:
                     'flattrade': 5,
                     'zerodha': 3,
                 },
+            ),
+            self.clock_result(
+                'a_square_off_cancels_a_resting_stop_before_closing',
+                dict(entry, synthetic={
+                    'type': 'square_off',
+                    'at_time': '15:10',
+                }),
+                [],
+                frozen + 20000,
+                accepted,
+                quote=self.scenarios.quote(),
+                positions=8,
+                resting=[
+                    '26091500000078',
+                ],
+                resting_status='PENDING',
+            ),
+            self.clock_result(
+                'a_square_off_closes_a_carry_position_with_a_carry_order',
+                dict(entry, synthetic={
+                    'type': 'square_off',
+                    'at_time': '15:10',
+                    'product': 'carry',
+                }),
+                [],
+                frozen + 20000,
+                accepted,
+                quote=self.scenarios.quote(),
+                positions=8,
+                position_product='NRML',
             ),
             self.clock_result(
                 'a_square_off_with_nothing_held_closes_nothing',

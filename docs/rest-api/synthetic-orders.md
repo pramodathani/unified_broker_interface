@@ -148,7 +148,7 @@ The master table below lists every type you can name in `synthetic.type`. `simpl
 | `exposure_hedge` | Multi-instrument | Trades a hedge when the account's net exposure leaves a band. | `watched`, `lower_band`, `upper_band`, `hedge_instrument_id` | 202 |
 | `candle_close_stop` | Stops and trailing | A hidden stop that fires only when a whole bar closes past the level. | `trigger_price`, `bar_minutes`, `backstop_price`, `backstop_limit_price` | 202 |
 | `atr_trail` | Stops and trailing | A trailing stop whose distance is a multiple of the recent average true range. | `trail_points`, `stop_limit_offset`, `bar_minutes`, `periods`, `atr_multiple` | 200 |
-| `square_off` | Time-based | At a time of day, cancels resting orders and closes the day's positions with limits. | `at_time`, `product`, `instrument_ids` | 202 |
+| `square_off` | Time-based | At a time of day, cancels resting orders and closes the net positions held on one product with limits. | `at_time`, `product`, `instrument_ids` | 202 |
 | `accumulation` | Execution algorithms | Buys a fixed quantity at a fixed interval, each purchase resting on its own side. | `every_minutes`, `purchases` | 200 |
 | `gtt` | Price triggers | A limit-if-touched order that keeps waiting across days until it expires. | `trigger_price`, `limit_price`, `valid_days` | 202 |
 | `daily_stop` | Stops and trailing | Places a fresh native stop every morning for a position held overnight. | `stop_price`, `stop_limit_price`, `arm_at`, `valid_days` | 202 |
@@ -1082,11 +1082,11 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `square_off`
 
-    A square-off answers `202 scheduled` and, at `at_time`, cancels every open order on each instrument it is closing and then closes the positions with limit orders priced 2 ticks past the touch. Positions are read from each broker's own positions, and each closing order goes to the broker that holds that position, so a position split across two brokers is closed with one order at each. A position whose broker token does not name exactly one instrument today is left open and counted in the parent's status message. Each of those cancels takes a rate token and is recorded on the square-off's own parent, as `outside_cancel_requested` and `outside_cancelled`, because the order it cancels may not be one the engine placed. Unlike [`POST /api/orders/flatten`](flatten.md), it leaves other products and other instruments alone.
+    A square-off answers `202 armed` and, at `at_time`, cancels every open order on each instrument it is closing, including stops still waiting for their trigger, and then closes the positions with limit orders priced 2 ticks past the touch, each on the product of the position it closes. Positions are read from each broker's own positions, and each closing order goes to the broker that holds that position, so a position split across two brokers is closed with one order at each. A position whose broker token does not name exactly one instrument today is left open and counted in the parent's status message. Each of those cancels takes a rate token and is recorded on the square-off's own parent, as `outside_cancel_requested` and `outside_cancelled`, because the order it cancels may not be one the engine placed. Unlike [`POST /api/orders/flatten`](flatten.md), it leaves other products and other instruments alone.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
-    | `at_time` | string | Yes | A time later today, well before the broker's own square-off. |
+    | `at_time` | string | Yes | A time of day, read as the table above says, well before the broker's own square-off. |
     | `product` | string | No | The product to close, as the positions route spells it. Defaults to `intraday`. |
     | `instrument_ids` | list of strings | No | Limits the square-off to these instruments. |
 
