@@ -88,7 +88,7 @@ Nothing in the plan order changed for this step; `AtrTrailPricing` and `StagesPr
 
 ## Stage 5g: plans that outlive the day (2026-10-01)
 
-`PlanOrder` sets `CARRIES_OVERNIGHT`, so recovery reads every plan's events from the 30-day carry window, but `carries_parent_overnight` keeps only a plan whose parameters say `carries_overnight`, which `run` sets when any order has a lifetime in `after_days`. Every other plan is a day's plan: rebuilding it after the 06:00 reset would revive yesterday's waiting orders and let them fire, which the reset's expiry of the parent caches has always prevented. The cost is a larger carry read, every plan of the last 30 days, which is acceptable at today's volumes and is the first thing to narrow if it is not.
+`PlanOrder` sets `CARRIES_OVERNIGHT`, so recovery reads every plan's events from the carry window, 366 days since 2026-10-04 (it was 30, which silently dropped a GTT valid for longer once it was a month old), but `carries_parent_overnight` keeps only a plan whose parameters say `carries_overnight`, which `run` sets when any order has a lifetime in `after_days`. Every other plan is a day's plan: rebuilding it after the 06:00 reset would revive yesterday's waiting orders and let them fire, which the reset's expiry of the parent caches has always prevented. The cost is a larger carry read, every plan of the last 366 days, twelve times the old 30-day read. That is acceptable at today's volumes and is the first thing to narrow if it is not, for example by reading only the parents still open in the Redis cache before the rebuild.
 
 ## Paced orders on the clock (2026-10-01)
 
@@ -133,3 +133,10 @@ Before building `cancel_part`, offline probes checked what a plan does when a ca
 `cancel_part` is the user's choice on 2026-10-02 to let cancel name a plan part, whether or not it has sent orders. A working part is marked `ended`, the flag a lifetime that runs out already sets, so `send_due` and `settle` already knew to send nothing more and to mark it done when its orders finish. A part whose turn has not come is also marked `ended` but left `pending`; `OrderPart.start` then marks it done without sending. Marking it done at once was tried first and was wrong: `is_started` counts a done part as started, so a Then join believed its Either child had started, set the shared quantity to the entry's fill of zero, and the target was cancelled with the stop. A kept-whole part that has not started is refused, as `modify_part` refuses it, because each kept-whole type has its own `start` and would need its own check. The answer reports each resting order's `cancel_accepted` from the part's `cancel_asked` list, which is exact without changing `cancel_once`; the broker's full answer is in the event log.
 
 The tick no longer moves a part marked `ended`. Before, a peg or trail whose lifetime had ended could be repriced while its cancel was on its way; no recording moved when this changed.
+
+
+## Refusals when an order fires (2026-10-04)
+
+A placement refused as a part fired, such as a fixed price off the tick or a reduce-only order with nothing to reduce, used to escape `_fire_waiting`, be logged by the ticker, and leave the part `waiting`, so it was refused again on every tick while the caller only ever saw `202 armed`. A refusal with a status in `PERMANENT_REFUSAL_STATUSES` (400, 404, 409) now ends the part as `refused` with the refusal's message, and the plan finishes as usual. Other statuses, such as 429 for a daily cap or 503 for no broker, are still raised and tried again on the next tick, because they can clear by themselves.
+
+`_refuse_off_tick_prices` also refuses a fixed price off the tick when the plan is placed, which covers every triggered order, because those read prices and so `remember_tick_size` has just read the tick at no extra cost. A fixed price on an order sent at once needs no such check, since the placement refuses it straight away.

@@ -258,6 +258,8 @@ A few rules hold for every type, and they explain behavior you will see across t
 - **Re-prices are throttled and count against the daily cap.** A re-price of an entry stops where new entries stop, and a re-price of an exit may use the exit reserve. Cancels and quantity reductions are never held back.
 - **Every price the engine computes is rounded to the tick.** Types that work prices out from the quote need a tick size that the brokers agree on, and are refused with `503` when there is none.
 - **Stops are always stop-limit orders.** Wherever a type places a stop, you must give both the trigger and the limit, and neither is defaulted.
+- **A fixed price must be a whole number of ticks.** A `limit_price` or other fixed price off the tick is refused with `400` when the order is placed, if it is triggered, and straight away otherwise.
+- **A refusal when an order fires ends it.** When the order is refused for good at the moment its trigger fires (`400`, `404` or `409`, such as a reduce-only order with nothing left to reduce), that part ends as `refused` with the reason, and the parent finishes rather than trying again on every tick. A refusal that can clear by itself, such as `429` for a daily cap or `503` when no broker can take it, is tried again on the next tick.
 
 ## Reduce-only orders
 

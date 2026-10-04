@@ -11852,6 +11852,19 @@ class OrderEngineSuite:
                 positions=-40,
             ),
             self.price_result(
+                'a_limit_if_touched_price_off_the_tick_is_refused_when_placed',
+                dict(entry, synthetic={
+                    'type': 'limit_if_touched',
+                    'trigger_price': 995,
+                    'limit_price': 990.03,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                ],
+                accepted,
+            ),
+            self.price_result(
                 'a_stop_and_reverse_closes_then_reverses_once_the_close_fills',
                 dict(entry, synthetic={
                     'type': 'stop_and_reverse',
