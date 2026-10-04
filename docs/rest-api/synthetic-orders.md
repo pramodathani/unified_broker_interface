@@ -213,6 +213,7 @@ stateDiagram-v2
     working --> protecting: exits armed
     working --> completed
     working --> cancelled
+    working --> rejected: every order refused, nothing traded
     working --> failed
     protecting --> completed
     protecting --> cancelled

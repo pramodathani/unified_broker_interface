@@ -31,6 +31,7 @@ ALLOWED_CHANGES = {
         'completed',
         'cancelling',
         'cancelled',
+        'rejected',
         'failed',
     ),
     'protecting': (

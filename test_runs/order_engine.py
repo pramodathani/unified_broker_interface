@@ -5689,6 +5689,58 @@ class OrderEngineSuite:
             ),
         ]
 
+    def run_linked_order_checks(self):
+        """Runs the linked types where a later fill, a race or a price off the tick used to leave a position unprotected or a parent in the wrong state.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        numbered = dict(
+            self.scenarios.answers.json_answer(
+                200,
+                self.scenarios.answers.place_success('flattrade'),
+            ),
+            number_orders=True,
+        )
+        steady = self.book_at(1000.00, 1000.05)
+
+        def preset_plan(name, settings):
+            """A plan of one order with one preset.
+
+            Args:
+                name (str): The preset.
+                settings (dict): Its settings.
+
+            Returns:
+                dict: The plan.
+            """
+            return {
+                'order': {
+                    'presets': [
+                        {
+                            name: settings,
+                        },
+                    ],
+                },
+            }
+
+        bracket = {
+            'stop_price': 990,
+            'stop_limit_price': 988,
+            'target_price': 1010,
+        }
+        return [
+            self.plan_price_result(
+                'a_plan_whose_only_order_is_rejected_after_it_was_accepted_ends_rejected',
+                preset_plan('bracket', bracket),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'REJECTED', 0)]},
+                ],
+                numbered,
+            ),
+        ]
+
     def seed_positions(self, quantity, product='MIS'):
         """Seeds a net position in RELIANCE, intraday unless told otherwise, held at Flattrade or split across brokers.
 
@@ -13448,6 +13500,7 @@ class OrderEngineSuite:
             results.extend(self.run_closed_position_checks())
             results.extend(self.run_late_auction_and_whole_lot_checks())
             results.extend(self.run_breakout_exit_checks())
+            results.extend(self.run_linked_order_checks())
             results.extend(self.run_price_checks())
             results.extend(self.run_wiring_checks())
             results.extend(self.run_assignment_checks())
