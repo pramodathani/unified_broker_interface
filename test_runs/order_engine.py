@@ -13128,6 +13128,82 @@ class OrderEngineSuite:
             },
         ]
 
+    def run_carry_window_checks(self):
+        """Checks that the rebuild after 06:00 still finds an order valid for longer than a month.
+
+        A GTT may be valid for up to 365 days, and the rebuild reads carried orders' events that far back. The events here are a 60-day GTT placed on 20 August 2026, rebuilt 31 and 45 days later, when it is still valid.
+
+        Returns:
+            list: One recorded result per check, with the parents the rebuild found.
+        """
+        placed = datetime.datetime(2026, 8, 20, 10, 0, tzinfo=moments.INDIA)
+        parameters = {
+            'type': 'plan',
+            'routed_from': 'gtt',
+            'plan': {
+                'order': {
+                    'presets': [
+                        {
+                            'good_till_triggered': {
+                                'trigger_price': 995,
+                                'limit_price': 990,
+                                'valid_days': 60,
+                            },
+                        },
+                    ],
+                },
+            },
+        }
+        rows = [
+            {
+                'time': placed.isoformat(),
+                'parent_order_id': 'gtt-sixty-days',
+                'sequence': 1,
+                'event': 'parent_received',
+                'synthetic_type': 'plan',
+                'parent_state': 'received',
+                'instrument_id': order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['reliance'],
+                'detail': {
+                    'parameters': parameters,
+                },
+            },
+            {
+                'time': (placed + datetime.timedelta(seconds=1)).isoformat(),
+                'parent_order_id': 'gtt-sixty-days',
+                'sequence': 2,
+                'event': 'parameters_changed',
+                'synthetic_type': 'plan',
+                'parent_state': 'received',
+                'detail': {
+                    'parameters': dict(parameters, carries_overnight=True),
+                },
+            },
+        ]
+        results = []
+        for days_later in [
+            31,
+            45,
+        ]:
+            now = datetime.datetime(2026, 8, 20, 7, 0, tzinfo=moments.INDIA) + datetime.timedelta(days=days_later)
+            parent_store = ParentStore(redis_stand_ins.FakeEngineStoreRedis())
+            parent_store.reset_epochs = lambda when=None, moment=now: ParentStore.reset_epochs(moment)
+            recovery = EngineRecovery(
+                parent_store.cache,
+                engine_stand_ins.WindowedEventLog(rows),
+                parent_store,
+                order_routes.BROKER_NAMES,
+                logging.getLogger('test_runs.order_engine'),
+            )
+            parents = recovery.replay()
+            states = []
+            for parent in parents:
+                states.append(parent.state)
+            results.append({
+                'name': f'a_sixty_day_gtt_is_rebuilt_{days_later}_days_after_it_was_placed',
+                'rebuilt': states,
+            })
+        return results
+
     def run_overnight_carry_checks(self):
         """Checks which timed orders are marked to outlive the 06:00 rebuild: those whose time falls on a later trading day, and not those due later the same day.
 
@@ -13342,6 +13418,7 @@ class OrderEngineSuite:
             results.extend(self.run_parent_checks())
             results.extend(self.run_recovery_checks())
             results.extend(self.run_overnight_carry_checks())
+            results.extend(self.run_carry_window_checks())
             results.extend(self.run_follower_checks())
             results.extend(self.run_reaction_checks())
             results.extend(self.run_plan_checks())

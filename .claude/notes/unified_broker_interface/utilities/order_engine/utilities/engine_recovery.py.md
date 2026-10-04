@@ -35,3 +35,8 @@ Replaying `orphan_abandoned` sets the parent to `failed`, not only the leg to `u
 ## Parents of retired types (2026-10-03)
 
 When the fixed classes were retired, a parent recorded under one of their names lost its runner: the tickers, the follower and the commands look the class up by the recorded type and quietly skip a missing one, so such a parent would sit open with live broker orders and nothing reacting to them. None was open when they were retired (29 parents recovered, 0 open), but `warn_if_unrun` logs each such parent that recovery finds open, naming its unfinished broker orders, so they can be looked after by hand rather than discovered later. It warns rather than cancels, because cancelling a stop that protects a real position is not something recovery should decide alone.
+
+
+## The carry window covers the longest GTT (2026-10-04)
+
+`CARRY_DAYS` was 30, while `plan_reader.MOST_DAYS` lets a GTT be valid for 365 days. A carried parent with no event for more than 30 days fell out of the carry read, so a 60-day GTT placed on 20 August vanished at the rebuild of 20 September, with 29 days still to run. `CARRY_DAYS` is now `MOST_DAYS + 1`, imported rather than repeated so the two cannot drift apart again; the extra day covers the reset falling just after the placing time. `run_carry_window_checks` in `test_runs/order_engine.py` rebuilds such a GTT 31 and 45 days on. The read is twelve times larger, as `plan.py.md` explains.

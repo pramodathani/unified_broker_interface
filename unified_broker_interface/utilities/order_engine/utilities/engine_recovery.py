@@ -9,13 +9,16 @@ from unified_broker_interface.utilities.order_engine.utilities.orphan_matcher im
 from unified_broker_interface.utilities.order_engine.utilities.parent_order import (
     ParentOrder,
 )
+from unified_broker_interface.utilities.order_engine.utilities.plan_reader import (
+    MOST_DAYS,
+)
 from unified_broker_interface.utilities.order_engine.utilities.registry import (
     SYNTHETIC_ORDER_CLASSES,
 )
 
 # How far back the carried types are read. Long enough for a stop armed before a long weekend and a
 # holiday to still be found, short enough that the query stays small.
-CARRY_DAYS = 30
+CARRY_DAYS = MOST_DAYS + 1
 
 
 class EngineRecovery:
