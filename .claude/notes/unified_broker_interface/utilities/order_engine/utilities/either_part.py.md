@@ -23,3 +23,9 @@ An Either at the root, such as an OCO, has no parent join to set a target, so it
 ## A caller's changes (added 2026-10-02)
 
 `take_caller_change` puts a caller's cut on the join's shared budget rather than on one child, so every child of a `reduce` join comes down by the same amount and the next settle cannot grow the cut exit back. It mirrors today's OCO, where cutting one exit brings the other down to match. Under the `cancel` rule the children are different trades, so `PlanOrder.on_leg_modified` only routes a change here for `reduce`.
+
+## The kept child is remembered (2026-10-04)
+
+`settle` used to choose the child to keep afresh on every settle, as the first child in list order with any fill. When the second child filled first, its siblings' cancel was asked for; if the first child then filled a little before that cancel landed, the next settle kept the first child and cancelled the rest of the second, the real winner. `winner` stores the first child seen with a fill in the join's record and never changes it. When two children are first seen filled in the same settle the list order still decides, because the leg records carry no fill time.
+
+`traded` subtracts buys and sells on the same instrument because a two-sided breakout's losing side can fill before its cancel lands. The gross 20 sized the exits for a position that was really flat.

@@ -400,7 +400,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `oto`
 
-    "One triggers other" places your order and, when it fills, places a second order described by `then`. The child is sized to what the first order actually filled and grows with each further fill. The `then` object is merged over your order body, and its quantity is always replaced, so leave it out.
+    "One triggers other" places your order and, when it fills, places a second order described by `then`. The child is sized to what the first order actually filled and grows with each further fill. If the child has already filled or been cancelled when the first order fills further, a new child is sent for the extra quantity, so a late fill is never left without its second order. The `then` object is merged over your order body, and its quantity is always replaced, so leave it out.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
@@ -451,7 +451,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `bracket`
 
-    A bracket places your order as an entry and, on its first partial fill, arms a stop and a target for what filled. Further fills grow the exits. When an exit fills while the entry is still working, the rest of the entry is cancelled first. The exit prices are checked before the entry is sent, so a bracket with unusable exits, including a stop or target that is not a whole number of ticks, is refused with <span class="status s4">400</span> before anything reaches a broker.
+    A bracket places your order as an entry and, on its first partial fill, arms a stop and a target for what filled. Further fills grow the exits, and an entry fill that arrives after both exits have finished, such as one that beats the entry's cancel, sends the exits again for what it added. When an exit fills while the entry is still working, the rest of the entry is cancelled first. The exit prices are checked before the entry is sent, so a bracket with unusable exits, including a stop or target that is not a whole number of ticks, is refused with <span class="status s4">400</span> before anything reaches a broker.
 
     It takes the same fields as `oco`: `stop_price`, `stop_limit_price` and `target_price`, with at least one of `stop_price` and `target_price`.
 
@@ -490,7 +490,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `two_sided_breakout`
 
-    A two-sided breakout rests a buy stop above a range and a sell stop below it, both as stop-limit orders for the order's `quantity`. The first fill cancels the other side. Once an entry has filled, a stop and a target are armed on the side that filled, each a distance from the entry's average fill: a long's stop sits `stop_distance` below it with its limit `stop_limit_offset` further down and its target `target_distance` above, and a short's the other way round. Prices are rounded to the nearest tick. The exits are distances, not prices, because one absolute stop or target cannot suit a break either way: after a break downwards, a target above the range would buy straight back. `stop_price`, `stop_limit_price` and `target_price` are refused with <span class="status s4">400</span>.
+    A two-sided breakout rests a buy stop above a range and a sell stop below it, both as stop-limit orders for the order's `quantity`. The first fill cancels the other side. If the other side fills before its cancel lands, the two fills offset, and the exits are cut to the net position, which is nothing when both sides filled in full. Once an entry has filled, a stop and a target are armed on the side that filled, each a distance from the entry's average fill: a long's stop sits `stop_distance` below it with its limit `stop_limit_offset` further down and its target `target_distance` above, and a short's the other way round. Prices are rounded to the nearest tick. The exits are distances, not prices, because one absolute stop or target cannot suit a break either way: after a break downwards, a target above the range would buy straight back. `stop_price`, `stop_limit_price` and `target_price` are refused with <span class="status s4">400</span>.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
@@ -508,7 +508,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `oca`
 
-    "One cancels all" places several candidate entries, each on its own instrument, and cancels every other candidate the moment any of them reports a fill, including a partial one. It places its candidates the way a `basket` does, so the `candidates` field follows the rules described in the Multi-instrument tab.
+    "One cancels all" places several candidate entries, each on its own instrument, and cancels every other candidate the moment any of them reports a fill, including a partial one. The first candidate seen to fill is the one kept, even when another fills a moment later before its cancel lands. It places its candidates the way a `basket` does, so the `candidates` field follows the rules described in the Multi-instrument tab, and a candidate the broker refuses leaves the others working, with a <span class="status s2">207</span> `partial` answer.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
@@ -1415,7 +1415,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     A plan that places nothing at once answers <span class="status s2">202</span> with `outcome: armed`. A plan whose root is one order placed at once answers with that order's broker answer, and any other plan answers with `legs`, one entry per order placed, each with its `path`, and an outcome combined as today's types combine several orders: `accepted` when every order was, `partial` with <span class="status s2">207</span> when only some were, and otherwise `rejected` or `unknown`. The engine checks every waiting order on every price tick and places it once, on the first tick its trigger holds. After every order update the whole plan is settled: each join brings its children in line with the fills as they are now, which is what keeps a second partial fill from being taken off an exit twice. A broker order whose cancel the broker has accepted is not asked to cancel again while its confirmation is on its way, so settling again spends no further order messages on it. An order that protects a position on its own, rather than one a `then` join's first plan opened, is refused with <span class="status s4">409</span> and the rule `protect_needs_position` when no position is held on the body's side, because it would open one. When the position is held, the order is sent to the broker that holds it, and it is refused with <span class="status s4">409</span> when several brokers hold it or the one holding it has less than the order's quantity.
 
-    Each part of the plan has a path, starting at `root`: a `then` join's plans are at `root.first` and `root.each_fill`, and an `either` join's at `root.children.0` and so on. Every broker order a part places carries its path as its `leg_role`, and each part's state is kept in the parent's `parameters.parts` under its path: `state` (`pending`, `waiting`, `working` or `done`), once done its `reason` (`filled`, `partly_filled`, `refused` or `cancelled`), `target`, the quantity a join set, `memory`, what its trigger remembers between ticks, and `fired_at`. Only the plan's main order carries the caller's `tag`. The parent ends when every part is done: `completed` when anything traded, `rejected` when a broker refused an order and nothing traded, and `cancelled` otherwise. [`GET /api/orders/parents`](orders.md#the-engines-parents) shows the parts with the rest of the parent.
+    Each part of the plan has a path, starting at `root`: a `then` join's plans are at `root.first` and `root.each_fill`, and an `either` join's at `root.children.0` and so on. Every broker order a part places carries its path as its `leg_role`, and each part's state is kept in the parent's `parameters.parts` under its path: `state` (`pending`, `waiting`, `working` or `done`), once done its `reason` (`filled`, `partly_filled`, `refused` or `cancelled`), `target`, the quantity a join set, `memory`, what its trigger remembers between ticks, and `fired_at`. An `either` join under the `cancel` rule keeps `winner`, the position of the child that filled first, and never changes it. Only the plan's main order carries the caller's `tag`. The parent ends when every part is done: `completed` when anything traded, `rejected` when a broker refused an order and nothing traded, and `cancelled` otherwise. [`GET /api/orders/parents`](orders.md#the-engines-parents) shows the parts with the rest of the parent.
 
     A refused plan answers like this:
 

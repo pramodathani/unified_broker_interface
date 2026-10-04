@@ -24,6 +24,10 @@ OPPOSITE_SIDES = {
     'BUY': 'SELL',
     'SELL': 'BUY',
 }
+GROWN_AGAIN_REASONS = (
+    'filled',
+    'cancelled',
+)
 NAMED_SIDES = {
     'buy': 'BUY',
     'sell': 'SELL',
@@ -250,7 +254,7 @@ class OrderPart:
     def _opening_side(self, plan_order):
         """The side that opened the position this order works on: the side the first plan of its Then join filled on, or the body's side.
 
-        Under a Then join the position is the one the first plan opened, which for a two-sided breakout is whichever side broke, so the side its filled broker orders traded is the one that counts. Otherwise the body's side is read the way a validated order reads it: the API accepts the side in any case, so `buy` must be read as `BUY`. Comparing the raw value made a lower-case buy wait in the sell direction and fire at once, which a live test on 2026-10-01 caught.
+        Under a Then join the position is the one the first plan opened, which for a two-sided breakout is whichever side broke, so the side its filled broker orders traded is the one that counts. When both sides filled, the larger one is the position's side. Otherwise the body's side is read the way a validated order reads it: the API accepts the side in any case, so `buy` must be read as `BUY`. Comparing the raw value made a lower-case buy wait in the sell direction and fire at once, which a live test on 2026-10-01 caught.
 
         Args:
             plan_order (PlanOrder): The plan order, whose parent holds the body and the legs.
@@ -258,9 +262,24 @@ class OrderPart:
         Returns:
             str: BUY or SELL.
         """
+        bought = 0
+        sold = 0
+        first_side = None
         for leg in plan_order.parent.legs:
             if leg.role in self.opened_by and (leg.filled_quantity or 0) > 0 and leg.transaction_type:
-                return str(leg.transaction_type).strip().upper()
+                side = str(leg.transaction_type).strip().upper()
+                if first_side is None:
+                    first_side = side
+                if side == 'BUY':
+                    bought = bought + leg.filled_quantity
+                elif side == 'SELL':
+                    sold = sold + leg.filled_quantity
+        if bought > sold:
+            return 'BUY'
+        if sold > bought:
+            return 'SELL'
+        if first_side is not None:
+            return first_side
         return str(self.context(plan_order).body.get('transaction_type') or '').strip().upper()
 
     def sending_side(self, opening_side, own_side=None):
@@ -1006,6 +1025,7 @@ class OrderPart:
         record = plan_order.part_record(self.path)
         state = record.get('state')
         if state == 'done':
+            self._grow_finished(plan_order, record, target)
             return
         changed = record.get('target') != target
         record['target'] = target
@@ -1042,6 +1062,35 @@ class OrderPart:
                     new_total,
                     f'the plan\'s {self.path} part should now trade {target} in all',
                 )
+
+    def _grow_finished(self, plan_order, record, target):
+        """Sends a finished order again for what its target has grown by, so a later fill of the order it follows is covered.
+
+        An exit that had already filled, or that its join cancelled when it had nothing left to trade, is done; when the entry it follows then fills further, the new quantity would otherwise have no exit. Such an order is reopened and sent a new broker order for the difference. Only an order that has sent a broker order before is reopened: one cancelled before it was ever sent, as the exits of an entry that never filled are, stays cancelled. An order a caller cancelled is `ended` and is not reopened, nor is one that was refused or expired, and neither is an order whose execution sends pieces rather than growing one order.
+
+        Args:
+            plan_order (PlanOrder): The plan order.
+            record (dict): The order's part record.
+            target (int): The quantity it should now trade in all, before the caller's change.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        if record.get('ended') or record.get('reason') not in GROWN_AGAIN_REASONS:
+            return
+        if not self.execution.changes_its_order_to_grow() or not self.own_legs(plan_order.parent):
+            return
+        wanted = target + (record.get('caller_change') or 0) - self.traded(plan_order.parent)
+        if wanted <= 0:
+            return
+        record['target'] = target
+        record['state'] = 'working'
+        record.pop('reason', None)
+        plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part had finished, and is sent again for the {wanted} more it should now trade')
+        quotes = {}
+        if self.needs_prices():
+            quotes = plan_order.quotes_now()
+        self.place(plan_order, None, quotes, wanted)
 
     def _cut_resting_pieces(self, plan_order, target):
         """Brings the resting pieces down so they account for no more than `target`, newest first; a larger target is left to the execution, which sends more pieces.
