@@ -10578,6 +10578,18 @@ class OrderEngineSuite:
                 accepted,
             ),
             self.clock_result(
+                'a_time_stop_closes_an_entry_that_filled_completely',
+                dict(entry, synthetic={
+                    'type': 'time_stop',
+                    'until_time': '10:30',
+                }),
+                [
+                    self.update('26091500000021', 'COMPLETE', 10),
+                ],
+                frozen + 1900,
+                accepted,
+            ),
+            self.clock_result(
                 'a_time_stop_that_filled_nothing_just_cancels',
                 dict(entry, synthetic={
                     'type': 'time_stop',

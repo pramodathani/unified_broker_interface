@@ -1069,11 +1069,11 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `time_stop`
 
-    A time stop places an entry and, at `until_time` or `minutes` after it was placed, cancels whatever is still resting and then closes what filled with a `MARKET` order in the closing direction. It closes only the position this order opened, not the account's whole position. If both fields are given, `until_time` is used.
+    A time stop places an entry and, at `until_time` or `minutes` after it was placed, cancels whatever is still resting and then closes what filled with a `MARKET` order in the closing direction. It closes only the position this order opened, not the account's whole position. It closes what filled whether the entry filled in part or completely. Give exactly one of the two fields; both, or neither, is refused with `400`.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
-    | `until_time` | string | One of the two | A time later today. |
+    | `until_time` | string | One of the two | A time of day, read as the table above says. |
     | `minutes` | number | One of the two | Above zero. |
 
     ```json
