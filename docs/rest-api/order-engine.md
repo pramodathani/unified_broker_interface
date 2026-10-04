@@ -91,7 +91,7 @@ The table below lists every answer that comes from the engine or the hand-over r
 
 | Status | Message | Meaning |
 |---|---|---|
-| <span class="status s2">202</span> | `outcome` is `armed` or `scheduled` | A synthetic order is recorded and waiting for a price, a time or a fill. Nothing may have reached a broker yet. |
+| <span class="status s2">202</span> | `outcome` is `armed` | A synthetic order is recorded and waiting for a price, a time or a fill. Nothing may have reached a broker yet. |
 | <span class="status s4">400</span> | `the order engine does not run '<type>' orders; it runs ...` | `synthetic.type` is not one of the registered types. |
 | <span class="status s4">400</span> | a type's own field message | The `synthetic` object is missing or has a wrong field for its type. |
 | <span class="status s4">403</span> | `the day is down <loss>, which is past the <limit> limit, so no new order is being placed` | The daily loss lockout is on. |
