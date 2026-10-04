@@ -13,6 +13,9 @@ from unified_broker_interface.utilities.order_engine.utilities.all_at_once_execu
 from unified_broker_interface.utilities.order_engine.utilities.atr_trail_pricing import (
     AtrTrailPricing,
 )
+from unified_broker_interface.utilities.order_engine.utilities.bar_builder import (
+    MOST_KEPT_BARS,
+)
 from unified_broker_interface.utilities.order_engine.utilities.book_depth_execution import (
     BookDepthExecution,
 )
@@ -2807,7 +2810,7 @@ class PlanReader:
         """Reads a trail's `atr` settings.
 
         Args:
-            atr (object): The settings as the caller wrote them: `bar_minutes` (default 5), `periods` (default 14) and `multiple` (default 2).
+            atr (object): The settings as the caller wrote them: `bar_minutes` (default 5), `periods` (default 14, at most one fewer than the bars a parent keeps, since the average needs one bar more than its periods) and `multiple` (default 2).
             path (str): Where they sit in the plan.
 
         Returns:
@@ -2819,7 +2822,7 @@ class PlanReader:
         problems_before = len(self.problems)
         self._refuse_unknown(atr, ('bar_minutes', 'periods', 'multiple'), path, 'atr', 'setting')
         bar_minutes = self._seconds(atr.get('bar_minutes', 5), path, 'bar_minutes')
-        periods = self._whole_number(atr.get('periods', 14), path, 'periods', 2, None)
+        periods = self._whole_number(atr.get('periods', 14), path, 'periods', 2, MOST_KEPT_BARS - 1)
         multiple = self._price(atr.get('multiple', 2), path, 'multiple')
         if len(self.problems) > problems_before:
             return None

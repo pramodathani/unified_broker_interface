@@ -5689,6 +5689,103 @@ class OrderEngineSuite:
             ),
         ]
 
+    def run_stop_type_checks(self):
+        """Runs the stop types where a price off the tick, a shrinking range, a cancel before the first send or a restart used to leave a position unprotected.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        accepted = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        entry = self.scenarios.bodies.market_order(
+            dry_run=None,
+            order_type='LIMIT',
+            price=1000,
+            quantity=10,
+        )
+        steady = self.book_at(1000.00, 1000.05)
+        stop_in_the_book = {
+            'order_type': 'SL',
+            'trigger_price': 990.05,
+        }
+        calming_path = [
+            1000.05,
+            1004,
+            998,
+            1006,
+            1010,
+            1002,
+            1012,
+            1008,
+            1015,
+            1007,
+            1018,
+            1016,
+            1022,
+            1014,
+            1025,
+            1021,
+            1026,
+            1024,
+            1027,
+            1026,
+            1028,
+            1027,
+            1029,
+            1028,
+            1029.5,
+            1028.5,
+            1030,
+            1029.5,
+            1030.5,
+            1030,
+            1031,
+            1030.5,
+            1024,
+            1022,
+            1021,
+            1020,
+        ]
+        calming_steps = []
+        for index, price in enumerate(calming_path):
+            calming_steps.append({
+                'quote': self.book_at(round(price - 0.05, 2), price),
+                'at': index * 15,
+            })
+        return [
+            self.price_result(
+                'an_average_range_trail_never_moves_its_stop_through_the_market',
+                dict(entry, synthetic={
+                    'type': 'atr_trail',
+                    'trail_points': 15,
+                    'stop_limit_offset': 2,
+                    'bar_minutes': 1,
+                    'periods': 3,
+                    'atr_multiple': 2,
+                }),
+                calming_steps,
+                accepted,
+                book_overrides=stop_in_the_book,
+                positions=10,
+            ),
+            self.price_result(
+                'an_average_range_trail_with_more_periods_than_bars_kept_is_refused',
+                dict(entry, synthetic={
+                    'type': 'atr_trail',
+                    'trail_points': 10,
+                    'stop_limit_offset': 2,
+                    'periods': 50,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+                positions=10,
+            ),
+        ]
+
     def run_linked_order_checks(self):
         """Runs the linked types where a later fill, a race or a price off the tick used to leave a position unprotected or a parent in the wrong state.
 
@@ -13673,6 +13770,7 @@ class OrderEngineSuite:
             results.extend(self.run_late_auction_and_whole_lot_checks())
             results.extend(self.run_breakout_exit_checks())
             results.extend(self.run_linked_order_checks())
+            results.extend(self.run_stop_type_checks())
             results.extend(self.run_price_checks())
             results.extend(self.run_wiring_checks())
             results.extend(self.run_assignment_checks())

@@ -765,15 +765,15 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `atr_trail`
 
-    This is a trailing stop whose distance is `atr_multiple` times the average true range of the last `periods` bars. The bars are built from the engine's own ticks, so until `periods` bars have closed it trails at `trail_points`.
+    This is a trailing stop whose distance is `atr_multiple` times the average true range of the last `periods` bars. The bars are built from the engine's own ticks, aligned to the clock, and the average needs `periods + 1` closed bars, the extra one for the first true range's previous close; until then it trails at `trail_points`. When the range shrinks, the trigger rises towards the best price even if the market has not, but it is never moved to or past the last traded price. It takes `activate_at` as `trailing_stop` does.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
     | `trail_points` | number | Yes | The fixed distance used until enough bars exist. Above zero. |
     | `stop_limit_offset` | number | Yes | As for `trailing_stop`. |
     | `bar_minutes` | number | No | Above zero. Defaults to 5. |
-    | `periods` | integer | No | At least 2. Defaults to 14. |
-    | `atr_multiple` | number | No | Above zero. Defaults to 2.0. |
+    | `periods` | integer | No | From 2 to 49, since the engine keeps the last 50 bars. Defaults to 14. |
+    | `atr_multiple` | number | No | Above zero. Defaults to 2. |
     | `step_ticks` | integer | No | As for `trailing_stop`. |
 
     ```json
@@ -1281,7 +1281,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | `marketable` | `buffer_ticks`, default 2 | A limit that many ticks past the opposite touch, read when the order is sent. With no book to price against, the order waits for the next tick. |
     | `native_stop` | `trigger_price` and `limit_price`; `exit_if_gapped`, default false | A stop-limit (`SL`) resting at the broker. With `exit_if_gapped`, a stop the last price has already passed when it is sent is sent as a limit two ticks past the other side's touch instead, since such a stop would be refused or fire at whatever the gap left. |
     | `trail` | `points` or `percent`, exactly one; `limit_offset`, required; `step_ticks`, default 1 | A stop-limit resting at the broker, placed `points` (or `percent` of the price) behind the last price and moved after the best price seen, never back. A sell stop follows the highest price up and a buy stop the lowest price down. It moves only when it can move by at least `step_ticks`, and every move passes the repricing throttle and rate budget. |
-    | `trail` with `atr` | `points`, required; `limit_offset`; `step_ticks`; `atr`: `bar_minutes` (default 5), `periods` (default 14, at least 2) and `multiple` (default 2) | A trail whose distance is `multiple` times the average true range of bars built from the engine's own ticks since the stop rested. Until `periods` bars have closed there is nothing to average, so it trails `points` behind: fourteen five-minute bars take seventy minutes. |
+    | `trail` with `atr` | `points`, required; `limit_offset`; `step_ticks`; `atr`: `bar_minutes` (default 5), `periods` (default 14, at least 2) and `multiple` (default 2) | A trail whose distance is `multiple` times the average true range of bars built from the engine's own ticks since the stop rested. Until `periods + 1` bars have closed there is nothing to average, so it trails `points` behind: fourteen-period five-minute bars take at least seventy-five minutes. `periods` is at most 49. |
     | `stages` | `entry_price`, `stop_price`, `limit_offset` and `rules`, required; `step_ticks` | A stop-limit resting at `stop_price` and moved by profit milestones. Each of up to 20 rules has a `gain` from `entry_price`, larger than the rule before, and either `stop_at_gain`, where the stop goes measured the same way (0 is breakeven), or `trail_points`, which must be the last rule and hands the rest of the trade to a trail. The stop only moves in the position's favour, so a rule that would loosen it is skipped. |
     | `peg` | `reference`: `own_touch` (default), `mid` or `opposite_touch`; `offset_ticks`, default 0; `follows`, default true; `within_body_price`, default false | A limit at that place in the book, moved `offset_ticks` away from filling (a negative offset moves towards it), and moved again whenever the reference moves. Every move passes the repricing throttle, and a move that changes nothing is not sent. With `follows: false` the order is priced at its reference when sent and left there. With `within_body_price`, a `LIMIT` body's price is the worst the order takes, and it rests at that price when the book shows no reference. |
     | `chase` | `step_ticks`, default 1; `step_seconds`, default 5; `cross_after_seconds`, optional | A limit at its own side's touch that steps `step_ticks` towards the market every `step_seconds`, from where it is, never past the other side's touch. With `cross_after_seconds`, once that long has passed it moves to the other side's touch. Its clock is recorded with each step, so a restart neither steps at once nor forgets when it began. |

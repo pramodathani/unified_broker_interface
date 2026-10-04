@@ -11,7 +11,7 @@ from unified_broker_interface.utilities.order_engine.utilities.trail_pricing imp
 class AtrTrailPricing:
     """A plan order's trailing stop whose distance is `multiple` times the average true range of the bars built since it rested.
 
-    It keeps the rules of today's average-range trail. The bars are built from the engine's own price ticks, `bar_minutes` long, into the pricing's memory, so there is nothing to average until `periods` of them have closed; until then the stop trails `points` behind, which is why `points` is required. Everything else is an ordinary `trail`: a native stop-limit that follows the best price seen and never moves back, by at least `step_ticks`.
+    It keeps the rules of today's average-range trail. The bars are built from the engine's own price ticks, `bar_minutes` long, into the pricing's memory, so there is nothing to average until `periods + 1` of them have closed, the extra one giving the first true range its previous close; until then the stop trails `points` behind, which is why `points` is required. Everything else is an ordinary `trail`: a native stop-limit that follows the best price seen and never moves back, by at least `step_ticks`.
 
     Attributes:
         points (decimal.Decimal): The distance until enough bars have closed.

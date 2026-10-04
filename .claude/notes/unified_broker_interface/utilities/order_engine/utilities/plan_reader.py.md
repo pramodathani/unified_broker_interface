@@ -77,3 +77,7 @@ With `using` read by `_read_using`, every join the design names is built, so the
 ## from_fill (2026-10-02)
 
 `from_fill` is read by `_read_from_fill`: exactly one of a stop (`stop_distance` with `stop_limit_offset`) or a target (`target_distance`). The Then join copies its `opened_by` list into the pricing, and a `from_fill` part with no `opened_by` is refused as `from_fill_needs_then`. Its stop variant joins `STOP_PRICINGS` in the `stop_not_sliced` rule.
+
+## `periods` is at most 49 (2026-10-04)
+
+`BarBuilder` keeps `MOST_KEPT_BARS` (50) closed bars, and an average true range over `periods` needs `periods + 1` of them, the extra one for the first true range's previous close. With no upper bound, `periods` of 50 or more was accepted and never produced an average, so the trail stayed at `trail_points` for the whole day. The bound is taken from `MOST_KEPT_BARS` so the two cannot drift apart.
