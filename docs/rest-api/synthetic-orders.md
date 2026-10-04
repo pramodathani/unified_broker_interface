@@ -617,10 +617,10 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     A close-on-trigger order (the Atlas's G12) is a stop that makes sure its exit is not rejected for margin. When the level is reached it does two things in order:
 
-    1. It cancels every order resting on the instrument, at every broker, including orders placed outside the engine. Pending orders hold margin, and on a short option position that margin can be what an exit is refused for.
+    1. It cancels every order resting on the instrument on the order's product, at every broker, including orders placed outside the engine and orders whose product the order feed did not record. Orders on another product belong to another position and are left alone. Pending orders hold margin, and on a short option position that margin can be what an exit is refused for.
     2. It closes the whole net position held on the instrument and the order's product, with a limit two ticks past the other side's best price. A position held at several brokers is closed with one order at each of them, for the part that broker holds.
 
-    It closes what is held when it fires, not a quantity named in advance, so the body's `quantity` is not used. Set `transaction_type` to the side that opened the position: a long is protected by a `BUY`, which fires when the price falls to the level. If nothing is held when it fires, the parent completes without sending an order. It takes no fields besides the price trigger fields above, including `trigger_on`.
+    It closes what is held when it fires, not a quantity named in advance, so the body's `quantity` is not used, and a change to its price or quantity while it waits is refused with `409`. Set `transaction_type` to the side that opened the position: a long is protected by a `BUY`, which fires when the price falls to the level. If nothing is held when it fires, the parent completes without sending an order. It takes no fields besides the price trigger fields above, including `trigger_on`.
 
     ```json
     {"type": "close_on_trigger", "trigger_price": 995, "trigger_on": "held", "hold_seconds": 3}
@@ -632,10 +632,10 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     | `method` | What is sent | Trade-off |
     |---|---|---|
-    | `sequential` (default) | A closing order for the position, and, once it has completely filled, a second order of the same size and side that opens the reverse | Nothing opens until the old position is gone, but there is a gap between the two |
+    | `sequential` (default) | A closing order for the position, and, once it has completely filled, a second order of the same size, on the same side as the close, that opens the reverse | Nothing opens until the old position is gone, but there is a gap between the two |
     | `double` | One order for twice the position | Faster, but the exchange sees one order of double size, and the broker must accept margin for the new side before the old one closes |
 
-    Both are limits two ticks past the other side's best price. A position held at several brokers is flipped at each of them, for the part that broker holds, and a sequential reverse at one broker waits only for that broker's close. A sequential close that only partly fills sends no reverse until it completes.
+    Both are limits two ticks past the other side's best price. With `double`, a position held at several brokers is flipped at each of them, for the part that broker holds. With `sequential`, the reverse waits until every broker's close is done and then opens the whole reverse at the broker of the first close. A close that only partly fills sends no reverse until it is done, and if it ends with part unfilled, the reverse is sized to what filled. The reverse is sent on the side the close traded, so it flips a short as well as a long, whatever the body's side.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
@@ -1209,7 +1209,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     |---|---|:---:|---|
     | `presets` | list | No | Objects each holding one preset name and its settings, from the table below. An order with no presets and no slot values runs as `simple`. |
     | `trigger` | object | No | What the order waits for: one condition, or `all` or `any` with a list of them. With no trigger the order is placed at once. |
-    | `side` | string | No | `buy`, `sell`, `protect`, which trades against the position the body's side opened, so a body `BUY` with `protect` sends a sell, `close`, which closes the position held when the order fires and needs a position `quantity`, or `against_delta`, which hedges the option the plan traded against its delta, opposite the opening side for a call and on the same side for a put, and needs a `parent_fill_delta` quantity. Defaults to the body's side. |
+    | `side` | string | No | `buy`, `sell`, `protect`, which trades against the position the body's side opened, so a body `BUY` with `protect` sends a sell, `close`, which closes the position held when the order fires and needs a position `quantity`, `same_as_first`, which under a Then join trades on the side the first plan filled on, or `against_delta`, which hedges the option the plan traded against its delta, opposite the opening side for a call and on the same side for a put, and needs a `parent_fill_delta` quantity. Defaults to the body's side. |
     | `pricing` | list | No | One pricing setter (`fixed`, `marketable`, `native_stop`, `trail`, `stages`, `peg`, `chase`, `follow_instrument`, `option_model` or `from_parent_fill`), and optionally the modifiers `cap` and `discretion`. Defaults to `fixed` with the body's own order type and price. |
     | `execution` | list | No | One execution value, which cuts the order into pieces and says when each is sent: `all_at_once`, `iceberg`, `twap`, `vwap`, `front_loaded`, `participation`, `book_depth`, `top_up`, `daily`, `ladder` or `freeze_limit`. Defaults to `all_at_once`. Two values nest, in list order: the first (`twap`, `vwap`, `front_loaded`, `participation` or `iceberg`) splits the order into slices as it would its pieces, and the second (`iceberg`, `twap`, `vwap` or `front_loaded`) works each slice as it would a whole order, so `[twap, iceberg]` shows each TWAP slice as an iceberg. Other pairs are refused as `bad_nesting`, and three values as `nesting_too_deep`. |
     | `guards` | list | No | Checks made before an order is sent or moved: `post_only` so far. |

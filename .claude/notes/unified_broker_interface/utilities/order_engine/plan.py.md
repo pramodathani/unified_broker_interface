@@ -142,3 +142,5 @@ A placement refused as a part fired, such as a fixed price off the tick or a red
 `_refuse_off_tick_prices` also refuses a fixed price off the tick when the plan is placed, which covers every triggered order, because those read prices and so `remember_tick_size` has just read the tick at no extra cost. A fixed price on an order sent at once needs no such check, since the placement refuses it straight away.
 
 `_remember_tick_sizes` now also keeps the tick of every instrument a part watches. A watched instrument with none fell back to the parent's own tick, so a CRUDEOIL order (tick 1.0) watching NIFTY rounded 24999.55 to 25000 and fired below its trigger.
+
+A part that closes positions refuses a change to its price or quantity with 409. Such a change used to be accepted and stored, but the close is built from the positions and the book when it fires and never read it.

@@ -991,6 +991,8 @@ class PlanOrder(SyntheticOrder):
             answer, status = self._change_held_part(part, price, quantity, dry_run)
             answer['part'] = path
             return answer, status
+        if part.position is not None and (price is not None or quantity is not None):
+            raise RefusedRequestError.refusal(f'part {path} closes the positions held when it fires, sized from those positions and priced from the book, so its price and quantity cannot be set; cancel it instead', 409, parent_id=parent_order_id, part=path)
         if (price is not None or trigger_price is not None) and not isinstance(part.pricing, (FixedPricing, NativeStopPricing)):
             raise RefusedRequestError.refusal(f'part {path} works out its price from the market when it is sent, so its price cannot be set beforehand', 400, parent_id=parent_order_id, part=path)
         context = part.context(self)

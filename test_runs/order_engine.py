@@ -9470,21 +9470,30 @@ class OrderEngineSuite:
         """Puts open RELIANCE orders placed outside the engine where the order updates and the broker's book hold them.
 
         Args:
-            resting (list | None): Flattrade order ids.
+            resting (list | None): Flattrade order ids, or objects with `order_id` and the `product` the update records.
             status (str): The status the order feed holds them in, on the shared vocabulary.
 
         Returns:
             None: This method returns nothing.
         """
-        for order_id in resting or []:
-            self.fake_redis.hashes.setdefault('unified:order-updates', {})[
-                f'flattrade:{order_id}'
-            ] = json.dumps({
+        for item in resting or []:
+            product = None
+            if isinstance(item, dict):
+                order_id = item['order_id']
+                product = item.get('product')
+            else:
+                order_id = item
+            update = {
                 'broker': 'flattrade',
                 'order_id': order_id,
                 'instrument_id': order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['reliance'],
                 'status': status,
-            })
+            }
+            if product is not None:
+                update['product'] = product
+            self.fake_redis.hashes.setdefault('unified:order-updates', {})[
+                f'flattrade:{order_id}'
+            ] = json.dumps(update)
             self.fake_redis.hashes.setdefault('flattrade:orders:orders', {})[
                 order_id
             ] = self.broker_book_entry(order_id)
@@ -11850,6 +11859,58 @@ class OrderEngineSuite:
                 ],
                 accepted,
                 positions=-40,
+            ),
+            self.price_result(
+                'a_close_on_trigger_leaves_orders_on_another_product_alone',
+                dict(entry, synthetic={
+                    'type': 'close_on_trigger',
+                    'trigger_price': 995,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                ],
+                accepted,
+                positions=75,
+                resting=[
+                    {'order_id': '26091500000077', 'product': 'CNC'},
+                    {'order_id': '26091500000078', 'product': 'MIS'},
+                ],
+            ),
+            self.price_result(
+                'a_close_on_trigger_refuses_a_change_to_the_close_it_will_send',
+                dict(entry, synthetic={
+                    'type': 'close_on_trigger',
+                    'trigger_price': 995,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'held_change': {'part': 'root', 'quantity': 5}},
+                    {'quote': steady, 'at': 2, 'held_change': {'part': 'root', 'price': '990'}},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 3},
+                ],
+                accepted,
+                positions=75,
+            ),
+            self.price_result(
+                'a_stop_and_reverse_reverses_a_short_with_a_buy_whatever_the_body_says',
+                dict(entry, synthetic={
+                    'type': 'stop_and_reverse',
+                    'trigger_price': 995,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                    {
+                        'quote': self.book_at(994.90, 994.95),
+                        'at': 2,
+                        'updates': [
+                            self.update('26091500000021', 'COMPLETE', 75),
+                        ],
+                    },
+                ],
+                accepted,
+                positions=-75,
             ),
             self.price_result(
                 'a_cross_instrument_order_reads_the_watched_price_at_its_own_tick',
