@@ -576,7 +576,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `cross_instrument`
 
-    This is a limit-if-touched order whose trigger watches the last traded price of a different instrument. You hold an option and exit it when the index crosses a level, for example. The engine does not check that the two instruments are related.
+    This is a limit-if-touched order whose trigger watches the last traded price of a different instrument, read at that instrument's own tick size. You hold an option and exit it when the index crosses a level, for example. The engine does not check that the two instruments are related.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|

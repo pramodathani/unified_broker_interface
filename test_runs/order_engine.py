@@ -11852,6 +11852,22 @@ class OrderEngineSuite:
                 positions=-40,
             ),
             self.price_result(
+                'a_cross_instrument_order_reads_the_watched_price_at_its_own_tick',
+                dict(entry, synthetic={
+                    'type': 'cross_instrument',
+                    'watch_instrument_id': order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['usdinr_future'],
+                    'trigger_price': 83.5,
+                    'trigger_direction': 'at_or_above',
+                    'limit_price': 1000,
+                }),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'usdinr_future': self.book_at(83.4925, 83.4950)}},
+                    {'quote': steady, 'at': 1, 'other_quotes': {'usdinr_future': self.book_at(83.4950, 83.4975)}},
+                    {'quote': steady, 'at': 2, 'other_quotes': {'usdinr_future': self.book_at(83.4975, 83.5000)}},
+                ],
+                accepted,
+            ),
+            self.price_result(
                 'a_limit_if_touched_price_off_the_tick_is_refused_when_placed',
                 dict(entry, synthetic={
                     'type': 'limit_if_touched',

@@ -385,17 +385,28 @@ class PlanOrder(SyntheticOrder):
         tick_sizes = {}
         for part in root.order_parts():
             context = part.context(self)
-            if context.is_parents_instrument() or not part.needs_prices():
-                continue
-            instrument, _, _ = self.placement.market_context(context.instrument_id, False, False)
-            tick_size = self.read_order(context.body).agreed_tick_size(instrument.handles)
-            if tick_size is None:
-                raise RefusedRequestError.refusal(
-                    'an order of this plan works its prices out from the live quote, which needs a tick size the brokers agree on, and there is none for its instrument',
-                    503,
-                    instrument_id=context.instrument_id,
-                )
-            tick_sizes[context.instrument_id] = str(tick_size)
+            if not context.is_parents_instrument() and part.needs_prices():
+                instrument, _, _ = self.placement.market_context(context.instrument_id, False, False)
+                tick_size = self.read_order(context.body).agreed_tick_size(instrument.handles)
+                if tick_size is None:
+                    raise RefusedRequestError.refusal(
+                        'an order of this plan works its prices out from the live quote, which needs a tick size the brokers agree on, and there is none for its instrument',
+                        503,
+                        instrument_id=context.instrument_id,
+                    )
+                tick_sizes[context.instrument_id] = str(tick_size)
+            for watched_id in part.instruments():
+                if watched_id in tick_sizes or context.is_parents_instrument(watched_id):
+                    continue
+                instrument, _, _ = self.placement.market_context(watched_id, False, False)
+                tick_size = self.read_order(context.body).agreed_tick_size(instrument.handles)
+                if tick_size is None:
+                    raise RefusedRequestError.refusal(
+                        'an order of this plan watches the price of an instrument whose brokers do not agree on a tick size, so its price cannot be read exactly',
+                        503,
+                        instrument_id=watched_id,
+                    )
+                tick_sizes[watched_id] = str(tick_size)
         if tick_sizes:
             self.parent.parameters = dict(self.parent.parameters)
             self.parent.parameters['tick_sizes'] = tick_sizes
