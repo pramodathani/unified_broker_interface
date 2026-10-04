@@ -302,6 +302,36 @@ class BrokerOrders:
             return lots * self.broker_lot_size(handle)
         return units
 
+    def units_per_lot(self, instrument, handle):
+        """The units in one lot, which every order's quantity at this broker must be a whole number of.
+
+        For a securities market it is the lot size in the broker's own order handle, the figure the placement's lot check compares against. For a currency or commodity market it is the instrument's trusted contract size.
+
+        Args:
+            instrument (Instrument): The tradeable instrument.
+            handle (dict): The broker's order handle for the instrument.
+
+        Returns:
+            int | None: The units in one lot, or None when it is not known or not a whole number above zero.
+        """
+        if instrument.is_securities_market():
+            if not isinstance(handle, dict):
+                return None
+            text = handle.get('lot_size')
+        else:
+            text = instrument.trusted_units_per_lot()
+        if text is None:
+            return None
+        try:
+            lot_size = decimal.Decimal(str(text))
+        except decimal.InvalidOperation:
+            return None
+        if not lot_size.is_finite() or lot_size <= 0:
+            return None
+        if lot_size != lot_size.to_integral_value():
+            return None
+        return int(lot_size)
+
     def handle_skip_reason(self, handle):
         """Checks what the broker needs from its order handle beyond the identifier field.
 

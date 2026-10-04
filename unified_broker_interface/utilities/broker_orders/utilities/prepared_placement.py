@@ -14,6 +14,7 @@ class PreparedPlacement:
         skipped (list): Each broker passed over before this one, as a dictionary with `broker` and `reason`.
         identifier_sent (str | None): The handle value the request named the instrument by, which is the broker token or the order symbol depending on that broker's `IDENTIFIER_FIELD`.
         broker_quantity (int | None): The quantity the request carries, in the broker's own terms, which is what an exchange freeze limit is compared against.
+        units_per_lot (int | None): The units in one lot at this broker, which an order split below a freeze limit cuts each slice to a whole number of, or None when it is not known.
     """
 
     def __init__(
@@ -24,6 +25,7 @@ class PreparedPlacement:
         skipped,
         identifier_sent=None,
         broker_quantity=None,
+        units_per_lot=None,
     ):
         """Builds the prepared placement.
 
@@ -34,6 +36,7 @@ class PreparedPlacement:
             skipped (list): Each broker passed over before this one.
             identifier_sent (str | None): The handle value the request named the instrument by.
             broker_quantity (int | None): The quantity the request carries, in the broker's own terms.
+            units_per_lot (int | None): The units in one lot at this broker, or None when it is not known.
 
         Returns:
             None: This method returns nothing.
@@ -45,3 +48,4 @@ class PreparedPlacement:
         self.skipped = skipped
         self.identifier_sent = identifier_sent
         self.broker_quantity = broker_quantity
+        self.units_per_lot = units_per_lot
