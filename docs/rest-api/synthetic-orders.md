@@ -5,7 +5,7 @@ A synthetic order is an order that no Indian exchange offers, built by the order
 This page is the glossary of all 54 types you can ask for. The engine runs `simple` and `plan` with classes of their own and every other type as a [`plan`](#plan) of that type's preset, so a request for a `bracket` is answered as a plan is. It lists every field each type reads from the `synthetic` object, with the defaults and limits taken from the code.
 
 !!! danger "Synthetic orders place real orders, sometimes long after you asked"
-    A synthetic order can place, modify or cancel orders at a broker minutes, hours or even days after your request, with nobody watching. Triggers, trailing stops, grids and schedules all act on their own. Send `"dry_run": true` first, which builds the first broker request without recording or sending anything.
+    A synthetic order can place, modify or cancel orders at a broker minutes, hours or even days after your request, with nobody watching. Triggers, trailing stops, grids and schedules all act on their own. Send `"dry_run": true` first, which checks the order and shows what it would do without recording or sending anything. For every type but `simple`, the answer's `plan` shows the orders the type will send; its `request` is your own order body as a broker would receive it, which for a stop is not the stop. A dry run also skips the check that a protecting order has a position to protect.
 
 !!! note "The order engine runs them"
     Synthetic orders are run by the [order engine](order-engine.md), which places every order the REST API accepts, so it has to be running.
@@ -16,7 +16,7 @@ A leg of a synthetic order can be changed through [`PUT /api/orders/modify`](ord
 
 | Type | After you change a leg |
 |---|---|
-| `trailing_stop`, `trailing_entry`, `atr_trail`, `stepped_stop` | The trail continues from the trigger you set, whichever way you moved it |
+| `trailing_stop`, `trailing_entry`, `atr_trail`, `stepped_stop` | The trail continues from the trigger you set. A trigger moved closer to the market stays; one moved further away stays only while the market is within the trail distance of it, and the next tick otherwise pulls it back to the trail. A `stepped_stop` before its trail starts keeps your trigger until the next milestone moves it further. |
 | `peg` | The peg follows the market at the new distance from its reference |
 | `chaser` | The chase waits a full step interval after your price, then continues from it |
 | `underlying_peg`, `volatility` | The price follows from your price and the followed instrument's price now |
@@ -127,11 +127,11 @@ The master table below lists every type you can name in `synthetic.type`. `simpl
 | `chaser` | Book-following limits | Starts on its own side of the book and steps towards the other until it fills. | `step_ticks`, `step_seconds`, `cap_price`, `cross_after_seconds` | 200 |
 | `market_if_touched` | Price triggers | Waits unseen for the price to touch a level, then sends a marketable limit. | `trigger_price`, `trigger_direction`, `buffer_ticks` | 202 |
 | `limit_if_touched` | Price triggers | Waits for the price to touch a level, then rests a limit at another price. | `trigger_price`, `limit_price`, `trigger_direction` | 202 |
-| `hidden_stop` | Stops and trailing | A stop kept in the engine that watches the bid or offer, with an optional real backstop. | `trigger_price`, `backstop_price`, `backstop_limit_price`, `buffer_ticks` | 202 |
+| `hidden_stop` | Stops and trailing | A stop kept in the engine that watches the bid or offer, with an optional real backstop. | `trigger_price`, `backstop_price`, `backstop_limit_price`, `buffer_ticks` | 202, or 200 with a backstop |
 | `cross_instrument` | Price triggers | A limit-if-touched order whose trigger watches a different instrument. | `watch_instrument_id`, `trigger_price`, `limit_price` | 202 |
 | `indicator_triggered` | Price triggers | Sends a limit when a chosen field of the live quote crosses a level. | `watch_field`, `trigger_price`, `limit_price` | 202 |
 | `trailing_stop` | Stops and trailing | A real stop at the broker whose trigger follows the market up, never down. | `trail_points` or `trail_percent`, `stop_limit_offset`, `step_ticks`, `activate_at` | 200, or 202 with `activate_at` |
-| `trailing_entry` | Stops and trailing | A stop entry that follows a falling market down so the first bounce fills it. | `trail_points` or `trail_percent`, `stop_limit_offset`, `step_ticks` | 200 |
+| `trailing_entry` | Stops and trailing | A stop entry that follows a falling market down so the first bounce fills it. | `trail_points` or `trail_percent`, `stop_limit_offset`, `step_ticks`, `activate_at` | 200, or 202 with `activate_at` |
 | `post_only` | Book-following limits | Checks that a limit would rest rather than trade before sending it. | `on_crossing` | 200 |
 | `discretionary` | Book-following limits | Shows one limit price and quietly takes a slightly worse one when it comes within reach. | `discretion_points`, `discretion_quantity` | 200 |
 | `vwap` | Execution algorithms | A TWAP whose slice sizes follow the shape of the day's volume. | `slices`, `over_minutes`, `volume_profile` | 200 |
@@ -146,8 +146,8 @@ The master table below lists every type you can name in `synthetic.type`. `simpl
 | `legged_spread` | Multi-instrument | Works one leg passively, then takes the other at the price that makes the net. | `candidates`, `net_price` | 200 |
 | `strategy_stop` | Multi-instrument | Places a basket and closes every leg when the total profit or loss crosses a line. | `candidates`, `loss_limit`, `profit_target` | 200 |
 | `exposure_hedge` | Multi-instrument | Trades a hedge when the account's net exposure leaves a band. | `watched`, `lower_band`, `upper_band`, `hedge_instrument_id` | 202 |
-| `candle_close_stop` | Stops and trailing | A hidden stop that fires only when a whole bar closes past the level. | `trigger_price`, `bar_minutes`, `backstop_price`, `backstop_limit_price` | 202 |
-| `atr_trail` | Stops and trailing | A trailing stop whose distance is a multiple of the recent average true range. | `trail_points`, `stop_limit_offset`, `bar_minutes`, `periods`, `atr_multiple` | 200 |
+| `candle_close_stop` | Stops and trailing | A hidden stop that fires only when a whole bar closes past the level. | `trigger_price`, `bar_minutes`, `backstop_price`, `backstop_limit_price` | 202, or 200 with a backstop |
+| `atr_trail` | Stops and trailing | A trailing stop whose distance is a multiple of the recent average true range. | `trail_points`, `stop_limit_offset`, `bar_minutes`, `periods`, `atr_multiple`, `activate_at` | 200, or 202 with `activate_at` |
 | `square_off` | Time-based | At a time of day, cancels resting orders and closes the net positions held on one product with limits. | `at_time`, `product`, `instrument_ids` | 202 |
 | `accumulation` | Execution algorithms | Buys a fixed quantity at a fixed interval, each purchase resting on its own side. | `every_minutes`, `purchases` | 200 |
 | `gtt` | Price triggers | A limit-if-touched order that keeps waiting across days until it expires. | `trigger_price`, `limit_price`, `valid_days` | 202 |
@@ -680,13 +680,14 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `hidden_stop`
 
-    A hidden stop lives in the engine and answers `202 armed`. It watches the **bid** when protecting a long and the **offer** when protecting a short, rather than the last trade, and falls back to the last trade when that side of the book is empty. When it fires, it cancels the backstop first and sends an exit priced `buffer_ticks` past the touch; if the broker does not accept the backstop's cancel, the exit is held back and the next tick tries again, so the two can never both fill. Once the backstop fills, the parent ends `completed` and stops watching, because the position is closed. By default a long's stop fires when the price falls to the level. It takes `trigger_price` and `trigger_direction` as the price triggers do.
+    A hidden stop lives in the engine and answers `202 armed`. It watches the **bid** when protecting a long and the **offer** when protecting a short, rather than the last trade. While that side of the book is empty it does not fire, even if the last trade is past the level. When it fires, it cancels the backstop first and sends an exit priced `buffer_ticks` past the touch; if the broker does not accept the backstop's cancel, the exit is held back and the next tick tries again, so the two can never both fill. Once the backstop fills, the parent ends `completed` and stops watching, because the position is closed. By default a long's stop fires when the price falls to the level. It takes `trigger_price` and `trigger_direction` as the price triggers do.
 
-    With a backstop, the backstop is a real stop-limit order placed at once, and the armed answer says so: it carries a `backstop` object with the `broker`, `order_id`, `outcome`, `trigger_price` and `price` of that order, and its `status_message` names the broker. `candle_close_stop` answers the same way.
+    With a backstop, the backstop is a real stop-limit order placed at once, so the answer is <span class="status s2">200</span> `accepted` with `legs`, one entry for the backstop at path `root.children.1` with its `order_id`. `candle_close_stop` answers the same way. Once any of the backstop fills, the engine's own stop stops watching, so a backstop that fills only partly leaves the rest of the position to the backstop alone. Neither stop is sized from the position: both send the order's `quantity`.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
     | `trigger_price` | number | Yes | The hidden level. |
+    | `trigger_direction` | string | No | `at_or_above` or `at_or_below`. By default a long's stop fires at or below the level and a short's at or above it. |
     | `backstop_price` | number | No | A real stop-loss limit's trigger, placed at the broker when the parent is armed. Give both backstop fields or neither. |
     | `backstop_limit_price` | number | With `backstop_price` | The backstop's limit. |
     | `buffer_ticks` | integer | No | At or above zero. Defaults to 2. |
@@ -697,7 +698,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `candle_close_stop`
 
-    This is a hidden stop that fires only when a whole bar has closed past the level. The bars are built from the engine's own price ticks from the moment the order was placed, so the first bar has to finish before anything can fire. It takes every `hidden_stop` field plus the one below.
+    This is a hidden stop that fires only when a whole bar has closed past the level. The bars are built from the last traded price on the engine's own ticks, from the moment the order was placed, and are aligned to the clock in Unix time: one-minute bars end on the minute, and hourly bars end at half past the hour in India time. The bar the order is placed in counts, so the first decision comes at the next boundary, which can be seconds away. The exit is a limit `buffer_ticks` past the opposite touch when the bar closes, and is not moved afterwards. It takes every `hidden_stop` field plus the one below.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
@@ -747,7 +748,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | `stop_price` | number | Yes | Where the stop starts. Above zero. |
     | `stop_limit_offset` | number | Yes | As for `trailing_stop`. |
     | `rules` | list | Yes | From 1 to 20 rules, each with a `gain` above zero and larger than the one before, and exactly one of `stop_at_gain` (a number, negative to keep some risk) or `trail_points` (above zero). |
-    | `step_ticks` | integer | No | As for `trailing_stop`, once trailing. |
+    | `step_ticks` | integer | No | As for `trailing_stop`. It applies to milestone moves too: a milestone whose move is smaller than `step_ticks` is skipped and not tried again. |
 
     `trail_points`, `trail_percent` and `activate_at` are refused outside a rule.
 
@@ -788,7 +789,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     |---|---|:---:|---|
     | `stop_price` | number | Yes | The stop's trigger. Above zero. |
     | `stop_limit_price` | number | Yes | The stop's limit. Above zero. |
-    | `arm_at` | string | No | A time of day as `HH:MM` or `HH:MM:SS`, India time. Defaults to `09:20`. |
+    | `arm_at` | string | No | A time of day as `HH:MM`, India time. Seconds are refused. Defaults to `09:20`. |
     | `valid_days` | integer | No | From 1 to 365. Defaults to 30. |
 
     ```json
