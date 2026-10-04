@@ -145,13 +145,16 @@ class PositionCloser:
             return None
         return str(instrument_ids[0])
 
-    def resting_orders(self, instrument_ids):
-        """Every open order at every broker on some instruments.
+    def resting_orders(self, instrument_ids, product=None):
+        """Every open order at every broker on some instruments, on one product when one is given.
 
         `unified:order-updates` is a hash keyed `broker:order_id` holding the latest update for every order the whole system has seen. It covers orders this engine never placed, including ones sent by hand or by another tool, and those are as capable of re-opening a position as the engine's own.
 
+        An order on another product is left alone, because it belongs to a position that is not being closed; an order whose product the update does not record is cancelled, since it cannot be told apart.
+
         Args:
             instrument_ids (set): The instruments.
+            product (str | None): The product being closed, on the positions vocabulary such as `carry`, or None for every product.
 
         Returns:
             list: One `(broker_name, broker_order_id)` per open order.
@@ -176,13 +179,15 @@ class PositionCloser:
                 continue
             if order.get('status') not in OPEN_STATUSES:
                 continue
+            if product in ORDER_PRODUCTS and order.get('product') and order.get('product') != ORDER_PRODUCTS[product]:
+                continue
             broker = order.get('broker')
             order_id = order.get('order_id')
             if broker and order_id:
                 found.append((broker, str(order_id)))
         return found
 
-    def cancel_resting(self, instrument_ids, reason):
+    def cancel_resting(self, instrument_ids, reason, product=None):
         """Cancels the orders that could re-open a position after it is closed.
 
         A cancel that a broker refuses is recorded and the closing carries on. Leaving a position open because one stale order could not be cancelled would be the worse mistake.
@@ -190,12 +195,13 @@ class PositionCloser:
         Args:
             instrument_ids (set): The instruments being closed.
             reason (str): Why, for a person reading the parent later.
+            product (str | None): The product being closed, on the positions vocabulary, or None for every product.
 
         Returns:
             int: How many cancels the brokers accepted.
         """
         cancelled = 0
-        for broker_name, broker_order_id in self.resting_orders(instrument_ids):
+        for broker_name, broker_order_id in self.resting_orders(instrument_ids, product):
             accepted = self.runner.cancel_outside_order(
                 broker_name,
                 broker_order_id,

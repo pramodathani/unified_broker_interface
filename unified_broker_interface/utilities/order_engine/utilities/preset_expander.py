@@ -1777,16 +1777,12 @@ class PresetExpander:
             path (str): The preset's path.
 
         Returns:
-            dict: A Then join: the close, then on completion an order the other way sized to what closed.
+            dict: A Then join: the close, then on completion an order on the same side as the close, sized to what closed, so the position ends the other way round whichever way it was held.
         """
         self._refuse_unknown(settings, ('trigger_price', 'trigger_direction', 'trigger_on', 'hold_seconds', 'method'), path, 'stop_and_reverse')
         if self.opening_side not in OTO_SIDES:
             self._add_problem(path, 'needs_side', 'a stop and reverse opens the side opposite to the position, so it needs to know the side of the order that opened it')
             return {}
-        if self.opening_side == 'BUY':
-            reverse_side = 'sell'
-        else:
-            reverse_side = 'buy'
         close = dict(entry)
         presets = list(close.get('presets') or [])
         presets.append(
@@ -1802,7 +1798,7 @@ class PresetExpander:
                 },
                 'on_complete': {
                     'order': {
-                        'side': reverse_side,
+                        'side': 'same_as_first',
                         'pricing': [
                             {
                                 'marketable': {

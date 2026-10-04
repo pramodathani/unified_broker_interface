@@ -1,5 +1,6 @@
 """Stand-ins for the parts of the order engine's surroundings the offline suites replace: the event log, `uuid.uuid4` and the stop event, and an engine that runs on the route's own thread."""
 
+import datetime
 import logging
 import uuid
 
@@ -133,6 +134,56 @@ class RecordingEventLog:
             shown.append(kept)
         return shown
 
+
+
+class WindowedEventLog:
+    """A stand-in for the synthetic order event table that answers recovery's two time-windowed reads.
+
+    Attributes:
+        rows (list): The recorded events, each with an ISO `time` and a `synthetic_type`.
+    """
+
+    def __init__(self, rows):
+        """Builds the log.
+
+        Args:
+            rows (list): The recorded events.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.rows = rows
+
+    def read_since(self, moment):
+        """Every event at or after a moment.
+
+        Args:
+            moment (datetime.datetime): The start of the window.
+
+        Returns:
+            list: The events.
+        """
+        found = []
+        for row in self.rows:
+            if datetime.datetime.fromisoformat(row['time']) >= moment:
+                found.append(row)
+        return found
+
+    def read_since_for_types(self, moment, types):
+        """Every event of some order types at or after a moment.
+
+        Args:
+            moment (datetime.datetime): The start of the window.
+            types (list): The order types.
+
+        Returns:
+            list: The events.
+        """
+        found = []
+        for row in self.read_since(moment):
+            if row['synthetic_type'] in types:
+                found.append(row)
+        return found
 
 class CountingUuid:
     """A stand-in for `uuid.uuid4` that counts rather than being random.

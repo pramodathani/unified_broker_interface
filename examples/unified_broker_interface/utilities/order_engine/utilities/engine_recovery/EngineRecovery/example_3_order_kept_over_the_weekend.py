@@ -1,6 +1,6 @@
 """Rebuilds a good-till-triggered order placed last week alongside today's orders, without counting any of its rows twice.
 
-Recovery reads the record twice. The first read covers everything since the last 06:00 IST. The second reaches thirty days further back, but only for the order types that live overnight, which `carried_types` names. A GTT order placed on Friday, which the engine runs as a plan marked `carries_overnight`, fired this morning, so it shows up in both reads, because its newest row is from today.
+Recovery reads the record twice. The first read covers everything since the last 06:00 IST. The second reaches 366 days further back, the longest a GTT can be valid plus a day, but only for the order types that live overnight, which `carried_types` names. A GTT order placed on Friday, which the engine runs as a plan marked `carries_overnight`, fired this morning, so it shows up in both reads, because its newest row is from today.
 
 `merged` joins the two reads by parent and sequence number, drops the repeated rows and puts each parent's rows back in order. `replay` does that merge itself and then rebuilds each parent, so the GTT order's plan comes back `working` with its Friday parameters intact, next to today's plain order.
 

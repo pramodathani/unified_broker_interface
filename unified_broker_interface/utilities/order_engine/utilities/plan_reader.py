@@ -280,6 +280,7 @@ SIDES = (
     'protect',
     'close',
     'against_delta',
+    'same_as_first',
 )
 WHOLE_PART_CLASSES = {
     'grid': GridPart,

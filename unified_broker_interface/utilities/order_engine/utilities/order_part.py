@@ -35,7 +35,7 @@ class OrderPart:
 
     Every broker order it places carries its path as the leg's role, and it only ever looks at legs with that role, so another part's orders can never be mistaken for its own. That is the rule that lets parts be combined, where today's order types each assume they own every leg of the parent.
 
-    An order with a trigger waits until the trigger holds and then places its order once. `side` is `buy` or `sell` to name the side, `protect` to trade against the position the caller's order opened, which sends the opposite side and counts as closing a position, or None for the body's own side. Pricing decides the order type and prices at the moment the order is sent.
+    An order with a trigger waits until the trigger holds and then places its order once. `side` is `buy` or `sell` to name the side, `protect` to trade against the position the caller's order opened, which sends the opposite side and counts as closing a position, `same_as_first` to trade on the side the first plan of its Then join filled on, or None for the body's own side. Pricing decides the order type and prices at the moment the order is sent.
 
     Attributes:
         path (str): Where the part sits in the plan, such as `root`.
@@ -275,6 +275,8 @@ class OrderPart:
         """
         if self.side in ('protect', 'close'):
             return OPPOSITE_SIDES[opening_side]
+        if self.side == 'same_as_first':
+            return opening_side
         if self.side in NAMED_SIDES:
             return NAMED_SIDES[self.side]
         if own_side:
@@ -282,7 +284,7 @@ class OrderPart:
         return opening_side
 
     def _sending_side(self, plan_order):
-        """The side this part's orders are sent on in this plan: against the position for `protect` and `close`, the named side for `buy` and `sell`, against the option's delta for `against_delta` (opposite the opening side for a call, the same side for a put), and otherwise its own body's side.
+        """The side this part's orders are sent on in this plan: against the position for `protect` and `close`, the named side for `buy` and `sell`, the first plan's filled side for `same_as_first`, against the option's delta for `against_delta` (opposite the opening side for a call, the same side for a put), and otherwise its own body's side.
 
         Args:
             plan_order (PlanOrder): The plan order.
