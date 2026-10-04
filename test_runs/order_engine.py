@@ -5894,6 +5894,31 @@ class OrderEngineSuite:
                 numbered,
             ),
             self.plan_result(
+                'an_oca_candidate_refused_after_others_were_placed_leaves_them_watched',
+                preset_plan('oca', {
+                    'candidates': [
+                        {
+                            'instrument_id': identifiers['reliance'],
+                            'quantity': 10,
+                            'price': 1000,
+                        },
+                        {
+                            'instrument_id': identifiers['kwil'],
+                            'quantity': 10,
+                            'price': 250,
+                        },
+                        {
+                            'instrument_id': identifiers['sensex_option'],
+                            'price': 100,
+                        },
+                    ],
+                }),
+                [
+                    self.update('26091500000101', 'OPEN', 4),
+                ],
+                numbered,
+            ),
+            self.plan_result(
                 'a_two_sided_breakout_whose_sides_both_fill_cancels_its_exit',
                 preset_plan('two_sided_breakout', breakout),
                 [

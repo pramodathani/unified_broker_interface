@@ -3,6 +3,9 @@
 import copy
 import time
 
+from unified_broker_interface.utilities.broker_orders.utilities.refused_request import (
+    RefusedRequestError,
+)
 from unified_broker_interface.utilities.order_engine.utilities.all_at_once_execution import (
     AllAtOnceExecution,
 )
@@ -517,7 +520,10 @@ class OrderPart:
             now (float | None): The Unix time now, or None to read the clock.
 
         Returns:
-            list: One `(path, answer, status)` per broker order placed now.
+            list: One `(path, answer, status)` per broker order placed now, including one for this order when the placement refused it while other orders of the plan were already at a broker.
+
+        Raises:
+            RefusedRequestError: When the placement refuses this order and nothing of the plan has reached a broker yet.
         """
         record = plan_order.part_record(self.path)
         if record.get('ended'):
@@ -552,7 +558,15 @@ class OrderPart:
             record['fired_at'] = now
         record['state'] = 'working'
         plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part is working')
-        return self.send(plan_order, started_at, quotes, now)
+        try:
+            return self.send(plan_order, started_at, quotes, now)
+        except RefusedRequestError as refusal:
+            refused = plan_order.refused_beside_live_orders(self, refusal)
+            if refused is None:
+                raise
+            return [
+                refused,
+            ]
 
     def send(self, plan_order, started_at, quotes, now=None):
         """Starts working now, when the order's trigger held or it was waiting for a price, and sends whatever is due.

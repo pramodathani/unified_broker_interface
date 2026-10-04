@@ -322,6 +322,37 @@ class PlanOrder(SyntheticOrder):
                 prices.append(('stop limit price', part.pricing.limit_price))
         return prices
 
+    def refused_beside_live_orders(self, part, refusal):
+        """Ends an order the placement refused while the plan's other orders were already at a broker, and describes it as a refused leg.
+
+        A plan that places several orders at once, such as an OCA's candidates or a basket's, used to let the refusal of a later one, for example a quantity that is not a whole number of lots, escape after the earlier ones had been placed. The caller got a 400 with no parent id, the parent was stored as rejected, and the orders already at the broker were left with nobody watching them. Now only the refused order ends, and the answer lists it beside the others, so the plan carries on and answers 207. When nothing has reached a broker yet, the refusal still escapes, so a single bad order is refused as before and leaves no parent.
+
+        Args:
+            part (object): The order part the placement refused.
+            refusal (RefusedRequestError): The refusal.
+
+        Returns:
+            tuple | None: The `(path, answer, status)` entry for the refused order, or None when the refusal should escape.
+        """
+        if refusal.status not in PERMANENT_REFUSAL_STATUSES:
+            return None
+        has_live_orders = False
+        for leg in self.parent.legs:
+            if leg.is_live():
+                has_live_orders = True
+        if not has_live_orders:
+            return None
+        self._end_refused(part, refusal)
+        reason = refusal.body.get('error') or refusal.body.get('status_message') or 'the order was refused'
+        answer = {
+            'broker': None,
+            'instrument_id': part.context(self).instrument_id,
+            'order_id': None,
+            'outcome': 'rejected',
+            'status_message': reason,
+        }
+        return part.path, answer, refusal.status
+
     def _end_refused(self, part, refusal):
         """Ends an order the placement refused as it fired, so the parent finishes and says why instead of trying again on every tick.
 
