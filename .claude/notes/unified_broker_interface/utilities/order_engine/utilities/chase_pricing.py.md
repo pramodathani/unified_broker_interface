@@ -15,3 +15,7 @@ A plan part's memory survives a restart only if an event records it. `OrderPart.
 ## Stale quotes (2026-10-05)
 
 The group 6 walkthrough found every moving pricing acting on a quote marked `stale`: a peg followed a stale bid, a chaser crossed to a stale offer of 1005, an underlying peg moved on a stale index. The quote combiner marks a quote stale when its broker has gone silent and no healthy backup exists, so its price may be minutes old. This pricing now treats a stale quote as no quote, as `LimitMarketableCondition` always did: it neither places from it nor moves on it, and the next fresh quote moves the order as usual.
+
+## Never backwards (2026-10-05)
+
+A step is clamped to the other side's touch. In a crossed or lagging book that clamp can land behind the order's own price (1000.05 dragged to 999.55 in the research run), which the class docstring always promised could not happen. Such a step is now skipped; `stepped_at` still moves, so the next step waits a full interval.

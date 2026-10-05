@@ -118,3 +118,7 @@ A sequential `stop_and_reverse` used to name its reverse side from the body: a B
 `settle` marks a working part that is `ended` and has no broker orders done as `cancelled`. `done_reason` answers None when there are no legs, so a daily stop cancelled before its first morning stayed working and its parent stayed `received` for ever.
 
 `move` also writes the pricing memory with an event when a new bar starts, so an average range trail keeps its closed bars across a restart (see `bar_builder.py.md`).
+
+## Held terms take the sending side (2026-10-05)
+
+`prepare` overwrites the held terms' `transaction_type` with the side the order is sent on. A held order protecting a long recorded BUY while it would sell, so `virtual_book` estimated the wrong side of the book and a paper order filled at once. The bracket target recording `a_plan_target_is_held_only_because_its_own_order_asks` now says SELL.

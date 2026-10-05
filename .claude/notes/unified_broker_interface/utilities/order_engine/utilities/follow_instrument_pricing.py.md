@@ -12,10 +12,14 @@ The start price and the watched price at sending are put in the pricing memory b
 
 Today's volatility type subclasses the underlying peg, and the two share the watched price, the bounds, the step and the moving. The subclass overrides only `prepared_memory`, `target_price`, `priced_body`, `reason` and `described`. `OrderPart` asks `isinstance(..., FollowInstrumentPricing)` to know that a pricing watches another instrument and readies memory when the plan is placed, which covers both.
 
-## Not done yet
+## Not done at first (re-anchoring on a caller's change is done now by `carry_on`)
 
 A caller who changes the price is not re-anchored, as with the peg.
 
 ## Stale quotes (2026-10-05)
 
 The group 6 walkthrough found every moving pricing acting on a quote marked `stale`: a peg followed a stale bid, a chaser crossed to a stale offer of 1005, an underlying peg moved on a stale index. The quote combiner marks a quote stale when its broker has gone silent and no healthy backup exists, so its price may be minutes old. This pricing now treats a stale quote as no quote, as `LimitMarketableCondition` always did: it neither places from it nor moves on it, and the next fresh quote moves the order as usual.
+
+## reason takes memory (2026-10-05)
+
+`reason` takes the pricing memory so `OptionModelPricing` can name the volatility in force after a caller's change; this class ignores it.

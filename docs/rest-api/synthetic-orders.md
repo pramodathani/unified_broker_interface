@@ -849,7 +849,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | Interest rate | `interest_rate`, 0 unless you give one. |
     | Time to expiry | From now to expiry, in years of 365 days. |
 
-    The order must be a `LIMIT`, and its `price` is the worst it will accept: the most a buy pays, the least a sell takes. The model's premium is used whenever it is better than that price. That price stays what the order was placed with, even after you change the leg. If you change the leg's price yourself, the order takes the volatility your price implies and carries on at that volatility. The answer carries `priced_at`, the price the order was first sent at.
+    The order must be a `LIMIT`, and its `price` is the worst it will accept: the most a buy pays, the least a sell takes. The model's premium is used whenever it is better than that price, and `lowest_price` and `highest_price` never push the order past it. That price stays what the order was placed with, even after you change the leg. If you change the leg's price yourself, the order takes the volatility your price implies and carries on at that volatility. An option that has already expired is refused with <span class="status s4">400</span>.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
@@ -865,7 +865,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `chaser`
 
-    A chaser starts on its own side of the book and steps towards the other side until it fills. It rests at `cap_price` if it reaches it. With `cross_after_seconds`, it moves to the other side's touch once that long has passed.
+    A chaser starts on its own side of the book and steps towards the other side until it fills. It rests at `cap_price` if it reaches it, and starts there when the touch is already past it. It is never moved backwards, even when the book lags behind it. With `cross_after_seconds`, it moves to the other side's touch once that long has passed, counted from the first tick after it rests, and after that it follows the other side's touch.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|

@@ -215,7 +215,7 @@ class WorstPriceAndRefusalExample:
         print(f'With a worst price of 150: {pricing.premium(plan_order, memory, "BUY", decimal.Decimal("25000"), {}, 1790137800.0)}')
         body = pricing.priced_body(plan_order, {'order_type': 'LIMIT', 'price': 150}, 'BUY', QuoteMaker().index_at(25000), memory)
         print(f'The first order is a {body["order_type"]} at {body["price"]}, remembering the index at {memory["watched_start"]}')
-        print(f'The reason it gives: {pricing.reason(decimal.Decimal("25100"), decimal.Decimal("150"))}')
+        print(f'The reason it gives: {pricing.reason(decimal.Decimal("25100"), decimal.Decimal("150"), {})}')
         index_order = StandInPlanOrder('11111111-1111-5111-8111-000000000099', {'order_type': 'LIMIT', 'price': 150})
         index_order.placement.instruments['11111111-1111-5111-8111-000000000099'] = StandInInstrument({}, 'equity')
         try:

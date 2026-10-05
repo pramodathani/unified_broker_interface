@@ -1,6 +1,6 @@
 """Prices a Nifty 25000 call at 12.5 volatility, and re-prices it as the index rises.
 
-`OptionModelPricing.prepared_memory` reads the option's strike, expiry and kind from the catalogue when the plan is placed. `model` builds the Black-76 model for the index now, and `premium` is its price, no worse than the body's own price and rounded onto the tick. `moved_prices` re-prices the resting order with `target_price`. The times are fixed so the output does not change from day to day. Nothing is read from Redis or sent anywhere.
+`OptionModelPricing.prepared_memory` reads the option's strike, expiry and kind from the catalogue when the plan is placed. `model` builds the Black-76 model for the index now, and `premium` is its price, no worse than the body's own price and rounded onto the tick. `moved_prices` re-prices the resting order with `target_price`. The times are fixed, including the clock `prepared_memory` reads to refuse an option that has already expired, so the output does not change from day to day. Nothing is read from Redis or sent anywhere.
 
 Run it from the project root:
 
@@ -8,6 +8,7 @@ Run it from the project root:
 """
 
 import decimal
+from unittest import mock
 
 from unified_broker_interface.utilities.order_engine.utilities.market_view import (
     MarketView,
@@ -206,7 +207,8 @@ class PremiumFromAVolatilityExample:
         pricing = OptionModelPricing(INDEX_ID, decimal.Decimal('12.5'), decimal.Decimal('0'), None, None, 1)
         plan_order = StandInPlanOrder(OPTION_ID, {'order_type': 'LIMIT', 'price': 500})
         maker = QuoteMaker()
-        memory = pricing.prepared_memory(plan_order)
+        with mock.patch('time.time', return_value=1790137800.0):
+            memory = pricing.prepared_memory(plan_order)
         print(f'Read from the catalogue: {memory}')
         now = 1790137800.0
         model = pricing.model(memory, decimal.Decimal('25000'), now)

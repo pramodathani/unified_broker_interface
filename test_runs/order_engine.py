@@ -5756,6 +5756,16 @@ class OrderEngineSuite:
             quantity=10,
         )
         steady = self.book_at(1000.00, 1000.05)
+        option = dict(
+            entry,
+            instrument_id=identifiers['nifty_option'],
+            quantity=75,
+        )
+        volatility = {
+            'type': 'volatility',
+            'watch_instrument_id': identifiers['nifty_index'],
+            'volatility': 12.5,
+        }
         index_at_25000 = {
             'nifty_index': self.scenarios.quote(last_price=25000),
         }
@@ -5831,6 +5841,31 @@ class OrderEngineSuite:
                 accepted,
             ),
             self.price_result(
+                'a_chaser_is_not_dragged_back_by_a_lagging_book',
+                dict(entry, synthetic={
+                    'type': 'chaser',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 5},
+                    {'quote': self.book_at(999.50, 999.55), 'at': 10},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_mid_peg_rests_where_the_caller_moved_it',
+                dict(entry, synthetic={
+                    'type': 'peg',
+                    'reference': 'mid',
+                }),
+                [
+                    {'quote': self.book_at(1000.00, 1000.15), 'at': 0},
+                    {'quote': self.book_at(1000.00, 1000.15), 'at': 2, 'leg_change': {'order_id': '26091500000021', 'price': 1000.00}},
+                    {'quote': self.book_at(1000.00, 1000.15), 'at': 4},
+                ],
+                accepted,
+            ),
+            self.price_result(
                 'a_peg_cap_off_the_tick_is_refused_when_placed',
                 dict(entry, synthetic={
                     'type': 'peg',
@@ -5849,6 +5884,25 @@ class OrderEngineSuite:
                     'delta': 0.5,
                     'lowest_price': 990.03,
                 }),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': index_at_25000},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_volatility_order_carries_on_at_the_volatility_the_callers_price_implies',
+                dict(option, price=500, synthetic=volatility),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': index_at_25000},
+                    {'quote': steady, 'at': 1, 'other_quotes': index_at_25000, 'leg_change': {'order_id': '26091500000021', 'price': 150.00}},
+                    {'quote': steady, 'at': 2, 'other_quotes': index_at_25000},
+                    {'quote': steady, 'at': 3, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=25100)}},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_volatility_order_never_bids_above_its_price_for_a_lowest_bound',
+                dict(option, price=150, synthetic=dict(volatility, lowest_price=200)),
                 [
                     {'quote': steady, 'at': 0, 'other_quotes': index_at_25000},
                 ],

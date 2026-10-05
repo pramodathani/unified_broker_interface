@@ -4,7 +4,7 @@
 
 The three references, the offset moved away from filling and the rounding onto the passive side are those of `peg.py`, so the `peg` preset sends what today's type sends; the offline scenarios `a_plan_peg_*` send the same requests at the same prices as the `a_peg_*` ones. The cap moved out into `CapModifier`, because a cap is useful on any pricing, not only on a peg.
 
-## What it does not do yet
+## What it did not do at first (now done; see "carry_on" below and the 2026-10-05 section)
 
 Today's peg re-anchors its offset when the caller changes the order's price, so it follows the market from the caller's price. A plan order has no `on_leg_modified` yet, so the next tick moves a hand-moved plan peg back to its reference. The trailing stop has the same gap since stage 2c.
 
@@ -19,3 +19,7 @@ A caller's price is kept as `offset_ticks` in the pricing's memory rather than b
 ## Stale quotes (2026-10-05)
 
 The group 6 walkthrough found every moving pricing acting on a quote marked `stale`: a peg followed a stale bid, a chaser crossed to a stale offer of 1005, an underlying peg moved on a stale index. The quote combiner marks a quote stale when its broker has gone silent and no healthy backup exists, so its price may be minutes old. This pricing now treats a stale quote as no quote, as `LimitMarketableCondition` always did: it neither places from it nor moves on it, and the next fresh quote moves the order as usual.
+
+## Offset after a caller's change (2026-10-05)
+
+`carry_on` turns the distance from the reference into whole ticks with `ROUND_FLOOR`. The default half-to-even rounding turned a mid peg's 1.5 ticks into 2, so a caller who moved a buy to 1000.00 under a mid of 1000.075 saw it re-priced to 999.95 on the same tick. Flooring always reproduces the caller's price after the passive rounding, on both sides.
