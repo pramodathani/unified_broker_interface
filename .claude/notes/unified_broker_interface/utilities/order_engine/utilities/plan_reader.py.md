@@ -93,3 +93,9 @@ With `using` read by `_read_using`, every join the design names is built, so the
 ## The second leg knows its own path (2026-10-05)
 
 The Then join reading sets `own_path` on a `from_parent_fill` pricing beside `first_path`, so the pricing can count the second leg's earlier orders when it prices the next one.
+
+## Repeat and using children, and the join a Then refuses (2026-10-05)
+
+`_read_repeat` refuses a child that reads as a join, from a join preset such as a bracket, or as a kept-whole part such as a grid, at `<path>.child` with `repeat_needs_order`. A join crashed the reader with `AttributeError` on `part.trigger`, answered 503 with a `parent_id` for a parent never stored, and a kept-whole part ignored the copy's schedule, so every copy placed its orders at once. `_read_using` refuses a kept-whole part in `each_piece` (`using_piece_kept_whole`) for the same reason, and a `quantity` in `each_piece` (`using_piece_quantity`), which was taken as the whole order's quantity and split, and with too few units for the ladder was refused only at placing with a bare 400 while a rejected parent was stored. `join_not_sized` names the join the caller wrote through `_join_name`, since repeat and using subclass together and were described as "a together or sequence join".
+
+Problem paths still name parts as they run, such as `root.children.0` for a repeat's child or `root.each_fill...` for a value given in a join preset, rather than where the caller wrote the value; mapping them back is left for a decision.

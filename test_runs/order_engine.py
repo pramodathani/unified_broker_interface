@@ -6564,6 +6564,102 @@ class OrderEngineSuite:
             ),
         ]
 
+    def run_plan_reading_checks(self):
+        """Runs the plans that used to crash the reader, run differently from what they said, be refused in words the caller never wrote, or pass a dry run that placing refuses.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        answers = self.scenarios.answers
+        numbered = dict(
+            answers.json_answer(
+                200,
+                answers.place_success('flattrade'),
+            ),
+            number_orders=True,
+        )
+        steady = self.book_at(1000.00, 1000.05)
+        entry = self.scenarios.bodies.market_order(
+            dry_run=None,
+            order_type='LIMIT',
+            price=1000,
+            quantity=10,
+        )
+        grid = {
+            'grid': {
+                'levels': 1,
+                'step_points': 5,
+                'most_inventory': 20,
+            },
+        }
+
+        def plan(tree, dry_run=None):
+            """The entry body carrying a plan.
+
+            Args:
+                tree (dict): The plan's root node.
+                dry_run (bool | None): True for a dry run.
+
+            Returns:
+                dict: The body.
+            """
+            return dict(
+                entry,
+                dry_run=dry_run,
+                synthetic={
+                    'type': 'plan',
+                    'plan': tree,
+                },
+            )
+
+        cases = [
+            (
+                'a_repeat_of_a_bracket_is_refused',
+                plan({'repeat': {'child': {'order': {'presets': [{'bracket': {'stop_price': 990, 'stop_limit_price': 988, 'target_price': 1010}}]}}, 'times': 2, 'every_minutes': 5}}),
+            ),
+            (
+                'a_repeat_of_a_grid_is_refused',
+                plan({'repeat': {'child': {'order': {'presets': [grid]}}, 'times': 2, 'every_minutes': 5}}),
+            ),
+            (
+                'a_using_with_a_grid_for_every_piece_is_refused',
+                plan({'using': {'order': {'execution': [{'twap': {'slices': 2, 'over_minutes': 10}}]}, 'each_piece': {'presets': [grid]}}}),
+            ),
+            (
+                'a_using_with_a_quantity_for_every_piece_is_refused',
+                plan({'using': {'order': {'execution': [{'ladder': {'from_price': 995, 'to_price': 999, 'steps': 3}}]}, 'each_piece': {'quantity': 2}}}),
+            ),
+            (
+                'a_then_whose_child_is_a_repeat_names_the_repeat',
+                plan({'then': {'first': {'order': {}}, 'each_fill': {'repeat': {'child': {'order': {'side': 'protect', 'pricing': [{'fixed': {'price': 1010}}]}}, 'times': 2, 'every_minutes': 5}}}}),
+            ),
+            (
+                'an_accumulation_of_no_purchases_names_its_own_setting',
+                plan({'order': {'presets': [{'accumulation': {'every_minutes': 5, 'purchases': 0}}]}}),
+            ),
+            (
+                'a_dry_run_of_an_oco_with_no_position_is_refused',
+                dict(entry, dry_run=True, synthetic={'type': 'oco', 'stop_price': 990, 'stop_limit_price': 988, 'target_price': 1010}),
+            ),
+            (
+                'a_dry_run_of_a_bracket_stop_off_the_tick_is_refused',
+                dict(entry, dry_run=True, synthetic={'type': 'bracket', 'stop_price': 990.03, 'stop_limit_price': 988, 'target_price': 1010}),
+            ),
+        ]
+        results = []
+        for name, body in cases:
+            results.append(
+                self.price_result(
+                    name,
+                    body,
+                    [
+                        {'quote': steady, 'at': 0},
+                    ],
+                    numbered,
+                ),
+            )
+        return results
+
     def run_execution_algorithm_checks(self):
         """Runs the execution algorithms where an empty slice, a lot, a falling volume, a stale book, a market or IOC body under holding, or an off-tick limit used to go wrong.
 
@@ -15294,6 +15390,7 @@ class OrderEngineSuite:
             results.extend(self.run_legged_spread_checks())
             results.extend(self.run_strategy_hedge_checks())
             results.extend(self.run_plan_exit_checks())
+            results.extend(self.run_plan_reading_checks())
             results.extend(self.run_price_checks())
             results.extend(self.run_wiring_checks())
             results.extend(self.run_assignment_checks())

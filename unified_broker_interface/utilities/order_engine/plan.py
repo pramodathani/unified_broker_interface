@@ -146,6 +146,7 @@ class PlanOrder(SyntheticOrder):
         root, warnings = self._read_plan()
         order = self.concrete_order(self.read_order(self.parent.body))
         if order.dry_run:
+            self._check_as_placing_would(root, order)
             prepared = self.placement.prepare(
                 order,
                 self.parent.instrument_id,
@@ -235,6 +236,34 @@ class PlanOrder(SyntheticOrder):
         self._finish_if_done(root)
         self.save()
         return self._answer(root, placed, warnings)
+
+    def _check_as_placing_would(self, root, order):
+        """Refuses a dry run of a plan that placing would refuse, for the reasons placing checks beyond reading the plan.
+
+        A dry run used to answer 200 for a plan that placing then refused, such as an exit protecting a position that is not held (409) or a bracket's stop off the tick (400), because it answered before those checks. It now makes them too, reading the position and the tick sizes as placing does, and changes nothing: nothing is recorded for a dry run.
+
+        Args:
+            root (object): The root part.
+            order (PlaceOrderRequest): The caller's order.
+
+        Returns:
+            None: This method returns nothing.
+
+        Raises:
+            RefusedRequestError: For a plan placing would refuse.
+        """
+        protecting = root.standalone_protecting_parts()
+        if protecting:
+            self._refuse_without_position(protecting[0])
+        for part in root.order_parts():
+            if part.venue is not None:
+                part.venue.check(part.context(self))
+            if part.fill_ratio is not None:
+                part.fill_ratio.check(part.context(self))
+                self._refuse_hedge_in_its_own_instrument(root, part)
+        self.remember_tick_size(order)
+        self._remember_tick_sizes(root)
+        self._refuse_off_tick_prices(root)
 
     def _refuse_hedge_in_its_own_instrument(self, root, part):
         """Refuses an order sized from a Then join's fills that trades the instrument the first plan trades.

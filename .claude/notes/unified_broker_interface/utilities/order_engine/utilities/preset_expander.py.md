@@ -127,3 +127,7 @@ The fixed `closing_price` type subclasses `Vwap` and so accepts a `volume_profil
 ## The legged spread's second leg is in whole lots (2026-10-05)
 
 `legged_spread` gives the second leg a `parent_fill` quantity with a ratio of 1 and whole lots. It used to take the first leg's filled quantity as it was, so 10 shares against a future of lot 500, or 75 Nifty units against a Sensex lot of 20, was refused and the parent stayed working. The nearest lot is used, as the attached hedge does, so 75 is matched by 80. `delta_volatility` is built: the earlier entry calling it not built is out of date.
+
+## Accumulation checks its own settings (2026-10-05)
+
+`_accumulation` checks `purchases` (a whole number from 1 to 100) and `every_minutes` (above zero) itself, at the preset's path. Passed straight to the repeat, a bad value was reported as `times ... not 0` and `every_minutes ... not None` at `root`, names and a place the caller never wrote.
