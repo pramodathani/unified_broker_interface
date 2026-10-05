@@ -103,18 +103,56 @@ class ThenPart:
             )
         elif child_started:
             self.child.set_target(plan_order, filled)
-        if self.first.is_done(plan_order) and filled == 0 and not child_started:
-            self.child.cancel_rest(
-                plan_order,
-                'the first plan finished without filling anything',
-            )
+        if self.first.is_done(plan_order) and not self.child.is_started(plan_order):
+            if filled == 0:
+                self.child.cancel_rest(
+                    plan_order,
+                    'the first plan finished without filling anything',
+                )
+            elif not plan_order.part_record(self.child.path).get('unsized'):
+                self.child.cancel_rest(
+                    plan_order,
+                    f'the first plan finished, and the {filled} it filled comes to nothing for the child to trade',
+                )
         placed = placed + self.child.settle(plan_order)
         if self.cancel_first_on_child_fill and self.child.traded(plan_order.parent) > 0:
             self.first.cancel_rest(
                 plan_order,
                 'the child has started filling, so the rest of the first plan is stopped',
             )
+        self._stop_after_refused_child(plan_order, filled)
         return placed
+
+    def _stop_after_refused_child(self, plan_order, filled):
+        """Stops the first plan once an order of the child was refused, and records what that leaves without its child.
+
+        The child protects or completes what the first plan fills, such as a hedge or a spread's second leg. An order of the child counts as refused once it is done and the placement refused it or a broker rejected one of its orders. Once it is refused it sends nothing more, so the first plan is stopped rather than left filling with nothing to follow it, and the refused order's record keeps `leaves_open`, which ends the parent `failed` rather than `completed`.
+
+        Args:
+            plan_order (PlanOrder): The plan order.
+            filled (int): How much the first plan has filled.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        if filled <= 0:
+            return
+        for part in self.child.order_parts():
+            record = plan_order.part_record(part.path)
+            if record.get('state') != 'done' or record.get('leaves_open'):
+                continue
+            refused = record.get('reason') == 'refused'
+            for leg in part.own_legs(plan_order.parent):
+                if leg.state == 'rejected':
+                    refused = True
+            if not refused:
+                continue
+            record['leaves_open'] = f'the plan\'s {part.path} part was refused, so what the first plan filled is left without it'
+            plan_order.set_part_record(part.path, record, record['leaves_open'])
+            self.first.cancel_rest(
+                plan_order,
+                f'the plan\'s {part.path} part was refused, so the rest of the first plan is stopped',
+            )
 
     def traded(self, parent):
         """How much the first plan traded, which is what this branch opened.

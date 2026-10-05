@@ -15,3 +15,9 @@ It is a bracket's rule, and the `bracket` and `cover` presets set it. Today's OT
 ## Why a first plan that finished without filling cancels the child
 
 A child that was never started would otherwise stay `pending` for ever and the plan would never be done. Marking it done as `cancelled` lets the parent end as `cancelled`.
+
+## A child under one lot, and a refused child (2026-10-05)
+
+When the first plan has finished and filled something but the child never started, the child is cancelled unless it is `unsized`. A hedge of ratio 1 in a future of lot 500 after an entry of 200 used to stay pending with a target of 0, and the parent stayed `working` for ever. An `unsized` child, one whose delta had no forward price, is left to the tick retry instead.
+
+`_stop_after_refused_child` stops the first plan once an order of the child is done refused, or done with a rejected broker order, and records `leaves_open` on it, which ends the parent `failed`. A refused hedge or second leg used to leave the first plan filling with nothing to follow it, and the parent `completed`.

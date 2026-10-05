@@ -7,3 +7,7 @@ Today's hedge rounds `ratio × filled` half up to whole lots of the hedge instru
 ## Not built
 
 The design's `parent_fill_delta` sizes a hedge by an option's Black-76 delta at a volatility. It needs the option model at each fill; the `attached_hedge` preset refuses `delta_volatility` as not built.
+
+## parent_fill_delta is built (2026-10-05)
+
+The entry above is out of date: `FillDelta` sizes a hedge by the option's delta, and the `attached_hedge` preset accepts `delta_volatility`.

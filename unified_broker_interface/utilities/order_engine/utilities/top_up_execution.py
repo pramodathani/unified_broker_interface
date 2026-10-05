@@ -4,7 +4,7 @@
 class TopUpExecution:
     """A plan order's execution that, each time its target grows, sends one new broker order for the quantity not yet traded or resting.
 
-    It keeps the way today's attached hedge and legged spread grow: a fill on the first plan raises the target, and a new order is sent for what is missing rather than the resting order being changed, so every broker order keeps the price it was given and its place in the queue. A target that shrinks cuts resting orders, newest first, as for any execution that does not change its order to grow. A rejected order stops it.
+    It keeps the way today's attached hedge and legged spread grow: a fill on the first plan raises the target, and a new order is sent for what is missing rather than the resting order being changed, so every broker order keeps the price it was given and its place in the queue. A target that shrinks cuts resting orders, newest first, as for any execution that does not change its order to grow. A rejected or cancelled order stops it until the target next grows.
     """
 
     def needs_prices(self):
@@ -86,7 +86,9 @@ class TopUpExecution:
         ]
 
     def will_send_more(self, memory, remaining, pieces):
-        """Whether more may still be sent: while some is missing and the last order was not rejected.
+        """Whether more may still be sent: while some is missing and the last order was neither rejected nor cancelled.
+
+        A cancelled order is not sent again at once: an `IOC` hedge the exchange cancels, or one the caller cancelled, would otherwise be followed by another straight away, for ever. The order is finished instead, and the next growth of its target sends what is missing then.
 
         Args:
             memory (dict): Unused.
@@ -97,7 +99,7 @@ class TopUpExecution:
             bool: True when another order may follow.
         """
         del memory
-        if pieces and pieces[-1].state == 'rejected':
+        if pieces and pieces[-1].state in ('rejected', 'cancelled'):
             return False
         return remaining > 0
 

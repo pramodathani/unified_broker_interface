@@ -24,6 +24,9 @@ from unified_broker_interface.utilities.order_engine.utilities.ladder_execution 
 from unified_broker_interface.utilities.order_engine.utilities.order_context import (
     OrderContext,
 )
+from unified_broker_interface.utilities.order_engine.utilities.top_up_execution import (
+    TopUpExecution,
+)
 
 MARKETABLE_BUFFER_TICKS = 2
 OPPOSITE_SIDES = {
@@ -33,6 +36,11 @@ OPPOSITE_SIDES = {
 GROWN_AGAIN_REASONS = (
     'filled',
     'cancelled',
+)
+TOPPED_UP_AGAIN_REASONS = (
+    'filled',
+    'cancelled',
+    'partly_filled',
 )
 NAMED_SIDES = {
     'buy': 'BUY',
@@ -542,7 +550,11 @@ class OrderPart:
         if target is not None and self.fill_ratio is not None:
             target = self.fill_ratio.scaled(self.context(plan_order), target)
             if target is None:
+                if not record.get('unsized'):
+                    record['unsized'] = True
+                    plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part cannot be sized yet, so every tick tries again')
                 return []
+            record.pop('unsized', None)
             if target <= 0:
                 record['target'] = target
                 plan_order.set_part_record(self.path, record, None)
@@ -684,7 +696,7 @@ class OrderPart:
     def send_due(self, plan_order, started_at, quotes, now=None):
         """Sends the pieces this order's execution says are due now, each priced by the order's pricing.
 
-        Every due piece is priced before any is sent, and when one cannot be priced none is sent, so the next tick asks again. Executions work out what they have sent from this order's broker orders, which recovery rebuilds after a restart, so nothing here has to be remembered between events.
+        Every due piece is priced before any is sent, and when one cannot be priced none is sent and the order is marked `unpriced`, so the next tick asks again even for an order that otherwise sends only when a fill arrives, such as a hedge topped up from a quote that was stale. Executions work out what they have sent from this order's broker orders, which recovery rebuilds after a restart, so nothing here has to be remembered between events.
 
         Args:
             plan_order (PlanOrder): The plan order.
@@ -715,7 +727,15 @@ class OrderPart:
             prices = self.execution.rung_prices(self.context(plan_order), sending_side)
         for index, quantity in enumerate(due):
             if self.order(plan_order, quotes, quantity, prices[index]) is None:
+                record = plan_order.part_record(self.path)
+                if record.get('state') != 'done' and not record.get('unpriced'):
+                    record['unpriced'] = True
+                    plan_order.set_part_record(self.path, record, None)
                 return []
+        record = plan_order.part_record(self.path)
+        if record.get('unpriced'):
+            record.pop('unpriced')
+            plan_order.set_part_record(self.path, record, None)
         if memory != stored:
             record['execution_memory'] = memory
             plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part\'s execution moved on to {memory}')
@@ -824,9 +844,9 @@ class OrderPart:
         An order sent all at once is that one broker order, so the caller's change is the new total. An execution that splits the order, such as an iceberg, sizes each later piece from what is still to trade, so the total stays what the plan asked for and the later pieces make up the difference, as today's iceberg and time-sliced types do.
 
         Returns:
-            bool: True for an order sent all at once.
+            bool: True for an order sent all at once, or topped up with a new order each time its target grows.
         """
-        return isinstance(self.execution, AllAtOnceExecution)
+        return isinstance(self.execution, (AllAtOnceExecution, TopUpExecution))
 
     def take_caller_change(self, plan_order, change):
         """Counts a caller's change to this order's quantity, so a later fill or target cannot undo it.
@@ -1092,7 +1112,7 @@ class OrderPart:
     def _grow_finished(self, plan_order, record, target):
         """Sends a finished order again for what its target has grown by, so a later fill of the order it follows is covered.
 
-        An exit that had already filled, or that its join cancelled when it had nothing left to trade, is done; when the entry it follows then fills further, the new quantity would otherwise have no exit. Such an order is reopened and sent a new broker order for the difference. Only an order that has sent a broker order before is reopened: one cancelled before it was ever sent, as the exits of an entry that never filled are, stays cancelled. An order a caller cancelled is `ended` and is not reopened, nor is one that was refused or expired, and neither is an order whose execution sends pieces rather than growing one order.
+        An exit that had already filled, or that its join cancelled when it had nothing left to trade, is done; when the entry it follows then fills further, the new quantity would otherwise have no exit. Such an order is reopened and sent a new broker order for the difference. Only an order that has sent a broker order before is reopened: one cancelled before it was ever sent, as the exits of an entry that never filled are, stays cancelled. An order a caller cancelled is `ended` and is not reopened, nor is one that was refused or expired, and neither is an order whose execution sends pieces rather than growing one order, except a top-up, whose every growth is a new order anyway; a top-up that stopped on a part-filled cancel is reopened too.
 
         Args:
             plan_order (PlanOrder): The plan order.
@@ -1102,9 +1122,14 @@ class OrderPart:
         Returns:
             None: This method returns nothing.
         """
-        if record.get('ended') or record.get('reason') not in GROWN_AGAIN_REASONS:
+        if record.get('ended') or not self.own_legs(plan_order.parent):
             return
-        if not self.execution.changes_its_order_to_grow() or not self.own_legs(plan_order.parent):
+        tops_up = isinstance(self.execution, TopUpExecution)
+        if tops_up and record.get('reason') not in TOPPED_UP_AGAIN_REASONS:
+            return
+        if not tops_up and record.get('reason') not in GROWN_AGAIN_REASONS:
+            return
+        if not tops_up and not self.execution.changes_its_order_to_grow():
             return
         wanted = target + (record.get('caller_change') or 0) - self.traded(plan_order.parent)
         if wanted <= 0:

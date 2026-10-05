@@ -89,3 +89,7 @@ With `using` read by `_read_using`, every join the design names is built, so the
 ## Held pieces need a holdable body (2026-10-05)
 
 `_held_pieces_tree` turned any twap or front_loaded order into held virtual-limit pieces when holding was on, without the body checks `_why_not_held` makes. A MARKET or stop TWAP was refused with 'a virtual limit order is held at its own limit price', and an IOC TWAP was held. `_body_cannot_be_held` now makes those checks, and such an order is read as it stands and sent unheld.
+
+## The second leg knows its own path (2026-10-05)
+
+The Then join reading sets `own_path` on a `from_parent_fill` pricing beside `first_path`, so the pricing can count the second leg's earlier orders when it prices the next one.

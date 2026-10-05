@@ -1,4 +1,6 @@
 Reads quotes: False, moves: False
 First fill: (Decimal('1002.0'), 'BUY')
 Sent as: {'quantity': 500, 'order_type': 'LIMIT', 'price': '982.0'}
+Sent before: (500, Decimal('491000.0'))
+After 500 more at 1,004, the next 500 is sent as: {'quantity': 500, 'order_type': 'LIMIT', 'price': '984.0'}
 As a dry run shows it: {'from_parent_fill': {'net_price': '20'}}

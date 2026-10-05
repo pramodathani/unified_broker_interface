@@ -500,6 +500,7 @@ class PlanReader:
             child.sized_by_fills = True
             if isinstance(child.pricing, FromParentFillPricing) and isinstance(first, OrderPart):
                 child.pricing.first_path = first.path
+                child.pricing.own_path = child.path
         if isinstance(child, (TogetherPart, SequencePart, RepeatPart)):
             self._add_problem(
                 child.path,

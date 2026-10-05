@@ -1,6 +1,6 @@
-"""Shows that a cancelled order's unfilled part is sent again, and that a rejected order stops the top-ups.
+"""Shows that a cancelled order and a rejected order both stop the top-ups until the target next grows.
 
-`TopUpExecution.committed` counts only what filled of a finished order, so a hedge of 500 cancelled after 200 filled leaves 300 to send. `will_send_more` is false once the last order was rejected, so a rejection is not repeated on every fill. Nothing is read from Redis or sent anywhere.
+`TopUpExecution.committed` counts only what filled of a finished order, so a hedge of 500 cancelled after 200 filled leaves 300 missing. `will_send_more` is false once the last order was cancelled or rejected, so neither is sent again at once: an `IOC` hedge the exchange cancels would otherwise be followed by another straight away, for ever. The order part sends what is missing when the first plan next fills. Nothing is read from Redis or sent anywhere.
 
 Run it from the project root:
 
@@ -56,7 +56,7 @@ class CancelledAndRejectedExample:
         cancelled = [
             maker.piece(1, 500, 'cancelled', 200),
         ]
-        print(f'After a cancel at 200 of 500: due {execution.due_pieces(None, {}, 500, cancelled, {}, 0.0)}')
+        print(f'After a cancel at 200 of 500: committed {execution.committed(cancelled)}, more to send {execution.will_send_more({}, 300, cancelled)}, due {execution.due_pieces(None, {}, 500, cancelled, {}, 0.0)}')
         rejected = [
             maker.piece(1, 500, 'rejected', 0),
         ]
