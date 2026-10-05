@@ -71,6 +71,9 @@ class OrderPart:
         position (PositionQuantity | None): For the `close` side, how the position it closes is read; None for any other order.
         fill_ratio (FillRatio | FillDelta | None): How the size a Then join hands it is scaled, or None to take it as it is.
         sized_by_fills (bool): Whether it is a Then join's child, sized by the first plan's fills.
+        follows_fills (bool): Whether it is anywhere inside a Then join's child, so its quantity follows the first plan's fills, for a dry run's description.
+        shares_quantity (bool): Whether it is a child of a `reduce` Either join, sharing one quantity with its siblings, for a dry run's description.
+        piece_of (str | None): `rung` or `slice` for a using join's piece, for a dry run's description; None otherwise.
         opened_by (list): The paths of the orders whose fills opened the position this order follows, for an order under a Then join; empty otherwise.
         venue (PreOpenVenue | None): Where the order is sent other than the broker selector's continuous market, or None.
         spans_days (bool): Whether the order may go on a later trading day, as a daily Repeat's copies do, which keeps the plan across trading days.
@@ -116,6 +119,9 @@ class OrderPart:
         self.position = position
         self.fill_ratio = None
         self.sized_by_fills = False
+        self.follows_fills = False
+        self.shares_quantity = False
+        self.piece_of = None
         self.opened_by = []
         self.venue = None
         self.spans_days = False
@@ -1362,8 +1368,10 @@ class OrderPart:
     def quantity_described(self):
         """Where this part's quantity comes from, as a dry run shows it.
 
+        A Then join's child trades what the first plan has filled, a child of a `reduce` Either join shares one quantity with its siblings, and a using join's piece trades its share; every other order, such as a sequence's or repeat's, trades the body's quantity unless it gives its own. The dry run used to call every order but the main one `set by its join`, which was wrong for a sequence or a repeat.
+
         Returns:
-            str | int | dict: The position read when it fires, the order's own quantity, `the body's quantity` for the plan's main order, or `set by its join` for any other.
+            str | int | dict: The position read when it fires, the fill sizing, the order's own quantity, or a description of where its quantity comes from.
         """
         if self.position is not None:
             return self.position.described()
@@ -1371,9 +1379,14 @@ class OrderPart:
             return self.fill_ratio.described()
         if 'quantity' in self.overrides:
             return self.overrides['quantity']
-        if self.keeps_tag:
-            return 'the body\'s quantity'
-        return 'set by its join'
+        if self.piece_of is not None:
+            return f'its {self.piece_of}\'s share of the order\'s quantity'
+        base = 'the body\'s quantity'
+        if self.sized_by_fills or self.follows_fills:
+            base = 'what the first plan has filled'
+        if self.shares_quantity:
+            return f'{base}, shared with its siblings, less what they have filled'
+        return base
 
     def _pricing_described(self):
         """The pricing setter and its modifiers, as a dry run shows them.
@@ -1446,17 +1459,24 @@ class OrderPart:
     def expanded(self):
         """This part as it will run, with every slot's value or default written out, for a dry run's answer.
 
+        `own_values` holds the values the order gives over the body's, such as another `instrument_id` or a `SELL`, so a basket's or a spread's legs can be told apart; the side falls back to the order's own `transaction_type` before the body's.
+
         Returns:
             dict: The part's path, presets and slot values.
         """
         trigger = 'at_once'
         if self.trigger is not None:
             trigger = self.trigger.described()
-        side = self.side or 'the body\'s transaction_type'
+        side = self.side or self.overrides.get('transaction_type') or 'the body\'s transaction_type'
+        own_values = {}
+        for name, value in self.overrides.items():
+            if name != 'quantity':
+                own_values[name] = value
         return {
             'order': {
                 'path': self.path,
                 'presets': list(self.presets),
+                'own_values': own_values,
                 'slots': {
                     'trigger': trigger,
                     'quantity': self.quantity_described(),

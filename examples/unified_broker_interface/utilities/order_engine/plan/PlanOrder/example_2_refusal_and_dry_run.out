@@ -3,5 +3,5 @@ Refused with HTTP 400: the plan cannot run; every problem found is listed in pro
   root.presets.1 [unknown_setting]: the simple preset takes no settings, not 'broker'
 Dry run: HTTP 200, broker zerodha
   Request: {'transaction_type': 'BUY', 'quantity': 10, 'price': '1402.50'}
-  Plan as it would run: {'order': {'path': 'root', 'presets': ['simple'], 'slots': {'trigger': 'at_once', 'quantity': "the body's quantity", 'side': "the body's transaction_type", 'execution': ['all_at_once'], 'pricing': [{'fixed': {'price': "the body's price", 'order_type': "the body's order_type"}}], 'guards': [], 'venue': 'selector', 'lifetime': ["the body's validity"]}}}
+  Plan as it would run: {'order': {'path': 'root', 'presets': ['simple'], 'own_values': {}, 'slots': {'trigger': 'at_once', 'quantity': "the body's quantity", 'side': "the body's transaction_type", 'execution': ['all_at_once'], 'pricing': [{'fixed': {'price': "the body's price", 'order_type': "the body's order_type"}}], 'guards': [], 'venue': 'selector', 'lifetime': ["the body's validity"]}}}
 Events recorded: 0, orders sent: 0
