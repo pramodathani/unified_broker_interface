@@ -523,7 +523,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
 === "Price triggers"
 
-    These eight types send nothing when you ask, apart from an `account_conditional` order with `action: cancel`. They answer `202 armed` and send one order on the first price tick where the level is reached, or, with `trigger_on`, where it is confirmed. They fire once. They run only while the engine is running, unlike a native stop at the exchange.
+    These eight types send nothing when you ask, apart from an `account_conditional` order with `action: cancel`. They answer `202 armed` and send one order on the first price tick where the level is reached, or, with `trigger_on`, where it is confirmed. They fire once. They run only while the engine is running, unlike a native stop at the exchange. A quote marked stale, which the quote combiner marks when the broker it came from has gone silent with no healthy backup, is treated as no quote: it never fires a trigger, and it neither counts towards nor resets a `double_last` or `held` confirmation. The same holds for every trigger that watches prices, including the stops' `hidden_stop` and `candle_close_stop`, and `post_only`, whose check waits for a fresh book rather than refusing or moving an order on a stale one. Types that move a resting order, such as `peg`, `chaser`, `underlying_peg`, `volatility`, the trailing stops and `discretionary`, likewise leave the order where it is on a stale quote and place nothing new from one, and move on the next fresh quote.
 
     Every price trigger reads the two fields below, and each type adds its own.
 

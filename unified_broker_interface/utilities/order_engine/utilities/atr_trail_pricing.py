@@ -141,7 +141,10 @@ class AtrTrailPricing:
         Returns:
             tuple | None: The new limit and trigger (decimal.Decimal) and a reason (str), or None.
         """
-        price = plan_order.view(quotes).last()
+        view = plan_order.view(quotes)
+        if view.is_stale():
+            return None
+        price = view.last()
         if price is not None:
             self.bars(memory).add(price, now)
         return self.trail(self.distance(memory)).moved_prices(plan_order, memory, leg, quotes, now)

@@ -5734,6 +5734,170 @@ class OrderEngineSuite:
             ),
         ]
 
+    def run_stale_quote_checks(self):
+        """Runs triggers on quotes marked stale, which the quote combiner marks when a quote's broker has gone silent with no healthy backup.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        accepted = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        entry = self.scenarios.bodies.market_order(
+            dry_run=None,
+            order_type='LIMIT',
+            price=1000,
+            quantity=10,
+        )
+        identifiers = order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS
+        steady = self.book_at(1000.00, 1000.05)
+        touched = self.book_at(994.90, 994.95)
+        stale_touched = dict(touched, stale=True)
+        return [
+            self.price_result(
+                'a_market_if_touched_order_is_not_fired_by_a_stale_quote',
+                dict(entry, synthetic={
+                    'type': 'market_if_touched',
+                    'trigger_price': 995,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': stale_touched, 'at': 1},
+                    {'quote': touched, 'at': 2},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_limit_if_touched_order_is_not_fired_by_a_stale_quote',
+                dict(entry, hold_limits=False, synthetic={
+                    'type': 'limit_if_touched',
+                    'trigger_price': 995,
+                    'limit_price': 990,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': stale_touched, 'at': 1},
+                    {'quote': steady, 'at': 2},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_double_last_trigger_does_not_count_a_stale_quote',
+                dict(entry, synthetic={
+                    'type': 'market_if_touched',
+                    'trigger_price': 995,
+                    'trigger_on': 'double_last',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': touched, 'at': 1},
+                    {'quote': stale_touched, 'at': 2},
+                    {'quote': touched, 'at': 3},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_post_only_order_waits_for_a_fresh_book_instead_of_judging_a_stale_one',
+                dict(entry, price=1000.10, synthetic={
+                    'type': 'post_only',
+                    'on_crossing': 'refuse',
+                }),
+                [
+                    {'quote': dict(steady, stale=True), 'at': 0},
+                    {'quote': self.book_at(1000.10, 1000.15), 'at': 1},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_peg_does_not_follow_a_stale_quote',
+                dict(entry, synthetic={
+                    'type': 'peg',
+                    'reference': 'own_touch',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': dict(self.book_at(1000.40, 1000.45), stale=True), 'at': 2},
+                    {'quote': self.book_at(1000.20, 1000.25), 'at': 4},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_chaser_does_not_cross_to_a_stale_offer',
+                dict(entry, synthetic={
+                    'type': 'chaser',
+                    'cross_after_seconds': 10,
+                }),
+                [
+                    {'quote': self.book_at(1000.00, 1000.50), 'at': 0},
+                    {'quote': dict(self.book_at(1000.00, 1005.00), stale=True), 'at': 11},
+                    {'quote': self.book_at(1000.00, 1000.50), 'at': 12},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'an_underlying_peg_does_not_move_on_a_stale_index',
+                dict(entry, synthetic={
+                    'type': 'underlying_peg',
+                    'watch_instrument_id': identifiers['nifty_index'],
+                    'delta': 0.5,
+                }),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=25000)}},
+                    {'quote': steady, 'at': 1, 'other_quotes': {'nifty_index': dict(self.scenarios.quote(last_price=25040), stale=True)}},
+                    {'quote': steady, 'at': 2, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=25020)}},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_trailing_stop_does_not_follow_a_stale_price',
+                dict(entry, synthetic={
+                    'type': 'trailing_stop',
+                    'trail_points': 10,
+                    'stop_limit_offset': 2,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': dict(self.book_at(1040.00, 1040.05), stale=True), 'at': 1},
+                    {'quote': self.book_at(1020.00, 1020.05), 'at': 2},
+                ],
+                accepted,
+                book_overrides={
+                    'order_type': 'SL',
+                    'trigger_price': 990.05,
+                },
+                positions=10,
+            ),
+            self.price_result(
+                'a_discretionary_order_does_not_take_a_stale_offer',
+                dict(entry, synthetic={
+                    'type': 'discretionary',
+                    'discretion_points': 0.25,
+                }),
+                [
+                    {'quote': self.book_at(1000.00, 1000.50), 'at': 0},
+                    {'quote': dict(self.book_at(1000.00, 1000.20), stale=True), 'at': 1},
+                    {'quote': self.book_at(1000.00, 1000.50), 'at': 2},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_candle_close_stop_leaves_a_stale_quote_out_of_its_bar',
+                dict(entry, synthetic={
+                    'type': 'candle_close_stop',
+                    'trigger_price': 995,
+                    'bar_minutes': 1,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': dict(self.book_at(990.00, 990.05), stale=True), 'at': 50},
+                    {'quote': steady, 'at': 61},
+                ],
+                accepted,
+                positions=10,
+            ),
+        ]
+
     def run_stop_type_checks(self):
         """Runs the stop types where a price off the tick, a shrinking range, a cancel before the first send or a restart used to leave a position unprotected.
 
@@ -13918,6 +14082,7 @@ class OrderEngineSuite:
             results.extend(self.run_breakout_exit_checks())
             results.extend(self.run_linked_order_checks())
             results.extend(self.run_stop_type_checks())
+            results.extend(self.run_stale_quote_checks())
             results.extend(self.run_price_checks())
             results.extend(self.run_wiring_checks())
             results.extend(self.run_assignment_checks())

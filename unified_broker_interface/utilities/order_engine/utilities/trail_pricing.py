@@ -123,6 +123,8 @@ class TrailPricing:
             dict | None: The body, or None when there is no last price to start from.
         """
         view = plan_order.view(quotes)
+        if view.is_stale():
+            return None
         start = view.last()
         if start is None:
             return None
@@ -196,6 +198,8 @@ class TrailPricing:
         """
         del now
         view = plan_order.view(quotes)
+        if view.is_stale():
+            return None
         price = view.last()
         if price is None:
             return None

@@ -142,7 +142,10 @@ class PegPricing:
             dict | None: The body, or None when no price can be made.
         """
         del memory
-        price = self.wanted_price(plan_order.view(quotes), sending_side)
+        view = plan_order.view(quotes)
+        if view.is_stale():
+            return None
+        price = self.wanted_price(view, sending_side)
         if self.within_body_price:
             price = self.within(price, body, sending_side)
         if price is None:
@@ -166,7 +169,7 @@ class PegPricing:
         """
         del now
         view = plan_order.view(quotes)
-        if not view.is_readable():
+        if not view.is_readable() or view.is_stale():
             return None
         price = self.wanted_price(view, leg.transaction_type, self.offset(memory))
         if price is None:

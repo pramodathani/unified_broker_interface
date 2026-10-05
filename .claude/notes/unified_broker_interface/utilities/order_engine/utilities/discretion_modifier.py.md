@@ -11,3 +11,7 @@ Today the taking order has its own role, `discretion`, so it is never mistaken f
 ## Why it is refused with slicing
 
 With pieces there would be several visible orders and the taking orders among them, and the rule for which to take from would no longer be today's. `OrderPart.set_target` now shares the wanted quantity across all resting orders, oldest first with the last taking the rest, so a part holding a visible order and a taking order is resized correctly under a join.
+
+## Stale quotes (2026-10-05)
+
+The group 6 walkthrough found every moving pricing acting on a quote marked `stale`: a peg followed a stale bid, a chaser crossed to a stale offer of 1005, an underlying peg moved on a stale index. The quote combiner marks a quote stale when its broker has gone silent and no healthy backup exists, so its price may be minutes old. This pricing now treats a stale quote as no quote, as `LimitMarketableCondition` always did: it neither places from it nor moves on it, and the next fresh quote moves the order as usual.

@@ -156,6 +156,8 @@ class StagesPricing:
         if memory.get('trail_points') is not None:
             return self.trail(memory).moved_prices(plan_order, memory, leg, quotes, now)
         view = plan_order.view(quotes)
+        if view.is_stale():
+            return None
         price = view.last()
         if price is None:
             return None

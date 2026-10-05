@@ -15,3 +15,7 @@ Today's volatility type subclasses the underlying peg, and the two share the wat
 ## Not done yet
 
 A caller who changes the price is not re-anchored, as with the peg.
+
+## Stale quotes (2026-10-05)
+
+The group 6 walkthrough found every moving pricing acting on a quote marked `stale`: a peg followed a stale bid, a chaser crossed to a stale offer of 1005, an underlying peg moved on a stale index. The quote combiner marks a quote stale when its broker has gone silent and no healthy backup exists, so its price may be minutes old. This pricing now treats a stale quote as no quote, as `LimitMarketableCondition` always did: it neither places from it nor moves on it, and the next fresh quote moves the order as usual.

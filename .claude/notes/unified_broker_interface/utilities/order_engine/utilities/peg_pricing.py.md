@@ -15,3 +15,7 @@ Today's accumulation prices each purchase at the bid when it is sent, no higher 
 ## A caller's changes (added 2026-10-02)
 
 A caller's price is kept as `offset_ticks` in the pricing's memory rather than by changing the pricing object, because the pricing is rebuilt from the caller's plan on every event and only memory survives a restart. `wanted_price` keeps its two-argument form for the example programs and takes the offset as an optional third argument. The offset is rounded to whole ticks, as today's peg rounds it.
+
+## Stale quotes (2026-10-05)
+
+The group 6 walkthrough found every moving pricing acting on a quote marked `stale`: a peg followed a stale bid, a chaser crossed to a stale offer of 1005, an underlying peg moved on a stale index. The quote combiner marks a quote stale when its broker has gone silent and no healthy backup exists, so its price may be minutes old. This pricing now treats a stale quote as no quote, as `LimitMarketableCondition` always did: it neither places from it nor moves on it, and the next fresh quote moves the order as usual.
