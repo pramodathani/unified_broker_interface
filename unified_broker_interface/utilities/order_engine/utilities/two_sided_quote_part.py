@@ -121,6 +121,35 @@ class TwoSidedQuotePart(WholePart):
         """
         return True
 
+    def fair_price(self, view):
+        """The price the quotes are kept around: the mid, or the last traded price when `fair_price` says so.
+
+        Args:
+            view (MarketView): The live quote.
+
+        Returns:
+            decimal.Decimal | None: The price, or None when the quote does not carry it.
+        """
+        if self.settings.get('fair_price', 'mid') == 'mid':
+            return view.mid()
+        return view.last()
+
+    def last_on_side(self, parent, side):
+        """The most recent order this quote placed on one side, finished or not.
+
+        Args:
+            parent (ParentOrder): The plan order's parent.
+            side (str): BUY or SELL.
+
+        Returns:
+            OrderLeg | None: The leg, or None before any.
+        """
+        found = None
+        for leg in self.own_legs(parent):
+            if leg.transaction_type == side:
+                found = leg
+        return found
+
     def wanted_prices(self, view, tick_size, net, size):
         """Where the bid and the ask belong now.
 
@@ -133,10 +162,7 @@ class TwoSidedQuotePart(WholePart):
         Returns:
             dict | None: `bid` and `ask` prices (decimal.Decimal), or None when the quote does not carry the fair price.
         """
-        if self.settings.get('fair_price', 'mid') == 'mid':
-            fair = view.mid()
-        else:
-            fair = view.last()
+        fair = self.fair_price(view)
         if fair is None or not tick_size:
             return None
         shift = decimal.Decimal(net) / decimal.Decimal(size) * self._whole('skew_ticks', 0, 0) * tick_size
@@ -160,19 +186,32 @@ class TwoSidedQuotePart(WholePart):
             dict: Nothing to remember, so an empty dict.
 
         Raises:
-            RefusedRequestError: With HTTP 503 when the quote does not carry the fair price, or the brokers do not agree on a tick size.
+            RefusedRequestError: With HTTP 503 when the quote does not carry the fair price, or the brokers do not agree on a tick size, and 400 when the body has no quantity, which a `quantity_reference` alone used to turn into a division by nothing, or when the half spread puts the bid at or below zero.
         """
         context = self.context(plan_order)
         order = plan_order.read_order(context.body)
-        instrument, quote, _ = context.placement.market_context(context.instrument_id, True, False)
-        tick_size = order.agreed_tick_size(instrument.handles)
-        if self.wanted_prices(MarketView(quote, tick_size), tick_size, 0, order.quantity) is None:
+        if not order.quantity:
             raise RefusedRequestError.refusal(
-                'a two-sided quote is kept around the fair price, and the live quote does not carry it yet',
-                503,
+                'a two-sided quote quotes a fixed size on each side, so it needs a quantity; a quantity_reference is not read',
+                400,
                 instrument_id=context.instrument_id,
             )
-        return {}
+        instrument, quote, _ = context.placement.market_context(context.instrument_id, True, False)
+        tick_size = order.agreed_tick_size(instrument.handles)
+        view = MarketView(quote, tick_size)
+        if self.wanted_prices(view, tick_size, 0, order.quantity) is not None:
+            return {}
+        if self.fair_price(view) is not None and tick_size:
+            raise RefusedRequestError.refusal(
+                f'half_spread_points {self._positive("half_spread_points")} puts the bid at or below zero around a fair price of {self.fair_price(view)}',
+                400,
+                instrument_id=context.instrument_id,
+            )
+        raise RefusedRequestError.refusal(
+            'a two-sided quote is kept around the fair price, and the live quote does not carry it yet',
+            503,
+            instrument_id=context.instrument_id,
+        )
 
     def live_quote(self, parent, side):
         """The resting order on one side, if there is one.
@@ -220,6 +259,8 @@ class TwoSidedQuotePart(WholePart):
     def move(self, plan_order, quotes, now):
         """Keeps both quotes where they belong: quotes a filled side again, moves one that is a whole step out, and pulls the side that would pass the cap.
 
+        A side whose last order the broker rejected is not quoted again: a refusal such as a margin shortfall would otherwise be sent again every second, each one a rejected order against the broker's daily cap.
+
         Args:
             plan_order (PlanOrder): The plan order.
             quotes (dict): The quotes the tick carried.
@@ -258,6 +299,9 @@ class TwoSidedQuotePart(WholePart):
                         acted = True
                 continue
             if leg is None:
+                last = self.last_on_side(plan_order.parent, side)
+                if last is not None and last.state == 'rejected':
+                    continue
                 self.place_order(plan_order, self.limit_order(plan_order, side, prices[role]), None)
                 acted = True
                 continue

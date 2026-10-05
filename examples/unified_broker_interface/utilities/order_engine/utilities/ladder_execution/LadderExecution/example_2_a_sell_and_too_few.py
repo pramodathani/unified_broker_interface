@@ -28,6 +28,14 @@ class StandInContext:
         """
         return decimal.Decimal('0.05')
 
+    def lot_size(self):
+        """The lot every rung must be a whole number of, which for a share is one.
+
+        Returns:
+            int: One.
+        """
+        return 1
+
 
 class ASellAndTooFewExample:
     """Prints a sell ladder and a refusal."""
@@ -41,7 +49,7 @@ class ASellAndTooFewExample:
         execution = LadderExecution(decimal.Decimal('1000.00'), decimal.Decimal('1000.12'), 4)
         print(f'Sell rungs: {execution.rung_prices(StandInContext(), "SELL")}, quantities for 10: {execution.quantities(10)}')
         try:
-            execution.due_pieces(None, {}, 3, [], {}, 0.0)
+            execution.due_pieces(StandInContext(), {}, 3, [], {}, 0.0)
         except RefusedRequestError as refusal:
             print(f'Three units over four rungs: {refusal.status} {refusal.body["error"]}')
 

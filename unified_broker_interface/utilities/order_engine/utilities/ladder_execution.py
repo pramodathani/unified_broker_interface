@@ -74,31 +74,34 @@ class LadderExecution:
         """
         del plan_order, memory, quotes, now
 
-    def quantities(self, total):
-        """Each rung's quantity, the first rungs taking the remainder.
+    def quantities(self, total, lot=1):
+        """Each rung's quantity in whole lots, the first rungs taking the remainder.
 
         Args:
             total (int): The order's quantity.
+            lot (int): The lot every rung must be a whole number of.
 
         Returns:
             list: One quantity per rung.
 
         Raises:
-            RefusedRequestError: With HTTP 400 when the quantity is smaller than the number of rungs.
+            RefusedRequestError: With HTTP 400 when the quantity is fewer lots than the number of rungs.
         """
-        if total < self.steps:
-            raise RefusedRequestError.refusal(
-                f'a ladder of {self.steps} steps needs a quantity of at least {self.steps}, not {total}',
-                400,
-            )
-        each = total // self.steps
-        remainder = total - each * self.steps
+        lots = total // lot
+        if lots < self.steps:
+            if lot == 1:
+                message = f'a ladder of {self.steps} steps needs a quantity of at least {self.steps}, not {total}'
+            else:
+                message = f'a ladder of {self.steps} steps needs at least {self.steps} lots of {lot}, not {total}'
+            raise RefusedRequestError.refusal(message, 400)
+        each = lots // self.steps
+        remainder = lots - each * self.steps
         quantities = []
         for index in range(self.steps):
             if index < remainder:
-                quantities.append(each + 1)
+                quantities.append((each + 1) * lot)
             else:
-                quantities.append(each)
+                quantities.append(each * lot)
         return quantities
 
     def rung_prices(self, plan_order, sending_side):
@@ -140,10 +143,10 @@ class LadderExecution:
         Raises:
             RefusedRequestError: With HTTP 400 when the quantity is smaller than the number of rungs.
         """
-        del plan_order, quotes, now, sending_side
+        del quotes, now, sending_side
         if not self.will_send_more(memory, total, pieces):
             return []
-        return self.quantities(total)
+        return self.quantities(total, plan_order.lot_size())
 
     def will_send_more(self, memory, remaining, pieces):
         """Whether the rungs are still to be sent, which they are only before any has been.

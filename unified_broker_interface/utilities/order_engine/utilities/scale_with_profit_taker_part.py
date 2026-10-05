@@ -275,7 +275,7 @@ class ScaleWithProfitTakerPart(WholePart):
         side = plan_order.read_order(context.body).transaction_type
         ladder = self.ladder()
         prices = ladder.rung_prices(context, side)
-        quantities = ladder.quantities(plan_order.read_order(context.body).quantity)
+        quantities = ladder.quantities(plan_order.read_order(context.body).quantity, context.lot_size())
         record = plan_order.part_record(self.path)
         record['state'] = 'working'
         plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} ladder is working')
@@ -313,6 +313,8 @@ class ScaleWithProfitTakerPart(WholePart):
     def settle(self, plan_order):
         """Sends a profit-taker for every rung that has filled, places a rung again once its profit-taker has filled, or holds it again when the rungs are held, and is done once every order has finished; once stopped, it places nothing more.
 
+        A profit-taker is the size its rung actually filled, not the rung's planned size: a rung the caller cut to 5 that filled 5 used to get a profit-taker of 10, which turned the position short.
+
         Args:
             plan_order (PlanOrder): The plan order.
 
@@ -346,7 +348,7 @@ class ScaleWithProfitTakerPart(WholePart):
                 rounded = MarketView(None, context.tick_size()).rounded(target, target_side)
                 if rounded is not None:
                     target = rounded
-                order = self.limit_order(plan_order, target_side, target, rung['quantity'])
+                order = self.limit_order(plan_order, target_side, target, leg.filled_quantity or rung['quantity'])
                 message = f'rung {rung_index + 1} filled at {rung_price}, so its profit is taken at {target}'
             else:
                 most_cycles = self._whole('most_cycles')

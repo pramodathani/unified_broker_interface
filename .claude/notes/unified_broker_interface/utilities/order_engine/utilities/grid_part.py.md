@@ -15,3 +15,7 @@ The last traded price is read in `prepared_own_memory`, before the parent is rec
 ## What differs from today's grid
 
 The answer is the plan's: `legs` with each order's outcome, rather than `centre_price` and `rungs`. Its legs carry the part's path as their role rather than `rung`.
+
+## Steps on the tick (2026-10-05)
+
+`prepared_own_memory` refuses a `step_points` that is not a whole number of ticks with 400. The answering order is priced one step from the filled rung and is not rounded, so with a step of 2.53 the sell answering a buy at 997.50 was 1000.03, refused by the placement after the fill had already been marked answered, leaving the position with no exit.

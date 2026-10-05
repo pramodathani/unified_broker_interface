@@ -121,7 +121,7 @@ class GridPart(WholePart):
             dict: `centre`, the price as a string, and `answered`, the filled rungs answered so far.
 
         Raises:
-            RefusedRequestError: With HTTP 503 when the live quote carries no last traded price, or the brokers do not agree on a tick size.
+            RefusedRequestError: With HTTP 503 when the live quote carries no last traded price, or the brokers do not agree on a tick size, and 400 when `step_points` is not a whole number of ticks: the order answering a filled rung is priced one step from it and would be refused, after the fill was already marked answered.
         """
         context = self.context(plan_order)
         instrument, quote, _ = context.placement.market_context(context.instrument_id, True, False)
@@ -131,6 +131,13 @@ class GridPart(WholePart):
             raise RefusedRequestError.refusal(
                 'a grid is built around where the market is and the live quote does not carry a last traded price yet',
                 503,
+                instrument_id=context.instrument_id,
+            )
+        step = self.step()
+        if tick_size and step % tick_size != 0:
+            raise RefusedRequestError.refusal(
+                f'step_points {step} must be a whole number of ticks of {format(tick_size.normalize(), "f")}, since each filled rung is answered one step away',
+                400,
                 instrument_id=context.instrument_id,
             )
         return {
