@@ -15,3 +15,7 @@ The size is the body's quantity as the order's own context sees it, with the ord
 ## Repeated cancels under an Either join
 
 In the scenario where an Either join cancels the quote, the quote's second order is asked to cancel twice: the first cancel's confirmation settles the plan again, and the join asks every unfinished sibling to cancel again. This was how every plan part under a cancelling Either join behaved. On 2026-10-02 `OrderPart.cancel_once` fixed it for every part, and the scenario now sends two cancels.
+
+## Refused re-quotes, a missing quantity, and a spread past zero (2026-10-05)
+
+`move` does not quote a side again when its last order was rejected; a margin refusal was sent again every second. `prepared_own_memory` refuses a body without a quantity (a `quantity_reference` alone divided by None in `wanted_prices` and answered 503 InvalidOperation), and tells a half spread that puts the bid at or below zero apart from a quote that carries no fair price.

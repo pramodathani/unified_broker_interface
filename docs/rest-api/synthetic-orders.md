@@ -333,7 +333,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `grid`
 
-    A grid rests `levels` buy limits below the last traded price and `levels` sell limits above it, `step_points` apart. When a buy fills, a sell is placed one step above it, and when a sell fills, a buy is placed one step below. The order's `quantity` is the size of each individual order. Once the net position the grid built reaches `most_inventory`, every resting order on the side that would make the position bigger is cancelled.
+    A grid rests `levels` buy limits below the last traded price and `levels` sell limits above it, `step_points` apart. When a buy fills, a sell is placed one step above it, and when a sell fills, a buy is placed one step below. The order's `quantity` is the size of each individual order. Once the net position the grid built reaches `most_inventory`, every resting order on the side that would make the position bigger is cancelled, and those orders are not placed again. The cap is checked after each fill, so one fill can take the position past it. `step_points` must be a whole number of ticks, or the order is refused with <span class="status s4">400</span>, because each filled order is answered one step away. The grid never re-centres and never ends on its own; once you cancel the parent, a fill that arrives afterwards places nothing new.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
@@ -352,8 +352,9 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     - The bid sits `half_spread_points` below the fair price and the ask the same distance above.
     - **Inventory leans both quotes.** For each order's worth held, both prices move `skew_ticks` against the position. A long lowers both, so its ask is more likely to be taken and its bid less.
     - A quote is only modified once it would move by at least `step_ticks`.
-    - When one side fills, the other is not cancelled; it is re-priced by the new lean, and the filled side is quoted again.
-    - Once the net position reaches `most_inventory`, the side that would add to it is cancelled and not quoted again until the position comes back.
+    - When one side fills, the other is not cancelled; it is re-priced by the new lean, and the filled side is quoted again. A side whose last order the broker rejected is not quoted again, so a refusal such as a margin shortfall is not repeated every second.
+    - Once the net position reaches `most_inventory`, the side that would add to it is cancelled and not quoted again until the position comes back. The cap is checked before each re-quote, so a full-size quote can take the position past it by up to one quote less one unit.
+    - The order must give a `quantity`; a `quantity_reference` is refused with <span class="status s4">400</span>. The lean is in proportion to the position, so a part fill leans the quotes by part of `skew_ticks`.
 
     In the offline suite, a quote of 10 with a half spread of 1 around a mid of 1000.025 was placed at 999.00 and 1001.05. When the market moved to 1010.025, both were modified, to 1009.00 and 1011.05. With `skew_ticks` 2 and `most_inventory` 10, a filled bid stopped the buying and moved the ask two ticks lower, to 1000.95.
 
@@ -378,11 +379,11 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     A scale order with profit-takers (the Atlas's G15, Interactive Brokers' ScaleTrader) is a `ladder` that books its profit one rung at a time. The rungs are placed as a ladder places them. Each rung then goes round a cycle:
 
-    1. When the rung has completely filled, a limit for the same quantity goes out `profit_points` better, rounded to the tick: a sell above a filled buy, a buy below a filled sell.
+    1. When the rung has completely filled, a limit for what it filled goes out `profit_points` better, rounded to the tick: a sell above a filled buy, a buy below a filled sell.
     2. When that profit-taker fills, the rung is placed again at its own price.
-    3. The cycle repeats, up to `most_cycles` times per rung, or until you cancel the parent.
+    3. The cycle repeats until each rung has been placed again `most_cycles` times, so each rung trades `most_cycles + 1` times, or until you cancel the parent.
 
-    A rung is placed again only after its profit-taker has closed it, so the position never grows past the ladder's own `quantity`. That is the cap the Atlas asks for. A rung that only partly fills waits for the rest before its profit-taker goes out. The parent does not finish on its own; cancel it with [`DELETE /api/orders/parents`](orders.md#cancel-a-parent) when you are done.
+    A rung is placed again only after its profit-taker has closed it, so the position never grows past the ladder's own `quantity`. That is the cap the Atlas asks for. A rung that only partly fills waits for the rest before its profit-taker goes out; if it is cancelled instead, the part that filled gets no profit-taker. Rungs are shared out in whole lots. A profit-taker the broker refuses leaves the other rungs working, and the parent stays `working`. Without `most_cycles` the parent does not finish on its own; cancel it with [`DELETE /api/orders/parents`](orders.md#cancel-a-parent) when you are done. With it, the parent completes once every rung has used its cycles.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|

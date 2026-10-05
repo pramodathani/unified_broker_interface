@@ -38,6 +38,40 @@ class StandInOrder(dict):
         self.quantity = int(body['quantity'])
 
 
+class StandInInstrument:
+    """Stands in for the catalogue's instrument, which lists no lot at any broker.
+
+    Attributes:
+        handles (dict): Each broker's handle, none here.
+    """
+
+    def __init__(self):
+        """Builds the instrument.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.handles = {}
+
+
+class StandInPlacement:
+    """Stands in for the placement, which reads the instrument from the catalogue."""
+
+    def market_context(self, instrument_id, with_quote, with_settings):
+        """The instrument, with no quote or settings.
+
+        Args:
+            instrument_id (str): Unused.
+            with_quote (bool): Unused.
+            with_settings (bool): Unused.
+
+        Returns:
+            tuple: The instrument, None and None.
+        """
+        del instrument_id, with_quote, with_settings
+        return StandInInstrument(), None, None
+
+
 class StandInPlanOrder:
     """Stands in for the plan order: keeps the parts' records and notes every order placed.
 
@@ -45,6 +79,7 @@ class StandInPlanOrder:
         parent (ParentOrder): The parent, a buy of ten RELIANCE.
         group_margin_legs (None): No group of legs is checked together here.
         placed (list): Every order placed, as `(role, quantity, price)`.
+        placement (StandInPlacement): Where the rungs' lot is looked up.
     """
 
     def __init__(self):
@@ -66,6 +101,7 @@ class StandInPlanOrder:
         }
         self.group_margin_legs = None
         self.placed = []
+        self.placement = StandInPlacement()
 
     def part_record(self, path):
         """A copy of one part's record.

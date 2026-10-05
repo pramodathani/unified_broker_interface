@@ -5749,6 +5749,7 @@ class OrderEngineSuite:
             accepted,
             number_orders=True,
         )
+        identifiers = order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS
         entry = self.scenarios.bodies.market_order(
             dry_run=None,
             order_type='LIMIT',
@@ -5768,6 +5769,11 @@ class OrderEngineSuite:
             'to_price': 990,
             'steps': 3,
             'profit_points': 4,
+        }
+        quote = {
+            'type': 'two_sided_quote',
+            'half_spread_points': 1,
+            'most_inventory': 30,
         }
 
         def answered_as(order_id):
@@ -5804,6 +5810,33 @@ class OrderEngineSuite:
                 book_every_order=True,
             ),
             self.price_result(
+                'a_grid_step_off_the_tick_is_refused_when_placed',
+                dict(entry, quantity=5, synthetic=dict(grid, step_points=2.53)),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                numbered,
+            ),
+            self.price_result(
+                'a_ladder_with_profit_takers_splits_its_rungs_in_whole_lots',
+                dict(entry, instrument_id=identifiers['nifty_option'], quantity=225, synthetic=dict(ladder, steps=2)),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'nifty_option': steady}},
+                ],
+                numbered,
+            ),
+            self.price_result(
+                'a_profit_taker_is_the_size_its_rung_filled',
+                dict(entry, quantity=30, synthetic=ladder),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'leg_change': {'order_id': '26091500000101', 'quantity': 5}},
+                    {'quote': steady, 'at': 2, 'updates': [self.update('26091500000101', 'COMPLETE', 5)]},
+                ],
+                numbered,
+                book_every_order=True,
+            ),
+            self.price_result(
                 'a_refused_profit_taker_leaves_the_parent_working',
                 dict(entry, quantity=30, synthetic=ladder),
                 [
@@ -5820,6 +5853,41 @@ class OrderEngineSuite:
                     ],
                 },
                 book_every_order=True,
+            ),
+            self.price_result(
+                'a_two_sided_quote_does_not_requote_a_side_the_broker_refused',
+                dict(entry, synthetic=quote),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'COMPLETE', 10)]},
+                    {'quote': steady, 'at': 2},
+                    {'quote': steady, 'at': 3},
+                    {'quote': steady, 'at': 4},
+                ],
+                {
+                    'sequence': [
+                        answered_as('26091500000101'),
+                        answered_as('26091500000102'),
+                        answers.json_answer(200, answers.place_refusal('flattrade')),
+                    ],
+                },
+            ),
+            self.price_result(
+                'a_two_sided_quote_without_a_quantity_is_refused',
+                dict(entry, quantity=None, quantity_reference={'kind': 'liquidate_position'}, synthetic=quote),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+                positions=10,
+            ),
+            self.price_result(
+                'a_two_sided_quote_whose_spread_passes_zero_says_so',
+                dict(entry, synthetic=dict(quote, half_spread_points=1001)),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
             ),
         ]
 

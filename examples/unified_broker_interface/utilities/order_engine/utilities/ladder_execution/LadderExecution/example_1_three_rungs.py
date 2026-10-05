@@ -25,6 +25,14 @@ class StandInContext:
         """
         return decimal.Decimal('0.05')
 
+    def lot_size(self):
+        """The lot every rung must be a whole number of, which for a share is one.
+
+        Returns:
+            int: One.
+        """
+        return 1
+
 
 class ThreeRungsExample:
     """Prints a three-rung ladder."""
@@ -38,8 +46,8 @@ class ThreeRungsExample:
         execution = LadderExecution(decimal.Decimal('995'), decimal.Decimal('1000'), 3)
         execution.begin(None, {}, {}, 0.0)
         print(f'Reads quotes: {execution.needs_prices()}, paced by ticks: {execution.paced_by_ticks()}, grows by changing its order: {execution.changes_its_order_to_grow()}')
-        print(f'Due: {execution.due_pieces(None, {}, 100, [], {}, 0.0)} at {execution.rung_prices(StandInContext(), "BUY")}')
-        print(f'Once sent, more to send: {execution.will_send_more({}, 100, ["a rung"])}, due {execution.due_pieces(None, {}, 100, ["a rung"], {}, 0.0)}')
+        print(f'Due: {execution.due_pieces(StandInContext(), {}, 100, [], {}, 0.0)} at {execution.rung_prices(StandInContext(), "BUY")}')
+        print(f'Once sent, more to send: {execution.will_send_more({}, 100, ["a rung"])}, due {execution.due_pieces(StandInContext(), {}, 100, ["a rung"], {}, 0.0)}')
         print(f'As a dry run shows it: {execution.described()}')
 
 

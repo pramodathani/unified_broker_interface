@@ -15,3 +15,7 @@ Today's type sets `FINISHES_WITH_LEGS = False` and stays open even once every ru
 ## `place_leg` returns the leg's id
 
 The third value `place_leg` returns is the leg's id, which `OrderContext.place_leg`'s docstring had called the leg; it was corrected when this part first used the value.
+
+## Profit-takers from the fill (2026-10-05)
+
+A profit-taker is sized from the rung's `filled_quantity`. A rung the caller cut to 5 that filled 5 got a profit-taker of 10, leaving the account short 5. The rung's remembered size is still used when it is placed again.

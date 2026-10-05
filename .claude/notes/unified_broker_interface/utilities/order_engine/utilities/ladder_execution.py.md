@@ -11,3 +11,7 @@ It reads no quotes, but it needs the instrument's tick size to round its rungs, 
 ## Refusing too small a quantity
 
 Today's ladder refuses before recording anything. A plan reads the quantity only when the order is sent, after the parent is recorded, so the refusal leaves an abandoned parent behind (`a_plan_ladder_needs_a_quantity_for_every_rung`).
+
+## Rungs in whole lots (2026-10-05)
+
+`quantities` shares the order out in whole lots (225 on a lot of 75 over 2 steps gives 150 and 75) and refuses an order of fewer lots than steps. Before, 113 and 112 were refused unheld, and a held scale order stalled silently in `received`. Reading the lot costs a ladder two more Redis round trips when it is placed (19 to 21 in the recordings).
