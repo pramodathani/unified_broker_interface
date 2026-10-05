@@ -148,6 +148,14 @@ class StandInPlanOrder:
             'outcome': 'accepted',
         }, 200, f'parent-1:{len(self.placed)}'
 
+    def lot_size(self):
+        """The lot every slice must be a whole number of, which for a share is one.
+
+        Returns:
+            int: One.
+        """
+        return 1
+
 
 class StartingTheRungsExample:
     """Starts a ladder Using and reads a TWAP one."""

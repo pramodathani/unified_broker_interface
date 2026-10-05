@@ -155,3 +155,28 @@ class OrderContext:
             str | None: The broker, or None before any order was placed.
         """
         return self.plan_order.chosen_broker()
+
+    def lot_size(self):
+        """The order's instrument's lot at the broker the plan's orders go to, which every slice must be a whole number of.
+
+        Any execution that cuts an order into pieces needs it: a piece that is not a whole number of lots is refused when it is sent.
+
+        Returns:
+            int: The lot, at least one: the chosen broker's, or before any broker is chosen the largest any broker lists.
+        """
+        instrument, _, _ = self.placement.market_context(self.instrument_id, False, False)
+        handles = instrument.handles or {}
+        broker_name = self.chosen_broker()
+        if broker_name is not None:
+            chosen = {
+                broker_name: handles.get(broker_name) or {},
+            }
+            handles = chosen
+        largest = 1
+        for handle in handles.values():
+            try:
+                size = int(float(handle.get('lot_size') or 1))
+            except (TypeError, ValueError):
+                size = 1
+            largest = max(largest, size)
+        return largest

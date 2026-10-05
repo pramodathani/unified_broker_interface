@@ -119,15 +119,32 @@ class TimedSlicesExecution:
             f'{type(self).__name__} must say how its slices are weighted.'
         )
 
-    def slice_quantities(self, total, memory):
-        """Each slice's quantity, sharing `total` out by weight with the largest-remainder method.
+    def slice_quantities(self, total, memory, lot=1):
+        """Each slice's quantity, sharing `total` out by weight in whole lots with the largest-remainder method.
 
         Args:
             total (int): The quantity to share out.
             memory (dict): The execution's memory.
+            lot (int): The lot every slice must be a whole number of.
 
         Returns:
-            list: One quantity per slice, adding up to `total`.
+            list: One quantity per slice, adding up to `total` when it is a whole number of lots; a slice can be 0.
+        """
+        lots = self.shared_lots(total // lot, memory)
+        quantities = []
+        for count in lots:
+            quantities.append(count * lot)
+        return quantities
+
+    def shared_lots(self, total, memory):
+        """Each slice's share of `total` units of trading, by weight with the largest-remainder method.
+
+        Args:
+            total (int): The number of lots, or of units when the lot is one, to share out.
+            memory (dict): The execution's memory.
+
+        Returns:
+            list: One whole number per slice, adding up to `total`.
         """
         weights = self.slice_weights(memory)
         total_weight = sum(weights)
@@ -152,7 +169,7 @@ class TimedSlicesExecution:
     def due_pieces(self, plan_order, memory, total, pieces, quotes, now, sending_side=None):
         """The next slice, once its time has come.
 
-        One slice is sent per tick at most, as today, so a tick that arrives late sends the slice that is due and the next tick catches up. Which slice is next is read from how many broker orders this order has placed, which recovery rebuilds after a restart; only the start time is kept in memory.
+        One slice is sent per tick at most, as today, so a tick that arrives late sends the slice that is due and the next tick catches up. Which slice is next is kept in memory as `slices_done`, which is written with the event of every slice sent; an order recorded before it existed falls back to how many broker orders it has placed. A slice that works out to nothing, as a small order or a profile weight of zero can make it, is counted as done and skipped. Counting slices by broker orders alone stalled such an order for ever on its first empty slice. Slices are whole lots, since a slice that is not is refused when it is sent.
 
         Args:
             plan_order (PlanOrder): Unused.
@@ -166,40 +183,56 @@ class TimedSlicesExecution:
         Returns:
             list: One quantity, or nothing.
         """
-        del plan_order, quotes, sending_side
-        index = len(pieces)
+        del quotes, sending_side
         started_at = memory.get('started_at')
-        if started_at is None or index >= self.slices:
+        if started_at is None:
             return []
-        if now < started_at + self.interval(memory) * index:
-            return []
+        index = self.slices_done(memory, pieces)
         sent = 0
         for piece in pieces:
             sent = sent + (piece.quantity or 0)
         remaining = total - sent
-        if index == self.slices - 1:
-            quantity = remaining
-        else:
-            quantity = min(self.slice_quantities(total, memory)[index], remaining)
-        if quantity < 1:
-            return []
-        return [
-            quantity,
-        ]
+        lot = plan_order.lot_size()
+        quantities = self.slice_quantities(total, memory, lot)
+        while index < self.slices and now >= started_at + self.interval(memory) * index:
+            if index == self.slices - 1:
+                quantity = remaining
+            else:
+                quantity = min(quantities[index], remaining)
+            index = index + 1
+            memory['slices_done'] = index
+            if quantity >= 1:
+                return [
+                    quantity,
+                ]
+        return []
+
+    def slices_done(self, memory, pieces):
+        """How many slices of the schedule have been sent or skipped.
+
+        Args:
+            memory (dict): The execution's memory.
+            pieces (list): The broker orders sent so far.
+
+        Returns:
+            int: The count.
+        """
+        if memory.get('slices_done') is not None:
+            return int(memory['slices_done'])
+        return len(pieces)
 
     def will_send_more(self, memory, remaining, pieces):
         """Whether more slices may still be sent: while some are left on the schedule and some quantity is left.
 
         Args:
-            memory (dict): Unused.
+            memory (dict): The execution's memory, holding `slices_done`.
             remaining (int): The quantity not yet sent.
             pieces (list): The broker orders sent so far, one per slice.
 
         Returns:
             bool: True when another slice may follow.
         """
-        del memory
-        return remaining > 0 and len(pieces) < self.slices
+        return remaining > 0 and self.slices_done(memory, pieces) < self.slices
 
     def described(self):
         """This execution as a dry run shows it.

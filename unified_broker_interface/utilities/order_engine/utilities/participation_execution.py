@@ -120,7 +120,7 @@ class ParticipationExecution:
 
         Args:
             plan_order (PlanOrder): The plan order.
-            memory (dict): The execution's memory, whose `counted_volume` moves on when a slice is due.
+            memory (dict): The execution's memory, whose `counted_volume` moves on by the volume a slice accounts for when one is due, so the fraction of a share and the part of a lot it could not send count towards the next slice. A day's volume that falls, as it does when another broker's quote takes over, starts the count again from there rather than waiting for the volume to climb back.
             total (int): The quantity the order should trade in all.
             pieces (list): The broker orders sent so far, one per slice.
             quotes (dict): The quotes the tick carried.
@@ -138,47 +138,22 @@ class ParticipationExecution:
         counted = memory.get('counted_volume')
         if volume is None:
             return []
-        if counted is None:
+        if counted is None or volume < counted:
             memory['counted_volume'] = volume
             return []
         traded = volume - counted
         share = min(int(traded * self.percent / 100), remaining)
-        lot = self.lot_size(plan_order)
+        lot = plan_order.lot_size()
         share = share - share % lot
         if share < 1:
             return []
-        memory['counted_volume'] = volume
+        counted = round(counted + share * 100 / float(self.percent), 6)
+        if counted == int(counted):
+            counted = int(counted)
+        memory['counted_volume'] = counted
         return [
             share,
         ]
-
-    def lot_size(self, plan_order):
-        """The order's instrument's lot at the broker the plan's orders go to, which every slice must be a whole number of.
-
-        A share of the market's volume rarely comes to whole lots, and a slice that does not is refused when it is sent. So it is cut down to whole lots, and a share under one lot leaves `counted_volume` where it was, so the volume goes on counting towards the next slice.
-
-        Args:
-            plan_order (OrderContext): The order's view of the plan order.
-
-        Returns:
-            int: The lot, at least one: the chosen broker's, or before any broker is chosen the largest any broker lists.
-        """
-        instrument, _, _ = plan_order.placement.market_context(plan_order.instrument_id, False, False)
-        handles = instrument.handles or {}
-        broker_name = plan_order.chosen_broker()
-        if broker_name is not None:
-            chosen = {
-                broker_name: handles.get(broker_name) or {},
-            }
-            handles = chosen
-        largest = 1
-        for handle in handles.values():
-            try:
-                size = int(float(handle.get('lot_size') or 1))
-            except (TypeError, ValueError):
-                size = 1
-            largest = max(largest, size)
-        return largest
 
     def will_send_more(self, memory, remaining, pieces):
         """Whether more slices may still be sent: while some is left and fewer than `most_slices` have gone.

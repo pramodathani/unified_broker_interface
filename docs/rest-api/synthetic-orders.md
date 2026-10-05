@@ -923,11 +923,11 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `twap`
 
-    A time-weighted average price order splits the order into `slices` equal parts sent at even intervals over `over_minutes`. The first slice goes at once. A slice that fell due while the engine was busy is sent as soon as it is noticed. Every slice goes to the first slice's broker.
+    A time-weighted average price order splits the order into `slices` equal parts sent at even intervals over `over_minutes`. The first slice goes at once. Slices are shared out in whole lots, and a slice that comes to nothing, as it does when the order is smaller than its slices, is skipped and the schedule moves on. At most one slice goes per tick, so slices that fell due while the engine was busy follow one a tick. Every slice goes to the first slice's broker. A slice that does not fill stays where it is, and the schedule does not stop at the market's close.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
-    | `slices` | integer | Yes | From 2 to 60. The order's `quantity` must be at least `slices`. |
+    | `slices` | integer | Yes | From 2 to 60. A quantity of fewer lots than `slices` is accepted, and the empty slices are skipped. |
     | `over_minutes` | number | Yes | Above zero. |
 
     ```json
@@ -978,7 +978,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `participation`
 
-    A percentage-of-volume order answers `202 armed` and then, on each price tick, sends `participation_percent` of the volume traded since its last slice, as a limit priced 2 ticks past the opposite touch. Each slice is rounded down to whole lots, and a share smaller than one lot is carried forward until enough volume has traded. It has no deadline.
+    A percentage-of-volume order answers `202 armed` and then, on each price tick, sends `participation_percent` of the volume traded since its last slice, as a limit priced 2 ticks past the opposite touch. Each slice is rounded down to whole lots, and only the volume a slice accounts for is used up, so the fraction of a share and the part of a lot it could not send count towards the next slice. When the day's volume falls, as it can when another broker's quote takes over, counting starts again from there. It has no deadline.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
@@ -991,7 +991,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `liquidity_seeking`
 
-    A liquidity-seeking order answers `202 armed`, shows nothing and watches the other side of the book. When the displayed size at prices at or inside `limit_price` adds up to at least `minimum_quantity`, it sends a limit at `limit_price` for the smaller of what is showing and what is left.
+    A liquidity-seeking order answers `202 armed`, shows nothing and watches the other side of the book. When the displayed size at prices at or inside `limit_price` adds up to at least `minimum_quantity`, it sends a limit at `limit_price` for the smaller of what is showing and what is left, rounded down to whole lots. The strike uses the body's validity, so with the default `DAY` an unfilled strike rests at `limit_price`. A book marked stale is never acted on.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
@@ -1004,7 +1004,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `iceberg`
 
-    An iceberg rests one slice at a time and places the next when that slice fills. Each slice is a new order, so it joins the back of the queue.
+    An iceberg rests one slice at a time and places the next when that slice fills. Each slice is a new order, so it joins the back of the queue. A randomised slice is brought to the nearest whole number of lots, at least one. A slice cancelled or rejected at the broker ends the iceberg.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|

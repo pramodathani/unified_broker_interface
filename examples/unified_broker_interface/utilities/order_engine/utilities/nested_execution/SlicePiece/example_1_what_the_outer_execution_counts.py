@@ -15,6 +15,18 @@ from unified_broker_interface.utilities.order_engine.utilities.twap_execution im
 )
 
 
+class StandInPlanOrder:
+    """Stands in for the plan order an execution is asked about, which here only answers the lot."""
+
+    def lot_size(self):
+        """The lot every slice must be a whole number of, which for a share is one.
+
+        Returns:
+            int: One.
+        """
+        return 1
+
+
 class StandInLeg:
     """Stands in for one broker order: its quantity, what it filled and whether it has finished.
 
@@ -76,7 +88,7 @@ class WhatTheOuterExecutionCountsExample:
         ]
         for slice_piece in released:
             print(f'slice of {slice_piece.quantity}: filled {slice_piece.filled_quantity}, finished {slice_piece.is_finished()}')
-        print(f'due at 45s: {twap.due_pieces(None, memory, 10, released, {}, 45.0)}')
+        print(f'due at 45s: {twap.due_pieces(StandInPlanOrder(), memory, 10, released, {}, 45.0)}')
         print(f'will send more: {twap.will_send_more(memory, 0, released)}')
 
 
