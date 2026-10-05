@@ -210,7 +210,7 @@ class BoundsAndRefusalsExample:
         plan_order = StandInPlanOrder(OPTION_ID, {'order_type': 'LIMIT', 'price': 200})
         for price in ('120', '199.97', '300'):
             print(f'{price} is held at {pricing.bounded(plan_order, decimal.Decimal(price), "BUY", {})}')
-        print(f'The reason it gives: {pricing.reason(decimal.Decimal("25040"), decimal.Decimal("220"))}')
+        print(f'The reason it gives: {pricing.reason(decimal.Decimal("25040"), decimal.Decimal("220"), {})}')
         own = StandInPlanOrder(INDEX_ID, {'order_type': 'LIMIT', 'price': 200})
         market = StandInPlanOrder(OPTION_ID, {'order_type': 'MARKET'})
         for name, order in (('its own instrument', own), ('a market order', market)):

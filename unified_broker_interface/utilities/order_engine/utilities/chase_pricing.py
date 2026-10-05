@@ -113,6 +113,8 @@ class ChasePricing:
     def moved_prices(self, plan_order, memory, leg, quotes, now):
         """The step to take on this tick, the cross when the time is up, or None when it should wait.
 
+        A step clamped to a book that is crossed or lagging can land behind where the order rests; such a step is skipped, so the order is never dragged backwards.
+
         Args:
             plan_order (PlanOrder): The plan order, which reads quotes into prices.
             memory (dict): The pricing's memory, given `started_at` and `stepped_at` in place.
@@ -146,6 +148,8 @@ class ChasePricing:
         if touch is not None:
             price = self.no_further_than(price, touch, side)
         memory['stepped_at'] = now
+        if (side == 'BUY' and price < here) or (side == 'SELL' and price > here):
+            return None
         return price, None, f'the chase stepped to {price}'
 
     def described(self):

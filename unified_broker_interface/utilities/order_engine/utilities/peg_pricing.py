@@ -204,7 +204,7 @@ class PegPricing:
             distance = reference_price - new_price
         else:
             distance = new_price - reference_price
-        offset = int((distance / tick_size).to_integral_value())
+        offset = int((distance / tick_size).to_integral_value(rounding=decimal.ROUND_FLOOR))
         memory['offset_ticks'] = offset
         return f'the caller moved the price to {new_price}, so the peg rests {offset} ticks from its {self.reference}'
 

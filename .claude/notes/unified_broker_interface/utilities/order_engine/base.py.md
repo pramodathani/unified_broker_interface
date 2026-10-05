@@ -81,3 +81,7 @@ Six types combined their orders' answers with `max(status)` and each worked its 
 ## `carries_parent_overnight` (2026-10-01)
 
 A class method rather than an instance one, because recovery asks it of a rebuilt `ParentOrder` before any order type object exists for it. The base answers `CARRIES_OVERNIGHT`, so only a type that carries some parents and not others overrides it, as `PlanOrder` does.
+
+## reprice_leg skips a cancelled leg (2026-10-05)
+
+`reprice_leg` returns False for a leg whose cancel was accepted, before any throttle or rate check, so no moving pricing sends a modify to an order the caller cancelled (`a_peg_is_not_moved_after_the_caller_cancels_its_order`).

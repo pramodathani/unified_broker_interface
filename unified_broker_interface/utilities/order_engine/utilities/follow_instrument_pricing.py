@@ -183,7 +183,7 @@ class FollowInstrumentPricing:
         current = decimal.Decimal(str(leg.price))
         if abs(price - current) < tick_size * self.step_ticks:
             return None
-        return price, None, self.reason(watched, price)
+        return price, None, self.reason(watched, price, memory)
 
     def carry_on(self, plan_order, memory, leg, before, quotes, now):
         """Re-anchors the order at the caller's new price and the followed instrument's price now, so it follows from there.
@@ -211,16 +211,18 @@ class FollowInstrumentPricing:
         memory['watched_start'] = str(watched)
         return f'the caller moved the price to {leg.price}, so the order follows the instrument from {watched}'
 
-    def reason(self, watched, price):
+    def reason(self, watched, price, memory):
         """Why the order moved, for the event log.
 
         Args:
             watched (decimal.Decimal): The watched instrument's price.
             price (decimal.Decimal): The new limit.
+            memory (dict): The pricing's memory, which this reason does not need.
 
         Returns:
             str: The reason.
         """
+        del memory
         return f'the followed instrument is at {watched}, so the order moved to {price}'
 
     def described(self):

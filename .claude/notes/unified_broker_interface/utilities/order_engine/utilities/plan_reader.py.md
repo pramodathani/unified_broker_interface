@@ -81,3 +81,7 @@ With `using` read by `_read_using`, every join the design names is built, so the
 ## `periods` is at most 49 (2026-10-04)
 
 `BarBuilder` keeps `MOST_KEPT_BARS` (50) closed bars, and an average true range over `periods` needs `periods + 1` of them, the extra one for the first true range's previous close. With no upper bound, `periods` of 50 or more was accepted and never produced an average, so the trail stayed at `trail_points` for the whole day. The bound is taken from `MOST_KEPT_BARS` so the two cannot drift apart.
+
+## Market and stop bodies (2026-10-05)
+
+`_fixed_order_type` reads the order type a fixed pricing really sends, the body's when the pricing names none. `_can_rest` and `_can_take_at_discretion` only looked at the pricing, so a routed `post_only` with a `MARKET` body was sent as `MKT`, a post-only `SL` with `rest` became a buy stop whose limit sat below its own trigger, and a discretionary stop was cancelled by its first take.

@@ -61,7 +61,7 @@ class OptionModelPricing(FollowInstrumentPricing):
             dict: The pricing's first memory.
 
         Raises:
-            RefusedRequestError: With HTTP 400 when the order is not a limit on an option with a strike and an expiry, or follows its own instrument.
+            RefusedRequestError: With HTTP 400 when the order is not a limit on an option with a strike and an expiry, follows its own instrument, or the option has already expired, which would otherwise leave the order armed for ever.
         """
         memory = super().prepared_memory(plan_order)
         instrument, _, _ = plan_order.placement.market_context(plan_order.instrument_id, False, False)
@@ -77,6 +77,12 @@ class OptionModelPricing(FollowInstrumentPricing):
             )
         expiry_day = datetime.date.fromisoformat(str(expiry))
         expires = datetime.datetime.combine(expiry_day, EXPIRES_AT, moments.INDIA)
+        if expires.timestamp() <= time.time():
+            raise RefusedRequestError.refusal(
+                f'the option expired at {expires:%Y-%m-%d %H:%M} India time, so the model has no premium to price it at',
+                400,
+                instrument_id=plan_order.instrument_id,
+            )
         watched, _, _ = plan_order.placement.market_context(self.instrument_id, False, False)
         memory['strike_price'] = float(strike)
         memory['expires_at'] = expires.timestamp()
@@ -105,7 +111,9 @@ class OptionModelPricing(FollowInstrumentPricing):
         return Black76(forward, memory['strike_price'], years, rate, memory['is_call'])
 
     def premium(self, plan_order, memory, side, watched, quotes, now):
-        """The premium the volatility gives now, no worse than the body's price, bounded and on the tick.
+        """The premium the volatility gives now, bounded and on the tick, and never worse than the body's price.
+
+        The body's price is applied last, so a `lowest_price` above it on a buy, or a `highest_price` below it on a sell, cannot push the order past the worst price the caller accepts.
 
         Args:
             plan_order (OrderContext): The order's view of the plan order, whose body's price is the worst accepted.
@@ -121,13 +129,15 @@ class OptionModelPricing(FollowInstrumentPricing):
         model = self.model(memory, watched, now)
         if model is None:
             return None
-        premium = decimal.Decimal(str(round(model.price(float(self.volatility) / 100), 6)))
+        premium = decimal.Decimal(str(round(model.price(float(self.volatility_now(memory)) / 100), 6)))
         worst = decimal.Decimal(str(plan_order.body['price']))
+        worst = plan_order.view(quotes).rounded(worst, side) or worst
+        premium = self.bounded(plan_order, premium, side, quotes)
+        if premium is None:
+            return None
         if side == 'BUY':
-            premium = min(premium, worst)
-        else:
-            premium = max(premium, worst)
-        return self.bounded(plan_order, premium, side, quotes)
+            return min(premium, worst)
+        return max(premium, worst)
 
     def target_price(self, plan_order, memory, side, watched, quotes, now):
         """Where the order should be: the premium for the underlying's price now.
@@ -169,17 +179,62 @@ class OptionModelPricing(FollowInstrumentPricing):
         body['price'] = str(premium)
         return body
 
-    def reason(self, watched, price):
+    def reason(self, watched, price, memory):
         """Why the order moved, for the event log.
 
         Args:
             watched (decimal.Decimal): The underlying's price.
             price (decimal.Decimal): The new premium.
+            memory (dict): The pricing's memory, which holds a volatility the caller's change implied.
 
         Returns:
             str: The reason.
         """
-        return f'at {self.volatility} volatility with the underlying at {watched}, the premium is {price}'
+        return f'at {self.volatility_now(memory)} volatility with the underlying at {watched}, the premium is {price}'
+
+    def volatility_now(self, memory):
+        """The volatility the order is priced at: the one a caller's price change implied, or the one it was placed with.
+
+        Args:
+            memory (dict): The pricing's memory.
+
+        Returns:
+            decimal.Decimal: The volatility, as a percentage.
+        """
+        if memory.get('volatility') is not None:
+            return decimal.Decimal(str(memory['volatility']))
+        return decimal.Decimal(str(self.volatility))
+
+    def carry_on(self, plan_order, memory, leg, before, quotes, now):
+        """Takes the volatility the caller's new price implies, so the order carries on at that volatility rather than snapping back.
+
+        The implied volatility is found from the model with the underlying's price now. When the underlying has no price, the option has expired, or no volatility between 0.01% and 500% gives the caller's price, the volatility is left as it was and the next tick moves the order back.
+
+        Args:
+            plan_order (OrderContext): The plan order's context for this order, which reads quotes into prices.
+            memory (dict): The pricing's memory, whose `volatility` is set in place.
+            leg (OrderLeg): The order, holding the caller's new price.
+            before (dict): What the leg held before, with `price`.
+            quotes (dict): The quotes now, by instrument id.
+            now (float): The Unix time of the change.
+
+        Returns:
+            str | None: What changed, for the event log, or None when nothing did.
+        """
+        if leg.price is None or leg.price == before.get('price') or memory.get('expires_at') is None:
+            return None
+        watched = self.watched_price(plan_order, quotes)
+        if watched is None:
+            return None
+        model = self.model(memory, watched, now)
+        if model is None:
+            return None
+        implied = model.implied_volatility(float(leg.price))
+        if implied is None:
+            return None
+        volatility = round(decimal.Decimal(str(implied * 100)), 4)
+        memory['volatility'] = str(volatility)
+        return f'the caller moved the price to {leg.price}, which is {volatility} volatility with the underlying at {watched}, so the order carries on at that volatility'
 
     def described(self):
         """This pricing as a dry run shows it.

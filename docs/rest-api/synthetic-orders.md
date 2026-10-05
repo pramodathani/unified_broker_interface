@@ -12,7 +12,7 @@ This page is the glossary of all 54 types you can ask for. The engine runs `simp
 
 ## Changing a synthetic order
 
-A leg of a synthetic order can be changed through [`PUT /api/orders/modify`](orders.md#an-order-the-engine-placed) like any other order, and the order type carries on from the change. The table below says what each kind of type does with it.
+A leg of a synthetic order can be changed through [`PUT /api/orders/modify`](orders.md#an-order-the-engine-placed) like any other order, and the order type carries on from the change. Once a broker has accepted your cancel of a leg, the engine never moves that leg again, even before the broker confirms the order is gone. The table below says what each kind of type does with it.
 
 | Type | After you change a leg |
 |---|---|
@@ -802,13 +802,13 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `peg`
 
-    A peg keeps a limit order re-priced to a place in the book. The throttle and the rule against moves that change nothing keep it from churning.
+    A peg keeps a limit order re-priced to a place in the book. The throttle and the rule against moves that change nothing keep it from churning. The body's own price is not used: the order is placed where the reference is, and a `MARKET` body is sent as a limit there. With no price for the reference yet, it answers <span class="status s2">202</span> `armed` and is placed on the first tick that has one.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
     | `reference` | string | No | `own_touch` (your own side's best price), `mid` (between the touch) or `opposite_touch` (the other side's best price). Defaults to `own_touch`. |
     | `offset_ticks` | integer | No | Ticks away from filling; negative moves towards the market. Defaults to 0. |
-    | `cap_price` | number | No | The price it never goes past. Above zero. |
+    | `cap_price` | number | No | The price it never goes past. Above zero, and a whole number of ticks, or the order is refused with <span class="status s4">400</span>. |
 
     ```json
     {"type": "peg", "reference": "own_touch", "offset_ticks": 0, "cap_price": 1005}
@@ -830,7 +830,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | `highest_price` | number | No | The highest price the order is moved to. Above zero, and not below `lowest_price`. |
     | `step_ticks` | integer | No | The smallest move worth a modify. At least 1. Defaults to 1. |
 
-    The order must be a `LIMIT` with a `price`. It answers with the broker's answer plus `underlying_start`, the underlying's price the peg measures from.
+    The order must be a `LIMIT` with a `price`. It answers with the broker's answer; the underlying's price it measures from is kept in the part's `pricing_memory` as `watched_start`. `lowest_price` and `highest_price` must be whole numbers of ticks, or the order is refused with <span class="status s4">400</span>.
 
     ```json
     {"type": "underlying_peg", "watch_instrument_id": "<Nifty index id>", "delta": 0.5, "step_ticks": 4}
@@ -849,7 +849,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | Interest rate | `interest_rate`, 0 unless you give one. |
     | Time to expiry | From now to expiry, in years of 365 days. |
 
-    The order must be a `LIMIT`, and its `price` is the worst it will accept: the most a buy pays, the least a sell takes. The model's premium is used whenever it is better than that price. That price stays what the order was placed with, even after you change the leg. If you change the leg's price yourself, the order takes the volatility your price implies and carries on at that volatility. The answer carries `priced_at`, the price the order was first sent at.
+    The order must be a `LIMIT`, and its `price` is the worst it will accept: the most a buy pays, the least a sell takes. The model's premium is used whenever it is better than that price, and `lowest_price` and `highest_price` never push the order past it. That price stays what the order was placed with, even after you change the leg. If you change the leg's price yourself, the order takes the volatility your price implies and carries on at that volatility. An option that has already expired is refused with <span class="status s4">400</span>.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
@@ -865,7 +865,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `chaser`
 
-    A chaser starts on its own side of the book and steps towards the other side until it fills. It rests at `cap_price` if it reaches it. With `cross_after_seconds`, it moves to the other side's touch once that long has passed.
+    A chaser starts on its own side of the book and steps towards the other side until it fills. It rests at `cap_price` if it reaches it, and starts there when the touch is already past it. It is never moved backwards, even when the book lags behind it. With `cross_after_seconds`, it moves to the other side's touch once that long has passed, counted from the first tick after it rests, and after that it follows the other side's touch.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
@@ -880,7 +880,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `post_only`
 
-    A post-only order checks the price against the book before sending. A buy is passive at or below the best bid, and a sell at or above the best offer. The book can still move while the order is in flight. The order is not watched afterwards.
+    A post-only order checks the price against the book before sending. A buy is passive anywhere below the best offer, and a sell anywhere above the best bid, so a price inside the spread is sent as it is. The book can still move while the order is in flight. The order's price is not watched afterwards. A `MARKET` body is refused with `post_only_crosses`, and a stop with `post_only_needs_limit`, both with <span class="status s4">400</span>. With no readable book on arrival it answers <span class="status s2">202</span> `armed` and checks the book on the first tick that has one; a refusal then ends the parent `rejected` rather than answering 409.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
@@ -892,7 +892,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `discretionary`
 
-    A discretionary order rests a visible limit at your `price`. If the other side comes within `discretion_points` of that price, the engine reduces the resting order first and then takes the other side.
+    A discretionary order rests a visible limit at your `price`. If the other side comes within `discretion_points` of that price, the engine reduces the resting order first, or cancels it when the whole of it is taken, and then takes the other side. The body must be a `LIMIT` with a price; a stop or `MARKET` body is refused with `discretion_needs_limit`. A visible order whose cancel the broker has accepted is never taken from again, so a take cannot happen twice while the cancel is confirmed.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
@@ -905,7 +905,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `virtual_limit`
 
-    A virtual limit is held in the engine's own book and sent, as a limit at your price, only once the other side reaches it: for a buy, when the best offer is at or below the price. It spends one daily order message instead of two for a limit that never fills. The body must be a `LIMIT` order with a `price`. A quote marked stale is never acted on. The separate `virtual_book` process estimates what a resting order would have filled, and that estimate is recorded as `missed_quantity` when the order is sent.
+    A virtual limit is held in the engine's own book and sent, as a limit at your price, only once the other side reaches it: for a buy, when the best offer is at or below the price. A limit that never becomes marketable sends nothing at all, so it spends no daily order messages. A price that is not a whole number of ticks is refused with <span class="status s4">400</span> when the order is placed. The body must be a `LIMIT` order with a `price`. A quote marked stale is never acted on. The separate `virtual_book` process estimates what a resting order would have filled, and that estimate is recorded as `missed_quantity` when the order is sent.
 
     Every plain `LIMIT` order runs as a virtual limit unless it names another type, because [limit orders are held by default](orders.md#limit-orders-are-held-until-they-can-fill). While it is held, its price and quantity can be changed through [`PUT /api/orders/modify` with `parent_id`](orders.md#a-held-order), which sends nothing to a broker; once it has been sent, it is changed by its broker order id like any other order.
 

@@ -162,3 +162,7 @@ A plan whose only order was accepted and then rejected by the exchange stayed `w
 `_refuse_off_tick_prices` now also checks parts whose execution is paced by ticks, so the daily stop's off-tick price is caught on arrival with 400 rather than at 09:20 the next morning.
 
 `_fire_waiting` writes the trigger memory with an event in two more cases: when a new bar starts (`BarBuilder.started_another`) and when a candle close trigger's bar in progress moves to the other side of its level (`closing_past`). Recovery rebuilds parents from events only, so without these a restart lost every bar. Writing on every tick would cost an event a second per order; once per bar plus once per crossing is enough, because a candle stop judges only the bar in progress and that bar's close is on the side last recorded.
+
+## More prices checked on arrival (2026-10-05)
+
+`_later_prices` also names a fixed limit's price taken from the body (a virtual limit's), a cap price, and a follow-instrument order's bounds, and the check now covers orders that move on ticks. An off-tick virtual limit used to answer 202 and be refused when it fired; a paper one filled at the off-tick price. An off-tick cap was sent unrounded in a modify, and an off-tick bound was breached by the passive rounding.

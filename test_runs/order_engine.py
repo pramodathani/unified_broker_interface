@@ -5734,6 +5734,192 @@ class OrderEngineSuite:
             ),
         ]
 
+    def run_limit_pricing_checks(self):
+        """Runs the book-following limit types where a cancelled order, a price off the tick, a stop or market body, or a caller's change used to go wrong.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        accepted = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        numbered = dict(
+            accepted,
+            number_orders=True,
+        )
+        identifiers = order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS
+        entry = self.scenarios.bodies.market_order(
+            dry_run=None,
+            order_type='LIMIT',
+            price=1000,
+            quantity=10,
+        )
+        steady = self.book_at(1000.00, 1000.05)
+        option = dict(
+            entry,
+            instrument_id=identifiers['nifty_option'],
+            quantity=75,
+        )
+        volatility = {
+            'type': 'volatility',
+            'watch_instrument_id': identifiers['nifty_index'],
+            'volatility': 12.5,
+        }
+        index_at_25000 = {
+            'nifty_index': self.scenarios.quote(last_price=25000),
+        }
+        return [
+            self.price_result(
+                'a_peg_is_not_moved_after_the_caller_cancels_its_order',
+                dict(entry, synthetic={
+                    'type': 'peg',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'leg_cancel': '26091500000021'},
+                    {'quote': self.book_at(1000.20, 1000.25), 'at': 2},
+                    {'quote': self.book_at(1000.40, 1000.45), 'at': 4},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_discretionary_order_takes_once_while_its_cancel_is_unconfirmed',
+                dict(entry, synthetic={
+                    'type': 'discretionary',
+                    'discretion_points': 0.25,
+                }),
+                [
+                    {'quote': self.book_at(1000.00, 1000.50), 'at': 0},
+                    {'quote': self.book_at(1000.00, 1000.20), 'at': 1},
+                    {'quote': self.book_at(1000.00, 1000.20), 'at': 2},
+                ],
+                numbered,
+            ),
+            self.price_result(
+                'a_discretionary_order_with_points_off_the_tick_takes_at_a_price_on_it',
+                dict(entry, synthetic={
+                    'type': 'discretionary',
+                    'discretion_points': 0.07,
+                }),
+                [
+                    {'quote': self.book_at(1000.00, 1000.50), 'at': 0},
+                    {'quote': self.book_at(1000.00, 1000.05), 'at': 1},
+                ],
+                numbered,
+            ),
+            self.price_result(
+                'a_discretionary_stop_is_refused',
+                dict(entry, order_type='SL', trigger_price=1001, price=1002, synthetic={
+                    'type': 'discretionary',
+                    'discretion_points': 0.25,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_post_only_market_order_is_refused',
+                dict(entry, order_type='MARKET', price=None, synthetic={
+                    'type': 'post_only',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_post_only_stop_is_refused',
+                dict(entry, order_type='SL', trigger_price=1001, price=1002, synthetic={
+                    'type': 'post_only',
+                    'on_crossing': 'rest',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_chaser_is_not_dragged_back_by_a_lagging_book',
+                dict(entry, synthetic={
+                    'type': 'chaser',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 5},
+                    {'quote': self.book_at(999.50, 999.55), 'at': 10},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_mid_peg_rests_where_the_caller_moved_it',
+                dict(entry, synthetic={
+                    'type': 'peg',
+                    'reference': 'mid',
+                }),
+                [
+                    {'quote': self.book_at(1000.00, 1000.15), 'at': 0},
+                    {'quote': self.book_at(1000.00, 1000.15), 'at': 2, 'leg_change': {'order_id': '26091500000021', 'price': 1000.00}},
+                    {'quote': self.book_at(1000.00, 1000.15), 'at': 4},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_peg_cap_off_the_tick_is_refused_when_placed',
+                dict(entry, synthetic={
+                    'type': 'peg',
+                    'cap_price': 1000.03,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'an_underlying_peg_bound_off_the_tick_is_refused_when_placed',
+                dict(entry, synthetic={
+                    'type': 'underlying_peg',
+                    'watch_instrument_id': identifiers['nifty_index'],
+                    'delta': 0.5,
+                    'lowest_price': 990.03,
+                }),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': index_at_25000},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_volatility_order_carries_on_at_the_volatility_the_callers_price_implies',
+                dict(option, price=500, synthetic=volatility),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': index_at_25000},
+                    {'quote': steady, 'at': 1, 'other_quotes': index_at_25000, 'leg_change': {'order_id': '26091500000021', 'price': 150.00}},
+                    {'quote': steady, 'at': 2, 'other_quotes': index_at_25000},
+                    {'quote': steady, 'at': 3, 'other_quotes': {'nifty_index': self.scenarios.quote(last_price=25100)}},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_volatility_order_never_bids_above_its_price_for_a_lowest_bound',
+                dict(option, price=150, synthetic=dict(volatility, lowest_price=200)),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': index_at_25000},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_virtual_limit_off_the_tick_is_refused_when_placed',
+                dict(entry, price=999.53, synthetic={
+                    'type': 'virtual_limit',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+        ]
+
     def run_stale_quote_checks(self):
         """Runs triggers on quotes marked stale, which the quote combiner marks when a quote's broker has gone silent with no healthy backup.
 
@@ -14083,6 +14269,7 @@ class OrderEngineSuite:
             results.extend(self.run_linked_order_checks())
             results.extend(self.run_stop_type_checks())
             results.extend(self.run_stale_quote_checks())
+            results.extend(self.run_limit_pricing_checks())
             results.extend(self.run_price_checks())
             results.extend(self.run_wiring_checks())
             results.extend(self.run_assignment_checks())

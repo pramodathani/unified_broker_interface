@@ -11,3 +11,7 @@ A type's parameters were recorded once, with `parent_received`, and every later 
 ## `working` to `rejected` (2026-10-04)
 
 A plan's order can be accepted and then rejected by the exchange, for example for price bands or margin. The parent was already `working`, and `ALLOWED_CHANGES` had no step to `rejected`, so a plan that ended with nothing traded and a refused order stayed `working` for ever. The step is allowed now; `PlanOrder._finish_if_done` chooses it only when nothing traded.
+
+## Applying leg_cancelled (2026-10-05)
+
+`apply_cancel_answer` sets `cancel_accepted` from an accepted `leg_cancelled` event. Because it comes from the event log, the mark survives a restart. The leg's state is left alone: only the broker's order update says the order is gone.

@@ -277,6 +277,10 @@ STOP_PRICINGS = (
     AtrTrailPricing,
     StagesPricing,
 )
+STOP_ORDER_TYPES = (
+    'SL',
+    'SL-M',
+)
 SIDES = (
     'buy',
     'sell',
@@ -1558,11 +1562,11 @@ class PlanReader:
         Returns:
             bool: True when they can go together.
         """
-        if isinstance(pricing, STOP_PRICINGS):
+        if isinstance(pricing, STOP_PRICINGS) or self._fixed_order_type(pricing) not in (None, 'LIMIT'):
             self._add_problem(
                 path,
                 'discretion_needs_limit',
-                'discretion takes a better price than a visible limit shows, and a stop order is not a visible limit',
+                'discretion takes a better price than a visible limit shows, and a stop or market order is not a visible limit',
             )
             return False
         if not isinstance(execution, AllAtOnceExecution):
@@ -1573,6 +1577,25 @@ class PlanReader:
             )
             return False
         return True
+
+    def _fixed_order_type(self, pricing):
+        """The order type a fixed pricing sends: its own, or the body's when it names none.
+
+        A routed type such as `post_only` or `discretionary` sends the body as written, so a `MARKET` or stop body has to be judged from the body; judging only the pricing let both through.
+
+        Args:
+            pricing (object): The order's pricing setter.
+
+        Returns:
+            str | None: The order type in capitals, or None for a pricing that is not fixed or a body without one.
+        """
+        if not isinstance(pricing, FixedPricing):
+            return None
+        if pricing.order_type is not None:
+            return str(pricing.order_type).strip().upper()
+        if self.body is None or not self.body.get('order_type'):
+            return None
+        return str(self.body.get('order_type')).strip().upper()
 
     def _can_rest(self, pricing, path):
         """Whether an order with this pricing can be post-only, reporting the problem when it cannot.
@@ -1586,7 +1609,7 @@ class PlanReader:
         Returns:
             bool: True when the two can go together.
         """
-        if isinstance(pricing, STOP_PRICINGS):
+        if isinstance(pricing, STOP_PRICINGS) or self._fixed_order_type(pricing) in STOP_ORDER_TYPES:
             self._add_problem(
                 path,
                 'post_only_needs_limit',
@@ -1596,7 +1619,7 @@ class PlanReader:
         crossing = isinstance(pricing, (MarketablePricing, ChasePricing))
         if isinstance(pricing, PegPricing) and pricing.reference == 'opposite_touch':
             crossing = True
-        if isinstance(pricing, FixedPricing) and pricing.order_type == 'MARKET':
+        if self._fixed_order_type(pricing) == 'MARKET':
             crossing = True
         if crossing:
             self._add_problem(

@@ -328,6 +328,8 @@ class OrderPart:
     def prepare(self, plan_order, memory):
         """Readies the trigger when the plan is placed, such as working out when a time falls.
 
+        Terms held in the virtual book take the side the order will be sent on, not the body's: a held order that protects a long is a sell, and recording the body's buy made the virtual book estimate, and a paper order fill, the wrong side of the book.
+
         Args:
             plan_order (PlanOrder): The plan order.
             memory (dict): The part's memory, changed in place.
@@ -343,6 +345,9 @@ class OrderPart:
         if 'trigger' not in memory:
             memory['trigger'] = {}
         self.trigger.prepare(self.context(plan_order), memory['trigger'])
+        held = memory['trigger'].get('held')
+        if isinstance(held, dict):
+            held['transaction_type'] = self._sending_side(plan_order)
 
     def refresh_held_terms(self, plan_order):
         """Rewrites the terms a `limit_marketable` trigger holds this order at, after a Using join has given it a rung's price and share.
