@@ -505,11 +505,28 @@ class PlanReader:
             self._add_problem(
                 child.path,
                 'join_not_sized',
-                'a Then join sizes its child to what the first plan filled, and the plans of a together or sequence join each trade their own quantity',
+                f'a Then join sizes its child to what the first plan filled, and the plans of a {self._join_name(child)} join each trade their own quantity',
             )
         if len(self.problems) > problems_before:
             return None
         return ThenPart(path, first, child, child_key, cancel_first)
+
+    def _join_name(self, join):
+        """The name a caller writes for a join that holds several plans.
+
+        Args:
+            join (object): A together, sequence, repeat or using join.
+
+        Returns:
+            str: `using`, `repeat`, `sequence` or `together`.
+        """
+        if isinstance(join, UsingPart):
+            return 'using'
+        if isinstance(join, RepeatPart):
+            return 'repeat'
+        if isinstance(join, SequencePart):
+            return 'sequence'
+        return 'together'
 
     def _read_children(self, content, path, keeps_tag, name, smallest):
         """Reads the `children` list a join holds.
@@ -642,6 +659,12 @@ class PlanReader:
             part = self._read_node(child, copy_path, keeps_tag and index == 0)
             if part is None:
                 return None
+            if isinstance(part, WholePart):
+                self._add_problem(f'{path}.child', 'repeat_needs_order', f'{part.name} runs by rules of its own and places its orders as soon as it starts, so it cannot wait for a repeat\'s turn')
+                return None
+            if not isinstance(part, OrderPart):
+                self._add_problem(f'{path}.child', 'repeat_needs_order', 'repeat sends one order again and again, and a join preset makes this child several orders; repeat a plain order instead')
+                return None
             schedule = None
             if daily_at is not None:
                 schedule = TradingDayTimeCondition(str(daily_at), index)
@@ -697,6 +720,8 @@ class PlanReader:
         execution = self._read_execution_list(execution_list, f'{path}.order.execution')
         if 'execution' in each_piece:
             self._add_problem(f'{path}.each_piece', 'using_piece_execution', 'each piece is sent whole, so each_piece takes no execution of its own')
+        if 'quantity' in each_piece:
+            self._add_problem(f'{path}.each_piece', 'using_piece_quantity', 'each piece\'s quantity is its share of the order\'s quantity, which the execution splits, so each_piece takes no quantity; give the quantity on the order or the body')
         for slot in each_piece:
             if slot in order and slot != 'presets':
                 self._add_problem(f'{path}.each_piece', 'using_slot_twice', f'{slot} is given by both order and each_piece; give it once')
@@ -731,6 +756,10 @@ class PlanReader:
             )
             if child is None:
                 return None
+            for part in child.order_parts():
+                if isinstance(part, WholePart):
+                    self._add_problem(f'{path}.each_piece', 'using_piece_kept_whole', f'{part.name} runs by rules of its own and places its orders as soon as it starts, so it cannot wait for a piece\'s turn or price')
+                    return None
             main = child.order_parts()[0]
             if not isinstance(execution, LadderExecution) and index > 0:
                 elapsed = ElapsedCondition(execution.interval() * index / 60)

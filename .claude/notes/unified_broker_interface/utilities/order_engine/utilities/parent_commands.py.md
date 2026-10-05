@@ -25,3 +25,7 @@ Flatten must not wait for every worker to reach its halt, because a worker may b
 ## `part` and `dry_run` on `cancel_parent` (added 2026-10-02)
 
 `cancel_parent` with `part` hands the cancel to `runner.cancel_part`, which only a plan implements; every other type refuses with 409, as `modify_part` does. A whole-parent dry run is answered by `cancel_parent_dry_run`, which lists the legs a cancel would be sent for under `resting_legs` and changes nothing. The reason recorded for a whole-parent cancel became `cancelled by the caller`, because the command is now sent by two routes and the old text named only `DELETE /api/orders/parents`.
+
+## Caller cancels reach the order type (2026-10-05)
+
+`cancel_leg` hands an accepted cancel to `runner.take_caller_cancel`, so a plan does not send again an order the caller cancelled by `order_id`.

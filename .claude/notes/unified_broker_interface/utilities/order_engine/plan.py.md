@@ -182,3 +182,9 @@ A plan whose only order was accepted and then rejected by the exchange stayed `w
 `_refuse_hedge_in_its_own_instrument` refuses a `parent_fill` or `parent_fill_delta` child naming an instrument the first plan trades. The attached hedge's docs and the retired class refused it; the preset accepted it, and the engine bought 1,000 RELIANCE and sold the same 1,000 straight back.
 
 `_remember_tick_sizes` reads the instrument of a `from_parent_fill` order too, so the second leg of a spread is rounded to its own tick and an unmapped second instrument is refused with 404 when the plan arrives instead of after the first leg filled.
+
+## Caller cancels, whole cancels and dry runs (2026-10-05)
+
+`take_caller_cancel` counts a caller's cancel of one broker order by `order_id` as a caller change of minus its unfilled quantity on the part that placed it, for an order sent whole or topped up, so the order is not sent again and a later entry fill is protected for the new quantity only. `stop_acting`, the path of a whole-parent cancel whose leg cancels were all accepted, now marks every part done as `finish_cancelling` already did; the parts used to stay `working` under a `cancelled` parent. The parent still ends `cancelled`, not `completed`, because the caller called it off.
+
+`_check_as_placing_would` runs the checks placing makes beyond reading the plan before a dry run answers: the position a standalone protecting order needs, venue and fill sizing checks, a hedge on its own instrument, the tick sizes of other instruments and off-tick prices. A dry run of an oco with nothing held answered 200 while placing answered 409. The dry run's `request` and `plan` are unchanged: they still show the body as a plain order and defaults, not each order's own instrument, side, quantity and price; making them show what runs is a larger change left for a decision.

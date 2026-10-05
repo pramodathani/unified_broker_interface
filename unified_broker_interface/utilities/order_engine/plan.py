@@ -146,6 +146,7 @@ class PlanOrder(SyntheticOrder):
         root, warnings = self._read_plan()
         order = self.concrete_order(self.read_order(self.parent.body))
         if order.dry_run:
+            self._check_as_placing_would(root, order)
             prepared = self.placement.prepare(
                 order,
                 self.parent.instrument_id,
@@ -235,6 +236,34 @@ class PlanOrder(SyntheticOrder):
         self._finish_if_done(root)
         self.save()
         return self._answer(root, placed, warnings)
+
+    def _check_as_placing_would(self, root, order):
+        """Refuses a dry run of a plan that placing would refuse, for the reasons placing checks beyond reading the plan.
+
+        A dry run used to answer 200 for a plan that placing then refused, such as an exit protecting a position that is not held (409) or a bracket's stop off the tick (400), because it answered before those checks. It now makes them too, reading the position and the tick sizes as placing does, and changes nothing: nothing is recorded for a dry run.
+
+        Args:
+            root (object): The root part.
+            order (PlaceOrderRequest): The caller's order.
+
+        Returns:
+            None: This method returns nothing.
+
+        Raises:
+            RefusedRequestError: For a plan placing would refuse.
+        """
+        protecting = root.standalone_protecting_parts()
+        if protecting:
+            self._refuse_without_position(protecting[0])
+        for part in root.order_parts():
+            if part.venue is not None:
+                part.venue.check(part.context(self))
+            if part.fill_ratio is not None:
+                part.fill_ratio.check(part.context(self))
+                self._refuse_hedge_in_its_own_instrument(root, part)
+        self.remember_tick_size(order)
+        self._remember_tick_sizes(root)
+        self._refuse_off_tick_prices(root)
 
     def _refuse_hedge_in_its_own_instrument(self, root, part):
         """Refuses an order sized from a Then join's fills that trades the instrument the first plan trades.
@@ -1430,6 +1459,25 @@ class PlanOrder(SyntheticOrder):
         self._finish_if_done(root)
         self.save()
 
+    def take_caller_cancel(self, leg):
+        """Counts a caller's cancel of one broker order as taking its unfilled quantity off the part that placed it.
+
+        Without this, a bracket's stop cancelled by its `order_id` was sent again as soon as the cancel was confirmed, so a caller could not remove it. The part's own target drops by what the order had left, so a later fill of the entry is still protected, for the new quantity only. It applies to an order sent all at once or topped up; an order split into pieces keeps its total, as a caller's quantity change does.
+
+        Args:
+            leg (OrderLeg): The leg whose cancel the broker accepted.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        root, _ = self._read_plan()
+        part = self._part_for_leg(root, leg)
+        if part is None or not part.keeps_caller_quantity():
+            return
+        unfilled = (leg.quantity or 0) - (leg.filled_quantity or 0)
+        if unfilled > 0:
+            part.take_caller_change(self, -unfilled)
+
     def closes_position(self, role):
         """Whether a leg closes a position, which a leg of a `protect` order does, and so does the close a lifetime's `close_filled` sends.
 
@@ -1470,6 +1518,40 @@ class PlanOrder(SyntheticOrder):
         self._finish_if_done(root)
         self.save()
 
+    def stop_acting(self, reason):
+        """Ends this parent as `cancelled`, as the base does, and marks every part not yet done as done, as a parent ended through `cancelling` has its parts marked.
+
+        Args:
+            reason (str): Why, for a person reading the parent later.
+
+        Returns:
+            bool: True when the parent was open and is now cancelled.
+        """
+        ended = super().stop_acting(reason)
+        if ended:
+            self._mark_parts_done()
+            self.save()
+        return ended
+
+    def _mark_parts_done(self):
+        """Marks every part not yet done as done, with the reason its broker orders give, or `cancelled`.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        root, _ = self._read_plan()
+        for part in root.order_parts():
+            record = self.part_record(part.path)
+            if record.get('state') == 'done':
+                continue
+            record['state'] = 'done'
+            record['reason'] = part.done_reason(self.parent) or 'cancelled'
+            self.set_part_record(
+                part.path,
+                record,
+                f'the plan\'s {part.path} part is done: {record["reason"]}',
+            )
+
     def finish_cancelling(self):
         """Ends a parent the caller is cancelling, and marks every part not yet done as done.
 
@@ -1478,18 +1560,7 @@ class PlanOrder(SyntheticOrder):
         """
         ended = super().finish_cancelling()
         if ended:
-            root, _ = self._read_plan()
-            for part in root.order_parts():
-                record = self.part_record(part.path)
-                if record.get('state') == 'done':
-                    continue
-                record['state'] = 'done'
-                record['reason'] = part.done_reason(self.parent) or 'cancelled'
-                self.set_part_record(
-                    part.path,
-                    record,
-                    f'the plan\'s {part.path} part is done: {record["reason"]}',
-                )
+            self._mark_parts_done()
             self.save()
         return ended
 

@@ -130,3 +130,9 @@ A sequential `stop_and_reverse` used to name its reverse side from the body: a B
 `keeps_caller_quantity` is true for a top-up execution, so a caller who grows a hedge order keeps the change; the engine used to modify it straight back.
 
 `start` marks a child whose fill sizing gave no size `unsized`, and `send_due` marks a working order whose piece could not be priced `unpriced`; the plan then settles on every tick until the size or price comes. `send_due` reads the record again before writing `unpriced`, because the post-only guard may have just ended the part as refused inside `order`.
+
+## Exits that come back, turn over, or are changed while cancelled (2026-10-05)
+
+`_grow_finished` reopens a finished order only once its target has grown past `done_at_target`, the target it had when `settle` marked it done (kept only for an order whose size a join sets). The 2026-10-04 rule reopened any order done as `cancelled`, so a bracket's stop cancelled by its `order_id` was placed again as soon as the cancel was confirmed, and every exchange cancel of a target placed another until one was rejected. The cases that rule was for still reopen: an exit that filled, or one its join cut to nothing, has a smaller `done_at_target` than the target a later entry fill gives.
+
+`set_target` skips an order whose cancel is in `cancel_asked`; it modified a stop being cancelled, spending a message. An order resting on the side the position no longer has, because the later side of a two-sided breakout filled more, is cancelled and the part marked `turned`; once its old orders have finished, `settle` sends the quantity on the new side through `_send_turned`. Before, the exits were resized to the net quantity and left on the old side, so a short of 6 kept sell exits that would have taken it to 12.

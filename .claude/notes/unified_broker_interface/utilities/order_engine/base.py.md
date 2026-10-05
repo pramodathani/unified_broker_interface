@@ -85,3 +85,7 @@ A class method rather than an instance one, because recovery asks it of a rebuil
 ## reprice_leg skips a cancelled leg (2026-10-05)
 
 `reprice_leg` returns False for a leg whose cancel was accepted, before any throttle or rate check, so no moving pricing sends a modify to an order the caller cancelled (`a_peg_is_not_moved_after_the_caller_cancels_its_order`).
+
+## A hook for a caller's cancel (2026-10-05)
+
+`take_caller_cancel` does nothing by default; `ParentCommands.cancel_leg` calls it once the broker accepts a cancel the caller asked for by `order_id`, so the plan type can count the cancel against the part that placed the order. Other order types keep their behaviour.

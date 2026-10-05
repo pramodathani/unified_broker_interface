@@ -355,6 +355,17 @@ class SyntheticOrder:
         outcome, _, _ = self.cancel_leg_answered(leg, reason)
         return outcome == 'accepted'
 
+    def take_caller_cancel(self, leg):
+        """Lets the order type carry on from a caller's cancel of one of its legs, which by default changes nothing.
+
+        Args:
+            leg (OrderLeg): The leg whose cancel the broker accepted.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        del leg
+
     def cancel_leg_answered(self, leg, reason):
         """Cancels one leg at its broker, records both the asking and the answer, and says what the broker answered.
 

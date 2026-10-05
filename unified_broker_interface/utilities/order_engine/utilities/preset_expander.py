@@ -693,6 +693,14 @@ class PresetExpander:
             dict: A Repeat join of a peg to the own touch that does not follow.
         """
         self._refuse_unknown(settings, ('every_minutes', 'purchases'), path, 'accumulation')
+        purchases = settings.get('purchases')
+        every_minutes = settings.get('every_minutes')
+        if isinstance(purchases, bool) or not isinstance(purchases, int) or not 1 <= purchases <= 100:
+            self._add_problem(path, 'bad_setting', f'purchases must be a whole number from 1 to 100, not {purchases!r}')
+        if isinstance(every_minutes, bool) or not isinstance(every_minutes, (int, float)) or every_minutes <= 0:
+            self._add_problem(path, 'bad_setting', f'every_minutes must be a number of minutes above zero, not {every_minutes!r}')
+        if self.problems:
+            return {}
         purchase = dict(entry)
         purchase['pricing'] = [
             {
