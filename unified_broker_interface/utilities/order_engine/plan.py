@@ -611,6 +611,8 @@ class PlanOrder(SyntheticOrder):
     def _after_placing(self, placed):
         """Moves the parent to `working` once any order is accepted, or records why none was.
 
+        Only a parent that has not started working is ended this way. A working parent whose next order is refused, such as one profit-taker of a ladder, keeps working while its other orders do; `_finish_if_done` ends it `rejected` only once every part is done with nothing traded. Moving it straight to `rejected` left its other orders live under a parent that could no longer be cancelled.
+
         Args:
             placed (list): One `(path, answer, status)` per order just placed.
 
@@ -625,6 +627,8 @@ class PlanOrder(SyntheticOrder):
         if 'accepted' in outcomes:
             state = 'working'
             message = None
+        elif self.parent.state != 'received':
+            return
         else:
             state = OUTCOME_PARENT_STATES.get(outcomes[0], 'failed')
             message = placed[0][1].get('status_message')
@@ -1403,6 +1407,8 @@ class PlanOrder(SyntheticOrder):
     def on_leg_update(self, leg, changes):
         """Settles the plan after a broker order changed, which may start, resize or cancel other orders, and ends the parent once the plan is done.
 
+        A parent that has already ended, such as one the caller cancelled, only records the update: a fill arriving after a cancel used to settle the plan again, and a grid then placed a new order that rested at the broker under a cancelled parent.
+
         Args:
             leg (OrderLeg): The leg that changed.
             changes (dict): What the update changed.
@@ -1410,6 +1416,9 @@ class PlanOrder(SyntheticOrder):
         Returns:
             None: This method returns nothing.
         """
+        if self.parent.is_terminal():
+            self.save()
+            return
         root, _ = self._read_plan()
         placed = root.settle(self)
         self._after_placing(placed)

@@ -166,3 +166,7 @@ A plan whose only order was accepted and then rejected by the exchange stayed `w
 ## More prices checked on arrival (2026-10-05)
 
 `_later_prices` also names a fixed limit's price taken from the body (a virtual limit's), a cap price, and a follow-instrument order's bounds, and the check now covers orders that move on ticks. An off-tick virtual limit used to answer 202 and be refused when it fired; a paper one filled at the off-tick price. An off-tick cap was sent unrounded in a modify, and an off-tick bound was breached by the passive rounding.
+
+## Ended parents place nothing, and a working parent is not rejected by one refusal (2026-10-05)
+
+`on_leg_update` only records the update for a parent that has ended. A grid cancelled with DELETE /api/orders/parents had its parent marked cancelled while its part was not stopped, and a fill arriving afterwards settled the plan and placed a new order that rested under the cancelled parent. `_after_placing` now moves the parent to rejected or failed only from received. Pull request #64 allowed working to rejected for a plan whose only order the exchange rejected after accepting it; `_finish_if_done` covers that case, but `_after_placing` also used the step whenever one batch of placements was all refused, so a single refused profit-taker marked a working ladder rejected while its other rungs rested, and the parent could no longer be cancelled.

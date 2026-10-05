@@ -5734,6 +5734,95 @@ class OrderEngineSuite:
             ),
         ]
 
+    def run_repeating_strategy_checks(self):
+        """Runs the repeating strategies where a late fill, a step off the tick, a lot, a resized rung, a refused order or a missing quantity used to go wrong.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        answers = self.scenarios.answers
+        accepted = answers.json_answer(
+            200,
+            answers.place_success('flattrade'),
+        )
+        numbered = dict(
+            accepted,
+            number_orders=True,
+        )
+        entry = self.scenarios.bodies.market_order(
+            dry_run=None,
+            order_type='LIMIT',
+            price=1000,
+            quantity=10,
+        )
+        steady = self.book_at(1000.00, 1000.05)
+        grid = {
+            'type': 'grid',
+            'levels': 1,
+            'step_points': 5,
+            'most_inventory': 50,
+        }
+        ladder = {
+            'type': 'scale_with_profit_taker',
+            'from_price': 1000,
+            'to_price': 990,
+            'steps': 3,
+            'profit_points': 4,
+        }
+
+        def answered_as(order_id):
+            """An accepted answer carrying one broker order id.
+
+            Args:
+                order_id (str): The id.
+
+            Returns:
+                dict: The stubbed answer.
+            """
+            answer = dict(accepted)
+            answer['json'] = dict(accepted['json'], norenordno=order_id)
+            return answer
+
+        return [
+            self.price_result(
+                'a_cancelled_grid_places_nothing_when_a_late_fill_arrives',
+                dict(entry, quantity=5, synthetic=grid),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'part_cancel': {}},
+                    {
+                        'quote': steady,
+                        'at': 2,
+                        'updates': [
+                            self.update('26091500000101', 'COMPLETE', 5, average_price=995.05),
+                            self.update('26091500000102', 'CANCELLED', 0),
+                        ],
+                    },
+                    {'quote': steady, 'at': 3},
+                ],
+                numbered,
+                book_every_order=True,
+            ),
+            self.price_result(
+                'a_refused_profit_taker_leaves_the_parent_working',
+                dict(entry, quantity=30, synthetic=ladder),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'COMPLETE', 10)]},
+                    {'quote': steady, 'at': 2},
+                ],
+                {
+                    'sequence': [
+                        answered_as('26091500000101'),
+                        answered_as('26091500000102'),
+                        answered_as('26091500000103'),
+                        answers.json_answer(200, answers.place_refusal('flattrade')),
+                    ],
+                },
+                book_every_order=True,
+            ),
+        ]
+
     def run_execution_algorithm_checks(self):
         """Runs the execution algorithms where an empty slice, a lot, a falling volume, a stale book, a market or IOC body under holding, or an off-tick limit used to go wrong.
 
@@ -14454,6 +14543,7 @@ class OrderEngineSuite:
             results.extend(self.run_stale_quote_checks())
             results.extend(self.run_limit_pricing_checks())
             results.extend(self.run_execution_algorithm_checks())
+            results.extend(self.run_repeating_strategy_checks())
             results.extend(self.run_price_checks())
             results.extend(self.run_wiring_checks())
             results.extend(self.run_assignment_checks())
