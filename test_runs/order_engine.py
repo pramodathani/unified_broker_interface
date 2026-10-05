@@ -5891,6 +5891,242 @@ class OrderEngineSuite:
             ),
         ]
 
+    def run_hedge_follower_checks(self):
+        """Runs the orders a Then join sizes from the first plan's fills where a filled follower, a lot, a missing price, a stale quote, a refusal, a caller's change or a cancel used to go wrong.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        answers = self.scenarios.answers
+        accepted = answers.json_answer(
+            200,
+            answers.place_success('flattrade'),
+        )
+        numbered = dict(
+            accepted,
+            number_orders=True,
+        )
+        refused = answers.json_answer(
+            200,
+            answers.place_refusal('flattrade'),
+        )
+        identifiers = order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS
+        entry = self.scenarios.bodies.market_order(
+            dry_run=None,
+            order_type='LIMIT',
+            price=1000,
+            quantity=1000,
+        )
+        steady = self.book_at(1000.00, 1000.05)
+        future = self.scenarios.quote()
+        stale_future = dict(
+            future,
+            stale=True,
+        )
+        hedge = {
+            'type': 'attached_hedge',
+            'hedge_instrument_id': identifiers['reliance_future'],
+            'ratio': 1,
+        }
+        spread = {
+            'type': 'legged_spread',
+            'net_price': 20,
+            'candidates': [
+                {
+                    'instrument_id': identifiers['reliance'],
+                    'transaction_type': 'BUY',
+                    'quantity': 10,
+                    'price': 1000,
+                },
+                {
+                    'instrument_id': identifiers['twin_first'],
+                    'transaction_type': 'SELL',
+                },
+            ],
+        }
+
+        def answered_as(order_id):
+            """An accepted answer carrying one broker order id.
+
+            Args:
+                order_id (str): The id.
+
+            Returns:
+                dict: The stubbed answer.
+            """
+            answer = dict(accepted)
+            answer['json'] = dict(accepted['json'], norenordno=order_id)
+            return answer
+
+        return [
+            self.price_result(
+                'an_attached_hedge_keeps_growing_after_a_hedge_fills',
+                dict(entry, synthetic=hedge),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'reliance_future': future}},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'OPEN', 600)]},
+                    {'quote': steady, 'at': 2, 'updates': [self.update('26091500000102', 'COMPLETE', 500, average_price=999.9)]},
+                    {'quote': steady, 'at': 3, 'updates': [self.update('26091500000101', 'COMPLETE', 1000)]},
+                    {'quote': steady, 'at': 4},
+                ],
+                numbered,
+                book_every_order=True,
+            ),
+            self.price_result(
+                'a_legged_spread_second_leg_keeps_growing_after_it_fills',
+                dict(entry, quantity=10, synthetic=spread),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'twin_first': self.book_at(980.00, 980.05)}},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'OPEN', 4, average_price=1000.0)]},
+                    {'quote': steady, 'at': 2, 'updates': [self.update('26091500000102', 'COMPLETE', 4, average_price=980.0)]},
+                    {'quote': steady, 'at': 3, 'updates': [self.update('26091500000101', 'COMPLETE', 10, average_price=1000.0)]},
+                    {'quote': steady, 'at': 4},
+                ],
+                numbered,
+                book_every_order=True,
+            ),
+            self.price_result(
+                'an_attached_hedge_under_one_lot_ends_when_the_entry_finishes',
+                dict(entry, quantity=200, synthetic=hedge),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'reliance_future': future}},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'COMPLETE', 200)]},
+                    {'quote': steady, 'at': 2},
+                ],
+                numbered,
+                book_every_order=True,
+            ),
+            self.price_result(
+                'a_delta_hedge_without_a_forward_price_is_sent_once_one_arrives',
+                dict(
+                    entry,
+                    instrument_id=identifiers['nifty_option'],
+                    quantity=1500,
+                    price=160,
+                    synthetic={
+                        'type': 'attached_hedge',
+                        'hedge_instrument_id': identifiers['reliance_future'],
+                        'delta_volatility': 12.5,
+                    },
+                ),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'reliance_future': self.scenarios.quote(last_price=None)}},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'COMPLETE', 1500)]},
+                    {'quote': steady, 'at': 2},
+                    {'quote': steady, 'at': 3, 'other_quotes': {'reliance_future': self.scenarios.quote(last_price=25000)}},
+                    {'quote': steady, 'at': 4},
+                ],
+                numbered,
+                book_every_order=True,
+            ),
+            self.price_result(
+                'an_attached_hedge_waits_out_a_stale_hedge_quote',
+                dict(entry, synthetic=hedge),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'reliance_future': stale_future}},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'COMPLETE', 1000)]},
+                    {'quote': steady, 'at': 2},
+                    {'quote': steady, 'at': 3, 'other_quotes': {'reliance_future': future}},
+                    {'quote': steady, 'at': 4},
+                ],
+                numbered,
+                book_every_order=True,
+            ),
+            self.price_result(
+                'an_attached_hedge_on_the_entrys_own_instrument_is_refused',
+                dict(entry, synthetic=dict(hedge, hedge_instrument_id=identifiers['reliance'])),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                numbered,
+            ),
+            self.price_result(
+                'a_refused_hedge_stops_the_entry_and_fails_the_parent',
+                dict(entry, synthetic=hedge),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'reliance_future': future}},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'OPEN', 500)]},
+                    {'quote': steady, 'at': 2, 'updates': [self.update('26091500000101', 'CANCELLED', 500)]},
+                    {'quote': steady, 'at': 3},
+                ],
+                {
+                    'sequence': [
+                        answered_as('26091500000101'),
+                        refused,
+                    ],
+                },
+                book_every_order=True,
+            ),
+            self.price_result(
+                'a_rejected_second_leg_stops_the_first_and_fails_the_parent',
+                dict(entry, quantity=10, synthetic=spread),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'twin_first': self.book_at(980.00, 980.05)}},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'OPEN', 4, average_price=1000.0)]},
+                    {'quote': steady, 'at': 2, 'updates': [self.update('26091500000102', 'REJECTED', 0, average_price=0.0)]},
+                    {'quote': steady, 'at': 3, 'updates': [self.update('26091500000101', 'CANCELLED', 4, average_price=1000.0)]},
+                    {'quote': steady, 'at': 4},
+                ],
+                numbered,
+                book_every_order=True,
+            ),
+            self.price_result(
+                'a_caller_grown_hedge_order_is_kept',
+                dict(entry, synthetic=hedge),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'reliance_future': future}},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'OPEN', 600)]},
+                    {'quote': steady, 'at': 2, 'leg_change': {'order_id': '26091500000102', 'quantity': 1000}},
+                    {'quote': steady, 'at': 3},
+                ],
+                numbered,
+                book_every_order=True,
+            ),
+            self.price_result(
+                'an_ioc_hedge_the_exchange_cancels_is_not_sent_again_at_once',
+                dict(entry, validity='IOC', synthetic=hedge),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'reliance_future': future}},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'OPEN', 600)]},
+                    {'quote': steady, 'at': 2, 'updates': [self.update('26091500000102', 'CANCELLED', 0)]},
+                    {'quote': steady, 'at': 3},
+                    {'quote': steady, 'at': 4, 'updates': [self.update('26091500000101', 'COMPLETE', 1000)]},
+                    {'quote': steady, 'at': 5},
+                ],
+                numbered,
+                book_every_order=True,
+            ),
+            self.price_result(
+                'a_basket_candidate_refused_beside_a_live_one_answers_partial',
+                dict(
+                    entry,
+                    quantity=10,
+                    synthetic={
+                        'type': 'basket',
+                        'candidates': [
+                            {
+                                'instrument_id': identifiers['reliance'],
+                                'quantity': 10,
+                                'price': 1000,
+                            },
+                            {
+                                'instrument_id': identifiers['gold_option'],
+                                'transaction_type': 'SELL',
+                                'quantity': 10,
+                                'price': 250,
+                            },
+                        ],
+                    },
+                ),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'gold_option': self.book_at(250.00, 250.05)}},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'COMPLETE', 10)]},
+                ],
+                numbered,
+                book_every_order=True,
+            ),
+        ]
+
     def run_execution_algorithm_checks(self):
         """Runs the execution algorithms where an empty slice, a lot, a falling volume, a stale book, a market or IOC body under holding, or an off-tick limit used to go wrong.
 
@@ -14612,6 +14848,7 @@ class OrderEngineSuite:
             results.extend(self.run_limit_pricing_checks())
             results.extend(self.run_execution_algorithm_checks())
             results.extend(self.run_repeating_strategy_checks())
+            results.extend(self.run_hedge_follower_checks())
             results.extend(self.run_price_checks())
             results.extend(self.run_wiring_checks())
             results.extend(self.run_assignment_checks())

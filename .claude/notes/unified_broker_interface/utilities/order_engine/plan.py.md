@@ -170,3 +170,13 @@ A plan whose only order was accepted and then rejected by the exchange stayed `w
 ## Ended parents place nothing, and a working parent is not rejected by one refusal (2026-10-05)
 
 `on_leg_update` only records the update for a parent that has ended. A grid cancelled with DELETE /api/orders/parents had its parent marked cancelled while its part was not stopped, and a fill arriving afterwards settled the plan and placed a new order that rested under the cancelled parent. `_after_placing` now moves the parent to rejected or failed only from received. Pull request #64 allowed working to rejected for a plan whose only order the exchange rejected after accepting it; `_finish_if_done` covers that case, but `_after_placing` also used the step whenever one batch of placements was all refused, so a single refused profit-taker marked a working ladder rejected while its other rungs rested, and the parent could no longer be cancelled.
+
+## Followers that fail, refusals beside live orders, and orders retried on ticks (2026-10-05)
+
+`_finish_if_done` ends a parent `failed` when it traded and a part recorded `leaves_open`. The Then join sets it on a child order that was refused or had an order rejected, such as an attached hedge, a legged spread's second leg or a strategy stop's close, and the exposure hedge sets it on itself when a hedge is refused. Before, every such parent ended `completed`, which read as success while a position was left unhedged or open. `failed` is the state that already meant a person must look.
+
+`refused_beside_live_orders` no longer lets a refusal escape because of its status. A strategy stop's basket whose second candidate the placement refused with 503, for a contract size the brokers disagree on, after the first had been sent, answered "no order is sent", stored the parent `rejected` and left the first order live with nobody watching it, so the stop never armed. Any refusal now ends only the refused order while others are live; a refusal with nothing live still escapes as before.
+
+`on_price_tick` settles the plan on every tick while a part is `unsized`, a Then join's child that could not be sized, such as a delta hedge whose forward had no last price, or `unpriced`, a working order whose due piece had no price, such as a hedge whose quote was stale. Both used to wait for the next order update, which for a hedge whose entry had finished never came.
+
+`_refuse_hedge_in_its_own_instrument` refuses a `parent_fill` or `parent_fill_delta` child naming an instrument the first plan trades. The attached hedge's docs and the retired class refused it; the preset accepted it, and the engine bought 1,000 RELIANCE and sold the same 1,000 straight back.

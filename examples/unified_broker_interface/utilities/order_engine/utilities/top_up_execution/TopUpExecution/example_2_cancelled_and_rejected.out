@@ -1,2 +1,2 @@
-After a cancel at 200 of 500: due [300]
+After a cancel at 200 of 500: committed 200, more to send False, due []
 After a rejection: more to send False, due []

@@ -122,3 +122,11 @@ A sequential `stop_and_reverse` used to name its reverse side from the body: a B
 ## Held terms take the sending side (2026-10-05)
 
 `prepare` overwrites the held terms' `transaction_type` with the side the order is sent on. A held order protecting a long recorded BUY while it would sell, so `virtual_book` estimated the wrong side of the book and a paper order filled at once. The bracket target recording `a_plan_target_is_held_only_because_its_own_order_asks` now says SELL.
+
+## Top-ups grow again, keep a caller's change, and wait for a size or a price (2026-10-05)
+
+`_grow_finished` reopens a top-up execution's order too, including one that stopped on a part-filled cancel. It returned for every execution that does not change its order to grow, so an attached hedge or a spread's second leg whose orders had all filled was done for good, and later fills of the first plan went unhedged while the parent ended `completed`; the retired AttachedHedge class did not have this.
+
+`keeps_caller_quantity` is true for a top-up execution, so a caller who grows a hedge order keeps the change; the engine used to modify it straight back.
+
+`start` marks a child whose fill sizing gave no size `unsized`, and `send_due` marks a working order whose piece could not be priced `unpriced`; the plan then settles on every tick until the size or price comes. `send_due` reads the record again before writing `unpriced`, because the post-only guard may have just ended the part as refused inside `order`.

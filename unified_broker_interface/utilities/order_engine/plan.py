@@ -173,6 +173,7 @@ class PlanOrder(SyntheticOrder):
                 part.venue.check(part.context(self))
             if part.fill_ratio is not None:
                 part.fill_ratio.check(part.context(self))
+                self._refuse_hedge_in_its_own_instrument(root, part)
             pricing_memory = part.prepared_pricing_memory(self)
             if pricing_memory:
                 record['pricing_memory'] = pricing_memory
@@ -228,6 +229,32 @@ class PlanOrder(SyntheticOrder):
         self._finish_if_done(root)
         self.save()
         return self._answer(root, placed, warnings)
+
+    def _refuse_hedge_in_its_own_instrument(self, root, part):
+        """Refuses an order sized from a Then join's fills that trades the instrument the first plan trades.
+
+        Such an order, an attached hedge's, hedges what the first plan filled in another instrument. Named on the first plan's own instrument it bought 1,000 and sold the same 1,000 straight back.
+
+        Args:
+            root (object): The root part.
+            part (OrderPart): The order sized from the first plan's fills.
+
+        Returns:
+            None: This method returns nothing.
+
+        Raises:
+            RefusedRequestError: With HTTP 400 when it trades an instrument the first plan trades.
+        """
+        instrument_id = part.context(self).instrument_id
+        for other in root.order_parts():
+            if other.path not in part.opened_by:
+                continue
+            if other.context(self).instrument_id == instrument_id:
+                raise RefusedRequestError.refusal(
+                    f'the plan\'s {part.path} part is sized from what {other.path} fills to hedge it in another instrument, and it names {other.path}\'s own instrument, so it would only trade straight back what was filled',
+                    400,
+                    instrument_id=instrument_id,
+                )
 
     def _outlives_the_next_reset(self, record):
         """Whether one of a part's times falls after the next 06:00 IST, when the engine rebuilds its open orders from the day's record.
@@ -346,7 +373,7 @@ class PlanOrder(SyntheticOrder):
     def refused_beside_live_orders(self, part, refusal):
         """Ends an order the placement refused while the plan's other orders were already at a broker, and describes it as a refused leg.
 
-        A plan that places several orders at once, such as an OCA's candidates or a basket's, used to let the refusal of a later one, for example a quantity that is not a whole number of lots, escape after the earlier ones had been placed. The caller got a 400 with no parent id, the parent was stored as rejected, and the orders already at the broker were left with nobody watching them. Now only the refused order ends, and the answer lists it beside the others, so the plan carries on and answers 207. When nothing has reached a broker yet, the refusal still escapes, so a single bad order is refused as before and leaves no parent.
+        A plan that places several orders at once, such as an OCA's candidates or a basket's, used to let the refusal of a later one, for example a quantity that is not a whole number of lots, escape after the earlier ones had been placed. The caller got a 400 with no parent id, the parent was stored as rejected, and the orders already at the broker were left with nobody watching them. Now only the refused order ends, and the answer lists it beside the others, so the plan carries on and answers 207. This holds for every refusal, including a `503` such as a contract size the brokers disagree on, since letting any refusal escape orphans what is live. When nothing has reached a broker yet, the refusal still escapes, so a single bad order is refused as before and leaves no parent.
 
         Args:
             part (object): The order part the placement refused.
@@ -355,8 +382,6 @@ class PlanOrder(SyntheticOrder):
         Returns:
             tuple | None: The `(path, answer, status)` entry for the refused order, or None when the refusal should escape.
         """
-        if refusal.status not in PERMANENT_REFUSAL_STATUSES:
-            return None
         has_live_orders = False
         for leg in self.parent.legs:
             if leg.is_live():
@@ -655,7 +680,7 @@ class PlanOrder(SyntheticOrder):
     def _finish_if_done(self, root):
         """Ends the parent once the root part is done.
 
-        A plan that only closed positions and found none held ends `completed`, as today's close types do, even straight from `received`, which the usual state changes do not allow.
+        A plan that only closed positions and found none held ends `completed`, as today's close types do, even straight from `received`, which the usual state changes do not allow. A plan that traded but one of whose parts recorded `leaves_open`, such as a hedge the broker refused, ends `failed` with that reason, because what it traded is left without the order meant to follow it.
 
         Args:
             root (object): The root part.
@@ -674,11 +699,18 @@ class PlanOrder(SyntheticOrder):
         if self._guard_refusal(root) is not None:
             rejected = True
         nothing_held = False
+        left_open = None
         for part in root.order_parts():
             record = self.part_record(part.path)
             if record.get('reason') == 'nothing_held':
                 nothing_held = True
+            if record.get('leaves_open') and left_open is None:
+                left_open = record['leaves_open']
             traded = traded + (record.get('paper_filled') or 0)
+        if traded > 0 and left_open is not None:
+            if self.parent.can_change_to('failed'):
+                self.record_state('failed', f'every part of the plan is done, with {traded} traded, but {left_open}')
+            return
         if traded > 0 or (nothing_held and not rejected):
             state = 'completed'
         elif rejected:
@@ -728,7 +760,7 @@ class PlanOrder(SyntheticOrder):
     def on_price_tick(self, quotes, now):
         """Places every waiting order whose trigger holds on this tick, then settles the plan.
 
-        An order whose join cancels before sending is sent only once every sibling's resting order has been cancelled; otherwise it tries again on the next tick. A working order whose pricing moves, such as a trailing stop, is then moved if the tick calls for it.
+        An order whose join cancels before sending is sent only once every sibling's resting order has been cancelled; otherwise it tries again on the next tick. A working order whose pricing moves, such as a trailing stop, is then moved if the tick calls for it. A Then join's child that could not be sized when the first plan filled, such as a delta hedge whose forward had no price, is `unsized`, and a working order whose due piece could not be priced, such as a hedge whose quote was stale, is `unpriced`; every tick settles the plan while either is so, so it is sized or priced and sent once it can be.
 
         Args:
             quotes (dict): The quotes the tick carried.
@@ -743,14 +775,19 @@ class PlanOrder(SyntheticOrder):
         waiting_paths = []
         moving_paths = []
         paced_paths = []
+        unsized_paths = []
         for path, record in records.items():
             if record.get('state') == 'waiting':
                 waiting_paths.append(path)
+            if record.get('state') == 'pending' and record.get('unsized'):
+                unsized_paths.append(path)
+            if record.get('state') == 'working' and record.get('unpriced') and not record.get('ended'):
+                unsized_paths.append(path)
             if record.get('state') == 'working' and record.get('moves') and not record.get('ended'):
                 moving_paths.append(path)
             if record.get('state') == 'working' and record.get('paced'):
                 paced_paths.append(path)
-        if not waiting_paths and not moving_paths and not paced_paths:
+        if not waiting_paths and not moving_paths and not paced_paths and not unsized_paths:
             return False
         root, _ = self._read_plan()
         placed, memory_changed, ended = self._fire_waiting(root, waiting_paths, quotes, now, False)
@@ -766,7 +803,7 @@ class PlanOrder(SyntheticOrder):
                 moved = True
         if moved:
             self._after_first_moves()
-        if not placed and not moved and not ended:
+        if not placed and not moved and not ended and not unsized_paths:
             if memory_changed or moving_paths or paced_paths:
                 self.save()
             return False

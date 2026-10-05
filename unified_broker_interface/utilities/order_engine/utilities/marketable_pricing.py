@@ -48,10 +48,12 @@ class MarketablePricing:
             memory (dict): Unused, since this pricing remembers nothing.
 
         Returns:
-            dict | None: The body, or None when no price can be made.
+            dict | None: The body, or None when no price can be made, including from a quote marked stale.
         """
         del memory
         view = plan_order.view(quotes)
+        if view.is_stale():
+            return None
         touch = view.opposite_touch(sending_side)
         if touch is None:
             return None
