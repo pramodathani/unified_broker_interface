@@ -6660,6 +6660,81 @@ class OrderEngineSuite:
             )
         return results
 
+    def run_exposure_catch_up_checks(self):
+        """Runs an exposure hedge in a watched instrument, whose filled hedge used to be counted twice once the positions caught up with it.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        answers = self.scenarios.answers
+        numbered = dict(
+            answers.json_answer(
+                200,
+                answers.place_success('flattrade'),
+            ),
+            number_orders=True,
+        )
+        identifiers = order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS
+        steady = self.book_at(1000.00, 1000.05)
+        started = FROZEN_NOW.timestamp()
+        entry = self.scenarios.bodies.market_order(
+            dry_run=None,
+            order_type='LIMIT',
+            price=1000,
+            quantity=10,
+        )
+        exposure = {
+            'type': 'exposure_hedge',
+            'watched': [
+                {
+                    'instrument_id': identifiers['reliance'],
+                    'exposure_per_unit': 1,
+                },
+            ],
+            'hedge_instrument_id': identifiers['reliance'],
+            'lower_band': -10,
+            'upper_band': 10,
+        }
+
+        def document(quantity, observed_after):
+            """A positions document holding RELIANCE, written now, whose Flattrade positions were observed some seconds after the order was placed.
+
+            Args:
+                quantity (int): The net RELIANCE position.
+                observed_after (int): Seconds after the order was placed.
+
+            Returns:
+                dict: The document.
+            """
+            observed = datetime.datetime.fromtimestamp(started + observed_after).strftime('%Y-%m-%dT%H:%M:%S')
+            return dict(
+                self.scenarios.positions(quantity),
+                as_of=observed,
+                brokers=[
+                    {
+                        'broker': 'flattrade',
+                        'status': 'ok',
+                        'as_of': observed,
+                    },
+                ],
+            )
+
+        return [
+            self.price_result(
+                'an_exposure_hedge_in_a_watched_instrument_waits_for_the_positions_to_count_its_fill',
+                dict(entry, synthetic=exposure),
+                [
+                    {'quote': steady, 'at': 0, 'positions_document': document(100, 0)},
+                    {'quote': steady, 'at': 1, 'positions_document': document(100, 0), 'updates': [self.update('26091500000101', 'COMPLETE', 100, average_price=999.9)]},
+                    {'quote': steady, 'at': 2, 'positions_document': document(0, 2)},
+                    {'quote': steady, 'at': 3, 'positions_document': document(0, 3)},
+                    {'quote': steady, 'at': 4, 'positions_document': document(60, 4)},
+                ],
+                numbered,
+                book_every_order=True,
+            ),
+        ]
+
     def run_execution_algorithm_checks(self):
         """Runs the execution algorithms where an empty slice, a lot, a falling volume, a stale book, a market or IOC body under holding, or an off-tick limit used to go wrong.
 
@@ -15391,6 +15466,7 @@ class OrderEngineSuite:
             results.extend(self.run_strategy_hedge_checks())
             results.extend(self.run_plan_exit_checks())
             results.extend(self.run_plan_reading_checks())
+            results.extend(self.run_exposure_catch_up_checks())
             results.extend(self.run_price_checks())
             results.extend(self.run_wiring_checks())
             results.extend(self.run_assignment_checks())

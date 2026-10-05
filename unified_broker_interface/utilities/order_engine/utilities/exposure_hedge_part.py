@@ -30,6 +30,8 @@ class ExposureHedgePart(WholePart):
 
     On every tick the account's positions in the `watched` instruments are read from `unified:portfolio:positions`, each multiplied by its `exposure_per_unit` (1 when not given) and added up, with the hedges this part has sent counted at once, before the positions catch up with them: a resting hedge for its whole quantity and a finished one for what it filled. Inside `lower_band` to `upper_band` nothing happens. Outside it a hedge is sent on `hedge_instrument_id`, sized to bring the total back to the middle of the band at `hedge_exposure_per_unit` (1 when not given) per unit, in whole lots, as a limit two ticks past the hedge's touch, so it trades now.
 
+    When the hedge instrument is also watched, the positions document counts a filled hedge itself once it catches up, so counting the fill as in flight as well would count it twice. The part therefore notes, in `fills_seen`, when it first saw each of its hedges fill as far as it has, and measures nothing until the document shows that hedge's broker observed after that moment; from then on a fill is taken as counted by the document, and only what a resting hedge has not filled is in flight. After a restart a fill is noted as seen on the first tick, so the part waits for the document rather than counting a fill twice.
+
     Nothing is measured from a missing positions document, one whose `as_of` is more than a minute old, or one that marks a broker `stale` or `unreadable`, nor priced from a quote marked stale.
 
     The hedge instrument is the part's own instrument, so the plan remembers its tick size and the hedge is priced from its own quote. The part places nothing when the plan is placed, so the plan answers `armed`, and it never ends on its own: it watches until its join or the caller stops it, or until a hedge is refused or rejected, and is done once its hedges have finished after that. A refused hedge is not sent again; the part records `leaves_open`, which ends the parent `failed` when anything traded, and `rejected` otherwise.
@@ -149,7 +151,9 @@ class ExposureHedgePart(WholePart):
         return total
 
     def hedges_in_flight(self, parent):
-        """The exposure of the hedges this part has sent, counted before the positions catch up with them: a resting hedge's whole quantity and what a finished one filled.
+        """The exposure of the hedges this part has sent that the positions document does not count.
+
+        When the hedge instrument is not watched, the document never counts the hedges, so a resting hedge counts for its whole quantity and a finished one for what it filled. When it is watched, the part measures only once the document has caught up with every fill, so only what a resting hedge has not filled is in flight.
 
         Args:
             parent (ParentOrder): The plan order's parent.
@@ -158,9 +162,14 @@ class ExposureHedgePart(WholePart):
             decimal.Decimal: The exposure already on its way.
         """
         per_unit = self._number(self.settings.get('hedge_exposure_per_unit', 1))
+        counted_by_positions = self.hedge_is_watched()
         total = decimal.Decimal('0')
         for leg in self.own_legs(parent):
-            if leg.is_finished():
+            if counted_by_positions and leg.is_finished():
+                continue
+            if counted_by_positions:
+                quantity = decimal.Decimal(str((leg.quantity or 0) - (leg.filled_quantity or 0)))
+            elif leg.is_finished():
                 quantity = decimal.Decimal(str(leg.filled_quantity or 0))
             else:
                 quantity = decimal.Decimal(str(leg.quantity or 0))
@@ -184,6 +193,88 @@ class ExposureHedgePart(WholePart):
             per_unit = self._number(entry.get('exposure_per_unit', 1))
             total = total + self.held(positions, entry['instrument_id']) * per_unit
         return total + self.hedges_in_flight(parent)
+
+    def hedge_is_watched(self):
+        """Whether the hedge instrument is one of the watched instruments, so the positions document counts the hedges' fills.
+
+        Returns:
+            bool: True when it is.
+        """
+        for entry in self.settings['watched']:
+            if entry['instrument_id'] == self.settings['hedge_instrument_id']:
+                return True
+        return False
+
+    def broker_observed_at(self, positions, broker):
+        """When the positions document last observed one broker's positions.
+
+        Args:
+            positions (dict): The positions document.
+            broker (str): The broker.
+
+        Returns:
+            float | None: The Unix time, or None when the document does not say.
+        """
+        for status in positions.get('brokers') or []:
+            if not isinstance(status, dict) or status.get('broker') != broker:
+                continue
+            try:
+                return datetime.datetime.strptime(status.get('as_of'), '%Y-%m-%dT%H:%M:%S').timestamp()
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    def note_fills(self, plan_order, now):
+        """Notes, for each hedge, the moment the part first saw it filled as far as it is now.
+
+        The moments are kept in the part record without an event, because after a restart noting them again at the first tick only makes the part wait longer.
+
+        Args:
+            plan_order (PlanOrder): The plan order.
+            now (float): The Unix time of the tick.
+
+        Returns:
+            dict: `fills_seen`, by leg id: `filled` and `seen_at`.
+        """
+        record = plan_order.part_record(self.path)
+        memory = dict(record.get('own_memory') or {})
+        seen = dict(memory.get('fills_seen') or {})
+        changed = False
+        for leg in self.own_legs(plan_order.parent):
+            filled = leg.filled_quantity or 0
+            if filled <= 0:
+                continue
+            if (seen.get(leg.leg_id) or {}).get('filled') != filled:
+                seen[leg.leg_id] = {
+                    'filled': filled,
+                    'seen_at': now,
+                }
+                changed = True
+        if changed:
+            memory['fills_seen'] = seen
+            record['own_memory'] = memory
+            plan_order.set_part_record(self.path, record, None)
+        return seen
+
+    def fills_caught_up(self, positions, plan_order, seen):
+        """Whether the positions document has observed every hedge's broker since the part saw that hedge fill.
+
+        Args:
+            positions (dict): The positions document.
+            plan_order (PlanOrder): The plan order.
+            seen (dict): `fills_seen`, by leg id.
+
+        Returns:
+            bool: True when every fill is counted by the document.
+        """
+        for leg in self.own_legs(plan_order.parent):
+            if (leg.filled_quantity or 0) <= 0:
+                continue
+            observed = self.broker_observed_at(positions, leg.broker)
+            seen_at = (seen.get(leg.leg_id) or {}).get('seen_at')
+            if observed is None or seen_at is None or observed <= seen_at:
+                return False
+        return True
 
     def positions_trusted(self, positions, now):
         """Whether the positions document can be measured from: there is one, it is fresh, and it marks no broker stale or unreadable.
@@ -270,6 +361,10 @@ class ExposureHedgePart(WholePart):
         _, _, positions = context.placement.market_context(plan_order.parent.instrument_id, False, True)
         if not self.positions_trusted(positions, now):
             return False
+        if self.hedge_is_watched():
+            seen = self.note_fills(plan_order, now)
+            if not self.fills_caught_up(positions, plan_order, seen):
+                return False
         lower = self._number(self.settings['lower_band'])
         upper = self._number(self.settings['upper_band'])
         total = self.exposure(positions, plan_order.parent)
