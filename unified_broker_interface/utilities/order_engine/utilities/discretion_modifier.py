@@ -110,6 +110,8 @@ class DiscretionModifier:
         if visible.is_finished() or visible.price is None or not visible.broker_order_id:
             return False
         view = plan_order.view(quotes)
+        if view.is_stale():
+            return False
         touch = view.opposite_touch(visible.transaction_type)
         if touch is None or not self.within_reach(touch, visible):
             return False

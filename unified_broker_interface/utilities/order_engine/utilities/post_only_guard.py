@@ -49,6 +49,8 @@ class PostOnlyGuard:
     def checked_body(self, view, body, side):
         """The body once checked, a reason it is refused, or a sign that the book cannot be read yet.
 
+        A book marked stale counts as one that cannot be read, so the order waits for a fresh book rather than being refused, or moved to a touch, on prices that may be minutes old.
+
         Args:
             view (MarketView): The order's quote.
             body (dict): The priced body, changed in place when it is moved back to rest.
@@ -58,7 +60,7 @@ class PostOnlyGuard:
             tuple: The body (dict | None, None when the book cannot be read yet) and a refusal (str | None).
         """
         own = view.own_touch(side)
-        if not view.is_readable() or own is None:
+        if not view.is_readable() or own is None or view.is_stale():
             return None, None
         if body.get('price') is None:
             return body, None
@@ -71,7 +73,7 @@ class PostOnlyGuard:
         return body, None
 
     def checked_move(self, view, price, side):
-        """The price a resting order may move to, or None when the move must be skipped.
+        """The price a resting order may move to, or None when the move must be skipped, as it is on a book marked stale.
 
         Args:
             view (MarketView): The order's quote.
@@ -81,6 +83,8 @@ class PostOnlyGuard:
         Returns:
             decimal.Decimal | None: The price to move to, or None.
         """
+        if view.is_stale():
+            return None
         if not self.would_cross(price, side, view):
             return price
         if self.on_crossing == 'refuse':

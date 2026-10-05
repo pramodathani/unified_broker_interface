@@ -131,6 +131,8 @@ class PriceCrossesCondition:
     def is_met(self, plan_order, memory, quotes, now, opening_side, sending_side):
         """Whether the level has been reached, and confirmed the way `confirm` asks, on this tick.
 
+        A quote marked stale is treated as no quote at all: it neither fires the condition nor counts towards a confirmation, and it does not start the count again. The quote combiner marks a quote stale when the broker it came from has gone silent with no healthy backup, so its price may be minutes old.
+
         Args:
             plan_order (PlanOrder): The plan order, which reads quotes into prices.
             memory (dict): The condition's memory between ticks, changed in place.
@@ -143,6 +145,8 @@ class PriceCrossesCondition:
             bool: True when the condition holds on this tick.
         """
         view = plan_order.view(quotes, self.instrument_id)
+        if view.is_stale():
+            return False
         price = self.watched_price(view, sending_side)
         if price is None:
             return False

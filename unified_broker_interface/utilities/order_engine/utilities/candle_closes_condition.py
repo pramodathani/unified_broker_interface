@@ -79,7 +79,7 @@ class CandleClosesCondition:
     def is_met(self, plan_order, memory, quotes, now, opening_side, sending_side):
         """Whether the bar that has just closed closed past the level.
 
-        It also keeps `closing_past`, whether the bar in progress would hold if it closed at this price. The plan records the memory with an event when that changes, so an engine restarted late in a bar still knows which side of the level the bar was closing on, without an event on every tick.
+        A quote marked stale adds nothing to the bar, as if no tick had come. It also keeps `closing_past`, whether the bar in progress would hold if it closed at this price. The plan records the memory with an event when that changes, so an engine restarted late in a bar still knows which side of the level the bar was closing on, without an event on every tick.
 
         Args:
             plan_order (OrderContext): The order's view of the plan order, which reads quotes into prices.
@@ -93,7 +93,10 @@ class CandleClosesCondition:
             bool: True when a bar closed past the level on this tick.
         """
         del sending_side
-        price = plan_order.view(quotes).last()
+        view = plan_order.view(quotes)
+        if view.is_stale():
+            return False
+        price = view.last()
         if price is None:
             return False
         if 'bars' not in memory:

@@ -62,6 +62,8 @@ class ChasePricing:
         """
         del memory
         view = plan_order.view(quotes)
+        if view.is_stale():
+            return None
         price = view.own_touch(sending_side)
         if price is None:
             return None
@@ -122,7 +124,7 @@ class ChasePricing:
             tuple | None: The new limit (decimal.Decimal), no trigger (None) and a reason (str), or None.
         """
         view = plan_order.view(quotes)
-        if not view.is_readable() or leg.price is None:
+        if not view.is_readable() or view.is_stale() or leg.price is None:
             return None
         side = leg.transaction_type
         if memory.get('started_at') is None:

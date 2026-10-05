@@ -15,3 +15,7 @@ The design lists `atr` as a third way to give a trail's distance. The reader kee
 ## 2026-10-04
 
 The restart limitation above is fixed: the pricing memory is now written with an event whenever a new bar starts (see `bar_builder.py.md`). The trigger can no longer move through the market as the range shrinks (see `trail_pricing.py.md`).
+
+## Stale quotes (2026-10-05)
+
+The group 6 walkthrough found every moving pricing acting on a quote marked `stale`: a peg followed a stale bid, a chaser crossed to a stale offer of 1005, an underlying peg moved on a stale index. The quote combiner marks a quote stale when its broker has gone silent and no healthy backup exists, so its price may be minutes old. This pricing now treats a stale quote as no quote, as `LimitMarketableCondition` always did: it neither places from it nor moves on it, and the next fresh quote moves the order as usual.

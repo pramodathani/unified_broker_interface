@@ -13,3 +13,7 @@ The bars live in the trigger's memory, which is saved with the parent on every t
 A candle stop judges only the bar in progress, so closed bars do not help it after a restart; what it loses is whether the bar in progress is closing beyond the level. `closing_past` is that verdict at the latest price, and the plan writes an event when it changes, a few times a day rather than every second. After a restart late in a bar the stored close is on the same side as the true one, so the bar is judged the same way (`a_candle_close_stop_remembers_which_side_its_bar_is_closing_on_across_a_restart`).
 
 The docstring said nothing is known until the first bar after the order rests has closed. The bar the order is placed in is tested too, at the next clock boundary.
+
+## Stale quotes (2026-10-05)
+
+A quote marked `stale` used to be read like any other, so with holding off a stale touch fired a `limit_if_touched` and sent its limit at once (found in the group 3 walkthrough). The quote combiner marks a quote stale when its broker has gone silent and no healthy backup exists, so the price may be minutes old. `LimitMarketableCondition` already ignored such quotes; this condition now does the same, returning False before its memory is touched, so a stale tick neither fires nor counts towards, nor resets, a confirmation. A time-based age limit was not added, because staleness is already decided from broker health in one place.

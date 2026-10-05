@@ -23,3 +23,7 @@ It is the same idea, but inside a part's own `pricing_memory` there is no other 
 ## Never through the market (2026-10-04)
 
 `moved_prices` refuses a move that would put a sell stop's trigger at or above the last price, or a buy stop's at or below it. For a plain trail that cannot happen, since the trigger only moves when the best price improves. For `AtrTrailPricing` the distance shrinks as the market calms, so the trigger rose while the best stayed put: in the research run, at a best of 1031 and a last of 1024, the engine sent a sell stop with trigger 1026.70, which a broker either refuses or fires at once into a limit resting above a falling market. The scenario `an_average_range_trail_never_moves_its_stop_through_the_market` replays that path.
+
+## Stale quotes (2026-10-05)
+
+The group 6 walkthrough found every moving pricing acting on a quote marked `stale`: a peg followed a stale bid, a chaser crossed to a stale offer of 1005, an underlying peg moved on a stale index. The quote combiner marks a quote stale when its broker has gone silent and no healthy backup exists, so its price may be minutes old. This pricing now treats a stale quote as no quote, as `LimitMarketableCondition` always did: it neither places from it nor moves on it, and the next fresh quote moves the order as usual.

@@ -76,6 +76,8 @@ class TrailsCondition:
     def is_met(self, plan_order, memory, quotes, now, opening_side, sending_side):
         """Whether the price has pulled back from its best by the trail distance, updating the best first.
 
+        A quote marked stale is ignored, so it neither sets a new best nor counts as the pullback.
+
         Args:
             plan_order (PlanOrder): The plan order, which reads quotes into prices.
             memory (dict): The condition's memory, whose `best` is updated in place.
@@ -88,7 +90,10 @@ class TrailsCondition:
             bool: True when the pullback has been reached.
         """
         del now, opening_side
-        price = plan_order.view(quotes).last()
+        view = plan_order.view(quotes)
+        if view.is_stale():
+            return False
+        price = view.last()
         if price is None:
             return False
         best = None

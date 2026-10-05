@@ -11,3 +11,7 @@ Starting at the own touch, stepping from the order's own price rather than from 
 ## Why the memory is recorded with each step
 
 A plan part's memory survives a restart only if an event records it. `OrderPart.move` records the pricing memory when an order moved or when the memory was first set, so the chase's start and last step are kept. A step that changed nothing, because the order already sat at the touch, updates `stepped_at` without an event; after a restart the order waits from the last real step instead, which sends nothing different, as `a_plan_chaser_keeps_its_clock_across_a_restart` shows.
+
+## Stale quotes (2026-10-05)
+
+The group 6 walkthrough found every moving pricing acting on a quote marked `stale`: a peg followed a stale bid, a chaser crossed to a stale offer of 1005, an underlying peg moved on a stale index. The quote combiner marks a quote stale when its broker has gone silent and no healthy backup exists, so its price may be minutes old. This pricing now treats a stale quote as no quote, as `LimitMarketableCondition` always did: it neither places from it nor moves on it, and the next fresh quote moves the order as usual.

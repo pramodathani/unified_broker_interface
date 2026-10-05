@@ -11,3 +11,7 @@ Today's post-only type never moves its order. In a plan it can sit beside a peg,
 ## The waiting case
 
 When the book cannot be read, `checked_body` answers no body and no refusal, so the order waits for a tick that carries a book, where today's type answers 503.
+
+## Stale books (2026-10-05)
+
+The guard used to judge a book marked stale like any other, so an order could be refused with 409, or moved to a touch, on prices minutes old (found in the group 6 walkthrough). A stale book now counts as unreadable: `checked_body` returns `(None, None)` so the order waits for a fresh book, as it already did with no book at all, and `checked_move` skips the move.

@@ -88,9 +88,12 @@ class FollowInstrumentPricing:
             quotes (dict): The quotes, by instrument id.
 
         Returns:
-            decimal.Decimal | None: The price, or None when its quote does not carry one.
+            decimal.Decimal | None: The price, or None when its quote does not carry one or is marked stale, which leaves the order where it is.
         """
-        return plan_order.view(quotes, self.instrument_id).last()
+        view = plan_order.view(quotes, self.instrument_id)
+        if view.is_stale():
+            return None
+        return view.last()
 
     def bounded(self, plan_order, price, side, quotes):
         """The price held inside `lowest` and `highest`, at least one tick, and rounded onto the tick.
