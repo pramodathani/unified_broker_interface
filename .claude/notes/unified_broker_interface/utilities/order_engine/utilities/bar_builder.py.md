@@ -21,3 +21,7 @@ That is stated in the class docstring because it bears directly on the average t
 ## Why everything is stored as text
 
 The bars live in the parent's parameters, which go through JSON and Redis. A price stored as a float comes back as a float, and a bar high of 1000.10 becomes 1000.0999999999999 — the same problem recorded at length in `PriceReference.number`, arriving by a different route. Text and `Decimal` at the boundaries avoid it entirely.
+
+## Bars across a restart (2026-10-04)
+
+The class docstring used to say the state "survives a restart". It did not: the parameters are a Redis cache, recovery rebuilds parents from the event log, and the plan wrote an event for a trigger's or pricing's memory only on rare changes. `started_another` lets both callers write one event per bar, so a restart keeps every closed bar and loses at most the ticks of the bar in progress. An average range trail restarted mid-run in `an_average_range_trail_keeps_its_bars_across_a_restart` ends at the same trigger as the run without a restart.

@@ -19,3 +19,7 @@ It is the same idea, but inside a part's own `pricing_memory` there is no other 
 ## A caller's changes (added 2026-10-02)
 
 `best_for_trigger` is the inverse of `prices_from` before rounding, matching `TrailingStop.watermark_for_trigger`. With `percent` the result is not rounded, so `best` can carry many decimal places; it is only compared and multiplied, so this is harmless.
+
+## Never through the market (2026-10-04)
+
+`moved_prices` refuses a move that would put a sell stop's trigger at or above the last price, or a buy stop's at or below it. For a plain trail that cannot happen, since the trigger only moves when the best price improves. For `AtrTrailPricing` the distance shrinks as the market calms, so the trigger rose while the best stayed put: in the research run, at a best of 1031 and a last of 1024, the engine sent a sell stop with trigger 1026.70, which a broker either refuses or fires at once into a limit resting above a falling market. The scenario `an_average_range_trail_never_moves_its_stop_through_the_market` replays that path.

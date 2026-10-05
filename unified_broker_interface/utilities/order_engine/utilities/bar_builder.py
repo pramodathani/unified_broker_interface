@@ -16,7 +16,7 @@ class BarBuilder:
 
     The bars are also built from samples rather than from trades. A one-second tick carries the last traded price at that moment, so a high that happened and was traded through between two ticks is missed. For a fifteen-minute bar sampled nine hundred times that is a small error; for a one-minute bar on an instrument that trades once a minute it is not, and the shorter the bar the less this is worth trusting.
 
-    Everything is kept as text in the parent's parameters, so it survives a restart and goes through JSON without a float rounding a price.
+    Everything is kept as text in the parent's parameters, which goes through JSON without a float rounding a price. The parameters are recorded with an event whenever a bar starts (see `started_another`), so a restart keeps every closed bar and loses only the one in progress.
     """
 
     def __init__(self, parameters, bar_seconds):
@@ -31,6 +31,23 @@ class BarBuilder:
         """
         self.parameters = parameters
         self.bar_seconds = bar_seconds
+
+    @staticmethod
+    def started_another(before, after):
+        """Whether a bar closed and another started between two copies of one stored state.
+
+        The engine writes an event for a part's memory only when something worth keeping across a restart changed. A new bar is such a change, once per bar rather than once per tick, so a restart loses at most the bar in progress instead of every bar since the order was placed.
+
+        Args:
+            before (dict | None): The stored state before the tick.
+            after (dict | None): The stored state after it.
+
+        Returns:
+            bool: True when the bar in progress is a different one.
+        """
+        started_before = (before or {}).get('bar_started_at')
+        started_after = (after or {}).get('bar_started_at')
+        return started_after is not None and started_after != started_before
 
     def bar_start(self, now):
         """The start of the bar a moment falls in, aligned to the bar length.

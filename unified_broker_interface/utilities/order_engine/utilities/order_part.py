@@ -9,6 +9,9 @@ from unified_broker_interface.utilities.broker_orders.utilities.refused_request 
 from unified_broker_interface.utilities.order_engine.utilities.all_at_once_execution import (
     AllAtOnceExecution,
 )
+from unified_broker_interface.utilities.order_engine.utilities.bar_builder import (
+    BarBuilder,
+)
 from unified_broker_interface.utilities.order_engine.utilities.fixed_pricing import (
     FixedPricing,
 )
@@ -780,7 +783,7 @@ class OrderPart:
             record = plan_order.part_record(self.path)
             record['pricing_memory'] = new_memory
             message = None
-            if moved_any or not stored:
+            if moved_any or not stored or BarBuilder.started_another(stored.get('bars'), new_memory.get('bars')):
                 message = f'the plan\'s {self.path} part\'s pricing remembers {new_memory}'
             plan_order.set_part_record(self.path, record, message)
         return moved_any or took
@@ -959,6 +962,8 @@ class OrderPart:
     def settle(self, plan_order):
         """Sends the next piece when the execution waits for fills, and marks this order done once every broker order has finished and no more will be sent.
 
+        A working order that was stopped before it sent anything, such as a daily stop cancelled before its first morning, has no broker order to finish, so it is marked done as `cancelled` straight away; otherwise its parent would never end.
+
         Args:
             plan_order (PlanOrder): The plan order.
 
@@ -979,6 +984,8 @@ class OrderPart:
         if not record.get('ended') and self.execution.will_send_more(record.get('execution_memory') or {}, remaining, pieces):
             return placed
         reason = self.done_reason(plan_order.parent)
+        if reason is None and record.get('ended') and not pieces:
+            reason = 'cancelled'
         if reason is None:
             return placed
         if self.waits_to_close_filled(record, reason):

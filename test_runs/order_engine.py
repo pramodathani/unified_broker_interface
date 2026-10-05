@@ -5734,6 +5734,180 @@ class OrderEngineSuite:
             ),
         ]
 
+    def run_stop_type_checks(self):
+        """Runs the stop types where a price off the tick, a shrinking range, a cancel before the first send or a restart used to leave a position unprotected.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        accepted = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        frozen = FROZEN_NOW.timestamp()
+        entry = self.scenarios.bodies.market_order(
+            dry_run=None,
+            order_type='LIMIT',
+            price=1000,
+            quantity=10,
+        )
+        steady = self.book_at(1000.00, 1000.05)
+        low = self.book_at(990.00, 990.05)
+        stop_in_the_book = {
+            'order_type': 'SL',
+            'trigger_price': 990.05,
+        }
+        calming_path = [
+            1000.05,
+            1004,
+            998,
+            1006,
+            1010,
+            1002,
+            1012,
+            1008,
+            1015,
+            1007,
+            1018,
+            1016,
+            1022,
+            1014,
+            1025,
+            1021,
+            1026,
+            1024,
+            1027,
+            1026,
+            1028,
+            1027,
+            1029,
+            1028,
+            1029.5,
+            1028.5,
+            1030,
+            1029.5,
+            1030.5,
+            1030,
+            1031,
+            1030.5,
+            1024,
+            1022,
+            1021,
+            1020,
+        ]
+        calming_steps = []
+        for index, price in enumerate(calming_path):
+            calming_steps.append({
+                'quote': self.book_at(round(price - 0.05, 2), price),
+                'at': index * 15,
+            })
+        candle_stop = {
+            'type': 'candle_close_stop',
+            'trigger_price': 995,
+            'bar_minutes': 1,
+        }
+        return [
+            self.clock_result(
+                'a_daily_stop_off_the_tick_is_refused_when_placed',
+                dict(entry, synthetic={
+                    'type': 'daily_stop',
+                    'stop_price': 990.03,
+                    'stop_limit_price': 988,
+                    'arm_at': '09:20',
+                }),
+                [],
+                frozen + 60,
+                accepted,
+                taken_at=FROZEN_NOW.replace(hour=8, minute=45),
+                quote=self.scenarios.quote(),
+                positions=10,
+            ),
+            self.plan_price_result(
+                'a_daily_stop_cancelled_before_its_first_morning_ends_cancelled',
+                {
+                    'order': {
+                        'presets': [
+                            {
+                                'daily_stop': {
+                                    'stop_price': 990,
+                                    'stop_limit_price': 988,
+                                },
+                            },
+                        ],
+                    },
+                },
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'part_cancel': {'part': 'root'}},
+                    {'quote': steady, 'at': 2},
+                ],
+                accepted,
+                positions=10,
+            ),
+            self.price_result(
+                'an_average_range_trail_never_moves_its_stop_through_the_market',
+                dict(entry, synthetic={
+                    'type': 'atr_trail',
+                    'trail_points': 15,
+                    'stop_limit_offset': 2,
+                    'bar_minutes': 1,
+                    'periods': 3,
+                    'atr_multiple': 2,
+                }),
+                calming_steps,
+                accepted,
+                book_overrides=stop_in_the_book,
+                positions=10,
+            ),
+            self.price_result(
+                'an_average_range_trail_with_more_periods_than_bars_kept_is_refused',
+                dict(entry, synthetic={
+                    'type': 'atr_trail',
+                    'trail_points': 10,
+                    'stop_limit_offset': 2,
+                    'periods': 50,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+                positions=10,
+            ),
+            self.price_result(
+                'an_average_range_trail_keeps_its_bars_across_a_restart',
+                dict(entry, synthetic={
+                    'type': 'atr_trail',
+                    'trail_points': 10,
+                    'stop_limit_offset': 2,
+                    'bar_minutes': 1,
+                    'periods': 2,
+                    'atr_multiple': 1,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1040.00, 1040.05), 'at': 10},
+                    {'quote': self.book_at(1010.00, 1010.05), 'at': 70},
+                    {'quote': self.book_at(1060.00, 1060.05), 'at': 130, 'restart': True},
+                    {'quote': self.book_at(1080.00, 1080.05), 'at': 190},
+                ],
+                accepted,
+                book_overrides=stop_in_the_book,
+                positions=10,
+            ),
+            self.price_result(
+                'a_candle_close_stop_remembers_which_side_its_bar_is_closing_on_across_a_restart',
+                dict(entry, synthetic=candle_stop),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 30},
+                    {'quote': low, 'at': 50, 'restart': True},
+                    {'quote': steady, 'at': 61},
+                ],
+                accepted,
+                positions=10,
+            ),
+        ]
+
     def run_linked_order_checks(self):
         """Runs the linked types where a later fill, a race or a price off the tick used to leave a position unprotected or a parent in the wrong state.
 
@@ -9829,7 +10003,7 @@ class OrderEngineSuite:
         Args:
             name (str): The check's name.
             request_body (dict): The request body.
-            steps (list): One `{"quote": dict | None, "at": float}` per tick, where `at` is seconds after the order was placed, and optionally `other_quotes` for other instruments, `updates`, order updates applied before the tick, `funds`, the combined funds document, and a caller's change or cancel run through the engine's commands before the tick: `held_change` and `part_cancel` name a parent's part, `leg_change` and `leg_cancel` one of its broker orders.
+            steps (list): One `{"quote": dict | None, "at": float}` per tick, where `at` is seconds after the order was placed, and optionally `other_quotes` for other instruments, `updates`, order updates applied before the tick, `funds`, the combined funds document, and a caller's change or cancel run through the engine's commands before the tick: `held_change` and `part_cancel` name a parent's part, `leg_change` and `leg_cancel` one of its broker orders. `restart: True` rebuilds every parent from its recorded events after that tick, as one engine restart does.
             answer (dict | None): The stubbed broker answer.
             throttle_seconds (float): The shortest gap the re-pricing throttle allows between two moves of one order.
             book_overrides (dict | None): Fields to replace on the broker's order book entry, for a type whose order is not a plain limit.
@@ -10073,7 +10247,7 @@ class OrderEngineSuite:
                 before = len(self.network.sent_requests)
                 self.tick_at(ticker, step_at)
                 moves.append(len(self.network.sent_requests) - before)
-                if restart_between_ticks:
+                if restart_between_ticks or step.get('restart'):
                     self.restart_parents(event_log, parent_store)
             finally:
                 time.time = original_time
@@ -13743,6 +13917,7 @@ class OrderEngineSuite:
             results.extend(self.run_late_auction_and_whole_lot_checks())
             results.extend(self.run_breakout_exit_checks())
             results.extend(self.run_linked_order_checks())
+            results.extend(self.run_stop_type_checks())
             results.extend(self.run_price_checks())
             results.extend(self.run_wiring_checks())
             results.extend(self.run_assignment_checks())

@@ -182,6 +182,8 @@ class TrailPricing:
     def moved_prices(self, plan_order, memory, leg, quotes, now):
         """Where the resting stop should move to on this tick, or None when it should stay.
 
+        A stop is never moved to or through the market: a sell stop's trigger stays below the last price and a buy stop's above it. A plain trail cannot get there, but a distance that shrinks, as an average range trail's does when the market calms, can raise the trigger while the best price stays put, and a stop moved past the market would fire at once or be refused.
+
         Args:
             plan_order (PlanOrder): The plan order, which reads quotes and knows the tick size.
             memory (dict): The pricing's memory, whose `best` is updated in place.
@@ -208,6 +210,10 @@ class TrailPricing:
         if prices is None:
             return None
         trigger, limit = prices
+        if side == 'SELL' and trigger >= price:
+            return None
+        if side == 'BUY' and trigger <= price:
+            return None
         if leg.trigger_price is not None:
             current = decimal.Decimal(str(leg.trigger_price))
             step = plan_order.tick_size() * self.step_ticks
