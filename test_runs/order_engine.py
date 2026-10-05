@@ -5734,6 +5734,255 @@ class OrderEngineSuite:
             ),
         ]
 
+    def run_linked_order_checks(self):
+        """Runs the linked types where a later fill, a race or a price off the tick used to leave a position unprotected or a parent in the wrong state.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        numbered = dict(
+            self.scenarios.answers.json_answer(
+                200,
+                self.scenarios.answers.place_success('flattrade'),
+            ),
+            number_orders=True,
+        )
+        steady = self.book_at(1000.00, 1000.05)
+        identifiers = order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS
+
+        def preset_plan(name, settings):
+            """A plan of one order with one preset.
+
+            Args:
+                name (str): The preset.
+                settings (dict): Its settings.
+
+            Returns:
+                dict: The plan.
+            """
+            return {
+                'order': {
+                    'presets': [
+                        {
+                            name: settings,
+                        },
+                    ],
+                },
+            }
+
+        bracket = {
+            'stop_price': 990,
+            'stop_limit_price': 988,
+            'target_price': 1010,
+        }
+        oco = {
+            'stop_price': 990,
+            'stop_limit_price': 988,
+            'target_price': 1010,
+        }
+        two_targets = {
+            'stop_price': 990,
+            'stop_limit_price': 988,
+            'target_prices': [
+                1010,
+                1020,
+            ],
+        }
+        breakout = {
+            'buy_trigger': 1010,
+            'buy_limit': 1012,
+            'sell_trigger': 990,
+            'sell_limit': 988,
+            'stop_distance': 25,
+            'stop_limit_offset': 2,
+        }
+        candidates = {
+            'candidates': [
+                {
+                    'instrument_id': identifiers['reliance'],
+                    'quantity': 10,
+                    'price': 1000,
+                },
+                {
+                    'instrument_id': identifiers['kwil'],
+                    'quantity': 10,
+                    'price': 250,
+                },
+            ],
+        }
+        return [
+            self.plan_price_result(
+                'a_bracket_sends_its_exits_again_when_the_entry_fills_after_they_finished',
+                preset_plan('bracket', bracket),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'OPEN', 4)]},
+                    {'quote': steady, 'at': 2, 'updates': [self.update('26091500000103', 'COMPLETE', 4)]},
+                    {'quote': steady, 'at': 3, 'updates': [self.update('26091500000102', 'CANCELLED', 0)]},
+                    {'quote': steady, 'at': 4, 'updates': [self.update('26091500000101', 'COMPLETE', 10)]},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'an_oto_sends_its_second_order_again_when_the_first_fills_after_it_filled',
+                preset_plan('oto', {
+                    'then': {
+                        'transaction_type': 'SELL',
+                        'price': 1010,
+                    },
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'OPEN', 6)]},
+                    {'quote': steady, 'at': 2, 'updates': [self.update('26091500000102', 'COMPLETE', 6)]},
+                    {'quote': steady, 'at': 3, 'updates': [self.update('26091500000101', 'COMPLETE', 10)]},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_bracket_stop_off_the_tick_is_refused_when_placed',
+                preset_plan('bracket', dict(bracket, stop_price=990.03)),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_scale_out_target_off_the_tick_is_refused_when_placed',
+                preset_plan('scale_out', dict(two_targets, target_prices=[1010, 1020.02])),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_scale_out_moves_its_stop_to_the_entry_price_rounded_to_the_tick',
+                preset_plan('scale_out', two_targets),
+                [
+                    {'quote': steady, 'at': 0},
+                    {
+                        'quote': steady,
+                        'at': 1,
+                        'updates': [
+                            self.update('26091500000101', 'COMPLETE', 10, average_price=1000.03),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 2,
+                        'updates': [
+                            self.update('26091500000102', 'OPEN', 0, order_type='SL'),
+                            self.update('26091500000103', 'OPEN', 0),
+                            self.update('26091500000104', 'OPEN', 0),
+                        ],
+                    },
+                    {
+                        'quote': steady,
+                        'at': 3,
+                        'updates': [
+                            self.update('26091500000103', 'COMPLETE', 5),
+                        ],
+                    },
+                ],
+                numbered,
+                book_overrides={
+                    'order_type': 'SL',
+                    'trigger_price': 990,
+                },
+            ),
+            self.plan_price_result(
+                'an_oco_is_sent_to_the_broker_that_holds_the_position',
+                preset_plan('oco', oco),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                dict(
+                    self.scenarios.answers.json_answer(
+                        200,
+                        self.scenarios.answers.place_success('zerodha'),
+                    ),
+                    number_orders=True,
+                ),
+                positions={
+                    'zerodha': 10,
+                },
+            ),
+            self.plan_price_result(
+                'an_oco_on_a_position_held_at_two_brokers_is_refused',
+                preset_plan('oco', oco),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                numbered,
+                positions={
+                    'flattrade': 6,
+                    'zerodha': 4,
+                },
+            ),
+            self.plan_price_result(
+                'an_oco_larger_than_the_position_is_refused',
+                preset_plan('oco', oco),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                numbered,
+                positions=6,
+            ),
+            self.plan_result(
+                'an_oca_keeps_the_candidate_that_filled_first_when_another_fills_before_its_cancel',
+                preset_plan('oca', candidates),
+                [
+                    self.update('26091500000102', 'OPEN', 3),
+                    self.update('26091500000101', 'OPEN', 2),
+                    self.update('26091500000101', 'CANCELLED', 2),
+                ],
+                numbered,
+            ),
+            self.plan_result(
+                'an_oca_candidate_refused_after_others_were_placed_leaves_them_watched',
+                preset_plan('oca', {
+                    'candidates': [
+                        {
+                            'instrument_id': identifiers['reliance'],
+                            'quantity': 10,
+                            'price': 1000,
+                        },
+                        {
+                            'instrument_id': identifiers['kwil'],
+                            'quantity': 10,
+                            'price': 250,
+                        },
+                        {
+                            'instrument_id': identifiers['sensex_option'],
+                            'price': 100,
+                        },
+                    ],
+                }),
+                [
+                    self.update('26091500000101', 'OPEN', 4),
+                ],
+                numbered,
+            ),
+            self.plan_result(
+                'a_two_sided_breakout_whose_sides_both_fill_cancels_its_exit',
+                preset_plan('two_sided_breakout', breakout),
+                [
+                    self.update('26091500000101', 'OPEN', 10, average_price=1010.0),
+                    self.update('26091500000102', 'COMPLETE', 10, average_price=990.0),
+                ],
+                numbered,
+            ),
+            self.plan_price_result(
+                'a_plan_whose_only_order_is_rejected_after_it_was_accepted_ends_rejected',
+                preset_plan('bracket', bracket),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'REJECTED', 0)]},
+                ],
+                numbered,
+            ),
+        ]
+
     def seed_positions(self, quantity, product='MIS'):
         """Seeds a net position in RELIANCE, intraday unless told otherwise, held at Flattrade or split across brokers.
 
@@ -13493,6 +13742,7 @@ class OrderEngineSuite:
             results.extend(self.run_closed_position_checks())
             results.extend(self.run_late_auction_and_whole_lot_checks())
             results.extend(self.run_breakout_exit_checks())
+            results.extend(self.run_linked_order_checks())
             results.extend(self.run_price_checks())
             results.extend(self.run_wiring_checks())
             results.extend(self.run_assignment_checks())

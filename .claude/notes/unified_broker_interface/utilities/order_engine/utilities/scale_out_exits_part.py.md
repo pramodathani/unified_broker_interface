@@ -19,3 +19,7 @@ A cancel's confirmation settles the plan again, and while another order's cancel
 ## Testing the move to breakeven
 
 The engine refuses to give a trigger price to an order the broker's book lists as a LIMIT, so the breakeven scenario runs through `plan_price_result` with `book_overrides` listing the stop as SL; `plan_result`'s book lists every order as LIMIT.
+
+## Rounding the breakeven price (2026-10-04)
+
+An average over several fills, such as 1000.03, is rarely on the tick, and the broker refused the modify, so the stop stayed at its old price. `move_to_breakeven` rounds towards the passive side, which for a stop means away from the market, so the stop can only lock in a little profit, never a small loss. The tick comes from the parent's `tick_size`, which `PlanOrder._refuse_off_tick_prices` keeps for plans that read no prices.

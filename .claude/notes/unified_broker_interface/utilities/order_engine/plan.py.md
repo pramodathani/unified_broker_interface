@@ -144,3 +144,13 @@ A placement refused as a part fired, such as a fixed price off the tick or a red
 `_remember_tick_sizes` now also keeps the tick of every instrument a part watches. A watched instrument with none fell back to the parent's own tick, so a CRUDEOIL order (tick 1.0) watching NIFTY rounded 24999.55 to 25000 and fired below its trigger.
 
 A part that closes positions refuses a change to its price or quantity with 409. Such a change used to be accepted and stored, but the close is built from the positions and the book when it fires and never read it.
+
+## Linked orders (2026-10-04)
+
+`_refuse_off_tick_prices` used to read only a part's `FixedPricing` price, so a bracket or cover stop (`NativeStopPricing`) or a scale out's targets and stop (`ScaleOutExitsPart` settings) off the tick were accepted and refused only when the entry filled, leaving the new position without its exits. `_later_prices` names every price a part will send with. The check now runs whether or not the plan reads prices; when no tick size was remembered it reads the brokers' agreed tick once and keeps it as `tick_size`, which also gives a later computed price, such as the breakeven stop, a tick to round to. A ladder's rung prices are now recorded rounded ("1000.00" rather than "1000"); the requests are unchanged.
+
+`_pin_to_holding_broker` exists because an OCO's exits were sent to whichever broker the selector picked. A sell at a broker that holds nothing opens a short there rather than closing the long elsewhere. A position split across brokers cannot be protected by one order at one broker, and an order larger than the share held could fill past flat, so both are refused with 409 rather than sent. It sets `body['broker']` only when the caller named none.
+
+A plan whose only order was accepted and then rejected by the exchange stayed `working` for ever, because `ALLOWED_CHANGES` had no `working` to `rejected` step and `_finish_if_done` could not move it. See `parent_order.py.md`.
+
+`refused_beside_live_orders` exists because the group 4 research placed an OCA whose third candidate, a SENSEX option without a quantity, took the body's 10 against a lot of 20. The refusal escaped from `root.start` after two candidates were at the broker: the caller got 400 with no parent id, the parent was stored as rejected with two acknowledged legs, and a later fill cancelled nothing. A first version of the PR #64 docs said such a candidate leaves the others working with 207, which was only true of a broker rejection. Now `OrderPart.start` hands such a refusal here; with live orders it ends the part as `refused` and returns a leg entry so `_answer` says 207, and with none it lets the refusal escape, so a single bad order is still refused with no parent.

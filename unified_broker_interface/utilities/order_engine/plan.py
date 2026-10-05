@@ -38,11 +38,18 @@ from unified_broker_interface.utilities.order_engine.utilities.parent_store impo
 from unified_broker_interface.utilities.order_engine.utilities.plan_reader import (
     PlanReader,
 )
+from unified_broker_interface.utilities.order_engine.utilities.position_closer import (
+    PositionCloser,
+)
 from unified_broker_interface.utilities.order_engine.utilities.pre_open_venue import (
     PreOpenVenue,
 )
 from unified_broker_interface.utilities.order_engine.utilities.reduce_only import (
+    POSITION_PRODUCTS,
     ReduceOnlyCheck,
+)
+from unified_broker_interface.utilities.order_engine.utilities.scale_out_exits_part import (
+    ScaleOutExitsPart,
 )
 from unified_broker_interface.utilities.order_engine.utilities.whole_part import (
     WholePart,
@@ -194,7 +201,7 @@ class PlanOrder(SyntheticOrder):
         if needs_prices:
             self.remember_tick_size(order)
             self._remember_tick_sizes(root)
-            self._refuse_off_tick_prices(root)
+        self._refuse_off_tick_prices(root)
         self.parent.parameters = dict(self.parent.parameters)
         self.parent.parameters['parts'] = records
         if carries_overnight:
@@ -251,9 +258,9 @@ class PlanOrder(SyntheticOrder):
         return found
 
     def _refuse_off_tick_prices(self, root):
-        """Refuses a fixed price on the parent's instrument that is not a whole number of ticks, before anything is recorded.
+        """Refuses a price on the parent's instrument that is not a whole number of ticks, when it belongs to an order sent later, before anything is recorded.
 
-        Such a price would be refused by the placement only when the order fires, long after the caller was told it was armed. The tick size is the one `remember_tick_size` has just read, so this costs no read of its own.
+        An order sent at once is refused by the placement straight away, but one behind a trigger, or an exit that follows an entry, would be refused only when its turn came: long after the caller was told it was armed, and for an exit, after the position it should protect is open. Fixed limits, stop triggers and limits, and a scale out's targets and stop are checked. The tick size is the one `remember_tick_size` read, or, when the plan reads no prices, the brokers' agreed tick read once here and kept on the parent the same way, so a price worked out later, such as a scale out's breakeven stop, can be rounded to it.
 
         Args:
             root (object): The root part.
@@ -262,23 +269,89 @@ class PlanOrder(SyntheticOrder):
             None: This method returns nothing.
 
         Raises:
-            RefusedRequestError: With HTTP 400 for a fixed price off the tick.
+            RefusedRequestError: With HTTP 400 for a price off the tick.
         """
         tick_size = self.tick_size()
-        if not tick_size:
-            return
         for part in root.order_parts():
-            if not isinstance(part.pricing, FixedPricing) or part.pricing.price is None:
+            if part.trigger is None and not part.opened_by:
                 continue
             if not part.context(self).is_parents_instrument():
                 continue
-            price = decimal.Decimal(str(part.pricing.price))
-            if price % tick_size != 0:
-                raise RefusedRequestError.refusal(
-                    f'the price {price} of part {part.path} must be a whole number of ticks of {format(tick_size.normalize(), "f")}',
-                    400,
-                    part=part.path,
-                )
+            prices = self._later_prices(part)
+            if not prices:
+                continue
+            if not tick_size:
+                instrument, _, _ = self.placement.market_context(self.parent.instrument_id, False, False)
+                tick_size = self.read_order(self.parent.body).agreed_tick_size(instrument.handles)
+                if not tick_size:
+                    return
+                self.parent.parameters = dict(self.parent.parameters)
+                self.parent.parameters['tick_size'] = str(tick_size)
+            for name, value in prices:
+                price = decimal.Decimal(str(value))
+                if price % tick_size != 0:
+                    raise RefusedRequestError.refusal(
+                        f'the {name} {price} of part {part.path} must be a whole number of ticks of {format(tick_size.normalize(), "f")}',
+                        400,
+                        part=part.path,
+                    )
+
+    def _later_prices(self, part):
+        """The prices one part will send with, by name.
+
+        Args:
+            part (object): The order part.
+
+        Returns:
+            list: Pairs of a name (str) and a price, leaving out prices not given.
+        """
+        prices = []
+        if isinstance(part, ScaleOutExitsPart):
+            for name in ('stop_price', 'stop_limit_price'):
+                if part.settings.get(name) is not None:
+                    prices.append((name.replace('_', ' '), part.settings[name]))
+            for value in part.settings.get('target_prices') or []:
+                prices.append(('target price', value))
+            return prices
+        if isinstance(part.pricing, FixedPricing) and part.pricing.price is not None:
+            prices.append(('price', part.pricing.price))
+        if isinstance(part.pricing, NativeStopPricing):
+            if part.pricing.trigger_price is not None:
+                prices.append(('stop trigger price', part.pricing.trigger_price))
+            if part.pricing.limit_price is not None:
+                prices.append(('stop limit price', part.pricing.limit_price))
+        return prices
+
+    def refused_beside_live_orders(self, part, refusal):
+        """Ends an order the placement refused while the plan's other orders were already at a broker, and describes it as a refused leg.
+
+        A plan that places several orders at once, such as an OCA's candidates or a basket's, used to let the refusal of a later one, for example a quantity that is not a whole number of lots, escape after the earlier ones had been placed. The caller got a 400 with no parent id, the parent was stored as rejected, and the orders already at the broker were left with nobody watching them. Now only the refused order ends, and the answer lists it beside the others, so the plan carries on and answers 207. When nothing has reached a broker yet, the refusal still escapes, so a single bad order is refused as before and leaves no parent.
+
+        Args:
+            part (object): The order part the placement refused.
+            refusal (RefusedRequestError): The refusal.
+
+        Returns:
+            tuple | None: The `(path, answer, status)` entry for the refused order, or None when the refusal should escape.
+        """
+        if refusal.status not in PERMANENT_REFUSAL_STATUSES:
+            return None
+        has_live_orders = False
+        for leg in self.parent.legs:
+            if leg.is_live():
+                has_live_orders = True
+        if not has_live_orders:
+            return None
+        self._end_refused(part, refusal)
+        reason = refusal.body.get('error') or refusal.body.get('status_message') or 'the order was refused'
+        answer = {
+            'broker': None,
+            'instrument_id': part.context(self).instrument_id,
+            'order_id': None,
+            'outcome': 'rejected',
+            'status_message': reason,
+        }
+        return part.path, answer, refusal.status
 
     def _end_refused(self, part, refusal):
         """Ends an order the placement refused as it fired, so the parent finishes and says why instead of trying again on every tick.
@@ -412,7 +485,9 @@ class PlanOrder(SyntheticOrder):
             self.parent.parameters['tick_sizes'] = tick_sizes
 
     def _refuse_without_position(self, part):
-        """Refuses a part that protects a position when none is held on its instrument on the side that opened it.
+        """Refuses a part that protects a position when none is held on its instrument on the side that opened it, and sends the plan to the broker that holds it.
+
+        A stop at one broker cannot protect a position held at another, so the plan is pinned to the one broker holding the position on that side, by writing it into the body before the parent is recorded, and an order larger than that broker's share is refused. A position held on that side at several brokers is refused, since one order cannot protect it and a caller cannot name the broker.
 
         Args:
             part (OrderPart): The protecting part.
@@ -421,7 +496,7 @@ class PlanOrder(SyntheticOrder):
             None: This method returns nothing.
 
         Raises:
-            RefusedRequestError: With HTTP 409 when no position is held on that side.
+            RefusedRequestError: With HTTP 409 when no position is held on that side, when it is held at several brokers, or when the order is larger than the position.
         """
         context = part.context(self)
         order = self.read_order(context.body)
@@ -429,9 +504,8 @@ class PlanOrder(SyntheticOrder):
             context.instrument_id,
             order.product,
         )
-        if order.transaction_type == 'BUY' and held > 0:
-            return
-        if order.transaction_type == 'SELL' and held < 0:
+        if (order.transaction_type == 'BUY' and held > 0) or (order.transaction_type == 'SELL' and held < 0):
+            self._pin_to_holding_broker(part, order)
             return
         raise RefusedRequestError.refusal(
             'the plan cannot run; every problem found is listed in problems',
@@ -444,6 +518,49 @@ class PlanOrder(SyntheticOrder):
                 },
             ],
         )
+
+    def _pin_to_holding_broker(self, part, order):
+        """Writes into the body the one broker that holds the position a protecting part protects, and refuses an order larger than its share.
+
+        Args:
+            part (OrderPart): The protecting part.
+            order (PlaceOrderRequest): The part's order, read from its body.
+
+        Returns:
+            None: This method returns nothing.
+
+        Raises:
+            RefusedRequestError: With HTTP 409 when the position is held at several brokers, or is smaller than the order.
+        """
+        if self.parent.body.get('broker'):
+            return
+        product = POSITION_PRODUCTS.get(str(order.product or '').upper())
+        shares = []
+        for broker_name, instrument_id, quantity in PositionCloser(self).open_positions(product, {part.context(self).instrument_id}):
+            if instrument_id is None:
+                continue
+            if (order.transaction_type == 'BUY' and quantity > 0) or (order.transaction_type == 'SELL' and quantity < 0):
+                shares.append((broker_name, abs(int(quantity))))
+        if not shares:
+            return
+        if len(shares) > 1:
+            held_at = []
+            for broker_name, quantity in shares:
+                held_at.append(f'{quantity} at {broker_name}')
+            raise RefusedRequestError.refusal(
+                f'the position this order protects is held at several brokers ({", ".join(held_at)}), and one order at one broker cannot protect a position held at another',
+                409,
+                part=part.path,
+            )
+        broker_name, quantity = shares[0]
+        if order.quantity > quantity:
+            raise RefusedRequestError.refusal(
+                f'this order protects {order.quantity}, but {broker_name} holds only {quantity}, so a fill could open a position the other way',
+                409,
+                part=part.path,
+            )
+        self.parent.body = dict(self.parent.body)
+        self.parent.body['broker'] = broker_name
 
     def quotes_now(self):
         """The quotes of this parent's instrument and of every instrument the plan watches, as they are now, for pricing an order placed outside a tick.

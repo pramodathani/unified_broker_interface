@@ -151,17 +151,42 @@ class EitherPart:
                 siblings_filled = total - fills[index]
                 child.set_target(plan_order, budget - siblings_filled)
         else:
-            for index, child in enumerate(self.children):
-                if fills[index] > 0:
-                    self.cancel_siblings(
-                        plan_order,
-                        index,
-                        f'{child.path} has started filling, so its siblings are cancelled',
-                    )
-                    break
+            winner = self.winner(plan_order, fills)
+            if winner is not None:
+                self.cancel_siblings(
+                    plan_order,
+                    winner,
+                    f'{self.children[winner].path} has started filling, so its siblings are cancelled',
+                )
         for child in self.children:
             placed = placed + child.settle(plan_order)
         return placed
+
+    def winner(self, plan_order, fills):
+        """The child kept under the `cancel` rule: the first one seen with a fill, remembered so it never changes.
+
+        A losing child can fill a little before its cancel lands. Choosing again from the fills on every settle would then keep whichever child comes first in the list, and cancel the rest of the child that really filled first.
+
+        Args:
+            plan_order (PlanOrder): The plan order.
+            fills (list): How much each child has traded, in the children's order.
+
+        Returns:
+            int | None: The position of the child kept, or None while no child has filled.
+        """
+        record = plan_order.part_record(self.path)
+        if record.get('winner') is not None:
+            return record['winner']
+        for index, filled in enumerate(fills):
+            if filled > 0:
+                record['winner'] = index
+                plan_order.set_part_record(
+                    self.path,
+                    record,
+                    f'{self.children[index].path} filled first, so it is the child the plan keeps',
+                )
+                return index
+        return None
 
     def cancel_siblings(self, plan_order, index, reason):
         """Stops every child but one.
@@ -197,7 +222,9 @@ class EitherPart:
         return None
 
     def traded(self, parent):
-        """How much the children traded between them.
+        """How much the children traded between them, net of buys and sells on the same instrument.
+
+        A two sided breakout's buy and sell can both fill when the losing side fills before its cancel lands. A buy of 10 and a sell of 10 on one instrument leave nothing held, so a Then join that sizes its exits from this must see 0, not 20. Children on different instruments, such as an OCA's candidates, do not offset each other.
 
         Args:
             parent (ParentOrder): The plan order's parent.
@@ -208,6 +235,22 @@ class EitherPart:
         total = 0
         for child in self.children:
             total = total + child.traded(parent)
+        paths = []
+        for part in self.order_parts():
+            paths.append(part.path)
+        bought = {}
+        sold = {}
+        for leg in parent.legs:
+            if leg.role not in paths or not leg.filled_quantity:
+                continue
+            side = str(leg.transaction_type or '').strip().upper()
+            if side == 'BUY':
+                bought[leg.instrument_id] = bought.get(leg.instrument_id, 0) + leg.filled_quantity
+            elif side == 'SELL':
+                sold[leg.instrument_id] = sold.get(leg.instrument_id, 0) + leg.filled_quantity
+        for instrument_id, quantity in bought.items():
+            if instrument_id in sold:
+                total = total - 2 * min(quantity, sold[instrument_id])
         return total
 
     def set_target(self, plan_order, target):

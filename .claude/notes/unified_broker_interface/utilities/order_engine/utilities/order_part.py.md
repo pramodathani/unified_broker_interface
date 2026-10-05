@@ -106,3 +106,9 @@ It reuses `ended`, which a lifetime sets, instead of a new flag, so every place 
 ## `same_as_first` (2026-10-04)
 
 A sequential `stop_and_reverse` used to name its reverse side from the body: a BUY body reversed with a sell. With a short position and a BUY body, the close bought and the reverse sold, so the account went from short back to the same short. The reverse now uses the side `same_as_first`, which sends on `_opening_side`, the side the first part's filled orders traded. Since the first part is the close, the reverse goes the same way as the close, which flips the position whichever way it was held.
+
+## Finished orders grow again (2026-10-04)
+
+`set_target` used to ignore a part that was `done`. An OTO's second order or a bracket's exits that had filled, or been cut to nothing, stayed done when the entry filled further, which happens when an entry fill beats the entry's cancel, so the extra quantity had no exit. `_grow_finished` reopens such a part for the difference between the new target and what it has traded. It only reopens a part that has sent a broker order before: the exits of an entry cancelled before it filled are `done` with reason `cancelled` and their target set, and reopening them sent exits for a position that never existed (`a_plan_bracket_entry_cancelled_while_it_rests_drops_its_exits`).
+
+`_opening_side` reads the net side of the opening legs, because a breakout's first part has a buy and a sell, and the side of whichever was listed first is not the side of the position.
