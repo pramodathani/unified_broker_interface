@@ -802,13 +802,13 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `peg`
 
-    A peg keeps a limit order re-priced to a place in the book. The throttle and the rule against moves that change nothing keep it from churning.
+    A peg keeps a limit order re-priced to a place in the book. The throttle and the rule against moves that change nothing keep it from churning. The body's own price is not used: the order is placed where the reference is, and a `MARKET` body is sent as a limit there. With no price for the reference yet, it answers <span class="status s2">202</span> `armed` and is placed on the first tick that has one.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
     | `reference` | string | No | `own_touch` (your own side's best price), `mid` (between the touch) or `opposite_touch` (the other side's best price). Defaults to `own_touch`. |
     | `offset_ticks` | integer | No | Ticks away from filling; negative moves towards the market. Defaults to 0. |
-    | `cap_price` | number | No | The price it never goes past. Above zero. |
+    | `cap_price` | number | No | The price it never goes past. Above zero, and a whole number of ticks, or the order is refused with <span class="status s4">400</span>. |
 
     ```json
     {"type": "peg", "reference": "own_touch", "offset_ticks": 0, "cap_price": 1005}
@@ -830,7 +830,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | `highest_price` | number | No | The highest price the order is moved to. Above zero, and not below `lowest_price`. |
     | `step_ticks` | integer | No | The smallest move worth a modify. At least 1. Defaults to 1. |
 
-    The order must be a `LIMIT` with a `price`. It answers with the broker's answer plus `underlying_start`, the underlying's price the peg measures from.
+    The order must be a `LIMIT` with a `price`. It answers with the broker's answer; the underlying's price it measures from is kept in the part's `pricing_memory` as `watched_start`. `lowest_price` and `highest_price` must be whole numbers of ticks, or the order is refused with <span class="status s4">400</span>.
 
     ```json
     {"type": "underlying_peg", "watch_instrument_id": "<Nifty index id>", "delta": 0.5, "step_ticks": 4}
@@ -880,7 +880,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `post_only`
 
-    A post-only order checks the price against the book before sending. A buy is passive at or below the best bid, and a sell at or above the best offer. The book can still move while the order is in flight. The order is not watched afterwards.
+    A post-only order checks the price against the book before sending. A buy is passive anywhere below the best offer, and a sell anywhere above the best bid, so a price inside the spread is sent as it is. The book can still move while the order is in flight. The order's price is not watched afterwards. A `MARKET` body is refused with `post_only_crosses`, and a stop with `post_only_needs_limit`, both with <span class="status s4">400</span>. With no readable book on arrival it answers <span class="status s2">202</span> `armed` and checks the book on the first tick that has one; a refusal then ends the parent `rejected` rather than answering 409.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
@@ -905,7 +905,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `virtual_limit`
 
-    A virtual limit is held in the engine's own book and sent, as a limit at your price, only once the other side reaches it: for a buy, when the best offer is at or below the price. It spends one daily order message instead of two for a limit that never fills. The body must be a `LIMIT` order with a `price`. A quote marked stale is never acted on. The separate `virtual_book` process estimates what a resting order would have filled, and that estimate is recorded as `missed_quantity` when the order is sent.
+    A virtual limit is held in the engine's own book and sent, as a limit at your price, only once the other side reaches it: for a buy, when the best offer is at or below the price. A limit that never becomes marketable sends nothing at all, so it spends no daily order messages. A price that is not a whole number of ticks is refused with <span class="status s4">400</span> when the order is placed. The body must be a `LIMIT` order with a `price`. A quote marked stale is never acted on. The separate `virtual_book` process estimates what a resting order would have filled, and that estimate is recorded as `missed_quantity` when the order is sent.
 
     Every plain `LIMIT` order runs as a virtual limit unless it names another type, because [limit orders are held by default](orders.md#limit-orders-are-held-until-they-can-fill). While it is held, its price and quantity can be changed through [`PUT /api/orders/modify` with `parent_id`](orders.md#a-held-order), which sends nothing to a broker; once it has been sent, it is changed by its broker order id like any other order.
 

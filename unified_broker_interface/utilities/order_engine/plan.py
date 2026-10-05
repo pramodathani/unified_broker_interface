@@ -20,6 +20,9 @@ from unified_broker_interface.utilities.order_engine.utilities.either_part impor
 from unified_broker_interface.utilities.order_engine.utilities.fixed_pricing import (
     FixedPricing,
 )
+from unified_broker_interface.utilities.order_engine.utilities.follow_instrument_pricing import (
+    FollowInstrumentPricing,
+)
 from unified_broker_interface.utilities.order_engine.utilities.from_fill_pricing import (
     FromFillPricing,
 )
@@ -276,7 +279,7 @@ class PlanOrder(SyntheticOrder):
         """
         tick_size = self.tick_size()
         for part in root.order_parts():
-            if part.trigger is None and not part.opened_by and not part.execution.paced_by_ticks():
+            if part.trigger is None and not part.opened_by and not part.execution.paced_by_ticks() and not part.moves_on_ticks():
                 continue
             if not part.context(self).is_parents_instrument():
                 continue
@@ -318,6 +321,16 @@ class PlanOrder(SyntheticOrder):
             return prices
         if isinstance(part.pricing, FixedPricing) and part.pricing.price is not None:
             prices.append(('price', part.pricing.price))
+        body_is_limit = str(self.parent.body.get('order_type') or '').strip().upper() == 'LIMIT'
+        if isinstance(part.pricing, FixedPricing) and part.pricing.price is None and part.pricing.order_type is None and body_is_limit and self.parent.body.get('price') is not None:
+            prices.append(('price', self.parent.body['price']))
+        if isinstance(part.pricing, FollowInstrumentPricing):
+            if part.pricing.lowest is not None:
+                prices.append(('lowest price', part.pricing.lowest))
+            if part.pricing.highest is not None:
+                prices.append(('highest price', part.pricing.highest))
+        if part.cap is not None:
+            prices.append(('cap price', part.cap.worst_price))
         if isinstance(part.pricing, NativeStopPricing):
             if part.pricing.trigger_price is not None:
                 prices.append(('stop trigger price', part.pricing.trigger_price))

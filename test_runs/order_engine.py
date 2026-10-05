@@ -5748,6 +5748,7 @@ class OrderEngineSuite:
             accepted,
             number_orders=True,
         )
+        identifiers = order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS
         entry = self.scenarios.bodies.market_order(
             dry_run=None,
             order_type='LIMIT',
@@ -5755,6 +5756,9 @@ class OrderEngineSuite:
             quantity=10,
         )
         steady = self.book_at(1000.00, 1000.05)
+        index_at_25000 = {
+            'nifty_index': self.scenarios.quote(last_price=25000),
+        }
         return [
             self.price_result(
                 'a_peg_is_not_moved_after_the_caller_cancels_its_order',
@@ -5793,6 +5797,72 @@ class OrderEngineSuite:
                     {'quote': self.book_at(1000.00, 1000.05), 'at': 1},
                 ],
                 numbered,
+            ),
+            self.price_result(
+                'a_discretionary_stop_is_refused',
+                dict(entry, order_type='SL', trigger_price=1001, price=1002, synthetic={
+                    'type': 'discretionary',
+                    'discretion_points': 0.25,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_post_only_market_order_is_refused',
+                dict(entry, order_type='MARKET', price=None, synthetic={
+                    'type': 'post_only',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_post_only_stop_is_refused',
+                dict(entry, order_type='SL', trigger_price=1001, price=1002, synthetic={
+                    'type': 'post_only',
+                    'on_crossing': 'rest',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_peg_cap_off_the_tick_is_refused_when_placed',
+                dict(entry, synthetic={
+                    'type': 'peg',
+                    'cap_price': 1000.03,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'an_underlying_peg_bound_off_the_tick_is_refused_when_placed',
+                dict(entry, synthetic={
+                    'type': 'underlying_peg',
+                    'watch_instrument_id': identifiers['nifty_index'],
+                    'delta': 0.5,
+                    'lowest_price': 990.03,
+                }),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': index_at_25000},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_virtual_limit_off_the_tick_is_refused_when_placed',
+                dict(entry, price=999.53, synthetic={
+                    'type': 'virtual_limit',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
             ),
         ]
 
