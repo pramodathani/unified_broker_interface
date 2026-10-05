@@ -12,7 +12,7 @@ This page is the glossary of all 54 types you can ask for. The engine runs `simp
 
 ## Changing a synthetic order
 
-A leg of a synthetic order can be changed through [`PUT /api/orders/modify`](orders.md#an-order-the-engine-placed) like any other order, and the order type carries on from the change. The table below says what each kind of type does with it.
+A leg of a synthetic order can be changed through [`PUT /api/orders/modify`](orders.md#an-order-the-engine-placed) like any other order, and the order type carries on from the change. Once a broker has accepted your cancel of a leg, the engine never moves that leg again, even before the broker confirms the order is gone. The table below says what each kind of type does with it.
 
 | Type | After you change a leg |
 |---|---|
@@ -892,7 +892,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `discretionary`
 
-    A discretionary order rests a visible limit at your `price`. If the other side comes within `discretion_points` of that price, the engine reduces the resting order first and then takes the other side.
+    A discretionary order rests a visible limit at your `price`. If the other side comes within `discretion_points` of that price, the engine reduces the resting order first, or cancels it when the whole of it is taken, and then takes the other side. The body must be a `LIMIT` with a price; a stop or `MARKET` body is refused with `discretion_needs_limit`. A visible order whose cancel the broker has accepted is never taken from again, so a take cannot happen twice while the cancel is confirmed.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|

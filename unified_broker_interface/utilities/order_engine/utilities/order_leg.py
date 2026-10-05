@@ -46,6 +46,7 @@ class OrderLeg:
         status_message (str | None): Why the outcome is not `accepted`.
         requested_at (str | None): When the leg was recorded as about to be sent.
         answered_at (str | None): When the broker's answer was recorded.
+        cancel_accepted (bool): Whether a broker has accepted a cancel of this leg that its order updates have not confirmed yet. The leg stays live until they do, but nothing should move it or act on it as resting.
     """
 
     def __init__(self, leg_id, role):
@@ -80,6 +81,7 @@ class OrderLeg:
         self.status_message = None
         self.requested_at = None
         self.answered_at = None
+        self.cancel_accepted = False
 
     def is_finished(self):
         """Whether the broker can do nothing more with this leg.
@@ -107,9 +109,9 @@ class OrderLeg:
         """The leg as the parent's Redis record and the offline recording hold it.
 
         Returns:
-            dict: Every attribute, all of them JSON types.
+            dict: Every attribute, all of them JSON types; `cancel_accepted` only when it is true, so the document of an ordinary leg is unchanged.
         """
-        return {
+        document = {
             'leg_id': self.leg_id,
             'role': self.role,
             'instrument_id': self.instrument_id,
@@ -133,6 +135,9 @@ class OrderLeg:
             'requested_at': self.requested_at,
             'answered_at': self.answered_at,
         }
+        if self.cancel_accepted:
+            document['cancel_accepted'] = True
+        return document
 
     @classmethod
     def from_document(cls, document):

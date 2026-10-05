@@ -245,6 +245,8 @@ class ParentOrder:
             self.apply_paper_fill(event)
         elif name == 'parameters_changed':
             self.apply_parameters(event)
+        elif name == 'leg_cancelled':
+            self.apply_cancel_answer(event)
 
     def apply_parameters(self, event):
         """Applies a recorded change to the order type's own parameters, such as a trailing stop's watermark moved to follow a caller's trigger.
@@ -295,6 +297,23 @@ class ParentOrder:
             self.tag = self.body.get('tag')
         if self.created_at is None:
             self.created_at = self.updated_at
+
+    def apply_cancel_answer(self, event):
+        """Marks a leg whose cancel a broker accepted, so it is not moved or taken from while the confirmation is on its way.
+
+        The leg's own state is left alone: only the broker's order update says the order is gone, and a cancel accepted by the broker can still lose a race with a fill.
+
+        Args:
+            event (dict): The `leg_cancelled` event.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        if event.get('outcome') != 'accepted':
+            return
+        leg = self.leg(event.get('leg_id'))
+        if leg is not None:
+            leg.cancel_accepted = True
 
     def apply_to_leg(self, name, event):
         """Applies an event that describes one leg, creating the leg when it is new.

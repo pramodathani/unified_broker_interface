@@ -5734,6 +5734,68 @@ class OrderEngineSuite:
             ),
         ]
 
+    def run_limit_pricing_checks(self):
+        """Runs the book-following limit types where a cancelled order, a price off the tick, a stop or market body, or a caller's change used to go wrong.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        accepted = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        numbered = dict(
+            accepted,
+            number_orders=True,
+        )
+        entry = self.scenarios.bodies.market_order(
+            dry_run=None,
+            order_type='LIMIT',
+            price=1000,
+            quantity=10,
+        )
+        steady = self.book_at(1000.00, 1000.05)
+        return [
+            self.price_result(
+                'a_peg_is_not_moved_after_the_caller_cancels_its_order',
+                dict(entry, synthetic={
+                    'type': 'peg',
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'leg_cancel': '26091500000021'},
+                    {'quote': self.book_at(1000.20, 1000.25), 'at': 2},
+                    {'quote': self.book_at(1000.40, 1000.45), 'at': 4},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_discretionary_order_takes_once_while_its_cancel_is_unconfirmed',
+                dict(entry, synthetic={
+                    'type': 'discretionary',
+                    'discretion_points': 0.25,
+                }),
+                [
+                    {'quote': self.book_at(1000.00, 1000.50), 'at': 0},
+                    {'quote': self.book_at(1000.00, 1000.20), 'at': 1},
+                    {'quote': self.book_at(1000.00, 1000.20), 'at': 2},
+                ],
+                numbered,
+            ),
+            self.price_result(
+                'a_discretionary_order_with_points_off_the_tick_takes_at_a_price_on_it',
+                dict(entry, synthetic={
+                    'type': 'discretionary',
+                    'discretion_points': 0.07,
+                }),
+                [
+                    {'quote': self.book_at(1000.00, 1000.50), 'at': 0},
+                    {'quote': self.book_at(1000.00, 1000.05), 'at': 1},
+                ],
+                numbered,
+            ),
+        ]
+
     def run_stale_quote_checks(self):
         """Runs triggers on quotes marked stale, which the quote combiner marks when a quote's broker has gone silent with no healthy backup.
 
@@ -14083,6 +14145,7 @@ class OrderEngineSuite:
             results.extend(self.run_linked_order_checks())
             results.extend(self.run_stop_type_checks())
             results.extend(self.run_stale_quote_checks())
+            results.extend(self.run_limit_pricing_checks())
             results.extend(self.run_price_checks())
             results.extend(self.run_wiring_checks())
             results.extend(self.run_assignment_checks())

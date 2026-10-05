@@ -75,6 +75,8 @@ class DiscretionModifier:
     def taking_price(self, view, touch, leg):
         """The taking order's limit: a little past the touch, never past what the discretion allows.
 
+        The furthest the discretion allows is rounded to the tick towards the visible price, down for a buy and up for a sell, so a `discretion_points` that is not a whole number of ticks still gives a price the exchange accepts. Unrounded, the taking order was refused after the visible order had already been cancelled, leaving nothing at the broker.
+
         Args:
             view (MarketView): The order's quote.
             touch (decimal.Decimal): The other side's best price.
@@ -87,7 +89,9 @@ class DiscretionModifier:
         price = view.rounded(price, leg.transaction_type)
         if price is None or price <= 0:
             return None
-        reachable = self.reachable_price(leg)
+        reachable = view.rounded(self.reachable_price(leg), leg.transaction_type)
+        if reachable is None:
+            return None
         if leg.transaction_type == 'BUY':
             return min(price, reachable)
         return max(price, reachable)
@@ -107,7 +111,7 @@ class DiscretionModifier:
         if not legs:
             return False
         visible = legs[0]
-        if visible.is_finished() or visible.price is None or not visible.broker_order_id:
+        if visible.is_finished() or visible.cancel_accepted or visible.price is None or not visible.broker_order_id:
             return False
         view = plan_order.view(quotes)
         if view.is_stale():

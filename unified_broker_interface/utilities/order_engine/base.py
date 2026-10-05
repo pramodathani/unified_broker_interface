@@ -884,7 +884,7 @@ class SyntheticOrder:
     def reprice_leg(self, leg, price, trigger_price, reason):
         """Moves one leg's prices at its broker, leaving its quantity alone.
 
-        Moving a stop to breakeven after a first target fills works through this, and so will every type that re-prices a resting order.
+        Moving a stop to breakeven after a first target fills works through this, and so will every type that re-prices a resting order. A leg whose cancel a broker has accepted is never moved: before, a peg or chaser kept modifying an order the caller had cancelled by its order id until the broker's update confirmed it.
 
         Args:
             leg (OrderLeg): The leg to move.
@@ -895,6 +895,8 @@ class SyntheticOrder:
         Returns:
             bool: True when the broker accepted the change.
         """
+        if leg.cancel_accepted:
+            return False
         if not self.moves_the_price(leg, price, trigger_price):
             return False
         if not self.allowed_to_reprice(leg, reason):
