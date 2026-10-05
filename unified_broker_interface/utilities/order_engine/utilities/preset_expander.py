@@ -514,7 +514,7 @@ class PresetExpander:
         }
 
     def _legged_spread(self, settings, entry, path):
-        """Two legs put on for a net price: the first candidate worked at its own price, and as it fills the second sent at whatever price makes the net.
+        """Two legs put on for a net price: the first candidate worked at its own price, and as it fills the second, in whole lots of its own instrument, sent at whatever price makes the net.
 
         Args:
             settings (dict): `net_price`, and `candidates`, exactly two.
@@ -534,9 +534,14 @@ class PresetExpander:
         if 'hold_limits' not in nodes[0]['order']:
             nodes[0]['order']['hold_limits'] = False
         second = dict(nodes[1]['order'])
-        second.pop('quantity', None)
         second.pop('presets', None)
         second.pop('hold_limits', None)
+        second['quantity'] = {
+            'parent_fill': {
+                'ratio': 1,
+                'whole_lots': True,
+            },
+        }
         second['pricing'] = [
             {
                 'from_parent_fill': {

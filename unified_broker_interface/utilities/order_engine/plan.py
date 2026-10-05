@@ -26,6 +26,9 @@ from unified_broker_interface.utilities.order_engine.utilities.follow_instrument
 from unified_broker_interface.utilities.order_engine.utilities.from_fill_pricing import (
     FromFillPricing,
 )
+from unified_broker_interface.utilities.order_engine.utilities.from_parent_fill_pricing import (
+    FromParentFillPricing,
+)
 from unified_broker_interface.utilities.order_engine.utilities.limit_marketable_condition import (
     LimitMarketableCondition,
 )
@@ -160,6 +163,7 @@ class PlanOrder(SyntheticOrder):
         records = {}
         carries_overnight = False
         needs_prices = False
+        needs_tick_sizes = False
         watched = []
         for part in root.order_parts():
             record = {
@@ -205,10 +209,12 @@ class PlanOrder(SyntheticOrder):
                 needs_prices = True
             if isinstance(part.pricing, FromFillPricing):
                 needs_prices = True
+            if isinstance(part.pricing, FromParentFillPricing):
+                needs_tick_sizes = True
             for instrument_id in part.instruments():
                 if instrument_id not in watched:
                     watched.append(instrument_id)
-        if needs_prices:
+        if needs_prices or needs_tick_sizes:
             self.remember_tick_size(order)
             self._remember_tick_sizes(root)
         self._refuse_off_tick_prices(root)
@@ -492,6 +498,8 @@ class PlanOrder(SyntheticOrder):
     def _remember_tick_sizes(self, root):
         """Works out the tick size of every other instrument a priced order of the plan trades, and keeps them on the parent beside the parent's own.
 
+        A spread's second leg is priced from the first leg's fills rather than a quote, but its price is still rounded to its own tick, so its instrument is read too; that also refuses, when the plan arrives, a second leg whose instrument is not mapped, which used to be found only after the first leg had filled.
+
         Args:
             root (object): The root part.
 
@@ -504,7 +512,7 @@ class PlanOrder(SyntheticOrder):
         tick_sizes = {}
         for part in root.order_parts():
             context = part.context(self)
-            if not context.is_parents_instrument() and part.needs_prices():
+            if not context.is_parents_instrument() and (part.needs_prices() or isinstance(part.pricing, FromParentFillPricing)):
                 instrument, _, _ = self.placement.market_context(context.instrument_id, False, False)
                 tick_size = self.read_order(context.body).agreed_tick_size(instrument.handles)
                 if tick_size is None:

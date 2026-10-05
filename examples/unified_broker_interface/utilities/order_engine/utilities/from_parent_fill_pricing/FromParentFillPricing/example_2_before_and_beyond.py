@@ -64,7 +64,7 @@ class StandInParent:
 
 
 class StandInContext:
-    """Stands in for the second leg's view of the plan order.
+    """Stands in for the second leg's view of the plan order, trading a future whose tick is 0.10.
 
     Attributes:
         parent (StandInParent): The parent.
@@ -80,6 +80,14 @@ class StandInContext:
             None: This method returns nothing.
         """
         self.parent = StandInParent(legs)
+
+    def tick_size(self):
+        """The second leg's tick size.
+
+        Returns:
+            decimal.Decimal: 0.10.
+        """
+        return decimal.Decimal('0.10')
 
 
 class BeforeAndBeyondExample:

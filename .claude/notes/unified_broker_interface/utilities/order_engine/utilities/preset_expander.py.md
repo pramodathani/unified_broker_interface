@@ -123,3 +123,7 @@ An `order_type` other than `LIMIT`, `MARKET` or `SL` is now refused with `bad_se
 ## The `closing_price` preset takes `volume_profile`, since 2026-10-02
 
 The fixed `closing_price` type subclasses `Vwap` and so accepts a `volume_profile`, but the preset refused it as an unknown setting, so a routed closing-price order carrying one answered HTTP 400 once every type was routed on 2026-10-02. The preset now hands the profile to its `vwap` execution, which reads it as `_read_profile` does for any VWAP, so a bad profile is still refused. Without one, the VWAP keeps the default equity curve. A plan read offline with `[1, 2, 3]` gives the profile `(1.0, 2.0, 3.0)`, and `'flat'` is refused with `bad_setting`.
+
+## The legged spread's second leg is in whole lots (2026-10-05)
+
+`legged_spread` gives the second leg a `parent_fill` quantity with a ratio of 1 and whole lots. It used to take the first leg's filled quantity as it was, so 10 shares against a future of lot 500, or 75 Nifty units against a Sensex lot of 20, was refused and the parent stayed working. The nearest lot is used, as the attached hedge does, so 75 is matched by 80. `delta_volatility` is built: the earlier entry calling it not built is out of date.

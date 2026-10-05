@@ -180,3 +180,5 @@ A plan whose only order was accepted and then rejected by the exchange stayed `w
 `on_price_tick` settles the plan on every tick while a part is `unsized`, a Then join's child that could not be sized, such as a delta hedge whose forward had no last price, or `unpriced`, a working order whose due piece had no price, such as a hedge whose quote was stale. Both used to wait for the next order update, which for a hedge whose entry had finished never came.
 
 `_refuse_hedge_in_its_own_instrument` refuses a `parent_fill` or `parent_fill_delta` child naming an instrument the first plan trades. The attached hedge's docs and the retired class refused it; the preset accepted it, and the engine bought 1,000 RELIANCE and sold the same 1,000 straight back.
+
+`_remember_tick_sizes` reads the instrument of a `from_parent_fill` order too, so the second leg of a spread is rounded to its own tick and an unmapped second instrument is refused with 404 when the plan arrives instead of after the first leg filled.

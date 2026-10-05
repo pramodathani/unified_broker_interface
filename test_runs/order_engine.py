@@ -6127,6 +6127,103 @@ class OrderEngineSuite:
             ),
         ]
 
+    def run_legged_spread_checks(self):
+        """Runs the legged spreads whose second leg used to be priced off the tick, sized outside its lots, priced from the wrong average, or placed on an instrument that is not mapped.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        answers = self.scenarios.answers
+        numbered = dict(
+            answers.json_answer(
+                200,
+                answers.place_success('flattrade'),
+            ),
+            number_orders=True,
+        )
+        identifiers = order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS
+        entry = self.scenarios.bodies.market_order(
+            dry_run=None,
+            order_type='LIMIT',
+            price=1000,
+            quantity=10,
+        )
+        steady = self.book_at(1000.00, 1000.05)
+
+        def spread(second_instrument, quantity=10, first_instrument='reliance', price=1000):
+            """A legged spread buying the first instrument and selling the second for a net of 20.
+
+            Args:
+                second_instrument (str): The second leg's instrument's short name.
+                quantity (int): The first leg's quantity.
+                first_instrument (str): The first leg's instrument's short name.
+                price (float): The first leg's limit price.
+
+            Returns:
+                dict: The synthetic settings.
+            """
+            return {
+                'type': 'legged_spread',
+                'net_price': 20,
+                'candidates': [
+                    {
+                        'instrument_id': identifiers[first_instrument],
+                        'transaction_type': 'BUY',
+                        'quantity': quantity,
+                        'price': price,
+                    },
+                    {
+                        'instrument_id': identifiers.get(second_instrument, second_instrument),
+                        'transaction_type': 'SELL',
+                    },
+                ],
+            }
+
+        return [
+            self.price_result(
+                'a_legged_spread_rounds_its_second_leg_onto_the_tick',
+                dict(entry, quantity=500, synthetic=spread('reliance_future', quantity=500)),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'reliance_future': self.book_at(980.0, 980.1)}},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'COMPLETE', 500, average_price=1002.05)]},
+                    {'quote': steady, 'at': 2},
+                ],
+                numbered,
+                book_every_order=True,
+            ),
+            self.price_result(
+                'a_legged_spread_sizes_its_second_leg_in_its_own_lots',
+                dict(entry, instrument_id=identifiers['nifty_option'], quantity=75, price=120, synthetic=spread('sensex_option', quantity=75, first_instrument='nifty_option', price=120)),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'nifty_option': self.book_at(119.95, 120.0), 'sensex_option': self.book_at(99.95, 100.0)}},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'COMPLETE', 75, average_price=120.0)]},
+                    {'quote': steady, 'at': 2},
+                ],
+                numbered,
+                book_every_order=True,
+            ),
+            self.price_result(
+                'a_legged_spread_prices_each_top_up_to_keep_the_net',
+                dict(entry, synthetic=spread('twin_first')),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'twin_first': self.book_at(980.00, 980.05)}},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'OPEN', 5, average_price=1000.0)]},
+                    {'quote': steady, 'at': 2, 'updates': [self.update('26091500000101', 'COMPLETE', 10, average_price=1001.0)]},
+                    {'quote': steady, 'at': 3},
+                ],
+                numbered,
+                book_every_order=True,
+            ),
+            self.price_result(
+                'a_legged_spread_with_an_unmapped_second_leg_is_refused',
+                dict(entry, synthetic=spread('11111111-1111-5111-8111-000000000099')),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                numbered,
+            ),
+        ]
+
     def run_execution_algorithm_checks(self):
         """Runs the execution algorithms where an empty slice, a lot, a falling volume, a stale book, a market or IOC body under holding, or an off-tick limit used to go wrong.
 
@@ -14849,6 +14946,7 @@ class OrderEngineSuite:
             results.extend(self.run_execution_algorithm_checks())
             results.extend(self.run_repeating_strategy_checks())
             results.extend(self.run_hedge_follower_checks())
+            results.extend(self.run_legged_spread_checks())
             results.extend(self.run_price_checks())
             results.extend(self.run_wiring_checks())
             results.extend(self.run_assignment_checks())
