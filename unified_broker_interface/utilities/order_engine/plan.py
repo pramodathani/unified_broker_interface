@@ -1430,6 +1430,25 @@ class PlanOrder(SyntheticOrder):
         self._finish_if_done(root)
         self.save()
 
+    def take_caller_cancel(self, leg):
+        """Counts a caller's cancel of one broker order as taking its unfilled quantity off the part that placed it.
+
+        Without this, a bracket's stop cancelled by its `order_id` was sent again as soon as the cancel was confirmed, so a caller could not remove it. The part's own target drops by what the order had left, so a later fill of the entry is still protected, for the new quantity only. It applies to an order sent all at once or topped up; an order split into pieces keeps its total, as a caller's quantity change does.
+
+        Args:
+            leg (OrderLeg): The leg whose cancel the broker accepted.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        root, _ = self._read_plan()
+        part = self._part_for_leg(root, leg)
+        if part is None or not part.keeps_caller_quantity():
+            return
+        unfilled = (leg.quantity or 0) - (leg.filled_quantity or 0)
+        if unfilled > 0:
+            part.take_caller_change(self, -unfilled)
+
     def closes_position(self, role):
         """Whether a leg closes a position, which a leg of a `protect` order does, and so does the close a lifetime's `close_filled` sends.
 
@@ -1470,6 +1489,40 @@ class PlanOrder(SyntheticOrder):
         self._finish_if_done(root)
         self.save()
 
+    def stop_acting(self, reason):
+        """Ends this parent as `cancelled`, as the base does, and marks every part not yet done as done, as a parent ended through `cancelling` has its parts marked.
+
+        Args:
+            reason (str): Why, for a person reading the parent later.
+
+        Returns:
+            bool: True when the parent was open and is now cancelled.
+        """
+        ended = super().stop_acting(reason)
+        if ended:
+            self._mark_parts_done()
+            self.save()
+        return ended
+
+    def _mark_parts_done(self):
+        """Marks every part not yet done as done, with the reason its broker orders give, or `cancelled`.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        root, _ = self._read_plan()
+        for part in root.order_parts():
+            record = self.part_record(part.path)
+            if record.get('state') == 'done':
+                continue
+            record['state'] = 'done'
+            record['reason'] = part.done_reason(self.parent) or 'cancelled'
+            self.set_part_record(
+                part.path,
+                record,
+                f'the plan\'s {part.path} part is done: {record["reason"]}',
+            )
+
     def finish_cancelling(self):
         """Ends a parent the caller is cancelling, and marks every part not yet done as done.
 
@@ -1478,18 +1531,7 @@ class PlanOrder(SyntheticOrder):
         """
         ended = super().finish_cancelling()
         if ended:
-            root, _ = self._read_plan()
-            for part in root.order_parts():
-                record = self.part_record(part.path)
-                if record.get('state') == 'done':
-                    continue
-                record['state'] = 'done'
-                record['reason'] = part.done_reason(self.parent) or 'cancelled'
-                self.set_part_record(
-                    part.path,
-                    record,
-                    f'the plan\'s {part.path} part is done: {record["reason"]}',
-                )
+            self._mark_parts_done()
             self.save()
         return ended
 

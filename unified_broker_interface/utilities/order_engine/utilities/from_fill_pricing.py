@@ -55,11 +55,14 @@ class FromFillPricing:
         """
         return self.stop_distance is not None
 
-    def opening_fill(self, parent):
+    def opening_fill(self, parent, opening_side=None):
         """The average price the position was opened at.
+
+        When both sides of a two-sided breakout filled, only the fills on the side the position is held count: a short opened at 990 and partly bought back at 1010 keeps its exits measured from 990, not from an average of the two.
 
         Args:
             parent (ParentOrder): The plan order's parent, holding the legs.
+            opening_side (str | None): BUY or SELL, the side the position is held on, or None to count every fill.
 
         Returns:
             decimal.Decimal | None: The average fill price, or None before anything has filled.
@@ -68,6 +71,8 @@ class FromFillPricing:
         spent = decimal.Decimal(0)
         for leg in parent.legs:
             if leg.role not in self.opened_by or not leg.filled_quantity:
+                continue
+            if opening_side is not None and str(leg.transaction_type or '').upper() != opening_side:
                 continue
             price = leg.average_price or leg.price
             if not price:
@@ -107,7 +112,8 @@ class FromFillPricing:
             dict | None: The body, or None when no price can be made.
         """
         del quotes, memory
-        filled_at = self.opening_fill(plan_order.parent)
+        opening_side = 'SELL' if sending_side == 'BUY' else 'BUY'
+        filled_at = self.opening_fill(plan_order.parent, opening_side)
         if filled_at is None:
             return None
         tick_size = plan_order.tick_size()

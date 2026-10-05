@@ -6,9 +6,9 @@ Started: [('root.each_fill', {'outcome': 'accepted', 'order_id': '1', 'broker': 
 1 filled, target 10: traded 1, total 10, committed 10, requests [('change', 'root.each_fill', 10)]
 Due now, with its one order resting: []
 Target 1: requests [('change', 'root.each_fill', 10), ('cancel', 'root.each_fill')]
-Settled: done True, record {'state': 'done', 'target': 1, 'cancel_asked': ['parent-1:1'], 'reason': 'partly_filled'}
+Settled: done True, record {'state': 'done', 'target': 1, 'cancel_asked': ['parent-1:1'], 'reason': 'partly_filled', 'done_at_target': 1}
 Asked to cancel again before settling: True, with 0 more requests
-A target cancelled and settled: done True, record {'state': 'done', 'target': 5, 'cancel_asked': ['parent-1:2'], 'reason': 'cancelled'}
+A target cancelled and settled: done True, record {'state': 'done', 'target': 5, 'cancel_asked': ['parent-1:2'], 'reason': 'cancelled', 'done_at_target': 5}
 A waiting target sent when its tick comes: accepted for 3, record {'state': 'working', 'target': 3}
 A trailing stop placed: ('place', 'root.children.3', 'SELL', 10, 'SL', '994.05'); moved at 1003: True, at 1001: False
 Last request: ('move', 'root.children.3', '998.00', '997.00'); a stop that does not trail moves: False

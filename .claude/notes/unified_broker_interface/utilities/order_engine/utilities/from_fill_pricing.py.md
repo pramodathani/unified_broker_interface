@@ -7,3 +7,7 @@ The pricing averages the fills of every leg whose role is in `opened_by`, which 
 Prices are rounded half up to the nearest tick and quantized to it, so they print like every other price ("1015.00" rather than "1015.0"). A plan holding a `from_fill` part stores its tick size at placement even though the pricing reads no quotes (`PlanOrder.run`), because otherwise nothing would be rounded.
 
 The stop variant counts as a resting stop for `stop_not_sliced`; the target variant does not.
+
+## Only the held side's fills (2026-10-05)
+
+`opening_fill` takes the side the position is held on, the opposite of the exit's sending side, and averages only fills on that side. When both sides of a breakout filled, the exits were measured from an average of the buy and sell fills: a short opened at 990 and partly bought back at 1010 got a stop at 1022.7 rather than 1017.

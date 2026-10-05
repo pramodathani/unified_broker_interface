@@ -1013,12 +1013,42 @@ class OrderPart:
             reason = 'cancelled'
         if reason is None:
             return placed
+        if record.get('turned') and not record.get('ended'):
+            return placed + self._send_turned(plan_order, record)
         if self.waits_to_close_filled(record, reason):
             return placed
         record['state'] = 'done'
         record['reason'] = reason
+        if record.get('target') is not None:
+            record['done_at_target'] = record['target']
         plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part is done: {reason}')
         return placed
+
+    def _send_turned(self, plan_order, record):
+        """Sends an order that turned over on the side it now trades, once its orders on the old side have finished.
+
+        Args:
+            plan_order (PlanOrder): The plan order.
+            record (dict): The order's part record.
+
+        Returns:
+            list: One `(path, answer, status)` per broker order placed.
+        """
+        record.pop('turned')
+        plan_order.set_part_record(self.path, record, None)
+        wanted = self.total(plan_order) - self.traded(plan_order.parent)
+        if wanted <= 0:
+            return self.settle(plan_order)
+        quotes = {}
+        if self.needs_prices():
+            quotes = plan_order.quotes_now()
+        answer = self.place(plan_order, None, quotes, wanted)
+        if answer is None:
+            return []
+        body, status = answer
+        return [
+            (self.path, body, status),
+        ]
 
     def waits_to_close_filled(self, record, reason):
         """Whether this order stays working after its broker orders finished, because its lifetime will close what they filled.
@@ -1055,7 +1085,7 @@ class OrderPart:
     def set_target(self, plan_order, target):
         """Sets how much this order should trade in all, resizing or cancelling its resting order to match.
 
-        A broker order's quantity is its total, filled part included, so a resting order is changed to what it has filled plus what is still wanted. When nothing more is wanted it is cancelled. An order the broker has not yet acknowledged is left alone, and the next settle tries again.
+        A broker order's quantity is its total, filled part included, so a resting order is changed to what it has filled plus what is still wanted. When nothing more is wanted it is cancelled. An order the broker has not yet acknowledged is left alone, and the next settle tries again. An order whose cancel the broker has already accepted is not changed, since that would spend an order message on an order about to go. An order resting on the wrong side, because the position it works on turned over, as when both sides of a breakout filled and the later side filled more, is cancelled, and the execution sends the quantity again on the right side once the cancel is confirmed.
 
         Args:
             plan_order (PlanOrder): The plan order.
@@ -1088,10 +1118,20 @@ class OrderPart:
             self._cut_resting_pieces(plan_order, target)
             return
         wanted = target - self.traded(plan_order.parent)
+        sending_side = self._sending_side(plan_order)
+        asked = record.get('cancel_asked') or []
         resting = []
         for leg in self.own_legs(plan_order.parent):
-            if not leg.is_finished() and leg.broker_order_id:
-                resting.append(leg)
+            if leg.is_finished() or not leg.broker_order_id or leg.leg_id in asked:
+                continue
+            if str(leg.transaction_type or '').upper() != sending_side:
+                self.cancel_once(plan_order, leg, f'the position the plan\'s {self.path} part works on is now on the other side, so its {leg.transaction_type} is cancelled and a {sending_side} takes its place')
+                turned = plan_order.part_record(self.path)
+                if not turned.get('turned'):
+                    turned['turned'] = True
+                    plan_order.set_part_record(self.path, turned, f'the plan\'s {self.path} part turns to {sending_side}, and sends again once its {leg.transaction_type} orders are cancelled')
+                continue
+            resting.append(leg)
         for index, leg in enumerate(resting):
             if wanted <= 0:
                 self.cancel_once(plan_order, leg, f'the plan\'s {self.path} part has nothing left to trade')
@@ -1112,7 +1152,7 @@ class OrderPart:
     def _grow_finished(self, plan_order, record, target):
         """Sends a finished order again for what its target has grown by, so a later fill of the order it follows is covered.
 
-        An exit that had already filled, or that its join cancelled when it had nothing left to trade, is done; when the entry it follows then fills further, the new quantity would otherwise have no exit. Such an order is reopened and sent a new broker order for the difference. Only an order that has sent a broker order before is reopened: one cancelled before it was ever sent, as the exits of an entry that never filled are, stays cancelled. An order a caller cancelled is `ended` and is not reopened, nor is one that was refused or expired, and neither is an order whose execution sends pieces rather than growing one order, except a top-up, whose every growth is a new order anyway; a top-up that stopped on a part-filled cancel is reopened too.
+        An exit that had already filled, or that its join cancelled when it had nothing left to trade, is done; when the entry it follows then fills further, the new quantity would otherwise have no exit. Such an order is reopened and sent a new broker order for the difference. Only an order that has sent a broker order before is reopened: one cancelled before it was ever sent, as the exits of an entry that never filled are, stays cancelled. It is reopened only once its target has grown past the target it had when it finished, kept as `done_at_target`, so an order the exchange or the caller cancelled is not simply sent again: an exit cancelled by its `order_id` came straight back, and every exchange cancel of an exit placed another. An order a caller cancelled as a part is `ended` and is not reopened, nor is one that was refused or expired, and neither is an order whose execution sends pieces rather than growing one order, except a top-up, whose every growth is a new order anyway; a top-up that stopped on a part-filled cancel is reopened too.
 
         Args:
             plan_order (PlanOrder): The plan order.
@@ -1123,6 +1163,9 @@ class OrderPart:
             None: This method returns nothing.
         """
         if record.get('ended') or not self.own_legs(plan_order.parent):
+            return
+        finished_at = record.get('done_at_target')
+        if finished_at is not None and target <= finished_at:
             return
         tops_up = isinstance(self.execution, TopUpExecution)
         if tops_up and record.get('reason') not in TOPPED_UP_AGAIN_REASONS:
@@ -1137,6 +1180,7 @@ class OrderPart:
         record['target'] = target
         record['state'] = 'working'
         record.pop('reason', None)
+        record.pop('done_at_target', None)
         plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part had finished, and is sent again for the {wanted} more it should now trade')
         quotes = {}
         if self.needs_prices():

@@ -6459,6 +6459,111 @@ class OrderEngineSuite:
             ),
         ]
 
+    def run_plan_exit_checks(self):
+        """Runs the plans whose exits used to come back after a cancel, rest on the wrong side, be changed while being cancelled, or stay working under a cancelled parent.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        answers = self.scenarios.answers
+        numbered = dict(
+            answers.json_answer(
+                200,
+                answers.place_success('flattrade'),
+            ),
+            number_orders=True,
+        )
+        steady = self.book_at(1000.00, 1000.05)
+        entry = self.scenarios.bodies.market_order(
+            dry_run=None,
+            order_type='LIMIT',
+            price=1000,
+            quantity=10,
+        )
+        bracket = {
+            'type': 'bracket',
+            'stop_price': 990,
+            'stop_limit_price': 988,
+            'target_price': 1010,
+        }
+        breakout = {
+            'type': 'two_sided_breakout',
+            'buy_trigger': 1010,
+            'buy_limit': 1012,
+            'sell_trigger': 990,
+            'sell_limit': 988,
+            'stop_distance': 25,
+            'stop_limit_offset': 2,
+            'target_distance': 30,
+        }
+        return [
+            self.price_result(
+                'a_bracket_stop_cancelled_by_order_id_stays_cancelled',
+                dict(entry, synthetic=bracket),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'COMPLETE', 10)]},
+                    {'quote': steady, 'at': 2, 'leg_cancel': '26091500000102'},
+                    {'quote': steady, 'at': 3, 'updates': [self.update('26091500000102', 'CANCELLED', 0)]},
+                    {'quote': steady, 'at': 4},
+                ],
+                numbered,
+                book_every_order=True,
+            ),
+            self.price_result(
+                'a_bracket_target_the_exchange_cancels_is_not_sent_again',
+                dict(entry, synthetic=bracket),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'COMPLETE', 10)]},
+                    {'quote': steady, 'at': 2, 'updates': [self.update('26091500000103', 'CANCELLED', 0)]},
+                    {'quote': steady, 'at': 3},
+                ],
+                numbered,
+                book_every_order=True,
+            ),
+            self.price_result(
+                'a_breakout_whose_later_side_fills_more_turns_its_exits',
+                dict(entry, synthetic=breakout),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'OPEN', 4, average_price=1010.0)]},
+                    {'quote': steady, 'at': 2, 'updates': [self.update('26091500000102', 'COMPLETE', 10, average_price=990.0)]},
+                    {'quote': steady, 'at': 3, 'updates': [self.update('26091500000101', 'CANCELLED', 4, average_price=1010.0)]},
+                    {'quote': steady, 'at': 4, 'updates': [self.update('26091500000103', 'CANCELLED', 0), self.update('26091500000104', 'CANCELLED', 0)]},
+                    {'quote': steady, 'at': 5},
+                ],
+                numbered,
+                book_every_order=True,
+            ),
+            self.price_result(
+                'an_exit_whose_cancel_was_asked_is_not_changed',
+                dict(entry, synthetic=bracket),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'OPEN', 4)]},
+                    {'quote': steady, 'at': 2, 'updates': [self.update('26091500000103', 'COMPLETE', 4, average_price=1010)]},
+                    {'quote': steady, 'at': 3, 'updates': [self.update('26091500000101', 'COMPLETE', 10)]},
+                    {'quote': steady, 'at': 4, 'updates': [self.update('26091500000102', 'CANCELLED', 0)]},
+                    {'quote': steady, 'at': 5},
+                ],
+                numbered,
+                book_every_order=True,
+            ),
+            self.price_result(
+                'a_whole_parent_cancel_marks_every_part_done',
+                dict(entry, synthetic=bracket),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000101', 'OPEN', 4)]},
+                    {'quote': steady, 'at': 2, 'part_cancel': {}},
+                    {'quote': steady, 'at': 3, 'updates': [self.update('26091500000101', 'CANCELLED', 4), self.update('26091500000102', 'CANCELLED', 0), self.update('26091500000103', 'CANCELLED', 0)]},
+                ],
+                numbered,
+                book_every_order=True,
+            ),
+        ]
+
     def run_execution_algorithm_checks(self):
         """Runs the execution algorithms where an empty slice, a lot, a falling volume, a stale book, a market or IOC body under holding, or an off-tick limit used to go wrong.
 
@@ -15188,6 +15293,7 @@ class OrderEngineSuite:
             results.extend(self.run_hedge_follower_checks())
             results.extend(self.run_legged_spread_checks())
             results.extend(self.run_strategy_hedge_checks())
+            results.extend(self.run_plan_exit_checks())
             results.extend(self.run_price_checks())
             results.extend(self.run_wiring_checks())
             results.extend(self.run_assignment_checks())

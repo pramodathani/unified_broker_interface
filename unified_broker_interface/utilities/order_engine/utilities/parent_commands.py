@@ -187,6 +187,8 @@ class ParentCommands:
             leg,
             'cancelled through DELETE /api/orders/cancel',
         )
+        if outcome == 'accepted':
+            runner.take_caller_cancel(leg)
         runner.save()
         return self.answered(runner, leg, outcome, status_message, broker_response)
 
