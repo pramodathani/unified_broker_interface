@@ -233,17 +233,19 @@ class StandInPlanOrder:
             role (str): The leg's role, the part's path.
             order (StandInOrder): The order.
             started_at (float | None): Unused.
-            broker_name (str | None): Unused.
+            broker_name (str | None): The broker, which the leg records.
             instrument_id (str | None): The instrument, or None for RELIANCE.
 
         Returns:
             tuple: The answer (dict), its HTTP status (int) and the leg's id (str).
         """
-        del started_at, broker_name
+        del started_at
         number = len(self.parent.legs) + 1
         leg = OrderLeg(f'parent-1:{number}', role)
         leg.state = 'acknowledged'
         leg.broker_order_id = str(number)
+        leg.broker = broker_name
+        leg.product = order.get('product')
         leg.transaction_type = order['transaction_type']
         leg.quantity = order['quantity']
         leg.price = float(order['price'])

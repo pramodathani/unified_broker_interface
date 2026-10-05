@@ -11,3 +11,7 @@ The basket's orders do not price themselves, so the plan would neither watch the
 ## When it is done
 
 Today's type marks its parent `completed` the moment it sends the closes. The part is done only once it has closed and every close has finished, so the plan completes when the position is actually flat. A resting basket order that had not filled when the strategy closed is cancelled by the Then join once a close fills, through `cancel_first_on_child_fill`; today's type leaves it resting.
+
+## Stale quotes, late fills and refused closes (2026-10-05)
+
+A quote marked stale marks nothing, so a stale 900 no longer closes a strategy entered at 1,000. When the stop acts it cancels the basket orders still resting, and `still_open` works out from the legs alone what each filled basket order still needs closed: closes are matched to it by instrument, broker, product and side, and every close counts its whole quantity whatever became of it. Fills that arrive before the cancel lands are closed by `settle`, and the part is done only once nothing of the basket rests. Before, a close was sized to what had filled at that moment and never resized, the basket was cancelled only after a close filled, and a leg that filled afterwards stayed open while the parent read `completed`. A rejected close is not sent again; the Then join records `leaves_open` and the parent ends `failed`.

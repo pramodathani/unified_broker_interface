@@ -6224,6 +6224,241 @@ class OrderEngineSuite:
             ),
         ]
 
+    def run_strategy_hedge_checks(self):
+        """Runs the strategy stops and exposure hedges where a stale quote, a late fill, a refused order, a hedge counted twice or a hedge outside its lots used to go wrong.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        answers = self.scenarios.answers
+        accepted = answers.json_answer(
+            200,
+            answers.place_success('flattrade'),
+        )
+        numbered = dict(
+            accepted,
+            number_orders=True,
+        )
+        refused = answers.json_answer(
+            200,
+            answers.place_refusal('flattrade'),
+        )
+        identifiers = order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS
+        entry = self.scenarios.bodies.market_order(
+            dry_run=None,
+            order_type='LIMIT',
+            price=1000,
+            quantity=10,
+        )
+        steady = self.book_at(1000.00, 1000.05)
+        kwil = self.book_at(250.00, 250.05)
+        future = self.book_at(1004.10, 1004.30)
+        strategy = {
+            'type': 'strategy_stop',
+            'loss_limit': -500,
+            'candidates': [
+                {
+                    'instrument_id': identifiers['reliance'],
+                    'quantity': 10,
+                    'price': 1000,
+                },
+                {
+                    'instrument_id': identifiers['kwil'],
+                    'transaction_type': 'SELL',
+                    'quantity': 10,
+                    'price': 250,
+                },
+            ],
+        }
+        both_filled = [
+            self.update('26091500000101', 'COMPLETE', 10, average_price=1000.0),
+            self.update('26091500000102', 'COMPLETE', 10, average_price=250.0),
+        ]
+        exposure = {
+            'type': 'exposure_hedge',
+            'watched': [
+                {
+                    'instrument_id': identifiers['reliance'],
+                    'exposure_per_unit': 1,
+                },
+            ],
+            'hedge_instrument_id': identifiers['reliance'],
+            'hedge_exposure_per_unit': 1,
+            'lower_band': -10,
+            'upper_band': 10,
+        }
+        future_exposure = dict(
+            exposure,
+            hedge_instrument_id=identifiers['reliance_future'],
+            hedge_exposure_per_unit=0.2,
+        )
+
+        def held(quantity):
+            """A unified positions document holding one RELIANCE position.
+
+            Args:
+                quantity (int): The net quantity.
+
+            Returns:
+                dict: The document.
+            """
+            return self.scenarios.positions(quantity)
+
+        def answered_as(order_id):
+            """An accepted answer carrying one broker order id.
+
+            Args:
+                order_id (str): The id.
+
+            Returns:
+                dict: The stubbed answer.
+            """
+            answer = dict(accepted)
+            answer['json'] = dict(accepted['json'], norenordno=order_id)
+            return answer
+
+        stale_document = dict(
+            held(100),
+            as_of='2026-09-14T09:00:00',
+            brokers=[
+                {
+                    'broker': 'flattrade',
+                    'status': 'stale',
+                    'as_of': '2026-09-14T09:00:00',
+                },
+            ],
+        )
+        return [
+            self.price_result(
+                'a_strategy_stop_ignores_a_stale_quote_past_its_limit',
+                dict(entry, synthetic=strategy),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'kwil': kwil}, 'updates': both_filled},
+                    {'quote': dict(self.book_at(900.00, 900.05), stale=True), 'at': 1, 'other_quotes': {'kwil': kwil}},
+                ],
+                numbered,
+                book_every_order=True,
+            ),
+            self.price_result(
+                'a_strategy_stop_closes_what_the_basket_fills_after_it_closed',
+                dict(entry, synthetic=dict(strategy, loss_limit=-300)),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'kwil': kwil}, 'updates': [self.update('26091500000101', 'OPEN', 4, average_price=1000.0)]},
+                    {'quote': self.book_at(900.00, 900.05), 'at': 1, 'other_quotes': {'kwil': kwil}},
+                    {'quote': self.book_at(900.00, 900.05), 'at': 2, 'other_quotes': {'kwil': kwil}, 'updates': [self.update('26091500000101', 'CANCELLED', 7, average_price=1000.0), self.update('26091500000102', 'CANCELLED', 0)]},
+                    {'quote': self.book_at(850.00, 850.05), 'at': 3, 'other_quotes': {'kwil': kwil}, 'updates': [self.update('26091500000103', 'COMPLETE', 4, average_price=899.9)]},
+                    {'quote': self.book_at(850.00, 850.05), 'at': 4, 'other_quotes': {'kwil': kwil}, 'updates': [self.update('26091500000104', 'COMPLETE', 3, average_price=849.9)]},
+                ],
+                numbered,
+                book_every_order=True,
+            ),
+            self.price_result(
+                'a_strategy_stop_whose_close_is_refused_fails_the_parent',
+                dict(entry, synthetic=strategy),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'kwil': kwil}, 'updates': both_filled},
+                    {'quote': self.book_at(900.00, 900.05), 'at': 1, 'other_quotes': {'kwil': kwil}},
+                    {'quote': self.book_at(800.00, 800.05), 'at': 2, 'other_quotes': {'kwil': self.book_at(300.00, 300.05)}, 'updates': [self.update('26091500000104', 'COMPLETE', 10, average_price=899.9)]},
+                    {'quote': self.book_at(800.00, 800.05), 'at': 3, 'other_quotes': {'kwil': self.book_at(350.00, 350.05)}},
+                ],
+                {
+                    'sequence': [
+                        answered_as('26091500000101'),
+                        answered_as('26091500000102'),
+                        refused,
+                        answered_as('26091500000104'),
+                    ],
+                },
+                book_every_order=True,
+            ),
+            self.price_result(
+                'an_exposure_hedge_counts_what_a_cancelled_hedge_filled',
+                dict(entry, synthetic=future_exposure),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'reliance_future': future}},
+                    {'quote': steady, 'at': 1, 'other_quotes': {'reliance_future': future}, 'updates': [self.update('26091500000101', 'OPEN', 200, average_price=1003.9)]},
+                    {'quote': steady, 'at': 2, 'other_quotes': {'reliance_future': future}, 'updates': [self.update('26091500000101', 'CANCELLED', 200, average_price=1003.9)]},
+                    {'quote': steady, 'at': 3, 'other_quotes': {'reliance_future': future}},
+                ],
+                numbered,
+                positions=100,
+                book_every_order=True,
+            ),
+            self.price_result(
+                'an_exposure_hedge_waits_out_a_stale_quote',
+                dict(entry, synthetic=exposure),
+                [
+                    {'quote': dict(steady, stale=True), 'at': 0},
+                    {'quote': dict(steady, stale=True), 'at': 1},
+                ],
+                numbered,
+                positions=100,
+                book_every_order=True,
+            ),
+            self.price_result(
+                'an_exposure_hedge_measures_nothing_without_positions',
+                dict(entry, synthetic=dict(exposure, lower_band=10, upper_band=50)),
+                [
+                    {'quote': steady, 'at': 0, 'positions_document': None},
+                    {'quote': steady, 'at': 1},
+                ],
+                numbered,
+                book_every_order=True,
+            ),
+            self.price_result(
+                'an_exposure_hedge_measures_nothing_from_stale_positions',
+                dict(entry, synthetic=exposure),
+                [
+                    {'quote': steady, 'at': 0, 'positions_document': stale_document},
+                    {'quote': steady, 'at': 1},
+                ],
+                numbered,
+                book_every_order=True,
+            ),
+            self.price_result(
+                'an_exposure_hedge_trades_whole_lots',
+                dict(entry, synthetic=future_exposure),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'reliance_future': future}},
+                    {'quote': steady, 'at': 1, 'other_quotes': {'reliance_future': future}},
+                ],
+                numbered,
+                positions=160,
+                book_every_order=True,
+            ),
+            self.price_result(
+                'an_exposure_hedge_stops_after_a_refused_hedge',
+                dict(entry, synthetic=future_exposure),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'reliance_future': future}},
+                    {'quote': steady, 'at': 1, 'other_quotes': {'reliance_future': future}, 'updates': [self.update('26091500000101', 'COMPLETE', 500, average_price=1003.9)], 'positions_document': held(200)},
+                    {'quote': steady, 'at': 2, 'other_quotes': {'reliance_future': future}},
+                    {'quote': steady, 'at': 3, 'other_quotes': {'reliance_future': future}},
+                    {'quote': steady, 'at': 4, 'other_quotes': {'reliance_future': future}},
+                ],
+                {
+                    'sequence': [
+                        answered_as('26091500000101'),
+                        refused,
+                    ],
+                },
+                positions=100,
+                book_every_order=True,
+            ),
+            self.price_result(
+                'an_exposure_hedge_whose_first_hedge_is_refused_ends_with_its_parent',
+                dict(entry, synthetic=future_exposure),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'reliance_future': future}},
+                    {'quote': steady, 'at': 1, 'other_quotes': {'reliance_future': future}},
+                    {'quote': steady, 'at': 2, 'other_quotes': {'reliance_future': future}},
+                ],
+                refused,
+                positions=100,
+                book_every_order=True,
+            ),
+        ]
+
     def run_execution_algorithm_checks(self):
         """Runs the execution algorithms where an empty slice, a lot, a falling volume, a stale book, a market or IOC body under holding, or an off-tick limit used to go wrong.
 
@@ -11026,7 +11261,7 @@ class OrderEngineSuite:
         Args:
             name (str): The check's name.
             request_body (dict): The request body.
-            steps (list): One `{"quote": dict | None, "at": float}` per tick, where `at` is seconds after the order was placed, and optionally `other_quotes` for other instruments, `updates`, order updates applied before the tick, `funds`, the combined funds document, and a caller's change or cancel run through the engine's commands before the tick: `held_change` and `part_cancel` name a parent's part, `leg_change` and `leg_cancel` one of its broker orders. `restart: True` rebuilds every parent from its recorded events after that tick, as one engine restart does.
+            steps (list): One `{"quote": dict | None, "at": float}` per tick, where `at` is seconds after the order was placed, and optionally `other_quotes` for other instruments, `updates`, order updates applied before the tick, `funds`, the combined funds document, `positions_document`, the unified positions document, or None to remove it, and a caller's change or cancel run through the engine's commands before the tick: `held_change` and `part_cancel` name a parent's part, `leg_change` and `leg_cancel` one of its broker orders. `restart: True` rebuilds every parent from its recorded events after that tick, as one engine restart does.
             answer (dict | None): The stubbed broker answer.
             throttle_seconds (float): The shortest gap the re-pricing throttle allows between two moves of one order.
             book_overrides (dict | None): Fields to replace on the broker's order book entry, for a type whose order is not a plain limit.
@@ -11157,6 +11392,11 @@ class OrderEngineSuite:
                 self.seed_other_quotes(step)
                 if step.get('funds') is not None:
                     self.fake_redis.strings['unified:portfolio:funds'] = json.dumps(step['funds'])
+                if 'positions_document' in step:
+                    if step['positions_document'] is None:
+                        self.fake_redis.strings.pop('unified:portfolio:positions', None)
+                    else:
+                        self.fake_redis.strings['unified:portfolio:positions'] = json.dumps(step['positions_document'])
                 for update in step.get('updates') or []:
                     changed = follower.follow({
                         'update': json.dumps(update),
@@ -14947,6 +15187,7 @@ class OrderEngineSuite:
             results.extend(self.run_repeating_strategy_checks())
             results.extend(self.run_hedge_follower_checks())
             results.extend(self.run_legged_spread_checks())
+            results.extend(self.run_strategy_hedge_checks())
             results.extend(self.run_price_checks())
             results.extend(self.run_wiring_checks())
             results.extend(self.run_assignment_checks())

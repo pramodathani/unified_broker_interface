@@ -1167,7 +1167,9 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `strategy_stop`
 
-    A strategy stop places its candidates as a basket, marks every leg to its last traded price on each tick and adds them up. When the total falls below `loss_limit` or rises above `profit_target`, every leg is closed, shorts first and their hedges after.
+    A strategy stop places its candidates as a basket, marks every leg to its last traded price on each tick and adds them up. When the total falls to `loss_limit` or below, or rises to `profit_target` or above, every leg is closed, shorts first and their hedges after. A quote marked stale marks nothing, so the stop waits for a live one.
+
+    When the stop acts, the basket's orders still resting are cancelled, and whatever they fill before the cancel lands is closed too, so the parent completes only once nothing of the basket rests and every close has finished. A close the broker refuses is not sent again, and the parent ends `failed`, because that leg is left open.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
@@ -1185,7 +1187,9 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `exposure_hedge`
 
-    An exposure hedge answers `202 armed` and, on every tick, adds up the account's positions in the watched instruments, each multiplied by its `exposure_per_unit`. The positions are the account's own, read from `unified:portfolio:positions`. When the total leaves the band, it trades `hedge_instrument_id` to bring the total back to the middle of the band. A hedge already sent counts at once, so it is not sent again while the positions catch up. It works in exposure, not in greeks: pass a delta you computed elsewhere as `exposure_per_unit` for a delta hedge.
+    An exposure hedge answers `202 armed` and, on every tick, adds up the account's positions in the watched instruments, each multiplied by its `exposure_per_unit`. The positions are the account's own, read from `unified:portfolio:positions`. When the total leaves the band, it trades `hedge_instrument_id` to bring the total back to the middle of the band, in whole lots of the hedge instrument. A hedge already sent counts at once, so it is not sent again while the positions catch up: a resting hedge for its whole quantity, and a finished one for what it filled. It works in exposure, not in greeks: pass a delta you computed elsewhere as `exposure_per_unit` for a delta hedge.
+
+    It measures nothing while the positions document is missing, more than a minute old, or marks a broker `stale` or `unreadable`, and prices nothing from a quote marked stale. When a hedge is refused, it stops watching and cancels any hedge still resting, and the parent ends `failed` when anything traded, or `rejected` when nothing did. When the hedge instrument is also watched, a filled hedge is counted twice once the positions catch up with it, so keep the hedge instrument out of `watched`.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|

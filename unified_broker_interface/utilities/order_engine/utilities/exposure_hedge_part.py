@@ -1,12 +1,21 @@
 """A plan order kept whole as an exposure hedge: a hedge traded whenever the account's net exposure leaves a band."""
 
+import datetime
 import decimal
 
+from unified_broker_interface.utilities.broker_orders.utilities.refused_request import (
+    RefusedRequestError,
+)
 from unified_broker_interface.utilities.order_engine.utilities.whole_part import (
     WholePart,
 )
 
 DEFAULT_BUFFER_TICKS = 2
+POSITIONS_STALE_SECONDS = 60
+UNTRUSTED_BROKER_STATUSES = (
+    'stale',
+    'unreadable',
+)
 SETTINGS = (
     'watched',
     'hedge_instrument_id',
@@ -19,9 +28,11 @@ SETTINGS = (
 class ExposureHedgePart(WholePart):
     """An exposure hedge in a plan, with the rules of today's exposure hedge type.
 
-    On every tick the account's positions in the `watched` instruments are read from `unified:portfolio:positions`, each multiplied by its `exposure_per_unit` (1 when not given) and added up, with the hedges this part has sent and not had rejected or cancelled counted at once, before the positions catch up with them. Inside `lower_band` to `upper_band` nothing happens. Outside it a hedge is sent on `hedge_instrument_id`, sized to bring the total back to the middle of the band at `hedge_exposure_per_unit` (1 when not given) per unit, as a limit two ticks past the hedge's touch, so it trades now.
+    On every tick the account's positions in the `watched` instruments are read from `unified:portfolio:positions`, each multiplied by its `exposure_per_unit` (1 when not given) and added up, with the hedges this part has sent counted at once, before the positions catch up with them: a resting hedge for its whole quantity and a finished one for what it filled. Inside `lower_band` to `upper_band` nothing happens. Outside it a hedge is sent on `hedge_instrument_id`, sized to bring the total back to the middle of the band at `hedge_exposure_per_unit` (1 when not given) per unit, in whole lots, as a limit two ticks past the hedge's touch, so it trades now.
 
-    The hedge instrument is the part's own instrument, so the plan remembers its tick size and the hedge is priced from its own quote. The part places nothing when the plan is placed, so the plan answers `armed`, and it never ends on its own: it watches until its join or the caller stops it, and is done once its hedges have finished after that.
+    Nothing is measured from a missing positions document, one whose `as_of` is more than a minute old, or one that marks a broker `stale` or `unreadable`, nor priced from a quote marked stale.
+
+    The hedge instrument is the part's own instrument, so the plan remembers its tick size and the hedge is priced from its own quote. The part places nothing when the plan is placed, so the plan answers `armed`, and it never ends on its own: it watches until its join or the caller stops it, or until a hedge is refused or rejected, and is done once its hedges have finished after that. A refused hedge is not sent again; the part records `leaves_open`, which ends the parent `failed` when anything traded, and `rejected` otherwise.
     """
 
     def __init__(self, path, name, settings, keeps_tag=True, overrides=None):
@@ -138,7 +149,7 @@ class ExposureHedgePart(WholePart):
         return total
 
     def hedges_in_flight(self, parent):
-        """The exposure of the hedges this part has sent, counted before the positions catch up with them.
+        """The exposure of the hedges this part has sent, counted before the positions catch up with them: a resting hedge's whole quantity and what a finished one filled.
 
         Args:
             parent (ParentOrder): The plan order's parent.
@@ -149,9 +160,10 @@ class ExposureHedgePart(WholePart):
         per_unit = self._number(self.settings.get('hedge_exposure_per_unit', 1))
         total = decimal.Decimal('0')
         for leg in self.own_legs(parent):
-            if leg.state in ('rejected', 'cancelled'):
-                continue
-            quantity = decimal.Decimal(str(leg.quantity or 0))
+            if leg.is_finished():
+                quantity = decimal.Decimal(str(leg.filled_quantity or 0))
+            else:
+                quantity = decimal.Decimal(str(leg.quantity or 0))
             if leg.transaction_type == 'SELL':
                 quantity = -quantity
             total = total + quantity * per_unit
@@ -173,6 +185,31 @@ class ExposureHedgePart(WholePart):
             total = total + self.held(positions, entry['instrument_id']) * per_unit
         return total + self.hedges_in_flight(parent)
 
+    def positions_trusted(self, positions, now):
+        """Whether the positions document can be measured from: there is one, it is fresh, and it marks no broker stale or unreadable.
+
+        Args:
+            positions (dict | None): The positions document.
+            now (float): The Unix time of the tick.
+
+        Returns:
+            bool: True when it can.
+        """
+        if not isinstance(positions, dict):
+            return False
+        as_of = positions.get('as_of')
+        if as_of is not None:
+            try:
+                written = datetime.datetime.strptime(as_of, '%Y-%m-%dT%H:%M:%S').timestamp()
+            except (TypeError, ValueError):
+                return False
+            if now - written > POSITIONS_STALE_SECONDS:
+                return False
+        for status in positions.get('brokers') or []:
+            if isinstance(status, dict) and status.get('status') in UNTRUSTED_BROKER_STATUSES:
+                return False
+        return True
+
     def hedge_price(self, view, side):
         """The price the hedge goes out at, two ticks past the touch so that it trades now.
 
@@ -181,8 +218,10 @@ class ExposureHedgePart(WholePart):
             side (str): BUY or SELL.
 
         Returns:
-            decimal.Decimal | None: The price, or None when the book gives nothing to price against.
+            decimal.Decimal | None: The price, or None when the book gives nothing to price against or the quote is marked stale.
         """
+        if view.is_stale():
+            return None
         touch = view.opposite_touch(side)
         if touch is None:
             touch = view.last()
@@ -218,16 +257,19 @@ class ExposureHedgePart(WholePart):
         Args:
             plan_order (PlanOrder): The plan order.
             quotes (dict): The quotes the tick carried.
-            now (float): Unused.
+            now (float): The Unix time of the tick.
 
         Returns:
-            bool: True when a hedge was sent.
+            bool: True when a hedge was sent, or the part stopped because one was refused.
         """
-        del now
         if plan_order.part_record(self.path).get('state') != 'working' or self.is_stopped(plan_order):
             return False
+        if self.stop_after_rejection(plan_order):
+            return True
         context = self.context(plan_order)
         _, _, positions = context.placement.market_context(plan_order.parent.instrument_id, False, True)
+        if not self.positions_trusted(positions, now):
+            return False
         lower = self._number(self.settings['lower_band'])
         upper = self._number(self.settings['upper_band'])
         total = self.exposure(positions, plan_order.parent)
@@ -235,18 +277,62 @@ class ExposureHedgePart(WholePart):
             return False
         per_unit = self._number(self.settings.get('hedge_exposure_per_unit', 1))
         wanted = ((lower + upper) / 2 - total) / per_unit
-        quantity = int(abs(wanted))
+        lot = context.lot_size()
+        quantity = int(abs(wanted)) // lot * lot
         if quantity < 1:
             return False
         side = 'BUY' if wanted > 0 else 'SELL'
         price = self.hedge_price(context.view(quotes), side)
         if price is None:
             return False
-        self.place_order(plan_order, self.limit_order(plan_order, side, price, quantity), None)
+        try:
+            self.place_order(plan_order, self.limit_order(plan_order, side, price, quantity), None)
+        except RefusedRequestError as refusal:
+            reason = refusal.body.get('error') or refusal.body.get('status_message') or 'the hedge was refused'
+            self.stop_refused(plan_order, reason)
+            return True
+        self.stop_after_rejection(plan_order)
         return True
 
+    def stop_after_rejection(self, plan_order):
+        """Stops the part once a broker has rejected one of its hedges, rather than sending the same hedge again on every tick.
+
+        Args:
+            plan_order (PlanOrder): The plan order.
+
+        Returns:
+            bool: True when it stopped now.
+        """
+        for leg in self.own_legs(plan_order.parent):
+            if leg.state == 'rejected':
+                self.stop_refused(plan_order, leg.status_message or 'the broker rejected a hedge')
+                return True
+        return False
+
+    def stop_refused(self, plan_order, reason):
+        """Stops watching because a hedge was refused, cancels any resting hedge, and records what that leaves.
+
+        Args:
+            plan_order (PlanOrder): The plan order.
+            reason (str): Why the hedge was refused.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        record = plan_order.part_record(self.path)
+        if record.get('leaves_open'):
+            return
+        record['leaves_open'] = f'the plan\'s {self.path} part\'s hedge was refused ({reason}), so it stopped watching the exposure'
+        if not self.own_legs(plan_order.parent):
+            record['state'] = 'done'
+            record['reason'] = 'refused'
+            record['message'] = reason
+        plan_order.set_part_record(self.path, record, record['leaves_open'])
+        if record.get('state') == 'working':
+            self.cancel_rest(plan_order, 'a hedge was refused')
+
     def settle(self, plan_order):
-        """Marks the hedge done once it has been stopped and its hedges have finished; a filled hedge leaves it watching.
+        """Stops the hedge once one was rejected, and marks it done once it has been stopped and its hedges have finished; a filled hedge leaves it watching.
 
         Args:
             plan_order (PlanOrder): The plan order.
@@ -254,6 +340,8 @@ class ExposureHedgePart(WholePart):
         Returns:
             list: Nothing is placed while settling, so an empty list.
         """
+        if plan_order.part_record(self.path).get('state') == 'working' and not self.is_stopped(plan_order):
+            self.stop_after_rejection(plan_order)
         if self.is_stopped(plan_order):
             self.finish_when_done(plan_order)
         return []
