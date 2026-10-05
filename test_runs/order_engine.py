@@ -5734,6 +5734,189 @@ class OrderEngineSuite:
             ),
         ]
 
+    def run_execution_algorithm_checks(self):
+        """Runs the execution algorithms where an empty slice, a lot, a falling volume, a stale book, a market or IOC body under holding, or an off-tick limit used to go wrong.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        accepted = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        identifiers = order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS
+        entry = self.scenarios.bodies.market_order(
+            dry_run=None,
+            order_type='LIMIT',
+            price=1000,
+            quantity=10,
+        )
+        steady = self.book_at(1000.00, 1000.05)
+        option = dict(
+            entry,
+            instrument_id=identifiers['nifty_option'],
+        )
+        results = [
+            self.price_result(
+                'a_vwap_skips_a_slice_its_profile_leaves_empty',
+                dict(entry, quantity=4, synthetic={
+                    'type': 'vwap',
+                    'slices': 4,
+                    'over_minutes': 240,
+                    'volume_profile': [
+                        1,
+                        1,
+                        1,
+                        0,
+                        1,
+                        1,
+                        1,
+                        1,
+                        1,
+                        1,
+                        1,
+                        1,
+                        1,
+                    ],
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 3600},
+                    {'quote': steady, 'at': 7200},
+                    {'quote': steady, 'at': 10800},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_twap_slices_in_whole_lots',
+                dict(entry, instrument_id=identifiers['crudeoil_future'], quantity=300, synthetic={
+                    'type': 'twap',
+                    'slices': 2,
+                    'over_minutes': 1,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 30},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_randomised_iceberg_varies_its_slices_in_whole_lots',
+                dict(option, quantity=750, synthetic={
+                    'type': 'iceberg',
+                    'slice_quantity': 150,
+                    'randomise_percent': 1,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'updates': [self.update('26091500000021', 'COMPLETE', 150)]},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_liquidity_seeking_order_strikes_in_whole_lots',
+                dict(option, quantity=750, synthetic={
+                    'type': 'liquidity_seeking',
+                    'limit_price': 1000.10,
+                    'minimum_quantity': 300,
+                }),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'nifty_option': steady}},
+                    {
+                        'quote': steady,
+                        'other_quotes': {
+                            'nifty_option': self.scenarios.quote(depth={
+                                'buy': [{'price': 1000.00, 'quantity': 100, 'orders': 1}],
+                                'sell': [{'price': 1000.05, 'quantity': 310, 'orders': 2}],
+                            }),
+                        },
+                        'at': 1,
+                    },
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_liquidity_seeking_order_does_not_strike_on_a_stale_book',
+                dict(entry, quantity=500, synthetic={
+                    'type': 'liquidity_seeking',
+                    'limit_price': 1000.10,
+                    'minimum_quantity': 300,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {
+                        'quote': dict(self.scenarios.quote(depth={
+                            'buy': [{'price': 1000.00, 'quantity': 100, 'orders': 1}],
+                            'sell': [{'price': 1000.05, 'quantity': 450, 'orders': 2}],
+                        }), stale=True),
+                        'at': 1,
+                    },
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_participation_order_counts_again_after_the_volume_falls',
+                dict(entry, quantity=100, synthetic={
+                    'type': 'participation',
+                    'participation_percent': 10,
+                }),
+                [
+                    {'quote': steady | {'volume': 10000}, 'at': 0},
+                    {'quote': steady | {'volume': 10300}, 'at': 1},
+                    {'quote': steady | {'volume': 200}, 'at': 2},
+                    {'quote': steady | {'volume': 500}, 'at': 3},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'an_accumulation_limit_off_the_tick_is_refused_when_placed',
+                dict(entry, price=1000.03, synthetic={
+                    'type': 'accumulation',
+                    'every_minutes': 10,
+                    'purchases': 3,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+        ]
+        original_hold_limits = api_configuration['order_hold_limits']
+        api_configuration['order_hold_limits'] = True
+        try:
+            results.append(
+                self.price_result(
+                    'a_market_twap_is_sent_unheld_while_holding_is_on',
+                    dict(entry, order_type='MARKET', price=None, synthetic={
+                        'type': 'twap',
+                        'slices': 2,
+                        'over_minutes': 1,
+                    }),
+                    [
+                        {'quote': steady, 'at': 0},
+                        {'quote': steady, 'at': 30},
+                    ],
+                    accepted,
+                )
+            )
+            results.append(
+                self.price_result(
+                    'an_ioc_twap_is_not_held_while_holding_is_on',
+                    dict(entry, validity='IOC', synthetic={
+                        'type': 'twap',
+                        'slices': 2,
+                        'over_minutes': 1,
+                    }),
+                    [
+                        {'quote': steady, 'at': 0},
+                    ],
+                    accepted,
+                )
+            )
+        finally:
+            api_configuration['order_hold_limits'] = original_hold_limits
+        return results
+
     def run_limit_pricing_checks(self):
         """Runs the book-following limit types where a cancelled order, a price off the tick, a stop or market body, or a caller's change used to go wrong.
 
@@ -14270,6 +14453,7 @@ class OrderEngineSuite:
             results.extend(self.run_stop_type_checks())
             results.extend(self.run_stale_quote_checks())
             results.extend(self.run_limit_pricing_checks())
+            results.extend(self.run_execution_algorithm_checks())
             results.extend(self.run_price_checks())
             results.extend(self.run_wiring_checks())
             results.extend(self.run_assignment_checks())

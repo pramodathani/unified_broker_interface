@@ -85,3 +85,7 @@ With `using` read by `_read_using`, every join the design names is built, so the
 ## Market and stop bodies (2026-10-05)
 
 `_fixed_order_type` reads the order type a fixed pricing really sends, the body's when the pricing names none. `_can_rest` and `_can_take_at_discretion` only looked at the pricing, so a routed `post_only` with a `MARKET` body was sent as `MKT`, a post-only `SL` with `rest` became a buy stop whose limit sat below its own trigger, and a discretionary stop was cancelled by its first take.
+
+## Held pieces need a holdable body (2026-10-05)
+
+`_held_pieces_tree` turned any twap or front_loaded order into held virtual-limit pieces when holding was on, without the body checks `_why_not_held` makes. A MARKET or stop TWAP was refused with 'a virtual limit order is held at its own limit price', and an IOC TWAP was held. `_body_cannot_be_held` now makes those checks, and such an order is read as it stands and sent unheld.

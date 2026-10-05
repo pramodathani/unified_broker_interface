@@ -131,6 +131,8 @@ class BookDepthExecution:
     def due_pieces(self, plan_order, memory, total, pieces, quotes, now, sending_side=None):
         """A strike, when enough size shows at an acceptable price.
 
+        The strike is cut down to whole lots, since a strike that is not is refused when it is sent, and a book marked stale is not acted on, as no other part of the engine acts on one.
+
         Args:
             plan_order (PlanOrder): The plan order, which reads quotes into prices.
             memory (dict): Unused.
@@ -147,11 +149,18 @@ class BookDepthExecution:
         remaining = total - self.committed(pieces)
         if not self.will_send_more(memory, remaining, pieces) or sending_side is None:
             return []
-        available = self.reachable_quantity(plan_order.view(quotes), sending_side)
+        view = plan_order.view(quotes)
+        if view.is_stale():
+            return []
+        available = self.reachable_quantity(view, sending_side)
         if available < self.minimum_quantity:
             return []
+        strike = min(available, remaining)
+        strike = strike - strike % plan_order.lot_size()
+        if strike < 1:
+            return []
         return [
-            min(available, remaining),
+            strike,
         ]
 
     def will_send_more(self, memory, remaining, pieces):

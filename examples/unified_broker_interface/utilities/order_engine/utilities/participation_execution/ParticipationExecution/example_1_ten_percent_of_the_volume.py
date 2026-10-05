@@ -1,6 +1,6 @@
 """Walks a participation order of ten at ten percent through the day's volume rising tick by tick.
 
-`ParticipationExecution.begin` starts counting from the volume in the instrument's live quote, so nothing traded before the order started counts. On each tick, `due_pieces` sends ten percent of the volume traded since the last slice, once that comes to a whole unit, and `committed` is how much the slices sent so far account for. Nothing is read from Redis or sent anywhere.
+`ParticipationExecution.begin` starts counting from the volume in the instrument's live quote, so nothing traded before the order started counts. On each tick, `due_pieces` sends ten percent of the volume traded since the last slice, once that comes to a whole unit, and `committed` is how much the slices sent so far account for. A slice uses up only the volume it accounts for, so when the last slice is cut to what is left, the count stops short of the day's volume. Nothing is read from Redis or sent anywhere.
 
 Run it from the project root:
 
@@ -98,6 +98,16 @@ class StandInPlanOrder:
             str: Zerodha.
         """
         return 'zerodha'
+
+    def lot_size(self):
+        """The lot every slice must be a whole number of, from the instrument's handle at the chosen broker, as the engine's order context reads it.
+
+        Returns:
+            int: The lot, at least one.
+        """
+        instrument, _, _ = self.placement.market_context(self.instrument_id, False, False)
+        handle = instrument.handles.get(self.chosen_broker()) or {}
+        return max(int(float(handle.get('lot_size') or 1)), 1)
 
 
 class TenPercentOfTheVolumeExample:

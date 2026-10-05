@@ -15,3 +15,7 @@ A join can change the order's total while the schedule runs, for example a brack
 ## `until` (2026-10-01)
 
 Today's closing price order works out its VWAP's length from the window's end and the moment it starts, whether that is the window's opening or a moment inside it. `until` is that rule for any timed execution: `begin` keeps the minutes in memory, recorded with the order, and `interval` reads them from there. It is set by the reader after building the execution rather than passed to every subclass's constructor.
+
+## Empty slices and lots (2026-10-05)
+
+The slice to send next used to be the number of broker orders placed, and a slice that worked out to nothing returned no piece, so the count never moved past it: a closing_price order of 3 sent nothing at all, one of 5 stopped after 2, and a vwap of 10 in 10 slices stopped after 6. `slices_done` in memory now counts slices sent or skipped; an empty slice is counted and skipped. It is written with the event of every slice sent, and a missing value falls back to the broker order count, so a restart recomputes any skips after the last slice. Slices are also shared out in whole lots (`shared_lots`), since a 150-unit slice of a 100-unit crude oil lot was refused. Slices still go out after the market's close; that is documented rather than changed.

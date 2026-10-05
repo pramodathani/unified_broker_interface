@@ -15,3 +15,7 @@ Shares come from the execution's own arithmetic (`LadderExecution.quantities`, `
 ## Never resized
 
 `set_target` does nothing. The reader already refuses a Using join, as a together join, under a Then join, and a reducing Either join takes single orders only, so nothing would ask.
+
+## Pieces in lots (2026-10-05)
+
+Held pieces are shared out with the order's lot, so a held TWAP on a crude oil future gets whole-lot pieces.

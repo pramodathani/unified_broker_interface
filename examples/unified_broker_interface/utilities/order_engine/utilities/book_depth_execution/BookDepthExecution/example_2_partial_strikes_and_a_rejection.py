@@ -37,6 +37,14 @@ class StandInPlanOrder:
         """
         return MarketView(quotes.get(INSTRUMENT_ID), decimal.Decimal('0.05'))
 
+    def lot_size(self):
+        """The lot every slice must be a whole number of, which for a share is one.
+
+        Returns:
+            int: One.
+        """
+        return 1
+
 
 class PieceMaker:
     """Builds broker orders as the engine records them, in a chosen state."""

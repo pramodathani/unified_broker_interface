@@ -34,18 +34,22 @@ class UsingPart(TogetherPart):
         self.execution = execution
         self.mains = mains
 
-    def quantities(self, total):
-        """Each piece's share of the order, as the execution would send them.
+    def quantities(self, total, context=None):
+        """Each piece's share of the order, as the execution would send them: a ladder's rungs, or timed slices in whole lots.
 
         Args:
             total (int): The order's quantity.
+            context (OrderContext | None): The first copy's view of the plan order, which knows the lot, or None for a lot of one.
 
         Returns:
             list: One quantity per piece.
         """
         if isinstance(self.execution, LadderExecution):
             return self.execution.quantities(total)
-        return self.execution.slice_quantities(total, {})
+        lot = 1
+        if context is not None:
+            lot = context.lot_size()
+        return self.execution.slice_quantities(total, {}, lot)
 
     def start(self, plan_order, target, started_at, quotes):
         """Starts every copy with its piece's share, and for a ladder its rung's price, which a piece held on a `limit_marketable` trigger is then held at.
@@ -63,7 +67,7 @@ class UsingPart(TogetherPart):
         total = target
         if total is None:
             total = plan_order.read_order(first_main.context(plan_order).body).quantity
-        shares = self.quantities(total)
+        shares = self.quantities(total, first_main.context(plan_order))
         prices = None
         if isinstance(self.execution, LadderExecution):
             prices = self.execution.rung_prices(first_main.context(plan_order), first_main._sending_side(plan_order))

@@ -2,7 +2,7 @@
 
 A slice the broker rejects stops `ParticipationExecution`, as a rejected piece stops an iceberg, rather than inviting a fresh rejection on every tick, and `last_was_rejected` says so. The unfilled part of a cancelled slice is sent again by later slices, because `committed` counts only what filled of a finished slice. A quote that carries no volume sends nothing.
 
-Last, `lot_size` reads the lot every slice must be a whole number of, from the instrument's handle at the broker the plan's orders go to. A share trades one at a time, so its lot is 1; a stand-in index future that Zerodha lists with a lot of 75 answers 75, so a share of the volume under 75 would wait for more. Nothing is read from Redis or sent anywhere.
+Last, the plan order's `lot_size` (on the engine's `OrderContext`) reads the lot every slice must be a whole number of, from the instrument's handle at the broker the plan's orders go to. A share trades one at a time, so its lot is 1; a stand-in index future that Zerodha lists with a lot of 75 answers 75, so a share of the volume under 75 would wait for more. Nothing is read from Redis or sent anywhere.
 
 Run it from the project root:
 
@@ -122,6 +122,16 @@ class StandInPlanOrder:
         """
         return 'zerodha'
 
+    def lot_size(self):
+        """The lot every slice must be a whole number of, from the instrument's handle at the chosen broker, as the engine's order context reads it.
+
+        Returns:
+            int: The lot, at least one.
+        """
+        instrument, _, _ = self.placement.market_context(self.instrument_id, False, False)
+        handle = instrument.handles.get(self.chosen_broker()) or {}
+        return max(int(float(handle.get('lot_size') or 1)), 1)
+
 
 class PieceMaker:
     """Builds broker orders as the engine records them, in a chosen state."""
@@ -183,7 +193,7 @@ class WhenItStopsExample:
         print(f'A quote without volume reads {execution.volume_of(plan_order, no_volume)} and sends {execution.due_pieces(plan_order, {"counted_volume": 1000}, 100, [], no_volume, 0.0)}')
         print(f'As a dry run shows it: {execution.described()}')
         future = StandInPlanOrder(75)
-        print(f'lot_size at {plan_order.chosen_broker()}: {execution.lot_size(plan_order)} for a share, {execution.lot_size(future)} for the index future')
+        print(f'lot_size at {plan_order.chosen_broker()}: {plan_order.lot_size()} for a share, {future.lot_size()} for the index future')
 
 
 if __name__ == '__main__':

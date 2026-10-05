@@ -11,3 +11,7 @@ A strike that partly fills rests, and counting the whole of a resting strike mea
 ## Prices from the book
 
 Book prices are read through `MarketView.number`, which snaps them to the tick, because a quote's JSON floats arrive as values such as 1000.0999999999999 and an unsnapped comparison with the limit would skip a level that is exactly at it.
+
+## Lots and stale books (2026-10-05)
+
+A strike is cut down to whole lots (310 shown on a lot of 75 strikes 300), and a book marked stale is not acted on, matching the rest of the engine after pull request #66.

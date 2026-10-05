@@ -15,3 +15,7 @@ A tick size is remembered when the plan is placed: the parent's own in `tick_siz
 ## The placement property
 
 It is a property rather than an attribute so a stand-in plan order without a placement can still build a context; only the option model asks for it.
+
+## lot_size (2026-10-05)
+
+Moved here from `ParticipationExecution` so the timed slices, the iceberg's randomised slices, book-depth strikes and the held pieces of a Using join all round to the same lot: the chosen broker's, or before any is chosen the largest any broker lists.

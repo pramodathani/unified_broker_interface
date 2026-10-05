@@ -18,6 +18,18 @@ from unified_broker_interface.utilities.order_engine.utilities.twap_execution im
 )
 
 
+class StandInPlanOrder:
+    """Stands in for the plan order an execution is asked about, which here only answers the lot."""
+
+    def lot_size(self):
+        """The lot every slice must be a whole number of, which for a share is one.
+
+        Returns:
+            int: One.
+        """
+        return 1
+
+
 class StandInLeg:
     """Stands in for one broker order: its quantity, what it filled and whether it has finished.
 
@@ -79,7 +91,7 @@ class SlicesAndTheirOrdersExample:
             30.0,
         ]
         for now in moments:
-            for quantity in execution.due_pieces(None, memory, 10, legs, {}, now):
+            for quantity in execution.due_pieces(StandInPlanOrder(), memory, 10, legs, {}, now):
                 legs.append(StandInLeg(quantity))
         legs[0].fill()
         for index in range(len(memory['slices'])):

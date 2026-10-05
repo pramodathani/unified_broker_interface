@@ -67,6 +67,8 @@ class IcebergExecution:
     def piece_size(self, plan_order, pieces):
         """The size of the next piece before it is capped at what is left.
 
+        A randomised size is brought to the nearest whole number of lots, at least one. Unrounded, a lot of 75 with a slice of 150 varied by 1% gave 151, which the broker refused, and the order stopped with nothing resting.
+
         Args:
             plan_order (PlanOrder): The plan order, whose parent id seeds the variation.
             pieces (list): The broker orders sent so far.
@@ -80,6 +82,8 @@ class IcebergExecution:
             spread = wanted * self.randomise_percent / 100
             offset = (seed % 2001) / 1000 - 1
             wanted = int(round(wanted + spread * offset))
+            lot = plan_order.lot_size()
+            wanted = lot * max(round(wanted / lot), 1)
         return max(wanted, 1)
 
     def due_pieces(self, plan_order, memory, total, pieces, quotes, now, sending_side=None):
