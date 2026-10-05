@@ -9515,21 +9515,30 @@ class OrderEngineSuite:
         """Puts open RELIANCE orders placed outside the engine where the order updates and the broker's book hold them.
 
         Args:
-            resting (list | None): Flattrade order ids.
+            resting (list | None): Flattrade order ids, or objects with `order_id` and the `product` the update records.
             status (str): The status the order feed holds them in, on the shared vocabulary.
 
         Returns:
             None: This method returns nothing.
         """
-        for order_id in resting or []:
-            self.fake_redis.hashes.setdefault('unified:order-updates', {})[
-                f'flattrade:{order_id}'
-            ] = json.dumps({
+        for item in resting or []:
+            product = None
+            if isinstance(item, dict):
+                order_id = item['order_id']
+                product = item.get('product')
+            else:
+                order_id = item
+            update = {
                 'broker': 'flattrade',
                 'order_id': order_id,
                 'instrument_id': order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['reliance'],
                 'status': status,
-            })
+            }
+            if product is not None:
+                update['product'] = product
+            self.fake_redis.hashes.setdefault('unified:order-updates', {})[
+                f'flattrade:{order_id}'
+            ] = json.dumps(update)
             self.fake_redis.hashes.setdefault('flattrade:orders:orders', {})[
                 order_id
             ] = self.broker_book_entry(order_id)
@@ -11897,6 +11906,87 @@ class OrderEngineSuite:
                 positions=-40,
             ),
             self.price_result(
+                'a_close_on_trigger_leaves_orders_on_another_product_alone',
+                dict(entry, synthetic={
+                    'type': 'close_on_trigger',
+                    'trigger_price': 995,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                ],
+                accepted,
+                positions=75,
+                resting=[
+                    {'order_id': '26091500000077', 'product': 'CNC'},
+                    {'order_id': '26091500000078', 'product': 'MIS'},
+                ],
+            ),
+            self.price_result(
+                'a_close_on_trigger_refuses_a_change_to_the_close_it_will_send',
+                dict(entry, synthetic={
+                    'type': 'close_on_trigger',
+                    'trigger_price': 995,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 1, 'held_change': {'part': 'root', 'quantity': 5}},
+                    {'quote': steady, 'at': 2, 'held_change': {'part': 'root', 'price': '990'}},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 3},
+                ],
+                accepted,
+                positions=75,
+            ),
+            self.price_result(
+                'a_stop_and_reverse_reverses_a_short_with_a_buy_whatever_the_body_says',
+                dict(entry, synthetic={
+                    'type': 'stop_and_reverse',
+                    'trigger_price': 995,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                    {
+                        'quote': self.book_at(994.90, 994.95),
+                        'at': 2,
+                        'updates': [
+                            self.update('26091500000021', 'COMPLETE', 75),
+                        ],
+                    },
+                ],
+                accepted,
+                positions=-75,
+            ),
+            self.price_result(
+                'a_cross_instrument_order_reads_the_watched_price_at_its_own_tick',
+                dict(entry, synthetic={
+                    'type': 'cross_instrument',
+                    'watch_instrument_id': order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['usdinr_future'],
+                    'trigger_price': 83.5,
+                    'trigger_direction': 'at_or_above',
+                    'limit_price': 1000,
+                }),
+                [
+                    {'quote': steady, 'at': 0, 'other_quotes': {'usdinr_future': self.book_at(83.4925, 83.4950)}},
+                    {'quote': steady, 'at': 1, 'other_quotes': {'usdinr_future': self.book_at(83.4950, 83.4975)}},
+                    {'quote': steady, 'at': 2, 'other_quotes': {'usdinr_future': self.book_at(83.4975, 83.5000)}},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_limit_if_touched_price_off_the_tick_is_refused_when_placed',
+                dict(entry, synthetic={
+                    'type': 'limit_if_touched',
+                    'trigger_price': 995,
+                    'limit_price': 990.03,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(994.90, 994.95), 'at': 1},
+                ],
+                accepted,
+            ),
+            self.price_result(
                 'a_stop_and_reverse_closes_then_reverses_once_the_close_fills',
                 dict(entry, synthetic={
                     'type': 'stop_and_reverse',
@@ -13083,6 +13173,82 @@ class OrderEngineSuite:
             },
         ]
 
+    def run_carry_window_checks(self):
+        """Checks that the rebuild after 06:00 still finds an order valid for longer than a month.
+
+        A GTT may be valid for up to 365 days, and the rebuild reads carried orders' events that far back. The events here are a 60-day GTT placed on 20 August 2026, rebuilt 31 and 45 days later, when it is still valid.
+
+        Returns:
+            list: One recorded result per check, with the parents the rebuild found.
+        """
+        placed = datetime.datetime(2026, 8, 20, 10, 0, tzinfo=moments.INDIA)
+        parameters = {
+            'type': 'plan',
+            'routed_from': 'gtt',
+            'plan': {
+                'order': {
+                    'presets': [
+                        {
+                            'good_till_triggered': {
+                                'trigger_price': 995,
+                                'limit_price': 990,
+                                'valid_days': 60,
+                            },
+                        },
+                    ],
+                },
+            },
+        }
+        rows = [
+            {
+                'time': placed.isoformat(),
+                'parent_order_id': 'gtt-sixty-days',
+                'sequence': 1,
+                'event': 'parent_received',
+                'synthetic_type': 'plan',
+                'parent_state': 'received',
+                'instrument_id': order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['reliance'],
+                'detail': {
+                    'parameters': parameters,
+                },
+            },
+            {
+                'time': (placed + datetime.timedelta(seconds=1)).isoformat(),
+                'parent_order_id': 'gtt-sixty-days',
+                'sequence': 2,
+                'event': 'parameters_changed',
+                'synthetic_type': 'plan',
+                'parent_state': 'received',
+                'detail': {
+                    'parameters': dict(parameters, carries_overnight=True),
+                },
+            },
+        ]
+        results = []
+        for days_later in [
+            31,
+            45,
+        ]:
+            now = datetime.datetime(2026, 8, 20, 7, 0, tzinfo=moments.INDIA) + datetime.timedelta(days=days_later)
+            parent_store = ParentStore(redis_stand_ins.FakeEngineStoreRedis())
+            parent_store.reset_epochs = lambda when=None, moment=now: ParentStore.reset_epochs(moment)
+            recovery = EngineRecovery(
+                parent_store.cache,
+                engine_stand_ins.WindowedEventLog(rows),
+                parent_store,
+                order_routes.BROKER_NAMES,
+                logging.getLogger('test_runs.order_engine'),
+            )
+            parents = recovery.replay()
+            states = []
+            for parent in parents:
+                states.append(parent.state)
+            results.append({
+                'name': f'a_sixty_day_gtt_is_rebuilt_{days_later}_days_after_it_was_placed',
+                'rebuilt': states,
+            })
+        return results
+
     def run_overnight_carry_checks(self):
         """Checks which timed orders are marked to outlive the 06:00 rebuild: those whose time falls on a later trading day, and not those due later the same day.
 
@@ -13297,6 +13463,7 @@ class OrderEngineSuite:
             results.extend(self.run_parent_checks())
             results.extend(self.run_recovery_checks())
             results.extend(self.run_overnight_carry_checks())
+            results.extend(self.run_carry_window_checks())
             results.extend(self.run_follower_checks())
             results.extend(self.run_reaction_checks())
             results.extend(self.run_plan_checks())

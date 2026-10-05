@@ -100,7 +100,7 @@ class PositionQuantity:
                 for _, instrument_id, _ in positions:
                     if instrument_id is not None:
                         instrument_ids.add(instrument_id)
-            cancelled = closer.cancel_resting(instrument_ids, 'cancelled before closing the position, so it cannot re-open it, and to free its margin')
+            cancelled = closer.cancel_resting(instrument_ids, 'cancelled before closing the position, so it cannot re-open it, and to free its margin', product)
         placed = []
         for broker_name, instrument_id, quantity in positions:
             if instrument_id is None:

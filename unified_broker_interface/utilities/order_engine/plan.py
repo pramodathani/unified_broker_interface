@@ -1,6 +1,7 @@
 """An order described as a plan of parts, which the composable synthetic orders are built on."""
 
 import copy
+import decimal
 import time
 
 from unified_broker_interface.utilities.broker_orders.utilities.refused_request import (
@@ -45,6 +46,13 @@ from unified_broker_interface.utilities.order_engine.utilities.reduce_only impor
 )
 from unified_broker_interface.utilities.order_engine.utilities.whole_part import (
     WholePart,
+)
+
+
+PERMANENT_REFUSAL_STATUSES = (
+    400,
+    404,
+    409,
 )
 
 
@@ -186,6 +194,7 @@ class PlanOrder(SyntheticOrder):
         if needs_prices:
             self.remember_tick_size(order)
             self._remember_tick_sizes(root)
+            self._refuse_off_tick_prices(root)
         self.parent.parameters = dict(self.parent.parameters)
         self.parent.parameters['parts'] = records
         if carries_overnight:
@@ -240,6 +249,53 @@ class PlanOrder(SyntheticOrder):
             elif isinstance(value, dict):
                 found.extend(self._trigger_moments(value))
         return found
+
+    def _refuse_off_tick_prices(self, root):
+        """Refuses a fixed price on the parent's instrument that is not a whole number of ticks, before anything is recorded.
+
+        Such a price would be refused by the placement only when the order fires, long after the caller was told it was armed. The tick size is the one `remember_tick_size` has just read, so this costs no read of its own.
+
+        Args:
+            root (object): The root part.
+
+        Returns:
+            None: This method returns nothing.
+
+        Raises:
+            RefusedRequestError: With HTTP 400 for a fixed price off the tick.
+        """
+        tick_size = self.tick_size()
+        if not tick_size:
+            return
+        for part in root.order_parts():
+            if not isinstance(part.pricing, FixedPricing) or part.pricing.price is None:
+                continue
+            if not part.context(self).is_parents_instrument():
+                continue
+            price = decimal.Decimal(str(part.pricing.price))
+            if price % tick_size != 0:
+                raise RefusedRequestError.refusal(
+                    f'the price {price} of part {part.path} must be a whole number of ticks of {format(tick_size.normalize(), "f")}',
+                    400,
+                    part=part.path,
+                )
+
+    def _end_refused(self, part, refusal):
+        """Ends an order the placement refused as it fired, so the parent finishes and says why instead of trying again on every tick.
+
+        Args:
+            part (object): The order part.
+            refusal (RefusedRequestError): The refusal.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        reason = refusal.body.get('error') or refusal.body.get('status_message') or 'the order was refused'
+        record = self.part_record(part.path)
+        record['state'] = 'done'
+        record['reason'] = 'refused'
+        record['message'] = reason
+        self.set_part_record(part.path, record, f'the plan\'s {part.path} part could not be sent and is done: {reason}')
 
     def _answer(self, root, placed, warnings):
         """The answer to the caller once the plan has started.
@@ -329,17 +385,28 @@ class PlanOrder(SyntheticOrder):
         tick_sizes = {}
         for part in root.order_parts():
             context = part.context(self)
-            if context.is_parents_instrument() or not part.needs_prices():
-                continue
-            instrument, _, _ = self.placement.market_context(context.instrument_id, False, False)
-            tick_size = self.read_order(context.body).agreed_tick_size(instrument.handles)
-            if tick_size is None:
-                raise RefusedRequestError.refusal(
-                    'an order of this plan works its prices out from the live quote, which needs a tick size the brokers agree on, and there is none for its instrument',
-                    503,
-                    instrument_id=context.instrument_id,
-                )
-            tick_sizes[context.instrument_id] = str(tick_size)
+            if not context.is_parents_instrument() and part.needs_prices():
+                instrument, _, _ = self.placement.market_context(context.instrument_id, False, False)
+                tick_size = self.read_order(context.body).agreed_tick_size(instrument.handles)
+                if tick_size is None:
+                    raise RefusedRequestError.refusal(
+                        'an order of this plan works its prices out from the live quote, which needs a tick size the brokers agree on, and there is none for its instrument',
+                        503,
+                        instrument_id=context.instrument_id,
+                    )
+                tick_sizes[context.instrument_id] = str(tick_size)
+            for watched_id in part.instruments():
+                if watched_id in tick_sizes or context.is_parents_instrument(watched_id):
+                    continue
+                instrument, _, _ = self.placement.market_context(watched_id, False, False)
+                tick_size = self.read_order(context.body).agreed_tick_size(instrument.handles)
+                if tick_size is None:
+                    raise RefusedRequestError.refusal(
+                        'an order of this plan watches the price of an instrument whose brokers do not agree on a tick size, so its price cannot be read exactly',
+                        503,
+                        instrument_id=watched_id,
+                    )
+                tick_sizes[watched_id] = str(tick_size)
         if tick_sizes:
             self.parent.parameters = dict(self.parent.parameters)
             self.parent.parameters['tick_sizes'] = tick_sizes
@@ -638,7 +705,14 @@ class PlanOrder(SyntheticOrder):
                 if isinstance(missed, int):
                     record['missed_quantity'] = missed
             self.set_part_record(part.path, record, None)
-            sent = part.send(self, None, sending_quotes, now)
+            try:
+                sent = part.send(self, None, sending_quotes, now)
+            except RefusedRequestError as refusal:
+                if refusal.status not in PERMANENT_REFUSAL_STATUSES:
+                    raise
+                self._end_refused(part, refusal)
+                ended = True
+                continue
             record = self.part_record(part.path)
             if not sent and record.get('state') == 'waiting':
                 record.pop('fired_at', None)
@@ -917,6 +991,8 @@ class PlanOrder(SyntheticOrder):
             answer, status = self._change_held_part(part, price, quantity, dry_run)
             answer['part'] = path
             return answer, status
+        if part.position is not None and (price is not None or quantity is not None):
+            raise RefusedRequestError.refusal(f'part {path} closes the positions held when it fires, sized from those positions and priced from the book, so its price and quantity cannot be set; cancel it instead', 409, parent_id=parent_order_id, part=path)
         if (price is not None or trigger_price is not None) and not isinstance(part.pricing, (FixedPricing, NativeStopPricing)):
             raise RefusedRequestError.refusal(f'part {path} works out its price from the market when it is sent, so its price cannot be set beforehand', 400, parent_id=parent_order_id, part=path)
         context = part.context(self)

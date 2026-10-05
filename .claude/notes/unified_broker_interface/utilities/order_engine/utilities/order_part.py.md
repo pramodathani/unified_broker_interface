@@ -101,3 +101,8 @@ Every update settles the whole plan, and an Either join that cancels its sibling
 ## `cancel_for_caller` (added 2026-10-02)
 
 It reuses `ended`, which a lifetime sets, instead of a new flag, so every place that already stops an ended part stops a cancelled one too. See `plan.py.md` for why a part whose turn has not come stays `pending` rather than being marked done, and why `start` checks `ended` first.
+
+
+## `same_as_first` (2026-10-04)
+
+A sequential `stop_and_reverse` used to name its reverse side from the body: a BUY body reversed with a sell. With a short position and a BUY body, the close bought and the reverse sold, so the account went from short back to the same short. The reverse now uses the side `same_as_first`, which sends on `_opening_side`, the side the first part's filled orders traded. Since the first part is the close, the reverse goes the same way as the close, which flips the position whichever way it was held.

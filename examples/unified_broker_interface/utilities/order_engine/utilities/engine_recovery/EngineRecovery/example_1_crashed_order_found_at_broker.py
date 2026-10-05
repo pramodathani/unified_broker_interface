@@ -4,7 +4,7 @@ The engine writes a `leg_requested` row before an order leaves for the broker an
 
 The event log is a small stand-in class that keeps rows in a list, because the real one is a TimescaleDB table. Redis is the in-memory `FakeEngineStoreRedis` from `test_runs/redis_stand_ins.py`, because recovery rebuilds four Redis keys through a pipeline and that stand-in already speaks every command involved. Nothing reaches a broker: the order book is text seeded into the stand-in, exactly as the broker's poller would have written it.
 
-Notice that the counts say one parent, one open, one orphan attributed; that the leg moves from `sending` to `acknowledged` with the broker's order id; and that one `orphan_attributed` row is added to the record, so the next start does not decide the same leg again. The recovery window always starts at the last 06:00 IST, and the order types that live overnight are read from thirty days further back.
+Notice that the counts say one parent, one open, one orphan attributed; that the leg moves from `sending` to `acknowledged` with the broker's order id; and that one `orphan_attributed` row is added to the record, so the next start does not decide the same leg again. The recovery window always starts at the last 06:00 IST, and the order types that live overnight are read from 366 days further back.
 
 Run it from the project root:
 
