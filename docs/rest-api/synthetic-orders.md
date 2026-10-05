@@ -1017,7 +1017,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     #### `accumulation`
 
-    An accumulation buys the order's `quantity` every `every_minutes`, `purchases` times, measured from when the order was placed. Each purchase rests on its own side of the book and is not chased if it does not fill. A `LIMIT` order's `price` is the most a buy pays, or the least a sell takes: a purchase rests at the book's own touch when that is better, and at your price otherwise, including when the book shows nothing on that side.
+    An accumulation buys the order's `quantity` every `every_minutes`, `purchases` times, measured from when the order was placed. Each purchase rests on its own side of the book and is not chased if it does not fill. A `LIMIT` order's `price` is the most a buy pays, or the least a sell takes: a purchase rests at the book's own touch when that is better, and at your price otherwise, including when the book shows nothing on that side. A price that is not a whole number of ticks is refused with <span class="status s4">400</span> when the order is placed. Purchases follow the clock, not the market's hours, so hourly purchases on an intraday product carry on after the close.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
@@ -1230,7 +1230,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | A leg of a Together join with `group_margin`, as in a basket | Never; asking for it on the leg is refused |
     | A `MARKET` order, an `IOC` or after-market order, or one priced by a pricing other than `fixed` | No; asking for it on the order is refused with the reason |
     | An order sent in other pieces (`vwap`, `iceberg`, `participation`, `book_depth`, two nested executions), with a post-only guard or discretion, in the pre-open or on paper, whose lifetime ends `marketable`, or whose lifetime bounds it only once it is `working` | No; asking for it on the order is refused with the reason |
-    | A `ladder` preset in a held order, or an order whose execution is one `ladder`, `twap` or `front_loaded`, given by the order or by a preset that gives nothing else, with no pricing, guards or venue | Each piece is held: a rung at its own price, as under [`ladder`](#ladder), and a timed slice from its turn onwards |
+    | A `ladder` preset in a held order, or an order whose execution is one `ladder`, `twap` or `front_loaded`, given by the order or by a preset that gives nothing else, with no pricing, guards or venue, on a `LIMIT` body with a price that is neither `IOC` nor after-market | Each piece is held: a rung at its own price, as under [`ladder`](#ladder), and a timed slice from its turn onwards |
     | An order sent as `freeze_limit` slices | The whole order is held, and every slice goes out together when the market reaches its price |
 
     These types are held by default when they are run as plans, because each sends one limit order whose only job is to rest until the market reaches it. Each one is held from the moment it would have been sent:
@@ -1251,7 +1251,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | `bracket`, `cover`, `scale_out`, `oto` | Placing | Every exit and the OTO's second order |
     | `oca` | Placing | Nothing; every candidate is held |
     | `scale_with_profit_taker` | Placing, and again each time a rung's profit has been taken | Every profit-taker |
-    | `twap`, `implementation_shortfall` | Each slice from its turn | Nothing; every slice is held |
+    | `twap`, `implementation_shortfall` | Each slice from its turn, when the body is a `LIMIT` with a price that is neither `IOC` nor after-market | Every slice of such an order is held; any other order is sent unheld, slice by slice |
     | `freeze_slicer` | Placing, the whole order | Nothing; every slice goes out together once the market reaches the price |
 
     A `vwap` or `closing_price` order is not held, since its volume-shaped slices are not split piece by piece yet, and an `iceberg` is not held, since keeping a small size in the queue is what it is for.

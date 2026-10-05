@@ -41,6 +41,9 @@ from unified_broker_interface.utilities.order_engine.utilities.paper_venue impor
 from unified_broker_interface.utilities.order_engine.utilities.parent_store import (
     ParentStore,
 )
+from unified_broker_interface.utilities.order_engine.utilities.peg_pricing import (
+    PegPricing,
+)
 from unified_broker_interface.utilities.order_engine.utilities.plan_reader import (
     PlanReader,
 )
@@ -323,6 +326,8 @@ class PlanOrder(SyntheticOrder):
             prices.append(('price', part.pricing.price))
         body_is_limit = str(self.parent.body.get('order_type') or '').strip().upper() == 'LIMIT'
         if isinstance(part.pricing, FixedPricing) and part.pricing.price is None and part.pricing.order_type is None and body_is_limit and self.parent.body.get('price') is not None:
+            prices.append(('price', self.parent.body['price']))
+        if isinstance(part.pricing, PegPricing) and part.pricing.within_body_price and body_is_limit and self.parent.body.get('price') is not None:
             prices.append(('price', self.parent.body['price']))
         if isinstance(part.pricing, FollowInstrumentPricing):
             if part.pricing.lowest is not None:

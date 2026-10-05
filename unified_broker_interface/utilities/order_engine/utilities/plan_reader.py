@@ -1280,7 +1280,7 @@ class PlanReader:
             wanted = order['hold_limits']
         else:
             wanted = self.hold_limits is True and not self._follow_on and order.get('side') != 'protect'
-        if not wanted or self._grouped:
+        if not wanted or self._grouped or self._body_cannot_be_held(order) is not None:
             return None
         pieces_order = dict(order)
         pieces_order.pop('hold_limits', None)
@@ -1340,6 +1340,28 @@ class PlanReader:
         copied = dict(order)
         copied.pop('execution', None)
         return copied
+
+    def _body_cannot_be_held(self, order):
+        """Why the request body keeps an order from being held piece by piece, or None when nothing in it does.
+
+        Held pieces are virtual limits at the body's own price, so the body must be a `LIMIT` with a price that is neither `IOC` nor after-market. `_why_not_held` makes the same checks for an order held whole; the pieces path skipped them, so a `MARKET` TWAP was refused although a market order is simply not held, and an `IOC` TWAP was held although an IOC order trades now or never.
+
+        Args:
+            order (dict): The order as the caller wrote it, whose own `validity` overrides the body's.
+
+        Returns:
+            str | None: The reason, as the end of a sentence, or None when the body can be held.
+        """
+        if self.body is None:
+            return None
+        if str(self.body.get('order_type') or '').strip().upper() != 'LIMIT' or self.body.get('price') is None:
+            return 'it is not a LIMIT order with a price'
+        validity = order.get('validity', self.body.get('validity'))
+        if str(validity or 'DAY').strip().upper() == 'IOC':
+            return 'an IOC order trades now or never'
+        if str(self.body.get('after_market')).strip().lower() in ('true', '1', 'yes'):
+            return 'an after-market order is queued for a session that sends no prices to release it'
+        return None
 
     def _wants_holding(self, order, side, path):
         """Whether an order is asked to be held in the virtual order book, by itself or by the request.

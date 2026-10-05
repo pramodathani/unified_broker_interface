@@ -5734,6 +5734,73 @@ class OrderEngineSuite:
             ),
         ]
 
+    def run_execution_algorithm_checks(self):
+        """Runs the execution algorithms where an empty slice, a lot, a falling volume, a stale book, a market or IOC body under holding, or an off-tick limit used to go wrong.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        accepted = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        entry = self.scenarios.bodies.market_order(
+            dry_run=None,
+            order_type='LIMIT',
+            price=1000,
+            quantity=10,
+        )
+        steady = self.book_at(1000.00, 1000.05)
+        results = [
+            self.price_result(
+                'an_accumulation_limit_off_the_tick_is_refused_when_placed',
+                dict(entry, price=1000.03, synthetic={
+                    'type': 'accumulation',
+                    'every_minutes': 10,
+                    'purchases': 3,
+                }),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+        ]
+        original_hold_limits = api_configuration['order_hold_limits']
+        api_configuration['order_hold_limits'] = True
+        try:
+            results.append(
+                self.price_result(
+                    'a_market_twap_is_sent_unheld_while_holding_is_on',
+                    dict(entry, order_type='MARKET', price=None, synthetic={
+                        'type': 'twap',
+                        'slices': 2,
+                        'over_minutes': 1,
+                    }),
+                    [
+                        {'quote': steady, 'at': 0},
+                        {'quote': steady, 'at': 30},
+                    ],
+                    accepted,
+                )
+            )
+            results.append(
+                self.price_result(
+                    'an_ioc_twap_is_not_held_while_holding_is_on',
+                    dict(entry, validity='IOC', synthetic={
+                        'type': 'twap',
+                        'slices': 2,
+                        'over_minutes': 1,
+                    }),
+                    [
+                        {'quote': steady, 'at': 0},
+                    ],
+                    accepted,
+                )
+            )
+        finally:
+            api_configuration['order_hold_limits'] = original_hold_limits
+        return results
+
     def run_limit_pricing_checks(self):
         """Runs the book-following limit types where a cancelled order, a price off the tick, a stop or market body, or a caller's change used to go wrong.
 
@@ -14270,6 +14337,7 @@ class OrderEngineSuite:
             results.extend(self.run_stop_type_checks())
             results.extend(self.run_stale_quote_checks())
             results.extend(self.run_limit_pricing_checks())
+            results.extend(self.run_execution_algorithm_checks())
             results.extend(self.run_price_checks())
             results.extend(self.run_wiring_checks())
             results.extend(self.run_assignment_checks())
