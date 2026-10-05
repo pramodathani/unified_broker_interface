@@ -6735,6 +6735,88 @@ class OrderEngineSuite:
             ),
         ]
 
+    def run_plan_description_checks(self):
+        """Runs plans whose refusals used to point at parts the caller never wrote, and whose dry runs hid each order's own instrument, side and quantity.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        answers = self.scenarios.answers
+        numbered = dict(
+            answers.json_answer(
+                200,
+                answers.place_success('flattrade'),
+            ),
+            number_orders=True,
+        )
+        identifiers = order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS
+        steady = self.book_at(1000.00, 1000.05)
+        entry = self.scenarios.bodies.market_order(
+            dry_run=None,
+            order_type='LIMIT',
+            price=1000,
+            quantity=10,
+        )
+
+        def plan(tree, dry_run=None):
+            """The entry body carrying a plan.
+
+            Args:
+                tree (dict): The plan's root node.
+                dry_run (bool | None): True for a dry run.
+
+            Returns:
+                dict: The body.
+            """
+            return dict(
+                entry,
+                dry_run=dry_run,
+                synthetic={
+                    'type': 'plan',
+                    'plan': tree,
+                },
+            )
+
+        cases = [
+            (
+                'a_bad_bracket_price_is_refused_at_the_bracket_preset',
+                plan({'order': {'presets': [{'bracket': {'stop_price': 'x', 'stop_limit_price': 988, 'target_price': 1010}}]}}),
+            ),
+            (
+                'a_bad_trigger_beside_a_bracket_is_refused_at_its_own_preset',
+                plan({'order': {'presets': [{'market_if_touched': {'trigger_price': 'x'}}, {'bracket': {'stop_price': 990, 'stop_limit_price': 988, 'target_price': 1010}}]}}),
+            ),
+            (
+                'a_bad_side_in_a_repeat_is_refused_at_its_child',
+                plan({'repeat': {'child': {'order': {'side': 'sideways'}}, 'times': 2, 'every_minutes': 5}}),
+            ),
+            (
+                'a_bad_side_in_a_using_is_refused_at_each_piece',
+                plan({'using': {'order': {'execution': [{'ladder': {'from_price': 995, 'to_price': 999, 'steps': 3}}]}, 'each_piece': {'side': 'sideways'}}}),
+            ),
+            (
+                'a_dry_run_of_a_basket_shows_each_legs_instrument_and_side',
+                dict(entry, dry_run=True, synthetic={'type': 'basket', 'candidates': [{'instrument_id': identifiers['reliance'], 'quantity': 10, 'price': 1000}, {'instrument_id': identifiers['kwil'], 'transaction_type': 'SELL', 'quantity': 10, 'price': 250}]}),
+            ),
+            (
+                'a_dry_run_of_a_sequence_shows_the_body_quantity_for_its_second_order',
+                plan({'sequence': {'children': [{'order': {}}, {'order': {'transaction_type': 'SELL', 'pricing': [{'fixed': {'price': 1010}}]}}]}}, dry_run=True),
+            ),
+        ]
+        results = []
+        for name, body in cases:
+            results.append(
+                self.price_result(
+                    name,
+                    body,
+                    [
+                        {'quote': steady, 'at': 0, 'other_quotes': {'kwil': self.book_at(250.00, 250.05)}},
+                    ],
+                    numbered,
+                ),
+            )
+        return results
+
     def run_execution_algorithm_checks(self):
         """Runs the execution algorithms where an empty slice, a lot, a falling volume, a stale book, a market or IOC body under holding, or an off-tick limit used to go wrong.
 
@@ -15467,6 +15549,7 @@ class OrderEngineSuite:
             results.extend(self.run_plan_exit_checks())
             results.extend(self.run_plan_reading_checks())
             results.extend(self.run_exposure_catch_up_checks())
+            results.extend(self.run_plan_description_checks())
             results.extend(self.run_price_checks())
             results.extend(self.run_wiring_checks())
             results.extend(self.run_assignment_checks())

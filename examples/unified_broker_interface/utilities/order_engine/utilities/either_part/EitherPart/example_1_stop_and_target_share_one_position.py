@@ -218,7 +218,7 @@ class PartMaker:
         return OrderPart(path, [], None, None, FixedPricing(None, None), True)
 
     def stop(self, path):
-        """A stop-limit protecting the position, triggering at 990 with a limit of 988.
+        """A stop-limit protecting the position, triggering at 990 with a limit of 988, sharing its quantity with its sibling as a reduce join's child does, which the plan reader marks.
 
         Args:
             path (str): The part's path.
@@ -226,10 +226,12 @@ class PartMaker:
         Returns:
             OrderPart: The part.
         """
-        return OrderPart(path, [], None, 'protect', NativeStopPricing(decimal.Decimal('990'), decimal.Decimal('988')), False)
+        part = OrderPart(path, [], None, 'protect', NativeStopPricing(decimal.Decimal('990'), decimal.Decimal('988')), False)
+        part.shares_quantity = True
+        return part
 
     def target(self, path):
-        """A limit at 1,010 protecting the position.
+        """A limit at 1,010 protecting the position, sharing its quantity with its sibling as a reduce join's child does, which the plan reader marks.
 
         Args:
             path (str): The part's path.
@@ -237,7 +239,9 @@ class PartMaker:
         Returns:
             OrderPart: The part.
         """
-        return OrderPart(path, [], None, 'protect', FixedPricing(decimal.Decimal('1010'), None), False)
+        part = OrderPart(path, [], None, 'protect', FixedPricing(decimal.Decimal('1010'), None), False)
+        part.shares_quantity = True
+        return part
 
 
 class StopAndTargetShareOnePositionExample:

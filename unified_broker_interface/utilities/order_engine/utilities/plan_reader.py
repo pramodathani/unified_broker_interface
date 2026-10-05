@@ -355,6 +355,7 @@ class PlanReader:
         self.warnings = []
         self._follow_on = False
         self._grouped = False
+        self._translations = []
 
     def read(self, plan):
         """Reads a whole plan.
@@ -369,6 +370,7 @@ class PlanReader:
         self.warnings = []
         self._follow_on = False
         self._grouped = False
+        self._translations = []
         if self.hold_limits is not None and not isinstance(self.hold_limits, bool):
             self._add_problem('hold_limits', 'bad_setting', f'hold_limits is true or false, not {self.hold_limits!r}')
         root = self._read_node(plan, 'root', True)
@@ -496,6 +498,9 @@ class PlanReader:
                     part.pricing.opened_by = opened_by
                 if isinstance(part, WholePart):
                     part.opened_instruments = opened_instruments
+        if child is not None:
+            for part in child.order_parts():
+                part.follows_fills = True
         if isinstance(child, OrderPart):
             child.sized_by_fills = True
             if isinstance(child.pricing, FromParentFillPricing) and isinstance(first, OrderPart):
@@ -656,7 +661,9 @@ class PlanReader:
         copies = []
         for index in range(times):
             copy_path = f'{path}.children.{index}'
+            self._translations.append(('repeat', copy_path, f'{path}.child', None))
             part = self._read_node(child, copy_path, keeps_tag and index == 0)
+            self._translations.pop()
             if part is None:
                 return None
             if isinstance(part, WholePart):
@@ -747,6 +754,7 @@ class PlanReader:
         mains = []
         for index in range(count):
             copy_path = f'{path}.pieces.{index}'
+            self._translations.append(('using', copy_path, path, list(each_piece)))
             child = self._read_node(
                 {
                     'order': piece_order,
@@ -754,6 +762,7 @@ class PlanReader:
                 copy_path,
                 keeps_tag and index == 0,
             )
+            self._translations.pop()
             if child is None:
                 return None
             for part in child.order_parts():
@@ -770,6 +779,7 @@ class PlanReader:
                 else:
                     main.trigger = ConditionGroup('all', [main.trigger, elapsed])
             children.append(child)
+            main.piece_of = 'rung' if isinstance(execution, LadderExecution) else 'slice'
             mains.append(main)
         return UsingPart(path, children, execution, mains)
 
@@ -866,6 +876,8 @@ class PlanReader:
                     'reduce_needs_orders',
                     'the children of a reduce join share one quantity, so each must be a single order',
                 )
+            if sibling_rule == 'reduce' and isinstance(read_child, OrderPart):
+                read_child.shares_quantity = True
             read_children.append(read_child)
         if len(self.problems) > problems_before:
             return None
@@ -889,11 +901,15 @@ class PlanReader:
                 'an order is an object',
             )
             return None
-        tree = self._join_preset_tree(order, path)
-        if tree is not None:
+        found = self._join_preset_tree(order, path)
+        if found is not None:
+            tree, index = found
             if not tree:
                 return None
-            return self._read_node(tree, path, keeps_tag)
+            self._translations.append(('join_preset', path, index, None))
+            part = self._read_node(tree, path, keeps_tag)
+            self._translations.pop()
+            return part
         held_pieces = self._held_pieces_tree(order)
         if held_pieces is not None:
             return self._read_node(held_pieces, path, keeps_tag)
@@ -1690,7 +1706,7 @@ class PlanReader:
             path (str): Where the order sits in the plan.
 
         Returns:
-            dict | None: The tree, as a caller would write it, or None when there is no join preset or it has problems.
+            tuple | None: The tree, as a caller would write it, empty when it has problems, and the preset's place in the order's `presets` (int); or None when there is no join preset.
         """
         presets = order.get('presets')
         if not isinstance(presets, list):
@@ -1714,7 +1730,7 @@ class PlanReader:
                 'two_join_presets',
                 'an order can name one preset that stands for a join, such as a bracket or an oco, not several',
             )
-            return {}
+            return {}, None
         index, name, settings = found[0]
         entry = dict(order)
         entry['presets'] = presets[:index] + presets[index + 1:]
@@ -1723,8 +1739,8 @@ class PlanReader:
         tree = expander.expand_join(name, settings, entry, f'{path}.presets.{index}')
         self.problems.extend(expander.problems)
         if expander.problems:
-            return {}
-        return tree
+            return {}, index
+        return tree, index
 
     def _preset_sources(self, presets, path):
         """Expands each preset into its slot values.
@@ -3023,36 +3039,85 @@ class PlanReader:
                     f'the {name} {kind} takes {", ".join(known)}, not {setting!r}',
                 )
 
-    def _add_problem(self, path, rule, message):
-        """Records one problem.
+    def _written_path(self, path):
+        """Where the caller wrote what a path names, for a path inside a part the reader built from something the caller wrote once.
+
+        A join preset is read as the join it stands for, a repeat as one copy per time and a using as one copy per piece, so a problem found while reading them is first given the path of the part as it runs, such as `root.each_fill.children.0` for a bracket's stop. The caller never wrote those parts. Each translation, innermost first, takes the path back: inside a join preset, to the preset that holds the value, which is the join preset itself unless the value came from another preset of the same order, or to the order itself for the order the join preset placed as its `first`; inside a repeat's copy, to its `child`; inside a using's piece, to `each_piece` or `order`, whichever holds the setting.
 
         Args:
-            path (str): The path of the part the problem is in.
+            path (str): The path as the part runs.
+
+        Returns:
+            str: The path in what the caller wrote.
+        """
+        for kind, prefix, target, extra in reversed(self._translations):
+            if path != prefix and not path.startswith(f'{prefix}.'):
+                continue
+            rest = path[len(prefix):]
+            if kind == 'repeat':
+                path = f'{target}{rest}'
+            elif kind == 'using':
+                slot = rest.split('.')[1] if rest else ''
+                holder = 'each_piece' if slot in extra else 'order'
+                path = f'{target}.{holder}{rest}'
+            else:
+                marker = '.presets.'
+                found = rest.find(marker)
+                if found == -1 and (rest == '.first' or rest.startswith('.first.')):
+                    path = f'{prefix}{rest[len(".first"):]}'
+                    continue
+                if found == -1:
+                    path = f'{prefix}.presets.{target}'
+                    continue
+                after = rest[found + len(marker):]
+                number, _, tail = after.partition('.')
+                if not number.isdigit():
+                    path = f'{prefix}.presets.{target}'
+                    continue
+                written = int(number)
+                if written >= target:
+                    written = written + 1
+                path = f'{prefix}.presets.{written}'
+                if tail:
+                    path = f'{path}.{tail}'
+        return path
+
+    def _add_problem(self, path, rule, message):
+        """Records one problem, at the path where the caller wrote what it is about, and with the part it became as `part` when that differs.
+
+        Args:
+            path (str): The path of the part the problem is in, as the part runs.
             rule (str): The name of the rule it breaks.
             message (str): What is wrong, for the caller.
 
         Returns:
             None: This method returns nothing.
         """
-        self.problems.append({
-            'path': path,
+        problem = {
+            'path': self._written_path(path),
             'rule': rule,
             'message': message,
-        })
+        }
+        if problem['path'] != path:
+            problem['part'] = path
+        self.problems.append(problem)
 
     def _add_warning(self, path, rule, message):
-        """Records one warning.
+        """Records one warning, at the path where the caller wrote what it is about, and with the part it became as `part` when that differs.
 
         Args:
-            path (str): The path the warning is about.
+            path (str): The path the warning is about, as the part runs.
             rule (str): The name of the rule that produced it.
             message (str): What the caller should know.
 
         Returns:
             None: This method returns nothing.
         """
-        self.warnings.append({
-            'path': path,
+        warning = {
+            'path': self._written_path(path),
             'rule': rule,
             'message': message,
-        })
+        }
+        if warning['path'] != path:
+            warning['part'] = path
+        self.warnings.append(warning)
