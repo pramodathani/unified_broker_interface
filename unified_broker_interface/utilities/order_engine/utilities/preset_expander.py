@@ -25,6 +25,8 @@ WATCH_FIELDS = {
     'mid': 'mid',
 }
 DEFAULT_BUFFER_TICKS = 2
+DEFAULT_FILL_WITHIN_SECONDS = 30
+SECONDS_IN_A_MINUTE = 60
 KEPT_WHOLE_PRESETS = (
     'grid',
     'two_sided_quote',
@@ -36,6 +38,7 @@ KEPT_WHOLE_PRESETS = (
 PRESET_NAMES = (
     'simple',
     'market_if_touched',
+    'marketable_limit',
     'limit_if_touched',
     'scheduled',
     'indicator_triggered',
@@ -225,6 +228,8 @@ class PresetExpander:
             return self._simple(settings, path)
         if name == 'market_if_touched':
             return self._market_if_touched(settings, path)
+        if name == 'marketable_limit':
+            return self._marketable_limit(settings, path)
         if name == 'limit_if_touched':
             return self._limit_if_touched(settings, path)
         if name == 'scheduled':
@@ -1156,6 +1161,46 @@ class PresetExpander:
                     'marketable': {
                         'buffer_ticks': settings.get('buffer_ticks', DEFAULT_BUFFER_TICKS),
                     },
+                },
+            ],
+        }
+
+    def _marketable_limit(self, settings, path):
+        """Sends the order as a limit a few ticks past the other side's best price, moves it after that price until it fills, and cancels what is left once its time is up.
+
+        The order is refused, rather than left waiting, when nobody is on the other side of the book, or no fresh quote has arrived, because a market order sent then would have nothing to trade against.
+
+        Args:
+            settings (dict): Optionally `buffer_ticks`, a whole number of ticks of at least 0, and `fill_within_seconds`, a number of seconds above zero.
+            path (str): The preset's path.
+
+        Returns:
+            dict: `peg` pricing on the opposite touch and a lifetime that cancels; empty when there are problems.
+        """
+        self._refuse_unknown(settings, ('buffer_ticks', 'fill_within_seconds'), path, 'marketable_limit')
+        buffer_ticks = settings.get('buffer_ticks', DEFAULT_BUFFER_TICKS)
+        if isinstance(buffer_ticks, bool) or not isinstance(buffer_ticks, int) or buffer_ticks < 0:
+            self._add_problem(path, 'bad_setting', f'buffer_ticks must be a whole number of ticks of at least 0, not {buffer_ticks!r}')
+        fill_within_seconds = settings.get('fill_within_seconds', DEFAULT_FILL_WITHIN_SECONDS)
+        if isinstance(fill_within_seconds, bool) or not isinstance(fill_within_seconds, (int, float)) or fill_within_seconds <= 0:
+            self._add_problem(path, 'bad_setting', f'fill_within_seconds must be a number of seconds above zero, not {fill_within_seconds!r}')
+        if self.problems:
+            return {}
+        return {
+            'pricing': [
+                {
+                    'peg': {
+                        'reference': 'opposite_touch',
+                        'offset_ticks': -buffer_ticks,
+                        'on_empty_book': 'refuse',
+                    },
+                },
+            ],
+            'lifetime': [
+                {
+                    'after_minutes': fill_within_seconds / SECONDS_IN_A_MINUTE,
+                    'applies_to': 'both',
+                    'on_end': 'cancel',
                 },
             ],
         }

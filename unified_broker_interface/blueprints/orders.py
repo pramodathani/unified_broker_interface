@@ -192,6 +192,7 @@ class OrdersBlueprint(BaseBlueprint):
             self.cache,
             api_configuration['order_engine_timeout_seconds'],
             api_configuration['order_hold_limits'],
+            api_configuration['order_market_as_limit'],
         )
         self.order_placement.start_connection_warmers()
 

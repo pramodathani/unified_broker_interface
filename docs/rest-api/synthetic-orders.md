@@ -2,7 +2,7 @@
 
 A synthetic order is an order that no Indian exchange offers, built by the order engine out of ordinary broker orders. You ask for one by adding a `synthetic` object to the body of [`POST /api/orders/place`](orders.md#place-an-order), and the engine places, watches, moves and cancels the real orders it is made of.
 
-This page is the glossary of all 54 types you can ask for. The engine runs `simple` and `plan` with classes of their own and every other type as a [`plan`](#plan) of that type's preset, so a request for a `bracket` is answered as a plan is. It lists every field each type reads from the `synthetic` object, with the defaults and limits taken from the code.
+This page is the glossary of all 55 types you can ask for. The engine runs `simple` and `plan` with classes of their own and every other type as a [`plan`](#plan) of that type's preset, so a request for a `bracket` is answered as a plan is. It lists every field each type reads from the `synthetic` object, with the defaults and limits taken from the code.
 
 !!! danger "Synthetic orders place real orders, sometimes long after you asked"
     A synthetic order can place, modify or cancel orders at a broker minutes, hours or even days after your request, with nobody watching. Triggers, trailing stops, grids and schedules all act on their own. Send `"dry_run": true` first, which checks the order and shows what it would do without recording or sending anything. For every type but `simple`, the answer's `plan` shows the orders the type will send; its `request` is your own order body as a broker would receive it, which for a stop is not the stop. A dry run also skips the check that a protecting order has a position to protect.
@@ -68,7 +68,7 @@ Three fields can appear in any `synthetic` object. The table below lists them.
 
 | Field | Type | Required | Meaning |
 |---|---|:---:|---|
-| `type` | string | Yes | One of the 54 names in the table below. A body with no `synthetic` object, or no `type`, runs as `simple`. An unknown name is refused with `400` and the message `the order engine does not run '<name>' orders; it runs <list>`. |
+| `type` | string | Yes | One of the 55 names in the table below. A body with no `synthetic` object, or no `type`, runs as `simple`. An unknown name is refused with `400` and the message `the order engine does not run '<name>' orders; it runs <list>`. |
 | `closes_position` | boolean | No | `true` says every leg of this order closes a position, so it may use the part of a broker's daily order cap kept for exits. Only the literal `true` counts. |
 | `hold_limits` | boolean | No | `true` holds each of its orders that would rest at the broker at a fixed limit price in the engine's virtual order book until the market reaches it, and `false` sends them as they come, as described under [`plan`](#plan). A type that does not say takes its default when it arrives: `true` for `ladder`, `scheduled`, `good_till_time`, `time_stop`, `account_conditional`, `limit_if_touched`, `indicator_triggered`, `cross_instrument`, `gtt`, `bracket`, `cover`, `scale_out`, `oto`, `oca`, `scale_with_profit_taker`, `freeze_slicer`, `twap` and `implementation_shortfall` while `UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS` is on, `false` for every other type. A `plan` written by the caller that does not say takes the switch's own value: `true` while it is on. A plan recorded before plans were held by default carries no value and is read as not held. A `simple` order, which is sent at once, refuses `true` with `400`. Anything other than `true` or `false` is refused with `400`. |
 
@@ -105,7 +105,7 @@ Types that wait for a price or a time send nothing at first, and answer <span cl
 
 Keep the `parent_id`. It is the only handle on an order that has not reached a broker yet.
 
-## All 54 types
+## All 55 types
 
 The master table below lists every type you can name in `synthetic.type`. `simple` and `plan` are run by classes of their own, registered in `SYNTHETIC_ORDER_CLASSES`; every other type is in `ROUTED_TYPES` in `order_engine/utilities/plan_routing.py` and runs as a plan of its preset, keeping its own name as `routed_from`. The "First answer" column says whether a broker order goes out when you ask (`200`, the broker's own answer) or whether the engine waits (`202`).
 
@@ -125,6 +125,7 @@ The master table below lists every type you can name in `synthetic.type`. `simpl
 | `twap` | Execution algorithms | Sends equal slices at even intervals over a period; run as a plan, holds each slice from its turn until the market reaches it. | `slices`, `over_minutes` | 200, or 202 when its slices are held |
 | `peg` | Book-following limits | Keeps a limit order re-priced to the bid, the offer or the midpoint. | `reference`, `offset_ticks`, `cap_price` | 200 |
 | `chaser` | Book-following limits | Starts on its own side of the book and steps towards the other until it fills. | `step_ticks`, `step_seconds`, `cap_price`, `cross_after_seconds` | 200 |
+| `marketable_limit` | Book-following limits | Sends a market order as a limit a few ticks past the other side's best price, follows that price until it fills, and cancels what is left after a time; refused when nobody is on the other side. Every plain `MARKET` order runs as this type while `UNIFIED_BROKER_INTERFACE_API_ORDER_MARKET_AS_LIMIT` is on. | `buffer_ticks`, `fill_within_seconds` | 200, or 409 on an empty book |
 | `market_if_touched` | Price triggers | Waits unseen for the price to touch a level, then sends a marketable limit. | `trigger_price`, `trigger_direction`, `buffer_ticks` | 202 |
 | `limit_if_touched` | Price triggers | Waits for the price to touch a level, then rests a limit at another price. | `trigger_price`, `limit_price`, `trigger_direction` | 202 |
 | `hidden_stop` | Stops and trailing | A stop kept in the engine that watches the bid or offer, with an optional real backstop. | `trigger_price`, `backstop_price`, `backstop_limit_price`, `buffer_ticks` | 202, or 200 with a backstop |
@@ -166,7 +167,7 @@ The master table below lists every type you can name in `synthetic.type`. `simpl
 | `account_conditional` | Price triggers | Sends an order when free margin, the day's profit or the open position count reaches a level, or cancels it then. | `account_field`, `account_level`, `trigger_direction`, `action` | 202, or 200 with `action: cancel` |
 | `plan` | Plans | An order described as a plan of parts: orders that may wait for a trigger, protect a position, trail the market, be priced by one pricing rule and be sent in pieces, joined with then and either. | `plan` | 200, or 202 when nothing is placed at once |
 
-The chart below counts how many of the 54 types fall into each family. The families are this page's own grouping, chosen to make the list easier to scan; the code does not group them.
+The chart below counts how many of the 55 types fall into each family. The families are this page's own grouping, chosen to make the list easier to scan; the code does not group them.
 
 ```vegalite
 {
@@ -179,7 +180,7 @@ The chart below counts how many of the 54 types fall into each family. The famil
       {"family": "Linked orders", "types": 8},
       {"family": "Execution algorithms", "types": 8},
       {"family": "Stops and trailing", "types": 7},
-      {"family": "Book-following limits", "types": 7},
+      {"family": "Book-following limits", "types": 8},
       {"family": "Price triggers", "types": 8},
       {"family": "Plain and laddered", "types": 6},
       {"family": "Time-based", "types": 5},
@@ -880,6 +881,25 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     ```json
     {"type": "chaser", "step_ticks": 1, "step_seconds": 5, "cap_price": 98.5, "cross_after_seconds": 60}
     ```
+
+    #### `marketable_limit`
+
+    A marketable limit is a market order with a worst price. It is sent as a `LIMIT` priced `buffer_ticks` past the other side's best price, which for a buy is the best offer, so it trades at once against what rests there. On every later tick it is moved to `buffer_ticks` past the other side's best price again, through the repricing throttle, until it fills. Once `fill_within_seconds` have passed since it was placed, whatever has not filled is cancelled. The parent then ends `cancelled` if nothing filled, or `completed` with what did.
+
+    The order is refused with <span class="status s4">409</span>, and nothing is sent, when it cannot be priced as it arrives: when nobody is offering for a buy, nobody is bidding for a sell, no live quote has arrived, or the quote is marked stale. A market order sent at such a moment would have nothing to trade against, or nothing to judge its price by.
+
+    You rarely need to name this type yourself. While `UNIFIED_BROKER_INTERFACE_API_ORDER_MARKET_AS_LIMIT` is on, which it is by default, every `MARKET` order with no `synthetic` object runs as a `marketable_limit` with the defaults below; see [Market orders are sent as marketable limits](orders.md#market-orders-are-sent-as-marketable-limits). A `LIMIT` body that names this type is priced from the book in the same way, and its own `price` is not used.
+
+    | Field | Type | Required | Rules |
+    |---|---|:---:|---|
+    | `buffer_ticks` | integer | No | How many ticks past the other side's best price the limit sits. At or above zero. Defaults to 2. |
+    | `fill_within_seconds` | number | No | How long the order may work before what is left is cancelled. Above zero. Defaults to 30. |
+
+    ```json
+    {"type": "marketable_limit", "buffer_ticks": 2, "fill_within_seconds": 30}
+    ```
+
+    In the offline suite, a market buy of 10 RELIANCE against a book of 1000.00 bid and 1000.05 offered was sent as a limit at 1000.15. When the book moved to 1000.20 and 1000.25 two seconds later, the order was modified to 1000.35.
 
     #### `post_only`
 

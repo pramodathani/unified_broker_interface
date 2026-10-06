@@ -1,4 +1,4 @@
-52 types run as plans, from account_conditional to vwap
+53 types run as plans, from account_conditional to vwap
 presets with another name: ['gtt -> good_till_triggered']
 18 hold by default, such as ['ladder', 'scheduled', 'good_till_time']
 run with classes of their own: ['plan', 'simple']

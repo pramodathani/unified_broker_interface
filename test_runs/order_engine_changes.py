@@ -77,6 +77,7 @@ class OrderEngineChangesSuite(order_routes.OrderRoutesSuite):
         api_configuration['order_rate_per_second'] = 0
         api_configuration['order_rate_per_broker_per_second'] = 10
         api_configuration['order_hold_limits'] = hold_limits
+        api_configuration['order_market_as_limit'] = False
         answers = order_routes.OrderRoutesAnswers()
         self.network.reset({
             'by_url': [

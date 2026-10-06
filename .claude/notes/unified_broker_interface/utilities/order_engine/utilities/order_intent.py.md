@@ -29,3 +29,11 @@ The offline route suites pin the setting off, because their scenarios test sendi
 ## Why an after-market order is never held
 
 An after-market order is queued by the broker for the next session's open. Nothing about the current quote says when it could fill, and outside market hours no fresh quote arrives to release it, so holding it meant it was never sent at all. A live test through tradingmachine on 2026-09-27 confirmed this: every after-market limit order came back `armed` and none reached a broker. `is_after_market` reads the flag with the same spellings `OrderRequest.parse_flag` accepts, so a body the route treats as after-market is never held. The scenario `a_plain_limit_order_is_held_by_default_and_nothing_else_is` in `test_runs/order_engine_changes.py` places one and records it being sent at once.
+
+## Why plain market orders are sent as marketable limits (2026-10-06)
+
+The user asked for every market order the engine sends to a broker to become a marketable limit that is worked until it fills, with two rules of their own: the order fails when nobody is on the other side of the book, and it fails when it has not filled within 30 seconds. `UNIFIED_BROKER_INTERFACE_API_ORDER_MARKET_AS_LIMIT`, on by default, makes a plain `MARKET` body a `marketable_limit`, decided here for the same reason a plain limit becomes a `virtual_limit` here: the intent, the parent and the answer all name the type that actually runs.
+
+Only a body with no `synthetic` object is converted. Flatten's closing orders name `simple`, so the panic button keeps true market orders, which close a position whatever the book looks like. After-market orders are left alone because there is no live book outside the session to price a limit from, and the empty-book rule would refuse every one of them. `IOC` market orders are converted: a limit sent `IOC` past the touch still trades now or never, which is what the caller asked for.
+
+`market_as_limit` defaults to false in this class and in `IntentHandoff`, so code that builds an intent by hand, the order engine suite and the examples among it, keeps sending market orders unless it asks. The suites that build the real API pin `order_market_as_limit` off beside `order_hold_limits`.

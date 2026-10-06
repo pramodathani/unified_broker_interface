@@ -341,11 +341,39 @@ The table below shows which orders are held.
 | `LIMIT` with `after_market` true, which the broker queues for the next session | No, sent at once, because no live price arrives to release it |
 | `LIMIT` with `"synthetic": {"type": "simple"}` | No, sent at once |
 | `LIMIT` with `IOC` validity, which means trade now or never | No, sent at once |
-| `MARKET`, `SL`, `SL-M`, or a `LIMIT` priced only by `price_reference` | No, sent at once |
+| `MARKET`, which is sent at once as a marketable limit, as [the next section](#market-orders-are-sent-as-marketable-limits) describes | No |
+| `SL`, `SL-M`, or a `LIMIT` priced only by `price_reference` | No, sent at once |
 | A `plan`, or a `ladder`, `scheduled`, `good_till_time`, `time_stop`, `account_conditional`, `limit_if_touched`, `indicator_triggered`, `cross_instrument`, `gtt`, `bracket`, `cover`, `scale_out`, `oto`, `oca`, `scale_with_profit_taker`, `freeze_slicer`, `twap` or `implementation_shortfall` order run as a plan, unless it gives `hold_limits: false` | Its limit orders, entry, every OCA candidate, each ladder rung or each timed slice is held until the market reaches it, while exits and profit-takers rest at the broker; [Holding orders until the market reaches them](synthetic-orders.md#plan) lists the exceptions |
 | Any order naming another `synthetic` type | Run as that type |
 
 The setting `UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS`, on by default, turns this off for every order, and for the rungs of a `ladder` run as a plan.
+
+### Market orders are sent as marketable limits
+
+A plain `MARKET` order is not sent to a broker as a market order. The order engine runs it as a [`marketable_limit`](synthetic-orders.md) order instead: a `LIMIT` priced two ticks past the other side's best price, which for a buy is the best offer, so it trades at once against what rests there but can never fill far from the price you saw. The engine moves it after that price on every tick until it fills, and cancels whatever has not filled 30 seconds after it was placed.
+
+The order is refused with <span class="status s4">409</span>, and nothing is sent to any broker, when it cannot be priced as it arrives. This happens when nobody is offering for a buy, nobody is bidding for a sell, no live quote for the instrument has arrived, or the quote is marked stale. The table below lists the refusal messages.
+
+| Book when the order arrives | `status_message` |
+|---|---|
+| A buy, and nobody is offering | `nobody is offering this instrument, so the BUY could not be priced and nothing was sent` |
+| A sell, and nobody is bidding | `nobody is bidding for this instrument, so the SELL could not be priced and nothing was sent` |
+| No live quote yet | `no live quote has arrived for this instrument, so the <side> could not be priced and nothing was sent` |
+| The quote is marked stale | `the live quote for this instrument is marked stale, so the <side> could not be priced and nothing was sent` |
+
+A sent order answers like any other, with <span class="status s2">200</span> and the broker's order id, as soon as the broker accepts the limit. The 30 seconds run after that answer, so you see the end of the order in the [order book](#order-book) or through [`GET /api/orders/parents`](#the-engines-parents): the parent ends `completed` when anything filled and `cancelled` when nothing did.
+
+Three kinds of market order are still sent as market orders:
+
+- an order with `after_market` true, because the broker queues it for the next session, when there is no live book to price a limit from;
+- an order that names any `synthetic` type, `simple` included, which is how [`POST /api/orders/flatten`](flatten.md) keeps its closing orders as market orders;
+- every market order while `UNIFIED_BROKER_INTERFACE_API_ORDER_MARKET_AS_LIMIT` is off.
+
+To choose a different buffer or time for one order, name the type yourself, as in `"synthetic": {"type": "marketable_limit", "buffer_ticks": 0, "fill_within_seconds": 10}`.
+
+Each move of the resting limit is a modification, which counts against the broker's [daily order cap](#daily-order-caps) like a placement. The repricing throttle allows each order one move a second by default (`UNIFIED_BROKER_INTERFACE_API_ORDER_REPRICE_MINIMUM_SECONDS`), so one order can send at most about 30 modifications before it is cancelled.
+
+A dry run still shows the body as a market order in `request`, because a dry run builds the request from the body as you wrote it, and adds the plan the order would run as in `plan`.
 
 ### Request parameters
 
