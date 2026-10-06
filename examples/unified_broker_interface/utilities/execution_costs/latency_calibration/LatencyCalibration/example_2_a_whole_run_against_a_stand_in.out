@@ -1,0 +1,5 @@
+Window starts 2026-09-16T18:20:00+00:00
+WARNING newbroker has no row in unified.broker_order_costs, so its latency figures are not kept.
+UPDATE groww: intraday None, delivery 0.80, fno None, answer 45 ms
+UPDATE newbroker: intraday None, delivery None, fno 0.10, answer 30 ms
+Rows updated: 1, transactions ['ROLLBACK', 'COMMIT']

@@ -66,3 +66,9 @@ WHERE costs."broker" = seed."broker"
         OR costs."margin_multiplier_commodity" IS NULL
         OR costs."gives_hedge_benefit" IS NULL
     );
+
+ALTER TABLE unified.broker_order_costs ADD COLUMN IF NOT EXISTS "latency_cost_bps_intraday" NUMERIC;
+ALTER TABLE unified.broker_order_costs ADD COLUMN IF NOT EXISTS "latency_cost_bps_delivery" NUMERIC;
+ALTER TABLE unified.broker_order_costs ADD COLUMN IF NOT EXISTS "latency_cost_bps_fno" NUMERIC;
+ALTER TABLE unified.broker_order_costs ADD COLUMN IF NOT EXISTS "broker_answer_milliseconds" NUMERIC CHECK ("broker_answer_milliseconds" >= 0);
+ALTER TABLE unified.broker_order_costs ADD COLUMN IF NOT EXISTS "latency_calibrated_at" TIMESTAMPTZ;

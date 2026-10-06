@@ -1,4 +1,4 @@
-"""Offline checks of the execution cost measurement: how a fill's cost is split, which legs are measured, and what is written.
+"""Offline checks of the execution cost measurement and the latency calibration: how a fill's cost is split, which legs are measured, what each broker's latency figures come to, and what is written.
 
 The figures are worked out by hand from scripted quotes on a NIFTY option near 238 rupees, so a change to the arithmetic, to the choice of quote, or to which legs count fails here. A stand-in database answers the queries, so no PostgreSQL, Redis, credentials or network are used.
 
@@ -19,6 +19,9 @@ from unified_broker_interface.utilities.execution_costs.execution_cost import (
 from unified_broker_interface.utilities.execution_costs.execution_cost_measurement import (
     COST_COLUMNS,
     ExecutionCostMeasurement,
+)
+from unified_broker_interface.utilities.execution_costs.latency_calibration import (
+    LatencyCalibration,
 )
 from unified_broker_interface.utilities.execution_costs.leg_execution import (
     LegExecution,
@@ -210,6 +213,12 @@ class ExecutionCostsSuite:
         self.the_summary_counts_each_broker()
         self.writing_replaces_the_days_in_one_transaction()
         self.a_failed_write_rolls_back()
+        self.legs_are_sorted_into_the_selectors_categories()
+        self.the_latency_cost_is_the_mean_over_every_leg()
+        self.too_few_legs_leave_a_figure_unmeasured()
+        self.the_answer_time_is_the_median()
+        self.only_measured_figures_are_written()
+        self.the_window_reaches_twenty_days_back()
 
         total = self.passed + len(self.failed)
         print(f'{total - len(self.failed)}/{total} checks passed.')
@@ -427,6 +436,123 @@ class ExecutionCostsSuite:
             raised = True
         self.check('error raised', raised, True)
         self.check('rolled back', database.transactions, ['ROLLBACK'])
+
+
+    def latency_rows(self, broker, count, latency_costs=None, answer_milliseconds='60', segment='nse_equity_index_options', product='MIS'):
+        """Rows of the execution cost table for one broker, as the calibration reads them.
+
+        Args:
+            broker (str): The broker.
+            count (int): How many rows.
+            latency_costs (list | None): The latency costs (str) of the first rows; the rest are zero.
+            answer_milliseconds (str): Every row's answer time.
+            segment (str): Every row's segment.
+            product (str): Every row's product.
+
+        Returns:
+            list: The rows, as tuples.
+        """
+        given = list(latency_costs or [])
+        rows = []
+        for index in range(count):
+            latency_cost = decimal.Decimal('0')
+            if index < len(given):
+                latency_cost = decimal.Decimal(given[index])
+            rows.append((broker, segment, product, latency_cost, decimal.Decimal(answer_milliseconds)))
+        return rows
+
+    def legs_are_sorted_into_the_selectors_categories(self):
+        """A future or option is `fno` whatever its product, a `CNC` order otherwise is `delivery`, and anything else is `intraday`.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        calibration = LatencyCalibration(None, self.logger)
+        cases = [
+            (('nse_equity_index_options', 'MIS'), 'fno'),
+            (('mcx_commodity_futures', 'NRML'), 'fno'),
+            (('nse_equities', 'CNC'), 'delivery'),
+            (('nse_equities', 'MIS'), 'intraday'),
+            ((None, 'MIS'), 'intraday'),
+        ]
+        for (segment, product), expected in cases:
+            self.check(f'category of {segment} {product}', calibration.category(segment, product), expected)
+
+    def the_latency_cost_is_the_mean_over_every_leg(self):
+        """Twenty-six legs that saw no move and four that did average to half a basis point; dropping the extremes would have given zero.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        calibration = LatencyCalibration(None, self.logger)
+        rows = self.latency_rows('zerodha', 30, ['3.00', '3.00', '-1.00', '10.00'])
+        brokers = calibration.brokers_from(rows)
+        self.check('fno latency cost', brokers[0].latency_cost('fno'), decimal.Decimal('0.50'))
+        self.check('fno legs', brokers[0].leg_count('fno'), 30)
+        flat = calibration.brokers_from(self.latency_rows('zerodha', 30, ['-0.00']))
+        self.check('no move is plain zero', str(flat[0].latency_cost('fno')), '0.00')
+
+    def too_few_legs_leave_a_figure_unmeasured(self):
+        """With 29 legs a category is not measured, and a broker with nothing measured is not written at all.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        calibration = LatencyCalibration(None, self.logger)
+        brokers = calibration.brokers_from(self.latency_rows('dhan', 29, ['5.00']))
+        self.check('29 legs give no figure', brokers[0].latency_cost('fno'), None)
+        self.check('29 answers give no time', brokers[0].typical_answer_milliseconds(), None)
+        self.check('nothing measured', brokers[0].measured_anything(), False)
+
+    def the_answer_time_is_the_median(self):
+        """Fifteen answers in 50 ms and fifteen in 70 ms give a median of 60 ms.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        calibration = LatencyCalibration(None, self.logger)
+        rows = self.latency_rows('flattrade', 15, answer_milliseconds='50') + self.latency_rows('flattrade', 15, answer_milliseconds='70')
+        brokers = calibration.brokers_from(rows)
+        self.check('median answer time', brokers[0].typical_answer_milliseconds(), decimal.Decimal('60'))
+
+    def only_measured_figures_are_written(self):
+        """A broker with enough legs is updated with None for its unmeasured categories, one without is skipped, and one missing from the cost table is warned about.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        database = StandInExecutionDatabase()
+        database.cost_table_brokers = [
+            'flattrade',
+            'dhan',
+        ]
+        database.cost_rows = (
+            self.latency_rows('flattrade', 30, ['2.00'])
+            + self.latency_rows('dhan', 10)
+            + self.latency_rows('newbroker', 30, segment='nse_equities', product='CNC')
+        )
+        calibration = LatencyCalibration(database.connect, self.logger)
+        brokers = calibration.measure(calibration.window_start(self.moment(23, 50, 0)))
+        updated = calibration.write(brokers)
+        self.check('rows updated', updated, 1)
+        self.check('updates sent', database.updates, [
+            (None, None, decimal.Decimal('0.07'), decimal.Decimal('60'), 'flattrade'),
+            (None, decimal.Decimal('0.00'), None, decimal.Decimal('60'), 'newbroker'),
+        ])
+        self.check('read rolled back, write committed', database.transactions, [
+            'ROLLBACK',
+            'COMMIT',
+        ])
+
+    def the_window_reaches_twenty_days_back(self):
+        """The default window starts twenty days before the run.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        calibration = LatencyCalibration(None, self.logger)
+        start = calibration.window_start(self.moment(23, 50, 0))
+        self.check('window start', start, self.moment(23, 50, 0, 0, datetime.date(2026, 9, 16)))
 
 
 if __name__ == '__main__':
