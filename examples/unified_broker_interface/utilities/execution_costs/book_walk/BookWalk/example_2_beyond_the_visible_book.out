@@ -1,0 +1,3 @@
+Large order: filled 3150, left over 1850, last level 239.25, average of the visible part 238.9111
+Gappy book levels kept: [(Decimal('41.40'), 60), (Decimal('41.60'), 200)]
+Gappy order: average 41.48, levels used 2

@@ -1,0 +1,6 @@
+BUY 1200: mid 238.25, touch 238.50, priceable True, covered True
+  half spread 0.2500 + book walk 0.1312 + beyond book 0.0000 = 0.3812 a unit
+  average price 238.6312, 16.00 bps, 457.44 rupees, side 1
+SELL 400: mid 238.25, touch 238.00, priceable True, covered True
+  half spread 0.2500 + book walk 0.0250 + beyond book 0.0000 = 0.2750 a unit
+  average price 237.9750, 11.54 bps, 110.00 rupees, side -1

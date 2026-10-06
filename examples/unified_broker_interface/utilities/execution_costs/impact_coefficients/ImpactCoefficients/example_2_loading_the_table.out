@@ -1,0 +1,5 @@
+Before loading: {}
+Rows loaded: 3
+nse_equities: 1.0, fitted False
+bse_currency_options: 1.0, fitted False
+mcx_commodity_options: 1.0, fitted False
