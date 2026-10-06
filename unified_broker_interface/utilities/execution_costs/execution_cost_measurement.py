@@ -42,6 +42,7 @@ EVENT_COLUMNS = [
     'product',
     'order_type',
     'quantity',
+    'price',
     'filled_quantity',
     'average_price',
     'outcome',
@@ -60,6 +61,7 @@ COST_COLUMNS = [
     'product',
     'order_type',
     'quantity',
+    'price',
     'filled_quantity',
     'average_price',
     'decided_at',
@@ -95,6 +97,7 @@ SELECT
     product,
     order_type,
     quantity,
+    price,
     filled_quantity,
     average_price,
     outcome

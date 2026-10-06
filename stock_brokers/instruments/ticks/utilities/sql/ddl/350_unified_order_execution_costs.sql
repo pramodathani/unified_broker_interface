@@ -45,3 +45,5 @@ CREATE INDEX IF NOT EXISTS order_execution_costs_broker_time_idx
 
 CREATE INDEX IF NOT EXISTS order_execution_costs_parent_idx
     ON unified.order_execution_costs (parent_order_id, leg_id);
+
+ALTER TABLE unified.order_execution_costs ADD COLUMN IF NOT EXISTS price NUMERIC(18,4);

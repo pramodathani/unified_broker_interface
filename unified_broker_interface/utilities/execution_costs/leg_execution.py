@@ -21,6 +21,7 @@ class LegExecution:
         product (str | None): The product, such as `MIS`.
         order_type (str | None): The order type, such as `LIMIT`.
         quantity (int | None): The quantity asked for, in units.
+        price (decimal.Decimal | None): The limit price the leg was sent with, or None for a market order.
         sent_at (datetime.datetime | None): When the engine recorded the request, just before sending it.
         answered_at (datetime.datetime | None): When the engine recorded the broker's answer.
         outcome (str | None): `accepted`, `rejected` or `unknown`.
@@ -50,6 +51,7 @@ class LegExecution:
         self.product = None
         self.order_type = None
         self.quantity = None
+        self.price = None
         self.sent_at = None
         self.answered_at = None
         self.outcome = None
@@ -78,6 +80,7 @@ class LegExecution:
             self.product = event.get('product')
             self.order_type = event.get('order_type')
             self.quantity = event.get('quantity')
+            self.price = event.get('price')
         elif name == 'leg_answered':
             self.answered_at = event.get('time')
             self.outcome = event.get('outcome')

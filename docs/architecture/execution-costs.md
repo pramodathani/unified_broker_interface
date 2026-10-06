@@ -2,11 +2,11 @@
 
 Brokerage is only part of what an order costs. The price an order fills at is usually worse than the price the market showed when the decision to trade was made, because the price moves while the order travels, because crossing the spread costs half of it, and because a large order walks the book. On an order worth 5 lakh rupees, one basis point is 50 rupees, which is more than the 20 rupees of brokerage most brokers charge for it. [Choosing a broker by cost](broker-selection.md) compares brokers on brokerage alone, so this page describes how the other part is measured.
 
-The measurement is the first stage of a longer plan, which the diagram below shows in full. The orange dots follow an order and what it leaves behind, and the blue dots follow what is learned from it and fed back. The lower row exists today: `bin/unified/orders/execution_costs` reads the order engine's event log and the stored quotes every night and writes `unified.order_execution_costs`, and `bin/unified/orders/latency_calibration` then turns that table into per-broker figures in `unified.broker_order_costs`. The pre-trade estimate, and the broker choice reading those figures, are later stages.
+The measurement is the first stage of a longer plan, which the diagram below shows in full. The orange dots follow an order and what it leaves behind, and the blue dots follow what is learned from it and fed back. The lower row exists today: `bin/unified/orders/execution_costs` reads the order engine's event log and the stored quotes every night and writes `unified.order_execution_costs`, and `bin/unified/orders/latency_calibration` then turns that table into per-broker figures in `unified.broker_order_costs`. The [pre-trade estimate](#the-pre-trade-estimate) exists as a class and is checked against the measured orders, but nothing on the order path calls it yet, and the broker choice does not yet read the per-broker figures.
 
 <figure class="diagram">
 --8<-- "docs/assets/diagrams/execution-costs.svg"
-<figcaption>The orange dots follow an order to its fills and into the execution cost table; the blue dots follow the figures learned from that table back into the cost table the broker choice reads. The measurement and the calibration exist today; the estimate and the broker choice's use of the figures do not.</figcaption>
+<figcaption>The orange dots follow an order to its fills and into the execution cost table; the blue dots follow the figures learned from that table back into the cost table the broker choice reads. The measurement, the calibration and the estimate exist today; nothing on the order path uses the estimate or the figures yet.</figcaption>
 </figure>
 
 ## What is measured
@@ -62,7 +62,7 @@ For each moment, the script takes the latest tick with both sides of the book at
 | `parent_order_id`, `leg_id` | Which leg of which parent, as in `unified.synthetic_order_events` |
 | `synthetic_type`, `leg_role` | The parent's type and what the leg was for, such as `entry` or `stop` |
 | `broker`, `instrument_id`, `segment` | Where it went and what it traded |
-| `transaction_type`, `product`, `order_type`, `quantity` | The leg as it was sent; `quantity` is in units |
+| `transaction_type`, `product`, `order_type`, `quantity`, `price` | The leg as it was sent; `quantity` is in units, and `price` is the limit price, empty for a market order |
 | `filled_quantity`, `average_price` | The fill as the broker last reported it |
 | `decided_at`, `answered_at` | The decision moment and the broker's answer |
 | `decision_quote_time`, `send_quote_time`, `answer_quote_time` | When each tick used was received, empty when none was recent enough |
@@ -145,6 +145,55 @@ bin/unified/orders/latency_calibration --dry-run          # print them without w
 bin/unified/orders/latency_calibration --window-days 40   # use forty days of legs instead of twenty
 ```
 
+## The pre-trade estimate
+
+The measurement says what orders cost after the fact. `PreTradeEstimate` says what an order will cost before it is sent, if it crosses the spread now. It works from the five visible levels of the book, and for any quantity beyond them it uses the square-root impact model. Like the measurement, it splits the cost per unit into parts that add up to the total.
+
+| Part | What it is | Exact or modelled? |
+|---|---|---|
+| Half spread | From the mid-price to the best price on the other side | Exact for the book as it stands |
+| Book walk | From that best price to the average of the visible levels the order takes, with any quantity beyond the last level counted at that level's price | Exact |
+| Beyond the book | What the square-root model adds for the quantity beyond the last visible level, spread over the whole order | Modelled |
+
+### A worked example
+
+The numbers below are from `python -m test_runs.pre_trade_estimate`. The ask side of a NIFTY option's book shows 300 at 238.50, 450 at 238.60, 600 at 238.75, 1,000 at 239.00 and 800 at 239.25, with the best bid at 238.00, so the mid-price is 238.25.
+
+| Order | Half spread | Book walk | Beyond the book | Total | Basis points |
+|---|---|---|---|---|---|
+| Buy 1,200 | 0.2500 | 0.1312 | 0 | 0.3812 | 16.00 |
+| Buy 5,000 | 0.2500 | 0.5365 | 0.3708 | 1.1573 | 48.58 |
+
+The buy of 1,200 takes 300 at 238.50, 450 at 238.60 and 450 at 238.75, for an average of 238.63125, so the book covers it and nothing is modelled. The buy of 5,000 empties the 3,150 visible units and leaves 1,850 beyond the last level. For those, the model adds coefficient × daily volatility × mid-price × √(1,850 ÷ average daily volume) a unit. With a coefficient of 1.0, a volatility of 9.8% and a million units a day, that is 1.0021 a unit for the 1,850, or 0.3708 a unit spread over all 5,000.
+
+### The square-root model and its coefficient
+
+The square-root model says that trading Q units of an instrument that trades V units a day, with daily volatility σ, moves the price by about Y × σ × √(Q ÷ V). It is the most widely used rule for market impact, and studies of many markets put Y near 1. The volatility is the standard deviation of the last 20 daily log returns, and V is the average volume of the same 20 days. Both come from the daily bars in `unified.price_history_adjusted`, so a stock split does not show up as a crash, and both need at least ten days.
+
+**Y has not been fitted to this project's orders, because none of them has been big enough.** Of the 465 orders measured up to 6 October 2026, none needed more than the best price level, and the largest took 17% of the five visible levels. Y can only be fitted from orders that go beyond the visible book. It lives in the table `unified.impact_coefficients`, one row per asset class (`securities`, `currency` and `commodity`), seeded with 1.0, and its `fitted_at` stays empty until it is fitted. When the model is needed but the volatility, the volume or the coefficient is missing, the estimate is left empty rather than guessed.
+
+### How close it comes
+
+`bin/unified/orders/estimate_check` runs the estimate on every measured order. It rebuilds the book at the order's decision from `unified.ticks` and sets the estimate beside the order's measured `half_spread_cost` plus `beyond_touch_cost`, which is the same cost without the price moving before and during sending. An estimate of crossing is only a fair prediction for an order that crossed, so crossing orders are summarised apart from resting ones. A crossing order is a market order, or a limit at or through the other side's best price at the decision. A stop order always counts as resting, because it waits for its trigger and fills later, against a book the decision never saw. The first run, on 6 October 2026, printed the following.
+
+```text
+legs        count  estimated  beyond book  mean estimate bps  mean actual bps  mean difference bps
+crossing      426        426            0               6.11             5.81                 2.82
+resting        29         29            0              12.28           -25.23                53.22
+Impact coefficient for commodity: 1.0 (not fitted, textbook value)
+Impact coefficient for currency: 1.0 (not fitted, textbook value)
+Impact coefficient for securities: 1.0 (not fitted, textbook value)
+```
+
+For crossing orders, the estimate is close. Split by segment, the 337 equity orders averaged 3.78 basis points estimated against 3.83 actual, with 265 of them matching to the hundredth. The 89 index option orders averaged 14.92 estimated against 13.33 actual. The resting row shows why resting orders are kept apart: they are priced as if they crossed, but on average they earned a little of the spread instead of paying it. The `beyond book` column is zero for both, which is why the coefficient is still the textbook value.
+
+```bash
+bin/unified/orders/estimate_check             # check the last 20 days of measured orders
+bin/unified/orders/estimate_check --days 40   # forty days instead
+```
+
+The script only reads, and has no timer; run it after a few weeks of new measurements, or after changing the coefficient.
+
 ## What it does not measure yet
 
 The measurement leaves four things out, each for a stated reason.
@@ -156,7 +205,8 @@ The measurement leaves four things out, each for a stated reason.
 
 ## What comes next
 
-Two later stages build on the table and the calibration.
+The last stage is to use what the first three produce.
 
-1. A pre-trade estimate will walk the five visible levels of the book for each order and use a square-root model, fitted to this table, for any quantity beyond them.
-2. The figures will be used. The lowest-cost selector will compare brokers on brokerage plus expected latency cost in rupees, and the estimate will help decide how to execute: how far a marketable limit may go through the book, when to slice an order instead of crossing at once, and how paper fills should be priced.
+1. The lowest-cost selector will compare brokers on brokerage plus expected latency cost in rupees, once a few weeks of ordinary trading show whether the brokers' latency figures really differ.
+2. The estimate will help decide how to execute: how far a marketable limit may go through the book, when to slice an order instead of crossing at once, and how paper fills should be priced.
+3. The impact coefficient will be fitted once orders larger than the visible book have been measured.

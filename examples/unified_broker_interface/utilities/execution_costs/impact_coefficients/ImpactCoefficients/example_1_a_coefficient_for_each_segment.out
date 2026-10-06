@@ -1,0 +1,3 @@
+nse_equity_index_options: class securities, coefficient 1.0, fitted False
+nse_currency_futures: class currency, coefficient None, fitted False
+mcx_commodity_futures: class commodity, coefficient 0.65, fitted True

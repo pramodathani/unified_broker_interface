@@ -150,6 +150,7 @@ class ExecutionCost:
             'product': leg.product,
             'order_type': leg.order_type,
             'quantity': leg.quantity,
+            'price': leg.price,
             'filled_quantity': leg.filled_quantity,
             'average_price': leg.average_price,
             'decided_at': leg.decided_at,

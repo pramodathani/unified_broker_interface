@@ -1,6 +1,6 @@
 """A stand-in database for measuring execution costs offline, holding scripted engine events, instruments and ticks.
 
-`ExecutionCostMeasurement` sends four kinds of statement: the event query, the segment query, the quote query and, when writing, the table's DDL, a delete and an insert. `LatencyCalibration` reads `unified.order_execution_costs` and updates `unified.broker_order_costs`. The stand-in answers the reads from what a program scripted, choosing the quote the way the real query does, and records the writes, so `python -m test_runs.execution_costs` and the example programs run without PostgreSQL.
+`ExecutionCostMeasurement` sends four kinds of statement: the event query, the segment query, the quote query and, when writing, the table's DDL, a delete and an insert. `LatencyCalibration` reads `unified.order_execution_costs` and updates `unified.broker_order_costs`. `EstimateCheck` reads `unified.impact_coefficients`, the measured legs, five-level books from `unified.ticks` and daily bars from `unified.price_history_adjusted`. The stand-in answers the reads from what a program scripted, choosing the quote the way the real query does, and records the writes, so `python -m test_runs.execution_costs` and the example programs run without PostgreSQL.
 
 Typical usage:
 
@@ -14,6 +14,11 @@ import decimal
 from unified_broker_interface.utilities.execution_costs.execution_cost_measurement import (
     EVENT_COLUMNS,
 )
+
+PRICE_COLUMNS = [
+    'price',
+    'average_price',
+]
 
 
 class StandInExecutionDatabase:
@@ -32,6 +37,11 @@ class StandInExecutionDatabase:
         cost_rows (list): The scripted rows of `unified.order_execution_costs`, as tuples of broker, segment, product, latency cost in basis points and answer time in milliseconds.
         cost_table_brokers (list): The brokers with a row in `unified.broker_order_costs`.
         updates (list): The parameters of every update of `unified.broker_order_costs`.
+        coefficient_rows (list): The scripted rows of `unified.impact_coefficients`, as tuples of asset class, coefficient and fitted_at.
+        estimate_legs (list): The scripted measured legs the estimate check reads, as tuples in `LEG_COLUMNS` order.
+        books (dict): Each instrument id (str) to a list of tuples of time and the twenty book values the book query returns.
+        daily_bars (dict): Each instrument id (str) to a list of tuples of time, close and volume.
+        daily_bar_reads (int): How many times daily bars were read.
     """
 
     def __init__(self):
@@ -52,6 +62,11 @@ class StandInExecutionDatabase:
         self.cost_rows = []
         self.cost_table_brokers = []
         self.updates = []
+        self.coefficient_rows = []
+        self.estimate_legs = []
+        self.books = {}
+        self.daily_bars = {}
+        self.daily_bar_reads = 0
 
     def add_event(self, time, parent_order_id, event, **columns):
         """Adds one event row, numbering it after the parent's last one.
@@ -60,7 +75,7 @@ class StandInExecutionDatabase:
             time (datetime.datetime): When the engine recorded it.
             parent_order_id (str): The parent.
             event (str): The event's name, such as `leg_requested`.
-            **columns: Any other column of `EVENT_COLUMNS`, such as `leg_id` or `average_price`; prices may be given as strings.
+            **columns: Any other column of `EVENT_COLUMNS`, such as `leg_id` or `average_price`; `price` and `average_price` may be given as strings.
 
         Returns:
             None: This method returns nothing.
@@ -74,7 +89,7 @@ class StandInExecutionDatabase:
             'event': event,
         }
         for name, value in columns.items():
-            if name == 'average_price' and value is not None:
+            if name in PRICE_COLUMNS and value is not None:
                 value = decimal.Decimal(value)
             values[name] = value
         row = []
@@ -101,6 +116,73 @@ class StandInExecutionDatabase:
         if ask is not None:
             ask_price = decimal.Decimal(ask)
         self.ticks.setdefault(instrument_id, []).append((time, bid_price, ask_price))
+
+    def add_book(self, instrument_id, time, bids, asks):
+        """Adds one stored five-level book.
+
+        Args:
+            instrument_id (str): The instrument.
+            time (datetime.datetime): When the tick was received.
+            bids (list): Up to five tuples of price (str) and quantity (int), best first.
+            asks (list): Up to five tuples of price (str) and quantity (int), best first.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        values = []
+        for side in [bids, asks]:
+            for level in range(5):
+                if level < len(side):
+                    values.append(decimal.Decimal(side[level][0]))
+                    values.append(side[level][1])
+                else:
+                    values.append(None)
+                    values.append(None)
+        self.books.setdefault(instrument_id, []).append((time, values))
+
+    def book_at(self, instrument_id, moment, oldest):
+        """The latest stored book after one moment and at or before another, as the real book query chooses it.
+
+        Args:
+            instrument_id (str): The instrument.
+            moment (datetime.datetime): The latest time allowed.
+            oldest (datetime.datetime): The time the book must be after.
+
+        Returns:
+            tuple | None: The twenty book values, or None.
+        """
+        chosen = None
+        for time, values in self.books.get(instrument_id, []):
+            if values[0] is None or values[10] is None:
+                continue
+            if time <= oldest or time > moment:
+                continue
+            if chosen is None or time > chosen[0]:
+                chosen = (time, values)
+        if chosen is None:
+            return None
+        return tuple(chosen[1])
+
+    def bars_before(self, instrument_id, before, limit):
+        """The latest daily bars before a moment, newest first, as the real daily bar query returns them.
+
+        Args:
+            instrument_id (str): The instrument.
+            before (datetime.datetime): The moment the bars must be before.
+            limit (int): The most bars returned.
+
+        Returns:
+            list: Tuples of close and volume.
+        """
+        bars = []
+        for time, close, volume in self.daily_bars.get(instrument_id, []):
+            if time < before:
+                bars.append((time, close, volume))
+        bars.sort(reverse=True)
+        answer = []
+        for time, close, volume in bars[:limit]:
+            answer.append((close, volume))
+        return answer
 
     def connect(self):
         """Opens a stand-in connection, as `get_postgres` would open a real one.
@@ -241,7 +323,19 @@ class StandInCursor:
             self.database.statements.append('DDL')
             return
         self.database.statements.append(text.split()[0])
-        if 'unified.synthetic_order_events' in text:
+        if 'unified.impact_coefficients' in text:
+            self.answer = list(self.database.coefficient_rows)
+        elif 'unified.price_history_adjusted' in text:
+            self.database.daily_bar_reads = self.database.daily_bar_reads + 1
+            self.answer = self.database.bars_before(*parameters)
+        elif 'bid5_price' in text:
+            self.answer = []
+            found = self.database.book_at(*parameters)
+            if found is not None:
+                self.answer.append(found)
+        elif 'decision_mid' in text and 'unified.order_execution_costs' in text:
+            self.answer = list(self.database.estimate_legs)
+        elif 'unified.synthetic_order_events' in text:
             self.answer = list(self.database.events)
         elif 'unified.instruments' in text:
             self.answer = []

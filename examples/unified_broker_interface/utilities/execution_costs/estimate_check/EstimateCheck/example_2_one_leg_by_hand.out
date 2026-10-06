@@ -1,0 +1,6 @@
+Book: best bid (Decimal('3693.30'), 40), asks [(Decimal('3693.40'), 25), (Decimal('3693.50'), 60)]
+Book two minutes later: None
+Daily bars: 15 closes, read 1 time
+Limit at 3693.35 crosses: False; at 3693.50: True
+Estimated 0.24 bps, actual 0.24 bps, crossing True
+Mean of 0.10, 0.25 and 0.40: 0.25

@@ -1,0 +1,5 @@
+first leg 1 MARKET BUY: crossing True, estimated 16.00, actual 16.79
+first leg 2 SL SELL: crossing False, estimated 10.49, actual -115.42
+second leg 1 LIMIT BUY: crossing False, estimated None, actual 10.00
+{'kind': 'crossing', 'legs': 1, 'estimated': 1, 'beyond_book': 0, 'mean_estimated_basis_points': Decimal('16.00'), 'mean_actual_basis_points': Decimal('16.79'), 'mean_absolute_difference': Decimal('0.79')}
+{'kind': 'resting', 'legs': 2, 'estimated': 1, 'beyond_book': 0, 'mean_estimated_basis_points': Decimal('10.49'), 'mean_actual_basis_points': Decimal('-115.42'), 'mean_absolute_difference': Decimal('125.91')}
