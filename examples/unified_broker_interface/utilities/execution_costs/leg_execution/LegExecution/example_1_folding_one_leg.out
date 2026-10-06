@@ -1,0 +1,6 @@
+after leg_requested: outcome None, filled None at None, measurable False
+after leg_answered: outcome accepted, filled None at None, measurable False
+after leg_update: outcome accepted, filled 30 at 238.80, measurable True
+after leg_update: outcome accepted, filled 65 at 238.80, measurable True
+after leg_update: outcome accepted, filled 65 at 238.90, measurable True
+Sent at 10:15:00.200000, answered at 10:15:00.300000, side 1
