@@ -4875,6 +4875,49 @@ class OrderEngineSuite:
                 },
             ),
             self.plan_price_result(
+                'a_plan_paper_order_takes_only_what_the_book_offers',
+                paper,
+                [
+                    {
+                        'quote': steady,
+                        'estimate': {
+                            'queue_filled': 0,
+                            'filled': 0,
+                        },
+                        'at': 0,
+                    },
+                    {
+                        'quote': self.book_at(999.40, 999.45),
+                        'estimate': {
+                            'queue_filled': 0,
+                            'filled': 250,
+                        },
+                        'at': 1,
+                    },
+                    {
+                        'quote': self.book_at(999.40, 999.45),
+                        'estimate': {
+                            'queue_filled': 0,
+                            'filled': 250,
+                        },
+                        'at': 2,
+                    },
+                    {
+                        'quote': self.book_at(999.40, 999.45),
+                        'estimate': {
+                            'queue_filled': 250,
+                            'filled': 250,
+                        },
+                        'at': 3,
+                    },
+                ],
+                accepted,
+                body_overrides={
+                    'price': 999.50,
+                    'quantity': 250,
+                },
+            ),
+            self.plan_price_result(
                 'a_plan_paper_fill_is_not_repeated_after_a_restart',
                 paper,
                 [
@@ -12087,6 +12130,11 @@ class OrderEngineSuite:
             ]
             result['paper_fills'] = [
                 event.get('filled_quantity')
+                for event in event_log.events
+                if event.get('event') == 'paper_filled'
+            ]
+            result['paper_fill_prices'] = [
+                event.get('average_price')
                 for event in event_log.events
                 if event.get('event') == 'paper_filled'
             ]

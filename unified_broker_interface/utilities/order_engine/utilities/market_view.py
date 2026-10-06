@@ -104,6 +104,34 @@ class MarketView:
             return None
         return self.number(entry.get('price'))
 
+    def levels_with_quantity(self, side):
+        """Every readable level of one side of the depth, with the quantity resting there.
+
+        Args:
+            side (str): `buy` or `sell`, as the depth names them.
+
+        Returns:
+            list: Tuples of price (decimal.Decimal, snapped to the tick) and quantity (int), best first; a level whose price or quantity cannot be read is left out.
+        """
+        if not self.is_readable():
+            return []
+        depth = self.quote.get('depth')
+        if not isinstance(depth, dict):
+            return []
+        entries = depth.get(side)
+        if not isinstance(entries, list):
+            return []
+        levels = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            price = self.number(entry.get('price'))
+            quantity = entry.get('quantity')
+            if price is None or isinstance(quantity, bool) or not isinstance(quantity, int) or quantity <= 0:
+                continue
+            levels.append((price, quantity))
+        return levels
+
     def best_bid(self):
         """The highest price anybody is bidding.
 
