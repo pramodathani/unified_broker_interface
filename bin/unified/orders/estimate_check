@@ -1,0 +1,117 @@
+#!/usr/bin/env python3
+"""
+Check the pre-trade cost estimate against what measured orders actually cost, and say whether the square-root
+impact model has had anything to work on.
+
+    bin/unified/orders/estimate_check
+    bin/unified/orders/estimate_check --days 40
+
+**Why.** The pre-trade estimate predicts what an order will cost to fill by crossing the spread, from the five
+visible levels of the book and, for any quantity beyond them, the square-root impact model. Before anything acts on
+the estimate, this script shows how close it comes on real orders.
+
+**How.** For every leg in `unified.order_execution_costs` sent in the last 20 days (`--days` to change it), it rebuilds
+the five-level book at the decision moment from `unified.ticks`, reads the instrument's daily volatility and volume
+from the daily bars before that day, estimates the cost of the filled quantity in basis points of the mid-price, and
+sets it beside the leg's measured `half_spread_cost` plus `beyond_touch_cost`. Crossing legs (market orders, and
+limits at or through the other side's best price) are summarised apart from resting ones and stops, because the
+estimate is of crossing.
+
+**The square-root model.** It prints each asset class's coefficient from `unified.impact_coefficients` and whether it
+has been fitted. The coefficient can only be fitted from legs larger than the visible book; the `beyond book` column
+counts them.
+
+It only reads the database and writes nothing. Exits 0 when the check ran, 1 when the database cannot be read, and 2
+for a bad argument.
+"""
+
+import sys
+import argparse
+import datetime
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+import psycopg2  # noqa: E402
+
+from utilities.configurations import get_logger, get_postgres  # noqa: E402
+from unified_broker_interface.utilities.execution_costs.estimate_check import (  # noqa: E402
+    EstimateCheck,
+)
+
+
+class EstimateCheckScript:
+    """The script: reads the arguments, runs the check and prints the comparison.
+
+    Attributes:
+        logger (logging.Logger): The logger.
+    """
+
+    def __init__(self):
+        """Builds the script.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.logger = get_logger("unified.estimate_check")
+
+    def arguments(self):
+        """Reads the command line.
+
+        Returns:
+            argparse.Namespace: `days` (int).
+        """
+        parser = argparse.ArgumentParser(description="Check the pre-trade cost estimate against measured orders.")
+        parser.add_argument("--days", type=int, default=20, help="How many days of measured legs to check; 20 when omitted.")
+        arguments = parser.parse_args()
+        if arguments.days < 1:
+            parser.error("--days must be at least 1")
+        return arguments
+
+    def show(self, check, comparisons):
+        """Prints the comparison and the coefficients.
+
+        Args:
+            check (EstimateCheck): The check, holding the coefficients it read.
+            comparisons (list): The dicts `EstimateCheck.compare` returns.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        print(f"{'legs':<10} {'count':>6} {'estimated':>10} {'beyond book':>12} {'mean estimate bps':>18} {'mean actual bps':>16} {'mean difference bps':>20}")
+        for line in check.summary(comparisons):
+            print(f"{line['kind']:<10} {line['legs']:>6} {line['estimated']:>10} {line['beyond_book']:>12} "
+                  f"{str(line['mean_estimated_basis_points']):>18} {str(line['mean_actual_basis_points']):>16} "
+                  f"{str(line['mean_absolute_difference']):>20}")
+        for asset_class in sorted(check.coefficients.rows):
+            coefficient, fitted_at = check.coefficients.rows[asset_class]
+            fitted = "not fitted, textbook value"
+            if fitted_at is not None:
+                fitted = f"fitted {fitted_at.isoformat()}"
+            print(f"Impact coefficient for {asset_class}: {coefficient} ({fitted})")
+
+    def run(self):
+        """Runs the check and prints it.
+
+        Returns:
+            int: The exit code.
+        """
+        arguments = self.arguments()
+        check = EstimateCheck(get_postgres, self.logger)
+        end = datetime.datetime.now(datetime.timezone.utc)
+        start = end - datetime.timedelta(days=arguments.days)
+        try:
+            comparisons = check.compare(start, end)
+        except psycopg2.Error as error:
+            self.logger.error(f"Could not read the measured legs, ticks or daily bars: {type(error).__name__}: {error}")
+            return 1
+        self.logger.info(f"Checked {len(comparisons)} measured legs sent from {start.isoformat()} to {end.isoformat()}.")
+        self.show(check, comparisons)
+        return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(EstimateCheckScript().run())
