@@ -901,7 +901,7 @@ class PlanOrder(SyntheticOrder):
             if record.get('state') != 'waiting':
                 continue
             if isinstance(part.venue, PaperVenue):
-                if part.venue.fill(self, part):
+                if part.venue.fill(self, part, quotes):
                     ended = True
                 continue
             record_memory_before = record.get('memory') or {}

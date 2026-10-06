@@ -1,0 +1,16 @@
+the offers reach 999.50:
+  event paper_filled: 200 of 250, average 999.475, touch {'quantity': 200, 'average_price': 999.475}
+  parent is now working: paper fill of 200 of 250
+  part record: the plan's root part filled 200 of 250 on paper
+  recorded a fill: True
+the book is still at the price:
+  recorded a fill: False
+a trade below 999.50 empties the queue:
+  event paper_filled: 250 of 250, average 999.48, touch {'quantity': 200, 'average_price': 999.475}
+  part record: the plan's root part filled on paper: 250 at an average of 999.4800
+  recorded a fill: True
+final record: done 250
+Walking 120 against the offers: {'quantity': 120, 'average_price': 999.4583}
+Average of 200 at 999.475 and 50 at the limit: 999.4800
+Counts read from an estimate: 7, None, None
+Prices read from memory: 999.50, None, None

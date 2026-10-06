@@ -2,7 +2,7 @@
 
 A `MarketView` wraps the quote the engine reads from `unified:quotes:live` for one instrument, together with its tick size. This program builds one such quote by hand, in the shape the unified quote script writes, with the prices as the JSON floats they arrive as, so the offer of 1000.10 is really 1000.0999999999999.
 
-Nothing is read from Redis; the quote is a plain dictionary. Notice that every price read out of the book comes back snapped to the 0.05 tick, that the midpoint of a one-tick spread is left between two ticks, and that a buy joins the bid but has to reach the offer to fill now, while a sell is the other way round. The program also moves a price two ticks towards and away from the market for each side, and rounds the midpoint towards the passive side for a buyer and a seller.
+Nothing is read from Redis; the quote is a plain dictionary. Notice that every price read out of the book comes back snapped to the 0.05 tick, that the midpoint of a one-tick spread is left between two ticks, and that a buy joins the bid but has to reach the offer to fill now, while a sell is the other way round. The program also lists the offers with the quantity resting at each, moves a price two ticks towards and away from the market for each side, and rounds the midpoint towards the passive side for a buyer and a seller.
 
 Run it from the project root:
 
@@ -84,6 +84,7 @@ class ReadingTheTouchExample:
         print(f'Best offer: {self.view.best_offer()}')
         print(f'Third level of the offers: {self.view.level("sell", 3)}')
         print(f'Fourth level of the offers: {self.view.level("sell", 4)}')
+        print(f'Offers with their quantities: {self.view.levels_with_quantity("sell")}')
         midpoint = self.view.mid()
         print(f'Midpoint: {midpoint}')
         print(f'Midpoint rounded for a buyer: {self.view.rounded(midpoint, "BUY")}')

@@ -11,5 +11,5 @@ the same estimate read again:
   recorded a fill: False
 estimate says 25 filled:
   event paper_filled: 10 of 10 at 1498.5
-  part record: the plan's root part filled on paper: 10 at 1498.50
+  part record: the plan's root part filled on paper: 10 at an average of 1498.5000
   recorded a fill: True
