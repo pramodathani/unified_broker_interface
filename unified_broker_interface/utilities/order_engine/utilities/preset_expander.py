@@ -1171,29 +1171,35 @@ class PresetExpander:
         The order is refused, rather than left waiting, when nobody is on the other side of the book, or no fresh quote has arrived, because a market order sent then would have nothing to trade against.
 
         Args:
-            settings (dict): Optionally `buffer_ticks`, a whole number of ticks of at least 0, and `fill_within_seconds`, a number of seconds above zero.
+            settings (dict): Optionally `buffer_ticks`, a whole number of ticks of at least 0; `fill_within_seconds`, a number of seconds above zero; and `maximum_cost_bps`, a number of basis points above zero, the most the order may be estimated to cost to cross the spread.
             path (str): The preset's path.
 
         Returns:
             dict: `peg` pricing on the opposite touch and a lifetime that cancels; empty when there are problems.
         """
-        self._refuse_unknown(settings, ('buffer_ticks', 'fill_within_seconds'), path, 'marketable_limit')
+        self._refuse_unknown(settings, ('buffer_ticks', 'fill_within_seconds', 'maximum_cost_bps'), path, 'marketable_limit')
         buffer_ticks = settings.get('buffer_ticks', DEFAULT_BUFFER_TICKS)
         if isinstance(buffer_ticks, bool) or not isinstance(buffer_ticks, int) or buffer_ticks < 0:
             self._add_problem(path, 'bad_setting', f'buffer_ticks must be a whole number of ticks of at least 0, not {buffer_ticks!r}')
         fill_within_seconds = settings.get('fill_within_seconds', DEFAULT_FILL_WITHIN_SECONDS)
         if isinstance(fill_within_seconds, bool) or not isinstance(fill_within_seconds, (int, float)) or fill_within_seconds <= 0:
             self._add_problem(path, 'bad_setting', f'fill_within_seconds must be a number of seconds above zero, not {fill_within_seconds!r}')
+        maximum_cost_bps = settings.get('maximum_cost_bps')
+        if maximum_cost_bps is not None and (isinstance(maximum_cost_bps, bool) or not isinstance(maximum_cost_bps, (int, float)) or maximum_cost_bps <= 0):
+            self._add_problem(path, 'bad_setting', f'maximum_cost_bps must be a number of basis points above zero, not {maximum_cost_bps!r}')
         if self.problems:
             return {}
+        peg = {
+            'reference': 'opposite_touch',
+            'offset_ticks': -buffer_ticks,
+            'on_empty_book': 'refuse',
+        }
+        if maximum_cost_bps is not None:
+            peg['maximum_cost_bps'] = maximum_cost_bps
         return {
             'pricing': [
                 {
-                    'peg': {
-                        'reference': 'opposite_touch',
-                        'offset_ticks': -buffer_ticks,
-                        'on_empty_book': 'refuse',
-                    },
+                    'peg': peg,
                 },
             ],
             'lifetime': [

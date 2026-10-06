@@ -2,6 +2,10 @@
 
 import decimal
 
+from unified_broker_interface.utilities.execution_costs.pre_trade_estimate import (
+    PreTradeEstimate,
+)
+
 REFERENCES = (
     'own_touch',
     'mid',
@@ -22,15 +26,18 @@ class PegPricing:
 
     With `on_empty_book` set to `refuse`, an order that cannot be priced when it is first sent is refused rather than left waiting for a tick that carries its reference. This is what lets a market order sent as a marketable limit fail when nobody is on the other side, as a market order would, instead of waiting for someone to arrive.
 
+    With `maximum_cost_bps` set, an order is refused before it is sent when crossing the spread for its whole quantity, as `PreTradeEstimate` works it out from the visible book, would cost more than that many basis points of the mid-price, or when the visible book does not hold its whole quantity, so the cost cannot be known. Both sides of the book must be visible to estimate; with one side empty the guard says nothing and the order is priced as before.
+
     Attributes:
         reference (str): One of `REFERENCES`.
         offset_ticks (int): How many ticks away from the reference, positive away from filling.
         follows (bool): Whether the order is moved after its reference on later ticks.
         within_body_price (bool): Whether the body's limit price is the worst the order takes.
         on_empty_book (str): One of `ON_EMPTY_BOOK`, what happens when the order cannot be priced when it is first sent.
+        maximum_cost_bps (decimal.Decimal | None): The most the order may be estimated to cost to cross the spread, in basis points, or None for no limit.
     """
 
-    def __init__(self, reference, offset_ticks, follows=True, within_body_price=False, on_empty_book='wait'):
+    def __init__(self, reference, offset_ticks, follows=True, within_body_price=False, on_empty_book='wait', maximum_cost_bps=None):
         """Builds the pricing from settings the plan reader has already checked.
 
         Args:
@@ -39,6 +46,7 @@ class PegPricing:
             follows (bool): Whether the order is moved after its reference.
             within_body_price (bool): Whether the body's limit price is the worst it takes.
             on_empty_book (str): `wait` to wait for a tick that carries the reference, or `refuse` to refuse the order.
+            maximum_cost_bps (decimal.Decimal | int | float | None): The most the order may be estimated to cost, in basis points, or None for no limit.
 
         Returns:
             None: This method returns nothing.
@@ -48,6 +56,9 @@ class PegPricing:
         self.follows = follows
         self.within_body_price = within_body_price
         self.on_empty_book = on_empty_book
+        self.maximum_cost_bps = None
+        if maximum_cost_bps is not None:
+            self.maximum_cost_bps = decimal.Decimal(str(maximum_cost_bps))
 
     def needs_prices(self):
         """Whether this pricing reads quotes, which it does.
@@ -140,6 +151,37 @@ class PegPricing:
         if self.reference == 'opposite_touch':
             return 'nobody is bidding for this instrument, so the SELL could not be priced and nothing was sent'
         return f'the book gives no {self.reference} price for this instrument, so the {side} could not be priced and nothing was sent'
+
+    def cost_refusal(self, view, side, quantity):
+        """Why an order is refused for costing too much to cross the spread, or None when it may be sent.
+
+        Args:
+            view (MarketView): The order's quote.
+            side (str): BUY or SELL, the side the order is sent on.
+            quantity (object): The order's quantity in units, from its body.
+
+        Returns:
+            str | None: The refusal, or None when there is no maximum, the quantity is not a positive whole number, the book cannot be priced, or the estimate is within the maximum.
+        """
+        if self.maximum_cost_bps is None:
+            return None
+        if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity <= 0:
+            return None
+        estimate = PreTradeEstimate(
+            side,
+            quantity,
+            view.levels_with_quantity('buy'),
+            view.levels_with_quantity('sell'),
+        )
+        if not estimate.is_priceable():
+            return None
+        if not estimate.is_covered_by_book():
+            visible = estimate.walk.visible_quantity()
+            return f'the visible book holds only {visible} of the {quantity} units this {side} needs, so what crossing the spread would cost cannot be estimated and nothing was sent; a type that sends it in pieces, such as twap, participation or iceberg, can work it instead'
+        cost = estimate.basis_points()
+        if cost > self.maximum_cost_bps:
+            return f'crossing the spread now would cost an estimated {cost} basis points, more than the maximum of {self.maximum_cost_bps}, so nothing was sent'
+        return None
 
     def within(self, price, body, side):
         """The price held no worse than the body's limit, or the limit itself when the book gave no price.
@@ -245,14 +287,17 @@ class PegPricing:
         """This pricing as a dry run shows it.
 
         Returns:
-            dict: The settings.
+            dict: The settings, with `maximum_cost_bps` only when one is set.
         """
+        settings = {
+            'reference': self.reference,
+            'offset_ticks': self.offset_ticks,
+            'follows': self.follows,
+            'within_body_price': self.within_body_price,
+            'on_empty_book': self.on_empty_book,
+        }
+        if self.maximum_cost_bps is not None:
+            settings['maximum_cost_bps'] = float(self.maximum_cost_bps)
         return {
-            'peg': {
-                'reference': self.reference,
-                'offset_ticks': self.offset_ticks,
-                'follows': self.follows,
-                'within_body_price': self.within_body_price,
-                'on_empty_book': self.on_empty_book,
-            },
+            'peg': settings,
         }

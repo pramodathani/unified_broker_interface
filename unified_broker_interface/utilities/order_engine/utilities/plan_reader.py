@@ -2138,14 +2138,14 @@ class PlanReader:
         """Reads `peg` pricing.
 
         Args:
-            settings (dict): `reference`, default `own_touch`; `offset_ticks`, default 0; `follows`, default true; `within_body_price`, default false; and `on_empty_book`, default `wait`.
+            settings (dict): `reference`, default `own_touch`; `offset_ticks`, default 0; `follows`, default true; `within_body_price`, default false; `on_empty_book`, default `wait`; and `maximum_cost_bps`, optional.
             path (str): Where it sits in the plan.
 
         Returns:
             PegPricing | None: The pricing, or None when it has a problem.
         """
         problems_before = len(self.problems)
-        self._refuse_unknown(settings, ('reference', 'offset_ticks', 'follows', 'within_body_price', 'on_empty_book'), path, 'peg')
+        self._refuse_unknown(settings, ('reference', 'offset_ticks', 'follows', 'within_body_price', 'on_empty_book', 'maximum_cost_bps'), path, 'peg')
         reference = settings.get('reference', 'own_touch')
         if reference not in REFERENCES:
             self._add_problem(
@@ -2173,9 +2173,16 @@ class PlanReader:
                 'bad_setting',
                 f'on_empty_book must be one of {", ".join(ON_EMPTY_BOOK)}, not {on_empty_book!r}',
             )
+        maximum_cost_bps = settings.get('maximum_cost_bps')
+        if maximum_cost_bps is not None and (isinstance(maximum_cost_bps, bool) or not isinstance(maximum_cost_bps, (int, float)) or maximum_cost_bps <= 0):
+            self._add_problem(
+                path,
+                'bad_setting',
+                f'maximum_cost_bps must be a number of basis points above zero, not {maximum_cost_bps!r}',
+            )
         if len(self.problems) > problems_before:
             return None
-        return PegPricing(reference, offset, flags['follows'], flags['within_body_price'], on_empty_book)
+        return PegPricing(reference, offset, flags['follows'], flags['within_body_price'], on_empty_book, maximum_cost_bps)
 
     def _read_chase(self, settings, path):
         """Reads `chase` pricing.
