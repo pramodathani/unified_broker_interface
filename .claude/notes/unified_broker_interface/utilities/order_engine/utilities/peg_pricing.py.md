@@ -41,3 +41,13 @@ An order bigger than the visible book is refused rather than estimated with the 
 With one side of the book empty the guard says nothing: the empty-book refusal handles the side the order needs, and an empty own side leaves no mid-price to measure from.
 
 `described` shows `maximum_cost_bps` only when it is set, so every dry run and recording of a peg without it is unchanged.
+
+## Reaching the order's size (2026-10-07)
+
+`reaches_size` was added as option C of stage 4 of the execution cost plan. A marketable limit two ticks past the touch fills an order bigger than those levels only in part, and then chases the price tick by tick for up to 30 seconds, which costs repricing messages from the broker's daily cap and lets the price run away. Setting the limit at the deepest level the quantity reaches takes that liquidity at once, as a market order would, but never past the fifth visible level, so the price is still bounded by what was visible.
+
+It is off by default because it changes the price of market orders, and it pairs with `maximum_cost_bps`, which refuses an order whose walk through the book would cost too much. The deeper price is not offset: the level's own price is enough to take that level.
+
+On later ticks `moved_prices` uses the leg's unfilled quantity, so after a partial fill the limit can come back nearer the touch; `a_marketable_limit_reaching_size_reprices_for_what_is_left` pins that.
+
+It needs the `opposite_touch` reference, because only the other side of the book holds what the order would take; the plan reader refuses it with any other reference.

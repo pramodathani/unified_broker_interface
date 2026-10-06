@@ -138,6 +138,7 @@ class OrderEngine:
         self.plan_routing = PlanRouting(
             api_configuration['order_hold_limits'],
             api_configuration['order_maximum_cost_bps'],
+            api_configuration['order_market_reaches_size'],
         )
         self.commands = ParentCommands(
             placement,

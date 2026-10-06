@@ -382,6 +382,18 @@ A marketable limit can also be refused for what it would cost. With `maximum_cos
 
 The estimate walks the whole quantity through the book, while the order itself is a limit only `buffer_ticks` past the best price, which would rest whatever the first levels cannot fill. So the guard is cautious: it refuses some orders that would only have rested part of their quantity.
 
+#### Reaching as deep as the order's size
+
+Two ticks past the best price is enough for a small order, but an order bigger than what the first levels hold fills only part at once and then chases the price. With `reaches_size: true`, on the order or for every market order through `UNIFIED_BROKER_INTERFACE_API_ORDER_MARKET_REACHES_SIZE`, the limit goes no nearer than the deepest visible level the order's unfilled quantity reaches, so it takes those levels at once. It never goes past the fifth visible level, and on each later tick it is set again for whatever is still unfilled. The table below shows a book that offers 100 at each price from 1000.05 to 1000.25.
+
+| Buy | Limit without `reaches_size` | Limit with it |
+|---|---|---|
+| 10 | 1000.15 | 1000.15 |
+| 350 | 1000.15 | 1000.20 |
+| 600 | 1000.15 | 1000.25, the last visible level |
+
+The setting is off by default, because it lets a market order trade further from the best price than two ticks; a `maximum_cost_bps` can be set beside it to bound that.
+
 Each move of the resting limit is a modification, which counts against the broker's [daily order cap](#daily-order-caps) like a placement. The repricing throttle allows each order one move a second by default (`UNIFIED_BROKER_INTERFACE_API_ORDER_REPRICE_MINIMUM_SECONDS`), so one order can send at most about 30 modifications before it is cancelled.
 
 A dry run still shows the body as a market order in `request`, because a dry run builds the request from the body as you wrote it, and adds the plan the order would run as in `plan`.

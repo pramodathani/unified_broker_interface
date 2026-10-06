@@ -2,6 +2,9 @@
 
 import decimal
 
+from unified_broker_interface.utilities.execution_costs.book_walk import (
+    BookWalk,
+)
 from unified_broker_interface.utilities.execution_costs.pre_trade_estimate import (
     PreTradeEstimate,
 )
@@ -11,6 +14,10 @@ REFERENCES = (
     'mid',
     'opposite_touch',
 )
+OPPOSITE_DEPTH_SIDES = {
+    'BUY': 'sell',
+    'SELL': 'buy',
+}
 ON_EMPTY_BOOK = (
     'wait',
     'refuse',
@@ -28,6 +35,8 @@ class PegPricing:
 
     With `maximum_cost_bps` set, an order is refused before it is sent when crossing the spread for its whole quantity, as `PreTradeEstimate` works it out from the visible book, would cost more than that many basis points of the mid-price, or when the visible book does not hold its whole quantity, so the cost cannot be known. Both sides of the book must be visible to estimate; with one side empty the guard says nothing and the order is priced as before.
 
+    With `reaches_size`, which needs the `opposite_touch` reference, the limit is set no nearer than the deepest visible level the order's unfilled quantity reaches on the other side, so an order bigger than the best level fills at once from the levels behind it instead of chasing the price; it never goes past the last visible level. A small order is priced as before.
+
     Attributes:
         reference (str): One of `REFERENCES`.
         offset_ticks (int): How many ticks away from the reference, positive away from filling.
@@ -35,9 +44,10 @@ class PegPricing:
         within_body_price (bool): Whether the body's limit price is the worst the order takes.
         on_empty_book (str): One of `ON_EMPTY_BOOK`, what happens when the order cannot be priced when it is first sent.
         maximum_cost_bps (decimal.Decimal | None): The most the order may be estimated to cost to cross the spread, in basis points, or None for no limit.
+        reaches_size (bool): Whether the limit reaches as deep into the visible book as the order's unfilled quantity needs.
     """
 
-    def __init__(self, reference, offset_ticks, follows=True, within_body_price=False, on_empty_book='wait', maximum_cost_bps=None):
+    def __init__(self, reference, offset_ticks, follows=True, within_body_price=False, on_empty_book='wait', maximum_cost_bps=None, reaches_size=False):
         """Builds the pricing from settings the plan reader has already checked.
 
         Args:
@@ -47,6 +57,7 @@ class PegPricing:
             within_body_price (bool): Whether the body's limit price is the worst it takes.
             on_empty_book (str): `wait` to wait for a tick that carries the reference, or `refuse` to refuse the order.
             maximum_cost_bps (decimal.Decimal | int | float | None): The most the order may be estimated to cost, in basis points, or None for no limit.
+            reaches_size (bool): Whether the limit reaches as deep into the visible book as the order's unfilled quantity needs; only with the `opposite_touch` reference.
 
         Returns:
             None: This method returns nothing.
@@ -59,6 +70,7 @@ class PegPricing:
         self.maximum_cost_bps = None
         if maximum_cost_bps is not None:
             self.maximum_cost_bps = decimal.Decimal(str(maximum_cost_bps))
+        self.reaches_size = reaches_size
 
     def needs_prices(self):
         """Whether this pricing reads quotes, which it does.
@@ -127,6 +139,41 @@ class PegPricing:
         if price is None or price <= 0:
             return None
         return price
+
+    def size_price(self, view, side, quantity):
+        """The price of the deepest visible level on the other side that an unfilled quantity reaches, or the last visible level when it reaches past them all.
+
+        Args:
+            view (MarketView): The order's quote.
+            side (str): BUY or SELL, the side the order is sent on.
+            quantity (object): The unfilled quantity, in units.
+
+        Returns:
+            decimal.Decimal | None: The price, or None when the setting is off, the quantity is not a positive whole number, or the other side shows nothing.
+        """
+        if not self.reaches_size:
+            return None
+        if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity <= 0:
+            return None
+        levels = view.levels_with_quantity(OPPOSITE_DEPTH_SIDES[side])
+        return BookWalk(quantity, levels).worst_price()
+
+    def reaching(self, price, size_price, side):
+        """The further of the touch's price and the size's price, for the order's side: the higher for a buy and the lower for a sell.
+
+        Args:
+            price (decimal.Decimal | None): The price the reference and offset give.
+            size_price (decimal.Decimal | None): The price the size reaches, or None.
+            side (str): BUY or SELL.
+
+        Returns:
+            decimal.Decimal | None: The price to send.
+        """
+        if price is None or size_price is None:
+            return price
+        if side == 'BUY':
+            return max(price, size_price)
+        return min(price, size_price)
 
     def empty_book_refusal(self, view, side):
         """Why an order that could not be priced is refused, or None when it waits for a tick that can price it.
@@ -221,6 +268,7 @@ class PegPricing:
         if view.is_stale():
             return None
         price = self.wanted_price(view, sending_side)
+        price = self.reaching(price, self.size_price(view, sending_side, body.get('quantity')), sending_side)
         if self.within_body_price:
             price = self.within(price, body, sending_side)
         if price is None:
@@ -247,6 +295,10 @@ class PegPricing:
         if not view.is_readable() or view.is_stale():
             return None
         price = self.wanted_price(view, leg.transaction_type, self.offset(memory))
+        unfilled = None
+        if isinstance(leg.quantity, int):
+            unfilled = leg.quantity - (leg.filled_quantity or 0)
+        price = self.reaching(price, self.size_price(view, leg.transaction_type, unfilled), leg.transaction_type)
         if price is None:
             return None
         return price, None, f'the {self.reference} peg moved to {price}'
@@ -287,7 +339,7 @@ class PegPricing:
         """This pricing as a dry run shows it.
 
         Returns:
-            dict: The settings, with `maximum_cost_bps` only when one is set.
+            dict: The settings, with `maximum_cost_bps` only when one is set and `reaches_size` only when it is on.
         """
         settings = {
             'reference': self.reference,
@@ -298,6 +350,8 @@ class PegPricing:
         }
         if self.maximum_cost_bps is not None:
             settings['maximum_cost_bps'] = float(self.maximum_cost_bps)
+        if self.reaches_size:
+            settings['reaches_size'] = True
         return {
             'peg': settings,
         }

@@ -97,25 +97,28 @@ class PlanRouting:
 
     `hold_limits` is taken out of the caller's settings and put beside the plan too, where the plan reader reads it for the whole request. An intent that does not say is given a value when it arrives: for a named type, true when it is in `HOLDING_TYPES` and `UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS` is on; for a plan the caller wrote, the switch's own value. Writing the value into the order means the plan read again after a restart holds the same orders, even if the setting or `HOLDING_TYPES` has changed since. A `simple` order cannot be held, so `check_unrouted` refuses `hold_limits: true` for it rather than ignoring it.
 
-    A `marketable_limit`, which is what a plain market order becomes, is given the cost guard `maximum_cost_bps` from `UNIFIED_BROKER_INTERFACE_API_ORDER_MAXIMUM_COST_BPS` when it does not set its own, and like `hold_limits` the value is written into the order when it arrives. The setting is unset by default, which leaves the guard off.
+    A `marketable_limit`, which is what a plain market order becomes, is given the cost guard `maximum_cost_bps` from `UNIFIED_BROKER_INTERFACE_API_ORDER_MAXIMUM_COST_BPS`, and `reaches_size: true` while `UNIFIED_BROKER_INTERFACE_API_ORDER_MARKET_REACHES_SIZE` is on, when it does not set its own; like `hold_limits`, the values are written into the order when it arrives. Both settings are off by default.
 
     Attributes:
         hold_limits (bool): Whether orders may be held in the virtual order book, from `UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS`.
         maximum_cost_bps (float | None): The cost guard given to a `marketable_limit` that sets none, from `UNIFIED_BROKER_INTERFACE_API_ORDER_MAXIMUM_COST_BPS`, or None when the setting is off.
+        reaches_size (bool): Whether a `marketable_limit` that sets no `reaches_size` is given true, from `UNIFIED_BROKER_INTERFACE_API_ORDER_MARKET_REACHES_SIZE`.
     """
 
-    def __init__(self, hold_limits=True, maximum_cost_bps=None):
+    def __init__(self, hold_limits=True, maximum_cost_bps=None, reaches_size=False):
         """Builds the routing.
 
         Args:
             hold_limits (bool): Whether orders may be held in the virtual order book.
             maximum_cost_bps (float | None): The cost guard every `marketable_limit` gets when it does not set its own `maximum_cost_bps`, in basis points, or None for none.
+            reaches_size (bool): Whether every `marketable_limit` that does not set its own `reaches_size` reaches as deep into the visible book as its quantity needs.
 
         Returns:
             None: This method returns nothing.
         """
         self.hold_limits = hold_limits
         self.maximum_cost_bps = maximum_cost_bps
+        self.reaches_size = reaches_size
 
     @staticmethod
     def preset_name(type_name):
@@ -136,7 +139,7 @@ class PlanRouting:
             intent (dict): The intent document.
 
         Returns:
-            dict: The intent to run, with `closes_position`, `reduce_only` and `hold_limits` at the top of the plan's `synthetic` object, `hold_limits` given its default when the caller did not say, and a `marketable_limit`'s `maximum_cost_bps` given the configured default when it sets none.
+            dict: The intent to run, with `closes_position`, `reduce_only` and `hold_limits` at the top of the plan's `synthetic` object, `hold_limits` given its default when the caller did not say, and a `marketable_limit`'s `maximum_cost_bps` and `reaches_size` given the configured defaults when it sets none.
         """
         named_type = intent.get('synthetic_type')
         if named_type == 'plan':
@@ -156,6 +159,8 @@ class PlanRouting:
             flags['hold_limits'] = self.hold_limits and named_type in HOLDING_TYPES
         if named_type == 'marketable_limit' and self.maximum_cost_bps is not None and 'maximum_cost_bps' not in settings:
             settings['maximum_cost_bps'] = self.maximum_cost_bps
+        if named_type == 'marketable_limit' and self.reaches_size and 'reaches_size' not in settings:
+            settings['reaches_size'] = True
         preset_name = self.preset_name(named_type)
         synthetic = {
             'type': 'plan',

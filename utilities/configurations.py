@@ -61,6 +61,7 @@ api_configuration = {
     'order_hold_limits': os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS', 'true').strip().lower() in ('true', '1', 'yes'),
     'order_market_as_limit': os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_MARKET_AS_LIMIT', 'true').strip().lower() in ('true', '1', 'yes'),
     'order_maximum_cost_bps': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_MAXIMUM_COST_BPS', '0') or '0') or None,
+    'order_market_reaches_size': os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_MARKET_REACHES_SIZE', 'false').strip().lower() in ('true', '1', 'yes'),
     'order_place_list_wait_seconds': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_PLACE_LIST_WAIT_SECONDS', '25')),
     'order_engine_result_ttl_seconds': int(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_RESULT_TTL_SECONDS', '300')),
     'order_engine_reconcile_seconds': float(os.getenv('UNIFIED_BROKER_INTERFACE_API_ORDER_ENGINE_RECONCILE_SECONDS', '5')),

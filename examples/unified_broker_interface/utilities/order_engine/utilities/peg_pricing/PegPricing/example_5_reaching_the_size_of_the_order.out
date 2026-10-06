@@ -1,0 +1,7 @@
+Usual price, two ticks past the offer: 1000.15
+BUY 10: the size reaches 1000.05, so the limit is 1000.15
+BUY 350: the size reaches 1000.20, so the limit is 1000.20
+BUY 600: the size reaches 1000.25, so the limit is 1000.25
+SELL 350: the size reaches 999.85, so the limit is 999.85
+With the setting off, the size reaches: None
+Described: {'peg': {'reference': 'opposite_touch', 'offset_ticks': -2, 'follows': True, 'within_body_price': False, 'on_empty_book': 'refuse', 'reaches_size': True}}

@@ -1171,13 +1171,13 @@ class PresetExpander:
         The order is refused, rather than left waiting, when nobody is on the other side of the book, or no fresh quote has arrived, because a market order sent then would have nothing to trade against.
 
         Args:
-            settings (dict): Optionally `buffer_ticks`, a whole number of ticks of at least 0; `fill_within_seconds`, a number of seconds above zero; and `maximum_cost_bps`, a number of basis points above zero, the most the order may be estimated to cost to cross the spread.
+            settings (dict): Optionally `buffer_ticks`, a whole number of ticks of at least 0; `fill_within_seconds`, a number of seconds above zero; `maximum_cost_bps`, a number of basis points above zero, the most the order may be estimated to cost to cross the spread; and `reaches_size`, true or false, whether the limit reaches as deep into the visible book as the order's quantity needs.
             path (str): The preset's path.
 
         Returns:
             dict: `peg` pricing on the opposite touch and a lifetime that cancels; empty when there are problems.
         """
-        self._refuse_unknown(settings, ('buffer_ticks', 'fill_within_seconds', 'maximum_cost_bps'), path, 'marketable_limit')
+        self._refuse_unknown(settings, ('buffer_ticks', 'fill_within_seconds', 'maximum_cost_bps', 'reaches_size'), path, 'marketable_limit')
         buffer_ticks = settings.get('buffer_ticks', DEFAULT_BUFFER_TICKS)
         if isinstance(buffer_ticks, bool) or not isinstance(buffer_ticks, int) or buffer_ticks < 0:
             self._add_problem(path, 'bad_setting', f'buffer_ticks must be a whole number of ticks of at least 0, not {buffer_ticks!r}')
@@ -1187,6 +1187,9 @@ class PresetExpander:
         maximum_cost_bps = settings.get('maximum_cost_bps')
         if maximum_cost_bps is not None and (isinstance(maximum_cost_bps, bool) or not isinstance(maximum_cost_bps, (int, float)) or maximum_cost_bps <= 0):
             self._add_problem(path, 'bad_setting', f'maximum_cost_bps must be a number of basis points above zero, not {maximum_cost_bps!r}')
+        reaches_size = settings.get('reaches_size', False)
+        if not isinstance(reaches_size, bool):
+            self._add_problem(path, 'bad_setting', f'reaches_size must be true or false, not {reaches_size!r}')
         if self.problems:
             return {}
         peg = {
@@ -1196,6 +1199,8 @@ class PresetExpander:
         }
         if maximum_cost_bps is not None:
             peg['maximum_cost_bps'] = maximum_cost_bps
+        if reaches_size:
+            peg['reaches_size'] = True
         return {
             'pricing': [
                 {
