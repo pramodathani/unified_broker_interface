@@ -1,0 +1,53 @@
+<svg class="ubi-svg" viewBox="0 0 900 360" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="execution-costs-title execution-costs-description">
+  <title id="execution-costs-title">Measuring execution costs</title>
+  <desc id="execution-costs-description">An order reaches the engine, a pre-trade estimate is made, a broker and an execution style are chosen, and the broker's fills come back. The engine logs when the order arrived and every fill, and a nightly script turns those, with the stored quotes, into the execution cost table, a later calibration turns that table into per-broker figures, and those figures go into the cost table the broker choice reads. Only the measurement and its table exist today; the estimate, the calibration and the feedback are later stages.</desc>
+  <path id="execution-costs-w1" class="wire" d="M140,170 L200,170"/>
+  <path id="execution-costs-w2" class="wire" d="M370,170 L420,170"/>
+  <path id="execution-costs-w3" class="wire" d="M580,170 L640,170"/>
+  <path id="execution-costs-w4" class="wire" d="M700,200 L700,260"/>
+  <path id="execution-costs-w5" class="wire" d="M640,290 L600,290"/>
+  <path id="execution-costs-w6" class="wire" d="M400,290 L370,290"/>
+  <path id="execution-costs-w7" class="wire" d="M200,290 L170,290 L170,47 L400,47"/>
+  <path id="execution-costs-w8" class="wire" d="M500,75 L500,140"/>
+  <path id="execution-costs-w9" class="wire" d="M340,200 C340,235 470,225 470,260"/>
+  <text class="small" x="410" y="226">arrival time logged</text>
+  <text class="small" x="178" y="110">once a day</text>
+  <circle class="dot" r="6"><animateMotion dur="2s" repeatCount="indefinite"><mpath href="#execution-costs-w1"/></animateMotion></circle>
+  <circle class="dot" r="6"><animateMotion dur="2s" begin="-0.5s" repeatCount="indefinite"><mpath href="#execution-costs-w2"/></animateMotion></circle>
+  <circle class="dot" r="6"><animateMotion dur="2s" begin="-1s" repeatCount="indefinite"><mpath href="#execution-costs-w3"/></animateMotion></circle>
+  <circle class="dot" r="6"><animateMotion dur="2s" begin="-1.5s" repeatCount="indefinite"><mpath href="#execution-costs-w4"/></animateMotion></circle>
+  <circle class="dot" r="6"><animateMotion dur="2s" repeatCount="indefinite"><mpath href="#execution-costs-w5"/></animateMotion></circle>
+  <circle class="dot" r="6"><animateMotion dur="2s" begin="-0.7s" repeatCount="indefinite"><mpath href="#execution-costs-w9"/></animateMotion></circle>
+  <circle class="dot alt" r="6"><animateMotion dur="4s" repeatCount="indefinite"><mpath href="#execution-costs-w6"/></animateMotion></circle>
+  <circle class="dot alt" r="6"><animateMotion dur="4s" repeatCount="indefinite"><mpath href="#execution-costs-w7"/></animateMotion></circle>
+  <circle class="dot alt" r="6"><animateMotion dur="4s" begin="-2s" repeatCount="indefinite"><mpath href="#execution-costs-w8"/></animateMotion></circle>
+  <rect class="store" x="400" y="20" width="200" height="55" rx="8"/>
+  <text class="title" x="500" y="43" text-anchor="middle">Cost table</text>
+  <text class="mono" x="500" y="62" text-anchor="middle">unified.broker_order_costs</text>
+  <rect class="box" x="20" y="140" width="120" height="60" rx="8"/>
+  <text class="title" x="80" y="167" text-anchor="middle">Order</text>
+  <text class="small" x="80" y="185" text-anchor="middle">reaches the engine</text>
+  <rect class="box" x="200" y="140" width="170" height="60" rx="8"/>
+  <text class="title" x="285" y="164" text-anchor="middle">Pre-trade estimate</text>
+  <text class="small" x="285" y="182" text-anchor="middle">walk the 5-level book,</text>
+  <text class="small" x="285" y="195" text-anchor="middle">square-root model beyond</text>
+  <rect class="accent-box" x="420" y="140" width="160" height="60" rx="8"/>
+  <text class="title" x="500" y="164" text-anchor="middle">Choose broker</text>
+  <text class="small" x="500" y="182" text-anchor="middle">and how to execute:</text>
+  <text class="small" x="500" y="195" text-anchor="middle">cross, rest, slice or refuse</text>
+  <rect class="box" x="640" y="140" width="120" height="60" rx="8"/>
+  <text class="title" x="700" y="167" text-anchor="middle">Broker</text>
+  <text class="small" x="700" y="185" text-anchor="middle">and the exchange</text>
+  <rect class="box" x="640" y="260" width="120" height="60" rx="8"/>
+  <text class="title" x="700" y="287" text-anchor="middle">Fills</text>
+  <text class="small" x="700" y="305" text-anchor="middle">average price, time</text>
+  <rect class="store" x="400" y="260" width="200" height="60" rx="8"/>
+  <text class="title" x="500" y="284" text-anchor="middle">Execution costs</text>
+  <text class="mono" x="500" y="303" text-anchor="middle">unified.order_execution_costs</text>
+  <rect class="box" x="200" y="260" width="170" height="60" rx="8"/>
+  <text class="title" x="285" y="284" text-anchor="middle">Nightly calibration</text>
+  <text class="small" x="285" y="302" text-anchor="middle">per-broker latency cost,</text>
+  <text class="small" x="285" y="315" text-anchor="middle">impact coefficient</text>
+  <circle class="dot" r="6" cx="250" cy="345"/><text class="small" x="262" y="349">an order and what it records</text>
+  <circle class="dot alt" r="6" cx="480" cy="345"/><text class="small" x="492" y="349">what is learned and fed back</text>
+</svg>

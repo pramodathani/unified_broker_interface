@@ -1,0 +1,5 @@
+first leg 1 (flattrade, BUY): decided 10:15:00, delay 0.1000, latency 0.1000, total 0.6500 = 27.28 bps = 42.25 rupees
+second leg 1 (zerodha, SELL): decided 10:15:00, delay -0.1000, latency -0.1000, total 0.2000 = 8.39 bps = 13.00 rupees
+first leg 2 (flattrade, SELL): decided 10:20:00, delay 0.0000, latency 0.0000, total 0.3000 = 12.49 bps = 19.50 rupees
+{'broker': 'flattrade', 'legs': 2, 'measured': 2, 'median_total_basis_points': Decimal('19.88'), 'mean_total_basis_points': Decimal('19.88'), 'mean_latency_basis_points': Decimal('2.10')}
+{'broker': 'zerodha', 'legs': 1, 'measured': 1, 'median_total_basis_points': Decimal('8.39'), 'mean_total_basis_points': Decimal('8.39'), 'mean_latency_basis_points': Decimal('-4.20')}

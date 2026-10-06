@@ -1,0 +1,9 @@
+Days: 2026-10-06T00:00:00+05:30 to 2026-10-07T00:00:00+05:30
+Event rows read: 4
+Filled legs: 1, sent at 21:00:00.200000
+Segment: mcx_commodity_futures, securities market False
+Quote when sent: 5210 / 5211
+Quote two minutes later: None
+Cost: 2.88 bps, rupees None
+Rows written: 1, statements ['DDL', 'DELETE', 'INSERT'], transactions ['COMMIT']
+Median and mean of 1, 2 and 6 basis points: 2.00, 3.00

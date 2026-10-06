@@ -1,0 +1,3 @@
+rejected: measurable False, side -1
+filled without a price: measurable False, side -1
+filled: measurable True, side -1

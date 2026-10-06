@@ -1,0 +1,19 @@
+# The nightly execution cost measurement: bin/unified/orders/execution_costs reads the order engine's event log and the
+# stored ticks, works out what every filled leg cost beyond brokerage, and writes one row per leg to
+# unified.order_execution_costs. It reads only the database and never calls a broker. Driven by
+# unified-execution-costs.timer.
+#
+#     systemctl --user start unified-execution-costs    # run it now
+#     bin/unified/orders/execution_costs --dry-run       # see the figures without writing them
+
+[Unit]
+Description=Nightly order execution cost measurement
+PartOf=unified.target
+
+[Service]
+Type=oneshot
+Environment=PYTHONUNBUFFERED=1
+SyslogIdentifier=unified-execution-costs
+ExecStart=%h/Projects/unified_broker_interface/bin/unified/orders/execution_costs
+TimeoutStartSec=10min
+Nice=10

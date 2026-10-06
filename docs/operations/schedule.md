@@ -19,6 +19,7 @@ The chart below shows one weekday from 06:00 to midnight IST. Blue bars and poin
       {"order": 4, "row": "Instrument download and mapping", "kind": "UBI job or cut-off", "start": "2026-09-28 07:45", "end": "2026-09-28 08:30", "source": "unified-mapping.timer; about 45 minutes per the unit comment"},
       {"order": 5, "row": "Unified price history (Mon to Sat)", "kind": "UBI job or cut-off", "start": "2026-09-28 08:30", "end": null, "source": "unified-prices.timer"},
       {"order": 5.5, "row": "Margin calibration (Mon to Fri)", "kind": "UBI job or cut-off", "start": "2026-09-28 09:30", "end": null, "source": "unified-margin-calibration.timer"},
+      {"order": 5.6, "row": "Execution cost measurement (Mon to Fri)", "kind": "UBI job or cut-off", "start": "2026-09-28 23:50", "end": null, "source": "unified-execution-costs.timer"},
       {"order": 6, "row": "NSE and BSE equity", "kind": "Trading session", "start": "2026-09-28 09:00", "end": "2026-09-28 09:15", "source": "Pre-open, sessions.py"},
       {"order": 6, "row": "NSE and BSE equity", "kind": "Trading session", "start": "2026-09-28 09:15", "end": "2026-09-28 15:30", "source": "Continuous session, sessions.py"},
       {"order": 7, "row": "Currency derivatives", "kind": "Trading session", "start": "2026-09-28 09:00", "end": "2026-09-28 17:00", "source": "sessions.py"},
@@ -92,6 +93,7 @@ The same facts are listed in the table below, with the file each one comes from.
 | 09:00 to 17:00 | Currency derivatives trade | Trading days | `CURRENCY_SESSION` |
 | 09:00 to 17:00, 17:00 to 23:30 | Commodity derivatives on MCX (and the NSE and BSE commodity segments) trade a morning and an evening session; the evening runs to 23:55 while the United States is on standard time | Trading days | `COMMODITY_SESSION` |
 | 10:00 to 17:00, 17:00 to 21:00 | NCDEX morning and evening sessions | Trading days | `NCDEX_SESSION` |
+| 23:50 | `unified-execution-costs.service` works out what every filled order leg of today and yesterday cost beyond brokerage and writes `unified.order_execution_costs` | Monday to Friday | `OnCalendar=Mon..Fri 23:50 Asia/Kolkata`, `Persistent=true` |
 | Every minute | `databases.service` starts any stopped database container | Always | `databases.timer`, `OnUnitInactiveSec=1min` |
 
 Two of these times deserve a closer look. The timers name `Asia/Kolkata` explicitly, so they keep IST even if the machine's time zone changes. The token renewal time is compared with `datetime.now()`, which is the machine's local clock, so it matches IST only when the machine runs on India time.
