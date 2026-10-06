@@ -7397,7 +7397,66 @@ class OrderEngineSuite:
                 ],
                 accepted,
             ),
+            self.price_result(
+                'a_marketable_limit_within_its_maximum_cost_is_sent',
+                dict(market, synthetic={'type': 'marketable_limit', 'maximum_cost_bps': 1}),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_marketable_limit_above_its_maximum_cost_is_refused',
+                dict(market, synthetic={'type': 'marketable_limit', 'maximum_cost_bps': 0.2}),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_marketable_limit_larger_than_the_visible_book_is_refused',
+                dict(market, quantity=600, synthetic={'type': 'marketable_limit', 'maximum_cost_bps': 100}),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_marketable_limit_with_a_bad_maximum_cost_is_refused',
+                dict(market, synthetic={'type': 'marketable_limit', 'maximum_cost_bps': 0}),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.configured_maximum_cost_result(market, steady, accepted),
         ]
+
+    def configured_maximum_cost_result(self, market, steady, accepted):
+        """Runs a plain market order with `UNIFIED_BROKER_INTERFACE_API_ORDER_MAXIMUM_COST_BPS` set to 0.2, which the routing gives the marketable limit it becomes, so it is refused.
+
+        Args:
+            market (dict): The plain market order's body.
+            steady (dict): A quote one tick wide at 1000.00 and 1000.05.
+            accepted (dict): The stubbed broker answer.
+
+        Returns:
+            dict: The recorded result.
+        """
+        original = api_configuration['order_maximum_cost_bps']
+        api_configuration['order_maximum_cost_bps'] = 0.2
+        try:
+            return self.price_result(
+                'a_market_order_takes_the_configured_maximum_cost',
+                market,
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+                market_as_limit=True,
+            )
+        finally:
+            api_configuration['order_maximum_cost_bps'] = original
 
     def run_stale_quote_checks(self):
         """Runs triggers on quotes marked stale, which the quote combiner marks when a quote's broker has gone silent with no healthy backup.
@@ -15719,6 +15778,8 @@ class OrderEngineSuite:
         api_configuration['order_broker_selector'] = 'round_robin'
         original_hold_limits = api_configuration['order_hold_limits']
         api_configuration['order_hold_limits'] = False
+        original_maximum_cost = api_configuration['order_maximum_cost_bps']
+        api_configuration['order_maximum_cost_bps'] = None
         try:
             results = []
             for scenario in OrderEngineScenarios().build():
@@ -15787,6 +15848,7 @@ class OrderEngineSuite:
             api_configuration['order_excluded_brokers'] = original_excluded
             api_configuration['order_broker_selector'] = original_selector
             api_configuration['order_hold_limits'] = original_hold_limits
+            api_configuration['order_maximum_cost_bps'] = original_maximum_cost
         return results
 
     def encode(self, result):

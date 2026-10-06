@@ -208,5 +208,5 @@ The measurement leaves four things out, each for a stated reason.
 The last stage is to use what the first three produce.
 
 1. The lowest-cost selector will compare brokers on brokerage plus expected latency cost in rupees, once a few weeks of ordinary trading show whether the brokers' latency figures really differ.
-2. The estimate will help decide how to execute: how far a marketable limit may go through the book, and when to slice an order instead of crossing at once. Paper fills already take only what the book offers when it reaches their price, through the same book walk (see the `paper` field of [`virtual_limit`](../rest-api/synthetic-orders.md)).
+2. The estimate will help decide how far a marketable limit may go through the book. It already guards marketable limits that set `maximum_cost_bps`, refusing them when crossing would cost too much or the book is too thin (see [A limit on what crossing the spread may cost](../rest-api/orders.md#a-limit-on-what-crossing-the-spread-may-cost)), and paper fills already take only what the book offers when it reaches their price (see the `paper` field of [`virtual_limit`](../rest-api/synthetic-orders.md)).
 3. The impact coefficient will be fitted once orders larger than the visible book have been measured.

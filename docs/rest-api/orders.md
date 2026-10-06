@@ -371,6 +371,17 @@ Three kinds of market order are still sent as market orders:
 
 To choose a different buffer or time for one order, name the type yourself, as in `"synthetic": {"type": "marketable_limit", "buffer_ticks": 0, "fill_within_seconds": 10}`.
 
+#### A limit on what crossing the spread may cost
+
+A marketable limit can also be refused for what it would cost. With `maximum_cost_bps` set, on the order as `"synthetic": {"type": "marketable_limit", "maximum_cost_bps": 15}` or for every market order through `UNIFIED_BROKER_INTERFACE_API_ORDER_MAXIMUM_COST_BPS`, the engine works out, just before sending, what filling the whole quantity against the visible book would cost in basis points of the mid-price, using the [pre-trade estimate](../architecture/execution-costs.md#the-pre-trade-estimate). The setting is unset by default, so no limit applies until you choose one. The table below lists the two refusals, both answered with <span class="status s4">409</span> before anything is sent.
+
+| Why | `status_message` |
+|---|---|
+| The estimate is above the maximum | `crossing the spread now would cost an estimated <cost> basis points, more than the maximum of <maximum>, so nothing was sent` |
+| The five visible levels do not hold the whole quantity | `the visible book holds only <visible> of the <quantity> units this <side> needs, so what crossing the spread would cost cannot be estimated and nothing was sent; a type that sends it in pieces, such as twap, participation or iceberg, can work it instead` |
+
+The estimate walks the whole quantity through the book, while the order itself is a limit only `buffer_ticks` past the best price, which would rest whatever the first levels cannot fill. So the guard is cautious: it refuses some orders that would only have rested part of their quantity.
+
 Each move of the resting limit is a modification, which counts against the broker's [daily order cap](#daily-order-caps) like a placement. The repricing throttle allows each order one move a second by default (`UNIFIED_BROKER_INTERFACE_API_ORDER_REPRICE_MINIMUM_SECONDS`), so one order can send at most about 30 modifications before it is cancelled.
 
 A dry run still shows the body as a market order in `request`, because a dry run builds the request from the body as you wrote it, and adds the plan the order would run as in `plan`.

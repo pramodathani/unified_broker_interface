@@ -1,0 +1,7 @@
+BUY 10 under a maximum of 1 bps: None
+BUY 10 under a maximum of 0.2 bps: crossing the spread now would cost an estimated 0.25 basis points, more than the maximum of 0.2, so nothing was sent
+BUY 260 under a maximum of 1 bps: None
+BUY 260 under a maximum of 0.5 bps: crossing the spread now would cost an estimated 0.67 basis points, more than the maximum of 0.5, so nothing was sent
+BUY 600 under a maximum of 100 bps: the visible book holds only 500 of the 600 units this BUY needs, so what crossing the spread would cost cannot be estimated and nothing was sent; a type that sends it in pieces, such as twap, participation or iceberg, can work it instead
+BUY 600 with no maximum: None
+Described: {'peg': {'reference': 'opposite_touch', 'offset_ticks': -2, 'follows': True, 'within_body_price': False, 'on_empty_book': 'refuse', 'maximum_cost_bps': 1.0}}

@@ -423,7 +423,7 @@ class OrderPart:
     def order(self, plan_order, quotes, quantity=None, price=None):
         """The order this part sends, priced now, or None when no price can be made yet or the post-only guard refused it.
 
-        The quantity is the piece's when one is given; otherwise the target a parent join set, less what this part has already traded, or the body's quantity when no join set one. Only the plan's main order keeps the caller's tag, as today's exits do: the tag belongs to the order the caller asked for. The cap holds the priced limit, and the post-only guard then checks it against the book; a refusal ends this part as refused. A peg told to refuse an empty book ends this part as refused, in the same way, when it cannot be priced.
+        The quantity is the piece's when one is given; otherwise the target a parent join set, less what this part has already traded, or the body's quantity when no join set one. Only the plan's main order keeps the caller's tag, as today's exits do: the tag belongs to the order the caller asked for. The cap holds the priced limit, and the post-only guard then checks it against the book; a refusal ends this part as refused. A peg told to refuse an empty book ends this part as refused, in the same way, when it cannot be priced, and so does a peg with a maximum cost whose estimated cost of crossing the spread is above it.
 
         Args:
             plan_order (PlanOrder): The plan order.
@@ -457,6 +457,11 @@ class OrderPart:
                 if refusal is not None:
                     self._refuse(plan_order, refusal)
             return None
+        if isinstance(self.pricing, PegPricing):
+            refusal = self.pricing.cost_refusal(context.view(quotes), sending_side, priced.get('quantity'))
+            if refusal is not None:
+                self._refuse(plan_order, refusal)
+                return None
         if memory != (record.get('pricing_memory') or {}):
             record['pricing_memory'] = memory
             plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part\'s pricing remembers {memory}')
