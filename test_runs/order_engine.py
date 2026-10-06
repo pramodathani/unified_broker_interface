@@ -7430,7 +7430,84 @@ class OrderEngineSuite:
                 accepted,
             ),
             self.configured_maximum_cost_result(market, steady, accepted),
+            self.price_result(
+                'a_marketable_limit_reaching_size_takes_the_levels_its_quantity_needs',
+                dict(market, quantity=350, synthetic={'type': 'marketable_limit', 'reaches_size': True}),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_small_marketable_limit_reaching_size_keeps_its_buffer',
+                dict(market, synthetic={'type': 'marketable_limit', 'reaches_size': True}),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_marketable_limit_reaching_past_the_book_stops_at_its_last_level',
+                dict(market, quantity=600, synthetic={'type': 'marketable_limit', 'reaches_size': True}),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_marketable_sell_reaching_size_takes_the_bids_its_quantity_needs',
+                dict(market, transaction_type='SELL', quantity=350, synthetic={'type': 'marketable_limit', 'reaches_size': True}),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_marketable_limit_reaching_size_reprices_for_what_is_left',
+                dict(market, quantity=350, synthetic={'type': 'marketable_limit', 'reaches_size': True}),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 2, 'updates': [self.update('26091500000021', 'OPEN', 300)]},
+                ],
+                accepted,
+                book_every_order=True,
+            ),
+            self.configured_reaches_size_result(market, steady, accepted),
+            self.price_result(
+                'a_marketable_limit_with_a_bad_reaches_size_is_refused',
+                dict(market, synthetic={'type': 'marketable_limit', 'reaches_size': 'yes'}),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
         ]
+
+    def configured_reaches_size_result(self, market, steady, accepted):
+        """Runs a plain market buy of 350 with `UNIFIED_BROKER_INTERFACE_API_ORDER_MARKET_REACHES_SIZE` on, which the routing gives the marketable limit it becomes, so it is priced at the fourth offer.
+
+        Args:
+            market (dict): The plain market order's body.
+            steady (dict): A quote one tick wide at 1000.00 and 1000.05.
+            accepted (dict): The stubbed broker answer.
+
+        Returns:
+            dict: The recorded result.
+        """
+        original = api_configuration['order_market_reaches_size']
+        api_configuration['order_market_reaches_size'] = True
+        try:
+            return self.price_result(
+                'a_market_order_reaches_its_size_with_the_switch_on',
+                dict(market, quantity=350),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+                market_as_limit=True,
+            )
+        finally:
+            api_configuration['order_market_reaches_size'] = original
 
     def configured_maximum_cost_result(self, market, steady, accepted):
         """Runs a plain market order with `UNIFIED_BROKER_INTERFACE_API_ORDER_MAXIMUM_COST_BPS` set to 0.2, which the routing gives the marketable limit it becomes, so it is refused.
@@ -15780,6 +15857,8 @@ class OrderEngineSuite:
         api_configuration['order_hold_limits'] = False
         original_maximum_cost = api_configuration['order_maximum_cost_bps']
         api_configuration['order_maximum_cost_bps'] = None
+        original_reaches_size = api_configuration['order_market_reaches_size']
+        api_configuration['order_market_reaches_size'] = False
         try:
             results = []
             for scenario in OrderEngineScenarios().build():
@@ -15849,6 +15928,7 @@ class OrderEngineSuite:
             api_configuration['order_broker_selector'] = original_selector
             api_configuration['order_hold_limits'] = original_hold_limits
             api_configuration['order_maximum_cost_bps'] = original_maximum_cost
+            api_configuration['order_market_reaches_size'] = original_reaches_size
         return results
 
     def encode(self, result):

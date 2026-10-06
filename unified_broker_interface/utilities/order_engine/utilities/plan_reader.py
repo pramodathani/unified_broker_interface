@@ -2138,14 +2138,14 @@ class PlanReader:
         """Reads `peg` pricing.
 
         Args:
-            settings (dict): `reference`, default `own_touch`; `offset_ticks`, default 0; `follows`, default true; `within_body_price`, default false; `on_empty_book`, default `wait`; and `maximum_cost_bps`, optional.
+            settings (dict): `reference`, default `own_touch`; `offset_ticks`, default 0; `follows`, default true; `within_body_price`, default false; `on_empty_book`, default `wait`; `maximum_cost_bps`, optional; and `reaches_size`, default false, which needs the `opposite_touch` reference.
             path (str): Where it sits in the plan.
 
         Returns:
             PegPricing | None: The pricing, or None when it has a problem.
         """
         problems_before = len(self.problems)
-        self._refuse_unknown(settings, ('reference', 'offset_ticks', 'follows', 'within_body_price', 'on_empty_book', 'maximum_cost_bps'), path, 'peg')
+        self._refuse_unknown(settings, ('reference', 'offset_ticks', 'follows', 'within_body_price', 'on_empty_book', 'maximum_cost_bps', 'reaches_size'), path, 'peg')
         reference = settings.get('reference', 'own_touch')
         if reference not in REFERENCES:
             self._add_problem(
@@ -2180,9 +2180,14 @@ class PlanReader:
                 'bad_setting',
                 f'maximum_cost_bps must be a number of basis points above zero, not {maximum_cost_bps!r}',
             )
+        reaches_size = settings.get('reaches_size', False)
+        if not isinstance(reaches_size, bool):
+            self._add_problem(path, 'bad_setting', f'reaches_size must be true or false, not {reaches_size!r}')
+        elif reaches_size and reference != 'opposite_touch':
+            self._add_problem(path, 'bad_setting', f'reaches_size needs the opposite_touch reference, because only the other side of the book holds what the order would take; not {reference!r}')
         if len(self.problems) > problems_before:
             return None
-        return PegPricing(reference, offset, flags['follows'], flags['within_body_price'], on_empty_book, maximum_cost_bps)
+        return PegPricing(reference, offset, flags['follows'], flags['within_body_price'], on_empty_book, maximum_cost_bps, reaches_size)
 
     def _read_chase(self, settings, path):
         """Reads `chase` pricing.

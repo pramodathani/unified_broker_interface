@@ -31,3 +31,5 @@ The fixed classes were retired on 2026-10-03, so the switch-over is complete: ev
 ## The configured cost guard (2026-10-07)
 
 `UNIFIED_BROKER_INTERFACE_API_ORDER_MAXIMUM_COST_BPS` is applied here, when the intent is routed, rather than in `PresetExpander`, for the same reason as `hold_limits`: the value is written into the order when it arrives, so a restart reads the order the same way even if the setting has changed since. It is given only to a `marketable_limit` that does not set its own. `0` or empty means off, through `float(... or '0') or None` in `utilities/configurations.py`.
+
+`UNIFIED_BROKER_INTERFACE_API_ORDER_MARKET_REACHES_SIZE` is applied in the same place and in the same way: given only to a `marketable_limit` that does not say, and written into the order when it arrives.
