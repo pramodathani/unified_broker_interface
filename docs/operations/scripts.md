@@ -19,7 +19,7 @@ bin/
     ├── user/                  details  unified_details
     ├── brokers/               unified_details
     ├── exchanges/             unified_details
-    ├── orders/                api_order_details  api_trade_details  websocket_order_details  store_orders_to_db  order_engine  virtual_book  margin_calibration
+    ├── orders/                api_order_details  api_trade_details  websocket_order_details  store_orders_to_db  order_engine  virtual_book  margin_calibration  execution_costs
     ├── portfolio/             positions  holdings  funds  store_positions_to_db
     └── instruments/           map  price_history  websocket_quotes  store_quotes_to_db
 ```
@@ -216,6 +216,7 @@ The three `unified_details` scripts take `--once` to copy once and exit, and the
 | `order_engine` | Places every order the REST API accepts, and runs the synthetic order types | stream `unified:orders:intents:stream`, `unified:order-updates:stream` | the broker, and a reply on `unified:orders:intents:result:<intent_id>` |
 | `virtual_book` | Keeps a queue estimate for every held `virtual_limit` order and plan order on a `limit_marketable` trigger | stream `unified:quotes:stream`, the engine's parent cache | Redis hash `unified:orders:virtual_queue` |
 | `margin_calibration` | Asks every broker's own margin calculator about the same reference orders, once, and works out each broker's margin surcharge and hedge benefit | today's catalogue and `unified:quotes:live`; the brokers' margin calculators | TimescaleDB `unified.broker_order_costs`, the `margin_multiplier_*`, `gives_hedge_benefit` and `margin_calibrated_at` columns |
+| `execution_costs` | Works out what every filled order leg cost beyond brokerage, split into delay, latency, half spread and market impact | TimescaleDB `unified.synthetic_order_events`, `unified.instruments` and `unified.ticks` | TimescaleDB `unified.order_execution_costs` |
 
 !!! danger "`bin/unified/orders/order_engine` places live orders"
     The order engine sends real orders to real broker accounts. It places every order the REST API accepts, and only one may run: it holds the lock in `unified:orders:engine:lock`, and a second engine exits 1. It exits 2 for a bad argument or configuration.
@@ -231,6 +232,16 @@ bin/unified/orders/margin_calibration --brokers zerodha dhan
 ```
 
 It exits 0 when at least one broker was measured, 1 when none could be, today's catalogue is not published, or the database cannot be written, and 2 for a bad argument.
+
+`execution_costs` reads only the database and never calls a broker or Redis. It runs from `unified-execution-costs.timer` at 23:50 IST on weekdays, measures today and yesterday by default, and replaces the rows of the days it measures in one transaction, so running it twice gives the same table. [Measuring execution costs](../architecture/execution-costs.md) explains the figures.
+
+```bash
+bin/unified/orders/execution_costs                              # measure today and yesterday and write the rows
+bin/unified/orders/execution_costs --dry-run                    # print each broker's figures without writing
+bin/unified/orders/execution_costs --date 2026-10-06 --days 5   # five days ending on 6 October
+```
+
+It exits 0 when the days were measured, even with no fills, 1 when the database cannot be read or written, and 2 for a bad argument.
 
 ### portfolio
 

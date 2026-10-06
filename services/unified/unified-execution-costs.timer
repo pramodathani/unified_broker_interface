@@ -1,0 +1,17 @@
+# When the nightly execution cost measurement runs.
+#
+# 23:50 IST Monday to Friday: twenty minutes after MCX's evening session closes, so the day's last fills and ticks have
+# been stored. The script measures today and yesterday, so a night this timer missed is caught up the next night.
+
+[Unit]
+Description=Nightly order execution cost measurement
+PartOf=unified.target
+
+[Timer]
+OnCalendar=Mon..Fri 23:50 Asia/Kolkata
+AccuracySec=1min
+Persistent=true
+Unit=unified-execution-costs.service
+
+[Install]
+WantedBy=timers.target

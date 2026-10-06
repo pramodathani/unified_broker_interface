@@ -175,6 +175,7 @@ nav:
       - architecture/index.md
       - Design choices: architecture/design-choices.md
       - Choosing a broker by cost: architecture/broker-selection.md
+      - Measuring execution costs: architecture/execution-costs.md
       - Data contracts: architecture/contracts.md
       - Redis keys and streams: architecture/redis-keys.md
       - Database: architecture/database.md

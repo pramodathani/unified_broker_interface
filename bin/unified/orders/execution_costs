@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+"""
+Work out what every filled order leg cost beyond brokerage, from the order engine's event log and the stored tick
+history, and write one row per leg to `unified.order_execution_costs`.
+
+    bin/unified/orders/execution_costs
+    bin/unified/orders/execution_costs --dry-run
+    bin/unified/orders/execution_costs --date 2026-10-06 --days 5
+
+**Why.** The lowest-cost broker selector compares brokers by brokerage alone, but the price an order fills at can
+cost more than the brokerage does: on an order worth 5 lakh rupees one basis point is 50 rupees. This script measures
+that cost on real fills, so the brokers can later be compared on it as well.
+
+**The arithmetic.** Each leg is measured against the mid-price of the best bid and ask when the decision to trade
+was made: the parent's arrival for its first leg, and the leg's own request for every later one. The cost per unit,
+positive when money was lost, is split into four parts that add up to the total:
+
+| Part | Price move it measures |
+| --- | --- |
+| `delay_cost` | the mid-price from the decision to the engine sending the leg |
+| `latency_cost` | the mid-price from sending to the broker's answer, the part that depends on the broker |
+| `half_spread_cost` | half the spread when the broker answered |
+| `beyond_touch_cost` | the fill beyond the best price on its side when the broker answered: market impact when positive, a resting order filled inside the spread when negative |
+
+Each quote is the latest row of `unified.ticks` with both sides of the book at or before its moment, and a quote more
+than 60 seconds old counts as missing, which leaves the parts that need it empty. Basis points are of the decision's
+mid-price. `total_cost_rupees` is filled in only for the securities markets, because some brokers report a currency
+or commodity fill in lots rather than units.
+
+**What it touches.** It reads `unified.synthetic_order_events`, `unified.instruments` and `unified.ticks`, never a
+broker or Redis. It replaces every row of the days it measures in one transaction, so running it twice gives the same
+table. By default it measures today and yesterday in India's time zone, so a run the timer missed is caught up the
+next night. Its timer runs it at 23:50 IST on weekdays, after MCX closes.
+
+Exits 0 when the days were measured, even with no fills, 1 when the database cannot be read or written, and 2 for a
+bad argument.
+"""
+
+import sys
+import argparse
+import datetime
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+import psycopg2  # noqa: E402
+
+from utilities.configurations import get_logger, get_postgres  # noqa: E402
+from unified_broker_interface.utilities.execution_costs.execution_cost_measurement import (  # noqa: E402
+    ExecutionCostMeasurement,
+)
+from unified_broker_interface.utilities.order_engine.utilities.parent_store import (  # noqa: E402
+    INDIA,
+)
+
+
+class ExecutionCostsScript:
+    """The script: reads the arguments, measures the days, prints each broker's figures, and writes the rows.
+
+    Attributes:
+        logger (logging.Logger): The logger.
+    """
+
+    def __init__(self):
+        """Builds the script.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.logger = get_logger("unified.execution_costs")
+
+    def arguments(self):
+        """Reads the command line.
+
+        Returns:
+            argparse.Namespace: `date` (datetime.date), `days` (int) and `dry_run` (bool).
+        """
+        today = datetime.datetime.now(INDIA).date()
+        parser = argparse.ArgumentParser(description="Measure what every filled order leg cost beyond brokerage.")
+        parser.add_argument("--date", type=datetime.date.fromisoformat, default=today, help="The last day measured, as YYYY-MM-DD; today in India when omitted.")
+        parser.add_argument("--days", type=int, default=2, help="How many days to measure, ending with --date; 2 when omitted.")
+        parser.add_argument("--dry-run", action="store_true", help="Print the figures without writing unified.order_execution_costs.")
+        arguments = parser.parse_args()
+        if arguments.days < 1:
+            parser.error("--days must be at least 1")
+        return arguments
+
+    def show(self, summary):
+        """Prints one line per broker.
+
+        Args:
+            summary (list): The dicts `ExecutionCostMeasurement.summary` returns.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        print(f"{'broker':<15} {'legs':>6} {'measured':>9} {'median bps':>11} {'mean bps':>9} {'mean latency bps':>17}")
+        for line in summary:
+            print(f"{line['broker'] or '-':<15} {line['legs']:>6} {line['measured']:>9} "
+                  f"{str(line['median_total_basis_points']):>11} {str(line['mean_total_basis_points']):>9} "
+                  f"{str(line['mean_latency_basis_points']):>17}")
+
+    def run(self):
+        """Measures, prints and writes.
+
+        Returns:
+            int: The exit code.
+        """
+        arguments = self.arguments()
+        measurement = ExecutionCostMeasurement(get_postgres, self.logger)
+        start, end = measurement.day_bounds(arguments.date, arguments.days)
+        try:
+            costs = measurement.measure(start, end)
+        except psycopg2.Error as error:
+            self.logger.error(f"Could not read the event log or the ticks: {type(error).__name__}: {error}")
+            return 1
+        self.logger.info(f"Measured {len(costs)} filled legs sent from {start.isoformat()} to {end.isoformat()}.")
+        self.show(measurement.summary(costs))
+        if arguments.dry_run:
+            self.logger.info("Dry run: nothing written.")
+            return 0
+        try:
+            written = measurement.write(start, end, costs)
+        except psycopg2.Error as error:
+            self.logger.error(f"Could not write unified.order_execution_costs: {type(error).__name__}: {error}")
+            return 1
+        self.logger.info(f"Wrote {written} rows to unified.order_execution_costs.")
+        return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(ExecutionCostsScript().run())
