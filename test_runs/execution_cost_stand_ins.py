@@ -1,6 +1,6 @@
 """A stand-in database for measuring execution costs offline, holding scripted engine events, instruments and ticks.
 
-`ExecutionCostMeasurement` sends four kinds of statement: the event query, the segment query, the quote query and, when writing, the table's DDL, a delete and an insert. The stand-in answers the first three from what a program scripted, choosing the quote the way the real query does, and records the rest, so `python -m test_runs.execution_costs` and the example programs run without PostgreSQL.
+`ExecutionCostMeasurement` sends four kinds of statement: the event query, the segment query, the quote query and, when writing, the table's DDL, a delete and an insert. `LatencyCalibration` reads `unified.order_execution_costs` and updates `unified.broker_order_costs`. The stand-in answers the reads from what a program scripted, choosing the quote the way the real query does, and records the writes, so `python -m test_runs.execution_costs` and the example programs run without PostgreSQL.
 
 Typical usage:
 
@@ -29,6 +29,9 @@ class StandInExecutionDatabase:
         deleted_between (list): The (start, end) of every delete.
         transactions (list): `COMMIT` and `ROLLBACK`, in the order they happened.
         fail_on_insert (bool): Whether an insert raises, to show a write rolling back.
+        cost_rows (list): The scripted rows of `unified.order_execution_costs`, as tuples of broker, segment, product, latency cost in basis points and answer time in milliseconds.
+        cost_table_brokers (list): The brokers with a row in `unified.broker_order_costs`.
+        updates (list): The parameters of every update of `unified.broker_order_costs`.
     """
 
     def __init__(self):
@@ -46,6 +49,9 @@ class StandInExecutionDatabase:
         self.deleted_between = []
         self.transactions = []
         self.fail_on_insert = False
+        self.cost_rows = []
+        self.cost_table_brokers = []
+        self.updates = []
 
     def add_event(self, time, parent_order_id, event, **columns):
         """Adds one event row, numbering it after the parent's last one.
@@ -183,6 +189,7 @@ class StandInCursor:
     Attributes:
         database (StandInExecutionDatabase): The database.
         answer (list): The rows the last query returned.
+        rowcount (int): How many rows the last update changed.
     """
 
     def __init__(self, database):
@@ -196,6 +203,7 @@ class StandInCursor:
         """
         self.database = database
         self.answer = []
+        self.rowcount = 0
 
     def __enter__(self):
         """Opens the cursor in a `with` statement.
@@ -248,6 +256,13 @@ class StandInCursor:
                 self.answer.append(chosen)
         elif text.startswith('DELETE'):
             self.database.deleted_between.append(parameters)
+        elif text.startswith('SELECT') and 'unified.order_execution_costs' in text:
+            self.answer = list(self.database.cost_rows)
+        elif text.startswith('UPDATE'):
+            self.database.updates.append(parameters)
+            self.rowcount = 0
+            if parameters[-1] in self.database.cost_table_brokers:
+                self.rowcount = 1
 
     def executemany(self, statement, rows):
         """Records the rows of an insert.

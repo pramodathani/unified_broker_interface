@@ -1,0 +1,4 @@
+An index option bought MIS is fno, a share bought CNC is delivery
+dhan: intraday 25 legs None bps, delivery 0 legs None bps, fno 0 legs None bps, answer None ms
+flattrade: intraday 101 legs 0.00 bps, delivery 0 legs None bps, fno 72 legs -0.44 bps, answer 54 ms
+zerodha: intraday 0 legs None bps, delivery 0 legs None bps, fno 37 legs 1.35 bps, answer 67 ms
