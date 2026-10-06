@@ -7,6 +7,10 @@ REFERENCES = (
     'mid',
     'opposite_touch',
 )
+ON_EMPTY_BOOK = (
+    'wait',
+    'refuse',
+)
 
 
 class PegPricing:
@@ -16,14 +20,17 @@ class PegPricing:
 
     With `follows` false the order is priced at its reference when it is sent and left there, as each of today's accumulation purchases is. With `within_body_price`, a body that is a limit with a price sets the worst price the order will take, and the order rests at that price when the book does not carry its reference.
 
+    With `on_empty_book` set to `refuse`, an order that cannot be priced when it is first sent is refused rather than left waiting for a tick that carries its reference. This is what lets a market order sent as a marketable limit fail when nobody is on the other side, as a market order would, instead of waiting for someone to arrive.
+
     Attributes:
         reference (str): One of `REFERENCES`.
         offset_ticks (int): How many ticks away from the reference, positive away from filling.
         follows (bool): Whether the order is moved after its reference on later ticks.
         within_body_price (bool): Whether the body's limit price is the worst the order takes.
+        on_empty_book (str): One of `ON_EMPTY_BOOK`, what happens when the order cannot be priced when it is first sent.
     """
 
-    def __init__(self, reference, offset_ticks, follows=True, within_body_price=False):
+    def __init__(self, reference, offset_ticks, follows=True, within_body_price=False, on_empty_book='wait'):
         """Builds the pricing from settings the plan reader has already checked.
 
         Args:
@@ -31,6 +38,7 @@ class PegPricing:
             offset_ticks (int): How many ticks away from the reference.
             follows (bool): Whether the order is moved after its reference.
             within_body_price (bool): Whether the body's limit price is the worst it takes.
+            on_empty_book (str): `wait` to wait for a tick that carries the reference, or `refuse` to refuse the order.
 
         Returns:
             None: This method returns nothing.
@@ -39,6 +47,7 @@ class PegPricing:
         self.offset_ticks = offset_ticks
         self.follows = follows
         self.within_body_price = within_body_price
+        self.on_empty_book = on_empty_book
 
     def needs_prices(self):
         """Whether this pricing reads quotes, which it does.
@@ -107,6 +116,30 @@ class PegPricing:
         if price is None or price <= 0:
             return None
         return price
+
+    def empty_book_refusal(self, view, side):
+        """Why an order that could not be priced is refused, or None when it waits for a tick that can price it.
+
+        It is asked only once `priced_body` has given no price, so it names whichever reason the book gives: no quote yet, a quote marked stale, or no one on the side the reference reads.
+
+        Args:
+            view (MarketView): The order's quote.
+            side (str): BUY or SELL, the side the order is sent on.
+
+        Returns:
+            str | None: The refusal, or None when `on_empty_book` is `wait`.
+        """
+        if self.on_empty_book != 'refuse':
+            return None
+        if not view.is_readable():
+            return f'no live quote has arrived for this instrument, so the {side} could not be priced and nothing was sent'
+        if view.is_stale():
+            return f'the live quote for this instrument is marked stale, so the {side} could not be priced and nothing was sent'
+        if self.reference == 'opposite_touch' and side == 'BUY':
+            return 'nobody is offering this instrument, so the BUY could not be priced and nothing was sent'
+        if self.reference == 'opposite_touch':
+            return 'nobody is bidding for this instrument, so the SELL could not be priced and nothing was sent'
+        return f'the book gives no {self.reference} price for this instrument, so the {side} could not be priced and nothing was sent'
 
     def within(self, price, body, side):
         """The price held no worse than the body's limit, or the limit itself when the book gave no price.
@@ -220,5 +253,6 @@ class PegPricing:
                 'offset_ticks': self.offset_ticks,
                 'follows': self.follows,
                 'within_body_price': self.within_body_price,
+                'on_empty_book': self.on_empty_book,
             },
         }

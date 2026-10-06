@@ -1,0 +1,8 @@
+Buy on a full book: {'order_type': 'LIMIT', 'price': '1000.15'}
+Sell on a full book: {'order_type': 'LIMIT', 'price': '999.90'}
+BUY with no offers: priced None, refused because nobody is offering this instrument, so the BUY could not be priced and nothing was sent
+SELL with no bids: priced None, refused because nobody is bidding for this instrument, so the SELL could not be priced and nothing was sent
+BUY with no quote: priced None, refused because no live quote has arrived for this instrument, so the BUY could not be priced and nothing was sent
+BUY with a stale quote: priced None, refused because the live quote for this instrument is marked stale, so the BUY could not be priced and nothing was sent
+A peg that waits gives no refusal: None
+As a dry run shows it: {'peg': {'reference': 'opposite_touch', 'offset_ticks': -2, 'follows': True, 'within_body_price': False, 'on_empty_book': 'refuse'}}

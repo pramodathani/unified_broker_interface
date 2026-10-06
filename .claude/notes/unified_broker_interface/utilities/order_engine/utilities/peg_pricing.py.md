@@ -23,3 +23,9 @@ The group 6 walkthrough found every moving pricing acting on a quote marked `sta
 ## Offset after a caller's change (2026-10-05)
 
 `carry_on` turns the distance from the reference into whole ticks with `ROUND_FLOOR`. The default half-to-even rounding turned a mid peg's 1.5 ticks into 2, so a caller who moved a buy to 1000.00 under a mid of 1000.075 saw it re-priced to 999.95 on the same tick. Flooring always reproduces the caller's price after the passive rounding, on both sides.
+
+## Refusing an empty book (2026-10-06)
+
+`on_empty_book: refuse` exists for `marketable_limit`, whose market order must fail rather than wait when nobody is on the other side. A new pricing class was considered and rejected: a peg on the opposite touch, offset towards the market, already prices and follows exactly as a marketable limit should, so the only missing behaviour was what to do when no price can be made. The pricing interface has no way to refuse, only to return no price, so `empty_book_refusal` gives the reason and `OrderPart.order` ends the part as refused with it, the same way the post-only guard does. The plan then answers 409 with that reason when nothing else of it was placed.
+
+A missing quote and a stale one are refused too, not only an empty side. Both mean the engine cannot see who is on the other side, and a market order that waited for them would wait for an unknown time, which is what the user's rule was meant to prevent. The refusal is asked only when the order is first sent: once it rests, a tick with an empty side simply leaves it where it is, and the lifetime cancels it when its time is up.

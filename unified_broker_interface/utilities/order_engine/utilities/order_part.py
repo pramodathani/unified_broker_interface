@@ -24,6 +24,9 @@ from unified_broker_interface.utilities.order_engine.utilities.ladder_execution 
 from unified_broker_interface.utilities.order_engine.utilities.order_context import (
     OrderContext,
 )
+from unified_broker_interface.utilities.order_engine.utilities.peg_pricing import (
+    PegPricing,
+)
 from unified_broker_interface.utilities.order_engine.utilities.top_up_execution import (
     TopUpExecution,
 )
@@ -420,7 +423,7 @@ class OrderPart:
     def order(self, plan_order, quotes, quantity=None, price=None):
         """The order this part sends, priced now, or None when no price can be made yet or the post-only guard refused it.
 
-        The quantity is the piece's when one is given; otherwise the target a parent join set, less what this part has already traded, or the body's quantity when no join set one. Only the plan's main order keeps the caller's tag, as today's exits do: the tag belongs to the order the caller asked for. The cap holds the priced limit, and the post-only guard then checks it against the book; a refusal ends this part as refused.
+        The quantity is the piece's when one is given; otherwise the target a parent join set, less what this part has already traded, or the body's quantity when no join set one. Only the plan's main order keeps the caller's tag, as today's exits do: the tag belongs to the order the caller asked for. The cap holds the priced limit, and the post-only guard then checks it against the book; a refusal ends this part as refused. A peg told to refuse an empty book ends this part as refused, in the same way, when it cannot be priced.
 
         Args:
             plan_order (PlanOrder): The plan order.
@@ -449,6 +452,10 @@ class OrderPart:
         memory = copy.deepcopy(record.get('pricing_memory') or {})
         priced = self.pricing.priced_body(context, body, sending_side, quotes, memory)
         if priced is None:
+            if isinstance(self.pricing, PegPricing):
+                refusal = self.pricing.empty_book_refusal(context.view(quotes), sending_side)
+                if refusal is not None:
+                    self._refuse(plan_order, refusal)
             return None
         if memory != (record.get('pricing_memory') or {}):
             record['pricing_memory'] = memory
@@ -459,11 +466,7 @@ class OrderPart:
         if self.post_only is not None:
             priced, refusal = self.post_only.checked_body(context.view(quotes), priced, sending_side)
             if refusal is not None:
-                record = plan_order.part_record(self.path)
-                record['state'] = 'done'
-                record['reason'] = 'refused'
-                record['message'] = refusal
-                plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part is done: {refusal}')
+                self._refuse(plan_order, refusal)
                 return None
             if priced is None:
                 return None
@@ -474,6 +477,22 @@ class OrderPart:
         if priced.get('price') != before.get('price'):
             priced.pop('price_reference', None)
         return plan_order.concrete_order(plan_order.read_order(priced))
+
+    def _refuse(self, plan_order, refusal):
+        """Ends this part as refused without sending anything, which the plan answers with HTTP 409 when nothing else of it was placed.
+
+        Args:
+            plan_order (PlanOrder): The plan order.
+            refusal (str): Why the order was refused, for the caller.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        record = plan_order.part_record(self.path)
+        record['state'] = 'done'
+        record['reason'] = 'refused'
+        record['message'] = refusal
+        plan_order.set_part_record(self.path, record, f'the plan\'s {self.path} part is done: {refusal}')
 
     def with_caller_prices(self, priced, record):
         """The priced body with the price and trigger price a caller set before this part was sent, through `PUT /api/orders/modify` with `parent_id` and `part`.
