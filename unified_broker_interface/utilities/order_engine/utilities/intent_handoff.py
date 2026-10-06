@@ -28,15 +28,17 @@ class IntentHandoff:
         cache (redis.Redis): The Redis client.
         timeout_seconds (float): How long to wait for the engine before answering that the outcome is unknown.
         hold_limits (bool): Whether a plain limit order is held in the engine's virtual order book rather than sent at once.
+        market_as_limit (bool): Whether a plain market order is sent as a marketable limit that follows the book until it fills.
     """
 
-    def __init__(self, cache, timeout_seconds, hold_limits=False):
+    def __init__(self, cache, timeout_seconds, hold_limits=False, market_as_limit=False):
         """Builds the handoff.
 
         Args:
             cache (redis.Redis): The Redis client.
             timeout_seconds (float): How long to wait for the engine's answer.
             hold_limits (bool): Whether a plain limit order is held in the virtual order book.
+            market_as_limit (bool): Whether a plain market order is sent as a marketable limit.
 
         Returns:
             None: This method returns nothing.
@@ -44,6 +46,7 @@ class IntentHandoff:
         self.cache = cache
         self.timeout_seconds = timeout_seconds
         self.hold_limits = hold_limits
+        self.market_as_limit = market_as_limit
 
     def place(self, body, instrument_id, started_at):
         """Writes the order down for the engine and answers with what the engine did.
@@ -67,6 +70,7 @@ class IntentHandoff:
             instrument_id,
             self.timeout_seconds,
             hold_limits=self.hold_limits,
+            market_as_limit=self.market_as_limit,
         )
         try:
             self.cache.xadd(
@@ -126,6 +130,7 @@ class IntentHandoff:
                 request_index,
                 reply_key,
                 hold_limits=self.hold_limits,
+                market_as_limit=self.market_as_limit,
             )
         return self.hand_over_many(intents, reply_key, wait_seconds, started_at)
 

@@ -131,3 +131,7 @@ The fixed `closing_price` type subclasses `Vwap` and so accepts a `volume_profil
 ## Accumulation checks its own settings (2026-10-05)
 
 `_accumulation` checks `purchases` (a whole number from 1 to 100) and `every_minutes` (above zero) itself, at the preset's path. Passed straight to the repeat, a bad value was reported as `times ... not 0` and `every_minutes ... not None` at `root`, names and a place the caller never wrote.
+
+## The marketable limit preset (2026-10-06)
+
+`marketable_limit` is a `peg` on the opposite touch with `offset_ticks` of minus `buffer_ticks`, because a positive peg offset moves away from filling, and a lifetime of `fill_within_seconds / 60` minutes, because a lifetime is counted in minutes and accepts a fraction. The lifetime applies to `both`, so an order still waiting for a price is ended as well, and ends with `cancel`, which ends the parent `cancelled` when nothing filled and `completed` when some did. The preset checks its two settings itself, so a bad value is reported under the names the caller wrote rather than as a peg offset or a lifetime in minutes. The default buffer of 2 ticks is `DEFAULT_BUFFER_TICKS`, the same buffer `market_if_touched` and the hidden stop use.

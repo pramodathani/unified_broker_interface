@@ -58,7 +58,7 @@ The intent written to the stream carries these fields.
 | `deadline_at` | `created_at` plus the worker's wait, after which the worker has given up |
 | `reply_key` | `unified:orders:intents:result:<intent_id>` |
 | `api_worker` | The host and process id of the worker, for diagnosis |
-| `synthetic_type` | `synthetic.type` from the body; `virtual_limit` for a plain limit order that is [held](orders.md#limit-orders-are-held-until-they-can-fill) while `UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS` is on; otherwise `simple` |
+| `synthetic_type` | `synthetic.type` from the body; `virtual_limit` for a plain limit order that is [held](orders.md#limit-orders-are-held-until-they-can-fill) while `UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS` is on; `marketable_limit` for a plain market order [sent as a marketable limit](orders.md#market-orders-are-sent-as-marketable-limits) while `UNIFIED_BROKER_INTERFACE_API_ORDER_MARKET_AS_LIMIT` is on; otherwise `simple` |
 | `instrument_id` | The instrument the worker resolved, so the lookup rule lives in one place |
 | `body` | Your JSON body, exactly as it arrived |
 | `request_index` | Only for an order from an `orders` list: its place in the list, which matches its answer to it on the list's shared reply key |
@@ -98,6 +98,7 @@ The table below lists every answer that comes from the engine or the hand-over r
 | <span class="status s4">409</span> | `the order engine read this order after the caller had stopped waiting for it, so it was not placed` | The intent went stale. |
 | <span class="status s4">409</span> | `the order engine had already started this order before it read it again, so it was not placed a second time; read the parent for its outcome` | The intent was read again after a restart, and had already started a parent. |
 | <span class="status s4">409</span> | a quantity reference message | A `quantity_reference` asked to reduce or close a position that is not there. |
+| <span class="status s4">409</span> | `nobody is offering this instrument, so the BUY could not be priced and nothing was sent`, or the same for a sell, a missing quote or a stale one | A [market order sent as a marketable limit](orders.md#market-orders-are-sent-as-marketable-limits) found nothing on the other side of the book to price against. |
 | <span class="status s4">429</span> | `<broker> has been sent <n> order messages today, ...` | The broker's daily order cap has no room for this kind of order. |
 | <span class="status s5">503</span> | `the order engine is not running, so the order was not placed; start unified-orders@order_engine.service` | No engine holds `unified:orders:engine:lock`, which a running engine refreshes every ten seconds and which expires thirty seconds after it stops. The API reads the key before it writes the intent, so nothing was queued. |
 | <span class="status s5">503</span> | `the order could not be written for the order engine: <error>` | The `XADD` failed; nothing was queued. |

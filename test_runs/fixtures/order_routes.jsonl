@@ -1,3 +1,4 @@
+{"body": {"broker": null, "instrument_id": "11111111-1111-5111-8111-000000000001", "intent_id": "00000000000040008000000000000001", "order_id": null, "outcome": "rejected", "parent_id": "00000000-0000-4000-8000-000000000002", "skipped": [], "status_message": "no live quote has arrived for this instrument, so the BUY could not be priced and nothing was sent", "tag": null}, "name": "market_order_sent_as_a_marketable_limit_is_refused_without_a_quote", "redis_round_trips": 4, "sent": [], "status": 409}
 {"body": {"error": "Access token is required"}, "name": "token_header_missing", "redis_round_trips": 0, "sent": [], "status": 401}
 {"body": {"error": "Invalid access token"}, "name": "token_wrong", "redis_round_trips": 1, "sent": [], "status": 401}
 {"body": {"error": "Access token has expired"}, "name": "token_expired", "redis_round_trips": 1, "sent": [], "status": 401}

@@ -1406,7 +1406,12 @@ class OrderEngineSuite:
             order_routes.OrderRoutesState.INSTRUMENT_IDENTIFIERS['reliance'],
         )
         for position, body in enumerate(scenario['bodies']):
-            intent = OrderIntent(body, instrument_id, 5.0)
+            intent = OrderIntent(
+                body,
+                instrument_id,
+                5.0,
+                market_as_limit=scenario.get('market_as_limit', False),
+            )
             intent.intent_id = f'{position:032x}'
             intent.reply_key = (
                 'unified:orders:intents:result:' + intent.intent_id
@@ -7186,6 +7191,171 @@ class OrderEngineSuite:
             ),
         ]
 
+    def run_marketable_limit_checks(self):
+        """Runs the market order sent as a marketable limit: priced past the other side's touch, moved after it, refused on an empty book, and cancelled when its time is up.
+
+        Returns:
+            list: One recorded result per check.
+        """
+        accepted = self.scenarios.answers.json_answer(
+            200,
+            self.scenarios.answers.place_success('flattrade'),
+        )
+        market = self.scenarios.bodies.market_order(dry_run=None)
+        steady = self.book_at(1000.00, 1000.05)
+        no_offers = self.scenarios.quote(
+            depth={
+                'buy': steady['depth']['buy'],
+                'sell': [],
+            },
+        )
+        no_bids = self.scenarios.quote(
+            depth={
+                'buy': [],
+                'sell': steady['depth']['sell'],
+            },
+        )
+        stale = dict(
+            steady,
+            stale=True,
+        )
+        return [
+            self.price_result(
+                'a_market_buy_is_sent_as_a_limit_two_ticks_past_the_offer',
+                market,
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+                market_as_limit=True,
+            ),
+            self.price_result(
+                'a_market_sell_is_sent_as_a_limit_two_ticks_past_the_bid',
+                dict(market, transaction_type='SELL'),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+                market_as_limit=True,
+            ),
+            self.price_result(
+                'a_marketable_limit_follows_the_offer_until_it_fills',
+                market,
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': self.book_at(1000.20, 1000.25), 'at': 2},
+                    {'quote': self.book_at(1000.20, 1000.25), 'at': 4, 'updates': [self.update('26091500000021', 'COMPLETE', 10)]},
+                    {'quote': self.book_at(1000.40, 1000.45), 'at': 6},
+                ],
+                accepted,
+                book_every_order=True,
+                market_as_limit=True,
+            ),
+            self.price_result(
+                'a_marketable_limit_still_unfilled_after_thirty_seconds_is_cancelled',
+                market,
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 29},
+                    {'quote': steady, 'at': 31},
+                    {'quote': steady, 'at': 33, 'updates': [self.update('26091500000021', 'CANCELLED', 0)]},
+                ],
+                accepted,
+                market_as_limit=True,
+            ),
+            self.price_result(
+                'a_marketable_limit_partly_filled_after_thirty_seconds_has_the_rest_cancelled',
+                market,
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 10, 'updates': [self.update('26091500000021', 'OPEN', 4)]},
+                    {'quote': steady, 'at': 31},
+                    {'quote': steady, 'at': 33, 'updates': [self.update('26091500000021', 'CANCELLED', 4)]},
+                ],
+                accepted,
+                market_as_limit=True,
+            ),
+            self.price_result(
+                'a_market_buy_is_refused_when_nobody_is_offering',
+                market,
+                [
+                    {'quote': no_offers, 'at': 0},
+                ],
+                accepted,
+                market_as_limit=True,
+            ),
+            self.price_result(
+                'a_market_sell_is_refused_when_nobody_is_bidding',
+                dict(market, transaction_type='SELL'),
+                [
+                    {'quote': no_bids, 'at': 0},
+                ],
+                accepted,
+                market_as_limit=True,
+            ),
+            self.price_result(
+                'a_market_order_is_refused_when_no_quote_has_arrived',
+                market,
+                [
+                    {'quote': None, 'at': 0},
+                ],
+                accepted,
+                market_as_limit=True,
+            ),
+            self.price_result(
+                'a_market_order_is_refused_when_the_quote_is_stale',
+                market,
+                [
+                    {'quote': stale, 'at': 0},
+                ],
+                accepted,
+                market_as_limit=True,
+            ),
+            self.price_result(
+                'an_after_market_order_is_still_sent_as_a_market_order',
+                dict(market, after_market=True),
+                [
+                    {'quote': None, 'at': 0},
+                ],
+                accepted,
+                market_as_limit=True,
+            ),
+            self.price_result(
+                'a_market_order_naming_simple_is_still_sent_as_a_market_order',
+                dict(market, synthetic={'type': 'simple'}),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+                market_as_limit=True,
+            ),
+            self.price_result(
+                'a_market_order_is_sent_as_a_market_order_with_the_switch_off',
+                market,
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_marketable_limit_named_by_the_caller_takes_its_own_buffer_and_time',
+                dict(market, synthetic={'type': 'marketable_limit', 'buffer_ticks': 0, 'fill_within_seconds': 5}),
+                [
+                    {'quote': steady, 'at': 0},
+                    {'quote': steady, 'at': 6},
+                ],
+                accepted,
+            ),
+            self.price_result(
+                'a_marketable_limit_with_bad_settings_is_refused',
+                dict(market, synthetic={'type': 'marketable_limit', 'buffer_ticks': -1, 'fill_within_seconds': 0}),
+                [
+                    {'quote': steady, 'at': 0},
+                ],
+                accepted,
+            ),
+        ]
+
     def run_stale_quote_checks(self):
         """Runs triggers on quotes marked stale, which the quote combiner marks when a quote's broker has gone silent with no healthy backup.
 
@@ -11611,6 +11781,7 @@ class OrderEngineSuite:
         daily_sent=None,
         resting=None,
         book_every_order=False,
+        market_as_limit=False,
     ):
         """Places one watching order, then walks it through a sequence of quotes.
 
@@ -11630,12 +11801,14 @@ class OrderEngineSuite:
             daily_sent (dict | None): Each broker's order messages already sent today, written before the order is placed.
             resting (list | None): Flattrade order ids of open RELIANCE orders placed outside the engine, for a type that cancels what is resting.
             book_every_order (bool): Whether every order placed on a tick is also put into the broker's book before the next tick, so the order type can change or cancel it, as it can in life.
+            market_as_limit (bool): Whether the intent is written as an API worker that sends plain market orders as marketable limits writes it.
 
         Returns:
             dict: The recorded result.
         """
         settings = {
             'answer': answer,
+            'market_as_limit': market_as_limit,
         }
         if request_body.get('instrument_id'):
             settings['instrument_id'] = request_body['instrument_id']
@@ -15541,6 +15714,7 @@ class OrderEngineSuite:
             results.extend(self.run_stop_type_checks())
             results.extend(self.run_stale_quote_checks())
             results.extend(self.run_limit_pricing_checks())
+            results.extend(self.run_marketable_limit_checks())
             results.extend(self.run_execution_algorithm_checks())
             results.extend(self.run_repeating_strategy_checks())
             results.extend(self.run_hedge_follower_checks())

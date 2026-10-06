@@ -1774,6 +1774,11 @@ class OrderRoutesScenarios:
         })
         return [
             self.place(
+                'market_order_sent_as_a_marketable_limit_is_refused_without_a_quote',
+                self.market_order(dry_run=None),
+                market_as_limit=True,
+            ),
+            self.place(
                 'token_header_missing',
                 self.market_order(),
                 headers={},
@@ -3617,6 +3622,7 @@ class OrderRoutesSuite:
             ]
         api_configuration['order_broker_priority'] = priority
         api_configuration['order_hold_limits'] = scenario.get('hold_limits', False)
+        api_configuration['order_market_as_limit'] = scenario.get('market_as_limit', False)
         if scenario.get('expect_construction_error'):
             try:
                 self.build_client()
@@ -3701,6 +3707,7 @@ class OrderRoutesSuite:
         original_selector = api_configuration['order_broker_selector']
         original_priority = api_configuration['order_broker_priority']
         original_hold_limits = api_configuration['order_hold_limits']
+        original_market_as_limit = api_configuration['order_market_as_limit']
         blueprint_base.get_cache = self.fake_cache
         blueprint_base.get_mongo_db = self.fake_mongo_database
         requests.Session.request = self.network.request
@@ -3718,6 +3725,7 @@ class OrderRoutesSuite:
             api_configuration['order_broker_selector'] = original_selector
             api_configuration['order_broker_priority'] = original_priority
             api_configuration['order_hold_limits'] = original_hold_limits
+            api_configuration['order_market_as_limit'] = original_market_as_limit
         return results
 
     def encode(self, result):

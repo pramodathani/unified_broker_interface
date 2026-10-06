@@ -115,6 +115,7 @@ from unified_broker_interface.utilities.order_engine.utilities.participation_exe
     ParticipationExecution,
 )
 from unified_broker_interface.utilities.order_engine.utilities.peg_pricing import (
+    ON_EMPTY_BOOK,
     REFERENCES,
     PegPricing,
 )
@@ -2137,14 +2138,14 @@ class PlanReader:
         """Reads `peg` pricing.
 
         Args:
-            settings (dict): `reference`, default `own_touch`; `offset_ticks`, default 0; `follows`, default true; and `within_body_price`, default false.
+            settings (dict): `reference`, default `own_touch`; `offset_ticks`, default 0; `follows`, default true; `within_body_price`, default false; and `on_empty_book`, default `wait`.
             path (str): Where it sits in the plan.
 
         Returns:
             PegPricing | None: The pricing, or None when it has a problem.
         """
         problems_before = len(self.problems)
-        self._refuse_unknown(settings, ('reference', 'offset_ticks', 'follows', 'within_body_price'), path, 'peg')
+        self._refuse_unknown(settings, ('reference', 'offset_ticks', 'follows', 'within_body_price', 'on_empty_book'), path, 'peg')
         reference = settings.get('reference', 'own_touch')
         if reference not in REFERENCES:
             self._add_problem(
@@ -2165,9 +2166,16 @@ class PlanReader:
             if not isinstance(value, bool):
                 self._add_problem(path, 'bad_setting', f'{name} must be true or false, not {value!r}')
             flags[name] = value
+        on_empty_book = settings.get('on_empty_book', 'wait')
+        if on_empty_book not in ON_EMPTY_BOOK:
+            self._add_problem(
+                path,
+                'bad_setting',
+                f'on_empty_book must be one of {", ".join(ON_EMPTY_BOOK)}, not {on_empty_book!r}',
+            )
         if len(self.problems) > problems_before:
             return None
-        return PegPricing(reference, offset, flags['follows'], flags['within_body_price'])
+        return PegPricing(reference, offset, flags['follows'], flags['within_body_price'], on_empty_book)
 
     def _read_chase(self, settings, path):
         """Reads `chase` pricing.

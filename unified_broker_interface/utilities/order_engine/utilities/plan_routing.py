@@ -33,6 +33,7 @@ ROUTED_TYPES = (
     'limit_if_touched',
     'liquidity_seeking',
     'market_if_touched',
+    'marketable_limit',
     'oca',
     'oco',
     'opening_auction',

@@ -2,6 +2,8 @@ simple: {}
   problems: []
 market_if_touched: {'trigger': {'price_crosses': {'level': 995, 'field': 'last', 'confirm': 'none'}}, 'pricing': [{'marketable': {'buffer_ticks': 2}}]}
   problems: []
+marketable_limit: {'pricing': [{'peg': {'reference': 'opposite_touch', 'offset_ticks': -2, 'on_empty_book': 'refuse'}}], 'lifetime': [{'after_minutes': 0.5, 'applies_to': 'both', 'on_end': 'cancel'}]}
+  problems: []
 limit_if_touched: {'trigger': {'price_crosses': {'level': 995, 'field': 'last', 'confirm': 'double_last'}}, 'pricing': [{'fixed': {'price': 996}}]}
   problems: []
 scheduled: {'trigger': {'time_at': '10:00'}}

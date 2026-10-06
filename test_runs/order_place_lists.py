@@ -265,6 +265,7 @@ class OrderPlaceListSuite(order_routes.OrderRoutesSuite):
             original_maximum,
         )
         api_configuration['order_hold_limits'] = scenario.get('hold_limits', False)
+        api_configuration['order_market_as_limit'] = scenario.get('market_as_limit', False)
         try:
             request = dict(scenario)
             request['answer'] = self.place_answers()

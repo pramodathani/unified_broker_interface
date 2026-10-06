@@ -11,6 +11,7 @@ from unified_broker_interface.utilities.broker_orders.utilities.order_request im
 
 REPLY_KEY_PREFIX = 'unified:orders:intents:result:'
 HELD_TYPE = 'virtual_limit'
+MARKET_AS_LIMIT_TYPE = 'marketable_limit'
 
 
 class OrderIntent:
@@ -40,6 +41,7 @@ class OrderIntent:
         reply_key=None,
         command=None,
         hold_limits=False,
+        market_as_limit=False,
     ):
         """Builds the intent for one accepted order.
 
@@ -51,6 +53,7 @@ class OrderIntent:
             reply_key (str | None): The list every order of one request is answered on, or None for a list of this order's own.
             command (str | None): A change to a parent the engine owns, with its arguments in `body`, or None for an order to place.
             hold_limits (bool): Whether a plain limit order is held in the engine's virtual order book rather than sent at once.
+            market_as_limit (bool): Whether a plain market order is sent as a marketable limit that follows the book until it fills, rather than as a market order.
 
         Returns:
             None: This method returns nothing.
@@ -66,9 +69,9 @@ class OrderIntent:
         self.body = body if isinstance(body, dict) else {}
         self.synthetic_type = None
         if command is None:
-            self.synthetic_type = self.read_synthetic_type(self.body, hold_limits)
+            self.synthetic_type = self.read_synthetic_type(self.body, hold_limits, market_as_limit)
 
-    def read_synthetic_type(self, body, hold_limits):
+    def read_synthetic_type(self, body, hold_limits, market_as_limit=False):
         """Reads which kind of order the body asks for.
 
         The value is carried but not checked here, because what a type needs beside it is the type's own business and is checked where the engine builds it.
@@ -76,9 +79,10 @@ class OrderIntent:
         Args:
             body (dict): The caller's decoded JSON body.
             hold_limits (bool): Whether a plain limit order is held in the virtual order book.
+            market_as_limit (bool): Whether a plain market order is sent as a marketable limit.
 
         Returns:
-            str: The named type; `virtual_limit` for a plain limit order when limits are held; `simple` otherwise.
+            str: The named type; `virtual_limit` for a plain limit order when limits are held; `marketable_limit` for a plain market order when market orders are sent as limits; `simple` otherwise.
         """
         synthetic = body.get('synthetic')
         if isinstance(synthetic, dict):
@@ -87,7 +91,26 @@ class OrderIntent:
                 return str(named_type)
         if hold_limits and self.is_holdable(body):
             return HELD_TYPE
+        if market_as_limit and self.is_market_to_limit(body):
+            return MARKET_AS_LIMIT_TYPE
         return 'simple'
+
+    def is_market_to_limit(self, body):
+        """Whether an order that names no type is a market order to send as a marketable limit.
+
+        An after-market order is left as it is, because the broker queues it for the next session, when there is no live book to price a limit from. A body with a `synthetic` object has chosen its type, `simple` included, which is how `POST /api/orders/flatten` keeps its closing orders as market orders.
+
+        Args:
+            body (dict): The caller's decoded JSON body.
+
+        Returns:
+            bool: True when the order is sent as a marketable limit.
+        """
+        if 'synthetic' in body:
+            return False
+        if str(body.get('order_type') or '').upper() != 'MARKET':
+            return False
+        return not self.is_after_market(body)
 
     def is_holdable(self, body):
         """Whether an order that names no type is one the virtual order book can hold.
