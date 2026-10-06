@@ -93,7 +93,7 @@ The same facts are listed in the table below, with the file each one comes from.
 | 09:00 to 17:00 | Currency derivatives trade | Trading days | `CURRENCY_SESSION` |
 | 09:00 to 17:00, 17:00 to 23:30 | Commodity derivatives on MCX (and the NSE and BSE commodity segments) trade a morning and an evening session; the evening runs to 23:55 while the United States is on standard time | Trading days | `COMMODITY_SESSION` |
 | 10:00 to 17:00, 17:00 to 21:00 | NCDEX morning and evening sessions | Trading days | `NCDEX_SESSION` |
-| 23:50 | `unified-execution-costs.service` works out what every filled order leg of today and yesterday cost beyond brokerage and writes `unified.order_execution_costs` | Monday to Friday | `OnCalendar=Mon..Fri 23:50 Asia/Kolkata`, `Persistent=true` |
+| 23:50 | `unified-execution-costs.service` works out what every filled order leg of today and yesterday cost beyond brokerage and writes `unified.order_execution_costs`, then writes each broker's latency figures to `unified.broker_order_costs` | Monday to Friday | `OnCalendar=Mon..Fri 23:50 Asia/Kolkata`, `Persistent=true` |
 | Every minute | `databases.service` starts any stopped database container | Always | `databases.timer`, `OnUnitInactiveSec=1min` |
 
 Two of these times deserve a closer look. The timers name `Asia/Kolkata` explicitly, so they keep IST even if the machine's time zone changes. The token renewal time is compared with `datetime.now()`, which is the machine's local clock, so it matches IST only when the machine runs on India time.

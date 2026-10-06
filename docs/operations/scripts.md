@@ -19,7 +19,7 @@ bin/
     ├── user/                  details  unified_details
     ├── brokers/               unified_details
     ├── exchanges/             unified_details
-    ├── orders/                api_order_details  api_trade_details  websocket_order_details  store_orders_to_db  order_engine  virtual_book  margin_calibration  execution_costs
+    ├── orders/                api_order_details  api_trade_details  websocket_order_details  store_orders_to_db  order_engine  virtual_book  margin_calibration  execution_costs  latency_calibration
     ├── portfolio/             positions  holdings  funds  store_positions_to_db
     └── instruments/           map  price_history  websocket_quotes  store_quotes_to_db
 ```
@@ -217,6 +217,7 @@ The three `unified_details` scripts take `--once` to copy once and exit, and the
 | `virtual_book` | Keeps a queue estimate for every held `virtual_limit` order and plan order on a `limit_marketable` trigger | stream `unified:quotes:stream`, the engine's parent cache | Redis hash `unified:orders:virtual_queue` |
 | `margin_calibration` | Asks every broker's own margin calculator about the same reference orders, once, and works out each broker's margin surcharge and hedge benefit | today's catalogue and `unified:quotes:live`; the brokers' margin calculators | TimescaleDB `unified.broker_order_costs`, the `margin_multiplier_*`, `gives_hedge_benefit` and `margin_calibrated_at` columns |
 | `execution_costs` | Works out what every filled order leg cost beyond brokerage, split into delay, latency, half spread and market impact | TimescaleDB `unified.synthetic_order_events`, `unified.instruments` and `unified.ticks` | TimescaleDB `unified.order_execution_costs` |
+| `latency_calibration` | Works out each broker's mean latency cost per order category and its median answer time over the last 20 days | TimescaleDB `unified.order_execution_costs` | TimescaleDB `unified.broker_order_costs`, the `latency_cost_bps_*`, `broker_answer_milliseconds` and `latency_calibrated_at` columns |
 
 !!! danger "`bin/unified/orders/order_engine` places live orders"
     The order engine sends real orders to real broker accounts. It places every order the REST API accepts, and only one may run: it holds the lock in `unified:orders:engine:lock`, and a second engine exits 1. It exits 2 for a bad argument or configuration.
@@ -242,6 +243,16 @@ bin/unified/orders/execution_costs --date 2026-10-06 --days 5   # five days endi
 ```
 
 It exits 0 when the days were measured, even with no fills, 1 when the database cannot be read or written, and 2 for a bad argument.
+
+`latency_calibration` runs straight after `execution_costs`, from the same unit, and does not run if the measurement failed. It writes a figure only when at least 30 legs are behind it, and the lowest-cost selector does not read its columns yet. [The latency calibration](../architecture/execution-costs.md#the-latency-calibration) explains both rules.
+
+```bash
+bin/unified/orders/latency_calibration                    # work out and write the figures
+bin/unified/orders/latency_calibration --dry-run          # print them without writing
+bin/unified/orders/latency_calibration --window-days 40   # forty days of legs instead of twenty
+```
+
+It exits 0 when the figures were worked out, even if none had enough legs to be written, 1 when the database cannot be read or written, and 2 for a bad argument.
 
 ### portfolio
 

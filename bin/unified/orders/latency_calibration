@@ -1,0 +1,127 @@
+#!/usr/bin/env python3
+"""
+Work out each broker's latency cost per order category, and how fast it answers, from the measured execution costs,
+and write them to `unified.broker_order_costs`.
+
+    bin/unified/orders/latency_calibration
+    bin/unified/orders/latency_calibration --dry-run
+    bin/unified/orders/latency_calibration --window-days 40
+
+**Why.** Of everything an order loses between the decision to trade and its fill, only the price move while the
+broker handles it depends on which broker is chosen. This script keeps one figure per broker and category for it, so
+the lowest-cost broker selector can later compare brokers on brokerage plus that cost. Nothing reads the columns yet.
+
+**The arithmetic.** It reads `latency_cost_basis_points` from `unified.order_execution_costs` for the last 20 days
+(`--window-days` to change it), sorted into the selector's categories: `fno` for a future or option, `delivery` for
+a `CNC` order and `intraday` for anything else. A broker's latency cost for a category is the mean over every leg,
+because most legs see no move and the cost comes from the few that do. `broker_answer_milliseconds` is the median time
+from sending a leg to the broker's answer. A figure needs at least 30 legs behind it; one with fewer is not written,
+and the table keeps what it held.
+
+**What it touches.** It reads one table and updates the latency columns and `latency_calibrated_at` of
+`unified.broker_order_costs`, never a broker or Redis. It runs straight after `execution_costs`, from the same unit,
+at 23:50 IST on weekdays.
+
+Exits 0 when the figures were worked out, even if none had enough legs to be written, 1 when the database cannot be
+read or written, and 2 for a bad argument.
+"""
+
+import sys
+import argparse
+import datetime
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+import psycopg2  # noqa: E402
+
+from utilities.configurations import get_logger, get_postgres  # noqa: E402
+from unified_broker_interface.utilities.execution_costs.broker_latency import (  # noqa: E402
+    CATEGORIES,
+)
+from unified_broker_interface.utilities.execution_costs.latency_calibration import (  # noqa: E402
+    WINDOW_DAYS,
+    LatencyCalibration,
+)
+
+
+class LatencyCalibrationScript:
+    """The script: reads the arguments, works out each broker's figures, prints them, and writes them.
+
+    Attributes:
+        logger (logging.Logger): The logger.
+    """
+
+    def __init__(self):
+        """Builds the script.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.logger = get_logger("unified.latency_calibration")
+
+    def arguments(self):
+        """Reads the command line.
+
+        Returns:
+            argparse.Namespace: `window_days` (int) and `dry_run` (bool).
+        """
+        parser = argparse.ArgumentParser(description="Work out each broker's latency cost and answer time from the measured execution costs.")
+        parser.add_argument("--window-days", type=int, default=WINDOW_DAYS, help=f"How many days of measured legs to use; {WINDOW_DAYS} when omitted.")
+        parser.add_argument("--dry-run", action="store_true", help="Print the figures without writing unified.broker_order_costs.")
+        arguments = parser.parse_args()
+        if arguments.window_days < 1:
+            parser.error("--window-days must be at least 1")
+        return arguments
+
+    def show(self, brokers):
+        """Prints each broker's leg counts, latency costs and answer time.
+
+        Args:
+            brokers (list): The `BrokerLatency` figures.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        headings = []
+        for category in CATEGORIES:
+            headings.append(f"{category + ' legs':>15} {category + ' bps':>14}")
+        print(f"{'broker':<15} {' '.join(headings)} {'answer ms':>10}")
+        for broker in brokers:
+            cells = []
+            for category in CATEGORIES:
+                cells.append(f"{broker.leg_count(category):>15} {str(broker.latency_cost(category)):>14}")
+            print(f"{broker.broker_name:<15} {' '.join(cells)} {str(broker.typical_answer_milliseconds()):>10}")
+
+    def run(self):
+        """Works out, prints and writes the figures.
+
+        Returns:
+            int: The exit code.
+        """
+        arguments = self.arguments()
+        calibration = LatencyCalibration(get_postgres, self.logger)
+        since = calibration.window_start(datetime.datetime.now(datetime.timezone.utc), arguments.window_days)
+        try:
+            brokers = calibration.measure(since)
+        except psycopg2.Error as error:
+            self.logger.error(f"Could not read unified.order_execution_costs: {type(error).__name__}: {error}")
+            return 1
+        self.show(brokers)
+        if arguments.dry_run:
+            self.logger.info("Dry run: nothing written.")
+            return 0
+        try:
+            updated = calibration.write(brokers)
+        except psycopg2.Error as error:
+            self.logger.error(f"Could not write unified.broker_order_costs: {type(error).__name__}: {error}")
+            return 1
+        self.logger.info(f"Wrote the latency columns of {updated} brokers to unified.broker_order_costs.")
+        return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(LatencyCalibrationScript().run())

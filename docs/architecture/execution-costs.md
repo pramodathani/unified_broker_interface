@@ -2,11 +2,11 @@
 
 Brokerage is only part of what an order costs. The price an order fills at is usually worse than the price the market showed when the decision to trade was made, because the price moves while the order travels, because crossing the spread costs half of it, and because a large order walks the book. On an order worth 5 lakh rupees, one basis point is 50 rupees, which is more than the 20 rupees of brokerage most brokers charge for it. [Choosing a broker by cost](broker-selection.md) compares brokers on brokerage alone, so this page describes how the other part is measured.
 
-The measurement is the first stage of a longer plan, which the diagram below shows in full. The orange dots follow an order and what it leaves behind, and the blue dots follow what is learned from it and fed back. Only the lower row exists today: `bin/unified/orders/execution_costs` reads the order engine's event log and the stored quotes every night and writes `unified.order_execution_costs`. The pre-trade estimate, the calibration and the feedback into broker choice are later stages.
+The measurement is the first stage of a longer plan, which the diagram below shows in full. The orange dots follow an order and what it leaves behind, and the blue dots follow what is learned from it and fed back. The lower row exists today: `bin/unified/orders/execution_costs` reads the order engine's event log and the stored quotes every night and writes `unified.order_execution_costs`, and `bin/unified/orders/latency_calibration` then turns that table into per-broker figures in `unified.broker_order_costs`. The pre-trade estimate, and the broker choice reading those figures, are later stages.
 
 <figure class="diagram">
 --8<-- "docs/assets/diagrams/execution-costs.svg"
-<figcaption>The orange dots follow an order to its fills and into the execution cost table; the blue dots follow the figures learned from that table back into the cost table the broker choice reads. Only the measurement exists today.</figcaption>
+<figcaption>The orange dots follow an order to its fills and into the execution cost table; the blue dots follow the figures learned from that table back into the cost table the broker choice reads. The measurement and the calibration exist today; the estimate and the broker choice's use of the figures do not.</figcaption>
 </figure>
 
 ## What is measured
@@ -89,7 +89,7 @@ ORDER BY broker;
 
 ## Running it
 
-`unified-execution-costs.timer` runs the script at 23:50 IST from Monday to Friday, after MCX closes. By default it measures today and yesterday in India's time zone, so a night the timer missed is caught up the next night.
+`unified-execution-costs.timer` runs the script at 23:50 IST from Monday to Friday, after MCX closes, and the same unit runs the [latency calibration](#the-latency-calibration) straight after it. By default the measurement covers today and yesterday in India's time zone, so a night the timer missed is caught up the next night.
 
 ```bash
 bin/unified/orders/execution_costs                              # measure today and yesterday and write the rows
@@ -107,6 +107,44 @@ zerodha             37        37        6.94    -12.29              1.35
 
 Two days of fills are too few to say one broker is cheaper than the other. The median latency was zero at both brokers, because the mid-price rarely moves in the tenth of a second a broker takes to answer, which is why the script prints the mean beside it.
 
+## The latency calibration
+
+Of the four parts, only latency depends on which broker carried the order. `bin/unified/orders/latency_calibration` therefore turns the last 20 days of the table into one latency figure per broker and order category, and writes it beside the brokerage in `unified.broker_order_costs`. The categories are the ones the lowest-cost selector prices brokerage by: `fno` for a future or option, `delivery` for a `CNC` order, and `intraday` for anything else. The table below lists the columns it writes.
+
+| Column | What it holds |
+|---|---|
+| `latency_cost_bps_intraday`, `latency_cost_bps_delivery`, `latency_cost_bps_fno` | The mean `latency_cost_basis_points` of the broker's legs in that category |
+| `broker_answer_milliseconds` | The median time from sending a leg to the broker's answer |
+| `latency_calibrated_at` | When the script last wrote any of them |
+
+Two rules decide what is written.
+
+1. **The mean over every leg, not the median.** While a broker answers, the mid-price usually does not move, so most legs have a latency cost of exactly zero and the cost comes from the few that do. The median is therefore almost always zero, and a mean that dropped the highest and lowest few legs was tried and came out as exactly zero for every broker, because it dropped the legs that carried the cost.
+2. **At least 30 legs.** A figure with fewer legs behind it is not written, and the column keeps whatever it held. A broker with nothing measured is not touched at all.
+
+The first run, on 6 October 2026 after ten days had been measured, printed the figures below. Six brokers had too few legs in every category to be written.
+
+```text
+broker            intraday legs   intraday bps   delivery legs   delivery bps        fno legs        fno bps  answer ms
+dhan                         25           None               0           None               0           None       None
+flattrade                   101           0.00               0           None              72          -0.44         54
+groww                        29           None               0           None               0           None       None
+indmoney                     20           None               0           None               0           None       None
+kotak                        23           None               0           None               0           None       None
+shoonya                      20           None               0           None               0           None       None
+stoxkart                     21           None               0           None               0           None       None
+wisdom_capital               90           0.00               0           None               0           None         88
+zerodha                      17           None               0           None              37           1.35         67
+```
+
+**Nothing reads these columns yet.** The lowest-cost selector still ranks brokers on brokerage alone. Reading them is a change to which broker receives an order, so it waits until a few weeks of ordinary trading show whether the brokers' figures really differ. Most of the legs above come from one test session on 29 September.
+
+```bash
+bin/unified/orders/latency_calibration                    # work out and write the figures
+bin/unified/orders/latency_calibration --dry-run          # print them without writing
+bin/unified/orders/latency_calibration --window-days 40   # use forty days of legs instead of twenty
+```
+
 ## What it does not measure yet
 
 The measurement leaves four things out, each for a stated reason.
@@ -118,8 +156,7 @@ The measurement leaves four things out, each for a stated reason.
 
 ## What comes next
 
-The table is the input to three later stages.
+Two later stages build on the table and the calibration.
 
-1. A nightly calibration will turn the table into a per-broker latency cost, stored beside the brokerage in `unified.broker_order_costs`, so the lowest-cost selector can compare brokers on brokerage plus expected latency cost in rupees.
-2. A pre-trade estimate will walk the five visible levels of the book for each order and use a square-root model, fitted to this table, for any quantity beyond them.
-3. That estimate will help decide how to execute: how far a marketable limit may go through the book, when to slice an order instead of crossing at once, and how paper fills should be priced.
+1. A pre-trade estimate will walk the five visible levels of the book for each order and use a square-root model, fitted to this table, for any quantity beyond them.
+2. The figures will be used. The lowest-cost selector will compare brokers on brokerage plus expected latency cost in rupees, and the estimate will help decide how to execute: how far a marketable limit may go through the book, when to slice an order instead of crossing at once, and how paper fills should be priced.

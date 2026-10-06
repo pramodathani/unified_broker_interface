@@ -36,6 +36,8 @@ The columns mean the following.
 
 The table is created and seeded by `stock_brokers/instruments/mapping/utilities/sql/ddl/150_unified_broker_order_costs.sql`. That file runs with the rest of the unified schema, by `python -m stock_brokers.instruments.mapping.utilities.sql.apply_ddl` and before every daily mapping run. Its seed uses `ON CONFLICT (broker) DO NOTHING`, so running it again never overwrites a row that has been changed since.
 
+`latency_cost_bps_intraday`, `latency_cost_bps_delivery` and `latency_cost_bps_fno` are how far, on average, the mid-price moved against an order while the broker handled it, in basis points, and `broker_answer_milliseconds` is the broker's median time to answer. `bin/unified/orders/latency_calibration` writes them and `latency_calibrated_at` every weekday night from the measured fills. **The selector does not read them yet**; [Measuring execution costs](execution-costs.md#the-latency-calibration) explains what they are for and why they wait.
+
 ### Changing a row or adding a broker
 
 A change takes effect at the next 06:00 IST reload, or when the REST API and the order engine are next restarted. This statement adds a broker, or replaces every value of one that is already there:
