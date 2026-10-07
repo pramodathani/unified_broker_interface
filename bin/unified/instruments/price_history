@@ -2,7 +2,7 @@
 """
 Build the unified price history - `unified.price_history` and its adjustment factors - from the brokers' price tables.
 
-    bin/unified/instruments/price_history daily                           # the daily job: load, corrections, load, factors, verify
+    bin/unified/instruments/price_history daily                           # the daily job: load, corrections, load, factors, intraday loads, verify
     bin/unified/instruments/price_history load                            # copy new and changed daily bars across
     bin/unified/instruments/price_history corrections                     # find series flattrade served already adjusted
     bin/unified/instruments/price_history factors --stale-days 14         # fetch Yahoo Finance and derive adjustment factors
@@ -44,7 +44,8 @@ creates the unified price tables the first time. The unified instruments have to
 - `sources` resolves every broker series and reports how, writing nothing.
 - `status` prints the last run and what is stored.
 - `daily` is the morning sequence `unified-prices.service` runs: `load`, `corrections`, `load` again for what the corrections changed,
-  `factors --stale-days 14`, then `verify`, whose failures are reported without failing the job.
+  `factors --stale-days 14`, then `load` for each of the fifteen intraday intervals, from `1minute` to `240minute`, then `verify`,
+  whose failures are reported without failing the job. It always loads `day` and every intraday interval, so `--interval` does not apply to it.
 
 Each run's outcome is written to `unified:prices:last_run` in Redis.
 
@@ -334,7 +335,7 @@ def main():
                                         "comma separated statuses, for example empty,mismatch")
     arguments = parser.parse_args()
 
-    from stock_brokers.instruments.historical.utilities.unified.sources import LOADED_INTERVALS
+    from stock_brokers.instruments.historical.utilities.unified.sources import INTRADAY_MINUTES, LOADED_INTERVALS
     from utilities.configurations import get_cache, get_logger, get_postgres
 
     logger = get_logger("unified.price_history")
@@ -368,12 +369,20 @@ def main():
 
     if arguments.step == "daily":
         # The morning sequence. A failed step ends the job; verify is reported without failing it.
-        sequence = [("load", {}), ("corrections", {}), ("load", {}), ("factors", {"stale_days": 14}), ("verify", {})]
+        sequence = [
+            ("load", "day", {}),
+            ("corrections", "day", {}),
+            ("load", "day", {}),
+            ("factors", "day", {"stale_days": 14}),
+        ]
+        for interval in INTRADAY_MINUTES:
+            sequence.append(("load", interval, {}))
+        sequence.append(("verify", "day", {}))
         outcome["steps"] = []
-        for position, (step, options) in enumerate(sequence, start=1):
-            print(f"\n=== {step} ({position} of {len(sequence)}) ===")
-            step_outcome, step_code = run_step(step, arguments.interval, instrument_ids, get_postgres, **options)
-            outcome["steps"].append({"step": step, "exit_code": step_code, **step_outcome})
+        for position, (step, interval, options) in enumerate(sequence, start=1):
+            print(f"\n=== {step} {interval} ({position} of {len(sequence)}) ===")
+            step_outcome, step_code = run_step(step, interval, instrument_ids, get_postgres, **options)
+            outcome["steps"].append({"step": step, "interval": interval, "exit_code": step_code, **step_outcome})
             if step_code and step != "verify":
                 logger.error(f"The daily job stopped: {step} failed.")
                 exit_code = step_code
