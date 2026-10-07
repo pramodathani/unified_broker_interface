@@ -14,7 +14,7 @@ flowchart LR
     end
     W --> PH[("#lt;broker#gt;.price_history")]
     subgraph Unified["bin/unified/instruments/price_history daily<br/>08:30 IST, Monday to Saturday"]
-        L["load"] --> C["corrections"] --> L2["load again"] --> FA["factors"] --> V["verify"]
+        L["load"] --> C["corrections"] --> L2["load again"] --> FA["factors"] --> LI["load each<br/>intraday interval"] --> V["verify"]
     end
     PH --> L
     MAP[("unified.instruments<br/>unified.broker_mappings")] --> L
@@ -141,7 +141,7 @@ The table below lists the subcommands. Each run writes its outcome to the Redis 
 | `verify` | Runs the checks, including known corporate action cases, and fails when any check fails | nothing |
 | `sources` | Resolves every broker series and reports how, writing nothing | nothing |
 | `status` | Prints the last run and what is stored | nothing |
-| `daily` | Runs `load`, `corrections`, `load` again, `factors --stale-days 14` and `verify`; a failed `verify` is reported without failing the job | all of the above |
+| `daily` | Runs `load`, `corrections`, `load` again, `factors --stale-days 14`, then `load` for each of the fifteen intraday intervals, then `verify`; a failed `verify` is reported without failing the job, and `--interval` does not apply | all of the above |
 
 `unified-prices.service` runs `daily` from `unified-prices.timer` at 08:30 IST, Monday to Saturday. The service is ordered after `unified-mapping.service`, so when the 07:45 instrument job runs late, the price job waits for it and loads against the day's mapping.
 
@@ -163,12 +163,12 @@ Only Flattrade (daily and intraday, NSE and BSE) and Wisdom Capital (BSE intrada
 
 ### Intervals loaded
 
-The `load` step accepts `day` and fifteen intraday names. Week and month bars are never loaded. The daily timer loads only `day`; intraday intervals are loaded by hand.
+The `load` step accepts `day` and fifteen intraday names. Week and month bars are never loaded. The daily job loads every one of the sixteen, `day` first and then the intraday intervals from `1minute` to `240minute` once the factors are up to date. An intraday load rebuilds an instrument only from three days before the newest bar its sources had already seen, so after the first load of an interval, each morning's run copies only the previous days' new bars.
 
 | `--interval` | Loaded by the daily job? |
 |---|:---:|
 | `day` | :material-check: |
-| `1minute`, `2minute`, `3minute`, `4minute`, `5minute`, `10minute`, `15minute`, `20minute`, `25minute`, `30minute`, `45minute`, `60minute`, `120minute`, `180minute`, `240minute` | :material-close: (by hand) |
+| `1minute`, `2minute`, `3minute`, `4minute`, `5minute`, `10minute`, `15minute`, `20minute`, `25minute`, `30minute`, `45minute`, `60minute`, `120minute`, `180minute`, `240minute` | :material-check: |
 
 ### How a load works
 
