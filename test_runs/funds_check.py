@@ -46,6 +46,7 @@ from unified_broker_interface.utilities.broker_selection.utilities.priced_leg im
 NIFTY_SPOT = decimal.Decimal('22721.25')
 NOW = datetime.datetime(2026, 9, 30, 10, 40, 0)
 READ_AT = '2026-09-30 10:39:59.500000'
+POSITIONS_WRITTEN_AT = '2026-09-30T10:39:59'
 
 IDENTITIES = {
     'INFY': {
@@ -393,6 +394,11 @@ class FundsCheckSuite:
         self.a_dry_run_reserves_nothing()
         self.an_order_without_a_price_skips_the_check()
         self.the_selector_rides_on_the_same_pipeline()
+        self.a_sell_that_closes_a_held_option_needs_no_margin()
+        self.a_buy_that_closes_a_short_future_needs_no_margin()
+        self.a_sell_larger_than_the_holding_is_priced_as_usual()
+        self.another_product_does_not_close_the_position()
+        self.old_or_untrusted_positions_close_nothing()
 
         total = self.passed + len(self.failed)
         print(f'{total - len(self.failed)}/{total} checks passed.')
@@ -632,7 +638,41 @@ class FundsCheckSuite:
             margin_rate_table = MarginRateTable(self.logger)
         return FundsCheck(self.cost_table(), margin_rate_table, True, 0.05, 1.15, 5, 2)
 
-    def decide(self, check, legs, funds_text=None, hedge_benefit=False):
+    def positions_document(self, positions, written_at=POSITIONS_WRITTEN_AT, statuses=None):
+        """A unified positions document holding some net positions, with each broker's share.
+
+        Args:
+            positions (list): One `(instrument_id, product, by_broker)` tuple per position, where `by_broker` maps a broker name to its signed quantity.
+            written_at (str): The document's `as_of`.
+            statuses (dict | None): A status to give a broker other than `ok`, by broker name.
+
+        Returns:
+            str: The document as JSON.
+        """
+        net = []
+        for instrument_id, product, by_broker in positions:
+            quantity = 0
+            for held in by_broker.values():
+                quantity = quantity + held
+            net.append({
+                'instrument_id': instrument_id,
+                'product': product,
+                'quantity': quantity,
+                'by_broker': by_broker,
+            })
+        brokers = []
+        for broker_name in ['dhan', 'flattrade', 'fyers', 'stoxkart', 'zerodha']:
+            brokers.append({
+                'broker': broker_name,
+                'status': (statuses or {}).get(broker_name, 'ok'),
+            })
+        return json.dumps({
+            'net': net,
+            'brokers': brokers,
+            'as_of': written_at,
+        })
+
+    def decide(self, check, legs, funds_text=None, hedge_benefit=False, positions_text=None):
         """Queues and runs the check for some legs, as the selector does.
 
         Args:
@@ -640,6 +680,7 @@ class FundsCheckSuite:
             legs (list): The `PricedLeg` legs.
             funds_text (str | None): The funds document, or None for the default one.
             hedge_benefit (bool): Whether the caller asked for hedge benefit.
+            positions_text (str | None): The positions document, or None for one holding nothing.
 
         Returns:
             dict: The reasons by broker name.
@@ -652,6 +693,7 @@ class FundsCheckSuite:
         replies = [
             funds_text or self.funds_document(),
             self.script_reply(legs),
+            positions_text or self.positions_document([]),
         ]
         return check.decide(replies, ['dhan', 'flattrade', 'fyers', 'stoxkart', 'zerodha'], NOW)
 
@@ -808,7 +850,7 @@ class FundsCheckSuite:
         self.check('no reasons', self.decide(check, [leg]), {})
 
     def the_selector_rides_on_the_same_pipeline(self):
-        """The lowest-cost selector queues its counts and the check's two commands together, and answers for skipped brokers.
+        """The lowest-cost selector queues its counts and the check's three commands together, and answers for skipped brokers.
 
         Returns:
             None: This method returns nothing.
@@ -821,17 +863,152 @@ class FundsCheckSuite:
         names = []
         for command in pipeline.commands:
             names.append(command[0])
-        self.check('three commands on one pipeline', (queued, names), (3, ['eval', 'get', 'eval']))
+        self.check('four commands on one pipeline', (queued, names), (4, ['eval', 'get', 'eval', 'get']))
         count_reply = [0] * (4 * len(selector.cost_table.rows))
         replies = [
             count_reply,
             self.funds_document(),
             self.script_reply([leg]),
+            self.positions_document([]),
         ]
         selector.funds_check.decide(replies[1:], ['fyers', 'zerodha'], NOW)
         self.check('Fyers is passed over', selector.passed_over_reason('fyers') is not None, True)
         self.check('Zerodha is not', selector.passed_over_reason('zerodha'), None)
 
+
+    def short_of_cash(self):
+        """A funds document in which no broker could afford to write a NIFTY option or sell a NIFTY future.
+
+        Returns:
+            str: The document as JSON.
+        """
+        overrides = {}
+        for broker_name in ['dhan', 'flattrade', 'fyers', 'stoxkart', 'zerodha']:
+            overrides[broker_name] = {
+                'available_balance': 50000.0,
+                'pools': {},
+            }
+        return self.funds_document(overrides)
+
+    def a_sell_that_closes_a_held_option_needs_no_margin(self):
+        """Selling 65 of a call Flattrade holds 65 of is an exit there, so Flattrade is offered it although nobody could afford to write the call; this is the exit refused on 2026-10-07.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        check = self.funds_check()
+        positions_text = self.positions_document([
+            ('NIFTY22800CE', 'carry', {'flattrade': 65}),
+        ])
+        reasons = self.decide(
+            check,
+            [self.leg('NIFTY22800CE', 'SELL', 'NRML', 65)],
+            self.short_of_cash(),
+            positions_text=positions_text,
+        )
+        self.check(
+            'only the brokers that do not hold the call are passed over',
+            sorted(reasons),
+            ['dhan', 'fyers', 'stoxkart', 'zerodha'],
+        )
+        self.check('Flattrade can take the exit', check.reason('flattrade'), None)
+        check.reserve_chosen('flattrade')
+        self.check(
+            'an exit reserves no margin',
+            check.reservations.reserved('flattrade', None),
+            decimal.Decimal(0),
+        )
+
+    def a_buy_that_closes_a_short_future_needs_no_margin(self):
+        """Buying back 65 of a future Zerodha is short 130 of closes half of it, so Zerodha is not passed over.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        check = self.funds_check()
+        positions_text = self.positions_document([
+            ('NIFTYFUT', 'carry', {'zerodha': -130}),
+        ])
+        reasons = self.decide(
+            check,
+            [self.leg('NIFTYFUT', 'BUY', 'NRML', 65)],
+            self.short_of_cash(),
+            positions_text=positions_text,
+        )
+        self.check('Zerodha can take the buy back', 'zerodha' in reasons, False)
+        self.check('Dhan holds nothing and is passed over', 'dhan' in reasons, True)
+
+    def a_sell_larger_than_the_holding_is_priced_as_usual(self):
+        """Selling 130 of a call Flattrade holds only 65 of would leave it short, and two sells of 65 cannot both count the same 65.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        positions_text = self.positions_document([
+            ('NIFTY22800CE', 'carry', {'flattrade': 65}),
+        ])
+        check = self.funds_check()
+        reasons = self.decide(
+            check,
+            [self.leg('NIFTY22800CE', 'SELL', 'NRML', 130)],
+            self.short_of_cash(),
+            positions_text=positions_text,
+        )
+        self.check('one sell of 130 is priced', 'flattrade' in reasons, True)
+        check = self.funds_check()
+        reasons = self.decide(
+            check,
+            [
+                self.leg('NIFTY22800CE', 'SELL', 'NRML', 65),
+                self.leg('NIFTY22800CE', 'SELL', 'NRML', 65),
+            ],
+            self.short_of_cash(),
+            positions_text=positions_text,
+        )
+        self.check('two sells of 65 are priced', 'flattrade' in reasons, True)
+
+    def another_product_does_not_close_the_position(self):
+        """An intraday sell of a call held as a carry position opens a new short at the broker, so it is priced.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        check = self.funds_check()
+        positions_text = self.positions_document([
+            ('NIFTY22800CE', 'carry', {'flattrade': 65}),
+        ])
+        reasons = self.decide(
+            check,
+            [self.leg('NIFTY22800CE', 'SELL', 'MIS', 65)],
+            self.short_of_cash(),
+            positions_text=positions_text,
+        )
+        self.check('the intraday sell is priced', 'flattrade' in reasons, True)
+
+    def old_or_untrusted_positions_close_nothing(self):
+        """A positions document older than five seconds, or a broker whose positions are stale, is not trusted to show an exit.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        held = [
+            ('NIFTY22800CE', 'carry', {'flattrade': 65}),
+        ]
+        cases = [
+            ('an old document', self.positions_document(held, '2026-09-30T10:39:50')),
+            ('a document with no time', self.positions_document(held, '')),
+            ('a broker whose positions are stale', self.positions_document(held, statuses={'flattrade': 'stale'})),
+            ('an unreadable document', 'not json'),
+        ]
+        for name, positions_text in cases:
+            check = self.funds_check()
+            reasons = self.decide(
+                check,
+                [self.leg('NIFTY22800CE', 'SELL', 'NRML', 65)],
+                self.short_of_cash(),
+                positions_text=positions_text,
+            )
+            self.check(f'{name} is not trusted', 'flattrade' in reasons, True)
 
 if __name__ == '__main__':
     sys.exit(FundsCheckSuite().run())

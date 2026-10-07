@@ -1,0 +1,8 @@
+document keys: ['as_of', 'brokers', 'net']
+document of an empty reply: None
+read_time: 2026-10-07 11:41:23
+read_time of a time in the wrong form: None
+trusted_brokers: ['flattrade']
+decimal_or_zero of 65.0: 65.0
+decimal_or_zero of "n/a": 0
+holdings: {('nifty-2026-10-27-22600-ce', 'carry'): {'flattrade': Decimal('65.0')}}

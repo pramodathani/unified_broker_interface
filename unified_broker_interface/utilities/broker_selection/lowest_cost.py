@@ -55,7 +55,7 @@ class LowestCostSelector(BrokerSelector):
     4. Pressure: the fullest of the broker's windows, as a share of what the window allows. A per-day budget is paced: by a given time of the NSE equity session it allows its share of the day so far plus a tenth, so a broker's day is not spent in the first hour. Lower pressure goes first, which shares orders between equally cheap brokers in proportion to their limits.
     5. The broker's place in the rotation, so the order is always the same for the same counts.
 
-    Before any of that, a broker that cannot afford the order is passed over altogether, when the margin rate table is loaded. `FundsCheck` estimates the margin the order, or the whole strategy it starts, needs at each broker, from the exchange's rates and the broker's measured surcharge, and compares it with the broker's free cash in `unified:portfolio:funds`. The placement asks `passed_over_reason` for each broker it is about to offer the order to, so a broker that cannot afford it is skipped with its reason. The check's two commands ride on the same pipeline as the counts.
+    Before any of that, a broker that cannot afford the order is passed over altogether, when the margin rate table is loaded. `FundsCheck` estimates the margin the order, or the whole strategy it starts, needs at each broker, from the exchange's rates and the broker's measured surcharge, and compares it with the broker's free cash in `unified:portfolio:funds`. The placement asks `passed_over_reason` for each broker it is about to offer the order to, so a broker that cannot afford it is skipped with its reason. The check's three commands ride on the same pipeline as the counts.
 
     The counts are read in one Redis command on the pipeline that also reads the instrument: a Lua script returns every broker's messages in the last second, minute and hour from the rate budget's windows, and today's count from the daily order count. Those windows fill only when a message is sent, but the order engine chooses a broker when an order arrives and sends it a moment later from the broker's lane, so a burst of orders would all see the same counts and all go to one broker. The selector therefore also remembers, in memory, the brokers it has chosen in the last second, minute and hour, and uses the higher of the two counts.
 
@@ -113,7 +113,7 @@ class LowestCostSelector(BrokerSelector):
             legs (OrderLegs | None): Every leg of a strategy this order is the first of, or None for a single order.
 
         Returns:
-            int: 1 for the counts script, plus 2 when the funds check is active.
+            int: 1 for the counts script, plus 3 when the funds check is active.
         """
         rows = self.cost_table.rows
         names = sorted(rows)
@@ -148,7 +148,7 @@ class LowestCostSelector(BrokerSelector):
             order (PlaceOrderRequest): The validated order.
             instrument (Instrument): The tradeable instrument.
             rotation (list): The broker names not excluded, in turn order.
-            redis_replies (list): The counts script's reply first, then the funds check's two replies when it is active.
+            redis_replies (list): The counts script's reply first, then the funds check's three replies when it is active.
 
         Returns:
             list: The broker names in the order to offer them the order.

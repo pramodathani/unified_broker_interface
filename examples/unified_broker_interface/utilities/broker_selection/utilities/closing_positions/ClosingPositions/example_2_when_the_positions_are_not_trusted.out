@@ -1,0 +1,6 @@
+a fresh document, a sell of 65: True
+a document ten seconds old: False
+Flattrade's positions are stale: False
+a sell of 130, more than is held: False
+an intraday sell of a carry position: False
+a buy, which adds to the position: False

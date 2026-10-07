@@ -1,6 +1,6 @@
 """Decides which of the ten brokers can afford to buy one lot of a NIFTY call, with the balances they held on 2026-09-30.
 
-`FundsCheck` queues two commands on the pipeline that already reads the instrument, a `GET` of `unified:portfolio:funds` and a Lua script that returns the leg's identity and prices, and then `decide` compares each broker's estimated margin with its free cash. This program answers those two commands with scripted replies holding the real free cash each account had at about 10:40 that morning, and the margin multipliers the DDL seeds, so it needs nothing running.
+`FundsCheck` queues three commands on the pipeline that already reads the instrument, a `GET` of `unified:portfolio:funds`, a Lua script that returns the leg's identity and prices, and a `GET` of `unified:portfolio:positions`, and then `decide` compares each broker's estimated margin with its free cash. This program answers the first two commands with scripted replies holding the real free cash each account had at about 10:40 that morning, and the margin multipliers the DDL seeds, so it needs nothing running. It leaves out the positions document, because a buy of a call nobody holds closes nothing.
 
 Notice that the call costs 7,962.50, about 8,360 with the 5% cushion. Kotak, Shoonya and Wisdom Capital hold under 5,000 and are passed over. Stoxkart holds 9,256.67, which would be enough, but it has no margin calculator to measure its surcharge by, so it carries the 1.15 default and is passed over too.
 

@@ -1,0 +1,3 @@
+4ac42975-514c-5b34-8b8a-1ef14fdde055 carry: {'flattrade': Decimal('65.0')}
+Selling 65 at flattrade only closes a position: True
+Selling 65 at zerodha only closes a position: False
