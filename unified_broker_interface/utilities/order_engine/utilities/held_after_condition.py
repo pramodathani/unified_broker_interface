@@ -10,7 +10,7 @@ class HeldAfterCondition(LimitMarketableCondition):
 
     An order asked to be held in the virtual order book may already wait for something, such as a time of day or a price touching a level. Without holding it would be sent the moment that trigger fires and then rest at the broker. Held, it is sent at the same moment only if the other side of the book has reached its limit, and otherwise waits in the engine until it does. Most triggers hold only while their condition is true on the current tick, so a price that touches a level and moves away again would leave a plain `all` of the two never true together. This condition remembers that the order's own trigger has fired, and from then on it is the `limit_marketable` condition alone.
 
-    The held terms the virtual book reads are written when the trigger fires rather than when the plan is placed, so the queue estimate starts when a resting order would have started queuing.
+    The held terms the virtual book reads are written when the trigger fires rather than when the plan is placed, so the queue estimate starts when a resting order would have started queuing. They take the side the order will be sent on, not the body's: a held stop that protects a long is a sell even though its body names the buy that opened the position.
 
     Attributes:
         first (object): The order's own trigger, a condition object or a `ConditionGroup`.
@@ -99,6 +99,7 @@ class HeldAfterCondition(LimitMarketableCondition):
                 return False
             memory['fired'] = True
             super().prepare(plan_order, memory)
+            memory['held']['transaction_type'] = sending_side
         return super().is_met(plan_order, memory, quotes, now, opening_side, sending_side)
 
     def described(self):
