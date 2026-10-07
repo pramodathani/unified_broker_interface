@@ -402,6 +402,7 @@ The example below is shortened to one net position and two brokers. The id is a 
       "option_type": null,
       "product": "carry",
       "quantity": -100.0,
+      "by_broker": {"dhan": -100.0},
       "buy": {"quantity": 0.0, "average_price": 0.0, "value": 0.0},
       "sell": {"quantity": 100.0, "average_price": 5730.0, "value": 573000.0},
       "average_price": 5730.0,
@@ -436,6 +437,7 @@ The example below is shortened to one net position and two brokers. The id is a 
 | `[].expiry_date`, `[].strike_price`, `[].option_type` | string, number, string, or null | The contract, for a derivative |
 | `[].product` | string | `delivery`, `intraday`, `carry`, `margin_trading`, `cover` or `bracket` |
 | `[].quantity` | number | The net quantity in units, positive for long and negative for short |
+| `[].by_broker` | object | Each broker's signed share of `quantity`, by broker name, so a closing order can be told apart from an opening one at the broker that holds the position |
 | `[].buy`, `[].sell` | object | Each side's `quantity`, `average_price` and `value` |
 | `[].average_price` | number | Buy value less sell value, divided by the net quantity |
 | `[].last_price` | number or null | From the live quote when there is one, otherwise the price a broker sent |
