@@ -5,6 +5,10 @@ import decimal
 import json
 import threading
 
+from unified_broker_interface.utilities.broker_selection.utilities.closing_positions import (
+    POSITIONS_KEY,
+    ClosingPositions,
+)
 from unified_broker_interface.utilities.broker_selection.utilities.funds_reservations import (
     FundsReservations,
 )
@@ -78,7 +82,7 @@ POOL_NAMES = {
 class FundsCheck:
     """Decides, for one order at a time, which brokers cannot afford it, and remembers the margin promised to the broker chosen.
 
-    It is used by the lowest-cost selector in two steps that happen on one thread. `queue_redis_commands` adds two commands to the pipeline that already reads the instrument, so the check costs no round trip of its own: a `GET` of the unified funds document, and one Lua script that returns each leg's identity, last traded price and underlying's last traded price. `decide` then estimates the exchange margin, applies each broker's multiplier from the cost table and a cushion, and compares the result with the broker's free cash, less anything already reserved for orders just sent there. `reason` answers for a broker the placement is about to offer the order to, and `reserve_chosen` records the margin once a broker has been chosen.
+    It is used by the lowest-cost selector in two steps that happen on one thread. `queue_redis_commands` adds three commands to the pipeline that already reads the instrument, so the check costs no round trip of its own: a `GET` of the unified funds document, one Lua script that returns each leg's identity, last traded price and underlying's last traded price, and a `GET` of the unified positions document. `decide` then estimates the exchange margin, applies each broker's multiplier from the cost table and a cushion, and compares the result with the broker's free cash, less anything already reserved for orders just sent there. A broker at which every leg only closes a position it already holds needs no margin and is never passed over for funds. `reason` answers for a broker the placement is about to offer the order to, and `reserve_chosen` records the margin once a broker has been chosen.
 
     The check is off, and queues nothing, until the margin rate table has been loaded and while `UNIFIED_BROKER_INTERFACE_API_ORDER_FUNDS_CHECK` is on. When the margin cannot be worked out, for example because a market order's instrument has no quote, no broker is passed over for funds.
 
@@ -91,6 +95,7 @@ class FundsCheck:
         maximum_age_seconds (float): How old a broker's funds may be before it is passed over.
         margin_estimate (MarginEstimate): Works out the exchange margin.
         reservations (FundsReservations): Margin promised to orders just sent.
+        closing_positions (ClosingPositions): Says at which brokers an order only closes a position already held.
         state (threading.local): This thread's order: `active`, `legs`, `reasons` and `requirements`.
     """
 
@@ -128,6 +133,7 @@ class FundsCheck:
         if margin_rate_table is not None:
             self.margin_estimate = MarginEstimate(margin_rate_table)
         self.reservations = FundsReservations(settle_seconds)
+        self.closing_positions = ClosingPositions(maximum_age_seconds)
         self.state = threading.local()
 
     def is_active(self):
@@ -141,7 +147,7 @@ class FundsCheck:
         return self.margin_rate_table.is_loaded()
 
     def queue_redis_commands(self, pipeline, order, instrument_id, legs=None):
-        """Queues the funds document and the legs' prices on the pipeline that also reads the instrument.
+        """Queues the funds document, the legs' prices and the positions document on the pipeline that also reads the instrument.
 
         Args:
             pipeline (redis.client.Pipeline): The pipeline.
@@ -150,7 +156,7 @@ class FundsCheck:
             legs (OrderLegs | None): Every leg of a strategy this order is the first of, or None for a single order.
 
         Returns:
-            int: How many commands were queued: 2 when the check is active, else 0.
+            int: How many commands were queued: 3 when the check is active, else 0.
         """
         self.state.active = False
         self.state.reasons = {}
@@ -171,13 +177,14 @@ class FundsCheck:
             QUOTES_KEY,
             *legs.instrument_ids(),
         )
-        return 2
+        pipeline.get(POSITIONS_KEY)
+        return 3
 
     def decide(self, redis_replies, rotation, now=None):
         """Works out which brokers in the rotation cannot afford the order, and why.
 
         Args:
-            redis_replies (list): The replies to the two commands `queue_redis_commands` queued.
+            redis_replies (list): The replies to the three commands `queue_redis_commands` queued; without the third, the positions document, no order counts as closing a position.
             rotation (list): The broker names not excluded.
             now (datetime.datetime | None): The moment to judge the funds' age by, as naive local time, or None for now.
 
@@ -198,9 +205,15 @@ class FundsCheck:
         if legs.hedge_benefit:
             hedged = self.margin_estimate.required(priced_legs, True)
         funds_by_broker = self.funds_by_broker(redis_replies[0])
+        positions_text = None
+        if len(redis_replies) > 2:
+            positions_text = redis_replies[2]
+        holdings = self.closing_positions.holdings(positions_text, now)
         pool_names = POOL_NAMES[priced_legs[0].market_category()]
         reasons = {}
         for broker_name in rotation:
+            if self.closing_positions.closes_only(holdings, legs, broker_name):
+                continue
             costs = self.cost_table.costs(broker_name)
             exchange_margin = standalone
             if legs.hedge_benefit and costs is not None and costs.gives_hedge_benefit:

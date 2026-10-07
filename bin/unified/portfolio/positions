@@ -20,7 +20,8 @@ interprets them.
 Capital report - their hash fields start `DAY:` or `NET:` - so `day` holds only theirs. Stoxkart's fields would start `DAY:`
 too if Stoxkart ever sent a day view, which it has not. A position is `instrument_id`,
 `symbol`, `exchange`, `segment`, `expiry_date`, `strike_price`, `option_type`, `product` (`delivery`, `intraday`,
-`carry`, `margin_trading`, `cover`, `bracket`), `quantity` (signed), `buy` and `sell` (`quantity`, `average_price`,
+`carry`, `margin_trading`, `cover`, `bracket`), `quantity` (signed), `by_broker` (each broker's signed share of
+`quantity`, by broker name, which the funds check uses to tell a closing order at the broker that holds it), `buy` and `sell` (`quantity`, `average_price`,
 `value`), `average_price`, `last_price`, `pnl` (`realized`, `unrealized`, `total`), `day_change` and
 `day_change_percentage`, sorted by symbol, expiry, strike, option type and product. Each summary is `count`,
 `realized_pnl`, `unrealized_pnl` and `total_pnl`.
@@ -446,7 +447,8 @@ def merged(read, basis, resolver):
                 row = rows[key] = {"identity": identity, "symbol": entry["symbol"], "exchange": entry["exchange"],
                                    "product": entry["product"], "quantity": 0.0, "buy_quantity": 0.0, "buy_value": 0.0,
                                    "sell_quantity": 0.0, "sell_value": 0.0, "realized": 0.0, "unrealized": 0.0,
-                                   "last_price": None, "close_price": None}
+                                   "last_price": None, "close_price": None, "by_broker": {}}
+            row["by_broker"][broker] = row["by_broker"].get(broker, 0.0) + entry["quantity"]
             for field in ("quantity", "buy_quantity", "buy_value", "sell_quantity", "sell_value", "realized", "unrealized"):
                 row[field] += entry[field]
             # A price is the instrument's, whichever broker sent it, so the latest one read wins.
@@ -505,6 +507,7 @@ def emitted(rows, quotes):
             "option_type": identity["option_type"] if identity else None,
             "product": row["product"],
             "quantity": round(quantity, 2),
+            "by_broker": {broker: round(held, 2) for broker, held in sorted(row["by_broker"].items())},
             "buy": {
                 "quantity": round(buy_quantity, 2),
                 "average_price": round(row["buy_value"] / buy_quantity, 2) if buy_quantity else 0.0,

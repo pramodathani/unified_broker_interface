@@ -139,7 +139,7 @@ This makes PostgreSQL something the REST API and the order engine need at start-
 
 Cost and rate budgets decide which broker is *preferred*. A broker is only *offered* the order if it also has the money for it. Before 2026-09-30 nothing checked this, so an order could go to the cheapest broker, be refused there for want of margin, and come back as a rejection even though another account could have taken it. Now the selector estimates the margin the order needs at each broker and passes over every broker whose free cash is short, in the same way it passes over a broker with no login. The reason goes into the answer's `skipped` list, for example `needs about 185,671.65 of margin but has 12,675.96 free`.
 
-The check calls no broker. The brokers' own margin calculators take 75 to 100 ms each, a full round trip per order, so they are used once a day to *measure* the numbers the check uses, and never while an order waits. The check adds two commands to the Redis pipeline the engine already sends to read the instrument, so an order still costs the same number of round trips.
+The check calls no broker. The brokers' own margin calculators take 75 to 100 ms each, a full round trip per order, so they are used once a day to *measure* the numbers the check uses, and never while an order waits. The check adds three commands to the Redis pipeline the engine already sends to read the instrument, so an order still costs the same number of round trips.
 
 ### What it compares
 
@@ -229,6 +229,24 @@ The check is off, and queues nothing, in three cases:
 
 Orders that name their broker, such as the closing orders of [flatten](../rest-api/flatten.md) and every leg after a strategy's first, are never checked: an exit frees margin, and a later leg has to go where the first one went.
 
+### Orders that close a position
+
+An order that does not name its broker can still be an exit, such as a program selling the option it bought a moment ago. Priced on its own, that sell looks like writing a new option, which needs the underlying's value times its futures rate: about two lakh for one lot of NIFTY. On 2026-10-07 no account held that much free, so every broker was passed over and the exit was refused with `no broker can take this order`, leaving the bought call open with no stop.
+
+So the check also reads `unified:portfolio:positions`, whose rows carry each broker's share of the position in `by_broker`. A broker at which every leg of the order only reduces a position it already holds, in the same instrument and product, needs no margin there: it is never passed over for funds, and nothing is reserved against it. The other brokers are priced as before, because at a broker that holds nothing the same sell would open a short.
+
+The positions are trusted only when it is safe to:
+
+| Case | What happens |
+|---|---|
+| The document is more than five seconds old, has no time, or is missing | No order counts as closing |
+| A broker's positions are `stale`, `missing` or `unreadable` | That broker's share is ignored |
+| The order is larger than the broker holds | It is priced as a whole, since part of it would open a position |
+| Two legs close the same position | They are taken one after another from what is held, so they cannot both count the same units |
+| The order's product differs from the position's, such as `MIS` against a `carry` position | It is priced, since the broker treats it as a new position |
+
+The positions are written every half second, so an exit sent within a second of its entry's fill can still be priced as an opening order and refused as before. A program should retry its exit rather than give up.
+
 ## Other ways this could have been done
 
 Five approaches were considered when this selector was designed. The one built is the third, and the first two are special cases of it.
@@ -255,6 +273,7 @@ The table below lists where each piece lives.
 | The table's definition and seed | `stock_brokers/instruments/mapping/utilities/sql/ddl/150_unified_broker_order_costs.sql` |
 | The funds check | [`FundsCheck`][unified_broker_interface.utilities.broker_selection.utilities.funds_check.FundsCheck] |
 | The margin estimate | [`MarginEstimate`][unified_broker_interface.utilities.broker_selection.utilities.margin_estimate.MarginEstimate], [`OptionPayoff`][unified_broker_interface.utilities.broker_selection.utilities.option_payoff.OptionPayoff] and [`PricedLeg`][unified_broker_interface.utilities.broker_selection.utilities.priced_leg.PricedLeg] |
+| Telling an exit from an opening order | [`ClosingPositions`][unified_broker_interface.utilities.broker_selection.utilities.closing_positions.ClosingPositions] |
 | A strategy's legs | [`OrderLegs`][unified_broker_interface.utilities.broker_selection.utilities.order_legs.OrderLegs] |
 | Margin promised to orders just sent | [`FundsReservations`][unified_broker_interface.utilities.broker_selection.utilities.funds_reservations.FundsReservations] |
 | The margin rates in memory | [`MarginRateTable`][unified_broker_interface.utilities.broker_selection.utilities.margin_rate_table.MarginRateTable] |

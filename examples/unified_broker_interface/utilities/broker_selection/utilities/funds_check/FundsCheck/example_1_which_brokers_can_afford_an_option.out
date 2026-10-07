@@ -1,6 +1,7 @@
-Active: True, commands queued: 2
+Active: True, commands queued: 3
   GET unified:portfolio:funds
   EVAL with keys ['unified:catalogue:current_date', 'unified:quotes:live'] and arguments ['nifty-2026-10-06-22800-ce']
+  GET unified:portfolio:positions
 dhan: can afford it
 flattrade: can afford it
 fyers: can afford it
