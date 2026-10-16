@@ -84,11 +84,12 @@ ALTER TABLE wisdom_capital.ticks SET (
     timescaledb.orderby = '"time" DESC'
 );
 
--- The current week stays uncompressed for fast ad hoc querying.
+-- Only the current day stays uncompressed, because a trading day of ticks takes about ten times the space before compression.
+CALL remove_columnstore_policy('wisdom_capital.ticks', if_exists => TRUE);
+
 CALL add_columnstore_policy(
     'wisdom_capital.ticks',
-    after => INTERVAL '7 days',
-    if_not_exists => TRUE
+    after => INTERVAL '1 day'
 );
 
 -- One row per order update the order feed or the order book poller observed.

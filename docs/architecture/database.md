@@ -59,7 +59,7 @@ The table below lists every table in the database. "Chunk" is the size of each T
 | Schema | Table | Chunk | Compressed after | Written by | DDL file |
 |---|---|---|---|---|---|
 | each broker | `instruments` | 1 month, by `download_date` | not compressed | `bin/<broker>/instruments/daily_feed` | `stock_brokers/instruments/sql/ddl/010_…` to `100_instruments_<broker>.sql` |
-| each broker | `ticks` | 1 day | 7 days | `bin/<broker>/instruments/store_quotes_to_db` | `stock_brokers/instruments/ticks/utilities/sql/ddl/<nnn>_<broker>_streams.sql` |
+| each broker | `ticks` | 1 day | 1 day | `bin/<broker>/instruments/store_quotes_to_db` | `stock_brokers/instruments/ticks/utilities/sql/ddl/<nnn>_<broker>_streams.sql` |
 | each broker | `order_updates` | 1 day | 7 days | `bin/<broker>/orders/store_orders_to_db` | the same streams file |
 | fyers, groww, kotak, wisdom_capital | `positions` | 1 day | 7 days | `bin/<broker>/portfolio/store_positions_to_db` | the same streams file |
 | seven brokers | `price_history` | 1 month | 30 days | `bin/<broker>/instruments/price_history` | `stock_brokers/instruments/historical/utilities/sql/ddl/0x0_price_history_<broker>.sql` |
@@ -76,7 +76,7 @@ The table below lists every table in the database. "Chunk" is the size of each T
 | `unified` | `adjustment_factors` | ordinary table | | `bin/unified/instruments/price_history` | `…/historical/utilities/sql/ddl/220_unified_adjustment_factors.sql` |
 | `unified` | `yahoo_fetch_state` | ordinary table | | `bin/unified/instruments/price_history` | `…/historical/utilities/sql/ddl/230_unified_yahoo_fetch_state.sql` |
 | `unified` | `price_history_corrections` | ordinary table | | `bin/unified/instruments/price_history` | `…/historical/utilities/sql/ddl/250_unified_price_history_corrections.sql` |
-| `unified` | `ticks` | 1 day | 7 days | `bin/unified/instruments/store_quotes_to_db` | `…/ticks/utilities/sql/ddl/300_unified_ticks.sql` |
+| `unified` | `ticks` | 1 day | 1 day | `bin/unified/instruments/store_quotes_to_db` | `…/ticks/utilities/sql/ddl/300_unified_ticks.sql` |
 | `unified` | `order_updates` | 1 month | 7 days | `bin/unified/orders/store_orders_to_db` | `…/ticks/utilities/sql/ddl/310_unified_order_updates.sql` |
 | `unified` | `positions` | 1 month | 7 days | `bin/unified/portfolio/store_positions_to_db` | `…/ticks/utilities/sql/ddl/320_unified_positions.sql` |
 | `unified` | `synthetic_order_events` | 1 day | 7 days | `bin/unified/orders/order_engine` | `…/ticks/utilities/sql/ddl/340_unified_synthetic_order_events.sql` |
@@ -84,7 +84,7 @@ The table below lists every table in the database. "Chunk" is the size of each T
 
 The seven brokers with price history are `zerodha`, `dhan`, `flattrade`, `shoonya`, `fyers`, `indmoney` and `wisdom_capital`, in the files numbered `000` to `060`.
 
-Chunk sizes follow how dense the data is. Ticks arrive in millions a day, so a trading day fits one chunk, which is also the unit compression acts on. Order updates and positions in the unified schema are sparse, hundreds a day, so a month to a chunk keeps chunks from being mostly overhead. The price history files record that seven-day chunks were tried first: daily bars going back two decades spread across 1,133 chunks of 98 rows each for a single instrument.
+Chunk sizes follow how dense the data is. Ticks arrive in millions a day, so a trading day fits one chunk, which is also the unit compression acts on. Tick chunks are compressed once they are a day old, because compression shrinks them about ten times: on 16 October 2026 a single uncompressed trading day of `zerodha.ticks` took 84 GB against about 7 GB compressed, and a seven-day policy left 936 GB of the 1.8 TB data disk uncompressed. The tick DDL files remove the policy and add it again, so a changed interval reaches a database that already has one. Order updates and positions in the unified schema are sparse, hundreds a day, so a month to a chunk keeps chunks from being mostly overhead. The price history files record that seven-day chunks were tried first: daily bars going back two decades spread across 1,133 chunks of 98 rows each for a single instrument.
 
 ### Tables with no primary key
 
