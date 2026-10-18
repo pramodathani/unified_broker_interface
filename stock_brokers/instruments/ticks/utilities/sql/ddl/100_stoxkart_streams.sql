@@ -69,10 +69,11 @@ ALTER TABLE stoxkart.ticks SET (
     timescaledb.orderby = '"time" DESC'
 );
 
+CALL remove_columnstore_policy('stoxkart.ticks', if_exists => TRUE);
+
 CALL add_columnstore_policy(
     'stoxkart.ticks',
-    after => INTERVAL '7 days',
-    if_not_exists => TRUE
+    after => INTERVAL '1 day'
 );
 
 CREATE TABLE IF NOT EXISTS stoxkart.order_updates (
