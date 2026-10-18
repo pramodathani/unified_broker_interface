@@ -91,6 +91,9 @@ Each broker's scripts write the keys below, with the broker's name in place of `
 | `<broker>:portfolio:holdings` | string | `bin/<broker>/portfolio/holdings` | `bin/unified/portfolio/holdings` | The broker's holdings |
 | `<broker>:portfolio:funds` | string | `bin/<broker>/portfolio/funds` | `bin/unified/portfolio/funds` | `{"timestamp", "status", "code", "data"}` |
 | `wisdom_capital:session:marketdata:lock` | string | `WisdomCapitalAPI` | `WisdomCapitalAPI` | The pid of the process logging in to Wisdom Capital's market data API; expires after 120 seconds |
+| `groww:api:blocked-until` | string | `GrowwAPI`, when Groww answers HTTP 429 | `GrowwAPI`, before every request | The epoch until which no Groww request is sent; expires after 300 seconds |
+| `groww:login:token-lock` | string | `GrowwAPI` | `GrowwAPI` | The pid of the process asking Groww for a new access token; set with `NX`, deleted when the request ends, expires after 60 seconds |
+| `groww:login:token-attempt` | string | `GrowwAPI` | `GrowwAPI` | The epoch of the last token request; another is not sent within 60 seconds of it |
 
 ## Shared hashes
 
