@@ -1,0 +1,5 @@
+200: nse_equity_index_options at flattrade, spread None
+  floor: 177.45 (+0.45)
+  tripwire: 178.50 (+1.50)
+  switch_on: 178.70 (+1.70)
+400: {'error': 'quantity is required'}

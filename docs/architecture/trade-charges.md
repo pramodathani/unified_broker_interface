@@ -134,11 +134,22 @@ and a sold position mirrors it, with its trigger below the floor. With no allowa
 
 The higher the percentile, the more exits land on the floor, but the further the price must rise before the stop can sit at the tripwire at all, so fewer trades are protected by it.
 
-## What comes next
+## The switch-on
 
-Two stages remain:
+A stop moved to its tripwire the moment the price reaches it is fired by the next ordinary wobble. The **switch-on** is the price the watched side, the bid for a bought position and the ask for a sold one, must reach before the stop is moved to the tripwire. It sits beyond the tripwire by the instrument's **flicker**: for each of the last 30 minutes of ticks, how far the watched price moved against the position within the next 5 seconds, and the 90th percentile of those moves. `PriceFlicker` measures it from `unified.ticks`, and `SwitchOnPrice` places the level, rounded to the tick away from the tripwire. Without 30 measured moves it falls back to the spread plus two ticks.
 
-1. A switch-on distance beyond the tripwire, so ordinary price flicker does not fire the stop the moment it moves there.
-2. A route that answers all three levels for an instrument, entry, quantity, side, product and broker, so any strategy, and later the order engine's own stops, can use them.
+On 19 October 2026, the bid of the NIFTY 27 October 22850 call fell by 0.10 or less within five seconds at the median and by 0.80 or less nine times in ten, and the 22900 put's by 0.85.
 
-Nothing on the order path reads the charge rate table or the stop slippage yet.
+## Asking for the levels
+
+`GET /api/instruments/breakeven` answers all three levels for one position: the instrument, the entry price, the quantity, the side, the product and, optionally, the broker. [Breakeven levels](../rest-api/breakeven.md) documents it. `BreakevenLevels` does the work: it reads the charge rates, the broker costs and the stop slips on the first request of each day and keeps them, reads the flicker on every request, and takes the spread from the live quote. The table below shows its answer for 65 units of the 22850 call bought at 177.00 at Flattrade, on the night of 19 October, with the week's stops.
+
+| Level | Price | From the entry | Worked out from |
+|---|---|---|---|
+| Floor | 177.45 | +0.45 | The charge rates, checked against the bill of 19 October |
+| Tripwire | 178.70 | +1.70 | 225 measured sell stops, 90th percentile slip 69.93 basis points |
+| Switch-on | 179.50 | +2.50 | 2,247 ticks, 90th percentile five-second fall 0.80 |
+
+A strategy using them buys at 177.00, waits for the bid to reach 179.50, then moves its stop to 178.70. Nine stops in ten that then fire close at 177.45 or better, which nets nothing or more after every charge.
+
+Nothing on the order path reads these levels yet; a strategy asks for them and moves its own stop.

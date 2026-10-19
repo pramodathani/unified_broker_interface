@@ -161,6 +161,7 @@ nav:
       - Instruments: rest-api/instruments.md
       - Market quotes: rest-api/market-quotes.md
       - Historical data: rest-api/historical-data.md
+      - Breakeven levels: rest-api/breakeven.md
       - Portfolio: rest-api/portfolio.md
       - Orders: rest-api/orders.md
       - Flatten everything: rest-api/flatten.md

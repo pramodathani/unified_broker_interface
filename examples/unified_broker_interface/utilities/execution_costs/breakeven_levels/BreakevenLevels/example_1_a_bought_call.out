@@ -1,0 +1,38 @@
+{
+ "instrument_id": "b546e617-303e-53d7-b888-3fd0256bafad",
+ "segment": "nse_equity_index_options",
+ "category": "fno",
+ "broker": "flattrade",
+ "brokerage_per_order": "0",
+ "opening_side": "BUY",
+ "entry_price": "177",
+ "quantity": 65,
+ "tick_size": "0.05",
+ "spread": "0.2",
+ "percentile": 90,
+ "floor": {
+  "price": "177.45",
+  "exact_price": "177.4205",
+  "distance_from_entry": "0.45",
+  "charges_checked_on": null
+ },
+ "tripwire": {
+  "price": "178.50",
+  "distance_from_entry": "1.50",
+  "source": "measured",
+  "slip_basis_points": "58",
+  "stops_measured": 40
+ },
+ "switch_on": {
+  "price": "178.70",
+  "distance_from_entry": "1.70",
+  "source": "measured",
+  "flicker": "0.20",
+  "ticks_measured": 59,
+  "horizon_seconds": 5
+ }
+}
+At zerodha the floor is 178.15
+Tables read today: 2026-10-19; refreshed again: False; ticks read 2 times
+The cheapest F&O broker: flattrade; the spread of an empty book: None
+As text: 1.50
