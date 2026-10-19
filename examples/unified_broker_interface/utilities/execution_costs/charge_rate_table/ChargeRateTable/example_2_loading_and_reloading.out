@@ -1,0 +1,12 @@
+read_rows found: [('nse_equities', 'delivery'), ('nse_equity_index_options', 'fno')]; the table still holds 0 rows
+After start: [('nse_equities', 'delivery'), ('nse_equity_index_options', 'fno')], reload thread running: True
+INFO Reloaded the charge rate table: 2 rows.
+Reload with the database up: True
+ERROR The charge rate table could not be reloaded, so yesterday's rates stay in use.
+Reload with the database down: False
+Rows kept: 2
+Reload thread running after stop: False
+reload_every_day returned at once, because stop is set
+An empty table loads without error; loaded: False
+WARNING unified.charge_rates is empty, so no trade's taxes and fees are known; apply the mapping DDL to seed it.
+Seconds from 05:00 IST to the next reload: 3600

@@ -1,0 +1,8 @@
+No brokerage
+  STT 17.36, exchange 8.20, SEBI 0.02, stamp 0.35
+  brokerage 0.00, GST 1.48, total 27.40
+  result after charges: 37.60
+20 rupees an order
+  STT 17.36, exchange 8.20, SEBI 0.02, stamp 0.35
+  brokerage 40.00, GST 8.68, total 74.60
+  result after charges: -9.60

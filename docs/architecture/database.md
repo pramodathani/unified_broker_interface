@@ -24,6 +24,7 @@ flowchart LR
         UU["underlyings"]
         UBC["broker_order_costs"]
         UMR["margin_rates"]
+        UCR["charge_rates"]
         UPH["price_history<br/>+ sources, factors,<br/>corrections, yahoo state"]
         UT["ticks"]
         UO["order_updates"]
@@ -285,7 +286,7 @@ On an empty database the directories must be applied in the order below, because
 
 ```mermaid
 flowchart TD
-    A["stock_brokers/instruments/sql/ddl<br/>000 broker schemas, 010–100 instruments"] --> B["mapping/utilities/sql/ddl<br/>100 unified schema, 110 instruments,<br/>120 broker_mappings, 130 contract_sizes,<br/>140 underlyings, 150 broker_order_costs,<br/>160 margin_rates"]
+    A["stock_brokers/instruments/sql/ddl<br/>000 broker schemas, 010–100 instruments"] --> B["mapping/utilities/sql/ddl<br/>100 unified schema, 110 instruments,<br/>120 broker_mappings, 130 contract_sizes,<br/>140 underlyings, 150 broker_order_costs,<br/>160 margin_rates, 170 impact_coefficients,<br/>180 charge_rates"]
     B --> C["historical/utilities/sql/ddl<br/>000–060 broker price history,<br/>200–250 unified price history"]
     A --> D["ticks/utilities/sql/ddl 010–100<br/>applied by each broker's persisters"]
     B --> E["ticks/utilities/sql/ddl 300, 310, 320<br/>applied by the unified persisters"]
