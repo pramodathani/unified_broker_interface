@@ -63,6 +63,18 @@ FROM unified.instruments
 WHERE instrument_id = ANY(%s::uuid[])
 """
 
+DAILY_ORDERS_TABLE_QUERY = """
+SELECT to_regclass('unified.daily_orders') IS NOT NULL
+"""
+
+BROKER_FILLS_QUERY = """
+SELECT engine_parent_id::text, filled_quantity, average_price
+FROM unified.daily_orders
+WHERE engine_parent_id = ANY(%s::uuid[])
+    AND filled_quantity > 0
+    AND average_price IS NOT NULL
+"""
+
 DELETE_QUERY = """
 DELETE FROM unified.stop_slippage
 WHERE fired_at >= %s
@@ -75,7 +87,7 @@ class StopSlippageMeasurement:
 
     A protective stop is a `plan` whose one order has `side` `protect` and a `price_crosses` trigger, which is what every held stop and every routed stop type becomes in the engine. Its side follows its trigger's direction: a stop that fires `at_or_below` sells, and one that fires `at_or_above` buys. It has fired once a `parameters_changed` event shows its trigger fired.
 
-    The close is the stop's own fill when it got one. Otherwise it is the first other order on the same instrument and side that was requested within a minute after the stop fired and got a fill, because a strategy whose stop did not fill closes the position itself; those closes are the furthest from the trigger, so leaving them out would make stops look better than they are.
+    The close is the stop's own fill when the event log has one. When it has none, the broker's final record of the stop's order in `unified.daily_orders` is read next, because a stop the strategy cancelled just as it filled is a fill the engine never saw: it stops following an order once it is cancelled. Otherwise the close is the first other order on the same instrument and side that was requested within a minute after the stop fired and got a fill, because a strategy whose stop did not fill closes the position itself; those closes are the furthest from the trigger, so leaving them out would make stops look better than they are.
 
     Attributes:
         connect (Callable): Opens a PostgreSQL connection, such as `configurations.get_postgres`.
@@ -143,12 +155,16 @@ class StopSlippageMeasurement:
                     if outcome.instrument_id not in instrument_ids:
                         instrument_ids.append(outcome.instrument_id)
                 segments = self.read_segments(cursor, instrument_ids)
+                parent_order_ids = []
+                for outcome in outcomes:
+                    parent_order_ids.append(outcome.parent_order_id)
+                broker_fills = self.read_broker_fills(cursor, parent_order_ids)
             connection.rollback()
         finally:
             connection.close()
         for outcome in outcomes:
             outcome.segment = segments.get(outcome.instrument_id)
-            self.find_close(outcome, parents)
+            self.find_close(outcome, parents, broker_fills)
         return outcomes
 
     def parents_from(self, rows):
@@ -287,12 +303,13 @@ class StopSlippageMeasurement:
         """
         return outcome.fired_at
 
-    def find_close(self, outcome, parents):
-        """Records the fill that closed a fired stop's position: its own, or the first other order's within a minute.
+    def find_close(self, outcome, parents, broker_fills=None):
+        """Records the fill that closed a fired stop's position: its own as the event log or the broker's record has it, or else the first other order's within a minute.
 
         Args:
             outcome (StopOutcome): The fired stop.
             parents (dict): Every parent `parents_from` built.
+            broker_fills (dict | None): The broker's fills of stop orders, as `read_broker_fills` returns them, or None when none were read.
 
         Returns:
             None: This method returns nothing.
@@ -302,6 +319,10 @@ class StopSlippageMeasurement:
             if leg['average_price'] is not None:
                 outcome.record_close('stop', leg['filled_quantity'], leg['average_price'])
                 return
+        broker_fill = (broker_fills or {}).get(outcome.parent_order_id)
+        if broker_fill is not None:
+            outcome.record_close('stop', broker_fill[0], broker_fill[1])
+            return
         latest = outcome.fired_at + datetime.timedelta(seconds=CLOSE_WINDOW_SECONDS)
         best = None
         for parent_order_id, parent in parents.items():
@@ -320,6 +341,32 @@ class StopSlippageMeasurement:
                     best = leg
         if best is not None:
             outcome.record_close('other_order', best['filled_quantity'], best['average_price'])
+
+    def read_broker_fills(self, cursor, parent_order_ids):
+        """Reads what the broker's final records say the orders of some parents filled, from `unified.daily_orders`.
+
+        Args:
+            cursor (psycopg2.extensions.cursor): An open cursor.
+            parent_order_ids (list): The parent order ids (str).
+
+        Returns:
+            dict: Each parent order id (str) with a fill to a tuple of the filled quantity (int) and the average price (decimal.Decimal) over all its orders; empty when the table does not exist yet.
+        """
+        if not parent_order_ids:
+            return {}
+        cursor.execute(DAILY_ORDERS_TABLE_QUERY)
+        exists = cursor.fetchall()
+        if not exists or not exists[0][0]:
+            return {}
+        cursor.execute(BROKER_FILLS_QUERY, (parent_order_ids,))
+        totals = {}
+        for parent_order_id, filled_quantity, average_price in cursor.fetchall():
+            quantity, value = totals.get(parent_order_id, (0, decimal.Decimal(0)))
+            totals[parent_order_id] = (quantity + filled_quantity, value + filled_quantity * decimal.Decimal(average_price))
+        fills = {}
+        for parent_order_id, (quantity, value) in totals.items():
+            fills[parent_order_id] = (quantity, value / quantity)
+        return fills
 
     def read_segments(self, cursor, instrument_ids):
         """Reads the segment of each instrument.

@@ -2,9 +2,10 @@ Parents: ['earlier-stop', 'entry-plan', 'later-stop']
 Entry plan trigger: None
 Stop trigger: {'field': 'bid', 'level': 190.0, 'direction': 'at_or_below'}
 The later stop fired at: 14:30
+Segments: {'065e67b5-b3f8-5374-a0bb-4ddc7786338d': 'nse_equity_index_options'}
+The broker's records: {'earlier-stop': (65, Decimal('184.50')), 'later-stop': (65, Decimal('189.00'))}
 Fired: earlier-stop at 14:10
   closed by stop at 184.50, slip 0.5000
 Fired: later-stop at 14:30
   closed by stop at 189.80, slip 0.2000
-Segments: {'065e67b5-b3f8-5374-a0bb-4ddc7786338d': 'nse_equity_index_options'}
-Wrote 2 rows; statements sent: ['SELECT', 'CREATE', 'DELETE', 'INSERT']
+Wrote 2 rows; statements sent: ['SELECT', 'SELECT', 'SELECT', 'CREATE', 'DELETE', 'INSERT']

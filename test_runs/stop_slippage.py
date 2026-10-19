@@ -149,6 +149,8 @@ class StopSlippageSuite:
         self.a_stop_closed_by_the_programs_own_order()
         self.a_close_too_late_is_not_found()
         self.a_buy_stop_slips_upwards()
+        self.the_brokers_record_comes_before_another_order()
+        self.broker_fills_are_averaged_and_skipped_without_the_table()
         self.a_fired_flag_without_a_time_uses_the_events_time()
         self.the_write_replaces_the_days_rows()
         self.the_summary_counts_each_kind_of_close()
@@ -222,6 +224,41 @@ class StopSlippageSuite:
         outcome = self.measured()[2]['buy-stop']
         self.check('buy stop: side', outcome.transaction_type, 'BUY')
         self.check('buy stop: slip', (outcome.slip(), outcome.slip_basis_points()), (decimal.Decimal('0.3000'), decimal.Decimal('30.00')))
+
+    def the_brokers_record_comes_before_another_order(self):
+        """A stop whose fill the engine never saw, but which the broker's final record shows filled at 195.85, is closed by the stop and not by the strategy's later sell.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        database = self.scripted_day()
+        database.daily_orders_exist = True
+        database.broker_fills.append(('closed-by-order', 65, '195.85'))
+        measurement = StopSlippageMeasurement(database.connect, self.logger)
+        start, end = measurement.day_bounds(DAY, 1)
+        by_parent = {}
+        for outcome in measurement.measure(start, end):
+            by_parent[outcome.parent_order_id] = outcome
+        outcome = by_parent['closed-by-order']
+        self.check('broker record: closed by', (outcome.closed_by, outcome.average_price, outcome.slip()), ('stop', decimal.Decimal('195.85'), decimal.Decimal('0.3000')))
+        self.check('broker record: own fill still wins', by_parent['filled-by-stop'].average_price, decimal.Decimal('195.15'))
+
+    def broker_fills_are_averaged_and_skipped_without_the_table(self):
+        """Two broker fills of one stop average by quantity, and nothing is read when the table does not exist.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        database = StandInStopDatabase()
+        database.daily_orders_exist = True
+        database.broker_fills.append(('stop', 40, '100.00'))
+        database.broker_fills.append(('stop', 25, '99.48'))
+        measurement = StopSlippageMeasurement(database.connect, self.logger)
+        cursor = database.connect().cursor()
+        self.check('averaged', measurement.read_broker_fills(cursor, ['stop']), {'stop': (65, decimal.Decimal('99.8'))})
+        self.check('no parents', measurement.read_broker_fills(cursor, []), {})
+        database.daily_orders_exist = False
+        self.check('no table', measurement.read_broker_fills(cursor, ['stop']), {})
 
     def a_fired_flag_without_a_time_uses_the_events_time(self):
         """A part that says only that its trigger fired is taken to have fired when the event was written.

@@ -1,6 +1,6 @@
 """A stand-in database for measuring stop slippage offline, holding scripted engine events, instrument segments and measured slips.
 
-`StopSlippageMeasurement` sends the event query, the segment query and, when writing, the table's DDL, a delete and an insert. `StopSlipAllowance` reads the measured slips. The stand-in answers the reads from what a program scripted and records the writes, so `python -m test_runs.stop_slippage` and the example programs run without PostgreSQL.
+`StopSlippageMeasurement` sends the event query, the segment query, the check that `unified.daily_orders` exists and the broker fill query and, when writing, the table's DDL, a delete and an insert. `StopSlipAllowance` reads the measured slips. The stand-in answers the reads from what a program scripted and records the writes, so `python -m test_runs.stop_slippage` and the example programs run without PostgreSQL.
 
 Typical usage:
 
@@ -24,6 +24,8 @@ class StandInStopDatabase:
         events (list): Event rows as dicts by column name, in the order added.
         segments (dict): Each instrument id (str) to its segment (str).
         slips (list): Tuples of segment, side and slip in basis points, as `unified.stop_slippage` would answer them.
+        daily_orders_exist (bool): Whether `unified.daily_orders` exists.
+        broker_fills (list): Tuples of engine parent id, filled quantity and average price, as `unified.daily_orders` would answer them.
         written (list): The rows the insert was given, as lists of values.
         deleted (list): The parameters each delete was given.
         statements (list): The first word of every statement executed, in order.
@@ -39,6 +41,8 @@ class StandInStopDatabase:
         self.events = []
         self.segments = {}
         self.slips = []
+        self.daily_orders_exist = False
+        self.broker_fills = []
         self.written = []
         self.deleted = []
         self.statements = []
@@ -245,6 +249,12 @@ class StandInStopCursor:
                     for column in EVENT_COLUMNS:
                         values.append(row[column])
                     self.answer.append(tuple(values))
+        elif 'to_regclass' in text:
+            self.answer = [(self.database.daily_orders_exist,)]
+        elif 'FROM unified.daily_orders' in text:
+            for parent_order_id, filled_quantity, average_price in self.database.broker_fills:
+                if parent_order_id in parameters[0]:
+                    self.answer.append((parent_order_id, filled_quantity, decimal.Decimal(average_price)))
         elif 'FROM unified.instruments' in text:
             for instrument_id in parameters[0]:
                 if instrument_id in self.database.segments:

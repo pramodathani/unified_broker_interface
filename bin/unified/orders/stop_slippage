@@ -13,15 +13,18 @@ measures the slip on real stops, so a tripwire can be set far enough from the br
 at or beyond it.
 
 **The arithmetic.** A protective stop is a `plan` whose order has `side` `protect` and a `price_crosses` trigger. Its
-close is its own fill when it got one, or else the first other order on the same instrument and side requested within
-a minute after it fired that got a fill, because a strategy whose stop did not fill closes the position itself. The
+close is its own fill when the event log has one; else the broker's final record of its order in `unified.daily_orders`,
+because a stop the strategy cancelled just as it filled is a fill the engine never saw; else the first other order on
+the same instrument and side requested within a minute after it fired that got a fill, because a strategy whose stop did
+not fill closes the position itself. The
 slip is the close's distance beyond the trigger, positive when worse, in rupees per unit and in basis points of the
 trigger. A stop whose close cannot be found is written with an empty slip.
 
-**What it touches.** It reads `unified.synthetic_order_events` and `unified.instruments`, never a broker or Redis. It
+**What it touches.** It reads `unified.synthetic_order_events`, `unified.instruments` and `unified.daily_orders`, never a
+broker or Redis. It
 replaces every row of the days it measures in one transaction, so running it twice gives the same table. By default
 it measures today and yesterday in India's time zone. `unified-execution-costs.service` runs it every weekday night
-after the execution cost measurement.
+after `bin/unified/orders/store_daily_orders` has saved the day's orders.
 
 Exits 0 when the days were measured, even with no stops, 1 when the database cannot be read or written, and 2 for a
 bad argument.

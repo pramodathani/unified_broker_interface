@@ -1,0 +1,11 @@
+trading_day: datetime.date(2026, 10, 19)
+broker: 'flattrade'
+order_id: '26101900306429'
+quantity: 65
+filled_quantity: 65
+average_price: Decimal('160.45')
+order_timestamp: datetime.datetime(2026, 10, 19, 13, 17, 41, tzinfo=datetime.timezone(datetime.timedelta(seconds=19800)))
+engine_parent_id: '6b7bf82f-2c16-453f-b812-902216e84f4f'
+whole(10.0) = 10, whole("x") = None
+number("160.45") = 160.45, number("") = None
+moment("yesterday") = None

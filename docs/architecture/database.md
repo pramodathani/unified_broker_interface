@@ -83,6 +83,7 @@ The table below lists every table in the database. "Chunk" is the size of each T
 | `unified` | `synthetic_order_events` | 1 day | 7 days | `bin/unified/orders/order_engine` | `…/ticks/utilities/sql/ddl/340_unified_synthetic_order_events.sql` |
 | `unified` | `order_execution_costs` | 7 days | not compressed | `bin/unified/orders/execution_costs`, which applies its own file (see [Measuring execution costs](execution-costs.md)) | `…/ticks/utilities/sql/ddl/350_unified_order_execution_costs.sql` |
 | `unified` | `stop_slippage` | 7 days | not compressed | `bin/unified/orders/stop_slippage`, which applies its own file (see [Trade charges and the real breakeven](trade-charges.md#the-tripwire)) | `…/ticks/utilities/sql/ddl/360_unified_stop_slippage.sql` |
+| `unified` | `daily_orders` | plain table, keyed by day, broker and order id | not compressed | `bin/unified/orders/store_daily_orders`, which applies its own file | `…/ticks/utilities/sql/ddl/370_unified_daily_orders.sql` |
 
 The seven brokers with price history are `zerodha`, `dhan`, `flattrade`, `shoonya`, `fyers`, `indmoney` and `wisdom_capital`, in the files numbered `000` to `060`.
 
