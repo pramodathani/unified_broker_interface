@@ -1,0 +1,6 @@
+Entry: 177.00
+Floor, the real breakeven: 177.45
+Tripwire, exact: 178.4858
+Tripwire, on the tick: 178.50 (measured)
+Above the floor by 1.05, above the entry by 1.50
+A fill slipping by the whole allowance: 177.46

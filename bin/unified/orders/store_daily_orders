@@ -1,0 +1,125 @@
+#!/usr/bin/env python3
+"""
+Save every broker's orders of the day, as `unified:orders:orders` last holds them, to `unified.daily_orders`.
+
+    bin/unified/orders/store_daily_orders
+    bin/unified/orders/store_daily_orders --dry-run
+    bin/unified/orders/store_daily_orders --date 2026-10-19
+
+**Why.** Each broker's orders live in Redis only until the next 06:00 IST. The order update streams reach the database
+for the brokers that stream them, but Flattrade's orders are only polled, so before this script nothing kept them. The
+day's final orders are also the only record of a stop that filled at the broker while the strategy was cancelling it:
+the order engine stops following an order once it is cancelled, so that fill never reaches its event log.
+`bin/unified/orders/stop_slippage` reads this table to price those stops.
+
+**What it writes.** One row per order placed on the day, keyed by day, broker and order id, with the order's final
+status, quantities and prices, the engine parent id the combined document carries, and the whole order as JSON. By
+default it saves every day the document holds, which is the current day until 06:00 IST; `--date` saves one day only.
+The day's rows are replaced in one transaction, so running it twice gives the same table.
+
+**What it touches.** It reads one Redis key and writes `unified.daily_orders`, creating the table if it is missing. It
+never calls a broker. `unified-execution-costs.service` runs it every weekday night at 23:50 IST, before the stop
+slippage measurement.
+
+Exits 0 when the document was saved, or when Redis holds none, which is logged; 1 when Redis or the database cannot be
+read or written; and 2 for a bad argument.
+"""
+
+import sys
+import argparse
+import datetime
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+import psycopg2  # noqa: E402
+import redis  # noqa: E402
+
+from utilities.configurations import get_cache, get_logger, get_postgres  # noqa: E402
+from unified_broker_interface.utilities.order_history.daily_order_snapshot import (  # noqa: E402
+    DailyOrderSnapshot,
+)
+
+
+class StoreDailyOrdersScript:
+    """The script: reads the arguments and the document, prints each broker's figures, and writes the rows.
+
+    Attributes:
+        logger (logging.Logger): The logger.
+    """
+
+    def __init__(self):
+        """Builds the script.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.logger = get_logger("unified.store_daily_orders")
+
+    def arguments(self):
+        """Reads the command line.
+
+        Returns:
+            argparse.Namespace: `date` (datetime.date or None) and `dry_run` (bool).
+        """
+        parser = argparse.ArgumentParser(description="Save every broker's orders of the day to unified.daily_orders.")
+        parser.add_argument("--date", type=datetime.date.fromisoformat, default=None, help="Save only this day, as YYYY-MM-DD; every day the document holds when omitted.")
+        parser.add_argument("--dry-run", action="store_true", help="Print the figures without writing unified.daily_orders.")
+        return parser.parse_args()
+
+    def show(self, trading_day, summary):
+        """Prints one line per broker for a day.
+
+        Args:
+            trading_day (datetime.date): The day.
+            summary (list): The dicts `DailyOrderSnapshot.summary` returns.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        print(f"{'day':<11} {'broker':<15} {'orders':>7} {'filled':>7} {'filled value':>15}")
+        for line in summary:
+            print(f"{trading_day.isoformat():<11} {line['broker']:<15} {line['orders']:>7} {line['filled']:>7} {line['filled_value']:>15,.2f}")
+
+    def run(self):
+        """Reads, prints and writes.
+
+        Returns:
+            int: The exit code.
+        """
+        arguments = self.arguments()
+        snapshot = DailyOrderSnapshot(get_cache(), get_postgres, self.logger)
+        try:
+            document = snapshot.read_document()
+        except (redis.exceptions.RedisError, ValueError) as error:
+            self.logger.error(f"Could not read unified:orders:orders: {type(error).__name__}: {error}")
+            return 1
+        if document is None:
+            self.logger.warning("unified:orders:orders is missing, so there is nothing to save; is bin/unified/orders/api_order_details running?")
+            return 0
+        if arguments.date is not None:
+            days = [arguments.date]
+        else:
+            days = snapshot.trading_days(document)
+        for trading_day in days:
+            orders = snapshot.orders_of_day(document, trading_day)
+            self.show(trading_day, snapshot.summary(orders))
+            if arguments.dry_run:
+                continue
+            try:
+                written = snapshot.write(trading_day, orders)
+            except psycopg2.Error as error:
+                self.logger.error(f"Could not write unified.daily_orders: {type(error).__name__}: {error}")
+                return 1
+            self.logger.info(f"Wrote {written} orders of {trading_day.isoformat()} to unified.daily_orders.")
+        if arguments.dry_run:
+            self.logger.info("Dry run: nothing written.")
+        return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(StoreDailyOrdersScript().run())

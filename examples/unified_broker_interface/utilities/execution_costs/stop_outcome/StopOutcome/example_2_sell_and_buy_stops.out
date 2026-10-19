@@ -1,0 +1,3 @@
+sell-stop: SELL at 100.00, closed by stop at 99.70, slip 0.3000 (30.00 bps)
+buy-stop: BUY at 100.00, closed by other_order at 100.30, slip 0.3000 (30.00 bps)
+lost-stop: SELL at 100.00, closed by None at None, slip None (None bps)

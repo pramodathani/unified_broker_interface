@@ -85,12 +85,60 @@ The table below shows the breakeven of some positions.
 
 Flat brokerage is shared across the quantity, which is why the same 20 rupees an order moves one share's breakeven by almost a tenth and a thousand shares' by a twentieth of a percent. A breakeven must therefore be worked out for each position, never set as a fixed number of points.
 
+## The tripwire
+
+The real breakeven is the floor of a protective stop, not its trigger. A stop does not sell at its trigger: it fires once the price has crossed it and fills at the next price, a little beyond. On 19 October 2026, 60 of 83 stops whose trigger was the entry price filled below it. A stop whose trigger is the floor would lose the same slip, so the trigger, the **tripwire**, has to sit beyond the floor by as much as stops usually slip.
+
+### Measuring the slip
+
+`bin/unified/orders/stop_slippage` follows every protective stop that fired to the fill that closed its position, and writes one row per stop to `unified.stop_slippage`. A protective stop is a `plan` whose order has `side` `protect` and a `price_crosses` trigger, which every held stop and every routed stop type becomes in the engine. The close is one of three things:
+
+| `closed_by` | What closed the position | Why it counts |
+|---|---|---|
+| `stop` | The stop's own order filled, as the event log or, when the engine never saw the fill, the broker's saved record in `unified.daily_orders` says | The ordinary case; a stop the strategy cancelled just as it filled is a fill only the broker recorded |
+| `other_order` | The stop did not fill, and the strategy's next order on the same instrument and side, requested within a minute, did | A strategy closes the position itself when its stop does not fill, and those closes are the furthest from the trigger; leaving them out would make stops look better than they are |
+| empty | No fill was found | Written with an empty slip and left out of the figures |
+
+The slip is the close's distance beyond the trigger, positive when worse, in rupees per unit (`slip`) and in basis points of the trigger (`slip_basis_points`). Basis points let one figure serve every price in a segment.
+
+The run over the week to 19 October 2026, after the day's orders were saved, printed the figures below.
+
+```text
+segment                      side   fired  by stop  by other  unresolved  median bps  90th bps
+nse_equity_index_options     BUY        1        0         0           1        None      None
+nse_equity_index_options     SELL     269      177        48          44       15.91     69.93
+```
+
+On 19 October, whose orders are saved in `unified.daily_orders`, 149 of the 173 sell stops filled themselves, 39 of them known only from the broker's record, 18 were closed by the strategy's own sell, and 6 stayed unresolved: 3 were refused by Flattrade for want of margin, because the position had already been closed and the sale would have opened a short one, 2 never reached the broker, and 1 was refused as it was being cancelled. Without the broker's records, 26 of those stops had been matched to the next trade's sell instead, because the strategy trades seconds apart. The 38 unresolved stops of the days before were not saved, because `bin/unified/orders/store_daily_orders` did not yet exist.
+
+### The allowance
+
+`StopSlipAllowance` reads the last 20 days of `unified.stop_slippage` and gives, for a segment and side, a percentile of the measured slips. The 90th percentile, the default, is the slip nine stops in ten stayed within. A segment and side with fewer than 30 measured stops has no allowance, because a handful of stops says little about the next one.
+
+### The trigger
+
+`TripwirePrice` places the trigger so that a fill slipping by the whole allowance still lands on the floor. For a bought position,
+
+```text
+trigger × (1 − allowance) = floor
+```
+
+and a sold position mirrors it, with its trigger below the floor. With no allowance, the trigger is the floor plus the live spread and two ticks instead. Either way it is rounded to the tick away from the floor. The table below shows the levels for 65 NIFTY option units bought at 177.00 at Flattrade, with the slips of 19 October.
+
+| Allowance | Basis points | Floor | Tripwire | From the entry |
+|---|---|---|---|---|
+| 50th percentile | 14.76 | 177.45 | 177.75 | +0.75 |
+| 90th percentile, the default | 56.36 | 177.45 | **178.50** | **+1.50** |
+| 95th percentile | 72.12 | 177.45 | 178.75 | +1.75 |
+| No measured slip, spread 0.20 | | 177.45 | 177.75 | +0.75 |
+
+The higher the percentile, the more exits land on the floor, but the further the price must rise before the stop can sit at the tripwire at all, so fewer trades are protected by it.
+
 ## What comes next
 
-The real breakeven is the floor of a protective stop. A stop that fires at the floor still sells a little below it, because it is sent once the price has crossed and fills at the next bid; on 19 October, 60 of 83 stops set at the entry price filled below it, by 0.30 a unit on average. The next stages build on this page:
+Two stages remain:
 
-1. A tripwire above the floor by the slip that stops in the same kind of instrument have shown, read from `unified.order_execution_costs`.
-2. A switch-on distance above the tripwire, so ordinary price flicker does not fire the stop at once.
-3. A route that answers all three levels for an instrument, entry, quantity, side, product and broker, so any strategy, and later the order engine's own stops, can use them.
+1. A switch-on distance beyond the tripwire, so ordinary price flicker does not fire the stop the moment it moves there.
+2. A route that answers all three levels for an instrument, entry, quantity, side, product and broker, so any strategy, and later the order engine's own stops, can use them.
 
-Nothing on the order path reads the charge rate table yet.
+Nothing on the order path reads the charge rate table or the stop slippage yet.
