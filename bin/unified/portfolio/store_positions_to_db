@@ -189,13 +189,13 @@ def position_row(position):
 
 def copy_value(value):
     """
-    One value in COPY text format, with the format's NULL marker and its three structural characters escaped.
+    One value in COPY text format, with the format's NULL marker, backslash, tab, newline and carriage return escaped.
 
     - `value` is the column value.
     """
     if value is None:
         return "\\N"
-    return str(value).replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n")
+    return str(value).replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n").replace("\r", "\\r")
 
 class StreamPersister:
     """
