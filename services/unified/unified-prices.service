@@ -1,5 +1,6 @@
 # The daily unified price history update: bin/unified/instruments/price_history daily, which runs load, corrections, load,
-# factors --stale-days 14 and verify, with a failed verify reported but not fatal. Driven by unified-prices.timer.
+# factors --stale-days 14, a load of each intraday interval and verify, with a failed verify reported but not fatal.
+# Driven by unified-prices.timer.
 #
 #     systemctl --user start unified-prices           # run it now
 #     bin/unified/instruments/price_history status
@@ -18,7 +19,7 @@ Environment=PYTHONUNBUFFERED=1
 SyslogIdentifier=unified-prices
 ExecStart=%h/Projects/unified_broker_interface/bin/unified/instruments/price_history daily
 # The first factors run over every instrument is thousands of Yahoo requests at about one a second.
-TimeoutStartSec=4h
+TimeoutStartSec=12h
 Nice=10
 IOSchedulingClass=idle
 CPUWeight=20

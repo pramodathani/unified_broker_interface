@@ -604,10 +604,11 @@ class IntradayLoader(UnifiedLoader):
                             loaded_earliest = b.first_bar, loaded_latest = b.last_bar, last_loaded_at = now()
                         from (select min("time") as first_bar, max("time") as last_bar
                               from {tables.PRICE_HISTORY}
-                              where instrument_id = %s and "interval" = %s and source_id = %s) b
+                              where instrument_id = %s and "interval" = %s and source_id = %s
+                                and "time" >= %s) b
                         where s.source_id = %s
                     """, (source.broker_earliest, source.broker_latest, instrument_id, self.interval,
-                          source.source_id, source.source_id))
+                          source.source_id, source.broker_earliest, source.source_id))
             self.connection.commit()
         except Exception:
             self.connection.rollback()
@@ -638,10 +639,10 @@ class IntradayLoader(UnifiedLoader):
         missing_day = ""
         if whole_days_only:
             missing_day = f"""
-                and not exists (select 1 from {tables.PRICE_HISTORY} u
-                                where u.instrument_id = %(instrument_id)s and u."interval" = %(interval)s
-                                  and u."time" >= {day}::timestamp at time zone 'Asia/Kolkata'
-                                  and u."time" < ({day} + 1)::timestamp at time zone 'Asia/Kolkata')"""
+                and {day} not in (select distinct (u."time" at time zone 'Asia/Kolkata')::date
+                                  from {tables.PRICE_HISTORY} u
+                                  where u.instrument_id = %(instrument_id)s and u."interval" = %(interval)s
+                                    and u."time" >= %(start)s::timestamptz - interval '1 day')"""
         trading_day = ""
         if exchange in ("nse", "bse"):
             trading_day = f"and exists (select 1 from unified_trading_days t where t.exchange = %(exchange)s and t.day = {day})"
@@ -685,12 +686,15 @@ class IntradayLoader(UnifiedLoader):
             tuple[float, int]: The share agreeing, and how many bars were compared.
         """
         broker = sources[0].broker
+        earliest = min(source.broker_earliest for source in sources)
         cursor.execute(f"""
             select count(*), count(*) filter (where abs(b.close - u.close) <= %s * abs(u.close))
             from {tables.PRICE_HISTORY} u
             join {broker}.price_history b
               on b.instrument_token = any(%s) and b."interval" = u."interval" and b."time" = u."time"
             where u.instrument_id = %s and u."interval" = %s
-        """, (INTRADAY_AGREEMENT_TOLERANCE, [source.broker_series for source in sources], instrument_id, self.interval))
+              and u."time" >= %s and b."time" >= %s
+        """, (INTRADAY_AGREEMENT_TOLERANCE, [source.broker_series for source in sources], instrument_id, self.interval,
+              earliest, earliest))
         compared, agreeing = cursor.fetchone()
         return (agreeing / compared if compared else 0.0), compared

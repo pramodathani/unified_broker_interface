@@ -61,7 +61,7 @@ def adjusted_close(cursor, unified_id, day):
     return row[0] if row else None
 
 def raw_fidelity(cursor):
-    """Every unified bar equals the bar its source row names, with any confirmed correction applied."""
+    """Every unified daily bar equals the bar its source row names, with any confirmed correction applied."""
     mismatched = 0
     compared = 0
     cursor.execute(f"select distinct broker from {tables.PRICE_HISTORY_SOURCES}")
@@ -83,6 +83,7 @@ def raw_fidelity(cursor):
             left join {tables.CORRECTION_RANGES} r
               on r.broker = s.broker and r.broker_series = s.broker_series and r."interval" = p."interval"
              and p."time" >= r.valid_from and p."time" < r.valid_to
+            where p."interval" = 'day'
         """, (broker,))
         compared += row[0]
         mismatched += row[1]
