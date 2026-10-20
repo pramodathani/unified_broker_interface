@@ -1,0 +1,4 @@
+bid 272.55, above the trigger: fired False released False
+bid 270.60, below the limit: fired True released False
+held side: SELL
+bid 271.10, back above the limit: released True
