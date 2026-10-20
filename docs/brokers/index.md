@@ -167,9 +167,9 @@ Each tab below describes one broker from its code: how it logs in (from `stock_b
 
 === "Groww"
 
-    **Login.** `GrowwAPI` probes `GET https://api.groww.in/v1/user/detail`. To log in, it posts the current TOTP to `https://api.groww.in/v1/token/api/access`, authorized with the account's stored TOTP token as a bearer token, and stores the access token it gets back.
+    **Login.** `GrowwAPI` probes `GET https://api.groww.in/v1/user/detail`. To log in, it posts the current TOTP to `https://api.groww.in/v1/token/api/access`, authorized with the account's stored TOTP token as a bearer token, and stores the access token it gets back. It logs in only after a 401, one process at a time and at most once a minute, and sends nothing for five minutes after Groww answers 429, as [Sessions and logins](../architecture/sessions.md) explains.
 
-    **Websockets.** Both sockets are NATS over a websocket at `wss://socket-api.groww.in`. Before connecting, a socket generates a fresh ed25519 key pair and exchanges its public key for a short-lived socket JWT and a subscription id, authorized with the access token. It then answers the server's `INFO` nonce with a signed `CONNECT`. Quotes subscribe a price subject and a depth subject per instrument, such as `/ld/eq/nse/price_detailed.2885` and `/ld/eq/nse/book.2885`, and payloads are protobuf messages decoded from Groww's own file descriptor. The order socket subscribes the account's order and derivatives position subjects.
+    **Websockets.** Both sockets are NATS over a websocket at `wss://socket-api.groww.in`. Before connecting, a socket generates a fresh ed25519 key pair and exchanges its public key for a short-lived socket JWT and a subscription id, authorized with the access token. It then answers the server's first `INFO` nonce with a signed `CONNECT` and its subscriptions. The server may send `INFO` again on the same connection, and a later one is ignored, because answering it subscribes everything a second time, which Groww refuses with "maximum subscriptions exceeded". Quotes subscribe a price subject and a depth subject per instrument, such as `/ld/eq/nse/price_detailed.2885` and `/ld/eq/nse/book.2885`, and payloads are protobuf messages decoded from Groww's own file descriptor. The order socket subscribes the account's order and derivatives position subjects.
 
     **Peculiarities.**
 

@@ -454,6 +454,7 @@ class GrowwQuotesSocket(BrokerWebsocket):
         self._key_pair = None
         self._socket_jwt = None
         self._buffer = GrowwNatsBuffer()
+        self._greeted = False
         self._subjects = {}
         self._state = {}
 
@@ -527,6 +528,7 @@ class GrowwQuotesSocket(BrokerWebsocket):
             None: This method returns nothing.
         """
         self._opened = True
+        self._greeted = False
         self._logger.info(f"{self.name} opened. Waiting for the NATS INFO frame.")
 
     def _on_error(self, websocket_connection, error):
@@ -569,7 +571,7 @@ class GrowwQuotesSocket(BrokerWebsocket):
         delivered = []
         for event in self._buffer.feed(message):
             if event[0] == "info":
-                self._authenticate(event[1])
+                self._answer_info(event[1])
             elif event[0] == "ping":
                 self._send(["PONG\r\n"])
             elif event[0] == "error":
@@ -592,6 +594,24 @@ class GrowwQuotesSocket(BrokerWebsocket):
                 ticks.append(tick)
         if ticks:
             self._on_ticks(ticks)
+
+    def _answer_info(self, info):
+        """
+        Authenticates on a connection's first INFO frame and ignores any later one.
+
+        A NATS server may send INFO again at any time, for example when its cluster changes, and a client answers only the first. Answering a later one sent CONNECT and every SUB a second time, which Groww refuses with "maximum subscriptions exceeded" and then "Authorization Violation".
+
+        Args:
+            info (dict): The decoded INFO frame.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        if self._greeted:
+            self._logger.info(f"{self.name} ignored a later NATS INFO frame on the same connection.")
+            return
+        self._greeted = True
+        self._authenticate(info)
 
     def _authenticate(self, info):
         """
@@ -811,6 +831,7 @@ class GrowwOrderUpdatesSocket(BrokerWebsocket):
         self._socket_jwt = None
         self._subscription_id = None
         self._buffer = GrowwNatsBuffer()
+        self._greeted = False
 
     def _connect(self):
         """
@@ -868,6 +889,7 @@ class GrowwOrderUpdatesSocket(BrokerWebsocket):
             None: This method returns nothing.
         """
         self._opened = True
+        self._greeted = False
         self._logger.info(f"{self.name} opened. Waiting for the NATS INFO frame.")
 
     def _on_error(self, websocket_connection, error):
@@ -921,7 +943,7 @@ class GrowwOrderUpdatesSocket(BrokerWebsocket):
         delivered = []
         for event in self._buffer.feed(message):
             if event[0] == "info":
-                self._authenticate(event[1])
+                self._answer_info(event[1])
             elif event[0] == "ping":
                 self._websocket_application.send("PONG\r\n")
             elif event[0] == "error":
@@ -949,6 +971,24 @@ class GrowwOrderUpdatesSocket(BrokerWebsocket):
                 self._logger.warning(f"Could not decode a payload on {subject}: {type(exception).__name__}: {exception}")
         if orders or positions:
             self._on_updates(orders, positions, received_at)
+
+    def _answer_info(self, info):
+        """
+        Authenticates on a connection's first INFO frame and ignores any later one.
+
+        A NATS server may send INFO again at any time, for example when its cluster changes, and a client answers only the first. Answering a later one sent CONNECT and every SUB a second time, which Groww refuses with "maximum subscriptions exceeded" and then "Authorization Violation".
+
+        Args:
+            info (dict): The decoded INFO frame.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        if self._greeted:
+            self._logger.info(f"{self.name} ignored a later NATS INFO frame on the same connection.")
+            return
+        self._greeted = True
+        self._authenticate(info)
 
     def _authenticate(self, info):
         """

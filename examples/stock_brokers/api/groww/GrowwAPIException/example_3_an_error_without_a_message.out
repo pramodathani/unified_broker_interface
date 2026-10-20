@@ -1,0 +1,5 @@
+Groww answers HTTP 400 with: {"status": "FAILURE", "error": "TOTP already used"}
+Caught: GrowwAPIException
+code: 400
+status_code: 400
+message: {'status': 'FAILURE', 'error': 'TOTP already used'}

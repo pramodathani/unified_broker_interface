@@ -1,0 +1,4 @@
+The funds script: caught GrowwBlockedError, code 429
+A limit is recorded in Redis under groww:api:blocked-until: True
+The positions script: caught GrowwBlockedError, code 429
+Requests that reached Groww: 1

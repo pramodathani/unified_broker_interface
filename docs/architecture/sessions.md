@@ -37,9 +37,10 @@ sequenceDiagram
 
 The probe is cheap, one HTTP request, so the common case where the morning's token is still good costs almost nothing. The real login runs only when the probe fails.
 
-For eight brokers, any failure of the probe leads to a login, even a network timeout. Two brokers are more careful:
+For seven brokers, any failure of the probe leads to a login, even a network timeout. Three brokers are more careful:
 
 - **Stoxkart** logs in only when the probe is refused as unauthorized (the codes `AuthorizationError`, `401` or `Invalid Session`). Any other error is raised, so an outage is not mistaken for an expired session.
+- **Groww** logs in only when the probe is refused with HTTP 401, and never while Groww is limiting the account. A 429 from Groww is recorded in the Redis key `groww:api:blocked-until`, and every Groww process then sends nothing for five minutes, because each request sent into the limit renews it. Only one process at a time asks for a new token, under the lock `groww:login:token-lock`; the others wait for its token, and a process that finds a login newer than the one it saw fail uses it. Groww is asked for a token at most once a minute, recorded in `groww:login:token-attempt`. Before 2026-10-18 every Groww script asked for its own token at the 06:00 expiry and retried every fifteen seconds under systemd, which used up the account's request limit and kept it used up all day.
 - **Wisdom Capital** treats a rate-limit refusal as proof the token works, because its rate limiter runs only after a request has authenticated. For its market data token, a failure that does not name the session is read as "cannot tell" and the token is kept, because minting a new one would invalidate the token the live feed holds.
 
 ## How each broker logs in
