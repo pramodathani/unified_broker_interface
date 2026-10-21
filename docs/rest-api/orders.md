@@ -620,6 +620,18 @@ Every failure below is answered without calling a broker, except the three outco
 | <span class="status s5">503</span> | `Redis could not be read: <error>`, `the order engine is not running, so the order was not placed; start unified-orders@order_engine.service`, `the order could not be written for the order engine: <error>`, `no instruments have been mapped yet`, `today's instrument catalogue is not published yet: the catalogue for <date> has expired, and the daily mapping has not published a new one`, `every broker is excluded from order placement`, `no broker can take this order` (with `skipped`), or `the contract size of this <segment> instrument is not trusted today (<status>), so no order is sent` (with `contract_size_status`). |
 | <span class="status s5">504</span> | `outcome` is `unknown`: the broker answered with a server error, answered success without an order id, or the network failed after the request left. **The order may exist.** |
 
+#### When the broker resets the connection
+
+A broker's server sometimes resets the connection an order was sent on, and then no answer arrives at all. Flattrade did this to 23 orders on 19 and 21 October 2026, among them protective stops, and its own order book showed that none of the 23 had arrived. For a Noren broker, which is Flattrade or Shoonya, UBI therefore does not stop at `unknown` after a reset. It reads the broker's order book straight away on a new connection and looks for the order: same exchange, symbol, side, product, order type, quantity and price, the same trigger price and `tag` when they were sent, and received no earlier than five seconds before the order was sent.
+
+| What the book shows | What UBI answers |
+|---|---|
+| Exactly one such order | `accepted` with that order's id, and a `status_message` saying the connection was reset but the order was placed |
+| No such order | The order never arrived, so it is sent once more on a new connection, and that answer is the answer |
+| Two or more such orders, or the book cannot be read | `unknown`, as before, with the reason added to `status_message`, because sending again could place the order twice |
+
+A timeout is never treated as a reset, because a slow broker may still be working on the order. Every other broker answers a reset with `unknown`, as before. The order engine places its legs through the same code, so a held stop that fires during a reset is settled the same way.
+
 The engine adds <span class="status s2">202</span>, <span class="status s4">403</span>, <span class="status s4">409</span>, <span class="status s4">429</span> and more <span class="status s5">503</span> and <span class="status s5">504</span> cases; they are listed on the [Order engine](order-engine.md) page.
 
 ### What happens, step by step

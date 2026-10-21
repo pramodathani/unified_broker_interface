@@ -32,6 +32,7 @@ The table below lists all nineteen. "Fixture" is the recording a suite compares 
 | `python -m test_runs.websocket_feeds` | Every broker's quotes and order sockets against scripted connections: every Redis command, frame sent, log line, login and wait | `test_runs/fixtures/websocket_feeds.jsonl` (160) | rewrites only the named brokers' lines | 0.5 s |
 | `python -m test_runs.examples` | Every example program under `examples/`, the ones shown in the code reference: each runs in its own process with every data store and HTTP request pointed at a closed port, and prints exactly what it printed when it was recorded. `--coverage` lists classes with fewer than two programs and public methods no program calls | the `.out` file beside each program (704) | rewrites only the named folders' `.out` files | 27 s |
 | `python -m test_runs.connection_warming` | That connection warming and the idle limit never make an order fail, against a local HTTP server that misbehaves | none | no | 34 s |
+| `python -m test_runs.reset_recovery` | That a place-order request whose connection is reset is settled from the broker's order book, sent again only when the book shows it never arrived, and never placed twice, against a local Noren server | none | no | 4.5 s |
 
 `order_engine_routes` and `order_change_lists` each have a fixture of their own on purpose. `--record` rewrites a whole file, so recording their scenarios into `order_routes.jsonl` would silently rewrite the recording that proves the single form and every broker's placement never changed.
 
@@ -74,6 +75,8 @@ The output below is the last lines of each suite from one run on 2026-09-27, wit
 160 of 160 scenarios match the recording, 0 differ
 ===== connection_warming
 22/22 checks passed.
+===== reset_recovery (2026-10-21)
+11/11 checks passed in 4.5 s.
 ===== examples
 704/704 example programs passed.
 ```
@@ -132,7 +135,7 @@ None of the suites connects to anything, but most of them import `utilities.conf
 
 | Loads `utilities.configurations` on import | Does not |
 |---|---|
-| `candle_parse`, `order_routes`, `order_engine_routes`, `order_place_lists`, `order_engine_changes`, `order_change_lists`, `order_engine`, `order_engine_throughput`, `broker_selection`, `order_flatten`, `instrument_routes`, `contract_sizes`, `price_cache`, `connection_warming` | `unified_ticks_sessions`, `virtual_queue`, `websocket_feeds` (the package itself) |
+| `candle_parse`, `order_routes`, `order_engine_routes`, `order_place_lists`, `order_engine_changes`, `order_change_lists`, `order_engine`, `order_engine_throughput`, `broker_selection`, `order_flatten`, `instrument_routes`, `contract_sizes`, `price_cache`, `connection_warming` | `reset_recovery`, `unified_ticks_sessions`, `virtual_queue`, `websocket_feeds` (the package itself) |
 
 Settings in `.env` can change what the API code does, so a failing suite is worth checking against `.env` before assuming the code is wrong.
 

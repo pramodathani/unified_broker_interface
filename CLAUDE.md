@@ -51,6 +51,7 @@ There is no `pyproject.toml`, no build step and no pytest suite. The project roo
 | Decide which instrument every live derivative is written on | `python -m stock_brokers.instruments.mapping.utilities.underlyings --date 2026-09-28` (the daily mapping run does this itself; `--dry-run` prints the decisions without writing `unified.underlyings`) |
 | Offline example program tests | `python -m test_runs.examples` (runs every program under `examples/` and compares its output with the `.out` beside it; name folders to run only those, `--record` rewrites their `.out` files, `--coverage` lists classes with fewer than two programs and public methods no program calls) |
 | Offline connection warming tests | `python -m test_runs.connection_warming` (a local HTTP server that misbehaves; about 40 seconds) |
+| Offline reset recovery tests | `python -m test_runs.reset_recovery` (a local Noren server that resets order connections; about 5 seconds) |
 | Download instrument masters | `python -m test_runs.download_instruments zerodha dhan` (no arguments means every broker) |
 | Apply broker schema and instrument DDL | `python -m stock_brokers.instruments.sql.apply_ddl` |
 | Apply price history DDL | `python -m stock_brokers.instruments.historical.utilities.sql.apply_ddl` |
