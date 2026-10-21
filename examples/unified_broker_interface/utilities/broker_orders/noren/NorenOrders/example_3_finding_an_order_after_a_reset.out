@@ -1,0 +1,13 @@
+Order book request:
+{
+  "form": {
+    "uid": "EN00001"
+  },
+  "method": "POST",
+  "url": "https://api.example-noren.in/NorenWClientTP/OrderBook"
+}
+Its body: jData={"uid": "EN00001"}&jKey=example-session-token
+the same sell, received the same second: matches
+the same sell, received a minute earlier: does not match
+a sell at another price: does not match
+the same sell, received 3 s before it was sent: matches

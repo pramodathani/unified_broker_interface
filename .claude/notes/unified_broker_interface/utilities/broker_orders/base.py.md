@@ -62,3 +62,26 @@ Most brokers' order scripts store the same exchange or segment code the broker's
 
 A modification and a cancel both instruct the broker about an existing order with the same login, so Kotak's `sid` check applies to both, and one hook keeps the two from drifting apart.
 
+
+## Settling a reset place-order request (2026-10-21)
+
+On 21 October 2026 a live call-put switch run on Flattrade lost its protective stop: the engine sent the stop's sell at 11:33:48, the connection was reset (`ConnectionError(ProtocolError('Connection aborted.', ConnectionResetError(104)))`), the leg's outcome was `unknown`, and `OUTCOME_PARENT_STATES` turned the plan `failed` at once. The script's own exits were reset twice more before one got through at 11:34:54. The same happened to the 22850 PE's stop at 11:35:53, and to trade 6 earlier that morning, which lost ₹978. The user asked to fix the underlying issue.
+
+Evidence gathered that day:
+
+- Every `unknown` outcome in `unified.synthetic_order_events` over the previous 15 days was a Flattrade connection reset: 12 on 13 Oct, 14 on 19 Oct, 9 on 21 Oct.
+- None of the 14 on 19 Oct appears in `unified.daily_orders` (Flattrade's own book, saved nightly) within 3 s of being sent, and none of the 9 on 21 Oct appears in the live order book. So 23 of 23 checkable reset orders never reached Flattrade. 13 Oct predates the daily snapshot and could not be checked.
+- Resets came back 45 to 212 ms after sending (median 129, a few up to 4.7 s), overlapping Flattrade's normal acceptance time (median 87 ms over 1,071 orders), so latency cannot tell an unreceived order from a received one. That is why the book is read rather than resending blindly.
+- The warmers in both REST workers and the engine log a Flattrade reset every few minutes, often two processes within seconds. Probes from the same machine with plain `requests` sessions (pinging every 2 s for 4 minutes; 20 connections idle 10 to 90 s for 5.5 minutes) saw no reset at all, while the engine's warmer logged one in the same window, so the cause on Flattrade's side was not pinned down. A 25-minute connection-age probe was started; see the note on `noren.py` for its result if it was recorded.
+
+What changed:
+
+- `BrokerAnswer.connection_reset`, set by `send` through `is_connection_reset`, which searches the wrapped error's `args` up to four levels for `ConnectionResetError`, `BrokenPipeError` or `http.client.RemoteDisconnected` (a subclass of `ConnectionResetError`, the stale keep-alive case). A `Timeout`, including `ConnectTimeout`, is never a reset.
+- `send_place` calls `recover_after_reset` when nothing came back and the connection was reset. It asks `find_placed_order` (overridden by `NorenOrders`; the base answers `cannot_tell`, so every other broker is unchanged). `found` makes the answer `accepted` with the book's order id; `absent` sends once more through `send_on_fresh_connection` (a one-off `requests.Session`, so the resend cannot draw another stale pooled connection) and that answer goes through the normal decoding; `cannot_tell` keeps `unknown` and appends the reason in parentheses.
+- Only one resend: a second reset stays `unknown` with "sent again, which also failed".
+- `send` takes an optional `session`, used by the resend and by the book read; both still count against the daily cap through `count_message`.
+- The engine places legs through `Placement.send` → `send_place`, so held stops and plan legs get the recovery too; `OUTCOME_PARENT_STATES` is unchanged, and an `unknown` that survives recovery still fails the parent.
+
+Remaining risk, accepted: if Flattrade received an order but its `OrderBook` did not list it yet when read (about 0.1 to 0.3 s later), the resend places it twice. Noren's book is the OMS's own and none of the 23 resets had arrived, so this was judged far smaller than a stop that silently dies.
+
+Checked by `test_runs/reset_recovery.py` (11 checks), the existing order suites (`connection_warming` 22/22, `broker_selection` 54/54, `order_routes` 620/620, `order_engine` 716/716, `order_engine_changes`, `order_place_lists`, `order_change_lists`, `order_flatten`, `margin_calculators` all matching), and `examples/.../BrokerOrders/example_5_telling_a_reset_from_a_timeout.py`.
