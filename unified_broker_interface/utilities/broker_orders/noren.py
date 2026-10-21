@@ -1,6 +1,10 @@
 """How the Noren platform, which Flattrade and Shoonya run, takes, modifies and cancels orders."""
 
+import datetime
 import json
+import zoneinfo
+
+import requests
 
 from unified_broker_interface.utilities.broker_orders.base import BrokerOrders
 from unified_broker_interface.utilities.broker_orders.utilities.broker_request import (
@@ -16,12 +20,19 @@ class NorenOrders(BrokerOrders):
 
     A subclass sets `BROKER_NAME`, `BASE_URL`, `ACCOUNT_SETTINGS_FIELD` and the three settings lists.
 
+    After a place-order request whose connection was reset, `find_placed_order` reads Noren's `OrderBook` on a new connection, so the base class can tell an order that arrived from one that never did.
+
     Attributes:
         BASE_URL (str): The API's base URL.
         ACCOUNT_SETTINGS_FIELD (str): The settings field holding the account id sent as `uid` and `actid`.
         ORDER_TYPE_CODES (dict): The shared order types to Noren's.
         PRODUCT_CODES (dict): The shared products to Noren's.
         SIDE_CODES (dict): The shared transaction types to Noren's.
+        INDIA (zoneinfo.ZoneInfo): India's time zone, which Noren's order times are in.
+        ORDER_TIME_FORMATS (list): The two forms Noren writes an order time in.
+        LOOKUP_EARLY_SECONDS (float): How long before the request was sent an order's time may be and still be the request's, allowing for the broker's clock running behind.
+        LOOKUP_MATCHED_FIELDS (list): The request fields an order in the book must repeat to be the request's.
+        NO_DATA_MARKER (str): The text in Noren's refusal when the book is simply empty.
     """
 
     BASE_URL = None
@@ -66,6 +77,20 @@ class NorenOrders(BrokerOrders):
         'BUY': 'B',
         'SELL': 'S',
     }
+    INDIA = zoneinfo.ZoneInfo('Asia/Kolkata')
+    ORDER_TIME_FORMATS = [
+        '%H:%M:%S %d-%m-%Y',
+        '%d-%m-%Y %H:%M:%S',
+    ]
+    LOOKUP_EARLY_SECONDS = 5.0
+    LOOKUP_MATCHED_FIELDS = [
+        'exch',
+        'tsym',
+        'trantype',
+        'prd',
+        'prctyp',
+    ]
+    NO_DATA_MARKER = 'no data'
 
     def encoded_body(self, noren_fields, login):
         """Encodes the fields as Noren's body, with `&` in the JSON escaped so a symbol such as `M&M` does not end the field early.
@@ -234,6 +259,134 @@ class NorenOrders(BrokerOrders):
         if not refusal:
             refusal = 'the broker refused the request'
         return refusal
+
+    def order_book_request(self, broker_request):
+        """Builds `POST {BASE_URL}/OrderBook` with the same account and login as a place-order request.
+
+        Args:
+            broker_request (BrokerRequest): The place-order request, whose body ends with `&jKey=<token>`.
+
+        Returns:
+            BrokerRequest | None: The request, or None when the place-order request carries no account or token.
+        """
+        fields = broker_request.shown_form or {}
+        account_identifier = fields.get('uid')
+        body = broker_request.data
+        if not account_identifier or not isinstance(body, str) or '&jKey=' not in body:
+            return None
+        login_token = body.rsplit('&jKey=', 1)[1]
+        book_fields = {
+            'uid': account_identifier,
+        }
+        return BrokerRequest(
+            'POST',
+            f'{self.BASE_URL}/OrderBook',
+            {},
+            data=self.encoded_body(book_fields, {'access_token': login_token}),
+            shown_form=book_fields,
+        )
+
+    def order_time(self, text):
+        """Reads an order time as Noren writes it.
+
+        Args:
+            text (object): Noren's `norentm`, in either of `ORDER_TIME_FORMATS`.
+
+        Returns:
+            float | None: The time as seconds since the epoch, or None when it cannot be read.
+        """
+        for time_format in self.ORDER_TIME_FORMATS:
+            try:
+                moment = datetime.datetime.strptime(str(text).strip(), time_format)
+            except ValueError:
+                continue
+            return moment.replace(tzinfo=self.INDIA).timestamp()
+        return None
+
+    def same_number(self, first, second):
+        """Whether two of Noren's numbers are equal, written as text or as numbers.
+
+        Args:
+            first (object): One number.
+            second (object): The other.
+
+        Returns:
+            bool: True when both read as the same number, or are both empty.
+        """
+        if first in (None, '') and second in (None, ''):
+            return True
+        try:
+            return float(first) == float(second)
+        except (TypeError, ValueError):
+            return False
+
+    def matches_request(self, row, fields, sent_at_epoch):
+        """Whether one order in Noren's book is the order a place-order request asked for.
+
+        It must repeat the exchange, symbol, side, product and order type, the quantity and the price, the trigger price when one was sent, and the remarks when they were sent, and must have reached the broker no earlier than `LOOKUP_EARLY_SECONDS` before the request was sent.
+
+        Args:
+            row (dict): One order in Noren's book.
+            fields (dict): The request's `jData` fields.
+            sent_at_epoch (float): When the request was sent, as seconds since the epoch.
+
+        Returns:
+            bool: True when every field matches.
+        """
+        for name in self.LOOKUP_MATCHED_FIELDS:
+            if str(row.get(name, '')) != str(fields.get(name, '')):
+                return False
+        if not self.same_number(row.get('qty'), fields.get('qty')):
+            return False
+        if fields.get('prctyp') in ('LMT', 'SL-LMT'):
+            if not self.same_number(row.get('prc'), fields.get('prc')):
+                return False
+        if fields.get('trgprc') not in (None, ''):
+            if not self.same_number(row.get('trgprc'), fields.get('trgprc')):
+                return False
+        if fields.get('remarks'):
+            if str(row.get('remarks', '')) != str(fields.get('remarks')):
+                return False
+        order_epoch = self.order_time(row.get('norentm'))
+        if order_epoch is None:
+            return False
+        return order_epoch >= sent_at_epoch - self.LOOKUP_EARLY_SECONDS
+
+    def find_placed_order(self, broker_request, sent_at_epoch):
+        """Reads Noren's order book on a new connection and looks for the order a reset place-order request carried.
+
+        Args:
+            broker_request (BrokerRequest): The place-order request that was sent.
+            sent_at_epoch (float): When it was sent, as seconds since the epoch.
+
+        Returns:
+            tuple: `(state, order_id, message)`, where state is `found` with Noren's order number when exactly one order matches, `absent` when the book was read and none does, or `cannot_tell` when the book could not be read or several orders match.
+        """
+        book_request = self.order_book_request(broker_request)
+        if book_request is None:
+            return 'cannot_tell', None, 'the request carries no account or login to read the order book with'
+        with requests.Session() as session:
+            book_answer = self.send(book_request, session)
+        body = book_answer.response_body
+        if book_answer.status_code is None:
+            return 'cannot_tell', None, f'the order book could not be read either: {book_answer.status_message}'
+        if isinstance(body, dict):
+            message = str(body.get('emsg') or body)
+            if self.NO_DATA_MARKER in message.lower():
+                return 'absent', None, 'the order book is empty'
+            return 'cannot_tell', None, f'the order book could not be read: {message[:200]}'
+        if not isinstance(body, list):
+            return 'cannot_tell', None, f'the order book came back without a list: {str(body)[:200]}'
+        fields = broker_request.shown_form or {}
+        matching_numbers = []
+        for row in body:
+            if isinstance(row, dict) and self.matches_request(row, fields, sent_at_epoch):
+                matching_numbers.append(str(row.get('norenordno')))
+        if len(matching_numbers) == 1:
+            return 'found', matching_numbers[0], 'one order in the book matches'
+        if not matching_numbers:
+            return 'absent', None, 'no order in the book matches'
+        return 'cannot_tell', None, f'{len(matching_numbers)} orders in the book match, so it is not known which, if any, is this one'
 
     def is_settled_refusal(self, error_code):
         """Whether the error code is Noren's `Not_Ok`.
