@@ -12,7 +12,7 @@ until stopped.
     redis-cli HGETALL flattrade:quotes:instruments
 
 The connection, the login, the handshake and the message decoding for Flattrade's Noren market feed at
-`wss://piconnect.flattrade.in/PiConnectWSTp/` are `FlattradeQuotesSocket` and `FlattradeSession` in
+`wss://piconnect.flattrade.in/PiConnectWSAPI/` are `FlattradeQuotesSocket` and `FlattradeSession` in
 `stock_brokers/websockets/flattrade.py`, whose module docstring describes the protocol. This script chooses the
 instruments, splits them across sockets, runs the sockets and writes what they decode to Redis, so it needs no
 other feed process or key.

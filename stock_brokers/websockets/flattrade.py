@@ -1,7 +1,7 @@
 """
 Flattrade's two websockets on the Noren platform: the market feed and the account's order updates.
 
-Both connect to `wss://piconnect.flattrade.in/PiConnectWSTp/`, a separate connection each.
+Both connect to `wss://piconnect.flattrade.in/PiConnectWSAPI/`, a separate connection each.
 Flattrade permits only one websocket per session, so in production the order updates socket is not run and orders come from the poller alone.
 
 **The login.**
@@ -39,7 +39,7 @@ from datetime import datetime, timedelta, timezone
 
 from stock_brokers.websockets.base import BrokerWebsocket
 
-FEED_URL = "wss://piconnect.flattrade.in/PiConnectWSTp/"
+FEED_URL = "wss://piconnect.flattrade.in/PiConnectWSAPI/"
 USER_DETAILS_URL = "https://piconnect.flattrade.in/PiConnectAPI/UserDetails"
 
 CONNECT_ACK = "ak"
