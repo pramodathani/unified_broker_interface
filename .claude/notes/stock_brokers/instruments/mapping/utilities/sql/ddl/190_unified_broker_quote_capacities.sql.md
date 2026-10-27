@@ -1,0 +1,26 @@
+# 190_unified_broker_quote_capacities.sql
+
+One row per broker saying how many quote websockets it may open and how many instruments each one carries. `bin/unified/instruments/allocate_subscriptions` reads it to share the day's instruments out between the brokers, and writes `instruments_per_socket` to each broker's `<broker>:quotes:per_socket` key for its quote script. A broker with `sockets` 0 is left out of the allocation and its subscription set is not touched.
+
+The seed rows are the ceilings measured with live probes on 2026-10-27, with each broker's production quote socket stopped while it was probed. Published documentation was wrong for most brokers, which is why the numbers are measured. `ON CONFLICT DO NOTHING` keeps a row the user has edited when the file is applied again.
+
+| Broker | Seed | What the probe showed |
+| --- | --- | --- |
+| Zerodha | 24 × 4,000 | Kite documents 3 × 3,000. 24 sockets of 3,000 all streamed and a 25th to 40th got HTTP 429, so the order socket probably takes the 25th slot. A socket asking for 5,000 got the text error "Can't subscribe to more than 4000 instruments." but still streamed all 5,000; 10,000 in one message was refused as too big. 4,000 is the safe figure. |
+| Dhan | 10 × 5,000 | Dhan documents 5 × 5,000. The probe saw instruments acknowledged up to 20,000 on one socket, and 12 sockets of 500 all worked, so the first seed was 10 × 20,000. Running that in production showed the acknowledgements were misleading: every socket sent one snapshot for each instrument but streamed updates only for the first 5,000 it subscribed, with nothing past position 5,000 ticking on any of nine sockets over five minutes. Five thousand is therefore the real limit per connection. Twenty sockets opened together blocked the IP for about 25 minutes, so the script starts them a second apart. |
+| Fyers | 1 × 100 | Fyers documents 5,000 symbols per user on the Prime plan and 100 on the Standard plan, counted across all connections. The probe refused 6,000 on one socket ("symbol count exceeds limit: 5000") and appeared to stream 10 sockets of 5,000, but it counted the snapshot every subscribed symbol gets. In production, 10 sockets of 5,000 near-dated options and then a single socket of 5,000 were all acknowledged and snapshotted, yet only 75 to 81 symbols updated afterwards each time, so the account streams about 100 symbols live, which is the Standard plan's limit. Raise this row if the account moves to Prime. |
+| Stoxkart | 4 × 50,000 | Nothing documented. The website broadcast feed never refused; past about four connections it reset them. About 45% of subscribed instruments send a packet within 90 seconds, and the instruments with packets levelled off at about 86,000 to 90,000, reached at 4 × 50,000. |
+| INDmoney | 1 × 3,000 | INDmoney documents 3 × 3,000. In production four sockets (three NFO, one NSE) all opened and subscribed, but only one NFO socket streamed updates; the probe had also seen sockets that open together get no data at random. One socket is all that can be relied on, and the quote script still opens one per segment, so INDmoney has preference 6 and gets its own instruments and what is left over. |
+| Shoonya | 1 × 100 | Every instrument past the hundredth on a connection is ignored. Three connections stayed open, but in production only one of the three streamed updates after its snapshot, which matches Shoonya's documented one connection per session. |
+| Flattrade | 1 × 100 | The same 100 cap, and a second market data connection closes the first. |
+| Wisdom Capital | 1 × 50 | XTS refused past 50 for the whole app key (`e-session-0004 Exceeded Instrument Subscription Limit of 50`); a second socket shares the 50. |
+| Kotak | 1 × 100 | Not probed, because the quote script was crash-looping; 100 is the most the script allows per socket. |
+| Groww | 0 × 0 | Left out at the user's request, because its login fails. |
+
+The raw probe results were kept in the session scratchpad, not in the repository.
+
+## Preference
+
+`preference` orders the brokers when an instrument has several carriers with room: the lowest number wins, and a tie goes to the carrier with the most room left. It does not affect an instrument only one broker carries, because those are allocated first. The column defaults to 100, and the seed `UPDATE` only touches rows still at 100, so a preference the user has set survives the file being applied again.
+
+The seed order came from the evidence of 2026-10-27. Zerodha streamed 24 sockets and 105,736 instruments in production with a median of about 0.85 seconds from exchange to unified Redis, so it comes first. Fyers streamed every instrument it was given and Dhan streams reliably within 5,000 per socket, so they follow. The small brokers share 4, apart from INDmoney at 6, below Stoxkart, because only one of its sockets can be relied on. Stoxkart comes after the brokers at 4: its feed is the trading website's unauthenticated broadcast socket rather than an API, it had the worst p99 lag of the brokers measured (5.9 seconds), and its derivatives were unproven at scale. Without a preference, the first rule tried gave every shared instrument to the carrier with the most room, which sent 148,647 instruments to Stoxkart while Zerodha had 51,353 slots spare.
