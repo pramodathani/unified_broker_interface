@@ -13,6 +13,8 @@ The connection, the login, the subscription, the acknowledgements and the binary
 
 **Instruments** are `--tokens` when given, otherwise the members of the Redis set `kotak:quotes:subscriptions`, each as `EXCHANGE|TOKEN` with Kotak's lowercase segment names - `nse_cm`, `bse_cm`, `nse_fo`, `bse_fo`, `cde_fo`, `nse_com`, `bse_cd`, `bse_co` or `mcx_fo` - and the instrument's `pSymbol` from Kotak's scrip master. Each is named with its trading symbol (`pTrdSymbol`) from Kotak's public scrip master files for today, downloaded at startup; an instrument those do not name takes the trading symbol the feed's first snapshot carries. One websocket carries up to `--per-socket` instruments, 100 by default and at most, because every instrument takes two of the 200 subscriptions Kotak allows on one channel.
 
+**Socket size.** Without `--per-socket`, each socket carries the number in the Redis key `kotak:quotes:per_socket`, which `bin/unified/instruments/allocate_subscriptions` writes from `unified.broker_quote_capacities` along with the subscription set, or 100 when the key is unset.
+
 **Keys.**
 
 - `kotak:quotes:live`, a hash of the latest tick per instrument as JSON, keyed by the instrument's trading symbol (`TCS-EQ`), or by its `EXCHANGE|TOKEN` while it has no name. A tick is replaced as the next one arrives. It is not cleared at startup, so an instrument no longer subscribed keeps its last tick.
@@ -71,6 +73,7 @@ SCRIP_MASTER_FILES = (
 LIVE_KEY = "kotak:quotes:live"
 INSTRUMENTS_KEY = "kotak:quotes:instruments"
 SUBSCRIPTIONS_KEY = "kotak:quotes:subscriptions"
+PER_SOCKET_KEY = "kotak:quotes:per_socket"
 STREAM_KEY = "kotak:quotes:stream"
 STREAM_MAX_LENGTH = 1000000
 
@@ -151,7 +154,7 @@ class KotakQuotesApplication:
         """
         parser = argparse.ArgumentParser(description="Stream Kotak Neo market quotes into kotak:quotes:live until stopped.")
         parser.add_argument("--tokens", help='comma separated EXCHANGE|TOKEN tokens, for example "nse_cm|11536"')
-        parser.add_argument("--per-socket", type=int, default=DEFAULT_PER_SOCKET, help=f"instruments per websocket connection, default and at most {MAX_PER_SOCKET}")
+        parser.add_argument("--per-socket", type=int, default=None, help=f"instruments per websocket connection, default the Redis key {PER_SOCKET_KEY}, or {DEFAULT_PER_SOCKET} when it is unset")
         return parser.parse_args()
 
     def _resolve_tokens(self, tokens, cache):
@@ -252,6 +255,8 @@ class KotakQuotesApplication:
 
         self._logger = get_logger("kotak.websocket_quotes")
         cache = get_cache()
+        if arguments.per_socket is None:
+            arguments.per_socket = int(cache.get(PER_SOCKET_KEY) or DEFAULT_PER_SOCKET)
 
         if arguments.per_socket < 1 or arguments.per_socket > MAX_PER_SOCKET:
             self._logger.error(f"--per-socket must be between 1 and {MAX_PER_SOCKET}.")

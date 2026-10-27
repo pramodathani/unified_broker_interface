@@ -31,6 +31,8 @@ exactly one market data session per application key, a second login invalidating
 A new one is minted only when none is stored or the one in use has been refused and nobody has replaced it,
 under `wisdom_capital:session:marketdata:lock`. Each connection reads it afresh.
 
+**Socket size.** Without `--per-socket`, each socket carries the number in the Redis key `wisdom_capital:quotes:per_socket`, which `bin/unified/instruments/allocate_subscriptions` writes from `unified.broker_quote_capacities` along with the subscription set, or 1000 when the key is unset.
+
 **Keys.**
 
 - `wisdom_capital:quotes:live`, a hash of the latest tick per instrument as JSON, keyed by its name, or by its
@@ -80,6 +82,7 @@ INSTRUMENTS_MASTER_URL = "https://trade.wisdomcapital.in/apimarketdata/instrumen
 LIVE_KEY = "wisdom_capital:quotes:live"
 INSTRUMENTS_KEY = "wisdom_capital:quotes:instruments"
 SUBSCRIPTIONS_KEY = "wisdom_capital:quotes:subscriptions"
+PER_SOCKET_KEY = "wisdom_capital:quotes:per_socket"
 
 # Every tick is also appended here for bin/wisdom_capital/instruments/store_quotes_to_db, which reads it with a consumer group. The cap
 # bounds Redis memory when the persister is down; ticks trimmed before it returns are not persisted.
@@ -187,8 +190,8 @@ def main():
     """Stream Wisdom Capital quotes into wisdom_capital:quotes:live until stopped."""
     parser = argparse.ArgumentParser(description="Stream Wisdom Capital market quotes into wisdom_capital:quotes:live until stopped.")
     parser.add_argument("--tokens", help="comma separated SEGMENT:EXCHANGEINSTRUMENTID tokens, for example 1:2885")
-    parser.add_argument("--per-socket", type=int, default=DEFAULT_INSTRUMENTS_PER_SOCKET,
-                        help=f"instruments per socket, default {DEFAULT_INSTRUMENTS_PER_SOCKET}")
+    parser.add_argument("--per-socket", type=int, default=None,
+                        help=f"instruments per websocket connection, default the Redis key {PER_SOCKET_KEY}, or {DEFAULT_INSTRUMENTS_PER_SOCKET} when it is unset")
     arguments = parser.parse_args()
 
     from stock_brokers.websockets.wisdom_capital import WisdomCapitalMarketDataSession, WisdomCapitalQuotesSocket
@@ -197,6 +200,8 @@ def main():
 
     logger = get_logger("wisdom_capital.websocket_quotes")
     cache = get_cache()
+    if arguments.per_socket is None:
+        arguments.per_socket = int(cache.get(PER_SOCKET_KEY) or DEFAULT_INSTRUMENTS_PER_SOCKET)
 
     if arguments.per_socket < 1:
         logger.error("--per-socket must be at least 1.")

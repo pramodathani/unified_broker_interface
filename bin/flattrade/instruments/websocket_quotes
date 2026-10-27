@@ -23,6 +23,8 @@ Flattrade's token. Each is named from Flattrade's public scrip master files, dow
 the trading symbol Noren sends back when a subscription is acknowledged. One websocket carries up to
 `--per-socket` instruments.
 
+**Socket size.** Without `--per-socket`, each socket carries the number in the Redis key `flattrade:quotes:per_socket`, which `bin/unified/instruments/allocate_subscriptions` writes from `unified.broker_quote_capacities` along with the subscription set, or 1000 when the key is unset.
+
 **Keys.**
 
 - `flattrade:quotes:live`, a hash of the latest tick per instrument as JSON, keyed by the instrument's name
@@ -82,6 +84,7 @@ SCRIP_MASTER_URLS = [
 LIVE_KEY = "flattrade:quotes:live"
 INSTRUMENTS_KEY = "flattrade:quotes:instruments"
 SUBSCRIPTIONS_KEY = "flattrade:quotes:subscriptions"
+PER_SOCKET_KEY = "flattrade:quotes:per_socket"
 
 # Every tick is also appended here for bin/flattrade/instruments/store_quotes_to_db, which reads it with a consumer group. The cap
 # bounds Redis memory when the persister is down; ticks trimmed before it returns are not persisted.
@@ -193,8 +196,8 @@ def main():
     """Stream Flattrade quotes into flattrade:quotes:live until stopped."""
     parser = argparse.ArgumentParser(description="Stream Flattrade market quotes into flattrade:quotes:live until stopped.")
     parser.add_argument("--tokens", help="comma separated EXCHANGE|TOKEN tokens, for example NSE|2885")
-    parser.add_argument("--per-socket", type=int, default=DEFAULT_INSTRUMENTS_PER_CONNECTION,
-                        help=f"instruments per websocket connection, default {DEFAULT_INSTRUMENTS_PER_CONNECTION}")
+    parser.add_argument("--per-socket", type=int, default=None,
+                        help=f"instruments per websocket connection, default the Redis key {PER_SOCKET_KEY}, or {DEFAULT_INSTRUMENTS_PER_CONNECTION} when it is unset")
     arguments = parser.parse_args()
 
     from stock_brokers.websockets.flattrade import FlattradeQuotesSocket, FlattradeSession
@@ -203,6 +206,8 @@ def main():
 
     logger = get_logger("flattrade.websocket_quotes")
     cache = get_cache()
+    if arguments.per_socket is None:
+        arguments.per_socket = int(cache.get(PER_SOCKET_KEY) or DEFAULT_INSTRUMENTS_PER_CONNECTION)
 
     if arguments.per_socket < 1:
         logger.error("--per-socket must be at least 1.")

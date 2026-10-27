@@ -21,13 +21,15 @@ no other feed process or key.
 each as `SEGMENT:TOKEN` with INDstocks' segment names - `NSE` and `BSE` for equity, `NFO` and `BFO` for
 derivatives, `NIDX` and `BIDX` for indices - then INDstocks' security id. Each websocket carries instruments of one
 segment only, up to `--per-socket` of them, 1000 by default, because the feed names an instrument by its bare
-security id and only the socket's segment places it. INDstocks publishes no connection limit.
+security id and only the socket's segment places it. INDstocks documents 3 connections per user and 3,000 instruments per connection; a probe on 2026-10-27 carried 20,000 on one socket, but with several open some sockets got no data at all.
 
 **Names.** INDstocks' instrument master sits behind a login and runs to three files, so rather than download it
 here the names are read from `indmoney:instruments:master`, which `bin/indmoney/instruments/daily_feed` fills: an equity or
 index is named by its exchange and `trading_symbol`, a derivative by its `NFO` or `BFO` segment and
 `trading_symbol`. An instrument the master does not hold - or every instrument, when that key is empty - is keyed
 by its token, and a warning says how many.
+
+**Socket size.** Without `--per-socket`, each socket carries the number in the Redis key `indmoney:quotes:per_socket`, which `bin/unified/instruments/allocate_subscriptions` writes from `unified.broker_quote_capacities` along with the subscription set, or 1000 when the key is unset.
 
 **Keys.**
 
@@ -87,6 +89,7 @@ PROJECT_ROOT = run_under_venv(__file__)
 LIVE_KEY = "indmoney:quotes:live"
 INSTRUMENTS_KEY = "indmoney:quotes:instruments"
 SUBSCRIPTIONS_KEY = "indmoney:quotes:subscriptions"
+PER_SOCKET_KEY = "indmoney:quotes:per_socket"
 
 # Every tick is also appended here for bin/indmoney/instruments/store_quotes_to_db, which reads it with a consumer group. The cap
 # bounds Redis memory when the persister is down; ticks trimmed before it returns are not persisted.
@@ -205,8 +208,8 @@ def main():
     """Stream INDmoney quotes into indmoney:quotes:live until stopped."""
     parser = argparse.ArgumentParser(description="Stream INDmoney market quotes into indmoney:quotes:live until stopped.")
     parser.add_argument("--tokens", help="comma separated SEGMENT:TOKEN tokens, for example NSE:2885")
-    parser.add_argument("--per-socket", type=int, default=DEFAULT_INSTRUMENTS_PER_CONNECTION,
-                        help=f"instruments per websocket connection, default {DEFAULT_INSTRUMENTS_PER_CONNECTION}")
+    parser.add_argument("--per-socket", type=int, default=None,
+                        help=f"instruments per websocket connection, default the Redis key {PER_SOCKET_KEY}, or {DEFAULT_INSTRUMENTS_PER_CONNECTION} when it is unset")
     arguments = parser.parse_args()
 
     from stock_brokers.websockets.indmoney import IndmoneyQuotesSocket, IndmoneySession
@@ -215,6 +218,8 @@ def main():
 
     logger = get_logger("indmoney.websocket_quotes")
     cache = get_cache()
+    if arguments.per_socket is None:
+        arguments.per_socket = int(cache.get(PER_SOCKET_KEY) or DEFAULT_INSTRUMENTS_PER_CONNECTION)
 
     if arguments.per_socket < 1:
         logger.error("--per-socket must be at least 1.")
