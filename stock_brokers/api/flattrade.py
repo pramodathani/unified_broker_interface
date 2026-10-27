@@ -15,6 +15,8 @@ class FlattradeAPI(BrokerAPI):
     Flattrade API class
     """
 
+    LOGIN_TIMEOUT_SECONDS = 10
+
     def __init__(self):
         """
         Flattrade API class
@@ -24,7 +26,7 @@ class FlattradeAPI(BrokerAPI):
         try:
             # Noren refuses a dead session inside an HTTP 200, which the request raises nothing for, so the
             # body is checked too: without it a dead token would never lead to a login.
-            details = (self.post(url="https://piconnect.flattrade.in/PiConnectAPI/UserDetails") or {}).get("data")
+            details = (self.post(url="https://piconnect.flattrade.in/PiConnectAPI/UserDetails", timeout=self.LOGIN_TIMEOUT_SECONDS) or {}).get("data")
             if not isinstance(details, dict) or str(details.get("stat", "")).lower() != "ok":
                 raise FlattradeAPIException(code="Not_Ok", message=f"UserDetails refused the session: {str(details)[:200]}")
         except Exception as e:
@@ -36,7 +38,7 @@ class FlattradeAPI(BrokerAPI):
                 "Referer": "https://auth.flattrade.in/",
             }
             
-            response = requests.post("https://auth.flattrade.in/auth/session", headers=headers)
+            response = requests.post("https://auth.flattrade.in/auth/session", headers=headers, timeout=self.LOGIN_TIMEOUT_SECONDS)
             if response.status_code != 200:
                 raise FlattradeAPIException(code=response.status_code, message=response.content.decode("utf-8").strip())
 
@@ -53,7 +55,7 @@ class FlattradeAPI(BrokerAPI):
                 "Override": ""
             }
 
-            response = requests.post("https://auth.flattrade.in/ftauth", json=json_data, headers=headers)
+            response = requests.post("https://auth.flattrade.in/ftauth", json=json_data, headers=headers, timeout=self.LOGIN_TIMEOUT_SECONDS)
             if response.status_code != 200:
                 raise FlattradeAPIException(code=response.status_code, message=response.content.decode("utf-8").strip())
 
@@ -76,12 +78,15 @@ class FlattradeAPI(BrokerAPI):
                 "api_secret": hashlib.sha256((self._settings["api_key"] + code + self._settings['api_secret']).encode('utf-8')).hexdigest()
             }
 
-            response = requests.post("https://authapi.flattrade.in/trade/apitoken", json=api_secret, headers=headers)
+            response = requests.post("https://authapi.flattrade.in/trade/apitoken", json=api_secret, headers=headers, timeout=self.LOGIN_TIMEOUT_SECONDS)
             if response.status_code != 200:
                 raise FlattradeAPIException(code=response.status_code, message=response.content.decode("utf-8").strip())
 
             token_data = response.json()
             token = token_data.get("token", "")
+            if not token:
+                emsg = token_data.get("emsg") or token_data.get("stat") or "no token in the answer"
+                raise FlattradeAPIException(code="Not_Ok", message=f"Flattrade issued no access token: {emsg}")
 
             last_login = {
                 "broker_name": "flattrade",
