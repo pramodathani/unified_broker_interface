@@ -297,7 +297,7 @@ class FyersCandles(BrokerCandles):
                       "cont_flag": "1", "oi_flag": "1"}
 
         try:
-            response = self._api.get(url=HISTORICAL_URL, params=parameters)
+            response = self._api.get(url=HISTORICAL_URL, params=parameters, timeout=self.REQUEST_TIMEOUT_SECONDS)
         except Exception as exception:
             # A session error comes back as CandleAuthenticationError, and the base class logs in
             # once and asks for this window again. See `BrokerCandles._fetch_bars`.

@@ -263,7 +263,8 @@ class NorenCandles(BrokerCandles):
             body = {"sym": f"{exchange}:{trading_symbol}", "from": str(start), "to": str(end)}
 
         try:
-            response = self._api.post(url=f"{self.BASE_URL}/{endpoint}", data=body)
+            response = self._api.post(url=f"{self.BASE_URL}/{endpoint}", data=body,
+                                      timeout=self.REQUEST_TIMEOUT_SECONDS)
         except Exception as exception:
             raise self._classify(exception) from exception
 

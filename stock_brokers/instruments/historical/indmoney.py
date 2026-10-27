@@ -247,7 +247,8 @@ class IndMoneyCandles(BrokerCandles):
 
         try:
             response = self._api.get(url=f"{HISTORICAL_URL}/{self.INTERVALS[interval]}",
-                                     params=parameters)
+                                     params=parameters,
+                                     timeout=self.REQUEST_TIMEOUT_SECONDS)
         except Exception as exception:
             raise self._classify(exception) from exception
 
