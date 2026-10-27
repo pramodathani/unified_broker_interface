@@ -178,6 +178,7 @@ def main():
     arguments = parser.parse_args()
 
     from stock_brokers.websockets.groww import GrowwQuotesSocket, GrowwSession
+    from stock_brokers.api.utilities.session import ensure_session
     from utilities.configurations import get_cache, get_logger
 
     logger = get_logger("groww.websocket_quotes")
@@ -194,6 +195,7 @@ def main():
         return 2
 
     try:
+        ensure_session("groww", logger=logger)
         session = GrowwSession(logger)
     except Exception as exception:
         logger.error(f"Could not log in to Groww: {type(exception).__name__}: {exception}")

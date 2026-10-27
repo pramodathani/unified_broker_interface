@@ -184,6 +184,7 @@ def main():
     arguments = parser.parse_args()
 
     from stock_brokers.websockets.dhan import DhanQuotesSocket, DhanSession
+    from stock_brokers.api.utilities.session import ensure_session
     from utilities.configurations import get_cache, get_logger
 
     logger = get_logger("dhan.websocket_quotes")
@@ -206,6 +207,7 @@ def main():
         return 2
 
     try:
+        ensure_session("dhan", logger=logger)
         session = DhanSession(logger)
     except Exception as exception:
         logger.error(f"Could not log in to Dhan: {type(exception).__name__}: {exception}")

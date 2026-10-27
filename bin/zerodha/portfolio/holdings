@@ -40,11 +40,13 @@ def is_authentication_error(exception):
 def main():
     """Fetch the holdings and write them to zerodha:portfolio:holdings every minute, until interrupted."""
     from stock_brokers.api.zerodha import ZerodhaAPI
+    from stock_brokers.api.utilities.session import ensure_session
     from utilities.configurations import get_cache, get_logger
 
     logger = get_logger("zerodha.holdings")
     cache = get_cache()
     try:
+        ensure_session("zerodha", logger=logger)
         zerodha = ZerodhaAPI()
     except Exception as exception:
         logger.error(f"Could not log in to Zerodha: {type(exception).__name__}: {exception}")

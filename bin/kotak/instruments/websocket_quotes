@@ -247,6 +247,7 @@ class KotakQuotesApplication:
         arguments = self._parse_arguments()
 
         from stock_brokers.websockets.kotak import KotakQuotesSocket, KotakSession
+        from stock_brokers.api.utilities.session import ensure_session
         from utilities.configurations import get_cache, get_logger
 
         self._logger = get_logger("kotak.websocket_quotes")
@@ -262,6 +263,7 @@ class KotakQuotesApplication:
             return 2
 
         try:
+            ensure_session("kotak", logger=logger)
             session = KotakSession(self._logger)
         except Exception as exception:
             self._logger.error(f"Could not log in to Kotak: {type(exception).__name__}: {exception}")

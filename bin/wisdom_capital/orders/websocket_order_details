@@ -450,10 +450,12 @@ class WisdomCapitalOrderUpdatesStore:
 def main():
     """Stream Wisdom Capital order and position updates into Redis until stopped."""
     from stock_brokers.websockets.wisdom_capital import WisdomCapitalInteractiveSession, WisdomCapitalOrderUpdatesSocket
+    from stock_brokers.api.utilities.session import ensure_session
     from utilities.configurations import get_cache, get_logger
 
     logger = get_logger("wisdom_capital.websocket_order_details")
     try:
+        ensure_session("wisdom_capital", logger=logger)
         session = WisdomCapitalInteractiveSession(logger)
     except Exception as exception:
         logger.error(f"Could not log in to Wisdom Capital: {type(exception).__name__}: {exception}")

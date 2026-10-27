@@ -7,8 +7,9 @@ endpoint and only runs the real login flow when that probe fails. A process that
 expiry will keep sending requests against a dead session unless something constructs the API object.
 
 That is what this module is for. The historical candle downloaders call it through `BrokerCandles`
-when they log in, and IND Money's instrument ingester calls it when no usable token is stored. Two
-things make it more than a one line helper.
+when they log in, IND Money's instrument ingester calls it when no usable token is stored, and every
+long-running script under `bin/<broker>/` calls it before it builds its broker class or socket
+session. Two things make it more than a one line helper.
 
 **Only one login at a time.** Kite issues one access token per session and a second login
 invalidates the first. Two processes starting together and both logging in would race, and the

@@ -138,7 +138,9 @@ def main():
     logger = get_logger("fyers.api_trade_details")
     report = PollReporter(logger)
     cache = get_cache()
+    from stock_brokers.api.utilities.session import ensure_session
     try:
+        ensure_session("fyers", logger=logger)
         fyers = start_session(logger)
     except Exception as exception:
         logger.error(f"Could not log in to Fyers: {type(exception).__name__}: {exception}")

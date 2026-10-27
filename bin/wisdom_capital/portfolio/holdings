@@ -49,11 +49,13 @@ def is_authentication_error(exception):
 def main():
     """Fetch the holdings and write them to wisdom_capital:portfolio:holdings every minute, until interrupted."""
     from stock_brokers.api.wisdom_capital import WisdomCapitalAPI
+    from stock_brokers.api.utilities.session import ensure_session
     from utilities.configurations import get_cache, get_logger
 
     logger = get_logger("wisdom_capital.holdings")
     cache = get_cache()
     try:
+        ensure_session("wisdom_capital", logger=logger)
         wisdom_capital = WisdomCapitalAPI()
     except Exception as exception:
         logger.error(f"Could not log in to Wisdom Capital: {type(exception).__name__}: {exception}")

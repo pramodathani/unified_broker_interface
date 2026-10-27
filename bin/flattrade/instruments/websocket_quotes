@@ -198,6 +198,7 @@ def main():
     arguments = parser.parse_args()
 
     from stock_brokers.websockets.flattrade import FlattradeQuotesSocket, FlattradeSession
+    from stock_brokers.api.utilities.session import ensure_session
     from utilities.configurations import get_cache, get_logger
 
     logger = get_logger("flattrade.websocket_quotes")
@@ -215,6 +216,7 @@ def main():
     batches = [tokens[start:start + arguments.per_socket] for start in range(0, len(tokens), arguments.per_socket)]
 
     try:
+        ensure_session("flattrade", logger=logger)
         session = FlattradeSession(logger)
     except Exception as exception:
         logger.error(f"Could not log in to Flattrade: {type(exception).__name__}: {exception}")

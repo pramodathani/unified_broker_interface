@@ -483,9 +483,11 @@ class StoxkartOrderUpdatesApplication:
             int: 0 when stopped, and 1 when a login failed.
         """
         from stock_brokers.websockets.stoxkart import StoxkartOrderSocket, StoxkartSession
+        from stock_brokers.api.utilities.session import ensure_session
 
         logger = get_logger("stoxkart.websocket_order_details")
         try:
+            ensure_session("stoxkart", logger=logger)
             session = StoxkartSession()
         except Exception as error:
             logger.error(f"Could not log in to Stoxkart: {type(error).__name__}: {error}")

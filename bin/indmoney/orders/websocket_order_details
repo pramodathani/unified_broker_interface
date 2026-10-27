@@ -327,10 +327,12 @@ class IndmoneyOrderUpdatesStore:
 def main():
     """Stream INDmoney order updates into indmoney:orders:orders until stopped."""
     from stock_brokers.websockets.indmoney import IndmoneyOrderUpdatesSocket, IndmoneySession
+    from stock_brokers.api.utilities.session import ensure_session
     from utilities.configurations import get_cache, get_logger
 
     logger = get_logger("indmoney.websocket_order_details")
     try:
+        ensure_session("indmoney", logger=logger)
         session = IndmoneySession(logger)
     except Exception as exception:
         logger.error(f"Could not log in to INDmoney: {type(exception).__name__}: {exception}")

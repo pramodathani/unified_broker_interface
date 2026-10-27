@@ -84,11 +84,13 @@ def is_authentication_error(exception):
 def main():
     """Fetch the holdings and write them to shoonya:portfolio:holdings every minute, until interrupted."""
     from stock_brokers.api.shoonya import ShoonyaAPI
+    from stock_brokers.api.utilities.session import ensure_session
     from utilities.configurations import get_cache, get_logger
 
     logger = get_logger("shoonya.holdings")
     cache = get_cache()
     try:
+        ensure_session("shoonya", logger=logger)
         shoonya = ShoonyaAPI()
         confirm_session(shoonya)
     except Exception as exception:
