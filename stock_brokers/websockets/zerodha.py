@@ -212,6 +212,7 @@ class ZerodhaQuotesSocket(BrokerWebsocket):
         Returns:
             None: This method returns nothing.
         """
+        self._note_rate_limit(error)
         if getattr(error, "status_code", None) in AUTHENTICATION_STATUSES:
             self._authentication_rejected = True
         self._logger.error(f"{self.name} error: {error}")
@@ -514,6 +515,7 @@ class ZerodhaOrderUpdatesSocket(BrokerWebsocket):
         Returns:
             None: This method returns nothing.
         """
+        self._note_rate_limit(error)
         if getattr(error, "status_code", None) in AUTHENTICATION_STATUSES:
             self._authentication_rejected = True
         self._logger.error(f"Order updates error: {error}")

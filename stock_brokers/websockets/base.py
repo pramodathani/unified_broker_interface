@@ -7,7 +7,7 @@ This class holds the loop around them, which is the same for every broker:
 
 1. Connect, and block until the connection closes.
 2. A connection that opened and was not refused resets the failure count and the backoff.
-3. A refused handshake, or six failed connects in a row, logs in again once before connecting again.
+3. A refused handshake, or six failed connects in a row, logs in again once before connecting again. A handshake refused with HTTP 429 is a rate limit, not a dead login, so it backs off without counting towards the six.
 4. Still failing after that login, the socket gives up: `gave_up` is set and `run_forever` returns, so the script can exit 1 and let systemd restart it.
 5. Otherwise wait, doubling the wait from 1 second up to 60, and connect again.
 
@@ -30,6 +30,7 @@ class BrokerWebsocket:
     MIN_BACKOFF_SECONDS = 1
     MAX_BACKOFF_SECONDS = 60
     MAX_FAILED_CONNECTS = 6
+    RATE_LIMITED_STATUS = 429
 
     def __init__(self, name, logger):
         """
@@ -49,6 +50,7 @@ class BrokerWebsocket:
         self._websocket_application = None
         self._opened = False
         self._authentication_rejected = False
+        self._rate_limited = False
 
     def close(self):
         """
@@ -74,6 +76,7 @@ class BrokerWebsocket:
         while not self._stop.is_set():
             self._opened = False
             self._authentication_rejected = False
+            self._rate_limited = False
             try:
                 self._connect()
             except Exception as exception:
@@ -85,7 +88,7 @@ class BrokerWebsocket:
                 failed_connects = 0
                 logged_in_again = False
                 backoff = self.MIN_BACKOFF_SECONDS
-            else:
+            elif not self._rate_limited:
                 failed_connects = failed_connects + 1
 
             if self._authentication_rejected or failed_connects >= self.MAX_FAILED_CONNECTS:
@@ -106,6 +109,21 @@ class BrokerWebsocket:
             self._stop.wait(backoff)
             backoff = min(backoff * 2, self.MAX_BACKOFF_SECONDS)
         self._logger.info(f"{self.name} stopped.")
+
+    def _note_rate_limit(self, error):
+        """
+        Remembers that the broker refused this connect with HTTP 429, so the loop backs off without logging in again.
+
+        A subclass calls this from its error handler.
+
+        Args:
+            error (Exception): The error the connection reported, which carries `status_code` when the handshake was refused.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        if getattr(error, "status_code", None) == self.RATE_LIMITED_STATUS:
+            self._rate_limited = True
 
     def _gives_up_after_logging_in_again(self, failed_connects):
         """

@@ -28,7 +28,7 @@ Nine of the ten sockets subclass [`BrokerWebsocket`][stock_brokers.websockets.ba
 
 1. Connect, and block until the connection closes.
 2. A connection that opened and was not refused resets the failure count and the backoff.
-3. A refused handshake, or six failed connects in a row, logs in again once before connecting again.
+3. A refused handshake, or six failed connects in a row, logs in again once before connecting again. A handshake refused with HTTP 429 is a rate limit rather than a dead login, so it backs off without counting towards the six. Dhan answers 429 when one IP opens too many sockets at once, and Kite when an API key opens more than it allows.
 4. If connecting still fails after that login, the socket gives up, so the script can exit 1 and let systemd restart it.
 5. Otherwise the socket waits, doubling the wait from 1 second up to 60, and connects again.
 
