@@ -6,6 +6,10 @@
 #
 # Each download is prefixed with `-`, so one broker's file not arriving does not cost the other nine their mapping -
 # bin/unified/instruments/map skips a broker with no rows stored for the date. Stoxkart is among them: its master is public and needs no login. The mapping's own exit status is the unit's.
+#
+# After the mapping, bin/unified/instruments/allocate_subscriptions divides the day's instruments between the brokers' quote websockets within the
+# limits in unified.broker_quote_capacities, rewrites each broker's <broker>:quotes:subscriptions set and restarts the quote feeds whose set changed.
+# It runs only when the mapping succeeded, and the feeds restart before the markets open at 09:00 IST.
 
 [Unit]
 Description=Daily instrument download and unified mapping
@@ -28,6 +32,7 @@ ExecStart=-%h/Projects/unified_broker_interface/bin/groww/instruments/daily_feed
 ExecStart=-%h/Projects/unified_broker_interface/bin/kotak/instruments/daily_feed
 ExecStart=-%h/Projects/unified_broker_interface/bin/stoxkart/instruments/daily_feed
 ExecStart=%h/Projects/unified_broker_interface/bin/unified/instruments/map
+ExecStart=%h/Projects/unified_broker_interface/bin/unified/instruments/allocate_subscriptions --restart-feeds
 # Ten downloads of up to 120 MB each, then a full mapping of every broker - about three quarters of an hour.
 TimeoutStartSec=3h
 Nice=10

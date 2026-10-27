@@ -1,0 +1,10 @@
+Capacities read: ['dhan', 'zerodha']
+nifty_option can be streamed by: ['dhan']
+reliance can be streamed by: ['dhan', 'zerodha']
+Mapping date 2026-10-27: 2 of 2 live instruments covered, 1 expired
+First write changed: ['dhan', 'zerodha']
+dhan:quotes:subscriptions: ['NSE_FNO:35001']
+zerodha:quotes:subscriptions: ['738561']
+dhan:quotes:per_socket: 5000
+zerodha:quotes:per_socket: 4000
+Second write changed: []

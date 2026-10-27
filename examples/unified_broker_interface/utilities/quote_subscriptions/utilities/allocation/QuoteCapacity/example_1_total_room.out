@@ -1,0 +1,3 @@
+zerodha: 24 sockets x 4000 = 96000, preference 1
+dhan: 10 sockets x 5000 = 50000, preference 3
+groww: 0 sockets x 0 = 0, preference 100

@@ -47,6 +47,7 @@ There is no `pyproject.toml`, no build step and no pytest suite. The project roo
 | Offline candle cache tests | `python -m test_runs.price_cache` |
 | Offline synthetic order book tests | `python -m test_runs.virtual_queue` (the queue estimate and the process that keeps it) |
 | Offline websocket feed tests | `python -m test_runs.websocket_feeds` (every broker's quotes and order sockets against scripted connections; name brokers to run only those, and `--record` rewrites only their lines) |
+| Divide the day's instruments between the brokers' quote websockets | `bin/unified/instruments/allocate_subscriptions` (reads `unified.broker_quote_capacities` and the day's mappings; writes every broker's `<broker>:quotes:subscriptions` and `:per_socket`; `--dry-run` prints without writing, `--restart-feeds` restarts the feeds that changed; `unified-mapping.service` runs it after the mapping) |
 | Run the synthetic limit order book | `bin/unified/orders/virtual_book` (beside the order engine; follows every order the engine holds) |
 | Decide a date's currency and commodity contract sizes | `python -m stock_brokers.instruments.mapping.utilities.contract_sizes --date 2026-09-15` (the daily mapping run does this itself) |
 | Decide which instrument every live derivative is written on | `python -m stock_brokers.instruments.mapping.utilities.underlyings --date 2026-09-28` (the daily mapping run does this itself; `--dry-run` prints the decisions without writing `unified.underlyings`) |
@@ -130,7 +131,7 @@ Seven packages read this way: `api/`, `websockets/`, `instruments/mapping/`, `in
 | `unified_broker_interface/utilities/broker_quotes/` | `BrokerQuoteSource` | Fetching a quote and turning it into a tick |
 | `unified_broker_interface/utilities/broker_orders/` | `BrokerOrders` | `MARKETS`, the place, modify and cancel requests, `MODIFIABLE_FIELDS`, and reading a success answer; the blueprint does every Redis read |
 
-Adding a broker touches many registries (`INGESTERS`, `ADAPTERS`, `MAPPED_BROKERS`, `DOWNLOADERS`, `NORMALIZERS`, `SOURCES`, `API_CLASSES`, `BROKER_ORDER_CLASSES`, `MARGIN_CALCULATOR_CLASSES`, and the `BROKERS` lists inside each `bin/unified/` combiner). `docs/project/adding-a-broker.md` lists them in order. `MAPPED_BROKERS` in `mapping/utilities/segments.py` is a processing order, not an unordered list.
+Adding a broker touches many registries (`INGESTERS`, `ADAPTERS`, `MAPPED_BROKERS`, `DOWNLOADERS`, `NORMALIZERS`, `SOURCES`, `API_CLASSES`, `BROKER_ORDER_CLASSES`, `MARGIN_CALCULATOR_CLASSES`, `QUOTE_SUBSCRIPTION_CLASSES`, and the `BROKERS` lists inside each `bin/unified/` combiner). `docs/project/adding-a-broker.md` lists them in order. `MAPPED_BROKERS` in `mapping/utilities/segments.py` is a processing order, not an unordered list.
 
 ### Choosing a broker for an order
 
@@ -141,6 +142,10 @@ The cost table is held in memory by `BrokerCostTable` in `broker_selection/utili
 The lowest-cost selector also passes over any broker that cannot afford the order. `FundsCheck` in `broker_selection/utilities/funds_check.py` estimates the exchange margin from `unified.margin_rates` and live quotes, multiplies it by the broker's measured surcharge (the `margin_multiplier_*` columns of `unified.broker_order_costs`), and compares it with that broker's free cash in `unified:portfolio:funds`, without calling a broker; a basket hands all its legs to the first leg's placement so the whole strategy is checked, optionally with hedge benefit. The check is off until `MarginRateTable.start` has loaded rows, so the offline suites never see it. The surcharges are measured each weekday morning by `bin/unified/orders/margin_calibration`, through one class per broker in `unified_broker_interface/utilities/margin_calculators/` (Stoxkart has no calculator); like the order engine, it is a `bin/unified/` script that calls brokers, but only their read-only margin endpoints. `docs/architecture/broker-selection.md` has the rules and the broker numbers they were checked against.
 
 A selector reads Redis by queueing commands onto the pipeline the order engine already sends to read the instrument (`read_instrument` in `order_engine/utilities/engine_placement.py`), through `queue_redis_commands`, instead of opening a round trip of its own. `docs/rest-api/orders.md` counts the round trips each one costs.
+
+### Which broker streams each instrument
+
+No broker streams every instrument, and every broker limits its quote sockets, so `bin/unified/instruments/allocate_subscriptions` gives each live instrument of the day's mapping to exactly one broker and writes it into that broker's `<broker>:quotes:subscriptions` set, which its quote script subscribes. The limits and a `preference` order are rows of `unified.broker_quote_capacities`, so the allocator names no broker or number; each broker's subscription spelling is a class in `unified_broker_interface/utilities/quote_subscriptions/`. An instrument only one broker carries always goes to that broker, and expired contracts, which some brokers' masters still list, are left out. The limits were measured live on 2026-10-27, and most differ from the brokers' documentation: several brokers snapshot every instrument they accept but stream updates for far fewer, so a probe must count updates, not acknowledgements. `docs/pipelines/market-data.md` under "Which instruments are subscribed" has the table.
 
 ### Order types and holding
 

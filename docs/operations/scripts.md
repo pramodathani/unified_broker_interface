@@ -298,18 +298,21 @@ It exits 0 when the check ran, 1 when the database cannot be read, and 2 for a b
 | Script | What it does | Reads | Writes |
 |---|---|---|---|
 | `map` | Maps every broker's instrument snapshot onto one shared list, and caches the day's rows | `<broker>.instruments` | TimescaleDB `unified.instruments`, `unified.broker_mappings`; Redis `unified:instruments`, `unified:broker_mappings` |
+| `allocate_subscriptions` | Gives every live instrument of the day's mapping to one broker within each broker's measured quote socket limits, and restarts the feeds whose set changed when `--restart-feeds` is given; `unified-mapping.service` runs it after `map` | `unified.broker_quote_capacities`, `unified.broker_mappings`, `unified.instruments`, `unified:mapping:meta` | Redis `<broker>:quotes:subscriptions`, `<broker>:quotes:per_socket`, `unified:quotes:allocation` |
 | `price_history` | Builds `unified.price_history` and its adjustment factors from the brokers' price tables, in steps | `<broker>.price_history`, Yahoo Finance for the factors | TimescaleDB `unified.price_history` and related tables |
 | `websocket_quotes` | Combines every broker's live ticks into one quote per instrument, choosing one owning broker at a time | the ten `<broker>:quotes:stream` streams, group `unified` | Redis `unified:quotes:live`, `unified:quotes:stream`, `unified:quotes:stats` |
 | `store_quotes_to_db` | Drains the unified quote stream | `unified:quotes:stream` | TimescaleDB `unified.ticks` |
 
-The two jobs in this folder take subcommands and options. The usage lines below are copied from their docstrings.
+The three jobs in this folder take subcommands and options. The usage lines below are copied from their docstrings.
 
 ```bash
 bin/unified/instruments/map                                # every broker, today
 bin/unified/instruments/map dhan kotak                     # only these
 bin/unified/instruments/map --cache-only --date 2026-09-13 # only rewrite the Redis cache
+bin/unified/instruments/allocate_subscriptions --dry-run          # print the decision, write nothing
+bin/unified/instruments/allocate_subscriptions --restart-feeds    # write, then restart the quote feeds that changed
 bin/unified/instruments/price_history daily                # load, corrections, load, factors, verify
 bin/unified/instruments/price_history status               # what the last run did
 ```
 
-`map` exits 2 for a bad argument or a date older than the newest one already mapped. `price_history` exits 2 for a bad argument, an interval not loaded, or no instruments matching `--symbols`.
+`map` exits 2 for a bad argument or a date older than the newest one already mapped. `allocate_subscriptions` exits 1 when the database or Redis cannot be read or a feed fails to restart, and 2 for a bad `--date`. `price_history` exits 2 for a bad argument, an interval not loaded, or no instruments matching `--symbols`.
