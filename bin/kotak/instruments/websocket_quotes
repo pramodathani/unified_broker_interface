@@ -263,7 +263,7 @@ class KotakQuotesApplication:
             return 2
 
         try:
-            ensure_session("kotak", logger=logger)
+            ensure_session("kotak", logger=self._logger)
             session = KotakSession(self._logger)
         except Exception as exception:
             self._logger.error(f"Could not log in to Kotak: {type(exception).__name__}: {exception}")
