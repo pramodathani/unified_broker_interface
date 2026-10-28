@@ -13,6 +13,8 @@ Once the socket opens it sends the `native_batch` authentication message, with t
 Kotak answers with message code 1119 and then 1117, both carrying each exchange's numeric id and price divider, and the first of them makes the socket subscribe every instrument once, with `subscribeDepth` and `ack_symbol`, in one message.
 Kotak checks the session only after that: message code 1120 means it refused the session, and its text, which repeats the session id, is never logged.
 Message code 1109 acknowledges the subscription and maps each `EXCHANGE|TOKEN` to its trading symbol, which names any instrument that had no name; binary frames that arrive before it are held back and decoded after it, so every instrument is named before its first tick.
+Kotak sends about 0.6 data frames per instrument before the acknowledgement, so the socket holds up to two frames per instrument, and at least 1,000, before decoding without it.
+Kotak streams at most 3,000 instruments on one connection and answers each instrument past that with message code 1, which the socket reports once per connection.
 Market data arrives in binary frames, each holding packets laid end to end in little-endian byte order.
 A packet starts with its length in two bytes, then its message code, exchange id, level, auction flag, sequence number and bitmask length, nine bytes in all.
 A market picture, at level 2, 4, 8 or 16, carries the instrument's whole state rather than a change: a fixed body of 135 bytes, then depth rows of 16 bytes, buy side first; `subscribeDepth` sends level 8, with five rows a side.
@@ -57,6 +59,8 @@ AUTHENTICATION_ANSWER_CODES = (
 )
 AUTHENTICATION_REFUSED_CODE = 1120
 SUBSCRIPTION_ACKNOWLEDGEMENT_CODE = 1109
+SUBSCRIPTION_LIMIT_CODE = 1
+INSTRUMENTS_PER_CONNECTION = 3000
 
 PACKET_LENGTH = struct.Struct("<H")
 PACKET_HEADER = struct.Struct("<HHbBBBB")
@@ -78,7 +82,8 @@ NOT_MARKET_PICTURE_CODES = (
 )
 TOUCH_LINE_LEVEL = 4
 DEFAULT_DIVIDER = 100
-MAX_HELD_FRAMES = 1000
+MIN_HELD_FRAMES = 1000
+HELD_FRAMES_PER_INSTRUMENT = 2
 
 EXCHANGE_NAMES = {
     1: "nse_cm",
@@ -466,6 +471,8 @@ class KotakQuotesSocket(BrokerWebsocket):
         self._subscribed = False
         self._acknowledged = False
         self._held_frames = []
+        self._held_frame_limit = max(MIN_HELD_FRAMES, HELD_FRAMES_PER_INSTRUMENT * len(instrument_tokens))
+        self._limit_reported = False
 
     def _gives_up_after_logging_in_again(self, failed_connects):
         """
@@ -524,6 +531,7 @@ class KotakQuotesSocket(BrokerWebsocket):
         self._subscribed = False
         self._acknowledged = False
         self._held_frames = []
+        self._limit_reported = False
         ucc, self._session_id = self._session.feed_credentials()
         if not ucc or not self._session_id:
             self._logger.error(f"{self.name}: no Kotak UCC or session id is stored.")
@@ -565,7 +573,7 @@ class KotakQuotesSocket(BrokerWebsocket):
             self._hand_on_ticks(frame)
             return
         self._held_frames.append(frame)
-        if len(self._held_frames) >= MAX_HELD_FRAMES:
+        if len(self._held_frames) >= self._held_frame_limit:
             self._logger.warning(f"{self.name}: Kotak has not acknowledged the subscription after {len(self._held_frames)} data frames; decoding them without its names.")
             self._release_held_frames()
 
@@ -599,8 +607,26 @@ class KotakQuotesSocket(BrokerWebsocket):
             self._logger.error(f"{self.name}: Kotak refused the session (message code {message_code}).")
             self._authentication_rejected = True
             websocket_connection.close()
+        elif message_code == SUBSCRIPTION_LIMIT_CODE:
+            self._report_limit(message)
         else:
             self._logger.info(f"{self.name} ignored a control message with message code {message_code}.")
+
+    def _report_limit(self, message):
+        """
+        Warns once per connection that Kotak refused the instruments past its per-connection limit, since Kotak repeats the message for every refused instrument.
+
+        Args:
+            message (dict): Kotak's limit message.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        if self._limit_reported:
+            return
+        self._limit_reported = True
+        refused = len(self._instrument_tokens) - INSTRUMENTS_PER_CONNECTION
+        self._logger.warning(f"{self.name}: Kotak answered {message.get('message')!r}; it streams at most {INSTRUMENTS_PER_CONNECTION} instruments per connection, so about {refused} of this socket's {len(self._instrument_tokens)} get no quotes.")
 
     def _subscribe(self, websocket_connection):
         """

@@ -18,6 +18,7 @@ CDE_FO = 3
 MCX_FO = 9
 MARKET_PICTURE_CODE = 7208
 CLOSING_AUCTION_CODE = 104
+LARGE_SOCKET_HELD_FRAMES = 1200
 
 class StubKotakAPI(harness.StubBrokerAPI):
     """A stand-in for `KotakAPI`, whose login carries a session id, the account's host and the market feed's address as Kotak's does.
@@ -394,6 +395,14 @@ class KotakFeedCases:
                 self.run_quotes_with_a_stored_feed_url,
             ),
             (
+                'kotak.quotes.large_socket_holds_until_acknowledged',
+                [
+                    self.large_socket_connection(),
+                ],
+                set(),
+                self.run_quotes_on_a_large_socket,
+            ),
+            (
                 'kotak.quotes.failed_connects_give_up',
                 harness.ConnectionPlan.failed_connects(12),
                 set(),
@@ -533,6 +542,29 @@ class KotakFeedCases:
             ('close', 1000, 'normal closure'),
         ]
 
+    def large_socket_connection(self):
+        """One connection on a socket past Kotak's instrument limit, whose acknowledgement comes after more than 1,000 data frames.
+
+        The held frames carry closing auction packets, which give no ticks, so only the one market picture after them is written.
+
+        Returns:
+            list: The scripted steps.
+        """
+        steps = [
+            ('open',),
+            ('message', self.messages.authentication_answer(1119)),
+        ]
+        auction = self.messages.packet(CLOSING_AUCTION_CODE, NSE_CM, 8, struct.pack('<IIqq', 11536, 385000, 100, 0) + bytes(150))
+        for _ in range(LARGE_SOCKET_HELD_FRAMES):
+            steps.append(('message', auction))
+        steps.append(('message', self.messages.market_picture(NSE_CM, 2885, 290000, 289000, [], [])))
+        limit_message = json.dumps({'message_code': 1, 'message': 'Subscription limit reached'})
+        steps.append(('message', limit_message))
+        steps.append(('message', limit_message))
+        steps.append(('message', self.messages.acknowledgement({'nse_cm|2885': 'RELIANCE-EQ'})))
+        steps.append(('close', 1000, 'normal closure'))
+        return steps
+
     def every_order_message_connection(self):
         """One connection carrying every kind of message the order decoder handles.
 
@@ -582,6 +614,34 @@ class KotakFeedCases:
         return {
             'gave_up': socket.gave_up,
             'names': names,
+        }
+
+    def run_quotes_on_a_large_socket(self, context):
+        """Runs a quotes socket of two instruments more than Kotak streams on one connection, none of them named.
+
+        Args:
+            context (harness.ScenarioContext): The scenario being run.
+
+        Returns:
+            dict: Whether the socket gave up, the names the socket learned, and how many instruments it subscribed.
+        """
+        instrument_tokens = [
+            'nse_cm|2885',
+        ]
+        for token in range(1, kotak_websockets.INSTRUMENTS_PER_CONNECTION + 2):
+            instrument_tokens.append(f'bse_cm|{token}')
+        names = {}
+        try:
+            socket = self.build_quotes_socket(context, instrument_tokens, names)
+        except RuntimeError as error:
+            return {
+                'build_error': str(error),
+            }
+        socket.run_forever()
+        return {
+            'gave_up': socket.gave_up,
+            'names': names,
+            'instruments': len(instrument_tokens),
         }
 
     def run_quotes_without_a_session_id(self, context):

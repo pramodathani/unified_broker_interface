@@ -212,6 +212,8 @@ Each tab below describes one broker from its code: how it logs in (from `stock_b
     - Kotak checks the session only after the feed has accepted the subscription and started sending data: message code 1120, which repeats the session id, means it refused the session, so its text is never logged.
     - On the SFeed feed every MCX quantity is in lots, as at Zerodha, whereas the HSM feed sent lots times Kotak's own lot size.
     - One quote socket carries at most 3,000 instruments, the most Kotak's SDK allows on one connection. On 2026-10-28, 45 connections of 3,000 streamed together with no refusal, and production ran 37 of them.
+    - Kotak answers each instrument past 3,000 on a connection with message code 1, "Subscription limit reached", and the socket logs that once per connection with the number refused.
+    - Kotak sends about 0.6 data frames per instrument before it acknowledges a subscription, so a socket holds up to two frames per instrument, and at least 1,000, waiting for the acknowledgement's names.
     - Its instrument files sit under a URL stamped with the day's date, so a missed download can never be fetched later.
     - It is one of four brokers whose order websocket also carries positions. It has no candle downloader.
 
