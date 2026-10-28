@@ -435,6 +435,25 @@ class KotakFeedCases:
                 self.run_orders,
             ),
             (
+                'kotak.orders.dropped_connection_is_a_warning',
+                [
+                    [
+                        ('open',),
+                        ('message', json.dumps({'ak': 'ok', 'type': 'cn', 'task': 'cn', 'msg': 'connected'})),
+                        ('error', harness.FakeWebsocketConnectionClosedError('Connection to remote host was lost.')),
+                        ('close', None, None),
+                    ],
+                    [
+                        ('open',),
+                        ('message', json.dumps({'ak': 'ok', 'type': 'cn', 'task': 'cn', 'msg': 'connected'})),
+                        ('error', harness.FakeWebsocketError('something else failed')),
+                        ('close', 1000, 'normal closure'),
+                    ],
+                ],
+                set(),
+                self.run_orders,
+            ),
+            (
                 'kotak.orders.refusal_drops_the_frame',
                 [
                     [

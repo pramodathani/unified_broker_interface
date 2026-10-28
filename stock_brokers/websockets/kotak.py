@@ -28,6 +28,7 @@ The quote socket gives up only after six more failed connects, not on the first 
 After connecting it sends Kotak's connection frame, a raw unquoted string that is deliberately not JSON: `{type:cn,Authorization:<access token>,Sid:<session id>,src:WEB}`.
 Kotak acknowledges it with `{"ak":"ok","type":"cn",...}` or refuses it with `{"ak":"nk","type":"failed to connect","msg":...}`; a refusal discards whatever else the same message carried.
 From then on the connection carries `{"type": "order", "data": {...}}` and `{"type": "position", "data": {...}}` messages with Kotak's abbreviated fields.
+Kotak closes every order updates connection without a close frame several times an hour, all of them within about a minute of each other, so a closed connection is logged as a warning and the socket reconnects; a reconnect that keeps failing is still an error.
 
 Neither socket writes Redis.
 The quotes socket hands names to `on_name` and each data frame's ticks to `on_ticks`, and the order socket hands each message's orders and positions to `on_updates`; the scripts in `bin/kotak/` do the writing.
@@ -771,7 +772,7 @@ class KotakOrderUpdatesSocket(BrokerWebsocket):
 
     def _on_error(self, websocket_connection, error):
         """
-        Reports an error.
+        Reports an error, and a connection Kotak closed without a close frame as a warning, because Kotak drops every order updates connection in waves and the socket reconnects at once.
 
         Args:
             websocket_connection (websocket.WebSocketApp): The connection that failed.
@@ -780,6 +781,11 @@ class KotakOrderUpdatesSocket(BrokerWebsocket):
         Returns:
             None: This method returns nothing.
         """
+        import websocket
+
+        if isinstance(error, websocket.WebSocketConnectionClosedException):
+            self._logger.warning(f"Kotak closed the order updates connection ({error}); reconnecting.")
+            return
         self._logger.error(f"Order updates error: {error}")
 
     def _on_message(self, websocket_connection, message):

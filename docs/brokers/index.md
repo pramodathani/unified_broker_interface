@@ -216,6 +216,7 @@ Each tab below describes one broker from its code: how it logs in (from `stock_b
     - Kotak sends about 0.6 data frames per instrument before it acknowledges a subscription, so a socket holds up to two frames per instrument, and at least 1,000, waiting for the acknowledgement's names.
     - Its instrument files sit under a URL stamped with the day's date, so a missed download can never be fetched later.
     - It is one of four brokers whose order websocket also carries positions. It has no candle downloader.
+    - Kotak closes every order updates connection without a close frame several times an hour, all of them within about a minute of each other, whatever the ping interval. The socket logs this as a warning and reconnects within a second, and `kotak-orders@api_order_details` polls the order book beside it.
 
     **Files.** `stock_brokers/api/kotak.py`, `stock_brokers/websockets/kotak.py`, `stock_brokers/instruments/kotak.py`, `stock_brokers/instruments/mapping/kotak.py` with `rules/kotak.yaml`, `stock_brokers/instruments/ticks/kotak.py`, `unified_broker_interface/utilities/broker_quotes/kotak.py`, `unified_broker_interface/utilities/broker_orders/kotak.py`, `bin/kotak/`, `services/kotak/`.
 
