@@ -298,7 +298,7 @@ def apply_table(connect, logger):
 def main():
     """Persist Dhan ticks from dhan:quotes:stream into dhan.ticks until stopped."""
     parser = argparse.ArgumentParser(description="Persist Dhan ticks from dhan:quotes:stream into dhan.ticks.")
-    parser.add_argument("--batch-size", type=int, default=500, help="most ticks written in one COPY, default 500")
+    parser.add_argument("--batch-size", type=int, default=10000, help="most ticks written in one COPY, default 10000")
     parser.add_argument("--flush-interval", type=float, default=1.0,
                         help="longest a tick waits before its batch is written, in seconds, default 1")
     arguments = parser.parse_args()
