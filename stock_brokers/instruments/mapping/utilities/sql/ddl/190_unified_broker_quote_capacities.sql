@@ -14,7 +14,7 @@ INSERT INTO unified.broker_quote_capacities (
 )
 VALUES
     ('dhan', 10, 5000, DATE '2026-10-27'),
-    ('flattrade', 1, 100, DATE '2026-10-27'),
+    ('flattrade', 0, 0, NULL),
     ('fyers', 1, 100, DATE '2026-10-27'),
     ('groww', 0, 0, NULL),
     ('indmoney', 1, 3000, DATE '2026-10-27'),

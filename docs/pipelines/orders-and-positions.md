@@ -168,8 +168,8 @@ The persisters acknowledge an entry only after its batch is committed, so a rest
 !!! danger "Updates past the stream cap are lost"
     If a persister stays stopped long enough for its stream to pass the cap, the trimmed updates never reach the database. They are counted as skipped when their pending ids come back empty.
 
-!!! note "Flattrade's order websocket is not enabled"
-    Flattrade permits one websocket per session and the quote feed holds it, so `services/flattrade/flattrade.target` leaves `flattrade-orders@websocket_order_details.service` out. Flattrade's orders come from the poller alone.
+!!! note "Flattrade's one websocket carries order updates"
+    Flattrade permits one websocket per session. Since 2026-10-28 `flattrade-orders@websocket_order_details.service` holds it, and `services/flattrade/flattrade.target` leaves the quote feed out. Fills arrive on the same socket as `om` order updates, and the order and trade book pollers keep running beside it.
 
 ## The unified layer
 

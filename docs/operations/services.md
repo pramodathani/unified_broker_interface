@@ -164,12 +164,11 @@ systemctl --user enable --now zerodha.target zerodha-login.timer \
 
 === "Flattrade"
 
-    Flattrade leaves out the order update socket. Its target file says that Flattrade permits one websocket per session and the quote feed holds it, so running `flattrade-orders@websocket_order_details.service` beside the quote feed would knock one of them off.
+    Flattrade leaves out the quote feed. Its target file says that Flattrade permits one websocket per session and the order update feed holds it, so running `flattrade-instruments@websocket_quotes.service` beside it would knock one of them off.
 
     ```bash
     systemctl --user enable --now flattrade.target flattrade-login.timer \
-        flattrade-instruments@websocket_quotes.service flattrade-instruments@store_quotes_to_db.service \
-        flattrade-orders@store_orders_to_db.service flattrade-orders@api_order_details.service flattrade-orders@api_trade_details.service \
+        flattrade-orders@websocket_order_details.service flattrade-orders@store_orders_to_db.service flattrade-orders@api_order_details.service flattrade-orders@api_trade_details.service \
         flattrade-portfolio@positions.service flattrade-portfolio@holdings.service flattrade-portfolio@funds.service \
         flattrade-user@details.service \
         flattrade-historical-prices.service

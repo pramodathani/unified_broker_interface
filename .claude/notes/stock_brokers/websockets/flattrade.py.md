@@ -4,9 +4,9 @@
 
 The classes were moved on 2026-09-25 out of `bin/flattrade/instruments/websocket_quotes` (`FlattradeSession`, `QuotesSocket` and the helpers `number`, `trade_time` and `build_tick`) and `bin/flattrade/orders/websocket_order_details` (`OrderUpdatesSocket`). The offline recording in `test_runs/websocket_feeds/` reproduces every tick, name and order write.
 
-## Why the order socket was moved although it is not run
+## Which socket runs
 
-Flattrade allows one websocket per session, so `flattrade.target` leaves the order updates unit out and Flattrade's orders come from the poller alone. The script is still kept working for the day that limit changes, so it was moved and recorded like every other broker's.
+Flattrade allows one websocket per session. Until 2026-10-28 `flattrade.target` left the order updates unit out and Flattrade's orders came from the poller alone. On 2026-10-27 at 12:56 both units were restarted by hand to test the move to `PiConnectWSAPI`, which started the order socket too; the new address enforces the one-socket rule, so each socket's connect closed the other with code 1000, 331 times each in the 2026-10-28 session, where the old address had tolerated two. On 2026-10-28 the user chose the order socket: `flattrade.target` now leaves the quote feed out, and `unified.broker_quote_capacities` gives Flattrade no quote sockets. The quotes socket class is kept working and recorded for the day that limit changes.
 
 ## Why the session is confirmed after every login
 

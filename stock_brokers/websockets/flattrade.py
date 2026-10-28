@@ -2,7 +2,7 @@
 Flattrade's two websockets on the Noren platform: the market feed and the account's order updates.
 
 Both connect to `wss://piconnect.flattrade.in/PiConnectWSAPI/`, a separate connection each.
-Flattrade permits only one websocket per session, so in production the order updates socket is not run and orders come from the poller alone.
+Flattrade permits only one websocket per session, so in production the order updates socket runs and the quotes socket does not; Flattrade streams no quotes.
 
 **The login.**
 `FlattradeSession` holds the `FlattradeAPI` both sockets read their credentials from, afresh on every connect, so a login made by any process is picked up.

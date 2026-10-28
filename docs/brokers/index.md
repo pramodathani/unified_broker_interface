@@ -38,7 +38,7 @@ The second table covers the classes in the REST API's packages, which decide whe
 
 A REST quote source is a registered class in `SOURCES` in `unified_broker_interface/utilities/broker_quotes/utilities/service.py`, used when no fresh live quote is cached. An order placement class is a subclass of [`BrokerOrders`][unified_broker_interface.utilities.broker_orders.base.BrokerOrders] in `unified_broker_interface/utilities/broker_orders/`. The modify fields are each class's `MODIFIABLE_FIELDS`; a field outside that list is refused, and a broker with an empty list would be answered with HTTP 501.
 
-[^flattrade-ws]: The script exists, but `services/flattrade/flattrade.target` leaves it out, because Flattrade permits one websocket per session and the quote feed holds it.
+[^flattrade-ws]: Flattrade permits one websocket per session, and since 2026-10-28 the order updates socket holds it, so `services/flattrade/flattrade.target` leaves the quote feed out and Flattrade streams no quotes.
 [^kotak-profile]: Kotak has no profile endpoint. `KotakAPI` writes the profile to `kotak:user:details` itself at every login, from the login response.
 [^quote-held]: A module exists (`fyers.py`, `groww.py`), but it is not registered. The Fyers module's field mapping is unverified because every probe met Fyers' request limit, and the Groww account is not entitled to live data and is refused with HTTP 403.
 
@@ -132,7 +132,7 @@ Each tab below describes one broker from its code: how it logs in (from `stock_b
 
     **Peculiarities.**
 
-    - Flattrade permits only one websocket per session, so in production the order updates socket is not run and orders come from the poller alone.
+    - Flattrade permits only one websocket per session, so in production the order updates socket runs and the quote socket does not. Two sockets on one session close each other with code 1000 within seconds; on 2026-10-28 that happened 331 times during market hours.
     - Noren also accepts a `c` connect frame but answers it `NOT_OK` for a good token, which looks like an expired session and is not one.
     - Noren's heartbeat `{"t":"h"}` is sent every three seconds, because a plain websocket ping is not enough.
     - Flattrade shares `NorenCandles` with Shoonya for candles, `NorenOrders` for orders and `NorenQuoteSource` for REST quotes. Its candle downloader runs at 10 requests a second, ten times Shoonya's.
