@@ -158,7 +158,8 @@ The unified quote combiner, the REST API and the price history job write these k
 | `unified:quotes:fetched` | hash | The REST API | The REST API | Quotes fetched from a broker when no fresh one was cached; each field expires after two days |
 | `unified:quotes:stats` | string | `bin/unified/instruments/websocket_quotes` | People | Counts: received, unresolved, out_of_session, not_owner, no_price, duplicate, written |
 | `unified:quotes:unresolved` | hash | `bin/unified/instruments/websocket_quotes` | People | A count per `broker:token:reason` that did not resolve |
-| `unified:prices:last_run` | string | `bin/unified/instruments/price_history` | The REST API's candle cache | What the last run did and when it finished |
+| `unified:prices:last_run` | string | `bin/unified/instruments/price_history` | The REST API's candle cache | What the last run did and when it finished; a `verify` run is not recorded here |
+| `unified:prices:last_verify` | string | `bin/unified/instruments/price_history verify` | People, through `price_history status` | What the last check found: the names of failing checks, and when it finished |
 | `unified:prices:cache:<instrument_id>:<interval>:<basis>:<known_as_of>` | string | The REST API | The REST API | One candle series already read from the database; `<known_as_of>` is `latest` when not given; expires after a day |
 
 ### Orders and portfolio

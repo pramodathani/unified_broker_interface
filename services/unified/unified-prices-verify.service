@@ -1,0 +1,25 @@
+# The nightly check of the unified price history: bin/unified/instruments/price_history verify, which runs every check
+# against unified.price_history, including the known corporate action cases, and writes its outcome to
+# unified:prices:last_verify. A failing check fails the unit. It reads only, but its comparisons read whole tables with
+# parallel workers, so it runs at midnight rather than in the morning job, where it kept the database disk busy into
+# market hours. Driven by unified-prices-verify.timer.
+#
+#     systemctl --user start unified-prices-verify    # run it now
+#     bin/unified/instruments/price_history status    # the last run and the last verify
+
+[Unit]
+Description=Nightly unified price history check
+PartOf=unified.target
+# If the morning price job is somehow still running at midnight, the check waits for it rather than reading half-loaded bars.
+After=unified-prices.service
+
+[Service]
+Type=oneshot
+Environment=PYTHONUNBUFFERED=1
+SyslogIdentifier=unified-prices-verify
+ExecStart=%h/Projects/unified_broker_interface/bin/unified/instruments/price_history verify
+# The verify step alone took 1 hour 23 minutes on 2026-10-26.
+TimeoutStartSec=4h
+Nice=10
+IOSchedulingClass=idle
+CPUWeight=20

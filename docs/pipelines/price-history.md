@@ -14,7 +14,10 @@ flowchart LR
     end
     W --> PH[("#lt;broker#gt;.price_history")]
     subgraph Unified["bin/unified/instruments/price_history daily<br/>08:30 IST, Monday to Saturday"]
-        L["load"] --> C["corrections"] --> L2["load again"] --> FA["factors"] --> V["verify"]
+        L["load"] --> C["corrections"] --> L2["load again"] --> FA["factors"]
+    end
+    subgraph Night["bin/unified/instruments/price_history verify<br/>00:00 IST, Tuesday to Sunday"]
+        V["verify"]
     end
     PH --> L
     MAP[("unified.instruments<br/>unified.broker_mappings")] --> L
@@ -23,6 +26,7 @@ flowchart LR
     C --> COR[("unified.price_history_corrections")]
     FA --> AF[("unified.adjustment_factors")]
     UPH --> VIEW["unified.price_history_adjusted<br/>unified.adjusted_bars()"]
+    UPH --> V
     AF --> VIEW
     VIEW --> REST["GET /api/instruments/prices"]
 ```
@@ -131,7 +135,7 @@ Most downloaders log in through the shared cross-process lock `ensure_session` i
 
 ### Subcommands
 
-The table below lists the subcommands. Each run writes its outcome to the Redis key `unified:prices:last_run`.
+The table below lists the subcommands. Each run writes its outcome to the Redis key `unified:prices:last_run`, except `verify`, which writes to `unified:prices:last_verify`. `verify` changes no bars, and the REST API's candle cache rebuilds every entry when `unified:prices:last_run` changes, so a check must not touch that key.
 
 | Subcommand | What it does | Writes |
 |---|---|---|
@@ -141,9 +145,11 @@ The table below lists the subcommands. Each run writes its outcome to the Redis 
 | `verify` | Runs the checks, including known corporate action cases, and fails when any check fails | nothing |
 | `sources` | Resolves every broker series and reports how, writing nothing | nothing |
 | `status` | Prints the last run and what is stored | nothing |
-| `daily` | Runs `load`, `corrections`, `load` again, `factors --stale-days 14` and `verify`; a failed `verify` is reported without failing the job | all of the above |
+| `daily` | Runs `load`, `corrections`, `load` again and `factors --stale-days 14`; a failed step ends the job | all of the above except `verify` |
 
 `unified-prices.service` runs `daily` from `unified-prices.timer` at 08:30 IST, Monday to Saturday. The service is ordered after `unified-mapping.service`, so when the 07:45 instrument job runs late, the price job waits for it and loads against the day's mapping.
+
+`unified-prices-verify.service` runs `verify` from `unified-prices-verify.timer` at 00:00 IST, Tuesday to Sunday, the midnight after each morning job, and fails when a check fails. The checks used to be the morning job's last step, but the job takes three hours or more, so they ran into market hours. On 2026-10-28 their comparison of whole tables kept the database disk so busy that the live tick writers fell behind and lost ticks, so they now run when every market is closed.
 
 ### Which broker supplies which instrument
 

@@ -20,6 +20,7 @@ The chart below shows one weekday from 06:00 to midnight IST. Blue bars and poin
       {"order": 5, "row": "Unified price history (Mon to Sat)", "kind": "UBI job or cut-off", "start": "2026-09-28 08:30", "end": null, "source": "unified-prices.timer"},
       {"order": 5.5, "row": "Margin calibration (Mon to Fri)", "kind": "UBI job or cut-off", "start": "2026-09-28 09:30", "end": null, "source": "unified-margin-calibration.timer"},
       {"order": 5.6, "row": "Execution cost measurement (Mon to Fri)", "kind": "UBI job or cut-off", "start": "2026-09-28 23:50", "end": null, "source": "unified-execution-costs.timer"},
+      {"order": 5.7, "row": "Unified price history check (Tue to Sun)", "kind": "UBI job or cut-off", "start": "2026-09-28 23:59", "end": null, "source": "unified-prices-verify.timer, 00:00 the next day"},
       {"order": 6, "row": "NSE and BSE equity", "kind": "Trading session", "start": "2026-09-28 09:00", "end": "2026-09-28 09:15", "source": "Pre-open, sessions.py"},
       {"order": 6, "row": "NSE and BSE equity", "kind": "Trading session", "start": "2026-09-28 09:15", "end": "2026-09-28 15:30", "source": "Continuous session, sessions.py"},
       {"order": 7, "row": "Currency derivatives", "kind": "Trading session", "start": "2026-09-28 09:00", "end": "2026-09-28 17:00", "source": "sessions.py"},
@@ -94,6 +95,7 @@ The same facts are listed in the table below, with the file each one comes from.
 | 09:00 to 17:00, 17:00 to 23:30 | Commodity derivatives on MCX (and the NSE and BSE commodity segments) trade a morning and an evening session; the evening runs to 23:55 while the United States is on standard time | Trading days | `COMMODITY_SESSION` |
 | 10:00 to 17:00, 17:00 to 21:00 | NCDEX morning and evening sessions | Trading days | `NCDEX_SESSION` |
 | 23:50 | `unified-execution-costs.service` works out what every filled order leg of today and yesterday cost beyond brokerage and writes `unified.order_execution_costs`, then writes each broker's latency figures to `unified.broker_order_costs` | Monday to Friday | `OnCalendar=Mon..Fri 23:50 Asia/Kolkata`, `Persistent=true` |
+| 00:00 | `unified-prices-verify.service` runs `bin/unified/instruments/price_history verify`, the checks of the morning's price history, after every market has closed | Tuesday to Sunday | `OnCalendar=Tue..Sun 00:00 Asia/Kolkata`, `Persistent=false` |
 | Every minute | `databases.service` starts any stopped database container | Always | `databases.timer`, `OnUnitInactiveSec=1min` |
 
 Two of these times deserve a closer look. The timers name `Asia/Kolkata` explicitly, so they keep IST even if the machine's time zone changes. The token renewal time is compared with `datetime.now()`, which is the machine's local clock, so it matches IST only when the machine runs on India time.
@@ -125,6 +127,7 @@ The reasons come from the comments in the unit files:
 2. The login timers set `Persistent=false`. A machine that was off at 07:00 does not catch up, because the first script to find its token refused logs in by itself.
 3. The mapping timer sets `Persistent=true`. The brokers publish only today's instrument file, so a missed snapshot can never be fetched later, and a machine that was off at 07:45 runs the job as soon as it starts.
 4. The price history job runs at 08:30, after the night's candle downloads and the 07:45 mapping. It says `After=unified-mapping.service`, so if the mapping runs late, the price job waits for it. It also runs on Saturday to pick up Friday's last bars and the week's corporate actions.
+5. The price history's checks run at midnight, not in the morning job. Until 2026-10-28 they were the job's last step, and because the job takes three hours or more they ran into market hours. On 2026-10-28 their comparison of whole tables, with ten parallel workers and temporary files, made the database disk queue about 400 writes and each commit wait 1 to 2.6 seconds, so the Zerodha and Kotak tick writers fell behind and lost ticks. At midnight every market is closed. The timer sets `Persistent=false`, so a missed midnight is skipped rather than run at boot, which could again be during market hours.
 
 ## What runs all day
 

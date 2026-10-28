@@ -1,5 +1,5 @@
-# The daily unified price history update: bin/unified/instruments/price_history daily, which runs load, corrections, load,
-# factors --stale-days 14 and verify, with a failed verify reported but not fatal. Driven by unified-prices.timer.
+# The daily unified price history update: bin/unified/instruments/price_history daily, which runs load, corrections, load
+# and factors --stale-days 14. Its check, verify, runs at midnight from unified-prices-verify.service. Driven by unified-prices.timer.
 #
 #     systemctl --user start unified-prices           # run it now
 #     bin/unified/instruments/price_history status
