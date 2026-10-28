@@ -1,0 +1,26 @@
+Stand-in login number 1
+Connecting to wss://sfeed.kotaksecurities.com/apifeed
+Sent: {"user": "ABCD1", "auth": "kotak-sid-1", "format": "native_batch", "source": "NEOTRADEAPI", "platform": "Web", "version": "1.2.3", "sdk_version": 2, "sdk_date": "2026-08-07T09:41:17.667Z", "conn_req_time": 1793159100000, "sessionValidation": false}
+INFO socket_0 opened. Authenticating.
+Kotak sends message code 1119
+Sent: {"event": "subscribeDepth", "inputtoken": "nse_cm|2885,nse_cm|1594", "ack_symbol": true}
+INFO socket_0 authenticated and subscribed to 2 instrument(s) with depth.
+Kotak sends message code 1117
+Kotak sends a binary frame of 608 bytes
+Kotak sends message code 1109
+Name learned: nse_cm|1594 is INFY-EQ
+Ticks handed on: 2
+  RELIANCE-EQ (nse_cm|2885) in full mode: last_price=1198.45 volume=1204500 change=0.1881
+    best bid={'quantity': 100, 'price': 1198.4, 'orders': 3} best offer={'quantity': 200, 'price': 1198.5, 'orders': 4} levels=5
+  INFY-EQ (nse_cm|1594) in full mode: last_price=1524.1 volume=830200 change=0.349
+    best bid={'quantity': 100, 'price': 1524.05, 'orders': 3} best offer={'quantity': 200, 'price': 1524.15, 'orders': 4} levels=5
+Kotak sends a binary frame of 912 bytes
+Ticks handed on: 2
+  INFY-EQ (nse_cm|1594) in full mode: last_price=1524.35 volume=831000 change=0.3654
+    best bid={'quantity': 100, 'price': 1524.3, 'orders': 3} best offer={'quantity': 200, 'price': 1524.4, 'orders': 4} levels=5
+  RELIANCE-EQ (nse_cm|2885) in full mode: last_price=1198.5 volume=1205000 change=0.1923
+    best bid={'quantity': 100, 'price': 1198.45, 'orders': 3} best offer={'quantity': 200, 'price': 1198.55, 'orders': 4} levels=5
+INFO socket_0 closed with status 1000: normal closure
+INFO socket_0 stopped.
+Gave up: False
+Names now: {'nse_cm|2885': 'RELIANCE-EQ', 'nse_cm|1594': 'INFY-EQ'}

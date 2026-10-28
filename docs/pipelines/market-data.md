@@ -28,37 +28,44 @@ Nine of the ten sockets subclass [`BrokerWebsocket`][stock_brokers.websockets.ba
 
 1. Connect, and block until the connection closes.
 2. A connection that opened and was not refused resets the failure count and the backoff.
-3. A refused handshake, or six failed connects in a row, logs in again once before connecting again.
+3. A refused handshake, or six failed connects in a row, logs in again once before connecting again. A handshake refused with HTTP 429 is a rate limit rather than a dead login, so it backs off without counting towards the six. Dhan answers 429 when one IP opens too many sockets at once, and Kite when an API key opens more than it allows.
 4. If connecting still fails after that login, the socket gives up, so the script can exit 1 and let systemd restart it.
 5. Otherwise the socket waits, doubling the wait from 1 second up to 60, and connects again.
 
 ### Which instruments are subscribed
 
-Nine brokers subscribe to whatever is in a Redis set named `<broker>:quotes:subscriptions`, or to the `--tokens` argument when it is given. Zerodha is different: with no `--tokens`, it subscribes to every instrument in that day's `zerodha:instruments:master`, which held 112,657 instruments on 2026-09-16. The table below shows how each broker spells a subscription and how many instruments one connection carries.
+Every broker's script subscribes to the members of a Redis set named `<broker>:quotes:subscriptions`, or to the `--tokens` argument when it is given. Zerodha falls back to the whole of that day's `zerodha:instruments:master` only when its set is empty. The sets are written by `bin/unified/instruments/allocate_subscriptions`, which `unified-mapping.service` runs straight after the day's mapping and which then restarts every feed whose set changed. No broker streams every instrument, and every broker limits how many sockets it accepts and how many instruments each one carries, so the allocator divides the day's instruments between them.
 
-| Broker | Instruments come from | One member looks like | Instruments per connection |
-|---|---|---|---|
-| Dhan | `dhan:quotes:subscriptions` | `NSE_EQ:2885` | up to 5,000 (default 5,000); Dhan allows 5 connections per user |
-| Flattrade | `flattrade:quotes:subscriptions` | `NSE\|2885` | default 1,000 |
-| Fyers | `fyers:quotes:subscriptions` | `NSE:SBIN-EQ` | up to 5,000 (default 5,000) |
-| Groww | `groww:quotes:subscriptions` | `NSE\|CASH\|2885` | default 1,000; commodity tokens are skipped |
-| INDmoney | `indmoney:quotes:subscriptions` | `NSE:2885` | default 1,000, one segment per socket |
-| Kotak | `kotak:quotes:subscriptions` | `nse_cm\|11536` | 100, the default and the maximum |
-| Shoonya | `shoonya:quotes:subscriptions` | `NSE\|2885` | default 1,000 |
-| Stoxkart | `stoxkart:quotes:subscriptions` | `NSE:760946` | no per-socket option |
-| Wisdom Capital | `wisdom_capital:quotes:subscriptions` | `1:2885` (XTS segment number, then instrument id) | default 1,000 |
-| Zerodha | today's `zerodha:instruments:master` | Kite instrument token `738561` | split across `--sockets` sockets, 24 by default |
+The allocator reads those limits from the table `unified.broker_quote_capacities`, one row per broker, and gives every live instrument of the mapping date to exactly one broker by these rules:
 
-To add an instrument to a set-driven feed, add a member to its set and restart the script. For example, the Flattrade script's own docstring gives this command:
+1. An instrument whose expiry date is before the mapping date is left out. Some brokers' masters still list expired contracts: on 2026-10-27, 277,956 of the 540,627 mapped instruments had expired, 253,795 of them listed by Stoxkart alone.
+2. A broker counts as a carrier of an instrument only when its own tick normalizer reads the subscription member back to the same token and segment, so a broker never streams ticks the combiner cannot place.
+3. Instruments with fewer carriers are allocated first, so an instrument only one broker carries always gets that broker's room before an instrument with alternatives can take it. After that come securities, then futures, then options, nearer expiries first.
+4. An instrument with several carriers goes to the one with room whose `preference` in the table is lowest, then to the one with the most room left.
+
+A broker with 0 sockets in the table, as Groww has while its login fails, is left out and its set is not touched. The allocator also writes `<broker>:quotes:per_socket`, which each script uses as its socket size when no `--per-socket` (Zerodha: `--sockets`) is given, and a summary as JSON in `unified:quotes:allocation`.
+
+The table below shows the capacities measured against the live brokers on 2026-10-27, and Kotak's on 2026-10-28, with each production feed stopped while it was probed and then checked again in production. A broker documents a limit that is not always what it enforces, and several brokers send one snapshot for every instrument they accept but stream updates for far fewer, so each figure is the number that kept streaming updates.
+
+| Broker | One member looks like | Sockets × instruments | Preference | What was measured |
+|---|---|---|---:|---|
+| Zerodha | Kite instrument token `738561` | 24 × 4,000 | 1 | Kite documents 3 × 3,000; 24 sockets streamed and the 25th onwards got HTTP 429 |
+| Kotak | `nse_cm\|11536` | 45 × 3,000 | 2 | measured on 2026-10-28: 45 connections of 3,000 streamed with no refusal or slowdown, and updates do not thin out further along a connection |
+| Fyers | `NSE:SBIN-EQ` | 1 × 100 | 2 | Fyers counts symbols per user: 100 on its Standard plan, 5,000 on Prime; about 100 kept updating |
+| Dhan | `NSE_EQ:2885` | 10 × 5,000 | 3 | only the first 5,000 instruments on a connection update; twenty sockets opened at once blocked the IP |
+| Flattrade | `NSE\|2885` | 1 × 100 | 4 | everything past the hundredth is ignored, and a second connection closes the first |
+| Shoonya | `NSE\|2885` | 1 × 100 | 4 | the same 100 cap, and only one connection per session streams |
+| Wisdom Capital | `1:2885` (XTS segment number, then instrument id) | 1 × 50 | 4 | 50 instruments for the whole app key |
+| Stoxkart | `NSE:760946` | 4 × 50,000 | 5 | never refuses; resets connections past about four; only NSE, NFO, BSE and MCX |
+| INDmoney | `NSE:2885` | 1 × 3,000 | 6 | only one socket of several streams reliably |
+| Groww | `NSE\|CASH\|2885` | 0 | — | left out while its login fails |
+
+On 2026-10-27 this covered 231,004 of the 262,671 live instruments. Of the rest, 22,976 had no broker whose feed can stream them, 2,286 had a single broker that was full, and 6,405 had only full brokers. With Kotak at 45 × 3,000, the allocation of 2026-10-28 covered 228,165 of the 254,025 live instruments, against 204,894 with Kotak at 1 × 100. Of the rest, 23,069 had no broker whose feed can stream them, 2,324 had a single small broker that was full and 467 had only full brokers, so every instrument some broker with room can stream was covered; Kotak took 109,608 on 37 sockets. Its quotes reached the unified store with a median of 0.63 seconds and a p99 of 1.10 seconds after the exchange's timestamp, against Zerodha's 0.90 and 2.12 seconds over the same minute, which is why Kotak comes straight after Zerodha. To add an instrument by hand, add a member to its broker's set and restart the script, as the Flattrade script's docstring shows; the next allocation replaces the set again.
 
 ```bash
 redis-cli SADD flattrade:quotes:subscriptions "NSE|2885" "MCX|565899"
+bin/unified/instruments/allocate_subscriptions --dry-run
 ```
-
-!!! warning "Zerodha asks for more than Kite documents"
-    Kite documents three websockets per API key and 3,000 instruments per websocket. Twenty-four sockets of about 4,700 instruments each exceeds both, so Kite is expected to refuse the sockets past its limit. A refused socket reconnects with backoff and leaves the others streaming, as the script's docstring explains.
-
-    Every login at Zerodha invalidates the previous token, and logins are taken one at a time under a cross-process lock. When the token dies, all 24 sockets need the new one at once, so they lean on that lock far harder than the two sockets Zerodha used to run. How long that recovery takes has not been measured live.
 
 ### What the script writes
 

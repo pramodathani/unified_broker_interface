@@ -1,0 +1,5 @@
+Sent as text: {"event": "subscribeDepth", "inputtoken": "nse_cm|2885,nse_fo|35003,mcx_fo|440001", "ack_symbol": true}
+Event 'subscribeDepth', asking for trading symbols: True
+  exchange nse_cm, token 2885
+  exchange nse_fo, token 35003
+  exchange mcx_fo, token 440001

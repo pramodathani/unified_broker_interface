@@ -19,7 +19,9 @@ writes the ticks they decode to Redis, so it needs no other feed process or key.
 **Instruments** are `--tokens` when given, otherwise the members of the Redis set `dhan:quotes:subscriptions`,
 each as `SEGMENT:SECURITY_ID` - `NSE_EQ`, `NSE_FNO`, `NSE_CURRENCY`, `BSE_EQ`, `BSE_FNO`, `BSE_CURRENCY`,
 `MCX_COMM` or `IDX_I`, then Dhan's security id. Each is named from Dhan's scrip master, downloaded at startup.
-One websocket carries up to `--per-socket` instruments, at most 5000, and Dhan allows 5 connections per user.
+One websocket carries up to `--per-socket` instruments, at most 20000, and at most 12 connections are opened. Dhan documents 5 connections of 5,000, but a probe on 2026-10-27 carried 12 connections, and 20,000 instruments on one.
+
+**Socket size.** Without `--per-socket`, each socket carries the number in the Redis key `dhan:quotes:per_socket`, which `bin/unified/instruments/allocate_subscriptions` writes from `unified.broker_quote_capacities` along with the subscription set, or 20000 when the key is unset.
 
 **Keys.**
 
@@ -44,7 +46,10 @@ previous session's close once Dhan has sent it, and `change` is the percentage c
 made by any process is picked up. When Dhan disconnects a socket for an expired or invalid token (disconnect
 codes 807, 808, 809), or a socket fails to open six times running, it logs in again - one socket at a time,
 and only if no other socket or process already replaced the token - before reconnecting. A reconnect
-otherwise backs off from 1 to 60 seconds.
+otherwise backs off from 1 to 60 seconds. A handshake refused with HTTP 429 does not count towards the six,
+because Dhan blocks the IP for opening too many sockets at once and a login cannot lift that block; the
+sockets are started one second apart so the script does not set it off. Twenty sockets opened together on
+2026-10-27 blocked the IP for about 25 minutes.
 
 Exits 0 when stopped with Ctrl+C or SIGTERM, 1 when a login fails or a socket still cannot open after logging
 in again, and 2 when there is nothing to subscribe to. Reads only - it places no orders.
@@ -56,6 +61,7 @@ import json
 import signal
 import argparse
 import threading
+import time
 from io import StringIO
 from pathlib import Path
 
@@ -71,6 +77,7 @@ SCRIP_MASTER_URL = "https://images.dhan.co/api-data/api-scrip-master-detailed.cs
 LIVE_KEY = "dhan:quotes:live"
 INSTRUMENTS_KEY = "dhan:quotes:instruments"
 SUBSCRIPTIONS_KEY = "dhan:quotes:subscriptions"
+PER_SOCKET_KEY = "dhan:quotes:per_socket"
 
 # Every tick is also appended here for bin/dhan/instruments/store_quotes_to_db, which reads it with a consumer group. The cap
 # bounds Redis memory when the persister is down; ticks trimmed before it returns are not persisted.
@@ -86,8 +93,9 @@ SCRIP_SEGMENTS = {("NSE", "E"): "NSE_EQ", ("NSE", "D"): "NSE_FNO", ("NSE", "C"):
                   ("BSE", "E"): "BSE_EQ", ("BSE", "D"): "BSE_FNO", ("BSE", "C"): "BSE_CURRENCY",
                   ("MCX", "M"): "MCX_COMM", ("NSE", "I"): "IDX_I", ("BSE", "I"): "IDX_I"}
 
-MAX_INSTRUMENTS_PER_CONNECTION = 5000
-CONNECTION_BUDGET = 5
+MAX_INSTRUMENTS_PER_CONNECTION = 20000
+SOCKET_START_GAP_SECONDS = 1
+CONNECTION_BUDGET = 12
 
 class DhanQuotesStore:
     """
@@ -179,8 +187,8 @@ def main():
     """Stream Dhan quotes into dhan:quotes:live until stopped."""
     parser = argparse.ArgumentParser(description="Stream Dhan market quotes into dhan:quotes:live until stopped.")
     parser.add_argument("--tokens", help="comma separated SEGMENT:SECURITY_ID tokens, for example NSE_EQ:2885")
-    parser.add_argument("--per-socket", type=int, default=MAX_INSTRUMENTS_PER_CONNECTION,
-                        help=f"instruments per websocket connection, at most {MAX_INSTRUMENTS_PER_CONNECTION}")
+    parser.add_argument("--per-socket", type=int, default=None,
+                        help=f"instruments per websocket connection, default the Redis key {PER_SOCKET_KEY}, or {MAX_INSTRUMENTS_PER_CONNECTION} when it is unset")
     arguments = parser.parse_args()
 
     from stock_brokers.websockets.dhan import DhanQuotesSocket, DhanSession
@@ -189,6 +197,8 @@ def main():
 
     logger = get_logger("dhan.websocket_quotes")
     cache = get_cache()
+    if arguments.per_socket is None:
+        arguments.per_socket = int(cache.get(PER_SOCKET_KEY) or MAX_INSTRUMENTS_PER_CONNECTION)
 
     if not 1 <= arguments.per_socket <= MAX_INSTRUMENTS_PER_CONNECTION:
         logger.error(f"--per-socket must be between 1 and {MAX_INSTRUMENTS_PER_CONNECTION}.")
@@ -203,7 +213,7 @@ def main():
     batches = [tokens[start:start + arguments.per_socket] for start in range(0, len(tokens), arguments.per_socket)]
     if len(batches) > CONNECTION_BUDGET:
         logger.error(f"{len(tokens)} instruments at {arguments.per_socket} per socket needs {len(batches)} connections, "
-                     f"but Dhan allows {CONNECTION_BUDGET} per user.")
+                     f"but at most {CONNECTION_BUDGET} are opened.")
         return 2
 
     try:
@@ -244,6 +254,7 @@ def main():
     logger.info(f"Starting {len(sockets)} websocket(s) for {len(tokens)} instrument(s).")
     for thread in threads:
         thread.start()
+        time.sleep(SOCKET_START_GAP_SECONDS)
 
     # Block in the main thread so the signal handlers above can run.
     while any(thread.is_alive() for thread in threads):

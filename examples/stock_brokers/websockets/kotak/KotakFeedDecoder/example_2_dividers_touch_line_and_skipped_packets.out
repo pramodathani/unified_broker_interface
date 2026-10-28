@@ -1,0 +1,20 @@
+USDINR before learning the dividers:
+  USDINR26NOVFUT (cde_fo|10465) in full mode: last_price=8820000.0 close=8812250.0 oi=245000
+    buy [{'quantity': 12, 'price': 8819750.0, 'orders': 3}]
+    sell [{'quantity': 40, 'price': 8820250.0, 'orders': 5}]
+Learning exchanges from message code 1119: ['cde_fo', 'mcx_fo', 'nse_cm']
+USDINR after learning the dividers:
+  USDINR26NOVFUT (cde_fo|10465) in full mode: last_price=88.2 close=88.1225 oi=245000
+    buy [{'quantity': 12, 'price': 88.1975, 'orders': 3}]
+    sell [{'quantity': 40, 'price': 88.2025, 'orders': 5}]
+Batch of 415 bytes holds 3 whole packet(s), leaving 30 bytes of a cut-short packet unread
+Packet of 176 bytes, message code 7208, exchange 3, level 8:
+  USDINR26NOVFUT (cde_fo|10465) in full mode: last_price=88.2 close=88.1225 oi=245000
+    buy [{'quantity': 12, 'price': 88.1975, 'orders': 3}]
+    sell [{'quantity': 40, 'price': 88.2025, 'orders': 5}]
+Packet of 176 bytes, message code 7208, exchange 9, level 4:
+  CRUDEOIL26NOVFUT (mcx_fo|440001) in full mode: last_price=9518.0 close=9498.0 oi=13801
+    buy [{'quantity': 3, 'price': 9517.5, 'orders': 2}]
+    sell [{'quantity': 4, 'price': 9518.5, 'orders': 1}]
+Packet of 33 bytes, message code 104, exchange 1, level 0:
+  no tick

@@ -1,0 +1,28 @@
+Stand-in login number 1
+Connecting to wss://sfeed.kotaksecurities.com/apifeed
+Sent: {"user": "ABCD1", "auth": "kotak-sid-1", "format": "native_batch", "source": "NEOTRADEAPI", "platform": "Web", "version": "1.2.3", "sdk_version": 2, "sdk_date": "2026-08-07T09:41:17.667Z", "conn_req_time": 1793159100000, "sessionValidation": false}
+INFO socket_0 opened. Authenticating.
+Kotak sends message code 1119
+Sent: {"event": "subscribeDepth", "inputtoken": "nse_cm|2885", "ack_symbol": true}
+INFO socket_0 authenticated and subscribed to 1 instrument(s) with depth.
+Kotak sends message code 1120
+ERROR socket_0: Kotak refused the session (message code 1120).
+INFO socket_0 closed with status 1000: normal closure
+WARNING Logging in to Kotak again.
+Stand-in login number 2
+WARNING socket_0 disconnected. Reconnecting in 0 seconds.
+Connecting to wss://sfeed-e21.kotaksecurities.com/apifeed
+Sent: {"user": "ABCD1", "auth": "kotak-sid-2", "format": "native_batch", "source": "NEOTRADEAPI", "platform": "Web", "version": "1.2.3", "sdk_version": 2, "sdk_date": "2026-08-07T09:41:17.667Z", "conn_req_time": 1793159100000, "sessionValidation": false}
+INFO socket_0 opened. Authenticating.
+Kotak sends message code 1119
+Sent: {"event": "subscribeDepth", "inputtoken": "nse_cm|2885", "ack_symbol": true}
+INFO socket_0 authenticated and subscribed to 1 instrument(s) with depth.
+Kotak sends message code 1109
+Kotak sends a binary frame of 304 bytes
+Ticks handed on: 1
+  RELIANCE-EQ (nse_cm|2885) in full mode: last_price=1198.45 volume=1204500 change=0.1881
+    best bid={'quantity': 100, 'price': 1198.4, 'orders': 3} best offer={'quantity': 200, 'price': 1198.5, 'orders': 4} levels=5
+INFO socket_0 closed with status 1000: normal closure
+INFO socket_0 stopped.
+Gave up: False
+Logins made: 2

@@ -171,7 +171,7 @@ class StoxkartInstrumentState:
         values = self.values
         previous_close = values.get("previous_close")
         change = None
-        if previous_close:
+        if previous_close and values["last_price"] is not None:
             change = round((values["last_price"] - previous_close) / previous_close * 100, 6)
         tick = {
             "id": self.name or self.instrument,

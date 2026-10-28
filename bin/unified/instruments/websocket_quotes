@@ -707,14 +707,14 @@ class IndmoneyNormalizer(Normalizer):
         return FeedKey(token.strip(), segments)
 
 class KotakNormalizer(Normalizer):
-    """Kotak: `exchange_segment|token`; `close` is the previous close; every MCX quantity in Kotak's lots; both times true."""
+    """Kotak: `exchange_segment|token`; `close` is the previous close; every MCX quantity in lots, as at Zerodha; both times true."""
     BROKER_NAME = "kotak"
     EXCHANGE_SEGMENTS = {"nse_cm": (("nse",), "cash_or_index"), "bse_cm": (("bse",), "cash_or_index"),
                          "nse_fo": (("nse",), "derivative"), "cde_fo": (("nse",), "derivative"),
                          "nse_com": (("nse",), "derivative"), "bse_fo": (("bse",), "derivative"),
                          "bse_cd": (("bse",), "derivative"), "bse_co": (("bse",), "derivative"),
                          "mcx_fo": (("mcx",), "derivative")}
-    BROKER_LOT_FIELDS = {"mcx": ALL_QUANTITIES}
+    LOT_FIELDS = {"mcx": ALL_QUANTITIES}
     CLOSE_POLICY = {"nse": CLOSE_ALWAYS, "bse": CLOSE_ALWAYS, "mcx": CLOSE_ALWAYS}
 
     def __init__(self):

@@ -273,6 +273,7 @@ class DhanQuotesSocket(BrokerWebsocket):
         Returns:
             None: This method returns nothing.
         """
+        self._note_rate_limit(error)
         self._logger.error(f"{self.name} error: {error}")
 
     def _on_message(self, websocket_connection, message):
@@ -593,6 +594,7 @@ class DhanOrderUpdatesSocket(BrokerWebsocket):
         Returns:
             None: This method returns nothing.
         """
+        self._note_rate_limit(error)
         self._logger.error(f"Order updates error: {error}")
 
     def _on_message(self, websocket_connection, message):

@@ -21,6 +21,8 @@ no other feed process or key.
 each a Fyers symbol with its exchange, such as `NSE:SBIN-EQ`, `NSE:NIFTY50-INDEX` or `MCX:CRUDEOIL26SEPFUT`.
 One websocket carries up to `--per-socket` instruments, at most 5000.
 
+**Socket size.** Without `--per-socket`, each socket carries the number in the Redis key `fyers:quotes:per_socket`, which `bin/unified/instruments/allocate_subscriptions` writes from `unified.broker_quote_capacities` along with the subscription set, or 5000 when the key is unset.
+
 **Keys.**
 
 - `fyers:quotes:live`, a hash of the latest tick per instrument as JSON, keyed by the Fyers symbol, which is
@@ -81,6 +83,7 @@ SYMBOL_TICKER_COLUMN = 9
 LIVE_KEY = "fyers:quotes:live"
 INSTRUMENTS_KEY = "fyers:quotes:instruments"
 SUBSCRIPTIONS_KEY = "fyers:quotes:subscriptions"
+PER_SOCKET_KEY = "fyers:quotes:per_socket"
 
 # Every tick is also appended here for bin/fyers/instruments/store_quotes_to_db, which reads it with a consumer group. The cap
 # bounds Redis memory when the persister is down; ticks trimmed before it returns are not persisted.
@@ -177,8 +180,8 @@ def main():
     """Stream Fyers quotes into fyers:quotes:live until stopped."""
     parser = argparse.ArgumentParser(description="Stream Fyers market quotes into fyers:quotes:live until stopped.")
     parser.add_argument("--tokens", help="comma separated Fyers symbols, for example NSE:SBIN-EQ")
-    parser.add_argument("--per-socket", type=int, default=MAX_INSTRUMENTS_PER_CONNECTION,
-                        help=f"instruments per websocket connection, at most {MAX_INSTRUMENTS_PER_CONNECTION}")
+    parser.add_argument("--per-socket", type=int, default=None,
+                        help=f"instruments per websocket connection, default the Redis key {PER_SOCKET_KEY}, or {MAX_INSTRUMENTS_PER_CONNECTION} when it is unset")
     arguments = parser.parse_args()
 
     from stock_brokers.websockets.fyers import FyersQuotesSocket, FyersSession
@@ -187,6 +190,8 @@ def main():
 
     logger = get_logger("fyers.websocket_quotes")
     cache = get_cache()
+    if arguments.per_socket is None:
+        arguments.per_socket = int(cache.get(PER_SOCKET_KEY) or MAX_INSTRUMENTS_PER_CONNECTION)
 
     if not 1 <= arguments.per_socket <= MAX_INSTRUMENTS_PER_CONNECTION:
         logger.error(f"--per-socket must be between 1 and {MAX_INSTRUMENTS_PER_CONNECTION}.")

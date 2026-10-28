@@ -1,6 +1,6 @@
 Stand-in login number 1
 UserDetails called for flattrade-token-1: Ok
-Connecting to wss://piconnect.flattrade.in/PiConnectWSTp/
+Connecting to wss://piconnect.flattrade.in/PiConnectWSAPI/
 Sent: {"t": "a", "uid": "FT012345", "actid": "FT012345", "source": "API", "accesstoken": "flattrade-token-1"}
 INFO socket_0 opened. Authenticating.
 Sent: {"t": "d", "k": "NSE|2885"}
