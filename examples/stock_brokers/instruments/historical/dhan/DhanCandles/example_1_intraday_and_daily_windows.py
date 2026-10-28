@@ -31,12 +31,13 @@ class RecordedDhanAPI:
         """
         self.requests = []
 
-    def post(self, url, json=None):
+    def post(self, url, json=None, timeout=None):
         """Records a POST request and answers it with recorded arrays.
 
         Args:
             url (str): The endpoint the downloader called.
             json (dict): The request body it sent.
+            timeout (float | None): How long the downloader would wait for an answer, in seconds; the stand-in answers at once.
 
         Returns:
             dict: The response envelope, with the arrays under `data`.

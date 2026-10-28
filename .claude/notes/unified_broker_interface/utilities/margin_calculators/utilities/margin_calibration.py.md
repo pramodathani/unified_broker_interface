@@ -17,3 +17,7 @@ A calculator that fails on one order (Wisdom Capital answered 0 for crude oil) m
 ## Why this script calls brokers from bin/unified/
 
 The architecture says `bin/unified/` reads only Redis and the database. The order engine in `bin/unified/orders/` is the existing exception, because placing an order has to reach a broker; this script follows it, and only calls endpoints that price an order and place nothing. It never logs in: a broker whose Redis login is missing is skipped.
+
+## Why `today` can be given
+
+`measure` builds its reference orders for a day, and until 2026-10-28 that was always the real date. The whole-run example program holds a catalogue for 2026-09-30 whose NIFTY options expire on 2026-10-06, so once that date passed it found no condor and failed. `today` lets a caller pin the day the way `ReferenceOrders` already allows; `bin/unified/orders/margin_calibration` passes nothing and keeps using the real date.

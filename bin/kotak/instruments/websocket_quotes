@@ -11,7 +11,7 @@
 
 The connection, the login, the subscription and the binary packet decoding for Kotak's SFeed market feed, the feed Kotak's own Python SDK (`kotakneoapi` 3.0) streams from, are `KotakQuotesSocket` and `KotakSession` in `stock_brokers/websockets/kotak.py`, whose module docstring describes the protocol. The feed's address is the `feed_url` Kotak's login names, or `wss://sfeed.kotaksecurities.com/apifeed` when it names none; Kotak retired the earlier HSM feed at `wss://mlhsm.kotaksecurities.com` in October 2026. This script chooses the instruments, splits them across sockets, runs the sockets and writes what they decode to Redis, so it needs no other feed process or key.
 
-**Instruments** are `--tokens` when given, otherwise the members of the Redis set `kotak:quotes:subscriptions`, each as `EXCHANGE|TOKEN` with Kotak's lowercase segment names - `nse_cm`, `bse_cm`, `nse_fo`, `bse_fo`, `cde_fo`, `nse_com`, `bse_cd`, `bse_co` or `mcx_fo` - and the instrument's `pSymbol` from Kotak's scrip master. Each is named with its trading symbol (`pTrdSymbol`) from Kotak's public scrip master files for today, downloaded at startup; an instrument those do not name takes the trading symbol Kotak's acknowledgement of the subscription carries. One websocket carries up to `--per-socket` instruments, 100 by default and 3,000 at most, which is what Kotak's SDK allows on one connection. The feed takes one subscription per instrument, and on 2026-10-28 forty-five connections of 3,000 streamed together without a refusal.
+**Instruments** are `--tokens` when given, otherwise the members of the Redis set `kotak:quotes:subscriptions`, each as `EXCHANGE|TOKEN` with Kotak's lowercase segment names - `nse_cm`, `bse_cm`, `nse_fo`, `bse_fo`, `cde_fo`, `nse_com`, `bse_cd`, `bse_co` or `mcx_fo` - and the instrument's `pSymbol` from Kotak's scrip master. Each is named with its trading symbol (`pTrdSymbol`) from Kotak's public scrip master files for today, downloaded at startup; an instrument those do not name takes the trading symbol Kotak's acknowledgement of the subscription carries. One websocket carries up to `--per-socket` instruments, 100 by default and 3,000 at most, which is what Kotak's SDK allows on one connection. The feed takes one subscription per instrument, and on 2026-10-28 forty-five connections of 3,000 streamed together without a refusal. Sockets start `SOCKET_START_GAP_SECONDS` (2) apart, so 37 sockets take about 74 seconds to open.
 
 **Socket size.** Without `--per-socket`, each socket carries the number in the Redis key `kotak:quotes:per_socket`, which `bin/unified/instruments/allocate_subscriptions` writes from `unified.broker_quote_capacities` along with the subscription set, or 100 when the key is unset.
 
@@ -50,6 +50,7 @@ import json
 import signal
 import sys
 import threading
+import time
 from datetime import date
 from io import StringIO
 from pathlib import Path
@@ -91,6 +92,7 @@ SEGMENTS = (
 
 DEFAULT_PER_SOCKET = 100
 MAX_PER_SOCKET = 3000
+SOCKET_START_GAP_SECONDS = 2
 
 
 class KotakQuotesStore:
@@ -304,6 +306,7 @@ class KotakQuotesApplication:
         self._logger.info(f"Starting {len(self._sockets)} websocket(s) for {len(instrument_tokens)} instrument(s).")
         for thread in threads:
             thread.start()
+            time.sleep(SOCKET_START_GAP_SECONDS)
 
         while any(thread.is_alive() for thread in threads):
             for thread in threads:

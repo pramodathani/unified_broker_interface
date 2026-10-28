@@ -163,12 +163,13 @@ class RefusingDhanAPI:
         self.error_type = error_type
         self.error_message = error_message
 
-    def post(self, url, json=None):
+    def post(self, url, json=None, timeout=None):
         """Refuses a POST request.
 
         Args:
             url (str): The endpoint the downloader called.
             json (dict): The request body it sent.
+            timeout (float | None): How long the downloader would wait for an answer, in seconds; the stand-in answers at once.
 
         Returns:
             dict: Never returns.
