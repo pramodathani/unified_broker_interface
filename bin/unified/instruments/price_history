@@ -2,7 +2,7 @@
 """
 Build the unified price history - `unified.price_history` and its adjustment factors - from the brokers' price tables.
 
-    bin/unified/instruments/price_history daily                           # the morning job: load, corrections, load, factors
+    bin/unified/instruments/price_history daily                           # the nightly job: load, corrections, load, factors
     bin/unified/instruments/price_history load                            # copy new and changed daily bars across
     bin/unified/instruments/price_history corrections                     # find series flattrade served already adjusted
     bin/unified/instruments/price_history factors --stale-days 14         # fetch Yahoo Finance and derive adjustment factors
@@ -43,9 +43,9 @@ creates the unified price tables the first time. The unified instruments have to
 - `verify` runs the checks, including the known cases, and fails when any check fails.
 - `sources` resolves every broker series and reports how, writing nothing.
 - `status` prints the last run and what is stored.
-- `daily` is the morning sequence `unified-prices.service` runs: `load`, `corrections`, `load` again for what the corrections changed,
-  then `factors --stale-days 14`. It does not run `verify`, whose comparison of whole tables kept the database disk busy into market hours;
-  `unified-prices-verify.service` runs `verify` at midnight instead.
+- `daily` is the sequence `unified-prices.service` runs at 02:00 IST: `load`, `corrections`, `load` again for what the corrections changed,
+  then `factors --stale-days 14`. It does not run `verify`, whose comparison of whole tables kept the database disk busy into market hours when the job ran in the morning;
+  `unified-prices-verify.service` runs `verify` at midnight instead, before the job.
 
 Each run's outcome is written to `unified:prices:last_run` in Redis, except a `verify` run's, which goes to `unified:prices:last_verify`,
 because `verify` changes no bars and the REST API's candle cache rebuilds its entries whenever `unified:prices:last_run` changes.

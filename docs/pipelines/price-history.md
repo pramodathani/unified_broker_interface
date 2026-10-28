@@ -1,6 +1,6 @@
 # Price history
 
-This page covers historical candles, which are bars of open, high, low, close and volume over a fixed interval. The pipeline has two halves. Seven brokers' candle downloaders slowly copy each broker's history into that broker's own table, running for weeks as a resumable queue. Then one unified job, every morning, picks the best broker for each instrument, stitches its bars into one history per unified instrument, and works out the corporate action factors that let prices be adjusted on read.
+This page covers historical candles, which are bars of open, high, low, close and volume over a fixed interval. The pipeline has two halves. Seven brokers' candle downloaders slowly copy each broker's history into that broker's own table, running for weeks as a resumable queue. Then one unified job, every night, picks the best broker for each instrument, stitches its bars into one history per unified instrument, and works out the corporate action factors that let prices be adjusted on read.
 
 ## The flow
 
@@ -13,10 +13,10 @@ flowchart LR
         PRG[("#lt;broker#gt;.price_history_progress<br/>the queue")] <--> W
     end
     W --> PH[("#lt;broker#gt;.price_history")]
-    subgraph Unified["bin/unified/instruments/price_history daily<br/>08:30 IST, Monday to Saturday"]
+    subgraph Unified["bin/unified/instruments/price_history daily<br/>02:00 IST, every day"]
         L["load"] --> C["corrections"] --> L2["load again"] --> FA["factors"]
     end
-    subgraph Night["bin/unified/instruments/price_history verify<br/>00:00 IST, Tuesday to Sunday"]
+    subgraph Night["bin/unified/instruments/price_history verify<br/>00:00 IST, every day"]
         V["verify"]
     end
     PH --> L
@@ -147,9 +147,11 @@ The table below lists the subcommands. Each run writes its outcome to the Redis 
 | `status` | Prints the last run and what is stored | nothing |
 | `daily` | Runs `load`, `corrections`, `load` again and `factors --stale-days 14`; a failed step ends the job | all of the above except `verify` |
 
-`unified-prices.service` runs `daily` from `unified-prices.timer` at 08:30 IST, Monday to Saturday. The service is ordered after `unified-mapping.service`, so when the 07:45 instrument job runs late, the price job waits for it and loads against the day's mapping.
+`unified-prices-verify.service` runs `verify` from `unified-prices-verify.timer` at 00:00 IST every day, checking what the previous night's job loaded, and fails when a check fails. `unified-prices.service` runs `daily` from `unified-prices.timer` at 02:00 IST every day. It is ordered after the check, so when the check runs long the job waits for it, because two `price_history` runs at once deadlock on the DDL each applies when it starts. It is also ordered after `unified-mapping.service`, which matters only when someone starts it by hand during the morning mapping.
 
-`unified-prices-verify.service` runs `verify` from `unified-prices-verify.timer` at 00:00 IST, Tuesday to Sunday, the midnight after each morning job, and fails when a check fails. The checks used to be the morning job's last step, but the job takes three hours or more, so they ran into market hours. On 2026-10-28 their comparison of whole tables kept the database disk so busy that the live tick writers fell behind and lost ticks, so they now run when every market is closed.
+Until 2026-10-28 the job ran at 08:30 IST from Monday to Saturday, with the checks as its last step. It takes three hours or more, so it ran into market hours, and on 2026-10-28 the checks' comparison of whole tables kept the database disk so busy that the live tick writers fell behind and lost ticks. Both timers set `Persistent=false`, so a run missed while the machine was off is skipped rather than started at boot, which could be during market hours.
+
+The night run loses no bars. The brokers' candle downloaders do not deliver a day's bars in one burst: a series that is up to date is set aside until midnight UTC (05:30 IST), and each downloader then works through its queue at its broker's rate limit for the rest of the day, so on 2026-10-28 Zerodha's daily series were refreshed between 06:00 and 21:00 IST and Flattrade's between 06:00 and 20:00. Whatever has arrived by 02:00 is loaded that night, and the rest the night after.
 
 ### Which broker supplies which instrument
 

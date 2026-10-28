@@ -191,6 +191,7 @@ Each tab below describes one broker from its code: how it logs in (from `stock_b
     **Peculiarities.**
 
     - Every quote socket carries instruments of one segment only, because an update names its instrument by a bare security id.
+    - On a day the quote allocator gives it no instruments, its quote feed neither logs in nor connects, and waits until the allocator restarts it with some, so the unit stays running rather than failing.
     - `close` is sent as the last price, not the previous close, and the best bid and offer are the only depth, without quantities.
     - Its instrument master is the only one that is not public: three CSV files behind an access token, which the ingester logs in for through `ensure_session` when no usable token is stored.
     - INDstocks names no trading symbol on orders, so the unified orders document leaves `id` null until the instrument supplies a symbol.

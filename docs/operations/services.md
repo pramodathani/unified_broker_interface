@@ -25,10 +25,10 @@ services/
 │   ├── unified-user@.service           runs bin/unified/user/%i
 │   ├── unified-mapping.service         daily instrument download and mapping
 │   ├── unified-mapping.timer           07:45 IST every day
-│   ├── unified-prices.service          daily unified price history
-│   ├── unified-prices.timer            08:30 IST Monday to Saturday
+│   ├── unified-prices.service          nightly unified price history
+│   ├── unified-prices.timer            02:00 IST every day
 │   ├── unified-prices-verify.service   nightly check of the unified price history
-│   ├── unified-prices-verify.timer     00:00 IST Tuesday to Sunday
+│   ├── unified-prices-verify.timer     00:00 IST every day
 │   └── unified-rest-api.service        bin/rest-api (gunicorn)
 ├── zerodha/                            one folder per broker
 │   ├── zerodha.target
@@ -89,8 +89,8 @@ flowchart TB
     TM["timers.target"] --> DBT["databases.timer<br/>every minute"]
     TM --> ZLT["zerodha-login.timer<br/>07:00"]
     TM --> UMT["unified-mapping.timer<br/>07:45"]
-    TM --> UPT["unified-prices.timer<br/>08:30 Mon–Sat"]
-    TM --> UVT["unified-prices-verify.timer<br/>00:00 Tue–Sun"]
+    TM --> UPT["unified-prices.timer<br/>02:00 daily"]
+    TM --> UVT["unified-prices-verify.timer<br/>00:00 daily"]
     DBT --> DBS["databases.service"]
     ZLT --> ZL["zerodha-login.service"]
     UMT --> UM["unified-mapping.service"]
@@ -121,8 +121,8 @@ The long-running services and the daily jobs follow different restart rules, bec
 | `unified-rest-api.service` | `always` | `5` | `RestartPreventExitStatus=2`, `StartLimitIntervalSec=0`, `TimeoutStopSec=60` |
 | `<broker>-login.service` | `on-failure` | `2min` | `Type=oneshot`, `StartLimitIntervalSec=1h`, `StartLimitBurst=3`, `TimeoutStartSec=300` |
 | `unified-mapping.service` | none | | `Type=oneshot`, `TimeoutStartSec=3h`, low priority |
-| `unified-prices.service` | none | | `Type=oneshot`, `TimeoutStartSec=4h`, low priority, `After=unified-mapping.service` |
-| `unified-prices-verify.service` | none | | `Type=oneshot`, `TimeoutStartSec=4h`, low priority, `After=unified-prices.service` |
+| `unified-prices.service` | none | | `Type=oneshot`, `TimeoutStartSec=4h`, low priority, `After=unified-mapping.service unified-prices-verify.service` |
+| `unified-prices-verify.service` | none | | `Type=oneshot`, `TimeoutStartSec=4h`, low priority |
 | `databases.service` | none | | `Type=oneshot`, `TimeoutStartSec=180`, runs again from its timer |
 
 `StartLimitIntervalSec=0` on the long-running units means systemd never gives up restarting them. The unit comment gives the reason: a broker outage can outlast any start limit, and each script paces its own logins. Every one of these units except `databases.service`, which runs no Python, also sets `Environment=PYTHONUNBUFFERED=1`, because Python holds back its output when it is not writing to a terminal, and without this setting the journal would stay empty.
@@ -337,8 +337,8 @@ The unified and database groups have their own units, listed in the table below.
 |---|---|---|---|
 | `databases.timer` → `databases.service` | timer + job | `docker compose up -d --wait --wait-timeout 120` | every minute |
 | `unified-mapping.timer` → `unified-mapping.service` | timer + job | ten `bin/<broker>/instruments/daily_feed`, then `bin/unified/instruments/map` | 07:45 IST daily |
-| `unified-prices.timer` → `unified-prices.service` | timer + job | `bin/unified/instruments/price_history daily` | 08:30 IST Monday to Saturday |
-| `unified-prices-verify.timer` → `unified-prices-verify.service` | timer + job | `bin/unified/instruments/price_history verify` | 00:00 IST Tuesday to Sunday |
+| `unified-prices.timer` → `unified-prices.service` | timer + job | `bin/unified/instruments/price_history daily` | 02:00 IST every day |
+| `unified-prices-verify.timer` → `unified-prices-verify.service` | timer + job | `bin/unified/instruments/price_history verify` | 00:00 IST every day |
 | `unified-instruments@websocket_quotes` | service | combines every broker's ticks into `unified:quotes:live` | always |
 | `unified-instruments@store_quotes_to_db` | service | drains `unified:quotes:stream` into `unified.ticks` | always |
 | `unified-orders@api_order_details` | service | writes `unified:orders:orders` | always |

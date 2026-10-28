@@ -42,10 +42,10 @@ This tab is about running UBI day after day on one machine. Everything runs as s
 
 A normal trading day follows the same steps every time, and no person has to start any of them. The numbered list below walks through one day in the order things happen.
 
-1. At **06:00 IST** the daily order counters in Redis expire, so every capped broker starts the day with its full allowance.
-2. At **07:00 IST** the ten broker login timers fire, each after its own random delay of up to 30 minutes, so the ten logins do not all happen in the same second. At the same hour, the REST API's own access token from yesterday stops being reused, and the next `connect` issues a new one.
-3. At **07:45 IST** the instrument job downloads every broker's instrument list and maps them all onto one shared list of instruments. The unit's own comment puts this at about three quarters of an hour.
-4. At **08:30 IST**, from Monday to Saturday, the unified price history job loads the brokers' candles into one table and refreshes the adjustment factors.
+1. At **00:00 IST** the unified price history is checked, and at **02:00 IST** the unified price history job loads the brokers' candles into one table and refreshes the adjustment factors. Both run at night because they read the database for hours.
+2. At **06:00 IST** the daily order counters in Redis expire, so every capped broker starts the day with its full allowance.
+3. At **07:00 IST** the ten broker login timers fire, each after its own random delay of up to 30 minutes, so the ten logins do not all happen in the same second. At the same hour, the REST API's own access token from yesterday stops being reused, and the next `connect` issues a new one.
+4. At **07:45 IST** the instrument job downloads every broker's instrument list and maps them all onto one shared list of instruments. The unit's own comment puts this at about three quarters of an hour.
 5. From **09:00 IST** the equity pre-open begins, and the unified quote layer starts accepting ticks, because its acceptance window opens at 09:00. NSE and BSE equity trades from 09:15 to 15:30.
 6. Through the day, the pollers and websocket scripts keep Redis up to date, the persisters copy every stream into TimescaleDB, and the unified scripts combine every broker into one view that the REST API serves.
 7. Commodity trading on MCX carries on into the evening and closes at **23:30 IST** (23:55 while the United States is on standard time).
@@ -55,8 +55,8 @@ The diagram below shows the same day as three groups of work: the morning jobs t
 ```mermaid
 flowchart LR
     subgraph Morning["Once a day"]
+        V["00:00<br/>price history check"] --> P["02:00<br/>unified price history"]
         L["07:00<br/>broker logins"] --> M["07:45<br/>instrument mapping"]
-        M --> P["08:30<br/>unified price history"]
     end
     subgraph AllDay["All day, restarted if they stop"]
         B["bin/&lt;broker&gt;/*<br/>feeds and pollers"] --> R[("Redis")]

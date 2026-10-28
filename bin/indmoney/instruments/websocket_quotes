@@ -29,6 +29,8 @@ index is named by its exchange and `trading_symbol`, a derivative by its `NFO` o
 `trading_symbol`. An instrument the master does not hold - or every instrument, when that key is empty - is keyed
 by its token, and a warning says how many.
 
+**No instruments.** When the subscription set is empty and no `--tokens` are given, the script neither logs in nor connects: it says so and waits until it is stopped, then exits 0. `bin/unified/instruments/allocate_subscriptions` empties the set on a day it gives INDmoney nothing and restarts the feed whenever the set changes, so the unit stays running instead of showing as failed with exit 2 every day. `--tokens` that resolve to nothing still exit 2.
+
 **Socket size.** Without `--per-socket`, each socket carries the number in the Redis key `indmoney:quotes:per_socket`, which `bin/unified/instruments/allocate_subscriptions` writes from `unified.broker_quote_capacities` along with the subscription set, or 1000 when the key is unset.
 
 **Keys.**
@@ -204,6 +206,32 @@ def instrument_names(tokens, cache, logger):
                 names[token] = f"{exchange}:{json.loads(row)[symbol_at]}"
     return {token: name for token, name in names.items() if not name.endswith(":None")}
 
+def wait_while_unsubscribed(logger):
+    """
+    Wait without logging in or connecting until systemd stops the feed, because the subscription set is empty.
+
+    `bin/unified/instruments/allocate_subscriptions` empties the set on a day it gives INDmoney no instruments, and
+    restarts this feed whenever the set changes, so the next instruments arrive through a restart.
+
+    Args:
+        logger (logging.Logger): Where the wait is reported.
+
+    Returns:
+        int: 0, once SIGTERM or SIGINT has been received.
+    """
+    stopped = threading.Event()
+
+    def _handle_signal(signal_number, frame):
+        logger.info(f"Received signal {signal_number}. Stopping the idle quotes feed.")
+        stopped.set()
+
+    for signal_number in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(signal_number, _handle_signal)
+    logger.info(f"The Redis set {SUBSCRIPTIONS_KEY} is empty, so there is nothing to stream. Waiting until the feed is "
+                f"restarted with instruments.")
+    stopped.wait()
+    return 0
+
 def main():
     """Stream INDmoney quotes into indmoney:quotes:live until stopped."""
     parser = argparse.ArgumentParser(description="Stream INDmoney market quotes into indmoney:quotes:live until stopped.")
@@ -226,6 +254,8 @@ def main():
         return 2
 
     tokens = resolve_tokens(arguments.tokens, cache, logger)
+    if not tokens and arguments.tokens is None:
+        return wait_while_unsubscribed(logger)
     if not tokens:
         logger.error(f"Nothing to subscribe to. Pass --tokens or add SEGMENT:TOKEN members to the Redis set "
                      f"{SUBSCRIPTIONS_KEY}.")
