@@ -21,7 +21,7 @@ class INDMoneyAPI(BrokerAPI):
 
         try:
             self.get(url="https://api.indstocks.com/user/profile")
-        except Exception as e:
+        except Exception:
             response = requests.post(
                 url="https://api.indstocks.com/generate/token", 
                 headers={
@@ -79,7 +79,7 @@ class INDMoneyAPI(BrokerAPI):
                 'Authorization': self._last_login['access_token']
             }        
         
-        if verbose == True:
+        if verbose:
             rest_api_message = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S:%f')} - requests.request(method='{method}', url='{url}', params={params}, data={data}, headers={headers}, cookies={cookies}, files={files}, auth={auth}, timeout={timeout}, allow_redirects={allow_redirects}, proxies={proxies}, hooks={hooks}, stream={stream}, verify={verify}, cert={cert}, json={json})"
             self._cache.rpush('broker_api_calls', rest_api_message)
             self._logger.info(rest_api_message)

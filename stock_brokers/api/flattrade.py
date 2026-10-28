@@ -29,7 +29,7 @@ class FlattradeAPI(BrokerAPI):
             details = (self.post(url="https://piconnect.flattrade.in/PiConnectAPI/UserDetails", timeout=self.LOGIN_TIMEOUT_SECONDS) or {}).get("data")
             if not isinstance(details, dict) or str(details.get("stat", "")).lower() != "ok":
                 raise FlattradeAPIException(code="Not_Ok", message=f"UserDetails refused the session: {str(details)[:200]}")
-        except Exception as e:
+        except Exception:
             headers = {
                 "Accept": "application/json",
                 "Accept-Language": "en-US,en;q=0.5",
@@ -142,7 +142,7 @@ class FlattradeAPI(BrokerAPI):
             data = "jData=" + data
             data += f"&jKey={self._last_login['access_token']}"        
 
-        if verbose == True:
+        if verbose:
             rest_api_message = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S:%f')} - requests.request(method='{method}', url='{url}', params={params}, data={data}, headers={headers}, cookies={cookies}, files={files}, auth={auth}, timeout={timeout}, allow_redirects={allow_redirects}, proxies={proxies}, hooks={hooks}, stream={stream}, verify={verify}, cert={cert}, json={json})"
             self._cache.rpush('broker_api_calls', rest_api_message)            
             self._logger.info(rest_api_message)
