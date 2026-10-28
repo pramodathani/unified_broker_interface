@@ -53,7 +53,7 @@ The table below shows the capacities measured against the live brokers on 2026-1
 | Kotak | `nse_cm\|11536` | 45 × 3,000 | 2 | measured on 2026-10-28: 45 connections of 3,000 streamed with no refusal or slowdown, and updates do not thin out further along a connection |
 | Fyers | `NSE:SBIN-EQ` | 1 × 100 | 2 | Fyers counts symbols per user: 100 on its Standard plan, 5,000 on Prime; about 100 kept updating |
 | Dhan | `NSE_EQ:2885` | 10 × 5,000 | 3 | only the first 5,000 instruments on a connection update; twenty sockets opened at once blocked the IP |
-| Flattrade | `NSE\|2885` | 1 × 100 | 4 | everything past the hundredth is ignored, and a second connection closes the first |
+| Flattrade | `NSE\|2885` | 0 | — | its one websocket per session carries order updates instead; when it streamed quotes, everything past the hundredth was ignored |
 | Shoonya | `NSE\|2885` | 1 × 100 | 4 | the same 100 cap, and only one connection per session streams |
 | Wisdom Capital | `1:2885` (XTS segment number, then instrument id) | 1 × 50 | 4 | 50 instruments for the whole app key |
 | Stoxkart | `NSE:760946` | 4 × 50,000 | 5 | never refuses; resets connections past about four; only NSE, NFO, BSE and MCX |

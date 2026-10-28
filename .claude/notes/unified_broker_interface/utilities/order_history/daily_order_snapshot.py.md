@@ -1,6 +1,6 @@
 # daily_order_snapshot.py
 
-Added on 2026-10-20. Flattrade permits one websocket per session and the quote feed holds it, so its order updates socket is not run and `flattrade:order-updates:stream` is never written; its orders exist only in `flattrade:orders:orders`, which the poller fills and which expires at 06:00 IST. Nothing kept them, so the stop slippage measurement could not price a stop the strategy cancelled just as it filled.
+Added on 2026-10-20. Flattrade permits one websocket per session and the quote feed holds it, so its order updates socket is not run and `flattrade:order-updates:stream` is never written; its orders exist only in `flattrade:orders:orders`, which the poller fills and which expires at 06:00 IST (since 2026-10-28 the order socket runs instead of the quote feed, and writes that stream). Nothing kept them, so the stop slippage measurement could not price a stop the strategy cancelled just as it filled.
 
 ## Why the combined document, not each broker's hash
 

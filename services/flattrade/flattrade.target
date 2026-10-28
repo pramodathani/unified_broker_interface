@@ -5,15 +5,16 @@
 #     systemctl --user link ~/Projects/unified_broker_interface/services/flattrade/*
 #     systemctl --user daemon-reload
 #     systemctl --user enable --now flattrade.target flattrade-login.timer \
-#         flattrade-instruments@websocket_quotes.service flattrade-instruments@store_quotes_to_db.service \
-#         flattrade-orders@store_orders_to_db.service flattrade-orders@api_order_details.service flattrade-orders@api_trade_details.service \
+#         flattrade-orders@websocket_order_details.service flattrade-orders@store_orders_to_db.service \
+#         flattrade-orders@api_order_details.service flattrade-orders@api_trade_details.service \
 #         flattrade-portfolio@positions.service flattrade-portfolio@holdings.service flattrade-portfolio@funds.service \
 #         flattrade-user@details.service \
 #         flattrade-historical-prices.service
 #
-# The order update feed is left out: Flattrade permits one websocket per session and the quote feed holds it, so
-# enabling flattrade-orders@websocket_order_details.service beside
-# flattrade-instruments@websocket_quotes.service would knock one of them off.
+# The quote feed is left out: Flattrade permits one websocket per session and the order update feed holds it, so
+# enabling flattrade-instruments@websocket_quotes.service beside
+# flattrade-orders@websocket_order_details.service would knock one of them off. unified.broker_quote_capacities gives
+# Flattrade no quote sockets, so the allocation gives its instruments to other brokers.
 
 [Unit]
 Description=flattrade scripts
