@@ -21,7 +21,7 @@ class DhanAPI(BrokerAPI):
 
         try:
             self.get(url="https://api.dhan.co/v2/profile")
-        except Exception as exc:
+        except Exception:
             params = {
                 "dhanClientId": self._settings['client_id'],
                 "pin": self._settings['pin'],
@@ -75,7 +75,7 @@ class DhanAPI(BrokerAPI):
                 'access-token': self._last_login['access_token']
             }        
         
-        if verbose == True:
+        if verbose:
             rest_api_message = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S:%f')} - requests.request(method='{method}', url='{url}', params={params}, data={data}, headers={headers}, cookies={cookies}, files={files}, auth={auth}, timeout={timeout}, allow_redirects={allow_redirects}, proxies={proxies}, hooks={hooks}, stream={stream}, verify={verify}, cert={cert}, json={json})"        
             self._cache.rpush('broker_api_calls', rest_api_message)
             self._logger.info(rest_api_message)

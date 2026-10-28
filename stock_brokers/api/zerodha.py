@@ -30,7 +30,7 @@ class ZerodhaAPI(BrokerAPI):
 
         try:
             self.get(url="https://api.kite.trade/user/profile")
-        except Exception as e:
+        except Exception:
             chrome_options = Options()
             chrome_options.add_argument('--headless')
             chrome_options.add_argument('--no-sandbox')
@@ -136,7 +136,7 @@ class ZerodhaAPI(BrokerAPI):
                 "Authorization": f"token {self._settings['api_key']}:{self._last_login['access_token']}"
             }
         
-        if verbose == True:
+        if verbose:
             rest_api_message = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S:%f')} - requests.request(method='{method}', url='{url}', params={params}, data={data}, headers={headers}, cookies={cookies}, files={files}, auth={auth}, timeout={timeout}, allow_redirects={allow_redirects}, proxies={proxies}, hooks={hooks}, stream={stream}, verify={verify}, cert={cert}, json={json})"
             self._cache.rpush('broker_api_calls', rest_api_message)
             self._logger.info(rest_api_message)

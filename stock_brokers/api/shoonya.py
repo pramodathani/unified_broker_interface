@@ -34,7 +34,7 @@ class ShoonyaAPI(BrokerAPI):
             details = (self.post(url="https://api.shoonya.com/NorenWClientAPI/UserDetails") or {}).get("data")
             if not isinstance(details, dict) or str(details.get("stat", "")).lower() != "ok":
                 raise ShoonyaAPIException(code="Not_Ok", message=f"UserDetails refused the session: {str(details)[:200]}")
-        except Exception as e:
+        except Exception:
             chrome_options = Options()
             chrome_options.add_argument('--headless')
             chrome_options.add_argument('--no-sandbox')
@@ -158,7 +158,7 @@ class ShoonyaAPI(BrokerAPI):
             data += f"&jKey={self._last_login['access_token']}"
         
         rest_api_message = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S:%f')} - requests.request(method='{method}', url='{url}', params={params}, data={data}, headers={headers}, cookies={cookies}, files={files}, auth={auth}, timeout={timeout}, allow_redirects={allow_redirects}, proxies={proxies}, hooks={hooks}, stream={stream}, verify={verify}, cert={cert}, json={json})"
-        if verbose == True:
+        if verbose:
             self._logger.info(rest_api_message)
             self._cache.rpush('broker_api_calls', rest_api_message)
                         

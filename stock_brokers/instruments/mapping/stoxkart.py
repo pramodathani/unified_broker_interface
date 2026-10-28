@@ -514,7 +514,6 @@ class StoxkartMappingAdapter(BrokerMappingAdapter):
             if not isin_missing(isin) and str(isin).startswith("INF"):
                 return self.segment_config("nse_exchange_traded_funds")
             if isin_missing(isin):
-                symbol = raw_row.get("symbol")
                 if self._is_nse_index_row(raw_row) and raw_row.get("series") == "EQ":
                     return self.segment_config("nse_equity_indices")
                 return None

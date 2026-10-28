@@ -10,7 +10,6 @@ from selenium.webdriver import Chrome
 from selenium.webdriver.chrome.options import Options
 from selenium.common.exceptions import *
 from selenium.webdriver.common.by import By
-from urllib.parse import urlparse, parse_qs
 
 from stock_brokers.api.base import BrokerAPI, BrokerAPIException
 
@@ -459,7 +458,7 @@ class WisdomCapitalAPI(BrokerAPI):
         if verify is None:
             verify = self._VERIFY_SSL
 
-        if verbose == True:
+        if verbose:
             rest_api_message = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S:%f')} - requests.request(method='{method}', url='{url}', params={params}, data={data}, headers={headers}, cookies={cookies}, files={files}, auth={auth}, timeout={timeout}, allow_redirects={allow_redirects}, proxies={proxies}, hooks={hooks}, stream={stream}, verify={verify}, cert={cert}, json={json})"
             self._cache.rpush('broker_api_calls', rest_api_message)
             self._logger.info(rest_api_message)        

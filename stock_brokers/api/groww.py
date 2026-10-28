@@ -23,7 +23,7 @@ class GrowwAPI(BrokerAPI):
 
         try:
             self.get(url="https://api.groww.in/v1/user/detail", timeout=self.LOGIN_TIMEOUT_SECONDS)
-        except Exception as e:
+        except Exception:
             headers = {
                 "Authorization": f"Bearer {self._settings['totp_token']}",
                 "Content-Type": "application/json"
@@ -82,7 +82,7 @@ class GrowwAPI(BrokerAPI):
                 'X-API-Version': '1.0'
             }
         
-        if verbose == True:
+        if verbose:
             rest_api_message = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S:%f')} - requests.request(method='{method}', url='{url}', params={params}, data={data}, headers={headers}, cookies={cookies}, files={files}, auth={auth}, timeout={timeout}, allow_redirects={allow_redirects}, proxies={proxies}, hooks={hooks}, stream={stream}, verify={verify}, cert={cert}, json={json})"
             self._cache.rpush('broker_api_calls', rest_api_message)
             self._logger.info(rest_api_message)

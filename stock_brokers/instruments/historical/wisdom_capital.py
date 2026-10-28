@@ -44,7 +44,7 @@ from stock_brokers.instruments.historical.base import (INDIA_TIMEZONE,
                                                        CandleThrottled,
                                                        SeriesContext)
 from stock_brokers.instruments.mapping.utilities.segments import (CASH_SEGMENTS, DERIVATIVE_SEGMENTS,
-                                                             INDEX_SEGMENTS, segments_of)
+                                                             segments_of)
 
 HISTORICAL_URL = "https://trade.wisdomcapital.in/apimarketdata/instruments/ohlc"
 
