@@ -116,19 +116,17 @@ class GrowwAPI(BrokerAPI):
         else:
             if "json" in response.headers["Content-Type"]:
                 json_content = response.json()
-                if "error" in json_content:
+                if isinstance(json_content.get("error"), dict):
                     if "code" in json_content["error"] and "message" in json_content["error"]:
                         raise GrowwAPIException(code=json_content["error"]["code"], message=json_content["error"]["message"])
-                else:
-                    raise GrowwAPIException(code=response.status_code, message=json_content)
+                raise GrowwAPIException(code=response.status_code, message=json_content)
             elif "text" in response.headers["Content-Type"]:
                 try:
                     json_content = json_lib.loads(response.content.decode("utf-8").strip())
-                    if "error" in json_content:
+                    if isinstance(json_content.get("error"), dict):
                         if "code" in json_content["error"] and "message" in json_content["error"]:
                             raise GrowwAPIException(code=json_content["error"]["code"], message=json_content["error"]["message"])
-                    else:
-                        raise GrowwAPIException(code=response.status_code, message=json_content)
+                    raise GrowwAPIException(code=response.status_code, message=json_content)
                 except json_lib.JSONDecodeError:
                     raise GrowwAPIException(code=response.status_code, message=response.content.decode("utf-8").strip())
             else:
