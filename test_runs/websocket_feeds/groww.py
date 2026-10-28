@@ -313,6 +313,32 @@ class GrowwFeedCases:
                 self.run_orders_failing_token_requests,
             ),
             (
+                'groww.orders.second_info_is_ignored',
+                [
+                    [
+                        ('open',),
+                        ('message', INFO),
+                        ('message', INFO),
+                        ('close', 1000, 'normal closure'),
+                    ],
+                ],
+                set(),
+                self.run_orders_with_answers(2),
+            ),
+            (
+                'groww.quotes.second_info_is_ignored',
+                [
+                    [
+                        ('open',),
+                        ('message', INFO),
+                        ('message', INFO),
+                        ('close', 1000, 'normal closure'),
+                    ],
+                ],
+                set(),
+                self.run_quotes_with_answers(2),
+            ),
+            (
                 'groww.orders.login_again_fails',
                 [],
                 {
