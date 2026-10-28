@@ -822,7 +822,7 @@ class BrokerCandles:
 
     def _defer_until_tomorrow(self, token, interval, reason):
         """
-        Put a series aside until the next day.
+        Put a series aside until the next midnight in India time.
 
         Reached when a forward window brings nothing new, which outside market hours is every
         forward window. Without it the highest priority series would be re-fetched continuously
@@ -834,7 +834,8 @@ class BrokerCandles:
         with self._connection.cursor() as cursor:
             cursor.execute(f"""
                 update {self._progress_table} set
-                    next_attempt_after = date_trunc('day', now()) + interval '1 day',
+                    next_attempt_after = (date_trunc('day', now() at time zone 'Asia/Kolkata')
+                                          + interval '1 day') at time zone 'Asia/Kolkata',
                     last_attempt_at = now(),
                     last_outcome = %s,
                     consecutive_failures = 0
