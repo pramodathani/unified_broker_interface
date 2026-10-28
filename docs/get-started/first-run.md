@@ -142,7 +142,7 @@ The unified scripts read only what the broker scripts wrote to Redis and the dat
 ```bash
 systemctl --user link ~/Projects/unified_broker_interface/services/unified/*
 systemctl --user daemon-reload
-systemctl --user enable --now unified.target unified-mapping.timer unified-prices.timer \
+systemctl --user enable --now unified.target unified-mapping.timer unified-prices.timer unified-prices-verify.timer \
     unified-instruments@websocket_quotes.service unified-instruments@store_quotes_to_db.service \
     unified-orders@api_order_details.service unified-orders@api_trade_details.service unified-orders@websocket_order_details.service unified-orders@store_orders_to_db.service \
     unified-portfolio@positions.service unified-portfolio@holdings.service unified-portfolio@funds.service unified-portfolio@store_positions_to_db.service \

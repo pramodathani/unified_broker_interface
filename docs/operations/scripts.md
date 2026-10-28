@@ -311,7 +311,8 @@ bin/unified/instruments/map dhan kotak                     # only these
 bin/unified/instruments/map --cache-only --date 2026-09-13 # only rewrite the Redis cache
 bin/unified/instruments/allocate_subscriptions --dry-run          # print the decision, write nothing
 bin/unified/instruments/allocate_subscriptions --restart-feeds    # write, then restart the quote feeds that changed
-bin/unified/instruments/price_history daily                # load, corrections, load, factors, verify
+bin/unified/instruments/price_history daily                # load, corrections, load, factors
+bin/unified/instruments/price_history verify               # the checks; unified-prices-verify.service runs them at midnight
 bin/unified/instruments/price_history status               # what the last run did
 ```
 
