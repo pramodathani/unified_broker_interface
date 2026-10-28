@@ -1,6 +1,6 @@
 Stand-in login number 1
 UserDetails called for flattrade-token-1: Ok
-Connecting to wss://piconnect.flattrade.in/PiConnectWSTp/
+Connecting to wss://piconnect.flattrade.in/PiConnectWSAPI/
 Sent: {"t": "a", "uid": "FT012345", "actid": "FT012345", "source": "API", "accesstoken": "flattrade-token-1"}
 INFO socket_0 opened. Authenticating.
 ERROR socket_0 authentication rejected: {'t': 'ak', 's': 'NOT_OK', 'emsg': 'Session Expired :  Invalid Session Key'}
@@ -9,7 +9,7 @@ WARNING Logging in to Flattrade again.
 Stand-in login number 2
 UserDetails called for flattrade-token-2: Ok
 WARNING socket_0 disconnected. Reconnecting in 0 seconds.
-Connecting to wss://piconnect.flattrade.in/PiConnectWSTp/
+Connecting to wss://piconnect.flattrade.in/PiConnectWSAPI/
 Sent: {"t": "a", "uid": "FT012345", "actid": "FT012345", "source": "API", "accesstoken": "flattrade-token-2"}
 INFO socket_0 opened. Authenticating.
 Sent: {"t": "d", "k": "MCX|565899#MCX|565900"}
