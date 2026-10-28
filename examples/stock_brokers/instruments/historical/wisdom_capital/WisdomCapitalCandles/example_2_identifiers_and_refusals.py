@@ -169,13 +169,14 @@ class RefusingWisdomCapitalAPI:
             'user_id': 'WC1001',
         }
 
-    def get(self, url, headers=None, params=None):
+    def get(self, url, headers=None, params=None, timeout=None):
         """Refuses a GET request with the chosen code.
 
         Args:
             url (str): The URL the downloader asked for.
             headers (dict): The headers it sent.
             params (dict): The query parameters it sent.
+            timeout (float | None): How long the downloader would wait for an answer, in seconds; the stand-in answers at once.
 
         Returns:
             dict: Never returns.

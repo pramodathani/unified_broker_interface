@@ -37,12 +37,13 @@ class ExpiringFlattradeAPI:
         """
         self.requests = []
 
-    def post(self, url, data=None):
+    def post(self, url, data=None, timeout=None):
         """Records a POST request and answers with a daily bar the first time and a refusal afterwards.
 
         Args:
             url (str): The endpoint the downloader called.
             data (dict): The request fields it sent.
+            timeout (float | None): How long the downloader would wait for an answer, in seconds; the stand-in answers at once.
 
         Returns:
             dict: The response envelope, with the decoded body under `data`.
