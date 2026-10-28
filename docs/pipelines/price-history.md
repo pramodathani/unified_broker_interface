@@ -151,7 +151,7 @@ The table below lists the subcommands. Each run writes its outcome to the Redis 
 
 Until 2026-10-28 the job ran at 08:30 IST from Monday to Saturday, with the checks as its last step. It takes three hours or more, so it ran into market hours, and on 2026-10-28 the checks' comparison of whole tables kept the database disk so busy that the live tick writers fell behind and lost ticks. Both timers set `Persistent=false`, so a run missed while the machine was off is skipped rather than started at boot, which could be during market hours.
 
-The night run loses no bars. The brokers' candle downloaders do not deliver a day's bars in one burst: a series that is up to date is set aside until midnight UTC (05:30 IST), and each downloader then works through its queue at its broker's rate limit for the rest of the day, so on 2026-10-28 Zerodha's daily series were refreshed between 06:00 and 21:00 IST and Flattrade's between 06:00 and 20:00. Whatever has arrived by 02:00 is loaded that night, and the rest the night after.
+The night run loses no bars. The brokers' candle downloaders do not deliver a day's bars in one burst: a series that is up to date is set aside until the next midnight IST, and each downloader then works through its queue at its broker's rate limit, which takes most of a day: on 2026-10-28, when series still woke at midnight UTC (05:30 IST), Zerodha's daily series were refreshed between 06:00 and 21:00 IST and Flattrade's between 06:00 and 20:00. Whatever has arrived by 02:00 is loaded that night, and the rest the night after.
 
 ### Which broker supplies which instrument
 
