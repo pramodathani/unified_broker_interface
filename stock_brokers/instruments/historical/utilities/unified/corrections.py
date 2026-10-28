@@ -62,6 +62,8 @@ IMPLAUSIBLE_RISE = 1.25
 EVENT_MATCH = 0.3
 EVENT_MARGIN = 0.2
 MINIMUM_INTRADAY_STEP = 1.08
+UNMOVED_TOLERANCE = 0.05
+STEPPED_TOLERANCE = 0.10
 MERGE_WINDOW_DAYS = 5
 
 def level_steps(values, tolerance, anchor=1.0, anchor_tolerance=None):
@@ -307,6 +309,37 @@ class CorrectionBuilder:
             return [(day, 1 / float(ratio)) for day, ratio in cursor.fetchall()]
 
     @staticmethod
+    def one_series_stepped(nse_change, bse_change, ratio):
+        """
+        The series to correct when the other one alone stepped across a pair step, by the step itself.
+
+        A broker adjusting a series for a split or bonus divides its older prices, so the series it served adjusted shows no move across the ex-date, while the raw series falls by the factor, and undoing the adjustment multiplies the older prices by more than 1. A reading is accepted only when its multiplier is above 1, the series it corrects moved by less than `UNMOVED_TOLERANCE` in log terms, and the series it leaves moved by the step's own ratio within `STEPPED_TOLERANCE`. JBCHEPHARM's 2023-09-18 split reads this way: NSE moved 0.98 and BSE 0.49 across a step of 2, so NSE is corrected by 2. A reading that would multiply by less than 1 means a consolidation, which only a Yahoo event can confirm.
+
+        Args:
+            nse_change (float): The move of NSE's own closes across the transition.
+            bse_change (float): The move of BSE's own closes across the transition.
+            ratio (float): The step in the BSE to NSE close ratio, the older level over the newer.
+
+        Returns:
+            str | None: "nse" or "bse", or None when no reading, or more than one, fits.
+        """
+        readings = []
+        candidates = [
+            ("nse", nse_change, bse_change, ratio),
+            ("bse", bse_change, nse_change, 1 / ratio),
+        ]
+        for side, own_change, other_change, multiplier in candidates:
+            if multiplier <= 1:
+                continue
+            unmoved = abs(_log(own_change)) < UNMOVED_TOLERANCE
+            stepped = abs(_log(other_change * multiplier)) < STEPPED_TOLERANCE
+            if unmoved and stepped:
+                readings.append(side)
+        if len(readings) == 1:
+            return readings[0]
+        return None
+
+    @staticmethod
     def own_level(closes, days, anchor, before):
         """
         The median of a series' own closes on the `PERSISTENCE` days nearest a date, on one side of it.
@@ -338,8 +371,9 @@ class CorrectionBuilder:
         correcting BSE leaves both moving as NSE did. A choice whose common move is a rise of more than
         `IMPLAUSIBLE_RISE` is ruled out, since prices do not jump up several times over without a
         consolidation Yahoo would list. What remains is decided by a split Yahoo lists near the date,
-        whose factor the right choice reproduces; failing that NSE is corrected, since flattrade's NSE
-        series are the ones known to be served pre-adjusted, but the row stays provisional.
+        whose factor the right choice reproduces; failing that by `one_series_stepped`, when one series
+        alone moved by the step and the other did not move; failing both NSE is corrected, since
+        flattrade's NSE series are the ones known to be served pre-adjusted, but the row stays provisional.
 
         Each side's move is measured between medians of its own closes just before and just after the
         transition, not between two shared days, so that a hole in one series - flattrade has no BSE
@@ -396,6 +430,8 @@ class CorrectionBuilder:
             # correcting BSE multiplies its earlier prices by 1/ratio, leaving both moving as NSE did.
             options = {"nse": bse_change, "bse": nse_change}
             plausible = {side: move for side, move in options.items() if move <= IMPLAUSIBLE_RISE}
+            stepped_side = self.one_series_stepped(nse_change, bse_change, ratio)
+            decided_by_step = False
             event = next(((day, factor) for day, factor in sorted(events, key=lambda item: abs((item[0] - after).days))
                           if before - _DAY * MERGE_WINDOW_DAYS < day <= after + _DAY * MERGE_WINDOW_DAYS), None)
             if event is not None:
@@ -412,12 +448,16 @@ class CorrectionBuilder:
                     side, backed = next(iter(acted)), True
                 elif distances and distances[0][0] < EVENT_MATCH and clear:
                     side, backed = distances[0][1], True
+                elif stepped_side is not None:
+                    side, backed, decided_by_step = stepped_side, True, True
                 elif "nse" in plausible:
                     side, backed = "nse", False
                 else:
                     side, backed = None, False
             elif len(plausible) == 1:
                 side, backed = next(iter(plausible)), True
+            elif stepped_side is not None:
+                side, backed, decided_by_step = stepped_side, True, True
             elif "nse" in plausible:
                 side, backed = "nse", False
             else:
@@ -440,7 +480,9 @@ class CorrectionBuilder:
             confirmed = (snapped is not None and backed and step["newer_run"] >= MINIMUM_NEWER_RUN
                          and not (in_hole and not dated_by_event))
             evidence["corrected"] = side
-            if event is not None and backed and len(plausible) > 1:
+            if decided_by_step:
+                evidence["decided_by"] = "one series stepped alone"
+            elif event is not None and backed and len(plausible) > 1:
                 evidence["decided_by"] = "yahoo event"
             elif backed:
                 evidence["decided_by"] = "only plausible reading"
