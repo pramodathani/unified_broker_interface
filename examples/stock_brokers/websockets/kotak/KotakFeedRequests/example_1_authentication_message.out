@@ -1,0 +1,12 @@
+Sent as text: {"user": "ABCD1", "auth": "kotak-sid-1", "format": "native_batch", "source": "NEOTRADEAPI", "platform": "Web", "version": "1.2.3", "sdk_version": 2, "sdk_date": "2026-08-07T09:41:17.667Z", "conn_req_time": 1793159100000, "sessionValidation": false}
+Fields:
+  user: 'ABCD1'
+  auth: 'kotak-sid-1'
+  format: 'native_batch'
+  source: 'NEOTRADEAPI'
+  platform: 'Web'
+  version: '1.2.3'
+  sdk_version: 2
+  sdk_date: '2026-08-07T09:41:17.667Z'
+  conn_req_time: 1793159100000
+  sessionValidation: False

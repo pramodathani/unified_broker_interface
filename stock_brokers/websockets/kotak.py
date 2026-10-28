@@ -1,21 +1,24 @@
 """
-Kotak's two websockets: the HSM market feed that Kotak's own Python SDK (`neo_api_client`) streams from, and the account's order and position update stream.
+Kotak's two websockets: the SFeed market feed that Kotak's own Python SDK (`kotakneoapi` 3.0) streams from, and the account's order and position update stream.
 
 **The login.**
-`KotakSession` holds the `KotakAPI` both sockets read the access token, the session id and the account's host from, afresh on every connect, so a login made by any process is picked up.
+`KotakSession` holds the `KotakAPI` both sockets read the login from, afresh on every connect, so a login made by any process is picked up.
 The quote sockets log in again one at a time, and only when no other socket or process has already replaced the session that failed; the order socket logs in again whenever it is refused, without that check, as it always has.
 
 **Quotes.**
-`KotakQuotesSocket` connects to `wss://mlhsm.kotaksecurities.com`.
-Every request and response is a binary frame that begins with its length in two big-endian bytes and then a one-byte frame type.
-The connection request (type 1) carries the access token, the session id and the source `JS_API` as length-prefixed fields.
-Kotak answers with a type 1 frame whose status is `K` for accepted, and with the number of data frames after which it wants an acknowledgement.
-Every instrument is subscribed twice, as a scrip topic (`sf|EXCHANGE|TOKEN`) for its prices and quantities and as a depth topic (`dp|EXCHANGE|TOKEN`) for its five-level book, up to 100 topics a subscription request (type 4) on channel 1.
-Data frames (type 6) begin with a four-byte message number when acknowledgements were asked for, and after that many data frames the socket sends an acknowledgement (type 3) carrying the last message number.
-Each data frame holds packets that are either a snapshot (`S`, 83) - topic id, topic name, the numeric fields as four-byte signed integers in field order, and string fields by id - or an update (`U`, 85) - topic id and the numeric fields again, where -2147483648 means unchanged.
-A topic's latest values are kept, and a whole tick is built for an instrument every time either of its topics changes, once its scrip snapshot has arrived.
-A snapshot's trading symbol (string field 54) names an instrument that had no name, and that name is handed to `on_name` before the frame's ticks.
-Prices are integers divided by the topic's multiplier (scrip field 23, depth field 32) times ten to its precision (scrip field 24, depth field 33).
+`KotakQuotesSocket` connects to the `feed_url` the login stored from Kotak's `feedUrl`, or to `wss://sfeed.kotaksecurities.com/apifeed` when the login has none.
+Kotak retired the earlier HSM feed at `wss://mlhsm.kotaksecurities.com` in October 2026; it refuses connections.
+Control messages are JSON text frames.
+Once the socket opens it sends the `native_batch` authentication message, with the account's UCC as `user` and the session id as `auth`.
+Kotak answers with message code 1119 and then 1117, both carrying each exchange's numeric id and price divider, and the first of them makes the socket subscribe every instrument once, with `subscribeDepth` and `ack_symbol`, in one message.
+Kotak checks the session only after that: message code 1120 means it refused the session, and its text, which repeats the session id, is never logged.
+Message code 1109 acknowledges the subscription and maps each `EXCHANGE|TOKEN` to its trading symbol, which names any instrument that had no name; binary frames that arrive before it are held back and decoded after it, so every instrument is named before its first tick.
+Market data arrives in binary frames, each holding packets laid end to end in little-endian byte order.
+A packet starts with its length in two bytes, then its message code, exchange id, level, auction flag, sequence number and bitmask length, nine bytes in all.
+A market picture, at level 2, 4, 8 or 16, carries the instrument's whole state rather than a change: a fixed body of 135 bytes, then depth rows of 16 bytes, buy side first; `subscribeDepth` sends level 8, with five rows a side.
+A packet is read as a market picture by its level, as `kotakneoapi` reads it, after the message codes that are something else are set aside: a closing auction update (104), a market status (105), the market opening and closing (6511 and 6521) and an index (7207); those, and any packet at another level or too short for the fixed body, are skipped.
+Prices are integers divided by the exchange's divider, 100 on most exchanges and 10,000,000 on `cde_fo` and `bse_cd`; times are Unix seconds.
+Within one frame only an instrument's latest market picture is handed on.
 The quote socket gives up only after six more failed connects, not on the first refusal after logging in again.
 
 **Order updates.**
@@ -29,57 +32,66 @@ The quotes socket hands names to `on_name` and each data frame's ticks to `on_ti
 """
 
 import json
+import struct
 import threading
 import time
 from datetime import datetime
 
 from stock_brokers.websockets.base import BrokerWebsocket
 
-FEED_URL = "wss://mlhsm.kotaksecurities.com"
+DEFAULT_FEED_URL = "wss://sfeed.kotaksecurities.com/apifeed"
 REALTIME_PATH = "/realtime"
 
-CONNECTION_SOURCE = "JS_API"
-CONNECTION_FRAME = 1
-ACKNOWLEDGEMENT_FRAME = 3
-SUBSCRIBE_FRAME = 4
-DATA_FRAME = 6
-SNAPSHOT_PACKET = 83
-UPDATE_PACKET = 85
-STATUS_ACCEPTED = "K"
-UNCHANGED_VALUE = -2147483648
-CHANNEL_NUMBER = 1
-MAX_TOPICS_PER_REQUEST = 100
+FEED_FORMAT = "native_batch"
+FEED_SOURCE = "NEOTRADEAPI"
+FEED_PLATFORM = "Web"
+FEED_VERSION = "1.2.3"
+FEED_SDK_VERSION = 2
+FEED_SDK_DATE = "2026-08-07T09:41:17.667Z"
+SUBSCRIBE_DEPTH_EVENT = "subscribeDepth"
+SUBSCRIBED_DESCRIPTION = "SUBSCRIBED"
 
-SCRIP_TOPIC = "sf"
-DEPTH_TOPIC = "dp"
+AUTHENTICATION_ANSWER_CODES = (
+    1117,
+    1119,
+)
+AUTHENTICATION_REFUSED_CODE = 1120
+SUBSCRIPTION_ACKNOWLEDGEMENT_CODE = 1109
 
-SCRIP_EXCHANGE_TIMESTAMP = 2
-SCRIP_LAST_TRADE_TIME = 3
-SCRIP_VOLUME = 4
-SCRIP_LAST_PRICE = 5
-SCRIP_LAST_QUANTITY = 6
-SCRIP_BUY_QUANTITY = 7
-SCRIP_SELL_QUANTITY = 8
-SCRIP_AVERAGE_PRICE = 13
-SCRIP_LOW = 14
-SCRIP_HIGH = 15
-SCRIP_OPEN = 20
-SCRIP_CLOSE = 21
-SCRIP_OPEN_INTEREST = 22
-SCRIP_MULTIPLIER = 23
-SCRIP_PRECISION = 24
+PACKET_LENGTH = struct.Struct("<H")
+PACKET_HEADER = struct.Struct("<HHbBBBB")
+MARKET_PICTURE = struct.Struct("<IqqqqqIIIIIqIIIIhiIdiIIIIIBI")
+DEPTH_ROW = struct.Struct("<qii")
+MARKET_PICTURE_END = PACKET_HEADER.size + MARKET_PICTURE.size
+MARKET_PICTURE_LEVELS = (
+    2,
+    4,
+    8,
+    16,
+)
+NOT_MARKET_PICTURE_CODES = (
+    104,
+    105,
+    6511,
+    6521,
+    7207,
+)
+TOUCH_LINE_LEVEL = 4
+DEFAULT_DIVIDER = 100
+MAX_HELD_FRAMES = 1000
 
-DEPTH_LEVELS = 5
-DEPTH_BUY_PRICE = 2
-DEPTH_SELL_PRICE = 7
-DEPTH_BUY_QUANTITY = 12
-DEPTH_SELL_QUANTITY = 17
-DEPTH_BUY_ORDERS = 22
-DEPTH_SELL_ORDERS = 27
-DEPTH_MULTIPLIER = 32
-DEPTH_PRECISION = 33
-
-STRING_TRADING_SYMBOL = 54
+EXCHANGE_NAMES = {
+    1: "nse_cm",
+    2: "nse_fo",
+    3: "cde_fo",
+    4: "nse_com",
+    5: "bse_cm",
+    6: "bse_fo",
+    7: "bse_cd",
+    8: "bse_co",
+    9: "mcx_fo",
+    10: "ncd_co",
+}
 
 ORDER = "order"
 POSITION = "position"
@@ -89,328 +101,190 @@ PING_INTERVAL_SECONDS = 30
 PING_TIMEOUT_SECONDS = 10
 
 
-class KotakTruncatedFrameError(ValueError):
-    """A binary frame ended before a field it declared."""
-
-
-class KotakFrameReader:
-    """
-    A cursor over one binary frame from Kotak's HSM feed, reading big-endian fields in order.
-
-    Attributes:
-        position (int): The offset of the next unread byte.
-    """
-
-    def __init__(self, data):
-        """
-        Starts reading a frame at its first byte.
-
-        Args:
-            data (bytes): The binary frame.
-
-        Returns:
-            None: This method returns nothing.
-        """
-        self._data = data
-        self.position = 0
-
-    def _take(self, size):
-        """
-        The next bytes, moving past them.
-
-        Args:
-            size (int): How many bytes to read.
-
-        Returns:
-            bytes: The bytes read.
-
-        Raises:
-            KotakTruncatedFrameError: The frame has fewer than `size` bytes left.
-        """
-        end = self.position + size
-        if end > len(self._data):
-            raise KotakTruncatedFrameError(f"frame of {len(self._data)} bytes ended reading {size} at {self.position}")
-        chunk = self._data[self.position:end]
-        self.position = end
-        return chunk
-
-    def read_unsigned(self, size):
-        """
-        Reads an unsigned big-endian integer.
-
-        Args:
-            size (int): Its width in bytes.
-
-        Returns:
-            int: The integer.
-
-        Raises:
-            KotakTruncatedFrameError: The frame ends first.
-        """
-        return int.from_bytes(self._take(size), "big")
-
-    def read_signed_integer(self):
-        """
-        Reads a four-byte signed big-endian integer.
-
-        Returns:
-            int: The integer.
-
-        Raises:
-            KotakTruncatedFrameError: The frame ends first.
-        """
-        return int.from_bytes(self._take(4), "big", signed=True)
-
-    def read_text(self, size):
-        """
-        Reads a string of single-byte characters.
-
-        Args:
-            size (int): Its length in bytes.
-
-        Returns:
-            str: The string.
-
-        Raises:
-            KotakTruncatedFrameError: The frame ends first.
-        """
-        return self._take(size).decode("latin-1")
-
-
 class KotakFeedRequests:
     """
-    Builds the binary requests a client sends to Kotak's HSM feed.
+    Builds the JSON control messages a client sends to Kotak's SFeed market feed.
     """
 
-    def connection(self, access_token, session_id):
+    def authentication(self, ucc, session_id, requested_at_milliseconds):
         """
-        Builds the connection request.
+        Builds the `native_batch` authentication message, as `kotakneoapi` 3.0.9 sends it.
 
         Args:
-            access_token (str): The REST access token from Kotak's login.
+            ucc (str): The account's unique client code.
             session_id (str): The session id from Kotak's login.
+            requested_at_milliseconds (int): The time of the request in Unix milliseconds.
 
         Returns:
-            bytes: The frame.
+            str: The message.
         """
-        fields = [
-            self._field(1, access_token.encode("latin-1")),
-            self._field(2, session_id.encode("latin-1")),
-            self._field(3, CONNECTION_SOURCE.encode("latin-1")),
-        ]
-        return self._framed(CONNECTION_FRAME, fields)
+        return json.dumps({
+            "user": ucc,
+            "auth": session_id,
+            "format": FEED_FORMAT,
+            "source": FEED_SOURCE,
+            "platform": FEED_PLATFORM,
+            "version": FEED_VERSION,
+            "sdk_version": FEED_SDK_VERSION,
+            "sdk_date": FEED_SDK_DATE,
+            "conn_req_time": requested_at_milliseconds,
+            "sessionValidation": False,
+        })
 
-    def subscription(self, topic_prefix, instrument_tokens):
+    def subscription(self, instrument_tokens):
         """
-        Builds a subscription to up to 100 topics on channel 1.
+        Builds one subscription to every instrument's five-level depth, asking for their trading symbols.
 
         Args:
-            topic_prefix (str): `sf` or `dp`.
             instrument_tokens (list[str]): The `EXCHANGE|TOKEN` instruments.
 
         Returns:
-            bytes: The frame.
+            str: The message.
         """
-        names = bytearray(len(instrument_tokens).to_bytes(2, "big"))
-        for instrument_token in instrument_tokens:
-            topic_name = f"{topic_prefix}|{instrument_token}".encode("latin-1")
-            names.append(len(topic_name))
-            names.extend(topic_name)
-        fields = [
-            self._field(1, bytes(names)),
-            self._field(2, bytes([CHANNEL_NUMBER])),
-        ]
-        return self._framed(SUBSCRIBE_FRAME, fields)
-
-    def acknowledgement(self, message_number):
-        """
-        Builds the acknowledgement of data frames up to a message number.
-
-        Args:
-            message_number (int): The message number of the last data frame received.
-
-        Returns:
-            bytes: The frame.
-        """
-        fields = [
-            self._field(1, message_number.to_bytes(4, "big", signed=True)),
-        ]
-        return self._framed(ACKNOWLEDGEMENT_FRAME, fields)
-
-    def _framed(self, frame_type, fields):
-        """
-        Joins a frame type and its fields behind the frame's length.
-
-        Args:
-            frame_type (int): The frame type byte.
-            fields (list[bytes]): The encoded fields, each already carrying its id and length.
-
-        Returns:
-            bytes: The whole frame.
-        """
-        body = bytes([frame_type, len(fields)]) + b"".join(fields)
-        return len(body).to_bytes(2, "big") + body
-
-    def _field(self, field_id, value):
-        """
-        Encodes one field as its id, a two-byte length and its bytes.
-
-        Args:
-            field_id (int): The field id.
-            value (bytes): The field's value.
-
-        Returns:
-            bytes: The encoded field.
-        """
-        return bytes([field_id]) + len(value).to_bytes(2, "big") + value
+        return json.dumps({
+            "event": SUBSCRIBE_DEPTH_EVENT,
+            "inputtoken": ",".join(instrument_tokens),
+            "ack_symbol": True,
+        })
 
 
-class KotakFeedTopic:
+class KotakFeedDecoder:
     """
-    The latest values of one subscribed topic, a scrip or a depth topic of one instrument.
-
-    Attributes:
-        kind (str): `sf` or `dp`.
-        instrument_token (str): The instrument's `EXCHANGE|TOKEN`.
-        strings (dict[int, str]): The topic's string fields by field id, such as its trading symbol.
+    Splits SFeed's binary frames into packets and turns market pictures into normalized ticks.
     """
 
-    def __init__(self, kind, instrument_token, strings):
+    def __init__(self):
         """
-        Creates a topic from its snapshot's name and strings.
-
-        Args:
-            kind (str): `sf` or `dp`.
-            instrument_token (str): The instrument's `EXCHANGE|TOKEN`.
-            strings (dict[int, str]): The snapshot's string fields by field id.
+        Starts with no exchanges learned, so every exchange uses the static names and the default divider.
 
         Returns:
             None: This method returns nothing.
         """
-        self.kind = kind
-        self.instrument_token = instrument_token
-        self.strings = strings
-        self._numbers = {}
+        self._names = dict(EXCHANGE_NAMES)
+        self._dividers = {}
 
-    def apply(self, numbers):
+    def learn_exchanges(self, exchanges):
         """
-        Takes a snapshot's or an update's numeric fields, keeping earlier values where a field is unchanged.
+        Takes the exchange ids and price dividers from Kotak's answer to the authentication message.
 
         Args:
-            numbers (list[int]): The numeric fields in field order.
+            exchanges (dict): Exchange names to `{"value": id, "divider": divider}`, as Kotak sends them.
 
         Returns:
             None: This method returns nothing.
         """
-        for index, value in enumerate(numbers):
-            if value != UNCHANGED_VALUE:
-                self._numbers[index] = value
+        for name, details in exchanges.items():
+            if not isinstance(details, dict) or details.get("value") is None:
+                continue
+            exchange_id = int(details["value"])
+            self._names[exchange_id] = name
+            self._dividers[exchange_id] = details.get("divider") or DEFAULT_DIVIDER
 
-    def number(self, index):
+    def packets(self, frame):
         """
-        A numeric field as sent.
+        Splits a binary frame into its packets, stopping at a length that is too short or runs past the frame.
 
         Args:
-            index (int): The field index.
+            frame (bytes): The frame.
 
         Returns:
-            int | None: The value, or None when the feed has not sent the field.
+            list[bytes]: The whole packets, in order.
         """
-        return self._numbers.get(index)
+        packets = []
+        offset = 0
+        while offset + PACKET_LENGTH.size <= len(frame):
+            size = PACKET_LENGTH.unpack_from(frame, offset)[0]
+            if size < PACKET_HEADER.size or offset + size > len(frame):
+                break
+            packets.append(frame[offset:offset + size])
+            offset = offset + size
+        return packets
 
-    def price(self, index):
+    def tick(self, packet, names):
         """
-        A price field in rupees, scaled by the topic's multiplier and precision.
+        Builds the normalized tick a market picture carries.
 
         Args:
-            index (int): The field index.
+            packet (bytes): One packet.
+            names (dict[str, str]): `EXCHANGE|TOKEN` to trading symbol.
 
         Returns:
-            float | None: The price, or None when the feed has not sent the field.
+            dict | None: The tick, or None when the packet is not a whole market picture.
         """
-        value = self._numbers.get(index)
-        if value is None:
+        _, message_code, exchange_id, level, _, _, _ = PACKET_HEADER.unpack_from(packet, 0)
+        if message_code in NOT_MARKET_PICTURE_CODES:
             return None
-        if self.kind == SCRIP_TOPIC:
-            multiplier = self._numbers.get(SCRIP_MULTIPLIER) or 1
-            precision = self._numbers.get(SCRIP_PRECISION, 2)
-        else:
-            multiplier = self._numbers.get(DEPTH_MULTIPLIER) or 1
-            precision = self._numbers.get(DEPTH_PRECISION, 2)
-        return round(value / (multiplier * 10 ** precision), precision)
-
-
-class KotakInstrumentQuote:
-    """
-    One instrument's scrip and depth topics, turned into a normalized tick.
-
-    Attributes:
-        instrument_token (str): The instrument's `EXCHANGE|TOKEN`.
-        scrip (KotakFeedTopic | None): The scrip topic, or None before its snapshot.
-        depth (KotakFeedTopic | None): The depth topic, or None before its snapshot.
-    """
-
-    def __init__(self, instrument_token):
-        """
-        Creates an instrument with neither topic yet.
-
-        Args:
-            instrument_token (str): The instrument's `EXCHANGE|TOKEN`.
-
-        Returns:
-            None: This method returns nothing.
-        """
-        self.instrument_token = instrument_token
-        self.scrip = None
-        self.depth = None
-
-    def tick(self, name):
-        """
-        Builds the normalized tick from the latest topic values.
-
-        Args:
-            name (str | None): The instrument's trading symbol, or None when it has none.
-
-        Returns:
-            dict | None: The tick, or None before the scrip snapshot has arrived.
-        """
-        scrip = self.scrip
-        if scrip is None:
+        if level not in MARKET_PICTURE_LEVELS or len(packet) < MARKET_PICTURE_END:
             return None
-        last_price = scrip.price(SCRIP_LAST_PRICE)
-        close = scrip.price(SCRIP_CLOSE)
+        (
+            token,
+            buy_quantity,
+            sell_quantity,
+            volume,
+            last_trade_time,
+            exchange_timestamp,
+            open_price,
+            close_price,
+            high_price,
+            low_price,
+            last_price,
+            last_quantity,
+            average_price,
+            _,
+            buy_rows,
+            sell_rows,
+            _,
+            _,
+            open_interest,
+            _,
+            _,
+            _,
+            _,
+            _,
+            _,
+            _,
+            _,
+            _,
+        ) = MARKET_PICTURE.unpack_from(packet, PACKET_HEADER.size)
+        divider = self._dividers.get(exchange_id) or DEFAULT_DIVIDER
+        exchange = self._names.get(exchange_id, str(exchange_id))
+        instrument_token = f"{exchange}|{token}"
+        if level == TOUCH_LINE_LEVEL:
+            buy_rows = 1
+            sell_rows = 1
+        buy_levels, sell_levels = self._depth(packet, buy_rows, sell_rows, divider)
+        last = last_price / divider
+        close = close_price / divider
         change = None
-        if last_price is not None and close:
-            change = (last_price - close) * 100 / close
-        buy_levels = self._depth_side(DEPTH_BUY_PRICE, DEPTH_BUY_QUANTITY, DEPTH_BUY_ORDERS)
-        sell_levels = self._depth_side(DEPTH_SELL_PRICE, DEPTH_SELL_QUANTITY, DEPTH_SELL_ORDERS)
+        if close:
+            change = (last - close) * 100 / close
         mode = "quote"
         if buy_levels or sell_levels:
             mode = "full"
         return {
-            "id": name or self.instrument_token,
+            "id": names.get(instrument_token) or instrument_token,
             "broker": "kotak",
-            "instrument_token": self.instrument_token,
-            "exchange": self.instrument_token.partition("|")[0],
+            "instrument_token": instrument_token,
+            "exchange": exchange,
             "mode": mode,
-            "last_price": last_price,
-            "last_quantity": scrip.number(SCRIP_LAST_QUANTITY),
-            "average_price": scrip.price(SCRIP_AVERAGE_PRICE),
-            "volume": scrip.number(SCRIP_VOLUME),
-            "buy_quantity": scrip.number(SCRIP_BUY_QUANTITY),
-            "sell_quantity": scrip.number(SCRIP_SELL_QUANTITY),
+            "last_price": last,
+            "last_quantity": last_quantity,
+            "average_price": average_price / divider,
+            "volume": volume,
+            "buy_quantity": buy_quantity,
+            "sell_quantity": sell_quantity,
             "ohlc": {
-                "open": scrip.price(SCRIP_OPEN),
-                "high": scrip.price(SCRIP_HIGH),
-                "low": scrip.price(SCRIP_LOW),
+                "open": open_price / divider,
+                "high": high_price / divider,
+                "low": low_price / divider,
                 "close": close,
             },
             "change": change,
-            "oi": scrip.number(SCRIP_OPEN_INTEREST),
+            "oi": open_interest,
             "oi_day_high": None,
             "oi_day_low": None,
-            "last_trade_time": scrip.number(SCRIP_LAST_TRADE_TIME) or None,
-            "exchange_timestamp": scrip.number(SCRIP_EXCHANGE_TIMESTAMP) or None,
+            "last_trade_time": last_trade_time if last_trade_time > 0 else None,
+            "exchange_timestamp": exchange_timestamp if exchange_timestamp > 0 else None,
             "depth": {
                 "buy": buy_levels,
                 "sell": sell_levels,
@@ -418,32 +292,37 @@ class KotakInstrumentQuote:
             "received_at": time.time(),
         }
 
-    def _depth_side(self, price_start, quantity_start, orders_start):
+    def _depth(self, packet, buy_rows, sell_rows, divider):
         """
-        One side of the order book.
+        Reads a market picture's depth rows, as many as the packet holds of those it declares.
 
         Args:
-            price_start (int): The field index of the best level's price.
-            quantity_start (int): The field index of the best level's quantity.
-            orders_start (int): The field index of the best level's order count.
+            packet (bytes): The market picture.
+            buy_rows (int): How many buy rows it declares.
+            sell_rows (int): How many sell rows it declares, after the buy rows.
+            divider (int): The exchange's price divider.
 
         Returns:
-            list[dict]: Up to five levels of `{quantity, price, orders}`, best first.
+            tuple: The buy levels and the sell levels, each a list of `{quantity, price, orders}`, best first.
         """
-        levels = []
-        if self.depth is None:
-            return levels
-        for level in range(DEPTH_LEVELS):
-            price = self.depth.price(price_start + level)
-            quantity = self.depth.number(quantity_start + level)
-            if price is None and quantity is None:
-                continue
-            levels.append({
+        buy_levels = []
+        sell_levels = []
+        offset = MARKET_PICTURE_END
+        for row in range(buy_rows + sell_rows):
+            if offset + DEPTH_ROW.size > len(packet):
+                break
+            quantity, price, orders = DEPTH_ROW.unpack_from(packet, offset)
+            level = {
                 "quantity": quantity,
-                "price": price,
-                "orders": self.depth.number(orders_start + level),
-            })
-        return levels
+                "price": price / divider,
+                "orders": orders,
+            }
+            if row < buy_rows:
+                buy_levels.append(level)
+            else:
+                sell_levels.append(level)
+            offset = offset + DEPTH_ROW.size
+        return buy_levels, sell_levels
 
 
 class KotakSession:
@@ -476,7 +355,7 @@ class KotakSession:
         The stored login in force now, which may be one another process has just obtained.
 
         Returns:
-            dict: The login, with `access_token`, `sid` and `base_url` among its fields; empty when none is stored.
+            dict: The login, with `access_token`, `sid`, `base_url` and `feed_url` among its fields; empty when none is stored.
         """
         return self._kotak._current_login() or {}
 
@@ -489,6 +368,25 @@ class KotakSession:
         """
         login = self.current_login()
         return login.get("access_token"), login.get("sid")
+
+    def feed_credentials(self):
+        """
+        The UCC and session id the market feed authenticates with.
+
+        Returns:
+            tuple: The account's UCC from Kotak's settings and the session id in force now, either of which may be None.
+        """
+        settings = self._kotak._settings or {}
+        return settings.get("ucc_code"), self.current_login().get("sid")
+
+    def feed_url(self):
+        """
+        The market feed's address for the login in force now.
+
+        Returns:
+            str: The `feed_url` the login stored, or Kotak's default address when it stored none.
+        """
+        return self.current_login().get("feed_url") or DEFAULT_FEED_URL
 
     def log_in_again(self, stale_session_id):
         """
@@ -537,7 +435,7 @@ class KotakSession:
 
 class KotakQuotesSocket(BrokerWebsocket):
     """
-    One Kotak HSM feed websocket carrying the scrip and depth topics of a batch of instruments.
+    One Kotak SFeed websocket carrying the five-level depth of a batch of instruments.
     """
 
     def __init__(self, name, instrument_tokens, names, session, on_name, on_ticks, logger):
@@ -547,9 +445,9 @@ class KotakQuotesSocket(BrokerWebsocket):
         Args:
             name (str): The connection's name, for the log.
             instrument_tokens (list[str]): The batch of `EXCHANGE|TOKEN` instruments.
-            names (dict[str, str]): `EXCHANGE|TOKEN` to trading symbol, shared by every socket and added to as snapshots name instruments.
+            names (dict[str, str]): `EXCHANGE|TOKEN` to trading symbol, shared by every socket and added to as the subscription acknowledgement names instruments.
             session (KotakSession): The shared login.
-            on_name (callable): Called with an instrument and its trading symbol when a snapshot names an unnamed instrument, on this socket's thread.
+            on_name (callable): Called with an instrument and its trading symbol when the acknowledgement names an unnamed instrument, on this socket's thread.
             on_ticks (callable): Called with each data frame's ticks, on this socket's thread.
             logger (logging.Logger): Where the connection reports.
 
@@ -563,11 +461,11 @@ class KotakQuotesSocket(BrokerWebsocket):
         self._on_name = on_name
         self._on_ticks = on_ticks
         self._requests = KotakFeedRequests()
+        self._decoder = KotakFeedDecoder()
         self._session_id = None
-        self._topics = {}
-        self._quotes = {}
-        self._acknowledge_every = 0
-        self._frames_since_acknowledgement = 0
+        self._subscribed = False
+        self._acknowledged = False
+        self._held_frames = []
 
     def _gives_up_after_logging_in_again(self, failed_connects):
         """
@@ -583,7 +481,7 @@ class KotakQuotesSocket(BrokerWebsocket):
 
     def _connect(self):
         """
-        Opens the websocket and blocks until it closes; the credentials are sent once it opens.
+        Opens the websocket at the feed address in force now and blocks until it closes; the authentication is sent once it opens.
 
         Returns:
             None: This method returns nothing.
@@ -591,7 +489,7 @@ class KotakQuotesSocket(BrokerWebsocket):
         import websocket
 
         self._websocket_application = websocket.WebSocketApp(
-            FEED_URL,
+            self._session.feed_url(),
             on_open=self._on_open,
             on_message=self._on_message,
             on_error=self._on_error,
@@ -611,24 +509,9 @@ class KotakQuotesSocket(BrokerWebsocket):
         """
         self._session.log_in_again(self._session_id)
 
-    def _send_binary(self, websocket_connection, frame):
-        """
-        Sends one binary frame.
-
-        Args:
-            websocket_connection (websocket.WebSocketApp): The open connection.
-            frame (bytes): The frame.
-
-        Returns:
-            None: This method returns nothing.
-        """
-        import websocket
-
-        websocket_connection.send(frame, opcode=websocket.ABNF.OPCODE_BINARY)
-
     def _on_open(self, websocket_connection):
         """
-        Sends the connection request with the login in force now; subscribing waits for Kotak's acceptance.
+        Sends the authentication with the login in force now; subscribing waits for Kotak's answer.
 
         Args:
             websocket_connection (websocket.WebSocketApp): The connection that opened.
@@ -637,17 +520,17 @@ class KotakQuotesSocket(BrokerWebsocket):
             None: This method returns nothing.
         """
         self._opened = True
-        self._topics = {}
-        self._quotes = {}
-        self._acknowledge_every = 0
-        self._frames_since_acknowledgement = 0
-        access_token, self._session_id = self._session.credentials()
-        if not access_token or not self._session_id:
-            self._logger.error(f"{self.name}: no Kotak access token or session id is stored.")
+        self._decoder = KotakFeedDecoder()
+        self._subscribed = False
+        self._acknowledged = False
+        self._held_frames = []
+        ucc, self._session_id = self._session.feed_credentials()
+        if not ucc or not self._session_id:
+            self._logger.error(f"{self.name}: no Kotak UCC or session id is stored.")
             self._authentication_rejected = True
             websocket_connection.close()
             return
-        self._send_binary(websocket_connection, self._requests.connection(access_token, self._session_id))
+        websocket_connection.send(self._requests.authentication(ucc, self._session_id, int(time.time() * 1000)))
         self._logger.info(f"{self.name} opened. Authenticating.")
 
     def _on_error(self, websocket_connection, error):
@@ -665,7 +548,7 @@ class KotakQuotesSocket(BrokerWebsocket):
 
     def _on_message(self, websocket_connection, message):
         """
-        Dispatches a binary frame by its type.
+        Handles a JSON control message, or decodes a binary frame, holding binary frames back until the subscription is acknowledged.
 
         Args:
             websocket_connection (websocket.WebSocketApp): The connection the frame arrived on.
@@ -675,215 +558,116 @@ class KotakQuotesSocket(BrokerWebsocket):
             None: This method returns nothing.
         """
         if isinstance(message, str):
-            self._logger.info(f"{self.name} text frame: {message[:200]}")
+            self._handle_control(websocket_connection, message)
             return
-        data = bytes(message)
-        if len(data) < 3:
+        frame = bytes(message)
+        if self._acknowledged:
+            self._hand_on_ticks(frame)
             return
-        reader = KotakFrameReader(data)
-        reader.read_unsigned(2)
-        frame_type = reader.read_unsigned(1)
-        try:
-            if frame_type == CONNECTION_FRAME:
-                self._handle_connection(websocket_connection, reader)
-            elif frame_type == SUBSCRIBE_FRAME:
-                self._handle_subscription(reader)
-            elif frame_type == DATA_FRAME:
-                self._handle_data(websocket_connection, reader)
-        except KotakTruncatedFrameError as error:
-            self._logger.warning(f"{self.name} skipped the rest of a truncated frame of type {frame_type}: {error}")
+        self._held_frames.append(frame)
+        if len(self._held_frames) >= MAX_HELD_FRAMES:
+            self._logger.warning(f"{self.name}: Kotak has not acknowledged the subscription after {len(self._held_frames)} data frames; decoding them without its names.")
+            self._release_held_frames()
 
-    def _handle_connection(self, websocket_connection, reader):
+    def _handle_control(self, websocket_connection, text):
         """
-        Reads the connection response, then subscribes or reports the refusal.
+        Acts on one JSON control message by its message code.
 
         Args:
             websocket_connection (websocket.WebSocketApp): The connection.
-            reader (KotakFrameReader): The frame, positioned after its type.
+            text (str): The message.
 
         Returns:
             None: This method returns nothing.
-
-        Raises:
-            KotakTruncatedFrameError: The frame ends before a declared field.
         """
-        field_count = reader.read_unsigned(1)
-        status = None
-        if field_count >= 1:
-            reader.read_unsigned(1)
-            status = reader.read_text(reader.read_unsigned(2))
-        if field_count >= 2:
-            reader.read_unsigned(1)
-            self._acknowledge_every = reader.read_unsigned(reader.read_unsigned(2))
-        if status != STATUS_ACCEPTED:
-            self._logger.error(f"{self.name}: Kotak refused the session (status {status!r}).")
+        try:
+            message = json.loads(text)
+        except ValueError:
+            self._logger.info(f"{self.name} ignored a text frame that is not JSON.")
+            return
+        if not isinstance(message, dict):
+            self._logger.info(f"{self.name} ignored a text frame that is not a JSON object.")
+            return
+        message_code = message.get("message_code")
+        if message_code in AUTHENTICATION_ANSWER_CODES:
+            self._decoder.learn_exchanges(message.get("exchanges") or {})
+            if not self._subscribed:
+                self._subscribe(websocket_connection)
+        elif message_code == SUBSCRIPTION_ACKNOWLEDGEMENT_CODE:
+            self._handle_acknowledgement(message)
+        elif message_code == AUTHENTICATION_REFUSED_CODE:
+            self._logger.error(f"{self.name}: Kotak refused the session (message code {message_code}).")
             self._authentication_rejected = True
             websocket_connection.close()
-            return
-        self._subscribe(websocket_connection)
+        else:
+            self._logger.info(f"{self.name} ignored a control message with message code {message_code}.")
 
     def _subscribe(self, websocket_connection):
         """
-        Subscribes every instrument's scrip and depth topics, 100 at a time.
+        Subscribes every instrument's five-level depth in one message.
 
         Args:
-            websocket_connection (websocket.WebSocketApp): The accepted connection.
+            websocket_connection (websocket.WebSocketApp): The connection Kotak answered on.
 
         Returns:
             None: This method returns nothing.
         """
-        for topic_prefix in (SCRIP_TOPIC, DEPTH_TOPIC):
-            for start in range(0, len(self._instrument_tokens), MAX_TOPICS_PER_REQUEST):
-                batch = self._instrument_tokens[start:start + MAX_TOPICS_PER_REQUEST]
-                self._send_binary(websocket_connection, self._requests.subscription(topic_prefix, batch))
-        self._logger.info(f"{self.name} authenticated and subscribed to {len(self._instrument_tokens)} instrument(s) with depth, acknowledging every {self._acknowledge_every} data frame(s).")
+        websocket_connection.send(self._requests.subscription(self._instrument_tokens))
+        self._subscribed = True
+        self._logger.info(f"{self.name} authenticated and subscribed to {len(self._instrument_tokens)} instrument(s) with depth.")
 
-    def _handle_subscription(self, reader):
+    def _handle_acknowledgement(self, message):
         """
-        Reads a subscription response and reports a refusal.
+        Reports a refused subscription, names the instruments the acknowledgement names, and decodes the frames held back for it.
 
         Args:
-            reader (KotakFrameReader): The frame, positioned after its type.
-
-        Returns:
-            None: This method returns nothing.
-
-        Raises:
-            KotakTruncatedFrameError: The frame ends before a declared field.
-        """
-        field_count = reader.read_unsigned(1)
-        if field_count < 1:
-            return
-        reader.read_unsigned(1)
-        status = reader.read_text(reader.read_unsigned(2))
-        if status != STATUS_ACCEPTED:
-            self._logger.error(f"{self.name}: Kotak refused a subscription (status {status!r}).")
-
-    def _handle_data(self, websocket_connection, reader):
-        """
-        Acknowledges data frames when asked, applies each packet to its topic, and hands on the changed instruments' ticks, even when the frame is cut short.
-
-        Args:
-            websocket_connection (websocket.WebSocketApp): The connection.
-            reader (KotakFrameReader): The frame, positioned after its type.
-
-        Returns:
-            None: This method returns nothing.
-
-        Raises:
-            KotakTruncatedFrameError: The frame ends before a declared field.
-        """
-        if self._acknowledge_every > 0:
-            message_number = reader.read_signed_integer()
-            self._frames_since_acknowledgement = self._frames_since_acknowledgement + 1
-            if self._frames_since_acknowledgement >= self._acknowledge_every:
-                self._send_binary(websocket_connection, self._requests.acknowledgement(message_number))
-                self._frames_since_acknowledgement = 0
-
-        changed_tokens = []
-        try:
-            packet_count = reader.read_unsigned(2)
-            for _ in range(packet_count):
-                reader.read_unsigned(2)
-                packet_type = reader.read_unsigned(1)
-                if packet_type == SNAPSHOT_PACKET:
-                    topic = self._read_snapshot(reader)
-                elif packet_type == UPDATE_PACKET:
-                    topic = self._read_update(reader)
-                else:
-                    self._logger.warning(f"{self.name} stopped reading a frame at unknown packet type {packet_type}.")
-                    break
-                if topic is not None and topic.instrument_token not in changed_tokens:
-                    changed_tokens.append(topic.instrument_token)
-        finally:
-            self._hand_on_ticks(changed_tokens)
-
-    def _read_snapshot(self, reader):
-        """
-        Reads a snapshot packet and registers its topic, naming its instrument when it had no name.
-
-        Args:
-            reader (KotakFrameReader): The frame, positioned after the packet type.
-
-        Returns:
-            KotakFeedTopic | None: The topic, or None when its name is not a scrip or depth topic.
-
-        Raises:
-            KotakTruncatedFrameError: The frame ends before a declared field.
-        """
-        topic_id = reader.read_signed_integer()
-        topic_name = reader.read_text(reader.read_unsigned(1))
-        numbers = []
-        for _ in range(reader.read_unsigned(1)):
-            numbers.append(reader.read_signed_integer())
-        strings = {}
-        for _ in range(reader.read_unsigned(1)):
-            field_id = reader.read_unsigned(1)
-            strings[field_id] = reader.read_text(reader.read_unsigned(1))
-
-        kind, _, instrument_token = topic_name.partition("|")
-        if kind not in (SCRIP_TOPIC, DEPTH_TOPIC):
-            self._logger.warning(f"{self.name} ignored a snapshot for unexpected topic {topic_name!r}.")
-            return None
-        topic = KotakFeedTopic(kind, instrument_token, strings)
-        topic.apply(numbers)
-        self._topics[topic_id] = topic
-
-        quote = self._quotes.get(instrument_token)
-        if quote is None:
-            quote = KotakInstrumentQuote(instrument_token)
-            self._quotes[instrument_token] = quote
-        if kind == SCRIP_TOPIC:
-            quote.scrip = topic
-        else:
-            quote.depth = topic
-        trading_symbol = strings.get(STRING_TRADING_SYMBOL)
-        if trading_symbol and not self._names.get(instrument_token):
-            self._names[instrument_token] = trading_symbol
-            self._on_name(instrument_token, trading_symbol)
-        return topic
-
-    def _read_update(self, reader):
-        """
-        Reads an update packet and applies it to its topic.
-
-        Args:
-            reader (KotakFrameReader): The frame, positioned after the packet type.
-
-        Returns:
-            KotakFeedTopic | None: The topic, or None when no snapshot has registered its id on this connection.
-
-        Raises:
-            KotakTruncatedFrameError: The frame ends before a declared field.
-        """
-        topic_id = reader.read_signed_integer()
-        numbers = []
-        for _ in range(reader.read_unsigned(1)):
-            numbers.append(reader.read_signed_integer())
-        topic = self._topics.get(topic_id)
-        if topic is None:
-            self._logger.debug(f"{self.name} ignored an update for unknown topic id {topic_id}.")
-            return None
-        topic.apply(numbers)
-        return topic
-
-    def _hand_on_ticks(self, instrument_tokens):
-        """
-        Hands on the latest tick of each changed instrument that has had its scrip snapshot.
-
-        Args:
-            instrument_tokens (list[str]): The instruments whose topics changed, in arrival order.
+            message (dict): The acknowledgement.
 
         Returns:
             None: This method returns nothing.
         """
-        ticks = []
-        for instrument_token in instrument_tokens:
-            tick = self._quotes[instrument_token].tick(self._names.get(instrument_token))
+        description = message.get("description")
+        error_code = message.get("error_code")
+        if description != SUBSCRIBED_DESCRIPTION or error_code:
+            self._logger.error(f"{self.name}: Kotak answered the subscription with {description!r} (error code {error_code}).")
+        trading_symbols = message.get("trading_symbols")
+        if isinstance(trading_symbols, dict):
+            for instrument_token, trading_symbol in trading_symbols.items():
+                if trading_symbol and not self._names.get(instrument_token):
+                    self._names[instrument_token] = trading_symbol
+                    self._on_name(instrument_token, trading_symbol)
+        self._release_held_frames()
+
+    def _release_held_frames(self):
+        """
+        Stops holding frames back and decodes the ones already held, in arrival order.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self._acknowledged = True
+        held_frames = self._held_frames
+        self._held_frames = []
+        for frame in held_frames:
+            self._hand_on_ticks(frame)
+
+    def _hand_on_ticks(self, frame):
+        """
+        Hands on the latest tick of each instrument a binary frame carries a market picture for.
+
+        Args:
+            frame (bytes): The frame.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        latest = {}
+        for packet in self._decoder.packets(frame):
+            tick = self._decoder.tick(packet, self._names)
             if tick is not None:
-                ticks.append(tick)
-        if ticks:
-            self._on_ticks(ticks)
+                latest[tick["instrument_token"]] = tick
+        if latest:
+            self._on_ticks(list(latest.values()))
 
 
 class KotakOrderUpdatesSocket(BrokerWebsocket):

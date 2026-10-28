@@ -5,22 +5,22 @@ Kotak names an instrument as `exchange_segment|token` in its own segment vocabul
 `nse_fo`, `mcx_fo` - and stores the bare token, which collides across segments, so the segment
 narrows the search.
 
-What Kotak's values mean, as measured on Kotak's HSM feed (`wss://mlhsm.kotaksecurities.com`) against
-Zerodha's ticks received at the same moment during the session of 2026-09-15:
+What Kotak's values mean, as measured on Kotak's SFeed market feed (`wss://sfeed.kotaksecurities.com/apifeed`) against
+Zerodha's ticks received within a second during the session of 2026-10-28:
 
-- `close` is the previous session's close: TCS read 2200.80, HDFCBANK 708.25 and CRUDEOIL SEP 9717.0,
-  all Zerodha's figures, while their last prices moved.
+- `close` is the previous session's close: CRUDEOIL NOV read 9498.0, NATURALGAS NOV 288.4, GOLD DEC 144138.0,
+  RELIANCE 1196.2 and TCS 2496.9, all Zerodha's figures, while their last prices moved.
 - On MCX every quantity - last quantity, volume, total buy and sell quantity, open interest and every
-  order book quantity - is lots times Kotak's own lot size. GOLD OCT (Kotak's lot 1) read volume 562 and
-  open interest 9474, Zerodha's lots exactly; CRUDEOIL SEP (Kotak's lot 100) read 276900 and 1598900
-  against Zerodha's 2769 and 15989; NATURALGAS SEP (Kotak's lot 1250) read 4943750 and 49037500 against
-  3955 and 39230. So each is divided by Kotak's lot size and multiplied by the authoritative one.
+  order book quantity - is in lots, as at Zerodha, whatever Kotak's own lot size: CRUDEOIL NOV (Kotak's lot 100)
+  read volume 3528 and open interest 13801, NATURALGAS NOV (Kotak's lot 1250) 9022 and 48182, and GOLD DEC
+  (Kotak's lot 1) 531 and 15603, Zerodha's figures exactly. So each is multiplied by the authoritative lot size.
 - On NSE and BSE quantities are units, as at Zerodha.
-- Both times are true instants: the last trade time and the exchange timestamp matched Zerodha's to the
-  second on TCS, HDFCBANK, CRUDEOIL, NATURALGAS and GOLD.
+- Both times are true instants in Unix seconds: the last trade time and the exchange timestamp matched Zerodha's
+  to the second on CRUDEOIL, NATURALGAS and GOLD.
 
-The earlier `sfeed` feed, measured on the weekend snapshots of 2026-09-12 and 2026-09-13, sent a date
-with no time and scaled only the MCX last quantity; `bin/kotak/instruments/websocket_quotes` no longer uses it.
+Kotak's HSM feed (`wss://mlhsm.kotaksecurities.com`), which `bin/kotak/instruments/websocket_quotes` streamed from
+until Kotak retired it in October 2026, sent every MCX quantity as lots times Kotak's own lot size instead, measured
+against Zerodha on 2026-09-15: CRUDEOIL SEP read 276900 for Zerodha's 2769.
 """
 
 from stock_brokers.instruments.ticks.base import (CLOSE_ALWAYS, QUANTITY_FIELDS, FeedKey, TickNormalizer,
@@ -46,7 +46,7 @@ class KotakTickNormalizer(TickNormalizer):
         "mcx_fo": (("mcx",), "derivative"),
     }
 
-    BROKER_LOT_FIELDS = {"mcx": frozenset(QUANTITY_FIELDS)}
+    LOT_FIELDS = {"mcx": frozenset(QUANTITY_FIELDS)}
 
     CLOSE_POLICY = {"nse": CLOSE_ALWAYS, "bse": CLOSE_ALWAYS, "mcx": CLOSE_ALWAYS}
 

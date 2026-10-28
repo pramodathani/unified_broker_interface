@@ -1,5 +1,11 @@
 # bin/kotak/instruments/websocket_quotes
 
+## Why the script moved back to sfeed on 2026-10-28
+
+Kotak retired the HSM feed in October 2026; by 2026-10-27 `mlhsm.kotaksecurities.com` (121.240.153.195) refused TCP on port 443 and the newest Kotak tick was 24 days old. Kotak's notice "Kotak Neo Trade API market feed changes" deprecated the old feed from 2026-09-15 and pointed to the new market feed integration in `kotakneoapi` 3.0, whose `neo_api_client/websocket/feed` package talks to `wss://sfeed.kotaksecurities.com/apifeed` with the `native_batch` format. That is the address the script left on 2026-09-15, but not the same service: the server now calls itself `SFD_EBETA_710` rather than `SFD_CBETA_710`, it sends little-endian binary market pictures rather than one JSON snapshot, and it keeps sending. On 2026-10-28 during market hours, five instruments produced 59 market pictures in twelve seconds and two produced 23 in eight, against one snapshot per instrument on 2026-09-14. The socket subscribes with `subscribeDepth`, the level `kotakneoapi` calls depth, rather than `subscribeFullDepth`, the level that went quiet in September. The protocol and the measurements are in the note on `stock_brokers/websockets/kotak.py`.
+
+The sections below describe the HSM feed and are kept as its history. Two of their conclusions no longer hold: MCX quantities are now in lots, as at Zerodha, not lots times Kotak's lot size, and the limit of 100 instruments per socket no longer comes from the channel's 200 subscriptions, since the feed takes one subscription per instrument; it is kept because larger sockets have not been tried.
+
 ## Why the script moved from sfeed to the HSM feed
 
 Until 2026-09-15 the script connected to `wss://sfeed.kotaksecurities.com/apifeed` with a JSON authentication frame (`source` `NEOTRADEAPI`, message codes 1117 and 1120) and `subscribeFullDepth`. The server identified itself as `SFD_CBETA_710`. It acknowledged the subscription, sent one snapshot per instrument and then nothing: the service had been connected since 2026-09-14 14:21 with no reconnect, and `kotak.ticks` held 80 rows for the whole of 2026-09-14, all at session boundaries (15:30, 16:30, 06:00, 07:30, 08:30), with TCS at Friday's 2200.80 and volume 0.

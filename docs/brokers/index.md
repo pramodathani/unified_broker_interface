@@ -200,15 +200,17 @@ Each tab below describes one broker from its code: how it logs in (from `stock_b
 
 === "Kotak"
 
-    **Login.** `KotakAPI` probes `GET {base_url}/quick/user/positions`. Its login takes two requests, with no browser: the mobile number, UCC and current TOTP go to `https://mis.kotaksecurities.com/login/1.0/tradeApiLogin`, and the MPIN goes to `tradeApiValidate` with the token and session id from the first answer. The second answer carries the token, the session id and a `baseUrl`, all of which are stored.
+    **Login.** `KotakAPI` probes `GET {base_url}/quick/user/positions`. Its login takes two requests, with no browser: the mobile number, UCC and current TOTP go to `https://mis.kotaksecurities.com/login/1.0/tradeApiLogin`, and the MPIN goes to `tradeApiValidate` with the token and session id from the first answer. The second answer carries the token, the session id, a `baseUrl` and the market feed's `feedUrl`, all of which are stored.
 
-    **Websockets.** Quotes use Kotak's HSM feed at `wss://mlhsm.kotaksecurities.com`, where every frame begins with its length in two big-endian bytes and a one-byte frame type. Every instrument is subscribed twice, as a scrip topic (`sf|EXCHANGE|TOKEN`) and a depth topic (`dp|EXCHANGE|TOKEN`), up to 100 topics per request. Order and position updates come from `wss://<host>/realtime`, after a connection frame that is deliberately not JSON: `{type:cn,Authorization:<access token>,Sid:<session id>,src:WEB}`.
+    **Websockets.** Quotes use Kotak's SFeed market feed at the `feedUrl` the login answer names, or `wss://sfeed.kotaksecurities.com/apifeed`; Kotak retired the earlier HSM feed at `wss://mlhsm.kotaksecurities.com` in October 2026. Control messages are JSON: the socket authenticates with the account's UCC and the session id, subscribes every instrument once for its five-level depth, and takes the instruments' trading symbols from Kotak's acknowledgement. Prices and depth arrive in little-endian binary packets, each a whole market picture rather than a change. Order and position updates come from `wss://<host>/realtime`, after a connection frame that is deliberately not JSON: `{type:cn,Authorization:<access token>,Sid:<session id>,src:WEB}`.
 
     **Peculiarities.**
 
     - Kotak assigns each session its own API host and returns it as `baseUrl`. A call to any other host is refused with stCode 200032 even when the token is valid, so no host is hard coded.
     - Kotak has no profile endpoint. The profile arrives only in the login answer, so every login writes `kotak:user:details` itself, and there is no `bin/kotak/user/details` script.
-    - One quote socket carries at most 100 instruments, because every instrument takes two of the 200 subscriptions Kotak allows on one channel.
+    - Kotak checks the session only after the feed has accepted the subscription and started sending data: message code 1120, which repeats the session id, means it refused the session, so its text is never logged.
+    - On the SFeed feed every MCX quantity is in lots, as at Zerodha, whereas the HSM feed sent lots times Kotak's own lot size.
+    - One quote socket carries at most 100 instruments. The feed takes one subscription per instrument and Kotak's SDK allows 3,000 on one connection, but larger sockets have not been tried.
     - Its instrument files sit under a URL stamped with the day's date, so a missed download can never be fetched later.
     - It is one of four brokers whose order websocket also carries positions. It has no candle downloader.
 

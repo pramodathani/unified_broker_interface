@@ -9,37 +9,37 @@
     redis-cli HGET kotak:quotes:live "TCS-EQ"
     redis-cli HGETALL kotak:quotes:instruments
 
-The connection, the login, the subscription, the acknowledgements and the binary packet decoding for Kotak's HSM market feed at `wss://mlhsm.kotaksecurities.com`, the feed Kotak's own Python SDK (`neo_api_client`) streams from, are `KotakQuotesSocket` and `KotakSession` in `stock_brokers/websockets/kotak.py`, whose module docstring describes the protocol. This script chooses the instruments, splits them across sockets, runs the sockets and writes what they decode to Redis, so it needs no other feed process or key.
+The connection, the login, the subscription and the binary packet decoding for Kotak's SFeed market feed, the feed Kotak's own Python SDK (`kotakneoapi` 3.0) streams from, are `KotakQuotesSocket` and `KotakSession` in `stock_brokers/websockets/kotak.py`, whose module docstring describes the protocol. The feed's address is the `feed_url` Kotak's login names, or `wss://sfeed.kotaksecurities.com/apifeed` when it names none; Kotak retired the earlier HSM feed at `wss://mlhsm.kotaksecurities.com` in October 2026. This script chooses the instruments, splits them across sockets, runs the sockets and writes what they decode to Redis, so it needs no other feed process or key.
 
-**Instruments** are `--tokens` when given, otherwise the members of the Redis set `kotak:quotes:subscriptions`, each as `EXCHANGE|TOKEN` with Kotak's lowercase segment names - `nse_cm`, `bse_cm`, `nse_fo`, `bse_fo`, `cde_fo`, `nse_com`, `bse_cd`, `bse_co` or `mcx_fo` - and the instrument's `pSymbol` from Kotak's scrip master. Each is named with its trading symbol (`pTrdSymbol`) from Kotak's public scrip master files for today, downloaded at startup; an instrument those do not name takes the trading symbol the feed's first snapshot carries. One websocket carries up to `--per-socket` instruments, 100 by default and at most, because every instrument takes two of the 200 subscriptions Kotak allows on one channel.
+**Instruments** are `--tokens` when given, otherwise the members of the Redis set `kotak:quotes:subscriptions`, each as `EXCHANGE|TOKEN` with Kotak's lowercase segment names - `nse_cm`, `bse_cm`, `nse_fo`, `bse_fo`, `cde_fo`, `nse_com`, `bse_cd`, `bse_co` or `mcx_fo` - and the instrument's `pSymbol` from Kotak's scrip master. Each is named with its trading symbol (`pTrdSymbol`) from Kotak's public scrip master files for today, downloaded at startup; an instrument those do not name takes the trading symbol Kotak's acknowledgement of the subscription carries. One websocket carries up to `--per-socket` instruments, 100 by default and at most. The feed takes one subscription per instrument and Kotak's SDK allows 3,000 on one connection, but sockets larger than 100 have not been tried.
 
 **Socket size.** Without `--per-socket`, each socket carries the number in the Redis key `kotak:quotes:per_socket`, which `bin/unified/instruments/allocate_subscriptions` writes from `unified.broker_quote_capacities` along with the subscription set, or 100 when the key is unset.
 
 **Keys.**
 
 - `kotak:quotes:live`, a hash of the latest tick per instrument as JSON, keyed by the instrument's trading symbol (`TCS-EQ`), or by its `EXCHANGE|TOKEN` while it has no name. A tick is replaced as the next one arrives. It is not cleared at startup, so an instrument no longer subscribed keeps its last tick.
-- `kotak:quotes:instruments`, a hash of every subscribed `EXCHANGE|TOKEN` to its trading symbol, or to an empty string when unnamed. Replaced whole at startup, and filled in when a snapshot names an instrument.
+- `kotak:quotes:instruments`, a hash of every subscribed `EXCHANGE|TOKEN` to its trading symbol, or to an empty string when unnamed. Replaced whole at startup, and filled in when the subscription acknowledgement names an instrument.
 - `kotak:quotes:stream`, a Redis Stream with every tick in arrival order as a `tick` field, which `bin/kotak/instruments/store_quotes_to_db` writes to `kotak.ticks`. Capped at about 1,000,000 entries, so ticks that arrive while the persister is down for long enough are trimmed before they are persisted.
 
-**The tick.** Every instrument is subscribed twice: as a scrip topic (`sf|EXCHANGE|TOKEN`) for its prices and quantities, and as a depth topic (`dp|EXCHANGE|TOKEN`) for its five-level order book. A topic arrives once as a snapshot and then as updates carrying only the fields that changed, so the script keeps each topic's latest values and writes a whole tick for an instrument every time either of its topics changes. A tick is written only once the scrip snapshot has arrived.
+**The tick.** Every instrument is subscribed once, for its five-level depth (`subscribeDepth`). Each market picture Kotak sends carries the instrument's whole state rather than a change, so every one becomes a whole tick; within one frame only an instrument's latest picture is written.
 
-| Tick field | Scrip topic field |
+| Tick field | Market picture field |
 | --- | --- |
-| `last_price` | 5 (`ltp`) |
-| `last_quantity` | 6 (`ltq`) |
-| `average_price` | 13 (`ap`) |
-| `volume` | 4 (`v`) |
-| `buy_quantity`, `sell_quantity` | 7 (`tbq`), 8 (`tsq`) |
-| `ohlc` | 20 (`op`), 15 (`h`), 14 (`lo`), 21 (`c`, the previous session's close) |
+| `last_price` | `last_traded_price` |
+| `last_quantity` | `last_trade_qty` |
+| `average_price` | `avg_trade_price` |
+| `volume` | `volume_traded_today` |
+| `buy_quantity`, `sell_quantity` | `total_buy_qty`, `total_sell_qty` |
+| `ohlc` | `open_price`, `high_price`, `low_price`, `close_price` (the previous session's close) |
 | `change` | Computed as the percentage of `last_price` over `close` |
-| `oi` | 22 (`oi`), which cash instruments do not send |
-| `last_trade_time` | 3 (`ltt`), epoch seconds |
-| `exchange_timestamp` | 2 (`fdtm`), epoch seconds |
-| `depth` | The depth topic: prices 2 to 6 (buy) and 7 to 11 (sell), quantities 12 to 16 and 17 to 21, orders 22 to 26 and 27 to 31 |
+| `oi` | `open_interest`, 0 for cash instruments |
+| `last_trade_time` | `last_trade_time`, Unix seconds, or None while the instrument has not traded |
+| `exchange_timestamp` | `last_update_time`, Unix seconds, or None while the instrument has not been updated |
+| `depth` | The depth rows after the fixed body, buy rows first, each a quantity, a price and a number of orders |
 
-`oi_day_high` and `oi_day_low` are always `None`. `mode` is `full` once the depth topic has arrived and `quote` before. Prices are integers divided by the topic's multiplier (scrip field 23, depth field 32) times ten to its precision (scrip field 24, depth field 33). On MCX every quantity, open interest and order book quantity included, is lots times Kotak's own lot size; on NSE and BSE quantities are units.
+`oi_day_high` and `oi_day_low` are always `None`. `mode` is `full` when the picture carries depth rows and `quote` when it carries none. Prices are integers divided by the exchange's divider, which Kotak sends when the socket authenticates: 100 on most exchanges and 10,000,000 on `cde_fo` and `bse_cd`. On MCX every quantity, open interest and order book quantity included, is in lots, as at Zerodha; on NSE and BSE quantities are units.
 
-**Sessions.** Each connection reads the access token and session id in force when it connects, so a login made by any process is picked up. When Kotak refuses the connection, or a socket fails to open six times running, it logs in again through the shared `KotakSession` - one socket at a time, and only if no other socket or process already replaced the session - before reconnecting. A reconnect otherwise backs off from 1 to 60 seconds.
+**Sessions.** Each connection reads the account's UCC and the session id in force when it connects, so a login made by any process is picked up. When Kotak refuses the session (message code 1120), or a socket fails to open six times running, it logs in again through the shared `KotakSession` - one socket at a time, and only if no other socket or process already replaced the session - before reconnecting. A reconnect otherwise backs off from 1 to 60 seconds.
 
 Exits 0 when stopped with Ctrl+C or SIGTERM, 1 when a login fails or a socket still cannot open after logging in again, and 2 when there is nothing to subscribe to or `--per-socket` is out of range. Reads only - it places no orders.
 """
@@ -108,7 +108,7 @@ class KotakQuotesStore:
         self._cache = cache
 
     def write_name(self, instrument_token, trading_symbol):
-        """Fills in the trading symbol a snapshot gave an instrument in the subscribed instruments hash.
+        """Fills in the trading symbol the subscription acknowledgement gave an instrument in the subscribed instruments hash.
 
         Args:
             instrument_token (str): The instrument's `EXCHANGE|TOKEN`.
@@ -195,7 +195,7 @@ class KotakQuotesApplication:
     def _instrument_names(self, instrument_tokens):
         """Returns the trading symbols of the subscribed instruments from today's scrip master files.
 
-        A file that cannot be downloaded is reported and skipped; its instruments take their names from the feed's snapshots instead.
+        A file that cannot be downloaded is reported and skipped; its instruments take their names from the subscription acknowledgement instead.
 
         Args:
             instrument_tokens (list[str]): The subscribed `EXCHANGE|TOKEN` instruments.
