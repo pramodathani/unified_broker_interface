@@ -1,5 +1,6 @@
-# The nightly unified price history update: bin/unified/instruments/price_history daily, which runs load, corrections, load
-# and factors --stale-days 14. Its check, verify, runs before it at midnight from unified-prices-verify.service. Driven by unified-prices.timer.
+# The nightly unified price history update: bin/unified/instruments/price_history daily, which runs load, corrections, load,
+# factors --stale-days 14 and a load of each intraday interval. Its check, verify, runs before it at midnight from
+# unified-prices-verify.service. Driven by unified-prices.timer.
 #
 #     systemctl --user start unified-prices           # run it now
 #     bin/unified/instruments/price_history status
@@ -18,9 +19,9 @@ Type=oneshot
 Environment=PYTHONUNBUFFERED=1
 SyslogIdentifier=unified-prices
 ExecStart=%h/Projects/unified_broker_interface/bin/unified/instruments/price_history daily
-# The first factors run over every instrument is thousands of Yahoo requests at about one a second. Four hours from
-# 02:00 ends it by 06:00, before the 07:00 logins and well before the markets open.
-TimeoutStartSec=4h
+# The first factors run over every instrument is thousands of Yahoo requests at about one a second, and the intraday
+# loads follow. Six hours from 02:00 ends it by 08:00, before the 08:25 feed restarts and the 09:00 pre-open.
+TimeoutStartSec=6h
 Nice=10
 IOSchedulingClass=idle
 CPUWeight=20

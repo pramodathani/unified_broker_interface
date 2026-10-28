@@ -121,7 +121,7 @@ The long-running services and the daily jobs follow different restart rules, bec
 | `unified-rest-api.service` | `always` | `5` | `RestartPreventExitStatus=2`, `StartLimitIntervalSec=0`, `TimeoutStopSec=60` |
 | `<broker>-login.service` | `on-failure` | `2min` | `Type=oneshot`, `StartLimitIntervalSec=1h`, `StartLimitBurst=3`, `TimeoutStartSec=300` |
 | `unified-mapping.service` | none | | `Type=oneshot`, `TimeoutStartSec=3h`, low priority |
-| `unified-prices.service` | none | | `Type=oneshot`, `TimeoutStartSec=4h`, low priority, `After=unified-mapping.service unified-prices-verify.service` |
+| `unified-prices.service` | none | | `Type=oneshot`, `TimeoutStartSec=6h`, low priority, `After=unified-mapping.service unified-prices-verify.service` |
 | `unified-prices-verify.service` | none | | `Type=oneshot`, `TimeoutStartSec=4h`, low priority |
 | `databases.service` | none | | `Type=oneshot`, `TimeoutStartSec=180`, runs again from its timer |
 
