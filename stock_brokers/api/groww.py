@@ -13,6 +13,8 @@ class GrowwAPI(BrokerAPI):
     Groww API class
     """
 
+    LOGIN_TIMEOUT_SECONDS = 10
+
     def __init__(self):
         """
         Groww API class
@@ -20,7 +22,7 @@ class GrowwAPI(BrokerAPI):
         super().__init__(broker_name="groww")
 
         try:
-            self.get(url="https://api.groww.in/v1/user/detail")
+            self.get(url="https://api.groww.in/v1/user/detail", timeout=self.LOGIN_TIMEOUT_SECONDS)
         except Exception as e:
             headers = {
                 "Authorization": f"Bearer {self._settings['totp_token']}",
@@ -32,7 +34,7 @@ class GrowwAPI(BrokerAPI):
                 "totp": pyotp.TOTP(self._settings["totp_secret"]).now()
             }
 
-            data = self.post(url="https://api.groww.in/v1/token/api/access", data=json_lib.dumps(data), headers=headers)
+            data = self.post(url="https://api.groww.in/v1/token/api/access", data=json_lib.dumps(data), headers=headers, timeout=self.LOGIN_TIMEOUT_SECONDS)
             if "data" not in data:
                 raise GrowwAPIException(code="500", message="Cannot get access token from Groww REST API server.")
             data = data["data"]
@@ -114,19 +116,17 @@ class GrowwAPI(BrokerAPI):
         else:
             if "json" in response.headers["Content-Type"]:
                 json_content = response.json()
-                if "error" in json_content:
+                if isinstance(json_content.get("error"), dict):
                     if "code" in json_content["error"] and "message" in json_content["error"]:
                         raise GrowwAPIException(code=json_content["error"]["code"], message=json_content["error"]["message"])
-                else:
-                    raise GrowwAPIException(code=response.status_code, message=json_content)
+                raise GrowwAPIException(code=response.status_code, message=json_content)
             elif "text" in response.headers["Content-Type"]:
                 try:
                     json_content = json_lib.loads(response.content.decode("utf-8").strip())
-                    if "error" in json_content:
+                    if isinstance(json_content.get("error"), dict):
                         if "code" in json_content["error"] and "message" in json_content["error"]:
                             raise GrowwAPIException(code=json_content["error"]["code"], message=json_content["error"]["message"])
-                    else:
-                        raise GrowwAPIException(code=response.status_code, message=json_content)
+                    raise GrowwAPIException(code=response.status_code, message=json_content)
                 except json_lib.JSONDecodeError:
                     raise GrowwAPIException(code=response.status_code, message=response.content.decode("utf-8").strip())
             else:

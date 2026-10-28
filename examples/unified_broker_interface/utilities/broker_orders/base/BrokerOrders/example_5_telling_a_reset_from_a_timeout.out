@@ -1,0 +1,7 @@
+connection reset by peer: reset True
+closed without an answer: reset True
+read timeout: reset False
+connect timeout: reset False
+refused connection: reset False
+Outcome after a reset: unknown
+Status message: ConnectionError: ('Connection aborted.', ConnectionResetError(104, 'Connection reset by peer')) (this broker's order book is not read after a reset)

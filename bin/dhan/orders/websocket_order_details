@@ -312,10 +312,12 @@ class DhanOrderUpdatesStore:
 def main():
     """Stream Dhan order updates into dhan:orders:orders until stopped."""
     from stock_brokers.websockets.dhan import DhanOrderUpdatesSocket, DhanSession
+    from stock_brokers.api.utilities.session import ensure_session
     from utilities.configurations import get_cache, get_logger
 
     logger = get_logger("dhan.websocket_order_details")
     try:
+        ensure_session("dhan", logger=logger)
         session = DhanSession(logger)
     except Exception as exception:
         logger.error(f"Could not log in to Dhan: {type(exception).__name__}: {exception}")

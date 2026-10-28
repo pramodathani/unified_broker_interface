@@ -1,0 +1,3 @@
+Broker name: None
+Cache kept: stand-in Redis client
+member raised NotImplementedError

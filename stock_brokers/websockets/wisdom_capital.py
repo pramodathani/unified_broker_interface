@@ -16,6 +16,7 @@ XTS reports a refused token with `e-session`, `e-token` or "Invalid Token" in th
 **Quotes.**
 `WisdomCapitalQuotesSocket` attaches with `publishFormat=JSON&broadcastMode=Full` and subscribes over REST, for touchline (1501) and market depth (1502); the answer carries the current snapshot, which is handed on straight away.
 XTS reports instruments still subscribed from an earlier connection as `e-session-0002 Instrument Already Subscribed`, with the same prefix as a refused token, so that answer is met by dropping the subscription and asking again rather than by replacing a good token.
+XTS also refuses a subscription past the app key's instrument limit as `e-session-0004 Exceeded Instrument Subscription Limit of 50`, which is logged and skipped rather than taken for a refused token, because logging in again cannot raise the limit.
 Events arrive as socket.io frames `42["<event>", <payload>]`, the payload a quote, a list of them, or either as a JSON string; touchline and depth for one instrument are merged, a depth message nesting its touchline fields, before a tick is built.
 XTS counts seconds from 1980-01-01 in India time, so its timestamps are moved onto the true Unix epoch, and it misspells the last traded quantity as `LastTradedQunatity`, sending the key with a null value.
 A tick with neither a price nor a book is not handed on.
@@ -69,6 +70,7 @@ AUTHENTICATION_MARKERS = (
     "invalid token",
 )
 ALREADY_SUBSCRIBED_MARKER = "already subscribed"
+SUBSCRIPTION_LIMIT_MARKER = "exceeded instrument subscription limit"
 
 QUOTES_HEARTBEAT_SECONDS = 25.0
 ORDER_UPDATES_HEARTBEAT_SECONDS = 10.0
@@ -593,6 +595,9 @@ class WisdomCapitalQuotesSocket(BrokerWebsocket):
                 )
                 response, body = self._ask_to_subscribe(instruments, code)
             if response.status >= 300:
+                if SUBSCRIPTION_LIMIT_MARKER in str(body).lower():
+                    self._logger.warning(f"{self.name}: subscription for message code {code} is over the app key's limit: {body[:200]}")
+                    continue
                 if self._transport.is_authentication_refusal(body):
                     self._logger.warning(f"{self.name}: subscription refused the market data token: {body[:200]}")
                     self._authentication_rejected = True

@@ -10,7 +10,7 @@ Four other brokers' stream files also create `<broker>.positions`, because those
 
 ## Why the table matches the other brokers' tick tables
 
-The columns, the one-day chunks, the indexes, compression segmented by `id` or `order_id` and the seven-day columnstore policy are copied from `010_zerodha_streams.sql`. One table per broker keeps each stream compressing, retaining and reloading on its own. The order book is flattened into five bid and five ask levels of numeric columns, because columnar compression works on repeated numerics and barely helps JSON.
+The columns, the one-day chunks, the indexes, compression segmented by `id` or `order_id` and the columnstore policies are copied from `010_zerodha_streams.sql`: the ticks are compressed after one day and the order updates after seven. One table per broker keeps each stream compressing, retaining and reloading on its own. The order book is flattened into five bid and five ask levels of numeric columns, because columnar compression works on repeated numerics and barely helps JSON.
 
 ## Why the file has no comments
 

@@ -7,6 +7,7 @@
 | `/ltp`, `/ohlc`, `/quote` | The unified quote cache, or a broker's REST API when that is not recent enough |
 | `/prices` | The Redis copy of the series, or unified.price_history, adjusted on read for equities, ETFs and investment trusts |
 | `/ticks` | unified.ticks, likewise, streamed |
+| `/breakeven` | unified.charge_rates, unified.broker_order_costs, unified.stop_slippage, unified.ticks and the live quote |
 
 Every route except the first three takes one instrument by `GET`, as `instrument_id` or as `exchange`,
 `segment` and the identity fields; see `utilities/instrument_identity.py`. The same routes take a list of
@@ -15,7 +16,9 @@ with one entry per instrument; see `utilities/instrument_batch.py`. The routes o
 shape responses - the work is in `utilities/`.
 """
 
+import decimal
 import functools
+import logging
 import threading
 from datetime import date, timedelta
 
@@ -25,12 +28,17 @@ from stock_brokers.instruments.mapping.utilities.cache import MappingCache
 from unified_broker_interface.blueprints.base import BaseBlueprint, authenticated
 from unified_broker_interface.utilities import instrument_history
 from unified_broker_interface.utilities.broker_quotes.utilities.service import QuoteService
+from unified_broker_interface.utilities.broker_selection.utilities.broker_cost_table import BrokerCostTable
+from unified_broker_interface.utilities.execution_costs.breakeven_levels import BreakevenLevels, BreakevenLevelsError
+from unified_broker_interface.utilities.execution_costs.charge_rate_table import ChargeRateTable
+from unified_broker_interface.utilities.execution_costs.stop_slip_allowance import StopSlipAllowance
 from unified_broker_interface.utilities.instrument_batch import InstrumentBatch
 from unified_broker_interface.utilities.instrument_catalogue import InstrumentCatalogue
 from unified_broker_interface.utilities.instrument_identity import (RequestError, identity_to_json, parse_bool,
                                                                     parse_date, parse_datetime, parse_exchange,
                                                                     parse_instrument, parse_int, parse_segment)
 from unified_broker_interface.utilities.json_stream import json_array_response, json_results_response
+from utilities.configurations import get_postgres
 
 SEARCH_LIMIT_DEFAULT = 50
 SEARCH_LIMIT_MAXIMUM = 200
@@ -66,6 +74,7 @@ class InstrumentsBlueprint(BaseBlueprint):
         ('/quote', 'quote', ['GET', 'POST']),
         ('/prices', 'prices', ['GET', 'POST']),
         ('/ticks', 'ticks', ['GET', 'POST']),
+        ('/breakeven', 'breakeven', ['GET']),
     ]
 
     def __init__(self):
@@ -79,6 +88,7 @@ class InstrumentsBlueprint(BaseBlueprint):
         self._mapping_cache = None
         self._catalogue = None
         self._quotes = None
+        self._breakeven_levels = None
 
     def _services(self):
         """
@@ -429,5 +439,66 @@ class InstrumentsBlueprint(BaseBlueprint):
                 yield entry, rows
 
         return json_results_response(entries_with_rows(), 'ticks')
+
+    def _levels_service(self):
+        """
+        This worker's breakeven levels service, built on first use, which reads its tables on the first request of each day.
+        """
+        with self._services_lock:
+            if self._breakeven_levels is None:
+                logger = logging.getLogger('rest_api.instruments')
+                self._breakeven_levels = BreakevenLevels(ChargeRateTable(logger), BrokerCostTable(logger), StopSlipAllowance(),
+                                                         get_postgres)
+        return self._breakeven_levels
+
+    @staticmethod
+    def _parse_price(raw, name):
+        """
+        A positive price parameter.
+
+        - `raw` is the parameter's value, or None when absent.
+        - `name` is the parameter's name, used in the error message.
+        """
+        if raw in (None, ""):
+            raise RequestError(f"{name} is required")
+        try:
+            value = decimal.Decimal(raw)
+        except decimal.InvalidOperation:
+            raise RequestError(f"{name} must be a number")
+        if not value.is_finite() or value <= 0:
+            raise RequestError(f"{name} must be above zero")
+        return value
+
+    @authenticated
+    @answers_request_errors
+    def breakeven(self):
+        """
+        The floor, tripwire and switch-on of a breakeven stop for one position in one instrument.
+        """
+        catalogue, quotes = self._services()
+        instrument = parse_instrument(request.args)
+        entry_price = self._parse_price(request.args.get('entry_price'), 'entry_price')
+        quantity = parse_int(request.args.get('quantity'), 'quantity', None, 1, 10 ** 9)
+        if quantity is None:
+            raise RequestError("quantity is required")
+        opening_side = (request.args.get('side') or 'BUY').strip().upper()
+        if opening_side not in ('BUY', 'SELL'):
+            raise RequestError("side must be BUY or SELL")
+        product = (request.args.get('product') or 'NRML').strip().upper()
+        broker = request.args.get('broker') or None
+        percentile = parse_int(request.args.get('percentile'), 'percentile', 90, 1, 99)
+        horizon_seconds = parse_int(request.args.get('horizon_seconds'), 'horizon_seconds', 5, 1, 300)
+        details = catalogue.details(instrument)
+        identity, mapping_date, _ = catalogue.resolve(instrument)
+        try:
+            quote = quotes.quote(identity, mapping_date)
+        except RequestError:
+            quote = None
+        try:
+            answer = self._levels_service().levels(details, quote, entry_price, quantity, opening_side, product, broker,
+                                                   percentile, horizon_seconds)
+        except BreakevenLevelsError as error:
+            return jsonify({'error': error.message}), error.status
+        return jsonify(answer), 200
 
 instruments_bp = InstrumentsBlueprint().blueprint

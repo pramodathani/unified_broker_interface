@@ -42,3 +42,9 @@ An offline check parsed the captured `full` frame as a string, a two-line frame 
 ## Where the socket went
 
 On 2026-09-25 the socket this note describes moved out of the script into `IndmoneyQuotesSocket` in `stock_brokers/websockets/indmoney.py`, which also has a note of its own. The script now writes to Redis what the socket hands it. Where this note names the old class or function, the same code now lives there, and the offline recording in `test_runs/websocket_feeds/` shows the move changed nothing the script writes to Redis.
+
+## Why an empty subscription set waits instead of exiting
+
+From 2026-10-27 the quote allocator decides which instruments each broker streams. INDmoney has preference 6, below every other broker, because only one of its sockets could be relied on, so on 2026-10-28 it was given 0 instruments and its subscription set was empty. The script then exited 2, which the unit treats as a bad argument and does not restart, so `indmoney-instruments@websocket_quotes.service` showed as failed every day although nothing was wrong. Exiting 0 instead would not help: the unit restarts on every exit other than 2, so the script would start again every 15 seconds. Stopping the unit from the allocator would not help either, because `bin/check-services` starts every stopped long-running service again.
+
+The script therefore waits, without logging in or opening a socket, until systemd stops it. The allocator's `--restart-feeds` restarts a feed whenever its set or socket size changes, so the day INDmoney is given instruments, the restart brings them in. Only an empty set waits: `--tokens` that resolve to nothing is still a mistake by whoever typed it, and still exits 2.

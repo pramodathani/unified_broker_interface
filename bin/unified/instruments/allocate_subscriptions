@@ -1,0 +1,136 @@
+#!/usr/bin/env python3
+"""
+Share the day's unified instruments out between the brokers' quote websockets, and write each broker's Redis subscription set.
+
+    bin/unified/instruments/allocate_subscriptions --dry-run          # print the decision, write nothing
+    bin/unified/instruments/allocate_subscriptions                    # write the sets
+    bin/unified/instruments/allocate_subscriptions --restart-feeds    # write, then restart the quote feeds that changed
+    bin/unified/instruments/allocate_subscriptions --date 2026-10-27
+
+**Why.** No broker streams every instrument, and every broker limits how many sockets it accepts and how many instruments each carries, so the day's instruments have to be divided. `unified.broker_quote_capacities` holds those limits, measured against the live brokers, and a broker with 0 sockets is left out.
+
+**What it decides.** Every live instrument of the mapping date goes to exactly one broker; an instrument whose expiry date has passed is left out, because some brokers' masters still list expired contracts. An instrument only one broker can stream always goes to that broker, as long as it has room, because instruments with fewer carriers are allocated first. Every other instrument goes to whichever of its brokers with room has the lowest `preference` in the table, and between equal preferences to the one with the most room left. A broker only counts as a carrier when its own tick normalizer reads the subscription member back to the same instrument, so it never streams ticks the unified combiner cannot place. `QuoteSubscriptionAllocation` in `unified_broker_interface/utilities/quote_subscriptions/utilities/allocation.py` holds the rules.
+
+**Keys.** For each broker with room, `<broker>:quotes:subscriptions` is replaced whole with its members, in the spelling its `bin/<broker>/instruments/websocket_quotes` subscribes, and `<broker>:quotes:per_socket` is set to its instruments per socket, which the quote script uses when no `--per-socket` is given. `unified:quotes:allocation` holds the summary as JSON. A left-out broker's keys are not touched.
+
+**Feeds.** A quote script reads its set only when it starts. `--restart-feeds` runs `systemctl --user restart <broker>-instruments@websocket_quotes.service` for every broker whose set or per-socket size changed. `unified-mapping.service` runs it so, straight after the day's mapping.
+
+Reads the database and Redis only and never calls a broker. Exits 0 when done, 1 when the database or Redis cannot be read or a feed fails to restart, and 2 for a bad argument.
+"""
+
+import sys
+import argparse
+import datetime
+import subprocess
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+from utilities.configurations import get_cache, get_logger, get_postgres  # noqa: E402
+from unified_broker_interface.utilities.quote_subscriptions.utilities.allocation import (  # noqa: E402
+    QuoteSubscriptionAllocation,
+)
+
+FEED_UNIT = "{broker}-instruments@websocket_quotes.service"
+
+
+class AllocateSubscriptionsScript:
+    """The command line entry point: allocate, print, write and restart the changed feeds.
+
+    Attributes:
+        logger (logging.Logger): Where progress is reported.
+    """
+
+    def __init__(self):
+        """Sets up the logger.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.logger = get_logger("unified.allocate_subscriptions")
+
+    def arguments(self):
+        """Reads the command line options.
+
+        Returns:
+            argparse.Namespace: `dry_run` (bool), `restart_feeds` (bool) and `date` (str | None).
+        """
+        parser = argparse.ArgumentParser(description="Share the day's instruments out between the brokers' quote websockets.")
+        parser.add_argument("--dry-run", action="store_true", help="print the decision without writing anything")
+        parser.add_argument("--restart-feeds", action="store_true", help="restart the quote feed of every broker whose set changed")
+        parser.add_argument("--date", help="the mapping date to allocate, as YYYY-MM-DD; default the one in unified:mapping:meta")
+        return parser.parse_args()
+
+    def show(self, summary):
+        """Prints the decision as a table.
+
+        Args:
+            summary (dict): What `QuoteSubscriptionAllocation.summary` returns.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        print(f"Mapping date {summary['mapping_date']}: {summary['covered']} of {summary['instruments']} live instruments covered; {summary['expired']} expired instruments left out.")
+        print(f"{'broker':16}{'preference':>11}{'sockets':>9}{'per socket':>12}{'capacity':>10}{'assigned':>10}")
+        for broker, figures in summary["brokers"].items():
+            print(f"{broker:16}{figures['preference']:>11}{figures['sockets']:>9}{figures['instruments_per_socket']:>12}{figures['capacity']:>10}{figures['assigned']:>10}")
+        for reason, count in summary["uncovered"].items():
+            print(f"Not covered, {reason}: {count}")
+
+    def restart_feeds(self, brokers):
+        """Restarts the quote feed of each broker given.
+
+        Args:
+            brokers (list[str]): The brokers whose feeds to restart.
+
+        Returns:
+            bool: True when every restart succeeded.
+        """
+        succeeded = True
+        for broker in brokers:
+            unit = FEED_UNIT.format(broker=broker)
+            completed = subprocess.run(["systemctl", "--user", "restart", unit], capture_output=True, text=True)
+            if completed.returncode != 0:
+                self.logger.error(f"Could not restart {unit}: {completed.stderr.strip()}")
+                succeeded = False
+            else:
+                self.logger.info(f"Restarted {unit}.")
+        return succeeded
+
+    def run(self):
+        """Allocates, prints, and unless this is a dry run writes the sets and restarts the changed feeds.
+
+        Returns:
+            int: 0 when done, 1 when a store cannot be read or a feed fails to restart, and 2 for a bad date.
+        """
+        arguments = self.arguments()
+        mapping_date = None
+        if arguments.date:
+            try:
+                mapping_date = datetime.date.fromisoformat(arguments.date)
+            except ValueError:
+                self.logger.error(f"--date is not YYYY-MM-DD: {arguments.date!r}")
+                return 2
+        try:
+            connection = get_postgres()
+            cache = get_cache()
+            allocation = QuoteSubscriptionAllocation(connection, cache, self.logger)
+            summary = allocation.run(mapping_date)
+        except Exception as exception:
+            self.logger.error(f"Could not allocate: {type(exception).__name__}: {exception}")
+            return 1
+        self.show(summary)
+        if arguments.dry_run:
+            return 0
+        changed = allocation.write()
+        self.logger.info(f"Wrote {len(allocation.assigned)} subscription set(s); changed: {', '.join(changed) or 'none'}.")
+        if arguments.restart_feeds and not self.restart_feeds(changed):
+            return 1
+        return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(AllocateSubscriptionsScript().run())

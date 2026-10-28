@@ -1,0 +1,37 @@
+zerodha: ['408065', '738561']
+dhan: ['NSE_EQ:11536', 'MCX_COMM:565899']
+stoxkart: ['NFO:77001']
+{
+  "mapping_date": "2026-10-27",
+  "instruments": 5,
+  "expired": 0,
+  "covered": 5,
+  "uncovered": {
+    "no broker can stream it": 0,
+    "its only broker is full": 0,
+    "all its brokers are full": 0
+  },
+  "brokers": {
+    "zerodha": {
+      "preference": 1,
+      "sockets": 1,
+      "instruments_per_socket": 2,
+      "capacity": 2,
+      "assigned": 2
+    },
+    "dhan": {
+      "preference": 3,
+      "sockets": 1,
+      "instruments_per_socket": 2,
+      "capacity": 2,
+      "assigned": 2
+    },
+    "stoxkart": {
+      "preference": 5,
+      "sockets": 1,
+      "instruments_per_socket": 1,
+      "capacity": 1,
+      "assigned": 1
+    }
+  }
+}

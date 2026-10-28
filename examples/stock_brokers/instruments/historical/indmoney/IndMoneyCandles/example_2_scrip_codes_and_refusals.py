@@ -163,12 +163,13 @@ class RefusingIndMoneyAPI:
         self.code = code
         self.message = message
 
-    def get(self, url, params=None):
+    def get(self, url, params=None, timeout=None):
         """Refuses a GET request.
 
         Args:
             url (str): The URL the downloader asked for.
             params (dict): The query parameters it sent.
+            timeout (float | None): How long the downloader would wait for an answer, in seconds; the stand-in answers at once.
 
         Returns:
             dict: Never returns.

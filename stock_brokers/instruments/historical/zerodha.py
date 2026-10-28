@@ -150,7 +150,7 @@ class ZerodhaCandles(BrokerCandles):
         parameters = {"from": start_date.isoformat(), "to": end_date.isoformat(), "oi": 1}
 
         try:
-            response = self._api.get(url=url, params=parameters)
+            response = self._api.get(url=url, params=parameters, timeout=self.REQUEST_TIMEOUT_SECONDS)
         except Exception as exception:
             raise self._classify(exception) from exception
 

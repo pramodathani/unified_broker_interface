@@ -23,7 +23,9 @@ flowchart LR
         UC["contract_sizes"]
         UU["underlyings"]
         UBC["broker_order_costs"]
+        UQC["broker_quote_capacities"]
         UMR["margin_rates"]
+        UCR["charge_rates"]
         UPH["price_history<br/>+ sources, factors,<br/>corrections, yahoo state"]
         UT["ticks"]
         UO["order_updates"]
@@ -59,7 +61,7 @@ The table below lists every table in the database. "Chunk" is the size of each T
 | Schema | Table | Chunk | Compressed after | Written by | DDL file |
 |---|---|---|---|---|---|
 | each broker | `instruments` | 1 month, by `download_date` | not compressed | `bin/<broker>/instruments/daily_feed` | `stock_brokers/instruments/sql/ddl/010_…` to `100_instruments_<broker>.sql` |
-| each broker | `ticks` | 1 day | 7 days | `bin/<broker>/instruments/store_quotes_to_db` | `stock_brokers/instruments/ticks/utilities/sql/ddl/<nnn>_<broker>_streams.sql` |
+| each broker | `ticks` | 1 day | 1 day | `bin/<broker>/instruments/store_quotes_to_db` | `stock_brokers/instruments/ticks/utilities/sql/ddl/<nnn>_<broker>_streams.sql` |
 | each broker | `order_updates` | 1 day | 7 days | `bin/<broker>/orders/store_orders_to_db` | the same streams file |
 | fyers, groww, kotak, wisdom_capital | `positions` | 1 day | 7 days | `bin/<broker>/portfolio/store_positions_to_db` | the same streams file |
 | seven brokers | `price_history` | 1 month | 30 days | `bin/<broker>/instruments/price_history` | `stock_brokers/instruments/historical/utilities/sql/ddl/0x0_price_history_<broker>.sql` |
@@ -69,6 +71,7 @@ The table below lists every table in the database. "Chunk" is the size of each T
 | `unified` | `contract_sizes` | 1 month, by `mapping_date` | not compressed | `bin/unified/instruments/map` | `…/mapping/utilities/sql/ddl/130_unified_contract_sizes.sql` |
 | `unified` | `underlyings` | 1 month, by `mapping_date` | not compressed | `bin/unified/instruments/map` | `…/mapping/utilities/sql/ddl/140_unified_underlyings.sql` |
 | `unified` | `broker_order_costs` | ordinary table | | by hand, its margin columns by `bin/unified/orders/margin_calibration` and its latency columns by `bin/unified/orders/latency_calibration`; seeded by its DDL file, and read by the REST API and the order engine at start-up and at 06:00 IST (see [Choosing a broker by cost](broker-selection.md)) | `…/mapping/utilities/sql/ddl/150_unified_broker_order_costs.sql` |
+| `unified` | `broker_quote_capacities` | ordinary table | | by hand; seeded by its DDL file with the limits measured on 2026-10-27, and read by `bin/unified/instruments/allocate_subscriptions` to divide the day's instruments between the brokers' quote websockets (see [Which instruments are subscribed](../pipelines/market-data.md#which-instruments-are-subscribed)) | `…/mapping/utilities/sql/ddl/190_unified_broker_quote_capacities.sql` |
 | `unified` | `impact_coefficients` | ordinary table | | by hand; seeded by its DDL file with the textbook coefficient 1.0 for each asset class, and read by `bin/unified/orders/estimate_check` (see [Measuring execution costs](execution-costs.md#the-pre-trade-estimate)) | `…/mapping/utilities/sql/ddl/170_unified_impact_coefficients.sql` |
 | `unified` | `margin_rates` | ordinary table | | by hand; seeded by its DDL file with cautious rates, and read with `broker_order_costs` to estimate the margin an order needs (see [Choosing a broker by cost](broker-selection.md)) | `…/mapping/utilities/sql/ddl/160_unified_margin_rates.sql` |
 | `unified` | `price_history` | 1 month | 30 days | `bin/unified/instruments/price_history` | `…/historical/utilities/sql/ddl/200_unified_price_history.sql` |
@@ -76,15 +79,17 @@ The table below lists every table in the database. "Chunk" is the size of each T
 | `unified` | `adjustment_factors` | ordinary table | | `bin/unified/instruments/price_history` | `…/historical/utilities/sql/ddl/220_unified_adjustment_factors.sql` |
 | `unified` | `yahoo_fetch_state` | ordinary table | | `bin/unified/instruments/price_history` | `…/historical/utilities/sql/ddl/230_unified_yahoo_fetch_state.sql` |
 | `unified` | `price_history_corrections` | ordinary table | | `bin/unified/instruments/price_history` | `…/historical/utilities/sql/ddl/250_unified_price_history_corrections.sql` |
-| `unified` | `ticks` | 1 day | 7 days | `bin/unified/instruments/store_quotes_to_db` | `…/ticks/utilities/sql/ddl/300_unified_ticks.sql` |
+| `unified` | `ticks` | 1 day | 1 day | `bin/unified/instruments/store_quotes_to_db` | `…/ticks/utilities/sql/ddl/300_unified_ticks.sql` |
 | `unified` | `order_updates` | 1 month | 7 days | `bin/unified/orders/store_orders_to_db` | `…/ticks/utilities/sql/ddl/310_unified_order_updates.sql` |
 | `unified` | `positions` | 1 month | 7 days | `bin/unified/portfolio/store_positions_to_db` | `…/ticks/utilities/sql/ddl/320_unified_positions.sql` |
 | `unified` | `synthetic_order_events` | 1 day | 7 days | `bin/unified/orders/order_engine` | `…/ticks/utilities/sql/ddl/340_unified_synthetic_order_events.sql` |
 | `unified` | `order_execution_costs` | 7 days | not compressed | `bin/unified/orders/execution_costs`, which applies its own file (see [Measuring execution costs](execution-costs.md)) | `…/ticks/utilities/sql/ddl/350_unified_order_execution_costs.sql` |
+| `unified` | `stop_slippage` | 7 days | not compressed | `bin/unified/orders/stop_slippage`, which applies its own file (see [Trade charges and the real breakeven](trade-charges.md#the-tripwire)) | `…/ticks/utilities/sql/ddl/360_unified_stop_slippage.sql` |
+| `unified` | `daily_orders` | plain table, keyed by day, broker and order id | not compressed | `bin/unified/orders/store_daily_orders`, which applies its own file | `…/ticks/utilities/sql/ddl/370_unified_daily_orders.sql` |
 
 The seven brokers with price history are `zerodha`, `dhan`, `flattrade`, `shoonya`, `fyers`, `indmoney` and `wisdom_capital`, in the files numbered `000` to `060`.
 
-Chunk sizes follow how dense the data is. Ticks arrive in millions a day, so a trading day fits one chunk, which is also the unit compression acts on. Order updates and positions in the unified schema are sparse, hundreds a day, so a month to a chunk keeps chunks from being mostly overhead. The price history files record that seven-day chunks were tried first: daily bars going back two decades spread across 1,133 chunks of 98 rows each for a single instrument.
+Chunk sizes follow how dense the data is. Ticks arrive in millions a day, so a trading day fits one chunk, which is also the unit compression acts on. Tick chunks are compressed once they are a day old, because compression shrinks them about ten times: on 16 October 2026 a single uncompressed trading day of `zerodha.ticks` took 84 GB against about 7 GB compressed, and a seven-day policy left 936 GB of the 1.8 TB data disk uncompressed. The tick DDL files remove the policy and add it again, so a changed interval reaches a database that already has one. Order updates and positions in the unified schema are sparse, hundreds a day, so a month to a chunk keeps chunks from being mostly overhead. The price history files record that seven-day chunks were tried first: daily bars going back two decades spread across 1,133 chunks of 98 rows each for a single instrument.
 
 ### Tables with no primary key
 
@@ -285,7 +290,7 @@ On an empty database the directories must be applied in the order below, because
 
 ```mermaid
 flowchart TD
-    A["stock_brokers/instruments/sql/ddl<br/>000 broker schemas, 010–100 instruments"] --> B["mapping/utilities/sql/ddl<br/>100 unified schema, 110 instruments,<br/>120 broker_mappings, 130 contract_sizes,<br/>140 underlyings, 150 broker_order_costs,<br/>160 margin_rates"]
+    A["stock_brokers/instruments/sql/ddl<br/>000 broker schemas, 010–100 instruments"] --> B["mapping/utilities/sql/ddl<br/>100 unified schema, 110 instruments,<br/>120 broker_mappings, 130 contract_sizes,<br/>140 underlyings, 150 broker_order_costs,<br/>160 margin_rates, 170 impact_coefficients,<br/>180 charge_rates"]
     B --> C["historical/utilities/sql/ddl<br/>000–060 broker price history,<br/>200–250 unified price history"]
     A --> D["ticks/utilities/sql/ddl 010–100<br/>applied by each broker's persisters"]
     B --> E["ticks/utilities/sql/ddl 300, 310, 320<br/>applied by the unified persisters"]

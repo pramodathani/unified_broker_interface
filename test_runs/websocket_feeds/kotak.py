@@ -1,6 +1,7 @@
-"""The Kotak quotes and order updates sockets, driven through scripted HSM and realtime connections."""
+"""The Kotak quotes and order updates sockets, driven through scripted SFeed and realtime connections."""
 
 import json
+import struct
 import types
 
 from stock_brokers.websockets import kotak as kotak_websockets
@@ -9,25 +10,30 @@ from test_runs.websocket_feeds import harness
 QUOTES_SCRIPT = 'bin/kotak/instruments/websocket_quotes'
 ORDERS_SCRIPT = 'bin/kotak/orders/websocket_order_details'
 
-CONNECTION_FRAME = 1
-SUBSCRIBE_FRAME = 4
-DATA_FRAME = 6
-SNAPSHOT_PACKET = 83
-UPDATE_PACKET = 85
-UNCHANGED = -2147483648
-
+PACKET_HEADER = struct.Struct('<HHbBBBB')
+MARKET_PICTURE = struct.Struct('<IqqqqqIIIIIqIIIIhiIdiIIIIIBI')
+DEPTH_ROW = struct.Struct('<qii')
+NSE_CM = 1
+CDE_FO = 3
+MCX_FO = 9
+MARKET_PICTURE_CODE = 7208
+CLOSING_AUCTION_CODE = 104
 
 class StubKotakAPI(harness.StubBrokerAPI):
-    """A stand-in for `KotakAPI`, whose login carries a session id and the account's host as Kotak's does.
+    """A stand-in for `KotakAPI`, whose login carries a session id, the account's host and the market feed's address as Kotak's does.
 
-    A ledger token starting with `nosid` has no session id, and one starting with `nobaseurl` has no host.
+    A ledger token starting with `nosid` has no session id, one starting with `nobaseurl` has no host, and one starting with `feedurl` names its own market feed.
     """
+
+    SETTINGS = {
+        'ucc_code': 'UCC01',
+    }
 
     def _current_login(self):
         """The login in force now.
 
         Returns:
-            dict | None: The access token, session id and host, or None before any login.
+            dict | None: The access token, session id, host and market feed address, or None before any login.
         """
         token = harness.StubBrokerAPI.logins.current_token
         if token is None:
@@ -36,137 +42,162 @@ class StubKotakAPI(harness.StubBrokerAPI):
             'access_token': token,
             'sid': f'sid-{token}',
             'base_url': 'https://e21.kotaksecurities.com/',
+            'feed_url': None,
         }
         if token.startswith('nosid'):
             login['sid'] = None
         if token.startswith('nobaseurl'):
             login['base_url'] = None
+        if token.startswith('feedurl'):
+            login['feed_url'] = 'wss://sfeed-e21.kotaksecurities.com/apifeed'
         return login
 
 
-class KotakFrames:
-    """Builds the binary frames of Kotak's HSM feed, big endian, as `wss://mlhsm.kotaksecurities.com` sends them."""
+class KotakFeedMessages:
+    """Builds the messages of Kotak's SFeed market feed, JSON control messages and little-endian binary packets, as `wss://sfeed.kotaksecurities.com/apifeed` sends them."""
 
-    def framed(self, frame_type, body):
-        """A frame: its length, its type and its body.
-
-        Args:
-            frame_type (int): The frame type.
-            body (bytes): Everything after the type.
-
-        Returns:
-            bytes: The frame.
-        """
-        content = bytes([frame_type]) + body
-        return len(content).to_bytes(2, 'big') + content
-
-    def status_field(self, status):
-        """A status field: id 1, a two-byte length and the status.
+    def authentication_answer(self, message_code):
+        """An answer to the authentication message, carrying the exchanges and their price dividers.
 
         Args:
-            status (str): The status letter.
+            message_code (int): 1119 or 1117.
 
         Returns:
-            bytes: The field.
+            str: The message.
         """
-        return bytes([1]) + len(status).to_bytes(2, 'big') + status.encode('latin-1')
+        return json.dumps({
+            'message_code': message_code,
+            'id': 'SFD_TEST',
+            'version': 1,
+            'format': 'native_batch',
+            'exchanges': {
+                'nse_cm': {
+                    'value': NSE_CM,
+                    'divider': 100,
+                },
+                'cde_fo': {
+                    'value': CDE_FO,
+                    'divider': 10000000,
+                },
+                'mcx_fo': {
+                    'value': MCX_FO,
+                    'divider': 100,
+                },
+            },
+        })
 
-    def connection_response(self, status, acknowledge_every):
-        """A connection response.
+    def refusal(self):
+        """Kotak's refusal of the session, which repeats the session id.
+
+        Returns:
+            str: The message.
+        """
+        return json.dumps({
+            'message_code': 1120,
+            'message': 'Auth failed Matrix Auth failed V0RTT sid-token-1 NEOTRADEAPI 100000 "ok" false null',
+        })
+
+    def acknowledgement(self, trading_symbols, description='SUBSCRIBED', error_code=0):
+        """The subscription acknowledgement.
 
         Args:
-            status (str): `K` for accepted.
-            acknowledge_every (int | None): After how many data frames Kotak wants an acknowledgement, or None to leave the field out.
+            trading_symbols (dict): `EXCHANGE|TOKEN` to trading symbol.
+            description (str): Kotak's description of the outcome.
+            error_code (int): Kotak's error code, 0 when subscribed.
 
         Returns:
-            bytes: The frame.
+            str: The message.
         """
-        if acknowledge_every is None:
-            return self.framed(CONNECTION_FRAME, bytes([1]) + self.status_field(status))
-        acknowledgement = bytes([2]) + (4).to_bytes(2, 'big') + acknowledge_every.to_bytes(4, 'big')
-        return self.framed(CONNECTION_FRAME, bytes([2]) + self.status_field(status) + acknowledgement)
+        return json.dumps({
+            'message_code': 1109,
+            'error_code': error_code,
+            'description': description,
+            'trading_symbols': trading_symbols,
+        })
 
-    def subscription_response(self, status):
-        """A subscription response.
+    def market_picture(self, exchange_id, token, last_price, close, buy_rows, sell_rows, level=8, declared_rows=None):
+        """A market picture packet, prices in the exchange's integer units.
 
         Args:
-            status (str): `K` for accepted.
+            exchange_id (int): The exchange id.
+            token (int): The instrument's token.
+            last_price (int): The last price.
+            close (int): The previous close.
+            buy_rows (list): Buy rows as (quantity, price, orders), best first.
+            sell_rows (list): Sell rows as (quantity, price, orders), best first.
+            level (int): The packet's level.
+            declared_rows (tuple | None): The buy and sell row counts to declare, when they should differ from the rows given.
 
         Returns:
-            bytes: The frame.
+            bytes: The packet, its length first.
         """
-        return self.framed(SUBSCRIBE_FRAME, bytes([1]) + self.status_field(status))
+        buy_count = len(buy_rows)
+        sell_count = len(sell_rows)
+        if declared_rows is not None:
+            buy_count, sell_count = declared_rows
+        body = MARKET_PICTURE.pack(
+            token,
+            5400,
+            6100,
+            1200000,
+            1790316328,
+            1790316329,
+            max(last_price - 500, 0),
+            close,
+            last_price + 1000,
+            max(last_price - 900, 0),
+            last_price,
+            25,
+            max(last_price - 150, 0),
+            0,
+            buy_count,
+            sell_count,
+            0,
+            0,
+            12000 if exchange_id == MCX_FO else 0,
+            0.0,
+            last_price - close,
+            0,
+            0,
+            0,
+            0,
+            1,
+            2,
+            1,
+        )
+        for quantity, price, orders in buy_rows + sell_rows:
+            body = body + DEPTH_ROW.pack(quantity, price, orders)
+        return self.packet(MARKET_PICTURE_CODE, exchange_id, level, body)
 
-    def numbers(self, values):
-        """Numeric fields, four signed bytes each, with None as Kotak's unchanged marker.
+    def packet(self, message_code, exchange_id, level, body):
+        """A packet: its length, its header and its body.
 
         Args:
-            values (list): The values.
+            message_code (int): The message code.
+            exchange_id (int): The exchange id.
+            level (int): The level.
+            body (bytes): Everything after the header.
 
         Returns:
-            bytes: The packed values.
+            bytes: The packet.
         """
-        packed = bytes([len(values)])
-        for value in values:
-            if value is None:
-                value = UNCHANGED
-            packed = packed + value.to_bytes(4, 'big', signed=True)
-        return packed
+        length = PACKET_HEADER.size + len(body)
+        return PACKET_HEADER.pack(length, message_code, exchange_id, level, 0, 0, 0) + body
 
-    def snapshot(self, topic_id, topic_name, values, strings):
-        """A snapshot packet.
+    def depth_rows(self, best_price, step):
+        """Five depth rows.
 
         Args:
-            topic_id (int): The topic id updates refer to.
-            topic_name (str): The topic name, such as `sf|nse_cm|11536`.
-            values (list): The numeric fields in field order.
-            strings (dict): String fields by field id.
+            best_price (int): The best price.
+            step (int): How far each further level is from the one before.
 
         Returns:
-            bytes: The packet, after its two-byte length.
+            list: Rows as (quantity, price, orders).
         """
-        name = topic_name.encode('latin-1')
-        body = bytes([SNAPSHOT_PACKET]) + topic_id.to_bytes(4, 'big', signed=True) + bytes([len(name)]) + name + self.numbers(values)
-        body = body + bytes([len(strings)])
-        for field_id, text in strings.items():
-            encoded = text.encode('latin-1')
-            body = body + bytes([field_id, len(encoded)]) + encoded
-        return len(body).to_bytes(2, 'big') + body
-
-    def update(self, topic_id, values):
-        """An update packet.
-
-        Args:
-            topic_id (int): The topic id.
-            values (list): The numeric fields in field order.
-
-        Returns:
-            bytes: The packet, after its two-byte length.
-        """
-        body = bytes([UPDATE_PACKET]) + topic_id.to_bytes(4, 'big', signed=True) + self.numbers(values)
-        return len(body).to_bytes(2, 'big') + body
-
-    def data(self, message_number, packets, declared_count=None):
-        """A data frame.
-
-        Args:
-            message_number (int | None): The message number, or None when acknowledgements were not asked for.
-            packets (list): The packets.
-            declared_count (int | None): The packet count to declare, when it should differ from the packets given.
-
-        Returns:
-            bytes: The frame.
-        """
-        count = len(packets)
-        if declared_count is not None:
-            count = declared_count
-        body = b''
-        if message_number is not None:
-            body = message_number.to_bytes(4, 'big', signed=True)
-        body = body + count.to_bytes(2, 'big')
-        for packet in packets:
-            body = body + packet
-        return self.framed(DATA_FRAME, body)
+        rows = []
+        for level in range(5):
+            rows.append((10 + level, best_price + level * step, 1 + level))
+        return rows
 
 
 class KotakFeedCases:
@@ -174,7 +205,7 @@ class KotakFeedCases:
 
     Attributes:
         loader (harness.ScriptLoader): Loads the two scripts.
-        frames (KotakFrames): Builds HSM frames.
+        messages (KotakFeedMessages): Builds SFeed messages.
     """
 
     def __init__(self, loader):
@@ -187,7 +218,7 @@ class KotakFeedCases:
             None: This method returns nothing.
         """
         self.loader = loader
-        self.frames = KotakFrames()
+        self.messages = KotakFeedMessages()
 
     def stub_modules(self, context):
         """The modules replaced while a Kotak scenario runs.
@@ -277,7 +308,8 @@ class KotakFeedCases:
         """
         refused = [
             ('open',),
-            ('message', self.frames.connection_response('N', None)),
+            ('message', self.messages.authentication_answer(1119)),
+            ('message', self.messages.refusal()),
         ]
         order_refused = [
             ('open',),
@@ -298,8 +330,9 @@ class KotakFeedCases:
                     refused + [('close', None, None)],
                     [
                         ('open',),
-                        ('message', self.frames.connection_response('K', None)),
-                        ('message', self.frames.data(None, [self.frames.snapshot(1, 'sf|nse_cm|11536', [0, 0, 1790316329, 1790316328, 1000, 385000], {})])),
+                        ('message', self.messages.authentication_answer(1119)),
+                        ('message', self.messages.acknowledgement({})),
+                        ('message', self.messages.market_picture(NSE_CM, 11536, 385000, 380000, [], [])),
                         ('close', 1000, 'normal closure'),
                     ],
                 ],
@@ -324,8 +357,9 @@ class KotakFeedCases:
                 [
                     [
                         ('open',),
+                        ('message', self.messages.authentication_answer(1119)),
                         ('call', self.log_in_elsewhere),
-                        ('message', self.frames.connection_response('N', None)),
+                        ('message', self.messages.refusal()),
                     ],
                     [
                         ('open',),
@@ -345,6 +379,19 @@ class KotakFeedCases:
                 ],
                 set(),
                 self.run_quotes,
+            ),
+            (
+                'kotak.quotes.stored_feed_url',
+                [
+                    [
+                        ('open',),
+                        ('message', self.messages.authentication_answer(1119)),
+                        ('message', self.messages.acknowledgement({})),
+                        ('close', 1000, 'normal closure'),
+                    ],
+                ],
+                set(),
+                self.run_quotes_with_a_stored_feed_url,
             ),
             (
                 'kotak.quotes.failed_connects_give_up',
@@ -453,95 +500,34 @@ class KotakFeedCases:
             ),
         ]
 
-    def scrip_values(self, last_price, close, open_interest):
-        """A scrip topic's numeric fields, 25 of them, in field order.
-
-        Args:
-            last_price (int): The last price, in paise.
-            close (int): The previous close, in paise.
-            open_interest (int | None): The open interest, or None for unchanged.
-
-        Returns:
-            list: The fields.
-        """
-        values = []
-        for _ in range(25):
-            values.append(0)
-        values[2] = 1790316329
-        values[3] = 1790316328
-        values[4] = 1200000
-        values[5] = last_price
-        values[6] = 25
-        values[7] = 5400
-        values[8] = 6100
-        values[13] = last_price - 150
-        values[14] = last_price - 900
-        values[15] = last_price + 1000
-        values[20] = last_price - 500
-        values[21] = close
-        values[22] = open_interest
-        values[23] = 1
-        values[24] = 2
-        return values
-
-    def depth_values(self):
-        """A depth topic's numeric fields, 34 of them, in field order.
-
-        Returns:
-            list: The fields.
-        """
-        values = []
-        for _ in range(34):
-            values.append(0)
-        for level in range(5):
-            values[2 + level] = 385000 - level * 5
-            values[7 + level] = 385010 + level * 5
-            values[12 + level] = 10 + level
-            values[17 + level] = 20 + level
-            values[22 + level] = 1 + level
-            values[27 + level] = 2 + level
-        values[6] = None
-        values[16] = None
-        values[32] = 1
-        values[33] = 2
-        return values
-
     def every_frame_connection(self):
-        """One connection carrying every HSM frame and packet shape the quotes decoder handles.
+        """One connection carrying every SFeed message and packet shape the quotes decoder handles.
 
         Returns:
             list: The scripted steps.
         """
-        first = self.frames.data(
-            1,
-            [
-                self.frames.snapshot(10, 'sf|nse_cm|11536', self.scrip_values(385000, 380000, None), {54: 'TCS-EQ'}),
-                self.frames.snapshot(11, 'sf|mcx_fo|426016', self.scrip_values(612300, 609900, 12000), {54: 'CRUDEOIL26OCTFUT'}),
-                self.frames.snapshot(12, 'dp|nse_cm|11536', self.depth_values(), {}),
-                self.frames.update(10, [None, None, 1790316330, None, None, 385050]),
-            ],
-        )
-        second = self.frames.data(
-            2,
-            [
-                self.frames.update(99, [1, 2]),
-                self.frames.snapshot(13, 'xx|nse_cm|1', [1], {}),
-                self.frames.snapshot(14, 'sf|nse_cm|2885', [0, 0, 0, 0, 0, None], {54: 'RELIANCE-EQ'}),
-                bytes([0, 1, 99]),
-                self.frames.update(10, [1]),
-            ],
-        )
-        truncated = self.frames.data(3, [self.frames.update(11, [None, None, None, None, None, 612400])], declared_count=2)
+        tcs_rows = self.messages.depth_rows(384990, -5) + self.messages.depth_rows(385010, 5)
+        held = self.messages.market_picture(NSE_CM, 11536, 385000, 380000, tcs_rows[:5], tcs_rows[5:])
+        held = held + self.messages.market_picture(MCX_FO, 426016, 612300, 609900, [(3, 612250, 2)], [(4, 612350, 1)])
+        after = self.messages.market_picture(NSE_CM, 11536, 385050, 380000, tcs_rows[:5], tcs_rows[5:])
+        after = after + self.messages.packet(CLOSING_AUCTION_CODE, NSE_CM, 8, struct.pack('<IIqq', 11536, 385000, 100, 0) + bytes(150))
+        after = after + self.messages.market_picture(NSE_CM, 11536, 385100, 380000, tcs_rows[:5], tcs_rows[5:])
+        after = after + self.messages.market_picture(NSE_CM, 2885, 0, 0, [], [])
+        after = after + self.messages.market_picture(CDE_FO, 10465, 831250000, 830000000, [(1, 831200000, 1)], [(2, 831300000, 1)], level=4)
+        after = after + self.messages.market_picture(42, 7, 100, 100, [], [])
+        after = after + self.messages.market_picture(NSE_CM, 1594, 150000, 149000, [(5, 149990, 1)], [(6, 150010, 1)], declared_rows=(5, 5))
+        after = after + self.messages.packet(MARKET_PICTURE_CODE, NSE_CM, 8, b'short')
+        after = after + bytes([200, 0, 1])
         return [
             ('open',),
-            ('message', self.frames.connection_response('K', 2)),
-            ('message', self.frames.subscription_response('K')),
-            ('message', self.frames.subscription_response('N')),
-            ('message', self.frames.framed(SUBSCRIBE_FRAME, bytes([0]))),
-            ('message', first),
-            ('message', second),
-            ('message', truncated),
-            ('message', self.frames.framed(9, b'unknown')),
+            ('message', self.messages.authentication_answer(1119)),
+            ('message', self.messages.authentication_answer(1117)),
+            ('message', held),
+            ('message', self.messages.acknowledgement({'nse_cm|11536': 'TCS-EQ', 'mcx_fo|426016': 'CRUDEOIL26OCTFUT', 'nse_cm|2885': 'RELIANCE-EQ', 'nse_cm|1594': ''})),
+            ('message', after),
+            ('message', self.messages.acknowledgement({}, 'NOT SUBSCRIBED', 3)),
+            ('message', json.dumps({'message_code': 1999, 'detail': 'something new'})),
+            ('message', json.dumps(['not', 'an', 'object'])),
             ('message', 'a text frame'),
             ('message', b'\x00'),
             ('close', 1000, 'normal closure'),
@@ -580,6 +566,8 @@ class KotakFeedCases:
             'mcx_fo|426016',
             'nse_cm|11536',
             'nse_cm|2885',
+            'cde_fo|10465',
+            'nse_cm|1594',
         ]
         names = {
             'nse_cm|11536': 'TCS-EQ',
@@ -615,6 +603,30 @@ class KotakFeedCases:
                 'build_error': str(error),
             }
         context.logins.replace_elsewhere('nosid-token')
+        socket.run_forever()
+        return {
+            'gave_up': socket.gave_up,
+        }
+
+    def run_quotes_with_a_stored_feed_url(self, context):
+        """Runs a quotes socket whose stored login names its own market feed address.
+
+        Args:
+            context (harness.ScenarioContext): The scenario being run.
+
+        Returns:
+            dict: Whether the socket gave up.
+        """
+        instrument_tokens = [
+            'nse_cm|11536',
+        ]
+        try:
+            socket = self.build_quotes_socket(context, instrument_tokens, {})
+        except RuntimeError as error:
+            return {
+                'build_error': str(error),
+            }
+        context.logins.replace_elsewhere('feedurl-token')
         socket.run_forever()
         return {
             'gave_up': socket.gave_up,

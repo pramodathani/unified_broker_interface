@@ -19,3 +19,9 @@ This is a deliberate exception to the project rule that data is stored exactly a
 The check lives in the base class rather than in `ZerodhaCandles.parse_response` because the limit belongs to the table, which every broker's table shares, not to Zerodha's response format.
 
 The issue is also recorded in `docs/contributing/known-issues.md` (removed in the documentation rebuild; read it with `git show b884d54:docs/contributing/known-issues.md`) and `docs/contributing/pitfalls.md` (removed in the documentation rebuild; read it with `git show b884d54:docs/contributing/pitfalls.md`).
+
+## Why candle requests time out after 30 seconds
+
+On 2026-10-27 three candle downloads had been silent for days while systemd showed them running: Shoonya since 2026-10-23 19:33, Wisdom Capital since 2026-10-23 16:14 and Fyers since 2026-10-25 14:05. Each process held one open HTTPS connection to its broker and nothing else. None of the six request sites (`dhan.py`, `fyers.py`, `indmoney.py`, `noren.py` for Flattrade and Shoonya, `wisdom_capital.py`, `zerodha.py`) passed a timeout, so `requests` waited forever for an answer that never came.
+
+They now pass `REQUEST_TIMEOUT_SECONDS` (30), longer than the 10 seconds used for logins because a candle answer can be large. A `requests.exceptions.ReadTimeout` was run through every broker's `_classify` on 2026-10-27 and each passed it through unchanged, so it reaches the generic `except` in `_fetch_and_store` and is recorded as one failed window rather than a login error or a block.

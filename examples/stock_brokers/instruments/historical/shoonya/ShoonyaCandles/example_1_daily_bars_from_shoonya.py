@@ -32,12 +32,13 @@ class RecordedShoonyaAPI:
         """
         self.requests = []
 
-    def post(self, url, data=None):
+    def post(self, url, data=None, timeout=None):
         """Records a POST request and answers it with two daily bars.
 
         Args:
             url (str): The endpoint the downloader called.
             data (dict): The request fields it sent.
+            timeout (float | None): How long the downloader would wait for an answer, in seconds; the stand-in answers at once.
 
         Returns:
             dict: The response envelope, with the bars under `data`.

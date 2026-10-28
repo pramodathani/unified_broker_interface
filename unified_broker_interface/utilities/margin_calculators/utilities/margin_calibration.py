@@ -52,15 +52,17 @@ class MarginCalibration:
         cache (redis.Redis): The Redis client.
         logger (logging.Logger): The logger.
         calculator_classes (list): The `BrokerMarginCalculator` classes to ask.
+        today (datetime.date | None): The day the reference orders are built for, or None for today.
     """
 
-    def __init__(self, cache, logger, calculator_classes=None):
+    def __init__(self, cache, logger, calculator_classes=None, today=None):
         """Builds the calibration.
 
         Args:
             cache (redis.Redis): The Redis client.
             logger (logging.Logger): The logger.
             calculator_classes (list | None): The classes to ask, or None for every broker's.
+            today (datetime.date | None): The day the reference orders are built for, or None for today.
 
         Returns:
             None: This method returns nothing.
@@ -68,6 +70,7 @@ class MarginCalibration:
         self.cache = cache
         self.logger = logger
         self.calculator_classes = calculator_classes or MARGIN_CALCULATOR_CLASSES
+        self.today = today
 
     def calculator(self, calculator_class):
         """A broker's calculator, with the login and settings Redis holds.
@@ -149,7 +152,7 @@ class MarginCalibration:
         Raises:
             ValueError: When today's catalogue is not published or no reference order could be built.
         """
-        reference_orders = ReferenceOrders(self.cache)
+        reference_orders = ReferenceOrders(self.cache, self.today)
         legs, condor = self.reference_legs(reference_orders)
         built = False
         for leg in legs.values():

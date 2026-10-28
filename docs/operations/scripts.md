@@ -19,7 +19,7 @@ bin/
     ├── user/                  details  unified_details
     ├── brokers/               unified_details
     ├── exchanges/             unified_details
-    ├── orders/                api_order_details  api_trade_details  websocket_order_details  store_orders_to_db  order_engine  virtual_book  margin_calibration  execution_costs  latency_calibration  estimate_check
+    ├── orders/                api_order_details  api_trade_details  websocket_order_details  store_orders_to_db  order_engine  virtual_book  margin_calibration  execution_costs  latency_calibration  store_daily_orders  stop_slippage  estimate_check
     ├── portfolio/             positions  holdings  funds  store_positions_to_db
     └── instruments/           map  price_history  websocket_quotes  store_quotes_to_db
 ```
@@ -218,6 +218,8 @@ The three `unified_details` scripts take `--once` to copy once and exit, and the
 | `margin_calibration` | Asks every broker's own margin calculator about the same reference orders, once, and works out each broker's margin surcharge and hedge benefit | today's catalogue and `unified:quotes:live`; the brokers' margin calculators | TimescaleDB `unified.broker_order_costs`, the `margin_multiplier_*`, `gives_hedge_benefit` and `margin_calibrated_at` columns |
 | `execution_costs` | Works out what every filled order leg cost beyond brokerage, split into delay, latency, half spread and market impact | TimescaleDB `unified.synthetic_order_events`, `unified.instruments` and `unified.ticks` | TimescaleDB `unified.order_execution_costs` |
 | `latency_calibration` | Works out each broker's mean latency cost per order category and its median answer time over the last 20 days | TimescaleDB `unified.order_execution_costs` | TimescaleDB `unified.broker_order_costs`, the `latency_cost_bps_*`, `broker_answer_milliseconds` and `latency_calibrated_at` columns |
+| `store_daily_orders` | Saves every broker's orders of the day, in their final state, before Redis drops them at 06:00 IST; the only lasting record of Flattrade's polled orders | Redis `unified:orders:orders` | TimescaleDB `unified.daily_orders` |
+| `stop_slippage` | Follows every protective stop that fired to the fill that closed its position, its own (from the event log or the broker's saved record) or the strategy's next order on the same side within a minute, and works out how far beyond the trigger it was | TimescaleDB `unified.synthetic_order_events`, `unified.instruments` and `unified.daily_orders` | TimescaleDB `unified.stop_slippage` |
 | `estimate_check` | Runs the pre-trade cost estimate on every measured leg of the last 20 days and prints it beside what the leg actually cost | TimescaleDB `unified.order_execution_costs`, `unified.ticks`, `unified.price_history_adjusted` and `unified.impact_coefficients` | nothing; it prints |
 
 !!! danger "`bin/unified/orders/order_engine` places live orders"
@@ -255,6 +257,24 @@ bin/unified/orders/latency_calibration --window-days 40   # forty days of legs i
 
 It exits 0 when the figures were worked out, even if none had enough legs to be written, 1 when the database cannot be read or written, and 2 for a bad argument.
 
+`store_daily_orders` runs in the same unit after the latency calibration. It saves every day `unified:orders:orders` holds, which is the current day until 06:00 IST, replacing that day's rows, and exits 0 with a warning when the key is missing so the stop measurement after it still runs.
+
+```bash
+bin/unified/orders/store_daily_orders                     # save the day's orders
+bin/unified/orders/store_daily_orders --dry-run           # print each broker's count and filled value without saving
+bin/unified/orders/store_daily_orders --date 2026-10-19   # save only that day
+```
+
+`stop_slippage` runs last in the same unit. It reads only the database, measures today and yesterday by default, and replaces the rows of the days it measures in one transaction. [The tripwire](../architecture/trade-charges.md#the-tripwire) explains what its figures are for.
+
+```bash
+bin/unified/orders/stop_slippage                              # measure today and yesterday and write the rows
+bin/unified/orders/stop_slippage --dry-run                    # print each segment's figures without writing
+bin/unified/orders/stop_slippage --date 2026-10-19 --days 7   # seven days ending on 19 October
+```
+
+It exits 0 when the days were measured, even with no stops, 1 when the database cannot be read or written, and 2 for a bad argument.
+
 `estimate_check` only reads and has no timer. [How close it comes](../architecture/execution-costs.md#how-close-it-comes) shows its first run and how to read it.
 
 ```bash
@@ -278,18 +298,22 @@ It exits 0 when the check ran, 1 when the database cannot be read, and 2 for a b
 | Script | What it does | Reads | Writes |
 |---|---|---|---|
 | `map` | Maps every broker's instrument snapshot onto one shared list, and caches the day's rows | `<broker>.instruments` | TimescaleDB `unified.instruments`, `unified.broker_mappings`; Redis `unified:instruments`, `unified:broker_mappings` |
+| `allocate_subscriptions` | Gives every live instrument of the day's mapping to one broker within each broker's measured quote socket limits, and restarts the feeds whose set changed when `--restart-feeds` is given; `unified-mapping.service` runs it after `map` | `unified.broker_quote_capacities`, `unified.broker_mappings`, `unified.instruments`, `unified:mapping:meta` | Redis `<broker>:quotes:subscriptions`, `<broker>:quotes:per_socket`, `unified:quotes:allocation` |
 | `price_history` | Builds `unified.price_history` and its adjustment factors from the brokers' price tables, in steps | `<broker>.price_history`, Yahoo Finance for the factors | TimescaleDB `unified.price_history` and related tables |
 | `websocket_quotes` | Combines every broker's live ticks into one quote per instrument, choosing one owning broker at a time | the ten `<broker>:quotes:stream` streams, group `unified` | Redis `unified:quotes:live`, `unified:quotes:stream`, `unified:quotes:stats` |
 | `store_quotes_to_db` | Drains the unified quote stream | `unified:quotes:stream` | TimescaleDB `unified.ticks` |
 
-The two jobs in this folder take subcommands and options. The usage lines below are copied from their docstrings.
+The three jobs in this folder take subcommands and options. The usage lines below are copied from their docstrings.
 
 ```bash
 bin/unified/instruments/map                                # every broker, today
 bin/unified/instruments/map dhan kotak                     # only these
 bin/unified/instruments/map --cache-only --date 2026-09-13 # only rewrite the Redis cache
-bin/unified/instruments/price_history daily                # load, corrections, load, factors, verify
+bin/unified/instruments/allocate_subscriptions --dry-run          # print the decision, write nothing
+bin/unified/instruments/allocate_subscriptions --restart-feeds    # write, then restart the quote feeds that changed
+bin/unified/instruments/price_history daily                # load, corrections, load, factors
+bin/unified/instruments/price_history verify               # the checks; unified-prices-verify.service runs them at midnight
 bin/unified/instruments/price_history status               # what the last run did
 ```
 
-`map` exits 2 for a bad argument or a date older than the newest one already mapped. `price_history` exits 2 for a bad argument, an interval not loaded, or no instruments matching `--symbols`.
+`map` exits 2 for a bad argument or a date older than the newest one already mapped. `allocate_subscriptions` exits 1 when the database or Redis cannot be read or a feed fails to restart, and 2 for a bad `--date`. `price_history` exits 2 for a bad argument, an interval not loaded, or no instruments matching `--symbols`.

@@ -1,0 +1,32 @@
+Frame of 304 bytes holds 1 packet(s)
+id: RELIANCE-EQ
+broker: kotak
+instrument_token: nse_cm|2885
+exchange: nse_cm
+mode: full
+last_price: 1198.45
+last_quantity: 25
+average_price: 1197.9
+volume: 2645310
+buy_quantity: 412000
+sell_quantity: 389500
+ohlc: {'open': 1195.0, 'high': 1204.0, 'low': 1192.1, 'close': 1196.2}
+change: 0.1881
+oi: 0
+oi_day_high: None
+oi_day_low: None
+last_trade_time: 1793163598
+exchange_timestamp: 1793163599
+received_at: 1793163600.0
+depth buy:
+  100 at 1198.4 from 3 order(s)
+  110 at 1198.35 from 4 order(s)
+  120 at 1198.3 from 5 order(s)
+  130 at 1198.25 from 6 order(s)
+  140 at 1198.2 from 7 order(s)
+depth sell:
+  200 at 1198.5 from 4 order(s)
+  210 at 1198.55 from 5 order(s)
+  220 at 1198.6 from 6 order(s)
+  230 at 1198.65 from 7 order(s)
+  240 at 1198.7 from 8 order(s)

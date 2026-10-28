@@ -233,7 +233,7 @@ class DhanCandles(BrokerCandles):
             body["toDate"] = end_date.isoformat()
 
         try:
-            response = self._api.post(url=url, json=body)
+            response = self._api.post(url=url, json=body, timeout=self.REQUEST_TIMEOUT_SECONDS)
         except Exception as exception:
             classified = self._classify(exception)
             if classified is None:

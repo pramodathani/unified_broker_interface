@@ -1,6 +1,7 @@
 """What every broker's order class shares: whether it can take, modify or cancel an order, the one HTTP call, and the reading of error answers."""
 
 import decimal
+import http.client
 import json
 import re
 import threading
@@ -55,6 +56,7 @@ class BrokerOrders:
         WARM_INTERVAL_SECONDS (float): How often a warming ping is sent, shorter than `MAXIMUM_IDLE_SECONDS`.
         WARM_TIMEOUT_SECONDS (tuple): The connect and read timeouts of a warming ping.
         WARM_SETTLE_SECONDS (float): How long a ping's connection is watched after its answer before it is returned to the pool, so a connection the server closes straight after answering never reaches an order.
+        RESET_ERRORS (tuple): The low-level errors that mean the server reset or dropped the connection.
         session (requests.Session): The session every request to this broker is sent through, so later requests reuse its open connection.
         adapter (IdleLimitedAdapter): The session's adapter, whose pools refuse connections idle longer than `MAXIMUM_IDLE_SECONDS`.
         origin_lock (threading.Lock): Guards `last_origin`.
@@ -108,6 +110,11 @@ class BrokerOrders:
         5,
     )
     WARM_SETTLE_SECONDS = 1.0
+    RESET_ERRORS = (
+        ConnectionResetError,
+        BrokenPipeError,
+        http.client.RemoteDisconnected,
+    )
 
     def __init__(self, pool_size=DEFAULT_POOL_SIZE, oldest_first=False):
         """Builds the broker's order class with a session that has no connection open yet.
@@ -615,22 +622,25 @@ class BrokerOrders:
         del error_code
         return False
 
-    def send(self, broker_request):
+    def send(self, broker_request, session=None):
         """Sends the request once and decodes whatever came back.
 
-        A connect timeout is `rejected`, because the request never left. Any other network error is `unknown`, because the broker may have acted on it.
+        A connect timeout is `rejected`, because the request never left. Any other network error is `unknown`, because the broker may have acted on it, and `connection_reset` says whether that error was the server resetting or dropping the connection.
 
         Args:
             broker_request (BrokerRequest): The request.
+            session (requests.Session | None): The session to send it through, or None for this broker's pooled session.
 
         Returns:
             BrokerAnswer: The answer, with `status_code` and `response_body` set when the broker answered.
         """
+        if session is None:
+            session = self.session
         self.remember_origin(broker_request.url)
         answer = BrokerAnswer(time.perf_counter())
         response = None
         try:
-            response = self.session.request(
+            response = session.request(
                 broker_request.method,
                 broker_request.url,
                 params=broker_request.params,
@@ -648,6 +658,7 @@ class BrokerOrders:
         except requests.exceptions.RequestException as error:
             answer.outcome = 'unknown'
             answer.status_message = f'{type(error).__name__}: {error}'
+            answer.connection_reset = self.is_connection_reset(error)
         answer.answered_at = time.perf_counter()
         self.count_message(answer)
         if response is not None:
@@ -656,6 +667,98 @@ class BrokerOrders:
                 answer.response_body = response.json()
             except ValueError:
                 answer.response_body = response.text[:300]
+        return answer
+
+    def is_connection_reset(self, error):
+        """Whether a failed request failed because the server reset or dropped the connection.
+
+        requests wraps the socket's own error, usually as `ConnectionError(ProtocolError('Connection aborted.', ConnectionResetError(...)))`, so the error's arguments are searched a few levels deep. A timeout is never a reset, because a slow broker may still be working on the order.
+
+        Args:
+            error (requests.exceptions.RequestException): The error the request raised.
+
+        Returns:
+            bool: True when one of `RESET_ERRORS` is inside the error.
+        """
+        if isinstance(error, requests.exceptions.Timeout):
+            return False
+        if not isinstance(error, requests.exceptions.ConnectionError):
+            return False
+        waiting = [
+            error,
+        ]
+        for _ in range(4):
+            found = []
+            for item in waiting:
+                if isinstance(item, self.RESET_ERRORS):
+                    return True
+                if isinstance(item, BaseException):
+                    found.extend(item.args)
+            waiting = found
+        return False
+
+    def send_on_fresh_connection(self, broker_request):
+        """Sends the request once on a connection opened just for it and closed afterwards, outside the pool.
+
+        Args:
+            broker_request (BrokerRequest): The request.
+
+        Returns:
+            BrokerAnswer: The answer, as `send` gives it.
+        """
+        with requests.Session() as session:
+            return self.send(broker_request, session)
+
+    def find_placed_order(self, broker_request, sent_at_epoch):
+        """Looks in the broker's own order book for an order a reset connection may have carried.
+
+        This base class cannot read a broker's order book, so it never claims to know; a broker that can, such as the Noren brokers, overrides it.
+
+        Args:
+            broker_request (BrokerRequest): The place-order request that was sent.
+            sent_at_epoch (float): When it was sent, as seconds since the epoch.
+
+        Returns:
+            tuple: `(state, order_id, message)`, where state is `found` with the broker's order id, `absent` when the book was read and holds no such order, or `cannot_tell`, and message says why.
+        """
+        del broker_request
+        del sent_at_epoch
+        return 'cannot_tell', None, 'this broker\'s order book is not read after a reset'
+
+    def recover_after_reset(self, broker_request, answer, sent_at_epoch):
+        """Settles a place-order request whose connection was reset, instead of leaving its outcome unknown.
+
+        The broker's order book is read on a new connection. When it shows the order, the order was placed and its id is taken from the book. When it shows no such order, the request never reached the broker, so it is sent once more on a new connection. When the book cannot be read, or more than one order matches, the outcome stays unknown, because sending again could place the order twice.
+
+        Args:
+            broker_request (BrokerRequest): The request that was sent.
+            answer (BrokerAnswer): Its answer, `unknown` with `connection_reset` set.
+            sent_at_epoch (float): When it was sent, as seconds since the epoch.
+
+        Returns:
+            BrokerAnswer: The settled answer, which is the answer of the second request when one was sent.
+        """
+        state, order_id, message = self.find_placed_order(
+            broker_request,
+            sent_at_epoch,
+        )
+        if state == 'found':
+            answer.outcome = 'accepted'
+            answer.order_id = order_id
+            answer.status_message = (
+                f'the connection was reset, but the broker\'s order book shows the order as {order_id}, so it was placed'
+            )
+            answer.answered_at = time.perf_counter()
+            return answer
+        if state == 'absent':
+            second_answer = self.send_on_fresh_connection(broker_request)
+            second_answer.sent_at = answer.sent_at
+            if second_answer.status_code is None:
+                second_answer.status_message = (
+                    f'the connection was reset and the broker\'s order book showed no such order, so it was sent again, which also failed: {second_answer.status_message}'
+                )
+            return second_answer
+        answer.status_message = f'{answer.status_message} ({message})'
         return answer
 
     def count_message(self, answer):
@@ -784,13 +887,22 @@ class BrokerOrders:
 
         An error status below 500 is `rejected`, and so is a server error whose code the broker's rules settle. Any other server error is `unknown`. A success status is `rejected` when its body carries a refusal, `accepted` when it carries an order id, and `unknown` otherwise.
 
+        When the connection is reset before an answer arrives, `recover_after_reset` reads the broker's order book to settle the outcome, and sends the order once more when the book shows it never arrived.
+
         Args:
             broker_request (BrokerRequest): The request.
 
         Returns:
             BrokerAnswer: The answer.
         """
+        sent_at_epoch = time.time()
         answer = self.send(broker_request)
+        if answer.status_code is None and answer.connection_reset:
+            answer = self.recover_after_reset(
+                broker_request,
+                answer,
+                sent_at_epoch,
+            )
         if answer.status_code is None:
             return answer
         response_fields = answer.response_fields()

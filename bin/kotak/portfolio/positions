@@ -282,7 +282,9 @@ def main():
     report = PollReporter(logger)
     cache = get_cache()
     merge = cache.register_script(MERGE_SCRIPT)
+    from stock_brokers.api.utilities.session import ensure_session
     try:
+        ensure_session("kotak", logger=logger)
         kotak = KotakAPI()
     except Exception as exception:
         logger.error(f"Could not log in to Kotak: {type(exception).__name__}: {exception}")

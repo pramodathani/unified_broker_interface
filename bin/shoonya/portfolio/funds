@@ -73,6 +73,7 @@ def is_authentication_error(exception):
 def main():
     """Fetch the limits and write them to shoonya:portfolio:funds every half second, until interrupted."""
     from stock_brokers.api.shoonya import ShoonyaAPI
+    from stock_brokers.api.utilities.session import ensure_session
     from utilities.configurations import get_cache, get_logger
     from utilities.poll_reporter import PollReporter
 
@@ -80,6 +81,7 @@ def main():
     report = PollReporter(logger)
     cache = get_cache()
     try:
+        ensure_session("shoonya", logger=logger)
         shoonya = ShoonyaAPI()
         confirm_session(shoonya)
     except Exception as exception:

@@ -15,26 +15,27 @@ The connection, the login and the binary packet decoding for Kite's ticker at `w
 describes the protocol. This script chooses the instruments, splits them across sockets, runs the sockets and
 writes the ticks they decode to Redis, so it needs no other feed process or key.
 
-**Instruments** are `--tokens` when given, otherwise every instrument in today's `zerodha:instruments:master`,
-the hash `bin/zerodha/instruments/daily_feed` fills at 07:45 IST - 112,657 instruments on 2026-09-16, across NFO, NCO,
-MCX, BSE, NSE, CDS, BFO, GLOBAL and NSEIX. Each is keyed by its Kite instrument token, the number in the
+**Instruments** are `--tokens` when given, otherwise the members of the Redis set `zerodha:quotes:subscriptions`,
+which `bin/unified/instruments/allocate_subscriptions` fills with Zerodha's share of the day's instruments, and only
+when that set is empty every instrument in today's `zerodha:instruments:master`, the hash
+`bin/zerodha/instruments/daily_feed` fills at 07:45 IST - 117,480 instruments on 2026-10-27. Each is keyed by its Kite instrument token, the number in the
 `instrument_token` column of Kite's instrument file, whose low byte names the exchange segment (738561 is NSE
 RELIANCE), and is named `EXCHANGE:TRADINGSYMBOL` from the master's own row. When the master is empty, only
 `--tokens` works, and those instruments are named from Kite's public instrument file instead.
 
-**Sockets.** The instruments are sorted by token and split into `--sockets` parts of as near the same size as
-they divide into, 24 parts by default, and each part is subscribed on its own websocket running on its own
-thread. The first `count % sockets` parts carry one instrument more than the rest, so today's master splits
-into one part of 4,695 and twenty-three of 4,694.
+**Sockets.** The instruments are sorted by token and split into parts of as near the same size as they divide
+into, and each part is subscribed on its own websocket running on its own thread. The number of parts is
+`--sockets` when given; otherwise it is as many as the Redis key `zerodha:quotes:per_socket` allows, which
+`bin/unified/instruments/allocate_subscriptions` writes from `unified.broker_quote_capacities`; and 24 when that
+key is unset. The first `count % sockets` parts carry one instrument more than the rest.
 
-**This asks Kite for far more than Kite documents.** Kite documents three websockets per api_key, one of which
-`bin/zerodha/orders/websocket_order_details` holds, and 3,000 instruments per websocket. Twenty-four sockets of about 4,700
-instruments each exceeds both, so Kite is expected to refuse the connections past its limit; a refused socket
-reconnects with backoff and leaves the others streaming rather than stopping the feed. The tick volume is also
-far above what the feed was built for: `zerodha:quotes:stream` was raised from 100,000 entries to 1,000,000 on
-2026-09-16 to give `bin/zerodha/instruments/store_quotes_to_db` ten times the room to catch up, which buys minutes rather than
-hours at this subscription size. Nothing here is capped or budgeted: the script opens as many sockets as it is
-asked for.
+**Kite allows more than it documents.** Kite documents three websockets per api_key and 3,000 instruments per
+websocket. A probe on 2026-10-27 found 24 sockets of 3,000 all streaming, the 25th to 40th refused with HTTP 429
+(the order updates socket probably holds the 25th slot), and a socket of 5,000 streaming in full after the text
+error "Can't subscribe to more than 4000 instruments.", while 10,000 in one message was refused as too big.
+`unified.broker_quote_capacities` therefore gives Zerodha 24 sockets of 4,000. The tick volume is far above
+what the feed was first built for: `zerodha:quotes:stream` was raised from 100,000 entries to 1,000,000 on
+2026-09-16 to give `bin/zerodha/instruments/store_quotes_to_db` ten times the room to catch up.
 
 **Keys.**
 
@@ -67,6 +68,7 @@ import sys
 import csv
 import json
 import signal
+import math
 import argparse
 import threading
 from io import StringIO
@@ -84,6 +86,8 @@ INSTRUMENTS_URL = "https://api.kite.trade/instruments"
 LIVE_KEY = "zerodha:quotes:live"
 INSTRUMENTS_KEY = "zerodha:quotes:instruments"
 MASTER_KEY = "zerodha:instruments:master"
+SUBSCRIPTIONS_KEY = "zerodha:quotes:subscriptions"
+PER_SOCKET_KEY = "zerodha:quotes:per_socket"
 MASTER_META_KEY = "zerodha:instruments:meta"
 
 # Every tick is also appended here for bin/zerodha/instruments/store_quotes_to_db, which reads it with a consumer group. The cap
@@ -176,21 +180,26 @@ def master_instruments(cache, logger):
         logger.info(f"Read {len(names)} instrument(s) from {MASTER_KEY}, downloaded {download_date}.")
     return names
 
-def resolve_tokens(tokens, master, logger):
+def resolve_tokens(tokens, master, cache, logger):
     """
     The Kite instrument tokens to subscribe to, as integers, in ascending order.
 
     Args:
-        tokens (str | None): A comma separated list of instrument tokens from `--tokens`, or None for every
-            instrument in today's master.
+        tokens (str | None): A comma separated list of instrument tokens from `--tokens`, or None for the subscription set, or every instrument in today's master when that set is empty.
         master (dict[str, str]): Today's instruments from `master_instruments`.
+        cache (redis.Redis): The Redis client holding the subscription set.
         logger (logging.Logger): Where the resolution and any unusable token are reported.
 
     Returns:
         list[int]: The instrument tokens to subscribe to, de-duplicated and sorted.
     """
+    subscribed = []
+    if not tokens:
+        subscribed = list(cache.smembers(SUBSCRIPTIONS_KEY))
     if tokens:
         wanted, source = [token.strip() for token in tokens.split(",")], "--tokens"
+    elif subscribed:
+        wanted, source = subscribed, SUBSCRIPTIONS_KEY
     else:
         wanted, source = list(master), MASTER_KEY
 
@@ -283,29 +292,38 @@ def main():
     """Stream Zerodha quotes into zerodha:quotes:live until stopped."""
     parser = argparse.ArgumentParser(description="Stream Zerodha market quotes into zerodha:quotes:live until stopped.")
     parser.add_argument("--tokens", help="comma separated Kite instrument tokens, for example 738561,408065")
-    parser.add_argument("--sockets", type=int, default=DEFAULT_SOCKETS,
-                        help=f"websockets to split the instruments equally across, default {DEFAULT_SOCKETS}")
+    parser.add_argument("--sockets", type=int, default=None,
+                        help=f"websockets to split the instruments equally across, default as many as {PER_SOCKET_KEY} allows, or {DEFAULT_SOCKETS} when it is unset")
     arguments = parser.parse_args()
 
     from stock_brokers.websockets.zerodha import ZerodhaQuotesSocket, ZerodhaSession
+    from stock_brokers.api.utilities.session import ensure_session
     from utilities.configurations import get_cache, get_logger
 
     logger = get_logger("zerodha.websocket_quotes")
     cache = get_cache()
 
-    if arguments.sockets < 1:
+    if arguments.sockets is not None and arguments.sockets < 1:
         logger.error("--sockets must be at least 1.")
         return 2
 
     master = master_instruments(cache, logger)
-    tokens = resolve_tokens(arguments.tokens, master, logger)
+    tokens = resolve_tokens(arguments.tokens, master, cache, logger)
     if not tokens:
         logger.error(f"Nothing to subscribe to. Pass --tokens, or run bin/zerodha/instruments/daily_feed to fill {MASTER_KEY}.")
         return 2
 
-    batches = split_into_parts(tokens, arguments.sockets)
+    sockets = arguments.sockets
+    if sockets is None:
+        per_socket = int(cache.get(PER_SOCKET_KEY) or 0)
+        if per_socket > 0:
+            sockets = math.ceil(len(tokens) / per_socket)
+        else:
+            sockets = DEFAULT_SOCKETS
+    batches = split_into_parts(tokens, sockets)
 
     try:
+        ensure_session("zerodha", logger=logger)
         session = ZerodhaSession(logger)
     except Exception as exception:
         logger.error(f"Could not log in to Zerodha: {type(exception).__name__}: {exception}")

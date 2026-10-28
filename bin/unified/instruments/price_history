@@ -2,11 +2,11 @@
 """
 Build the unified price history - `unified.price_history` and its adjustment factors - from the brokers' price tables.
 
-    bin/unified/instruments/price_history daily                           # the daily job: load, corrections, load, factors, intraday loads, verify
+    bin/unified/instruments/price_history daily                           # the nightly job: load, corrections, load, factors, intraday loads
     bin/unified/instruments/price_history load                            # copy new and changed daily bars across
     bin/unified/instruments/price_history corrections                     # find series flattrade served already adjusted
     bin/unified/instruments/price_history factors --stale-days 14         # fetch Yahoo Finance and derive adjustment factors
-    bin/unified/instruments/price_history verify                          # run the checks
+    bin/unified/instruments/price_history verify                          # run the checks; unified-prices-verify.service runs it at midnight
     bin/unified/instruments/price_history sources                         # resolve every series and report, writing nothing
     bin/unified/instruments/price_history status                          # what the last run did, and what is stored
 
@@ -43,14 +43,16 @@ creates the unified price tables the first time. The unified instruments have to
 - `verify` runs the checks, including the known cases, and fails when any check fails.
 - `sources` resolves every broker series and reports how, writing nothing.
 - `status` prints the last run and what is stored.
-- `daily` is the morning sequence `unified-prices.service` runs: `load`, `corrections`, `load` again for what the corrections changed,
-  `factors --stale-days 14`, then `load` for each of the fifteen intraday intervals, from `1minute` to `240minute`, then `verify`,
-  whose failures are reported without failing the job. It always loads `day` and every intraday interval, so `--interval` does not apply to it.
+- `daily` is the sequence `unified-prices.service` runs at 02:00 IST: `load`, `corrections`, `load` again for what the corrections changed,
+  `factors --stale-days 14`, then `load` for each of the fifteen intraday intervals, from `1minute` to `240minute`. It always loads `day` and every intraday interval, so `--interval` does not apply to it.
+  It does not run `verify`, whose comparison of whole tables kept the database disk busy into market hours when the job ran in the morning;
+  `unified-prices-verify.service` runs `verify` at midnight instead, before the job.
 
-Each run's outcome is written to `unified:prices:last_run` in Redis.
+Each run's outcome is written to `unified:prices:last_run` in Redis, except a `verify` run's, which goes to `unified:prices:last_verify`,
+because `verify` changes no bars and the REST API's candle cache rebuilds its entries whenever `unified:prices:last_run` changes.
 
-Exits 0 when the step or steps succeeded, 1 when a step failed, the import could not run or verify found a failing check
-(outside `daily`), and 2 for a bad argument, an interval not loaded, or no instruments matching `--symbols`.
+Exits 0 when the step or steps succeeded, 1 when a step failed, the import could not run or verify found a failing check,
+and 2 for a bad argument, an interval not loaded, or no instruments matching `--symbols`.
 """
 
 import sys
@@ -68,6 +70,7 @@ from utilities.bootstrap import run_under_venv
 PROJECT_ROOT = run_under_venv(__file__)
 
 LAST_RUN_KEY = "unified:prices:last_run"
+LAST_VERIFY_KEY = "unified:prices:last_verify"
 
 # Instruments that between them exercise every case the design has to handle: a bonus and a demerger (RELIANCE), a split
 # (AJMERA), a token change and an action Yahoo has not caught up with (INDIAGLYCO), a new listing (JIOFIN), a REIT
@@ -197,6 +200,8 @@ def status(cache, connect):
 
     last = cache.get(LAST_RUN_KEY)
     print("last run:", json.dumps(json.loads(last), indent=2) if last else "none recorded")
+    last_verify = cache.get(LAST_VERIFY_KEY)
+    print("last verify:", json.dumps(json.loads(last_verify), indent=2) if last_verify else "none recorded")
     connection = connect()
     try:
         with connection.cursor() as cursor:
@@ -368,7 +373,6 @@ def main():
     exit_code = 0
 
     if arguments.step == "daily":
-        # The morning sequence. A failed step ends the job; verify is reported without failing it.
         sequence = [
             ("load", "day", {}),
             ("corrections", "day", {}),
@@ -377,18 +381,15 @@ def main():
         ]
         for interval in INTRADAY_MINUTES:
             sequence.append(("load", interval, {}))
-        sequence.append(("verify", "day", {}))
         outcome["steps"] = []
         for position, (step, interval, options) in enumerate(sequence, start=1):
             print(f"\n=== {step} {interval} ({position} of {len(sequence)}) ===")
             step_outcome, step_code = run_step(step, interval, instrument_ids, get_postgres, **options)
             outcome["steps"].append({"step": step, "interval": interval, "exit_code": step_code, **step_outcome})
-            if step_code and step != "verify":
+            if step_code:
                 logger.error(f"The daily job stopped: {step} failed.")
                 exit_code = step_code
                 break
-            if step_code:
-                logger.warning(f"verify found failing checks: {', '.join(step_outcome.get('failed', []))}")
     else:
         step_outcome, exit_code = run_step(arguments.step, arguments.interval, instrument_ids, get_postgres,
                                            stale_days=arguments.stale_days, retry=arguments.retry)
@@ -397,8 +398,11 @@ def main():
     outcome["started"] = started.strftime("%Y-%m-%d %H:%M:%S")
     outcome["finished"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     outcome["exit_code"] = exit_code
+    record_key = LAST_RUN_KEY
+    if arguments.step == "verify":
+        record_key = LAST_VERIFY_KEY
     try:
-        cache.set(LAST_RUN_KEY, json.dumps(outcome, default=str))
+        cache.set(record_key, json.dumps(outcome, default=str))
     except Exception as exception:
         logger.error(f"The run was not recorded in Redis: {exception}")
     return exit_code

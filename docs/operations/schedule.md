@@ -4,7 +4,7 @@ UBI's day is fixed to India Standard Time (IST, UTC+05:30). Some things happen b
 
 ## The day at a glance
 
-The chart below shows one weekday from 06:00 to midnight IST. Blue bars and points are UBI's own jobs and cut-off times; orange bars are the exchanges' trading sessions. Hover over a mark to see its exact times and where the time comes from.
+The chart below shows one weekday from midnight to midnight IST. Blue bars and points are UBI's own jobs and cut-off times; orange bars are the exchanges' trading sessions. Hover over a mark to see its exact times and where the time comes from.
 
 ```vegalite
 {
@@ -13,11 +13,12 @@ The chart below shows one weekday from 06:00 to midnight IST. Blue bars and poin
   "height": 330,
   "data": {
     "values": [
+      {"order": 0.1, "row": "Unified price history check", "kind": "UBI job or cut-off", "start": "2026-09-28 00:00", "end": null, "source": "unified-prices-verify.timer"},
+      {"order": 0.2, "row": "Unified price history", "kind": "UBI job or cut-off", "start": "2026-09-28 02:00", "end": null, "source": "unified-prices.timer"},
       {"order": 1, "row": "Daily order counts reset", "kind": "UBI job or cut-off", "start": "2026-09-28 06:00", "end": null, "source": "RESET_HOUR in parent_store.py"},
       {"order": 2, "row": "API token renewal time", "kind": "UBI job or cut-off", "start": "2026-09-28 07:00", "end": null, "source": "DAILY_RENEWAL_TIME in tokens.py"},
       {"order": 3, "row": "Broker logins (ten timers)", "kind": "UBI job or cut-off", "start": "2026-09-28 07:00", "end": "2026-09-28 07:30", "source": "<broker>-login.timer, RandomizedDelaySec=1800"},
       {"order": 4, "row": "Instrument download and mapping", "kind": "UBI job or cut-off", "start": "2026-09-28 07:45", "end": "2026-09-28 08:30", "source": "unified-mapping.timer; about 45 minutes per the unit comment"},
-      {"order": 5, "row": "Unified price history (Mon to Sat)", "kind": "UBI job or cut-off", "start": "2026-09-28 08:30", "end": null, "source": "unified-prices.timer"},
       {"order": 5.5, "row": "Margin calibration (Mon to Fri)", "kind": "UBI job or cut-off", "start": "2026-09-28 09:30", "end": null, "source": "unified-margin-calibration.timer"},
       {"order": 5.6, "row": "Execution cost measurement (Mon to Fri)", "kind": "UBI job or cut-off", "start": "2026-09-28 23:50", "end": null, "source": "unified-execution-costs.timer"},
       {"order": 6, "row": "NSE and BSE equity", "kind": "Trading session", "start": "2026-09-28 09:00", "end": "2026-09-28 09:15", "source": "Pre-open, sessions.py"},
@@ -50,7 +51,7 @@ The chart below shows one weekday from 06:00 to midnight IST. Blue bars and poin
           "type": "temporal",
           "title": "Time of day (IST)",
           "axis": {"format": "%H:%M", "tickCount": 18, "grid": true, "gridOpacity": 0.3},
-          "scale": {"domain": [{"year": 2026, "month": 9, "date": 28, "hours": 6}, {"year": 2026, "month": 9, "date": 29, "hours": 0}]}
+          "scale": {"domain": [{"year": 2026, "month": 9, "date": 28, "hours": 0}, {"year": 2026, "month": 9, "date": 29, "hours": 0}]}
         },
         "x2": {"field": "end"},
         "tooltip": [
@@ -81,12 +82,13 @@ The same facts are listed in the table below, with the file each one comes from.
 
 | Time (IST) | What happens | Days | Where it is set |
 |---|---|---|---|
+| 00:00 | `unified-prices-verify.service` runs `bin/unified/instruments/price_history verify`, the checks of the unified price history, after every market has closed | Every day | `OnCalendar=*-*-* 00:00 Asia/Kolkata`, `Persistent=false` |
+| 02:00 | `unified-prices.service` runs `bin/unified/instruments/price_history daily`, waiting for the check if it is still running | Every day | `OnCalendar=*-*-* 02:00 Asia/Kolkata`, `Persistent=false`, `After=unified-prices-verify.service` |
 | 06:00 | Every broker's daily order count in Redis (`unified:orders:daily_count:<broker>`) expires | Every day | `RESET_HOUR = 6` in `unified_broker_interface/utilities/order_engine/utilities/parent_store.py`, used by `daily_order_count.py` |
 | 06:00 | The REST API and the order engine reload the broker cost table `unified.broker_order_costs` that the lowest-cost selector, the rate budget and the daily order count read | Every day | `BrokerCostTable` in `unified_broker_interface/utilities/broker_selection/utilities/broker_cost_table.py`, which uses the same `RESET_HOUR` |
 | 07:00 | The REST API stops reusing yesterday's access token; the next `connect` issues a new one | Every day | `DAILY_RENEWAL_TIME = time(7, 0)` in `unified_broker_interface/utilities/tokens.py` |
 | 07:00 to 07:30 | Each of the ten `<broker>-login.timer` units fires once, at a random moment in this half hour | Every day, weekends included | `OnCalendar=*-*-* 07:00 Asia/Kolkata`, `RandomizedDelaySec=1800` |
 | 07:45 | `unified-mapping.service` downloads ten instrument masters, then maps them | Every day, weekends included | `OnCalendar=*-*-* 07:45 Asia/Kolkata`, `Persistent=true` |
-| 08:30 | `unified-prices.service` runs `bin/unified/instruments/price_history daily` | Monday to Saturday | `OnCalendar=Mon..Sat 08:30 Asia/Kolkata`, `Persistent=true` |
 | 09:00 to 09:15 | NSE and BSE equity pre-open | Trading days | `EQUITY_SESSION` in `stock_brokers/instruments/ticks/utilities/sessions.py` |
 | 09:30 | `unified-margin-calibration.service` asks every broker's margin calculator about the reference orders and writes each broker's margin surcharge to `unified.broker_order_costs` | Monday to Friday | `OnCalendar=Mon..Fri 09:30 Asia/Kolkata`, `Persistent=true` |
 | 09:15 to 15:30 | NSE and BSE cash, index and equity derivatives trade | Trading days | `EQUITY_SESSION` |
@@ -108,14 +110,11 @@ sequenceDiagram
     participant T as systemd timers
     participant B as Broker login services
     participant M as unified-mapping
-    participant P as unified-prices
     participant F as Live feeds
     T->>B: 07:00 + up to 30 min, one per broker
     B-->>B: write the new token to MongoDB, then Redis
     T->>M: 07:45
     M->>M: ten daily_feed downloads, then map
-    T->>P: 08:30 (Mon to Sat)
-    Note over P: After=unified-mapping.service,<br/>so it waits if mapping is still running
     F->>F: 09:00 pre-open, and the tick windows open
 ```
 
@@ -124,7 +123,7 @@ The reasons come from the comments in the unit files:
 1. The logins happen at 07:00, which is before the 07:45 instrument download and the 09:00 pre-open, and well clear of MCX's 23:30 close. The half hour of random delay keeps the ten logins apart, several of which drive a headless Chrome or wait on a TOTP, and still lands every one before 07:45.
 2. The login timers set `Persistent=false`. A machine that was off at 07:00 does not catch up, because the first script to find its token refused logs in by itself.
 3. The mapping timer sets `Persistent=true`. The brokers publish only today's instrument file, so a missed snapshot can never be fetched later, and a machine that was off at 07:45 runs the job as soon as it starts.
-4. The price history job runs at 08:30, after the night's candle downloads and the 07:45 mapping. It says `After=unified-mapping.service`, so if the mapping runs late, the price job waits for it. It also runs on Saturday to pick up Friday's last bars and the week's corporate actions.
+4. The unified price history is checked at 00:00 and rebuilt at 02:00, not in the morning. Until 2026-10-28 the job ran at 08:30 from Monday to Saturday with the checks as its last step, and because it takes three hours or more it ran into market hours. On 2026-10-28 the checks' comparison of whole tables, with ten parallel workers and temporary files, made the database disk queue about 400 writes and each commit wait 1 to 2.6 seconds, so the Zerodha and Kotak tick writers fell behind and lost ticks. At night every market is closed. The job says `After=unified-prices-verify.service`, so it waits for a check that runs long, because two price history runs at once deadlock. Both timers set `Persistent=false`, so a missed night is skipped rather than run at boot, which could be during market hours.
 
 ## What runs all day
 

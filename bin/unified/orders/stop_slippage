@@ -1,0 +1,130 @@
+#!/usr/bin/env python3
+"""
+Follow every protective stop that fired to the fill that closed its position, from the order engine's event log, and
+write one row per stop to `unified.stop_slippage`.
+
+    bin/unified/orders/stop_slippage
+    bin/unified/orders/stop_slippage --dry-run
+    bin/unified/orders/stop_slippage --date 2026-10-19 --days 5
+
+**Why.** A stop does not sell at its trigger: it fires when the price crosses the trigger and fills at the next price,
+a little beyond it. A breakeven stop whose trigger is the real breakeven therefore still loses that slip. This script
+measures the slip on real stops, so a tripwire can be set far enough from the breakeven that most stops still close
+at or beyond it.
+
+**The arithmetic.** A protective stop is a `plan` whose order has `side` `protect` and a `price_crosses` trigger. Its
+close is its own fill when the event log has one; else the broker's final record of its order in `unified.daily_orders`,
+because a stop the strategy cancelled just as it filled is a fill the engine never saw; else the first other order on
+the same instrument and side requested within a minute after it fired that got a fill, because a strategy whose stop did
+not fill closes the position itself. The
+slip is the close's distance beyond the trigger, positive when worse, in rupees per unit and in basis points of the
+trigger. A stop whose close cannot be found is written with an empty slip.
+
+**What it touches.** It reads `unified.synthetic_order_events`, `unified.instruments` and `unified.daily_orders`, never a
+broker or Redis. It
+replaces every row of the days it measures in one transaction, so running it twice gives the same table. By default
+it measures today and yesterday in India's time zone. `unified-execution-costs.service` runs it every weekday night
+after `bin/unified/orders/store_daily_orders` has saved the day's orders.
+
+Exits 0 when the days were measured, even with no stops, 1 when the database cannot be read or written, and 2 for a
+bad argument.
+"""
+
+import sys
+import argparse
+import datetime
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+from utilities.bootstrap import run_under_venv
+
+PROJECT_ROOT = run_under_venv(__file__)
+
+import psycopg2  # noqa: E402
+
+from utilities.configurations import get_logger, get_postgres  # noqa: E402
+from unified_broker_interface.utilities.execution_costs.stop_slippage_measurement import (  # noqa: E402
+    StopSlippageMeasurement,
+)
+from unified_broker_interface.utilities.order_engine.utilities.parent_store import (  # noqa: E402
+    INDIA,
+)
+
+
+class StopSlippageScript:
+    """The script: reads the arguments, measures the days, prints each segment's figures, and writes the rows.
+
+    Attributes:
+        logger (logging.Logger): The logger.
+    """
+
+    def __init__(self):
+        """Builds the script.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        self.logger = get_logger("unified.stop_slippage")
+
+    def arguments(self):
+        """Reads the command line.
+
+        Returns:
+            argparse.Namespace: `date` (datetime.date), `days` (int) and `dry_run` (bool).
+        """
+        today = datetime.datetime.now(INDIA).date()
+        parser = argparse.ArgumentParser(description="Measure how far beyond their trigger protective stops filled.")
+        parser.add_argument("--date", type=datetime.date.fromisoformat, default=today, help="The last day measured, as YYYY-MM-DD; today in India when omitted.")
+        parser.add_argument("--days", type=int, default=2, help="How many days to measure, ending with --date; 2 when omitted.")
+        parser.add_argument("--dry-run", action="store_true", help="Print the figures without writing unified.stop_slippage.")
+        arguments = parser.parse_args()
+        if arguments.days < 1:
+            parser.error("--days must be at least 1")
+        return arguments
+
+    def show(self, summary):
+        """Prints one line per segment and side.
+
+        Args:
+            summary (list): The dicts `StopSlippageMeasurement.summary` returns.
+
+        Returns:
+            None: This method returns nothing.
+        """
+        print(f"{'segment':<28} {'side':<5} {'fired':>6} {'by stop':>8} {'by other':>9} {'unresolved':>11} {'median bps':>11} {'90th bps':>9}")
+        for line in summary:
+            print(f"{line['segment'] or '-':<28} {line['transaction_type']:<5} {line['fired']:>6} {line['by_stop']:>8} "
+                  f"{line['by_other_order']:>9} {line['unresolved']:>11} {str(line['median_slip_basis_points']):>11} "
+                  f"{str(line['ninetieth_slip_basis_points']):>9}")
+
+    def run(self):
+        """Measures, prints and writes.
+
+        Returns:
+            int: The exit code.
+        """
+        arguments = self.arguments()
+        measurement = StopSlippageMeasurement(get_postgres, self.logger)
+        start, end = measurement.day_bounds(arguments.date, arguments.days)
+        try:
+            outcomes = measurement.measure(start, end)
+        except psycopg2.Error as error:
+            self.logger.error(f"Could not read the event log: {type(error).__name__}: {error}")
+            return 1
+        self.logger.info(f"Measured {len(outcomes)} fired stops from {start.isoformat()} to {end.isoformat()}.")
+        self.show(measurement.summary(outcomes))
+        if arguments.dry_run:
+            self.logger.info("Dry run: nothing written.")
+            return 0
+        try:
+            written = measurement.write(start, end, outcomes)
+        except psycopg2.Error as error:
+            self.logger.error(f"Could not write unified.stop_slippage: {type(error).__name__}: {error}")
+            return 1
+        self.logger.info(f"Wrote {written} rows to unified.stop_slippage.")
+        return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(StopSlippageScript().run())

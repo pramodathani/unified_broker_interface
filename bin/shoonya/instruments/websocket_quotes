@@ -23,6 +23,8 @@ named `EXCHANGE:TRADINGSYMBOL` from Shoonya's public scrip files for the exchang
 startup; an instrument the files do not name takes the trading symbol Noren sends when it acknowledges the
 subscription. One websocket carries up to `--per-socket` instruments.
 
+**Socket size.** Without `--per-socket`, each socket carries the number in the Redis key `shoonya:quotes:per_socket`, which `bin/unified/instruments/allocate_subscriptions` writes from `unified.broker_quote_capacities` along with the subscription set, or 1000 when the key is unset.
+
 **Keys.**
 
 - `shoonya:quotes:live`, a hash of the latest tick per instrument as JSON, keyed by `EXCHANGE:TRADINGSYMBOL`, or
@@ -71,6 +73,7 @@ SCRIP_FILE_URL = "https://api.shoonya.com/{exchange}_symbols.txt.zip"
 LIVE_KEY = "shoonya:quotes:live"
 INSTRUMENTS_KEY = "shoonya:quotes:instruments"
 SUBSCRIPTIONS_KEY = "shoonya:quotes:subscriptions"
+PER_SOCKET_KEY = "shoonya:quotes:per_socket"
 
 # Every tick is also appended here for bin/shoonya/instruments/store_quotes_to_db, which reads it with a consumer group. The cap
 # bounds Redis memory when the persister is down; ticks trimmed before it returns are not persisted.
@@ -182,15 +185,18 @@ def main():
     """Stream Shoonya quotes into shoonya:quotes:live until stopped."""
     parser = argparse.ArgumentParser(description="Stream Shoonya market quotes into shoonya:quotes:live until stopped.")
     parser.add_argument("--tokens", help="comma separated EXCHANGE|TOKEN tokens, for example NSE|2885")
-    parser.add_argument("--per-socket", type=int, default=DEFAULT_INSTRUMENTS_PER_CONNECTION,
-                        help=f"instruments per websocket connection, default {DEFAULT_INSTRUMENTS_PER_CONNECTION}")
+    parser.add_argument("--per-socket", type=int, default=None,
+                        help=f"instruments per websocket connection, default the Redis key {PER_SOCKET_KEY}, or {DEFAULT_INSTRUMENTS_PER_CONNECTION} when it is unset")
     arguments = parser.parse_args()
 
     from stock_brokers.websockets.shoonya import ShoonyaQuotesSocket, ShoonyaSession
+    from stock_brokers.api.utilities.session import ensure_session
     from utilities.configurations import get_cache, get_logger
 
     logger = get_logger("shoonya.websocket_quotes")
     cache = get_cache()
+    if arguments.per_socket is None:
+        arguments.per_socket = int(cache.get(PER_SOCKET_KEY) or DEFAULT_INSTRUMENTS_PER_CONNECTION)
 
     if arguments.per_socket < 1:
         logger.error("--per-socket must be at least 1.")
@@ -203,6 +209,7 @@ def main():
         return 2
 
     try:
+        ensure_session("shoonya", logger=logger)
         session = ShoonyaSession(logger)
     except Exception as exception:
         logger.error(f"Could not log in to Shoonya: {type(exception).__name__}: {exception}")

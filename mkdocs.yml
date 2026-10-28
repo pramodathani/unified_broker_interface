@@ -33,7 +33,6 @@ theme:
         icon: material/brightness-4
         name: Switch to light mode
   features:
-    - navigation.instant
     - navigation.tracking
     - navigation.tabs
     - navigation.tabs.sticky
@@ -162,6 +161,7 @@ nav:
       - Instruments: rest-api/instruments.md
       - Market quotes: rest-api/market-quotes.md
       - Historical data: rest-api/historical-data.md
+      - Breakeven levels: rest-api/breakeven.md
       - Portfolio: rest-api/portfolio.md
       - Orders: rest-api/orders.md
       - Flatten everything: rest-api/flatten.md
@@ -176,6 +176,7 @@ nav:
       - Design choices: architecture/design-choices.md
       - Choosing a broker by cost: architecture/broker-selection.md
       - Measuring execution costs: architecture/execution-costs.md
+      - Trade charges and the real breakeven: architecture/trade-charges.md
       - Data contracts: architecture/contracts.md
       - Redis keys and streams: architecture/redis-keys.md
       - Database: architecture/database.md

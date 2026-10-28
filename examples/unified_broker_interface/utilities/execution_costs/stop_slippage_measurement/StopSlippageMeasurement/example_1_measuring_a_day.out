@@ -1,0 +1,5 @@
+Measuring from 2026-10-19T00:00:00+05:30 to 2026-10-20T00:00:00+05:30
+13:12:03 closed-by-the-strategy: trigger 196.15, closed by other_order, slip 1.5500
+13:17:40 close-not-found: trigger 161.25, closed by None, slip None
+13:26:25 filled-itself: trigger 173.85, closed by stop, slip 0.6000
+{'segment': 'nse_equity_index_options', 'transaction_type': 'SELL', 'fired': 3, 'by_stop': 1, 'by_other_order': 1, 'unresolved': 1, 'median_slip_basis_points': Decimal('56.76'), 'ninetieth_slip_basis_points': Decimal('79.02')}

@@ -20,6 +20,8 @@ class KotakAPI(BrokerAPI):
 
     The order update feed, `bin/kotak/orders/websocket_order_details`, does the same thing with the same stored value.
 
+    The same response names the market feed's address as `feedUrl`, which the login stores as `feed_url` for `bin/kotak/instruments/websocket_quotes`; a response without one stores None, and the quote socket then uses Kotak's default address.
+
     Kotak also has no profile endpoint. The account's profile arrives only in the Login Validate response, so a login here keeps it on `login_response` and writes it to the Redis key `kotak:user:details` through `_store_profile`, in the shape the other brokers' `user/details` scripts write. `_PROFILE_FIELDS` names the fields Kotak's Totp_validate documentation describes, rather than filtering the response, so a token Kotak adds to it later can never land in the profile.
     """
 
@@ -151,6 +153,7 @@ class KotakAPI(BrokerAPI):
                 "access_token": data["token"],
                 "sid": data["sid"],
                 "base_url": base_url,
+                "feed_url": str(data.get("feedUrl") or "").strip() or None,
                 "last_login": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
             }
             self._mongo_db["last_login"].replace_one({"broker_name": "kotak"}, last_login, upsert=True)

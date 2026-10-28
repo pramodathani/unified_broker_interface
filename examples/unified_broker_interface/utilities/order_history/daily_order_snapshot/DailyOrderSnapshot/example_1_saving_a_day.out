@@ -1,0 +1,9 @@
+2026-10-18: wrote 1 orders
+  zerodha: 1 orders, 1 filled, worth 500.00
+2026-10-19: wrote 3 orders
+  flattrade: 2 orders, 1 filled, worth 10,429.25
+  wisdom_capital: 1 orders, 0 filled, worth 0.00
+Statements: ['CREATE', 'DELETE', 'INSERT', 'CREATE', 'DELETE', 'INSERT']
+Days deleted before writing: [(datetime.date(2026, 10, 18),), (datetime.date(2026, 10, 19),)]
+First order of 19 October saved: 26101900306429, filled 65 at 160.45
+The 19th is the day of 2026-10-19; no time gives None

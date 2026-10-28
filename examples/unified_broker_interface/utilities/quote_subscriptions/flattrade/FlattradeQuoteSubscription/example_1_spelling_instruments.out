@@ -1,0 +1,4 @@
+Broker: flattrade
+RELIANCE (nse_equities): NSE|2885
+NIFTY 26 NOV 24000 CE (nse_equity_index_options): NFO|35001
+USDINR 26 NOV FUT (nse_currency_futures): CDS|1234

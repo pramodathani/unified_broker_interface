@@ -332,7 +332,7 @@ class RefusedSocketTokenExample:
             200,
         ])
         index = GrowwMessageClasses().stocks_response_class()()
-        index.stocksLiveIndices.value = 2515065
+        index.stocksLiveIndices.value = 25150.65
         index.stocksLiveIndices.tsInMillis = 1790311529000
         nats = NatsFrames()
         plans = [

@@ -222,6 +222,7 @@ def is_authentication_error(exception):
 def main():
     """Fetch the positions and merge them into indmoney:portfolio:positions every half second, until interrupted."""
     from stock_brokers.api.indmoney import INDMoneyAPI
+    from stock_brokers.api.utilities.session import ensure_session
     from utilities.configurations import get_cache, get_logger
     from utilities.poll_reporter import PollReporter
 
@@ -230,6 +231,7 @@ def main():
     cache = get_cache()
     merge = cache.register_script(MERGE_SCRIPT)
     try:
+        ensure_session("indmoney", logger=logger)
         indmoney = INDMoneyAPI()
     except Exception as exception:
         logger.error(f"Could not log in to INDmoney: {type(exception).__name__}: {exception}")

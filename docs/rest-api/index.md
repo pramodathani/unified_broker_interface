@@ -34,6 +34,7 @@ The table below lists all 29 routes in 36 rows, because the seven instrument rou
 | <span class="method post">POST</span> | [`/api/instruments/prices`](historical-data.md#prices-for-several-instruments) | The same for a list of instruments in one request | :material-lock: |
 | <span class="method get">GET</span> | [`/api/instruments/ticks`](historical-data.md#ticks) | Every recorded tick between two times, streamed | :material-lock: |
 | <span class="method post">POST</span> | [`/api/instruments/ticks`](historical-data.md#ticks-for-several-instruments) | The same for a list of instruments in one request | :material-lock: |
+| <span class="method get">GET</span> | [`/api/instruments/breakeven`](breakeven.md#breakeven) | The floor, tripwire and switch-on of a breakeven stop for one position | :material-lock: |
 | <span class="method get">GET</span> | [`/api/portfolio/funds`](portfolio.md#funds) | Cash and margin, summed across brokers | :material-lock: |
 | <span class="method get">GET</span> | [`/api/portfolio/holdings`](portfolio.md#holdings) | Long-term holdings, combined and priced | :material-lock: |
 | <span class="method get">GET</span> | [`/api/portfolio/positions`](portfolio.md#positions) | Open positions, combined | :material-lock: |

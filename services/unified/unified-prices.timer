@@ -1,15 +1,19 @@
-# When the daily unified price history update runs.
+# When the unified price history update runs.
 #
-# 08:30 IST Monday to Saturday: after the night's candle downloads and the 07:45 instrument job, and on Saturday to pick up Friday's last bars and the week's corporate actions.
+# 02:00 IST every day: every market has closed (MCX by 23:55 at the latest), and the price check that starts at 00:00 has
+# usually finished; if it has not, the job waits for it. The job takes three hours or more, so at 08:30, where it used to
+# run, it read the database into market hours and slowed the live tick writers. The brokers' candle downloaders work
+# their queues all day, so the job loads whatever has arrived by 02:00 and the rest the next night.
+# Persistent=false, so a machine that was off at 02:00 does not run the job at boot, which could be during market hours.
 
 [Unit]
-Description=Daily unified price history update
+Description=Nightly unified price history update
 PartOf=unified.target
 
 [Timer]
-OnCalendar=Mon..Sat 08:30 Asia/Kolkata
+OnCalendar=*-*-* 02:00 Asia/Kolkata
 AccuracySec=1min
-Persistent=true
+Persistent=false
 Unit=unified-prices.service
 
 [Install]

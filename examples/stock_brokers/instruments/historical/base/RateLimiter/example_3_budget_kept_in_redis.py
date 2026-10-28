@@ -88,11 +88,12 @@ class StandInRedis:
         """
         self.values = {}
 
-    def get(self, key):
+    def get(self, key, timeout=None):
         """Reads a value.
 
         Args:
             key (str): The key.
+            timeout (float | None): How long the downloader would wait for an answer, in seconds; the stand-in answers at once.
 
         Returns:
             str | None: The value.

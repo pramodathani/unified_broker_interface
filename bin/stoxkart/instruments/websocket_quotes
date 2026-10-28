@@ -14,6 +14,8 @@
 
 **Instruments** are `--tokens` when given, otherwise the members of the Redis set `stoxkart:quotes:subscriptions`. Each is `EXCHANGE:TOKEN`, the field format of `stoxkart:instruments:master`, with the exchange one of `NSE`, `BSE`, `NFO` or `MCX`, whose broadcast segments are 1, 4, 2 and 5. Other Stoxkart exchanges are refused, because no trade packet was seen for them on 2026-09-15 and their segment numbers are unconfirmed. Each instrument is named from `stoxkart:instruments:master`: a future or option by its `symbol_description` when that begins with its `symbol`, is longer, has no space and carries a digit (`NFO:NIFTY26SEPFUT`), any other contract, such as an MCX future whose description is `COPPER` or `GOLD 995`, by its symbol, expiry, strike and option type (`MCX:CRUDEOIL21SEP26FUT`), and anything else by its `symbol` (`NSE:KWIL`).
 
+**Connections.** The instruments are split into batches of `--per-socket`, each streamed on its own broadcast connection on its own thread. Without `--per-socket` the size is the Redis key `stoxkart:quotes:per_socket`, which `bin/unified/instruments/allocate_subscriptions` writes from `unified.broker_quote_capacities`, and every instrument goes on one connection when the key is unset. A probe on 2026-10-27 found the feed never refuses a subscription, but resets connections past about four, and about 45% of subscribed instruments send a packet within 90 seconds.
+
 **Keys.**
 
 - `stoxkart:quotes:live`, a hash of the latest tick per instrument as JSON, keyed by the instrument's name, or by `EXCHANGE:TOKEN` when the master does not name it. It is not cleared at startup.
@@ -46,6 +48,7 @@ import argparse
 import json
 import signal
 import sys
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -59,6 +62,7 @@ from utilities.configurations import get_cache, get_logger
 LIVE_KEY = "stoxkart:quotes:live"
 INSTRUMENTS_KEY = "stoxkart:quotes:instruments"
 SUBSCRIPTIONS_KEY = "stoxkart:quotes:subscriptions"
+PER_SOCKET_KEY = "stoxkart:quotes:per_socket"
 STREAM_KEY = "stoxkart:quotes:stream"
 STREAM_MAX_LENGTH = 1000000
 MASTER_KEY = "stoxkart:instruments:master"
@@ -241,11 +245,17 @@ class StoxkartQuotesApplication:
         """Parses the options, names the instruments, and streams until stopped.
 
         Returns:
-            int: 0 when stopped, and 2 for nothing to subscribe to or a malformed instrument.
+            int: 0 when stopped, and 2 for nothing to subscribe to, a malformed instrument or a per-socket size below 1.
         """
         arguments = self._parse_arguments()
         logger = get_logger("stoxkart.websocket_quotes")
         cache = get_cache()
+        per_socket = arguments.per_socket
+        if per_socket is None:
+            per_socket = int(cache.get(PER_SOCKET_KEY) or 0) or None
+        if per_socket is not None and per_socket < 1:
+            logger.error("--per-socket must be at least 1.")
+            return 2
         instruments, source = self._instruments(arguments.tokens, cache)
         if not instruments:
             logger.error(f"Nothing to subscribe to. Pass --tokens or add EXCHANGE:TOKEN members to the Redis set {SUBSCRIPTIONS_KEY}.")
@@ -268,18 +278,33 @@ class StoxkartQuotesApplication:
 
         from stock_brokers.websockets.stoxkart import StoxkartQuoteStream
 
-        stream = StoxkartQuoteStream(instruments, names, StoxkartQuotesStore(cache).write_ticks, logger)
-        self._handle_signals(stream)
-        return stream.run()
+        if per_socket is None:
+            per_socket = len(instruments)
+        store = StoxkartQuotesStore(cache)
+        streams = []
+        for start in range(0, len(instruments), per_socket):
+            streams.append(StoxkartQuoteStream(instruments[start:start + per_socket], names, store.write_ticks, logger))
+        self._handle_signals(streams)
+        logger.info(f"Starting {len(streams)} stream(s) of up to {per_socket} instrument(s).")
+        threads = []
+        for stream in streams:
+            thread = threading.Thread(target=stream.run, daemon=True)
+            threads.append(thread)
+            thread.start()
+        while any(thread.is_alive() for thread in threads):
+            for thread in threads:
+                thread.join(timeout=1)
+        return 0
 
     def _parse_arguments(self):
         """Reads the command line options.
 
         Returns:
-            argparse.Namespace: The option `tokens`.
+            argparse.Namespace: The options `tokens` and `per_socket`.
         """
         parser = argparse.ArgumentParser(description="Stream Stoxkart market quotes into stoxkart:quotes:live and stoxkart:quotes:stream.")
         parser.add_argument("--tokens", help="comma-separated EXCHANGE:TOKEN instruments instead of the subscription set")
+        parser.add_argument("--per-socket", type=int, default=None, help=f"instruments per broadcast connection, default the Redis key {PER_SOCKET_KEY}, or all of them on one connection when it is unset")
         return parser.parse_args()
 
     def _instruments(self, tokens, cache):
@@ -321,22 +346,23 @@ class StoxkartQuotesApplication:
                 malformed.append(instrument)
         return malformed
 
-    def _handle_signals(self, stream):
-        """Makes Ctrl+C and SIGTERM stop the stream.
+    def _handle_signals(self, streams):
+        """Makes Ctrl+C and SIGTERM stop every stream.
 
         Args:
-            stream (StoxkartQuoteStream): The stream to stop.
+            streams (list[StoxkartQuoteStream]): The streams to stop.
         """
         def stop_stream(signal_number, frame):
-            """Sets the stream's stop event.
+            """Sets every stream's stop event.
 
             Args:
                 signal_number (int): The signal received.
                 frame (frame): The interrupted stack frame, unused.
             """
             del frame
-            stream.logger.info(f"Received signal {signal_number}. Stopping.")
-            stream.stop.set()
+            for stream in streams:
+                stream.logger.info(f"Received signal {signal_number}. Stopping.")
+                stream.stop.set()
 
         signal.signal(signal.SIGINT, stop_stream)
         signal.signal(signal.SIGTERM, stop_stream)

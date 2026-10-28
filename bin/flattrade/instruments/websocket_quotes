@@ -12,7 +12,7 @@ until stopped.
     redis-cli HGETALL flattrade:quotes:instruments
 
 The connection, the login, the handshake and the message decoding for Flattrade's Noren market feed at
-`wss://piconnect.flattrade.in/PiConnectWSTp/` are `FlattradeQuotesSocket` and `FlattradeSession` in
+`wss://piconnect.flattrade.in/PiConnectWSAPI/` are `FlattradeQuotesSocket` and `FlattradeSession` in
 `stock_brokers/websockets/flattrade.py`, whose module docstring describes the protocol. This script chooses the
 instruments, splits them across sockets, runs the sockets and writes what they decode to Redis, so it needs no
 other feed process or key.
@@ -22,6 +22,8 @@ other feed process or key.
 Flattrade's token. Each is named from Flattrade's public scrip master files, downloaded at startup, and from
 the trading symbol Noren sends back when a subscription is acknowledged. One websocket carries up to
 `--per-socket` instruments.
+
+**Socket size.** Without `--per-socket`, each socket carries the number in the Redis key `flattrade:quotes:per_socket`, which `bin/unified/instruments/allocate_subscriptions` writes from `unified.broker_quote_capacities` along with the subscription set, or 1000 when the key is unset.
 
 **Keys.**
 
@@ -82,6 +84,7 @@ SCRIP_MASTER_URLS = [
 LIVE_KEY = "flattrade:quotes:live"
 INSTRUMENTS_KEY = "flattrade:quotes:instruments"
 SUBSCRIPTIONS_KEY = "flattrade:quotes:subscriptions"
+PER_SOCKET_KEY = "flattrade:quotes:per_socket"
 
 # Every tick is also appended here for bin/flattrade/instruments/store_quotes_to_db, which reads it with a consumer group. The cap
 # bounds Redis memory when the persister is down; ticks trimmed before it returns are not persisted.
@@ -193,15 +196,18 @@ def main():
     """Stream Flattrade quotes into flattrade:quotes:live until stopped."""
     parser = argparse.ArgumentParser(description="Stream Flattrade market quotes into flattrade:quotes:live until stopped.")
     parser.add_argument("--tokens", help="comma separated EXCHANGE|TOKEN tokens, for example NSE|2885")
-    parser.add_argument("--per-socket", type=int, default=DEFAULT_INSTRUMENTS_PER_CONNECTION,
-                        help=f"instruments per websocket connection, default {DEFAULT_INSTRUMENTS_PER_CONNECTION}")
+    parser.add_argument("--per-socket", type=int, default=None,
+                        help=f"instruments per websocket connection, default the Redis key {PER_SOCKET_KEY}, or {DEFAULT_INSTRUMENTS_PER_CONNECTION} when it is unset")
     arguments = parser.parse_args()
 
     from stock_brokers.websockets.flattrade import FlattradeQuotesSocket, FlattradeSession
+    from stock_brokers.api.utilities.session import ensure_session
     from utilities.configurations import get_cache, get_logger
 
     logger = get_logger("flattrade.websocket_quotes")
     cache = get_cache()
+    if arguments.per_socket is None:
+        arguments.per_socket = int(cache.get(PER_SOCKET_KEY) or DEFAULT_INSTRUMENTS_PER_CONNECTION)
 
     if arguments.per_socket < 1:
         logger.error("--per-socket must be at least 1.")
@@ -215,6 +221,7 @@ def main():
     batches = [tokens[start:start + arguments.per_socket] for start in range(0, len(tokens), arguments.per_socket)]
 
     try:
+        ensure_session("flattrade", logger=logger)
         session = FlattradeSession(logger)
     except Exception as exception:
         logger.error(f"Could not log in to Flattrade: {type(exception).__name__}: {exception}")

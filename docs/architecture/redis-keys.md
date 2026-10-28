@@ -78,7 +78,8 @@ Each broker's scripts write the keys below, with the broker's name in place of `
 | `<broker>:user:details` | string | `bin/<broker>/user/details` | `bin/unified/user/details` | Kotak has no profile endpoint, so `KotakAPI` writes `kotak:user:details` itself when it logs in |
 | `<broker>:quotes:live` | hash | `bin/<broker>/instruments/websocket_quotes` | Nothing in the pipeline; it is for looking a tick up by hand | The latest [tick](contracts.md#the-tick) per instrument, keyed by its name; not cleared at start |
 | `<broker>:quotes:instruments` | hash | `bin/<broker>/instruments/websocket_quotes` | People | Every subscribed token and its name; replaced whole at start |
-| `<broker>:quotes:subscriptions` | set | You, with `redis-cli SADD` | `bin/<broker>/instruments/websocket_quotes` | The instruments to subscribe to; Zerodha has none, because its feed subscribes to the whole instrument master |
+| `<broker>:quotes:subscriptions` | set | `bin/unified/instruments/allocate_subscriptions`, or you with `redis-cli SADD` | `bin/<broker>/instruments/websocket_quotes` | The instruments to subscribe to, in the broker's own spelling; replaced whole by each allocation. Zerodha's feed subscribes to its whole instrument master only when this set is empty |
+| `<broker>:quotes:per_socket` | string | `bin/unified/instruments/allocate_subscriptions` | `bin/<broker>/instruments/websocket_quotes` | How many instruments one socket carries, from `unified.broker_quote_capacities`; used when the script is given no `--per-socket` (Zerodha: no `--sockets`) |
 | `<broker>:instruments:master` | hash | `bin/<broker>/instruments/daily_feed` | Zerodha's, INDmoney's and Stoxkart's `websocket_quotes`; `bin/stoxkart/portfolio/positions` | The day's instrument master, one row per instrument as a JSON array |
 | `<broker>:instruments:master:staging` | hash | `bin/<broker>/instruments/daily_feed` | Nothing | Built first, then renamed over the master, so a reader never sees half a file |
 | `<broker>:instruments:master:previous` | hash | `bin/<broker>/instruments/daily_feed` | Nothing | The previous master, unlinked once the swap is done |
@@ -152,11 +153,13 @@ The unified quote combiner, the REST API and the price history job write these k
 
 | Key | Type | Written by | Read by | Notes |
 |---|---|---|---|---|
+| `unified:quotes:allocation` | string | `bin/unified/instruments/allocate_subscriptions` | People | The last allocation as JSON: the mapping date, the live and expired instrument counts, how many were covered and why the rest were not, and each broker's preference, sockets, capacity and share |
 | `unified:quotes:live` | hash | `bin/unified/instruments/websocket_quotes` | The REST API's `ltp`, `ohlc` and `quote`; `bin/unified/portfolio/holdings` and `positions`; the order engine | One [unified quote](contracts.md#the-unified-quote) per `instrument_id`; quotes stale for a week are removed |
 | `unified:quotes:fetched` | hash | The REST API | The REST API | Quotes fetched from a broker when no fresh one was cached; each field expires after two days |
 | `unified:quotes:stats` | string | `bin/unified/instruments/websocket_quotes` | People | Counts: received, unresolved, out_of_session, not_owner, no_price, duplicate, written |
 | `unified:quotes:unresolved` | hash | `bin/unified/instruments/websocket_quotes` | People | A count per `broker:token:reason` that did not resolve |
-| `unified:prices:last_run` | string | `bin/unified/instruments/price_history` | The REST API's candle cache | What the last run did and when it finished |
+| `unified:prices:last_run` | string | `bin/unified/instruments/price_history` | The REST API's candle cache | What the last run did and when it finished; a `verify` run is not recorded here |
+| `unified:prices:last_verify` | string | `bin/unified/instruments/price_history verify` | People, through `price_history status` | What the last check found: the names of failing checks, and when it finished |
 | `unified:prices:cache:<instrument_id>:<interval>:<basis>:<known_as_of>` | string | The REST API | The REST API | One candle series already read from the database; `<known_as_of>` is `latest` when not given; expires after a day |
 
 ### Orders and portfolio

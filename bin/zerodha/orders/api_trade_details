@@ -40,6 +40,7 @@ def is_authentication_error(exception):
 def main():
     """Fetch the trade book and write it to zerodha:orders:trades every half second, until interrupted."""
     from stock_brokers.api.zerodha import ZerodhaAPI
+    from stock_brokers.api.utilities.session import ensure_session
     from utilities.configurations import book_configuration, get_cache, get_logger
     delay_seconds = max(DELAY_SECONDS, book_configuration["poll_seconds"])
     from utilities.poll_reporter import PollReporter
@@ -48,6 +49,7 @@ def main():
     report = PollReporter(logger)
     cache = get_cache()
     try:
+        ensure_session("zerodha", logger=logger)
         zerodha = ZerodhaAPI()
     except Exception as exception:
         logger.error(f"Could not log in to Zerodha: {type(exception).__name__}: {exception}")

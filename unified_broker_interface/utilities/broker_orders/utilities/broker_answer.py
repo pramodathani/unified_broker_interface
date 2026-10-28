@@ -13,6 +13,7 @@ class BrokerAnswer:
         status_code (int | None): The broker's HTTP status, or None when nothing came back.
         sent_at (float): `time.perf_counter()` just before the request was sent.
         answered_at (float): `time.perf_counter()` just after it returned or failed.
+        connection_reset (bool): Whether the request failed because the broker's server reset or dropped the connection, rather than timing out or answering.
     """
 
     OUTCOME_STATUSES = {
@@ -37,6 +38,7 @@ class BrokerAnswer:
         self.status_code = None
         self.sent_at = sent_at
         self.answered_at = sent_at
+        self.connection_reset = False
 
     def response_fields(self):
         """The broker's body when it is a JSON object.

@@ -9,7 +9,7 @@ streaming until stopped.
 
 The connection and the login are `FlattradeOrderUpdatesSocket` and `FlattradeSession` in
 `stock_brokers/websockets/flattrade.py`, whose module docstring describes Noren's connect frame and heartbeat
-at `wss://piconnect.flattrade.in/PiConnectWSTp/`. This script runs the socket and turns the updates it hands
+at `wss://piconnect.flattrade.in/PiConnectWSAPI/`. This script runs the socket and turns the updates it hands
 over into the Redis writes below, so it needs no other feed process or key.
 
 **The stream.** This is a connection of its own, carrying no market data. After it opens, the client sends the
@@ -306,11 +306,13 @@ class FlattradeOrderUpdatesStore:
 def main():
     """Stream Flattrade order updates into flattrade:orders:orders until stopped."""
     from stock_brokers.websockets.flattrade import FlattradeOrderUpdatesSocket, FlattradeSession
+    from stock_brokers.api.utilities.session import ensure_session
     from utilities.configurations import get_cache, get_logger
 
     logger = get_logger("flattrade.websocket_order_details")
     store = FlattradeOrderUpdatesStore(get_cache(), logger)
     try:
+        ensure_session("flattrade", logger=logger)
         session = FlattradeSession(logger)
     except Exception as exception:
         logger.error(f"Could not log in to Flattrade: {type(exception).__name__}: {exception}")

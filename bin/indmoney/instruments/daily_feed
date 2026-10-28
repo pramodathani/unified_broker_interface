@@ -155,7 +155,9 @@ def main():
     logger = get_logger("indmoney.daily_feed")
     download_date = date.today()
 
+    from stock_brokers.api.utilities.session import ensure_session
     try:
+        ensure_session("indmoney", logger=logger)
         ingester = downloader()
     except Exception as exception:
         logger.error(f"Could not log in to INDmoney: {type(exception).__name__}: {exception}")

@@ -39,11 +39,13 @@ def is_authentication_error(exception):
 def main():
     """Fetch the profile and write it to zerodha:user:details every minute, until interrupted."""
     from stock_brokers.api.zerodha import ZerodhaAPI
+    from stock_brokers.api.utilities.session import ensure_session
     from utilities.configurations import get_cache, get_logger
 
     logger = get_logger("zerodha.details")
     cache = get_cache()
     try:
+        ensure_session("zerodha", logger=logger)
         zerodha = ZerodhaAPI()
     except Exception as exception:
         logger.error(f"Could not log in to Zerodha: {type(exception).__name__}: {exception}")
