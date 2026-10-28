@@ -843,6 +843,10 @@ class FakeAbnf:
     OPCODE_CLOSE = 0x8
 
 
+class FakeWebsocketConnectionClosedError(FakeWebsocketError):
+    """A connection the far end closed without a close frame, as websocket-client's `WebSocketConnectionClosedException` reports it."""
+
+
 class FakeWebsocketModule(types.ModuleType):
     """A stand-in for the `websocket` package, placed in `sys.modules` while a scenario runs.
 
@@ -853,6 +857,7 @@ class FakeWebsocketModule(types.ModuleType):
     """
 
     WebSocketException = FakeWebsocketError
+    WebSocketConnectionClosedException = FakeWebsocketConnectionClosedError
     WebSocketTimeoutException = TimeoutError
     ABNF = FakeAbnf
 
