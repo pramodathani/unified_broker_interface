@@ -9,6 +9,7 @@ Run it from the project root:
     python examples/unified_broker_interface/utilities/margin_calculators/utilities/margin_calibration/MarginCalibration/example_2_a_whole_run_against_stand_ins.py
 """
 
+import datetime
 import decimal
 import json
 
@@ -24,6 +25,7 @@ from unified_broker_interface.utilities.margin_calculators.utilities.reference_o
 )
 from utilities import configurations
 
+CATALOGUE_DATE = datetime.date(2026, 9, 30)
 EXCHANGE_ANSWERS = {
     'INFY bought intraday': '203.48',
     'NIFTY future sold': '167109.41',
@@ -402,7 +404,7 @@ class AWholeRunAgainstStandInsExample:
             GammaCalculator,
             DeltaCalculator,
         ]
-        self.calibration = MarginCalibration(cache, PrintingLogger(), calculator_classes)
+        self.calibration = MarginCalibration(cache, PrintingLogger(), calculator_classes, CATALOGUE_DATE)
 
     def run(self):
         """Measures, prints the exchange's margins, and writes.
@@ -412,7 +414,7 @@ class AWholeRunAgainstStandInsExample:
         """
         missing = self.calibration.calculator(DeltaCalculator)
         print(f'A calculator for delta: {missing}')
-        reference_orders = ReferenceOrders(self.calibration.cache)
+        reference_orders = ReferenceOrders(self.calibration.cache, CATALOGUE_DATE)
         legs, condor = self.calibration.reference_legs(reference_orders)
         print(f'Reference orders: {sorted(legs)}, condor legs: {len(condor)}')
         alpha = self.calibration.measure_broker(self.calibration.calculator(AlphaCalculator), legs, condor)
