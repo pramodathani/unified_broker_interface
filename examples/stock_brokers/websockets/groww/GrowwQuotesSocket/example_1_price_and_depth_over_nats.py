@@ -1,6 +1,6 @@
 """Runs a Groww quotes socket through the socket token, the NATS handshake, and one price and one depth message.
 
-`GrowwQuotesSocket` speaks NATS over a websocket. Before connecting it generates a fresh ed25519 key pair and exchanges its public key for a short-lived socket JWT. When the server opens with an INFO line carrying a nonce, the socket answers CONNECT with the JWT and the signed nonce, then PING, then one SUB for the price subject and one for the depth subject of each instrument. Payloads are protobuf `StocksSocketResponseProtoDto` messages; price and depth arrive separately and are merged per instrument, prices in paise are divided into rupees, and quantities arrive as doubles and are rounded.
+`GrowwQuotesSocket` speaks NATS over a websocket. Before connecting it generates a fresh ed25519 key pair and exchanges its public key for a short-lived socket JWT. When the server opens with an INFO line carrying a nonce, the socket answers CONNECT with the JWT and the signed nonce, then PING, then one SUB for the price subject and one for the depth subject of each instrument. Payloads are protobuf `StocksSocketResponseProtoDto` messages; price and depth arrive separately and are merged per instrument, prices arrive in rupees, and quantities arrive as doubles and are rounded.
 
 This program subscribes NSE token 2885 and delivers a price message and a depth message in one websocket frame. No real socket or HTTP request is made: a stand-in `requests` package answers the socket token request, a stand-in `websocket` package plays the frames and prints the NATS lines the socket sends with the signature replaced by its length, because the key pair is fresh on every run, and a stand-in `stock_brokers.api.groww` module lets the real `GrowwSession` supply the access token without logging in. The payloads are built with `GrowwMessageClasses`.
 
@@ -334,17 +334,17 @@ class PriceAndDepthOverNatsExample:
         price = response_class()
         price.symbol = 'RELIANCE'
         price.stockLivePrice.tsInMillis = 1790311529000
-        price.stockLivePrice.ltp = 295050
-        price.stockLivePrice.open = 293000
-        price.stockLivePrice.high = 296000
-        price.stockLivePrice.low = 292500
-        price.stockLivePrice.close = 291000
+        price.stockLivePrice.ltp = 2950.5
+        price.stockLivePrice.open = 2930.0
+        price.stockLivePrice.high = 2960.0
+        price.stockLivePrice.low = 2925.0
+        price.stockLivePrice.close = 2910.0
         price.stockLivePrice.volume = 1204500.0
         depth = response_class()
         depth.symbol = 'RELIANCE'
-        depth.stocksMarketDepth.buyBook[1].price = 295000
+        depth.stocksMarketDepth.buyBook[1].price = 2950.0
         depth.stocksMarketDepth.buyBook[1].qty = 100.0
-        depth.stocksMarketDepth.sellBook[1].price = 295100
+        depth.stocksMarketDepth.sellBook[1].price = 2951.0
         depth.stocksMarketDepth.sellBook[1].qty = 120.0
         nats = NatsFrames()
         frame = nats.message('/ld/eq/nse/price_detailed.2885', price.SerializeToString())
