@@ -1,5 +1,5 @@
-# The daily unified price history update: bin/unified/instruments/price_history daily, which runs load, corrections, load
-# and factors --stale-days 14. Its check, verify, runs at midnight from unified-prices-verify.service. Driven by unified-prices.timer.
+# The nightly unified price history update: bin/unified/instruments/price_history daily, which runs load, corrections, load
+# and factors --stale-days 14. Its check, verify, runs before it at midnight from unified-prices-verify.service. Driven by unified-prices.timer.
 #
 #     systemctl --user start unified-prices           # run it now
 #     bin/unified/instruments/price_history status
@@ -8,16 +8,18 @@
 Description=Unified price history and adjustment factors
 PartOf=unified.target
 Wants=network-online.target
-# When the 07:45 instrument job runs past 08:30, this start waits for it to finish, so the history loads against the
-# day's mapping: ordering applies to a job already running, not only to one started in the same transaction.
-After=network-online.target unified-mapping.service
+# A start waits for a running instrument job or price check to finish: the history loads against a finished mapping, and
+# two price_history runs at once deadlock on the DDL each applies when it starts. Ordering applies to a job already
+# running, not only to one started in the same transaction.
+After=network-online.target unified-mapping.service unified-prices-verify.service
 
 [Service]
 Type=oneshot
 Environment=PYTHONUNBUFFERED=1
 SyslogIdentifier=unified-prices
 ExecStart=%h/Projects/unified_broker_interface/bin/unified/instruments/price_history daily
-# The first factors run over every instrument is thousands of Yahoo requests at about one a second.
+# The first factors run over every instrument is thousands of Yahoo requests at about one a second. Four hours from
+# 02:00 ends it by 06:00, before the 07:00 logins and well before the markets open.
 TimeoutStartSec=4h
 Nice=10
 IOSchedulingClass=idle

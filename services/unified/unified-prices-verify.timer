@@ -1,7 +1,7 @@
 # When the nightly unified price history check runs.
 #
-# 00:00 IST Tuesday to Sunday: the midnight after each Monday to Saturday morning price job, once MCX's evening session
-# has closed (23:30, or 23:55 while the United States is on standard time), so no market is open while it reads.
+# 00:00 IST every day: once MCX's evening session has closed (23:30, or 23:55 while the United States is on standard
+# time), so no market is open while it reads, and two hours before the 02:00 price job, which waits for it.
 # Persistent=false, so a machine that was off at midnight does not run the check at boot, which could be during market hours.
 
 [Unit]
@@ -9,7 +9,7 @@ Description=Nightly unified price history check
 PartOf=unified.target
 
 [Timer]
-OnCalendar=Tue..Sun 00:00 Asia/Kolkata
+OnCalendar=*-*-* 00:00 Asia/Kolkata
 AccuracySec=1min
 Persistent=false
 Unit=unified-prices-verify.service

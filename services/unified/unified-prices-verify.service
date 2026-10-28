@@ -1,8 +1,9 @@
 # The nightly check of the unified price history: bin/unified/instruments/price_history verify, which runs every check
 # against unified.price_history, including the known corporate action cases, and writes its outcome to
 # unified:prices:last_verify. A failing check fails the unit. It reads only, but its comparisons read whole tables with
-# parallel workers, so it runs at midnight rather than in the morning job, where it kept the database disk busy into
-# market hours. Driven by unified-prices-verify.timer.
+# parallel workers, so it runs at midnight, when every market is closed; it used to be the last step of the price job,
+# which then ran in the morning and kept the database disk busy into market hours. It checks what the previous night's
+# price job loaded, and unified-prices.service, at 02:00, waits for it. Driven by unified-prices-verify.timer.
 #
 #     systemctl --user start unified-prices-verify    # run it now
 #     bin/unified/instruments/price_history status    # the last run and the last verify
@@ -10,8 +11,6 @@
 [Unit]
 Description=Nightly unified price history check
 PartOf=unified.target
-# If the morning price job is somehow still running at midnight, the check waits for it rather than reading half-loaded bars.
-After=unified-prices.service
 
 [Service]
 Type=oneshot
