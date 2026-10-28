@@ -9,6 +9,7 @@ The quote sockets log in again one at a time, and only when no other socket or p
 
 **NATS.**
 The server opens with an `INFO` frame carrying a nonce; the socket answers `CONNECT` with the JWT and the nonce signed by its private key, then `PING`, then one `SUB` per subject.
+The server sends `INFO` again once `CONNECT` is accepted, carrying `connect_info`, and only the first `INFO` on a connection is answered.
 NATS is line based: control lines end with CRLF, and a `MSG` line is followed by a payload of the declared length, and a websocket frame may split or join those, so `GrowwNatsBuffer` buffers the stream and hands back only whole messages.
 A server `PING` is answered with `PONG`, and an `-ERR` naming an authorization failure is a refused login.
 
@@ -16,7 +17,7 @@ A server `PING` is answered with `PONG`, and an `-ERR` naming an authorization f
 `GrowwQuotesSocket` subscribes a price subject and a depth subject per instrument, such as `/ld/eq/nse/price_detailed.2885` and `/ld/eq/nse/book.2885`, with `/ld/fo/...` for derivatives.
 Payloads are protobuf `StocksSocketResponseProtoDto` messages, whose classes are built at runtime from Groww's file descriptor, carried here serialized, in a descriptor pool of their own.
 Price and depth arrive separately and are merged per instrument.
-Prices are in paise and are divided into rupees, and quantities arrive as doubles and are rounded to whole numbers.
+Prices arrive in rupees, and quantities arrive as doubles and are rounded to whole numbers.
 An instrument without a name takes the symbol Groww puts in the payload.
 The quote socket gives up only after six more failed connects, not on the first refusal after logging in again.
 
@@ -57,7 +58,6 @@ EQUITY_ORDERS = "stocks/order/updates.apex."
 DERIVATIVES_ORDERS = "stocks_fo/order/updates.apex."
 DERIVATIVES_POSITIONS = "stocks_fo/position/updates.apex."
 
-DIVISOR = 100.0
 
 AUTHENTICATION_ERRORS = (
     "authorization violation",
@@ -454,6 +454,7 @@ class GrowwQuotesSocket(BrokerWebsocket):
         self._key_pair = None
         self._socket_jwt = None
         self._buffer = GrowwNatsBuffer()
+        self._answered_info = False
         self._subjects = {}
         self._state = {}
 
@@ -493,6 +494,7 @@ class GrowwQuotesSocket(BrokerWebsocket):
             raise RuntimeError(f"No token in the Groww socket token response: {str(payload)[:200]}")
         self._socket_jwt = payload["token"]
         self._buffer = GrowwNatsBuffer()
+        self._answered_info = False
         self._subjects = {}
         self._state = {}
         self._websocket_application = websocket.WebSocketApp(
@@ -569,7 +571,9 @@ class GrowwQuotesSocket(BrokerWebsocket):
         delivered = []
         for event in self._buffer.feed(message):
             if event[0] == "info":
-                self._authenticate(event[1])
+                if not self._answered_info:
+                    self._answered_info = True
+                    self._authenticate(event[1])
             elif event[0] == "ping":
                 self._send(["PONG\r\n"])
             elif event[0] == "error":
@@ -700,7 +704,7 @@ class GrowwQuotesSocket(BrokerWebsocket):
         for _, entry in sorted(book_map.items()):
             levels.append({
                 "quantity": self._whole(entry.qty),
-                "price": entry.price / DIVISOR,
+                "price": entry.price,
                 "orders": None,
             })
         return levels
@@ -718,7 +722,7 @@ class GrowwQuotesSocket(BrokerWebsocket):
         """
         if state.get(key) is None:
             return None
-        return state[key] / DIVISOR
+        return state[key]
 
     def _whole(self, value):
         """
@@ -811,6 +815,7 @@ class GrowwOrderUpdatesSocket(BrokerWebsocket):
         self._socket_jwt = None
         self._subscription_id = None
         self._buffer = GrowwNatsBuffer()
+        self._answered_info = False
 
     def _connect(self):
         """
@@ -836,6 +841,7 @@ class GrowwOrderUpdatesSocket(BrokerWebsocket):
         self._socket_jwt = payload["token"]
         self._subscription_id = payload["subscriptionId"]
         self._buffer = GrowwNatsBuffer()
+        self._answered_info = False
         self._websocket_application = websocket.WebSocketApp(
             FEED_URL,
             on_open=self._on_open,
@@ -921,7 +927,9 @@ class GrowwOrderUpdatesSocket(BrokerWebsocket):
         delivered = []
         for event in self._buffer.feed(message):
             if event[0] == "info":
-                self._authenticate(event[1])
+                if not self._answered_info:
+                    self._answered_info = True
+                    self._authenticate(event[1])
             elif event[0] == "ping":
                 self._websocket_application.send("PONG\r\n")
             elif event[0] == "error":
