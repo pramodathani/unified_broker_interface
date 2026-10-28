@@ -78,7 +78,7 @@ A third key, `<broker>:quotes:instruments`, maps every subscribed token to its n
 
 ## Stage 2: persisting each broker's ticks
 
-`bin/<broker>/instruments/store_quotes_to_db` reads its broker's stream as the consumer group `persist` and writes ticks to the hypertable `<broker>.ticks` with PostgreSQL `COPY`, a batch at a time. A batch is written when it holds `--batch-size` ticks or has waited `--flush-interval` seconds, whichever comes first.
+`bin/<broker>/instruments/store_quotes_to_db` reads its broker's stream as the consumer group `persist` and writes ticks to the hypertable `<broker>.ticks` with PostgreSQL `COPY`, a batch at a time. A batch is written when it holds `--batch-size` ticks or has waited `--flush-interval` seconds, whichever comes first. Zerodha, Kotak, Stoxkart and Dhan default to batches of 10,000 and the other brokers to 500. A commit costs a few milliseconds on a quiet disk, but on 2026-10-28 a congested database disk made each commit wait 1 to 2.6 seconds, and writers committing every 500 ticks stored about 700 a second while Zerodha and Kotak each sent about 4,500, so most of their ticks were trimmed from the stream before they were stored. Larger batches carry more ticks per commit for the same wait.
 
 The persister acknowledges a stream entry only after the batch holding it is committed. The consequences are worth knowing:
 

@@ -405,7 +405,7 @@ class StoxkartPersistTicksApplication:
             argparse.Namespace: The options `batch_size` and `flush_interval`.
         """
         parser = argparse.ArgumentParser(description="Persist Stoxkart ticks from stoxkart:quotes:stream into stoxkart.ticks.")
-        parser.add_argument("--batch-size", type=int, default=500, help="most ticks written in one COPY, default 500")
+        parser.add_argument("--batch-size", type=int, default=10000, help="most ticks written in one COPY, default 10000")
         parser.add_argument("--flush-interval", type=float, default=1.0, help="longest a tick waits before its batch is written, in seconds, default 1")
         return parser.parse_args()
 
