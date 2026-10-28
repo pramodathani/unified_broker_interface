@@ -313,6 +313,32 @@ class GrowwFeedCases:
                 self.run_orders_failing_token_requests,
             ),
             (
+                'groww.orders.second_info_is_ignored',
+                [
+                    [
+                        ('open',),
+                        ('message', INFO),
+                        ('message', INFO),
+                        ('close', 1000, 'normal closure'),
+                    ],
+                ],
+                set(),
+                self.run_orders_with_answers(2),
+            ),
+            (
+                'groww.quotes.second_info_is_ignored',
+                [
+                    [
+                        ('open',),
+                        ('message', INFO),
+                        ('message', INFO),
+                        ('close', 1000, 'normal closure'),
+                    ],
+                ],
+                set(),
+                self.run_quotes_with_answers(2),
+            ),
+            (
                 'groww.orders.login_again_fails',
                 [],
                 {
@@ -531,29 +557,29 @@ class GrowwFeedCases:
         price = response_class()
         price.symbol = 'RELIANCE'
         price.stockLivePrice.tsInMillis = 1790316329123
-        price.stockLivePrice.ltp = 295050
-        price.stockLivePrice.open = 293500
-        price.stockLivePrice.high = 296000
-        price.stockLivePrice.low = 292500
-        price.stockLivePrice.close = 293000
+        price.stockLivePrice.ltp = 2950.50
+        price.stockLivePrice.open = 2935.00
+        price.stockLivePrice.high = 2960.00
+        price.stockLivePrice.low = 2925.00
+        price.stockLivePrice.close = 2930.00
         price.stockLivePrice.volume = 1200000.4
         price.stockLivePrice.bidQty = 5400
         price.stockLivePrice.offerQty = 6100
-        price.stockLivePrice.avgPrice = 294810
+        price.stockLivePrice.avgPrice = 2948.10
         depth = response_class()
         depth.stocksMarketDepth.tsInMillis = 1790316330123
-        depth.stocksMarketDepth.buyBook[2].price = 295000
+        depth.stocksMarketDepth.buyBook[2].price = 2950.00
         depth.stocksMarketDepth.buyBook[2].qty = 300
-        depth.stocksMarketDepth.buyBook[1].price = 295040
+        depth.stocksMarketDepth.buyBook[1].price = 2950.40
         depth.stocksMarketDepth.buyBook[1].qty = 75.6
-        depth.stocksMarketDepth.sellBook[1].price = 295060
+        depth.stocksMarketDepth.sellBook[1].price = 2950.60
         depth.stocksMarketDepth.sellBook[1].qty = 150
         futures = response_class()
         futures.symbol = 'NIFTY26OCTFUT'
-        futures.stockLivePrice.ltp = 2515050
+        futures.stockLivePrice.ltp = 25150.50
         futures.stockLivePrice.openInterest = 1234500
         index = response_class()
-        index.stocksLiveIndices.value = 2512345
+        index.stocksLiveIndices.value = 25123.45
         index.stocksLiveIndices.tsInMillis = 1790316329000
         nothing = response_class()
         nothing.symbol = 'SBIN'

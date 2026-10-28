@@ -210,6 +210,7 @@ def main():
     arguments = parser.parse_args()
 
     from stock_brokers.websockets.indmoney import IndmoneyQuotesSocket, IndmoneySession
+    from stock_brokers.api.utilities.session import ensure_session
     from utilities.configurations import get_cache, get_logger
 
     logger = get_logger("indmoney.websocket_quotes")
@@ -234,6 +235,7 @@ def main():
             batches.append(segment_tokens[start:start + arguments.per_socket])
 
     try:
+        ensure_session("indmoney", logger=logger)
         session = IndmoneySession(logger)
     except Exception as exception:
         logger.error(f"Could not log in to INDmoney: {type(exception).__name__}: {exception}")

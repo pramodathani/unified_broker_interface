@@ -306,10 +306,12 @@ class ZerodhaOrderUpdatesStore:
 def main():
     """Stream Zerodha order updates into zerodha:orders:orders until stopped."""
     from stock_brokers.websockets.zerodha import ZerodhaOrderUpdatesSocket, ZerodhaSession
+    from stock_brokers.api.utilities.session import ensure_session
     from utilities.configurations import get_cache, get_logger
 
     logger = get_logger("zerodha.websocket_order_details")
     try:
+        ensure_session("zerodha", logger=logger)
         session = ZerodhaSession(logger)
     except Exception as exception:
         logger.error(f"Could not log in to Zerodha: {type(exception).__name__}: {exception}")

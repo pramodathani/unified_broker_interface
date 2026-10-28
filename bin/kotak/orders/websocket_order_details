@@ -417,10 +417,12 @@ class KotakOrderUpdatesStore:
 def main():
     """Stream Kotak order and position updates into Redis until stopped."""
     from stock_brokers.websockets.kotak import KotakOrderUpdatesSocket, KotakSession
+    from stock_brokers.api.utilities.session import ensure_session
     from utilities.configurations import get_cache, get_logger
 
     logger = get_logger("kotak.websocket_order_details")
     try:
+        ensure_session("kotak", logger=logger)
         session = KotakSession(logger)
     except Exception as exception:
         logger.error(f"Could not log in to Kotak: {type(exception).__name__}: {exception}")

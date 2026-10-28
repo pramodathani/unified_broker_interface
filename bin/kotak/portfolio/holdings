@@ -90,7 +90,9 @@ def main():
 
     logger = get_logger("kotak.holdings")
     cache = get_cache()
+    from stock_brokers.api.utilities.session import ensure_session
     try:
+        ensure_session("kotak", logger=logger)
         kotak = KotakAPI()
     except Exception as exception:
         logger.error(f"Could not log in to Kotak: {type(exception).__name__}: {exception}")

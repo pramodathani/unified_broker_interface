@@ -41,6 +41,7 @@ def is_authentication_error(exception):
 def main():
     """Fetch the funds and write them to dhan:portfolio:funds every half second, until interrupted."""
     from stock_brokers.api.dhan import DhanAPI
+    from stock_brokers.api.utilities.session import ensure_session
     from utilities.configurations import get_cache, get_logger
     from utilities.poll_reporter import PollReporter
 
@@ -48,6 +49,7 @@ def main():
     report = PollReporter(logger)
     cache = get_cache()
     try:
+        ensure_session("dhan", logger=logger)
         dhan = DhanAPI()
     except Exception as exception:
         logger.error(f"Could not log in to Dhan: {type(exception).__name__}: {exception}")

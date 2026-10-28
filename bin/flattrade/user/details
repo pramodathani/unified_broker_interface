@@ -70,11 +70,13 @@ def is_authentication_error(exception):
 def main():
     """Fetch the user details and write them to flattrade:user:details every minute, until interrupted."""
     from stock_brokers.api.flattrade import FlattradeAPI
+    from stock_brokers.api.utilities.session import ensure_session
     from utilities.configurations import get_cache, get_logger
 
     logger = get_logger("flattrade.details")
     cache = get_cache()
     try:
+        ensure_session("flattrade", logger=logger)
         flattrade = FlattradeAPI()
         confirm_session(flattrade)
     except Exception as exception:

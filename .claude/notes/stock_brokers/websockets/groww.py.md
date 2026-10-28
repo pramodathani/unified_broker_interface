@@ -23,3 +23,11 @@ The old order socket decoded each protobuf message and normalized it in the same
 ## Test notes
 
 `GrowwNkeyPair` generates a fresh ed25519 key per connection, so the NKEY and the nonce signature change on every run. The recording patches `Ed25519PrivateKey.generate` to return a key built from fixed bytes, and masks the random `x-request-id` header of the socket token request.
+
+## Why only the first INFO is answered
+
+Groww's NATS gateway sends `INFO` twice on every connection: once on open, with the nonce, and again after it accepts `CONNECT`, with `connect_info: true` and the `remote_account`. Both sockets used to answer every `INFO` with `CONNECT` and a full set of `SUB` lines, so each connection subscribed every subject twice under the same subscription ids. On 2026-10-28, with a paid plan freshly enabled, the server answered that with `-ERR 'maximum subscriptions exceeded'` and closed the connection, about once a second; on the plan without live data it also sent `-ERR 'Authorization Violation'`. A raw probe that sent `CONNECT` once and the same ten `SUB` lines once got `+OK` for each and live price and depth messages on all ten subjects. `_answered_info` is reset with the buffer on every connect, and set by the first `INFO`.
+
+## Why prices are not divided by 100
+
+The socket used to divide every price by 100, on the belief that Groww's feed sends paise. It sends rupees: on 2026-10-28, the first day the feed ran on a plan with live data, HDFCBANK, ICICIBANK, INFY, RELIANCE and TCS all came out exactly 100 times below `GET /v1/live-data/ltp` (RELIANCE 11.767 against 1176.7), and Groww's own SDK (`growwapi` 1.5.0) passes the protobuf values through unscaled. The replay scenarios now build their messages in rupees, so the recorded ticks did not change. Index values go through the same `_price`; no index was subscribed on that day, so that index values are rupees too rests on the SDK, not on a live comparison.

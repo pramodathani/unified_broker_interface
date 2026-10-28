@@ -40,11 +40,13 @@ def is_authentication_error(exception):
 def main():
     """Fetch the profile and write it to dhan:user:details every 60 seconds, until interrupted."""
     from stock_brokers.api.dhan import DhanAPI
+    from stock_brokers.api.utilities.session import ensure_session
     from utilities.configurations import get_cache, get_logger
 
     logger = get_logger("dhan.details")
     cache = get_cache()
     try:
+        ensure_session("dhan", logger=logger)
         dhan = DhanAPI()
     except Exception as exception:
         logger.error(f"Could not log in to Dhan: {type(exception).__name__}: {exception}")

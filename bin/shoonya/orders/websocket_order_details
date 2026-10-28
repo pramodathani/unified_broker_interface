@@ -301,10 +301,12 @@ class ShoonyaOrderUpdatesStore:
 def main():
     """Stream Shoonya order updates into shoonya:orders:orders until stopped."""
     from stock_brokers.websockets.shoonya import ShoonyaOrderUpdatesSocket, ShoonyaSession
+    from stock_brokers.api.utilities.session import ensure_session
     from utilities.configurations import get_cache, get_logger
 
     logger = get_logger("shoonya.websocket_order_details")
     try:
+        ensure_session("shoonya", logger=logger)
         session = ShoonyaSession(logger)
     except Exception as exception:
         logger.error(f"Could not log in to Shoonya: {type(exception).__name__}: {exception}")

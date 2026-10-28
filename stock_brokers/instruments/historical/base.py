@@ -255,6 +255,7 @@ class BrokerCandles:
     INTERVALS = {}
     MAXIMUM_WINDOW_DAYS = {}
     REQUESTS_PER_SECOND = 1.0
+    REQUEST_TIMEOUT_SECONDS = 30
     REQUESTS_PER_DAY = None
     EARLIEST_AVAILABLE_DATE = datetime.date(2010, 1, 1)
 

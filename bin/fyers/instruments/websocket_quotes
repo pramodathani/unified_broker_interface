@@ -182,6 +182,7 @@ def main():
     arguments = parser.parse_args()
 
     from stock_brokers.websockets.fyers import FyersQuotesSocket, FyersSession
+    from stock_brokers.api.utilities.session import ensure_session
     from utilities.configurations import get_cache, get_logger
 
     logger = get_logger("fyers.websocket_quotes")
@@ -197,6 +198,7 @@ def main():
         return 2
 
     try:
+        ensure_session("fyers", logger=logger)
         session = FyersSession(logger)
     except Exception as exception:
         logger.error(f"Could not log in to Fyers: {type(exception).__name__}: {exception}")

@@ -154,7 +154,7 @@ Plain market orders are not sent to a broker as market orders while `UNIFIED_BRO
 
 A broker API class first tries an authenticated call with the stored token and only logs in (often through headless Chrome, Selenium and a TOTP) when that fails. A successful login writes MongoDB first and the Redis `last_login` hash second. Every request reads the current login through `BrokerAPI._current_login`, so a token obtained by any process is used by all of them without restarts. Constructors must not write the token to Redis, because that races a concurrent login. At Zerodha every login invalidates the previous token, so two independent logins break each other.
 
-`stock_brokers/api/utilities/session.py` `ensure_session` is the cross-process login lock used by `BrokerCandles` and INDmoney's instrument ingester. It keeps separate attempt and success markers and releases locks whose holder process has died.
+`stock_brokers/api/utilities/session.py` `ensure_session` is the cross-process login lock used by `BrokerCandles`, INDmoney's instrument ingester and every long-running `bin/<broker>/` script, which calls it before building its broker class or socket session. Without it each script logged in on its own and `Restart=always` restarted it every 15 seconds; on 2026-10-27 that meant about 14,000 Flattrade logins and a Groww token limit used up for the day. It keeps separate attempt and success markers and releases locks whose holder process has died.
 
 ### Database and DDL
 

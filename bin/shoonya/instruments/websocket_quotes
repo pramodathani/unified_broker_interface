@@ -187,6 +187,7 @@ def main():
     arguments = parser.parse_args()
 
     from stock_brokers.websockets.shoonya import ShoonyaQuotesSocket, ShoonyaSession
+    from stock_brokers.api.utilities.session import ensure_session
     from utilities.configurations import get_cache, get_logger
 
     logger = get_logger("shoonya.websocket_quotes")
@@ -203,6 +204,7 @@ def main():
         return 2
 
     try:
+        ensure_session("shoonya", logger=logger)
         session = ShoonyaSession(logger)
     except Exception as exception:
         logger.error(f"Could not log in to Shoonya: {type(exception).__name__}: {exception}")

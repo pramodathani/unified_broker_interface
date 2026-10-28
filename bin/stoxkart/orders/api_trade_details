@@ -24,6 +24,7 @@ from utilities.bootstrap import run_under_venv
 PROJECT_ROOT = run_under_venv(__file__)
 
 from stock_brokers.api.stoxkart import StoxkartAPI
+from stock_brokers.api.utilities.session import ensure_session
 from utilities.configurations import book_configuration, get_cache, get_logger
 from utilities.poll_reporter import PollReporter
 
@@ -61,6 +62,7 @@ class StoxkartTradesPoller:
             int: 0 when stopped with Ctrl+C, and 1 when a login failed.
         """
         try:
+            ensure_session("stoxkart", logger=self.logger)
             self._stoxkart = StoxkartAPI()
         except Exception as error:
             self.logger.error(f"Could not log in to Stoxkart: {type(error).__name__}: {error}")

@@ -56,6 +56,7 @@ def net_margin_available(funds):
 def main():
     """Fetch the balance and write it to wisdom_capital:portfolio:funds every half second, until interrupted."""
     from stock_brokers.api.wisdom_capital import WisdomCapitalAPI
+    from stock_brokers.api.utilities.session import ensure_session
     from utilities.configurations import get_cache, get_logger
     from utilities.poll_reporter import PollReporter
 
@@ -63,6 +64,7 @@ def main():
     report = PollReporter(logger)
     cache = get_cache()
     try:
+        ensure_session("wisdom_capital", logger=logger)
         wisdom_capital = WisdomCapitalAPI()
     except Exception as exception:
         logger.error(f"Could not log in to Wisdom Capital: {type(exception).__name__}: {exception}")

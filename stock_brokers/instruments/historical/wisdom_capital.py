@@ -320,7 +320,8 @@ class WisdomCapitalCandles(BrokerCandles):
         try:
             response = self._api.get(url=HISTORICAL_URL,
                                      headers={"authorization": self._market_data_token},
-                                     params=parameters)
+                                     params=parameters,
+                                     timeout=self.REQUEST_TIMEOUT_SECONDS)
         except Exception as exception:
             raise self._classify(exception) from exception
 
