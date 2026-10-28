@@ -45,22 +45,22 @@ The allocator reads those limits from the table `unified.broker_quote_capacities
 
 A broker with 0 sockets in the table, as Groww has while its login fails, is left out and its set is not touched. The allocator also writes `<broker>:quotes:per_socket`, which each script uses as its socket size when no `--per-socket` (Zerodha: `--sockets`) is given, and a summary as JSON in `unified:quotes:allocation`.
 
-The table below shows the capacities measured against the live brokers on 2026-10-27, with each production feed stopped while it was probed and then checked again in production. A broker documents a limit that is not always what it enforces, and several brokers send one snapshot for every instrument they accept but stream updates for far fewer, so each figure is the number that kept streaming updates.
+The table below shows the capacities measured against the live brokers on 2026-10-27, and Kotak's on 2026-10-28, with each production feed stopped while it was probed and then checked again in production. A broker documents a limit that is not always what it enforces, and several brokers send one snapshot for every instrument they accept but stream updates for far fewer, so each figure is the number that kept streaming updates.
 
 | Broker | One member looks like | Sockets × instruments | Preference | What was measured |
 |---|---|---|---:|---|
 | Zerodha | Kite instrument token `738561` | 24 × 4,000 | 1 | Kite documents 3 × 3,000; 24 sockets streamed and the 25th onwards got HTTP 429 |
+| Kotak | `nse_cm\|11536` | 45 × 3,000 | 2 | measured on 2026-10-28: 45 connections of 3,000 streamed with no refusal or slowdown, and updates do not thin out further along a connection |
 | Fyers | `NSE:SBIN-EQ` | 1 × 100 | 2 | Fyers counts symbols per user: 100 on its Standard plan, 5,000 on Prime; about 100 kept updating |
 | Dhan | `NSE_EQ:2885` | 10 × 5,000 | 3 | only the first 5,000 instruments on a connection update; twenty sockets opened at once blocked the IP |
 | Flattrade | `NSE\|2885` | 1 × 100 | 4 | everything past the hundredth is ignored, and a second connection closes the first |
 | Shoonya | `NSE\|2885` | 1 × 100 | 4 | the same 100 cap, and only one connection per session streams |
-| Kotak | `nse_cm\|11536` | 1 × 100 | 4 | not probed; 100 is the most the script allows |
 | Wisdom Capital | `1:2885` (XTS segment number, then instrument id) | 1 × 50 | 4 | 50 instruments for the whole app key |
 | Stoxkart | `NSE:760946` | 4 × 50,000 | 5 | never refuses; resets connections past about four; only NSE, NFO, BSE and MCX |
 | INDmoney | `NSE:2885` | 1 × 3,000 | 6 | only one socket of several streams reliably |
 | Groww | `NSE\|CASH\|2885` | 0 | — | left out while its login fails |
 
-On 2026-10-27 this covered 231,004 of the 262,671 live instruments. Of the rest, 22,976 had no broker whose feed can stream them, 2,286 had a single broker that was full, and 6,405 had only full brokers. To add an instrument by hand, add a member to its broker's set and restart the script, as the Flattrade script's docstring shows; the next allocation replaces the set again.
+On 2026-10-27 this covered 231,004 of the 262,671 live instruments. Of the rest, 22,976 had no broker whose feed can stream them, 2,286 had a single broker that was full, and 6,405 had only full brokers. With Kotak at 45 × 3,000, the allocation of 2026-10-28 covered 228,165 of the 254,025 live instruments, against 204,894 with Kotak at 1 × 100. Of the rest, 23,069 had no broker whose feed can stream them, 2,324 had a single small broker that was full and 467 had only full brokers, so every instrument some broker with room can stream was covered; Kotak took 109,608 on 37 sockets. Its quotes reached the unified store with a median of 0.63 seconds and a p99 of 1.10 seconds after the exchange's timestamp, against Zerodha's 0.90 and 2.12 seconds over the same minute, which is why Kotak comes straight after Zerodha. To add an instrument by hand, add a member to its broker's set and restart the script, as the Flattrade script's docstring shows; the next allocation replaces the set again.
 
 ```bash
 redis-cli SADD flattrade:quotes:subscriptions "NSE|2885" "MCX|565899"

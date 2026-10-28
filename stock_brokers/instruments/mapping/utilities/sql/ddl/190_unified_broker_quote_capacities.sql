@@ -18,7 +18,7 @@ VALUES
     ('fyers', 1, 100, DATE '2026-10-27'),
     ('groww', 0, 0, NULL),
     ('indmoney', 1, 3000, DATE '2026-10-27'),
-    ('kotak', 1, 100, NULL),
+    ('kotak', 45, 3000, DATE '2026-10-28'),
     ('shoonya', 1, 100, DATE '2026-10-27'),
     ('stoxkart', 4, 50000, DATE '2026-10-27'),
     ('wisdom_capital', 1, 50, DATE '2026-10-27'),
@@ -38,7 +38,7 @@ FROM (
         ('shoonya', 4),
         ('flattrade', 4),
         ('wisdom_capital', 4),
-        ('kotak', 4),
+        ('kotak', 2),
         ('stoxkart', 5)
 ) AS seed ("broker", "preference")
 WHERE unified.broker_quote_capacities."broker" = seed."broker"
