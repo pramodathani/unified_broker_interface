@@ -40,8 +40,8 @@ class WisdomCapitalAPI(BrokerAPI):
 
     _VERIFY_SSL = False
 
-    def __init__(self):
-        """Establishes both of the sessions Wisdom Capital's platform needs, logging in only where the stored token has stopped working.
+    def __init__(self, force_login=False):
+        """Establishes both of the sessions Wisdom Capital's platform needs, logging in only where the stored token has stopped working or a fresh login is asked for.
 
         Symphony XTS splits a broker into two applications with separate credentials. The interactive application places orders and reports the account, and the market data application serves quotes and charts; each issues its own token and refuses the other's. Constructing this class establishes both, and leaves them in the `last_login` document as `access_token` and `market_data_access_token`.
 
@@ -51,15 +51,18 @@ class WisdomCapitalAPI(BrokerAPI):
 
         A market data login that fails is recorded in `market_data_session_error` rather than raised, because the scripts that poll orders, positions and funds need only the interactive token and must not be stopped by a market data credential they never use. `bin/wisdom_capital/session/connect` reports that error and exits non-zero, so the morning login is still where a broken market data credential is caught.
 
+        Args:
+            force_login (bool): When True, neither stored token is checked and both sessions are always logged in afresh.
+
         Raises:
             WisdomCapitalAPIException: The legacy login found no access token on the login page, the host lookup returned no unique key, or the interactive session request returned no token.
         """
         super().__init__(broker_name="wisdom_capital")
 
         self.market_data_session_error = None
-        self._ensure_trading_session()
+        self._ensure_trading_session(force_login)
         try:
-            self._ensure_market_data_session()
+            self._ensure_market_data_session(force_login)
         except Exception as exception:
             self.market_data_session_error = exception
             self._logger.warning("Wisdom Capital's market data session could not be established (%s: %s). The interactive session is unaffected.", type(exception).__name__, exception)
@@ -150,8 +153,11 @@ class WisdomCapitalAPI(BrokerAPI):
         finally:
             self._cache.delete(MARKET_DATA_LOCK_KEY)
 
-    def _ensure_trading_session(self):
+    def _ensure_trading_session(self, force_login=False):
         """Makes sure the interactive token in the shared login is one Wisdom Capital still accepts, logging in again when it is not.
+
+        Args:
+            force_login (bool): When True, the stored token is not checked and a new one is always obtained.
 
         Returns:
             None: The token in force is left in `self._last_login`.
@@ -160,7 +166,7 @@ class WisdomCapitalAPI(BrokerAPI):
             WisdomCapitalAPIException: The login produced no token.
         """
         stored_token = (self._current_login() or {}).get("access_token")
-        if stored_token and stored_token != "None" and self._trading_token_works():
+        if not force_login and stored_token and stored_token != "None" and self._trading_token_works():
             return
         self._log_in_to_trading()
 
@@ -289,8 +295,11 @@ class WisdomCapitalAPI(BrokerAPI):
             "accessToken": access_token,
         }
 
-    def _ensure_market_data_session(self):
+    def _ensure_market_data_session(self, force_login=False):
         """Makes sure the market data token in the shared login is one Wisdom Capital still accepts, logging in again when it is not.
+
+        Args:
+            force_login (bool): When True, the stored token is not checked and a new one is always obtained.
 
         Returns:
             None: The token in force is left in `self._last_login`.
@@ -299,7 +308,7 @@ class WisdomCapitalAPI(BrokerAPI):
             WisdomCapitalAPIException: No market data session could be established.
         """
         stored_token = (self._current_login() or {}).get("market_data_access_token")
-        if stored_token and stored_token != "None" and self._market_data_token_works(stored_token):
+        if not force_login and stored_token and stored_token != "None" and self._market_data_token_works(stored_token):
             return
         self.replace_market_data_session(stale_access_token=stored_token)
 

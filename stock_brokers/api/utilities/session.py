@@ -108,6 +108,24 @@ def stored_login(broker_name):
     """
     return get_mongo_db()['last_login'].find_one({'broker_name': broker_name}, {'_id': 0}) or {}
 
+def issued_today(broker_name):
+    """
+    Whether a broker's stored login was made today, by this machine's clock.
+
+    The morning login uses it to log in afresh when the token in force was issued on an earlier
+    day, even though that token may still work. Brokers stamp `last_login` with local time, some
+    with microseconds and some without. A stamp that cannot be read counts as not today.
+
+    - `broker_name` is the name of the broker.
+    """
+    stamp = stored_login(broker_name).get('last_login')
+    for form in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(str(stamp), form).date() == datetime.now().date()
+        except ValueError:
+            continue
+    return False
+
 def _login_timestamp(document):
     """
     The moment a stored login was made, as an epoch, or None when it cannot be read.

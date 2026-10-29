@@ -22,13 +22,21 @@ class ZerodhaAPI(BrokerAPI):
     Zerodha API class
     """
 
-    def __init__(self):
+    def __init__(self, force_login=False):
         """
-        Zerodha API class
+        Logs in to Kite, unless the stored access token still works and no fresh login is asked for.
+
+        Args:
+            force_login (bool): When True, the stored token is not checked and the full login is always run.
+
+        Raises:
+            ZerodhaAPIException: A step of the login was refused or returned no token.
         """
         super().__init__(broker_name="zerodha")
 
         try:
+            if force_login:
+                raise ZerodhaAPIException(code="ForcedLogin", message="A fresh login was asked for.")
             self.get(url="https://api.kite.trade/user/profile")
         except Exception:
             chrome_options = Options()

@@ -13,13 +13,21 @@ class INDMoneyAPI(BrokerAPI):
     INDMoneyAPI class
     """
 
-    def __init__(self):
+    def __init__(self, force_login=False):
         """
-        INDMoneyAPI class
+        Logs in to INDstocks, unless the stored access token still works and no fresh login is asked for.
+
+        Args:
+            force_login (bool): When True, the stored token is not checked and a new access token is always generated.
+
+        Raises:
+            INDMoneyAPIException: INDstocks refused the token request or returned no token.
         """
         super().__init__(broker_name="indmoney")
 
         try:
+            if force_login:
+                raise INDMoneyAPIException(code="ForcedLogin", message="A fresh login was asked for.")
             self.get(url="https://api.indstocks.com/user/profile")
         except Exception:
             response = requests.post(

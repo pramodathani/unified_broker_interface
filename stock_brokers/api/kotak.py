@@ -71,9 +71,15 @@ class KotakAPI(BrokerAPI):
                 base_url = f"https://{base_url}"
         return f"{base_url}/{str(path).lstrip('/')}"
 
-    def __init__(self):
+    def __init__(self, force_login=False):
         """
-        Kotak API class
+        Logs in to Kotak, unless the stored session still works and no fresh login is asked for.
+
+        Args:
+            force_login (bool): When True, the stored session is not checked and the full login is always run.
+
+        Raises:
+            KotakAPIException: A step of the login was refused or returned no session.
         """
         super().__init__(broker_name="kotak")
 
@@ -82,6 +88,8 @@ class KotakAPI(BrokerAPI):
         self.login_response = None
 
         try:
+            if force_login:
+                raise KotakAPIException(code="ForcedLogin", message="A fresh login was asked for.")
             self.get(url=self.url("/quick/user/positions"))
         except Exception:
             headers = {
