@@ -186,7 +186,7 @@ sequenceDiagram
     end
 ```
 
-systemd runs one instance of a unit at a time, so any number of refusals in any number of workers start at most one login. The login script probes the stored session before it logs in, so a login requested after another process refreshed the session changes nothing. A worker asks at most once every five minutes per broker.
+systemd runs one instance of a unit at a time, so any number of refusals in any number of workers start at most one login. Once the day's token is in place, the login script probes the stored session before it logs in, so a login requested after another process refreshed the session changes nothing. A worker asks at most once every five minutes per broker.
 
 ## The daily login
 
@@ -206,6 +206,15 @@ gantt
 ```
 
 Each timer adds up to 30 minutes of random delay (`RandomizedDelaySec=1800`), so the ten logins do not fire in the same second, and every one still lands before the instrument download. A login service is tried up to three times an hour, two minutes apart, and each attempt may take up to 300 seconds. A machine that was off at 07:00 does not catch up; the first script to find its token refused logs in then. [Daily schedule](../operations/schedule.md) shows the whole day.
+
+The morning login always gets a token issued that day. Before it builds the broker's API class, the connect script asks `issued_today` in `stock_brokers/api/utilities/session.py` whether the stored login was made today, by the machine's clock. When it was not, the script passes `force_login=True`, and the class skips the check of the stored token and runs the real login, even if yesterday's token would still be accepted. When it was, the class checks the stored token as usual and logs in only if that is refused. So a run later in the day, by hand or started by the REST API after a refused request, never replaces a working token from the same day.
+
+| Stored login made | What connect does |
+|---|---|
+| Before today | Logs in afresh, even if the old token still works |
+| Today | Checks the stored token, and logs in only when it is refused |
+
+The old token is never cleared. It stays in MongoDB and Redis until the login writes the new one over it, so the pollers, sockets and REST API keep working through the login and switch to the new token on their next request, because they always take the newest login. At Zerodha the new login ends the old token a moment before Redis is updated; a request caught in that moment is refused once, and its recovery builds a new `ZerodhaAPI`, which checks the newest stored token first and finds the new one working, so no second login follows.
 
 The connect script writes the outcome to `<broker>:session:status` and exits `1` on failure, so systemd retries it. Nothing has to be restarted after a login, because every script reads the current token on its next request.
 

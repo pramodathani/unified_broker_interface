@@ -102,7 +102,7 @@ The session scripts log a broker in or mark it logged out. `connect` is what `<b
 
 | Script | What it does | Reads | Writes |
 |---|---|---|---|
-| `connect` | Logs in by building the broker's API class, confirms the session answers an authenticated request, and records the outcome | MongoDB `settings`, `last_login` | MongoDB and Redis `last_login` (through the login), Redis `<broker>:session:status` |
+| `connect` | Logs in by building the broker's API class, afresh when the stored login is from an earlier day and otherwise only when the stored token is refused, confirms the session answers an authenticated request, and records the outcome | MongoDB `settings`, `last_login` | MongoDB and Redis `last_login` (through the login), Redis `<broker>:session:status` |
 | `disconnect` | Marks the broker as logged out | nothing | Redis `<broker>:session:status` |
 
 `connect` exits 0 when the session works and 1 when the login, the check or the Redis write fails, so the login service can retry. Two brokers do a little more: Kotak's login also refreshes `kotak:user:details`, and Wisdom Capital's `connect` confirms both of its sessions.

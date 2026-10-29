@@ -6,6 +6,12 @@ the Redis key `groww:session:status`.
     bin/groww/session/connect
     redis-cli GET groww:session:status
 
+When the stored token was issued before today, the real login runs even if the old token still works, so
+the 07:00 run of `groww-login.service` starts each day with that day's token. The old token stays in
+place until the new one is stored, so the running scripts are never without one. Otherwise the stored
+token is checked first, and a later run - by hand, or started by the REST API after a refused request -
+logs in only when the session is dead.
+
 `GrowwAPI()` probes `GET /v1/user/detail` with the stored token and only generates a new access token -
 from the TOTP token and a TOTP, through `POST /v1/token/api/access` - when that probe fails. A new token is
 written to MongoDB and to the Redis `last_login` hash, where every other process picks it up. The user
@@ -43,10 +49,11 @@ TIMEOUT_SECONDS = 10
 def main():
     """Construct GrowwAPI, which logs in when the stored session is dead, confirm it, and record the outcome."""
     from stock_brokers.api.groww import GrowwAPI
+    from stock_brokers.api.utilities.session import issued_today
     from utilities.configurations import get_cache
 
     try:
-        groww = GrowwAPI()
+        groww = GrowwAPI(force_login=not issued_today("groww"))
         if not isinstance((groww.get(url=USER_DETAIL_URL, timeout=TIMEOUT_SECONDS) or {}).get('data'), dict):
             raise RuntimeError("Groww answered the user detail request without user details")
         login = groww._last_login or {}
