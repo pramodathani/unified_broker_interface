@@ -7,7 +7,7 @@ Each check returns a `Check(name, passed, detail)`. The general checks hold for 
 - **hygiene** - no bar on a day its exchange did not trade, and no daily bar off midnight India time;
 - **continuity** - trading days missing inside each instrument's loaded span, as a count;
 - **cross-exchange** - dual listed instruments whose NSE and BSE closes disagree by more than a few
-  percent on the same day, which is how a series served already adjusted gives itself away;
+  percent for three months in a row, which is how a series served already adjusted gives itself away;
 - **coverage** - per segment, instruments in the master against instruments with bars;
 - **query plans** - one instrument over five years, and a one day cross-section, timed.
 
@@ -24,6 +24,7 @@ from utilities.configurations import get_postgres
 from stock_brokers.instruments.historical.utilities.unified import tables
 
 Check = namedtuple("Check", ["name", "passed", "detail"])
+CROSS_EXCHANGE_RUN = 3
 
 def one(cursor, statement, parameters=()):
     """Run a statement and return its first row."""
@@ -143,7 +144,14 @@ def cross_exchange(cursor):
     A single day apart says little - two exchanges' last trades in a thinly traded stock are often
     5% apart - so the test is on the median ratio over each calendar month with at least ten shared
     days. A series served at a different scale, pre-adjusted and not corrected, fails it for every
-    month before the action.
+    month before the action, so an instrument fails only when `CROSS_EXCHANGE_RUN` such months in a row
+    are more than 5% apart; one or two months apart are how thinly traded stocks disagree.
+
+    Args:
+        cursor (psycopg2.extensions.cursor): An open cursor on the database.
+
+    Returns:
+        Check: Passed when no dual listed instrument has such a run.
     """
     cursor.execute(f"""
         with months as (
@@ -160,16 +168,28 @@ def cross_exchange(cursor):
             group by 1, 2
         )
         select symbol, count(*) filter (where abs(ratio - 1) > 0.05), count(*),
-               round(min(ratio)::numeric, 3), round(max(ratio)::numeric, 3)
+               round(min(ratio)::numeric, 3), round(max(ratio)::numeric, 3),
+               array_agg(abs(ratio - 1) > 0.05 order by month)
         from months where days >= 10
         group by symbol
         having count(*) filter (where abs(ratio - 1) > 0.05) > 0
         order by 2 desc
     """)
-    rows = cursor.fetchall()
+    rows = []
+    for symbol, off, months, low, high, apart in cursor.fetchall():
+        longest = 0
+        current = 0
+        for month_apart in apart:
+            if month_apart:
+                current += 1
+            else:
+                current = 0
+            longest = max(longest, current)
+        if longest >= CROSS_EXCHANGE_RUN:
+            rows.append((symbol, off, months, low, high))
     cursor.execute(f"select count(distinct symbol) from {tables.MASTER} where exchange = 'nse'")
     return Check("V12 cross-exchange", not rows,
-                 f"{len(rows)} dual listed instruments have a month at a different scale; most: "
+                 f"{len(rows)} dual listed instruments have {CROSS_EXCHANGE_RUN} months in a row at a different scale; most: "
                  f"{[(symbol, f'{off}/{months} months', float(low), float(high)) for symbol, off, months, low, high in rows[:10]]}")
 
 def bonus(cursor):

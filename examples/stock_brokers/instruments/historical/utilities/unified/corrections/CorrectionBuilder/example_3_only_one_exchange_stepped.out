@@ -1,0 +1,6 @@
+JBCHEPHARM on bse: 20 served closes, 2956.0 on 2023-09-15, 1482.0 on 2023-09-18
+JBCHEPHARM on nse: 20 served closes, 1478.0 on 2023-09-15, 1482.0 on 2023-09-18
+Build summary: {'pairs': 1, 'cross_exchange_confirmed': 1, 'instruments_changed': 1}
+Stored: NSE|1726|JBCHEPHARM-EQ from 2023-09-18, multiplier 2.0 (2/1), by cross_exchange, confirmed
+  evidence {"ratio_before": 2.0, "ratio_after": 1.0, "last_day_before": "2023-09-15", "first_day_after": "2023-09-18", "nse_change": 1.0, "bse_change": 0.5, "newer_run": 10, "dispersion": 0.0, "corrected": "nse", "decided_by": "one series stepped alone"}
+Follow-up statements: ['delete from unified.price_history_corrections', 'delete from unified.price_history_corrections', 'update unified.price_history_sources set', 'delete from unified.adjustment_factors', 'update unified.yahoo_fetch_state set']
