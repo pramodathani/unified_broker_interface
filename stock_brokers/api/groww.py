@@ -15,13 +15,21 @@ class GrowwAPI(BrokerAPI):
 
     LOGIN_TIMEOUT_SECONDS = 10
 
-    def __init__(self):
+    def __init__(self, force_login=False):
         """
-        Groww API class
+        Logs in to Groww, unless the stored access token still works and no fresh login is asked for.
+
+        Args:
+            force_login (bool): When True, the stored token is not checked and a new access token is always generated.
+
+        Raises:
+            GrowwAPIException: Groww did not return an access token.
         """
         super().__init__(broker_name="groww")
 
         try:
+            if force_login:
+                raise GrowwAPIException(code="ForcedLogin", message="A fresh login was asked for.")
             self.get(url="https://api.groww.in/v1/user/detail", timeout=self.LOGIN_TIMEOUT_SECONDS)
         except Exception:
             headers = {

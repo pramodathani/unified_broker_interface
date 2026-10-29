@@ -7,6 +7,12 @@ the Redis key `kotak:session:status`. A login also refreshes `kotak:user:details
     redis-cli GET kotak:session:status
     redis-cli GET kotak:user:details
 
+When the stored token was issued before today, the real login runs even if the old token still works, so
+the 07:00 run of `kotak-login.service` starts each day with that day's token. The old token stays in
+place until the new one is stored, so the running scripts are never without one. Otherwise the stored
+token is checked first, and a later run - by hand, or started by the REST API after a refused request -
+logs in only when the session is dead.
+
 `KotakAPI()` probes `GET {base_url}/quick/user/positions` with the stored token and only runs the real
 login - the mobile number, UCC and a TOTP, then the MPIN - when that probe fails. The login stores the
 token, the `sid` and the `base_url`, the API host Kotak assigned this session, in MongoDB and in the Redis
@@ -91,11 +97,12 @@ def kotak_request(kotak, method, path, body=None):
 def main():
     """Construct KotakAPI, which logs in when the stored session is dead, confirm it, and record the outcome."""
     from stock_brokers.api.kotak import KotakAPI
+    from stock_brokers.api.utilities.session import issued_today
     from utilities.configurations import get_cache
 
     logged_in = False
     try:
-        kotak = KotakAPI()
+        kotak = KotakAPI(force_login=not issued_today("kotak"))
         kotak_request(kotak, 'GET', POSITIONS_PATH)
         login = kotak._last_login or {}
         record = {'status': 'success', 'access-token': login.get('access_token'), 'last_login': login.get('last_login')}

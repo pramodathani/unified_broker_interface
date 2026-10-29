@@ -22,11 +22,22 @@ class FyersAPI(BrokerAPI):
     Fyers API class
     """
 
-    def __init__(self):
+    def __init__(self, force_login=False):
         """
-        Fyers API class
+        Logs in to Fyers, unless the stored access token still works and no fresh login is asked for.
+
+        Args:
+            force_login (bool): When True, the stored token is not checked and the full login is always run.
+
+        Raises:
+            FyersBlockedError: A step of the login was refused with HTTP 429.
+            FyersAPIException: The stored token was refused for a reason a login does not fix, or a step of the login failed.
         """
         super().__init__(broker_name="fyers")
+
+        if force_login:
+            self._log_in()
+            return
 
         try:
             self.get(url="https://api-t1.fyers.in/api/v3/profile")

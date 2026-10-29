@@ -17,6 +17,11 @@ tokens are written to MongoDB and to the Redis `last_login` hash, as `access_tok
 `market_data_access_token`, where every other process picks them up. The balance is then asked once more, so a
 success means a session that has actually been used, not just a constructor that returned.
 
+When the stored login was made before today, both sessions are opened afresh even if their tokens still work,
+so the 07:00 run of `wisdom_capital-login.service` starts each day with that day's tokens. The old tokens stay
+in place until the new ones are stored, so the running scripts are never without them. A later run - by hand,
+or started by the REST API after a refused request - checks the stored tokens first as described above.
+
 The check uses the balance rather than `/user/profile` because Wisdom Capital allows only about one profile
 call a day. A check refused for rate (HTTP 429 or an `e-apirl` code) still counts as a working session: XTS
 rate limits only after the request has authenticated.
@@ -56,10 +61,11 @@ TIMEOUT_SECONDS = 10
 def main():
     """Construct WisdomCapitalAPI, which logs in where a stored session is dead, confirm both sessions, and record the outcome."""
     from stock_brokers.api.wisdom_capital import WisdomCapitalAPI
+    from stock_brokers.api.utilities.session import issued_today
     from utilities.configurations import get_cache
 
     try:
-        wisdom_capital = WisdomCapitalAPI()
+        wisdom_capital = WisdomCapitalAPI(force_login=not issued_today("wisdom_capital"))
         try:
             wisdom_capital.get(url=BALANCE_URL, params={'clientID': wisdom_capital._settings.get('ucc_code', '')},
                                timeout=TIMEOUT_SECONDS)

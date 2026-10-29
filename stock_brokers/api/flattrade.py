@@ -17,13 +17,21 @@ class FlattradeAPI(BrokerAPI):
 
     LOGIN_TIMEOUT_SECONDS = 10
 
-    def __init__(self):
+    def __init__(self, force_login=False):
         """
-        Flattrade API class
+        Logs in to Flattrade, unless the stored session still works and no fresh login is asked for.
+
+        Args:
+            force_login (bool): When True, the stored session is not checked and the full login is always run.
+
+        Raises:
+            FlattradeAPIException: A step of the login was refused or returned no token.
         """
         super().__init__(broker_name="flattrade")
 
         try:
+            if force_login:
+                raise FlattradeAPIException(code="ForcedLogin", message="A fresh login was asked for.")
             # Noren refuses a dead session inside an HTTP 200, which the request raises nothing for, so the
             # body is checked too: without it a dead token would never lead to a login.
             details = (self.post(url="https://piconnect.flattrade.in/PiConnectAPI/UserDetails", timeout=self.LOGIN_TIMEOUT_SECONDS) or {}).get("data")

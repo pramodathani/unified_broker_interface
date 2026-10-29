@@ -13,13 +13,21 @@ class DhanAPI(BrokerAPI):
     DhanAPI class
     """
 
-    def __init__(self):
+    def __init__(self, force_login=False):
         """
-        DhanAPI class
-        """        
+        Logs in to Dhan, unless the stored access token still works and no fresh login is asked for.
+
+        Args:
+            force_login (bool): When True, the stored token is not checked and a new access token is always generated.
+
+        Raises:
+            DhanAPIException: Dhan did not return an access token.
+        """
         super().__init__(broker_name="dhan")
 
         try:
+            if force_login:
+                raise DhanAPIException(code="ForcedLogin", message="A fresh login was asked for.")
             self.get(url="https://api.dhan.co/v2/profile")
         except Exception:
             params = {
