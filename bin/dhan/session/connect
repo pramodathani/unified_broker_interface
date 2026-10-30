@@ -6,9 +6,10 @@ the Redis key `dhan:session:status`.
     bin/dhan/session/connect
     redis-cli GET dhan:session:status
 
-When the stored token was issued before today, a new access token is generated from the client id,
-PIN and a TOTP even if the old one still works, so the 07:00 run of `dhan-login.service` starts each
-day with that day's token. Otherwise `DhanAPI()` probes `GET /v2/profile` with the stored token and
+When `dhan-login.timer` started the run, or the stored token was issued before today, a new access
+token is generated from the client id, PIN and a TOTP even if the old one still works, so each day
+starts with a token issued by the morning login; the timer is told apart by the `TRIGGER_UNIT`
+variable systemd passes to the service, on retries too. Otherwise `DhanAPI()` probes `GET /v2/profile` with the stored token and
 only generates a new one when that probe fails, so a later run - by hand, or started by the REST API
 after a refused request - logs in only when the session is dead. The old token stays in place until
 the new one is written to MongoDB and to the Redis `last_login` hash, where every other process picks
@@ -43,13 +44,13 @@ PROFILE_URL = "https://api.dhan.co/v2/profile"
 REDIS_KEY = "dhan:session:status"
 
 def main():
-    """Construct DhanAPI, which logs in when the stored session is dead or from an earlier day, confirm it, and record the outcome."""
+    """Construct DhanAPI, which logs in when the stored session is dead, from an earlier day, or the login timer started this run, confirm it, and record the outcome."""
     from stock_brokers.api.dhan import DhanAPI
-    from stock_brokers.api.utilities.session import issued_today
+    from stock_brokers.api.utilities.session import needs_fresh_login
     from utilities.configurations import get_cache
 
     try:
-        dhan = DhanAPI(force_login=not issued_today("dhan"))
+        dhan = DhanAPI(force_login=needs_fresh_login("dhan"))
         dhan.get(url=PROFILE_URL)
         login = dhan._last_login or {}
         record = {'status': 'success', 'access-token': login.get('access_token'), 'last_login': login.get('last_login')}

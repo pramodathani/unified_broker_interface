@@ -126,6 +126,23 @@ def issued_today(broker_name):
             continue
     return False
 
+def needs_fresh_login(broker_name):
+    """
+    Whether a broker's connect script should log in afresh rather than reuse a stored token that still works.
+
+    Two cases call for it. The broker's `<broker>-login.timer` started this run, which systemd says
+    through the `TRIGGER_UNIT` variable it passes to the service on the first attempt and on every
+    `Restart=on-failure` retry, so the morning login always issues that day's token. Or the stored
+    login was made on an earlier day, which covers a morning on which the machine was off at 07:00.
+    Any other start - by hand, or by the REST API after a broker refused a request - reuses a token
+    from today that still works, because at Zerodha a needless login invalidates every other
+    process's token.
+
+    - `broker_name` is the name of the broker.
+    """
+    started_by_timer = os.environ.get("TRIGGER_UNIT") == f"{broker_name}-login.timer"
+    return started_by_timer or not issued_today(broker_name)
+
 def _login_timestamp(document):
     """
     The moment a stored login was made, as an epoch, or None when it cannot be read.

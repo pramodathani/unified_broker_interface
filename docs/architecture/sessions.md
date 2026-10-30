@@ -207,12 +207,19 @@ gantt
 
 Each timer adds up to 30 minutes of random delay (`RandomizedDelaySec=1800`), so the ten logins do not fire in the same second, and every one still lands before the instrument download. A login service is tried up to three times an hour, two minutes apart, and each attempt may take up to 300 seconds. A machine that was off at 07:00 does not catch up; the first script to find its token refused logs in then. [Daily schedule](../operations/schedule.md) shows the whole day.
 
-The morning login always gets a token issued that day. Before it builds the broker's API class, the connect script asks `issued_today` in `stock_brokers/api/utilities/session.py` whether the stored login was made today, by the machine's clock. When it was not, the script passes `force_login=True`, and the class skips the check of the stored token and runs the real login, even if yesterday's token would still be accepted. When it was, the class checks the stored token as usual and logs in only if that is refused. So a run later in the day, by hand or started by the REST API after a refused request, never replaces a working token from the same day.
+The morning login always issues a fresh token, whatever token is already stored. Before it builds the broker's API class, the connect script asks `needs_fresh_login` in `stock_brokers/api/utilities/session.py` whether to log in afresh. When the answer is yes, the script passes `force_login=True`, and the class skips the check of the stored token and runs the real login, even if the token in force would still be accepted. When it is no, the class checks the stored token as usual and logs in only if that is refused.
 
-| Stored login made | What connect does |
-|---|---|
-| Before today | Logs in afresh, even if the old token still works |
-| Today | Checks the stored token, and logs in only when it is refused |
+The answer is yes in two cases. The first is that `<broker>-login.timer` started the run. systemd tells the service which unit triggered it through the `TRIGGER_UNIT` environment variable, on the first attempt and on every `Restart=on-failure` retry, and leaves it unset when the unit is started any other way; this was checked on systemd 259 on 2026-10-30 with a throwaway timer whose service failed once. The second is that the stored login was made on an earlier day, by the machine's clock, which `issued_today` decides and which covers a morning when the machine was off at 07:00.
+
+| Who started connect | Stored login made | What connect does |
+|---|---|---|
+| `<broker>-login.timer`, or its retry | Any time | Logs in afresh, even if the stored token still works |
+| Anything else: the REST API, `systemctl start`, a terminal | Before today | Logs in afresh |
+| Anything else | Today | Checks the stored token, and logs in only when it is refused |
+
+The timer is the only thing that forces a login over a working token from the same day. A run the REST API starts after a refused request, or one started by hand, never replaces a token that still works, because at Zerodha every needless login invalidates the token every other process is holding.
+
+Brokers whose tokens expire overnight are usually logged in again before 07:00 by their own pollers: Kotak and Stoxkart at midnight, Fyers and Groww at 06:00 and INDmoney at 07:00, as their logs showed on 2026-10-30. The morning login replaces those tokens too, so every broker's token in use during the session is one the morning login issued.
 
 The old token is never cleared. It stays in MongoDB and Redis until the login writes the new one over it, so the pollers, sockets and REST API keep working through the login and switch to the new token on their next request, because they always take the newest login. At Zerodha the new login ends the old token a moment before Redis is updated; a request caught in that moment is refused once, and its recovery builds a new `ZerodhaAPI`, which checks the newest stored token first and finds the new one working, so no second login follows.
 

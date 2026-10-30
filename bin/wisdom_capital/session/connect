@@ -17,8 +17,9 @@ tokens are written to MongoDB and to the Redis `last_login` hash, as `access_tok
 `market_data_access_token`, where every other process picks them up. The balance is then asked once more, so a
 success means a session that has actually been used, not just a constructor that returned.
 
-When the stored login was made before today, both sessions are opened afresh even if their tokens still work,
-so the 07:00 run of `wisdom_capital-login.service` starts each day with that day's tokens. The old tokens stay
+When `wisdom_capital-login.timer` started the run, or the stored login was made before today, both sessions
+are opened afresh even if their tokens still work, so each day starts with tokens issued by the morning
+login; the timer is told apart by the `TRIGGER_UNIT` variable systemd passes to the service, on retries too. The old tokens stay
 in place until the new ones are stored, so the running scripts are never without them. A later run - by hand,
 or started by the REST API after a refused request - checks the stored tokens first as described above.
 
@@ -61,11 +62,11 @@ TIMEOUT_SECONDS = 10
 def main():
     """Construct WisdomCapitalAPI, which logs in where a stored session is dead, confirm both sessions, and record the outcome."""
     from stock_brokers.api.wisdom_capital import WisdomCapitalAPI
-    from stock_brokers.api.utilities.session import issued_today
+    from stock_brokers.api.utilities.session import needs_fresh_login
     from utilities.configurations import get_cache
 
     try:
-        wisdom_capital = WisdomCapitalAPI(force_login=not issued_today("wisdom_capital"))
+        wisdom_capital = WisdomCapitalAPI(force_login=needs_fresh_login("wisdom_capital"))
         try:
             wisdom_capital.get(url=BALANCE_URL, params={'clientID': wisdom_capital._settings.get('ucc_code', '')},
                                timeout=TIMEOUT_SECONDS)

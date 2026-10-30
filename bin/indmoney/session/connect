@@ -6,11 +6,12 @@ the outcome in the Redis key `indmoney:session:status`.
     bin/indmoney/session/connect
     redis-cli GET indmoney:session:status
 
-When the stored token was issued before today, the real login runs even if the old token still works, so
-the 07:00 run of `indmoney-login.service` starts each day with that day's token. The old token stays in
-place until the new one is stored, so the running scripts are never without one. Otherwise the stored
-token is checked first, and a later run - by hand, or started by the REST API after a refused request -
-logs in only when the session is dead.
+When `indmoney-login.timer` started the run, the real login always runs, even if the stored token still
+works, so each day starts with a token issued by the morning login; the timer is told apart by the
+`TRIGGER_UNIT` variable systemd passes to the service, on retries too. The same happens on any start when
+the stored token was issued before today. The old token stays in place until the new one is stored, so
+the running scripts are never without one. Otherwise the stored token is checked first, and a run by
+hand, or one the REST API starts after a refused request, logs in only when the session is dead.
 
 `INDMoneyAPI()` probes `GET /user/profile` with the stored token and only generates a new one - from the
 MPIN and a TOTP, through `POST /generate/token` - when that probe fails. A new token is written to MongoDB
@@ -48,11 +49,11 @@ TIMEOUT_SECONDS = 10
 def main():
     """Construct INDMoneyAPI, which logs in when the stored session is dead, confirm it, and record the outcome."""
     from stock_brokers.api.indmoney import INDMoneyAPI
-    from stock_brokers.api.utilities.session import issued_today
+    from stock_brokers.api.utilities.session import needs_fresh_login
     from utilities.configurations import get_cache
 
     try:
-        indmoney = INDMoneyAPI(force_login=not issued_today("indmoney"))
+        indmoney = INDMoneyAPI(force_login=needs_fresh_login("indmoney"))
         indmoney.get(url=PROFILE_URL, timeout=TIMEOUT_SECONDS)
         login = indmoney._last_login or {}
         record = {'status': 'success', 'access-token': login.get('access_token'), 'last_login': login.get('last_login')}
