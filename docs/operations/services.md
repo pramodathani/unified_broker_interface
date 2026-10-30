@@ -38,7 +38,7 @@ services/
 │   ├── zerodha-user@.service           runs bin/zerodha/user/%i
 │   ├── zerodha-historical-prices.service   bin/zerodha/instruments/price_history
 │   ├── zerodha-login.service           bin/zerodha/session/connect
-│   └── zerodha-login.timer             07:00 IST every day, up to 30 minutes late
+│   └── zerodha-login.timer             07:18 IST every day; each broker has its own slot
 ├── dhan/  flattrade/  fyers/  groww/  indmoney/
 └── kotak/  shoonya/  stoxkart/  wisdom_capital/
 ```
