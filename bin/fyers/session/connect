@@ -6,11 +6,12 @@ the Redis key `fyers:session:status`.
     bin/fyers/session/connect
     redis-cli GET fyers:session:status
 
-When the stored token was issued before today, the real login runs even if the old token still works, so
-the 07:00 run of `fyers-login.service` starts each day with that day's token. The old token stays in
-place until the new one is stored, so the running scripts are never without one. Otherwise the stored
-token is checked first, and a later run - by hand, or started by the REST API after a refused request -
-logs in only when the session is dead.
+When `fyers-login.timer` started the run, the real login always runs, even if the stored token still
+works, so each day starts with a token issued by the morning login; the timer is told apart by the
+`TRIGGER_UNIT` variable systemd passes to the service, on retries too. The same happens on any start when
+the stored token was issued before today. The old token stays in place until the new one is stored, so
+the running scripts are never without one. Otherwise the stored token is checked first, and a run by
+hand, or one the REST API starts after a refused request, logs in only when the session is dead.
 
 `FyersAPI()` probes `GET /api/v3/profile` with the stored token and only runs the real login - through
 Fyers' API alone: a login OTP for the Fyers ID, verified with a TOTP, then the PIN, an auth code, and the
@@ -50,11 +51,11 @@ TIMEOUT_SECONDS = 10
 def main():
     """Construct FyersAPI, which logs in when the stored session is dead, confirm it, and record the outcome."""
     from stock_brokers.api.fyers import FyersAPI
-    from stock_brokers.api.utilities.session import issued_today
+    from stock_brokers.api.utilities.session import needs_fresh_login
     from utilities.configurations import get_cache
 
     try:
-        fyers = FyersAPI(force_login=not issued_today("fyers"))
+        fyers = FyersAPI(force_login=needs_fresh_login("fyers"))
         profile = (fyers.get(url=PROFILE_URL, timeout=TIMEOUT_SECONDS) or {}).get('data')
         if not isinstance(profile, dict) or profile.get('s') not in (None, 'ok'):
             raise RuntimeError(f"the profile request refused the session: {str(profile)[:200]}")
