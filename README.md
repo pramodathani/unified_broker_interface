@@ -125,7 +125,7 @@ bin/rest-api --dev         # Flask's development server, for local debugging
 bin/rest-api-app           # a Streamlit page to poke at the API, on port 8501
 ```
 
-In production everything runs as systemd **user** units, linked from `services/` rather than copied, so the units expect the repository at `~/Projects/unified_broker_interface`. Each folder's target file carries its own install commands in its header. Timers log every broker in at 07:00 IST, download and map the instrument masters at 07:45, check the unified price history at midnight and rebuild it at 02:00, when every market is closed. A separate `databases` unit runs `docker compose up -d --wait` every minute, so a stopped container comes back on its own.
+In production everything runs as systemd **user** units, linked from `services/` rather than copied, so the units expect the repository at `~/Projects/unified_broker_interface`. Each folder's target file carries its own install commands in its header. Timers log the brokers in from 07:00 IST, two minutes apart, download and map the instrument masters at 07:45, check the unified price history at midnight and rebuild it at 02:00, when every market is closed. A separate `databases` unit runs `docker compose up -d --wait` every minute, so a stopped container comes back on its own.
 
 ```bash
 bin/check-services               # check every unit and start the ones that are down

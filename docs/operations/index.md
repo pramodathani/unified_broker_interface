@@ -44,7 +44,7 @@ A normal trading day follows the same steps every time, and no person has to sta
 
 1. At **00:00 IST** the unified price history is checked, and at **02:00 IST** the unified price history job loads the brokers' candles into one table and refreshes the adjustment factors. Both run at night because they read the database for hours.
 2. At **06:00 IST** the daily order counters in Redis expire, so every capped broker starts the day with its full allowance.
-3. At **07:00 IST** the ten broker login timers fire, each after its own random delay of up to 30 minutes, so the ten logins do not all happen in the same second. At the same hour, the REST API's own access token from yesterday stops being reused, and the next `connect` issues a new one.
+3. From **07:00 IST** the ten broker login timers fire two minutes apart, in alphabetical order from Dhan at 07:00 to Zerodha at 07:18, so no two logins start together. At the same hour, the REST API's own access token from yesterday stops being reused, and the next `connect` issues a new one.
 4. At **07:45 IST** the instrument job downloads every broker's instrument list and maps them all onto one shared list of instruments. The unit's own comment puts this at about three quarters of an hour.
 5. From **09:00 IST** the equity pre-open begins, and the unified quote layer starts accepting ticks, because its acceptance window opens at 09:00. NSE and BSE equity trades from 09:15 to 15:30.
 6. Through the day, the pollers and websocket scripts keep Redis up to date, the persisters copy every stream into TimescaleDB, and the unified scripts combine every broker into one view that the REST API serves.

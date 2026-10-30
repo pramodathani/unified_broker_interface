@@ -198,14 +198,38 @@ gantt
     dateFormat HH:mm
     axisFormat %H:%M
     section Logins
-    Ten login timers fire at random within 30 minutes :07:00, 30m
+    Dhan :07:00, 2m
+    Flattrade :07:02, 2m
+    Fyers :07:04, 2m
+    Groww :07:06, 2m
+    INDmoney :07:08, 2m
+    Kotak :07:10, 2m
+    Shoonya :07:12, 2m
+    Stoxkart :07:14, 2m
+    Wisdom Capital :07:16, 2m
+    Zerodha :07:18, 2m
     section Instruments
     Download and map every master :07:45, 45m
     section Market
     NSE and BSE pre-open :09:00, 15m
 ```
 
-Each timer adds up to 30 minutes of random delay (`RandomizedDelaySec=1800`), so the ten logins do not fire in the same second, and every one still lands before the instrument download. A login service is tried up to three times an hour, two minutes apart, and each attempt may take up to 300 seconds. A machine that was off at 07:00 does not catch up; the first script to find its token refused logs in then. [Daily schedule](../operations/schedule.md) shows the whole day.
+The timers fire at fixed times two minutes apart, in alphabetical order, so no two logins start together and the order is the same every day. Until 2026-10-30 every timer fired at 07:00 with a random delay of up to 30 minutes (`RandomizedDelaySec=1800`), which kept the logins apart too but put each broker's login at a different time each morning.
+
+| Broker | Timer fires |
+|---|---|
+| Dhan | 07:00 |
+| Flattrade | 07:02 |
+| Fyers | 07:04 |
+| Groww | 07:06 |
+| INDmoney | 07:08 |
+| Kotak | 07:10 |
+| Shoonya | 07:12 |
+| Stoxkart | 07:14 |
+| Wisdom Capital | 07:16 |
+| Zerodha | 07:18 |
+
+A login service is tried up to three times an hour, two minutes apart, and each attempt may take up to 300 seconds. So a slow login can still be running when the next broker's timer fires, which is harmless because the two logins go to different brokers. Even Zerodha's three attempts, at their slowest, end by about 07:37, before the 07:45 instrument download. A machine that was off at 07:00 does not catch up; the first script to find its token refused logs in then. [Daily schedule](../operations/schedule.md) shows the whole day.
 
 The morning login always issues a fresh token, whatever token is already stored. Before it builds the broker's API class, the connect script asks `needs_fresh_login` in `stock_brokers/api/utilities/session.py` whether to log in afresh. When the answer is yes, the script passes `force_login=True`, and the class skips the check of the stored token and runs the real login, even if the token in force would still be accepted. When it is no, the class checks the stored token as usual and logs in only if that is refused.
 
