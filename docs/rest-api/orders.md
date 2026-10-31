@@ -5,7 +5,7 @@ The order routes read today's orders and trades across every broker, place one o
 !!! danger "These routes place, change and cancel real orders"
     `POST /api/orders/place`, `PUT /api/orders/modify` and `DELETE /api/orders/cancel` send real requests to real broker accounts, and nothing is retried or undone for you. Every one of them accepts `"dry_run": true`, which builds the exact broker request and returns it without sending it. Send a dry run first whenever you are unsure. A list sent to `modify` or `cancel` sends a request for every order in it that passes its checks, and its `dry_run` covers the whole list.
 
-The table below lists the five routes on this page. The emergency route that cancels and closes everything has a page of its own, [Flatten everything](flatten.md).
+The table below lists the eight routes on this page. The emergency route that cancels and closes everything has a page of its own, [Flatten everything](flatten.md).
 
 | Method | Endpoint | Description |
 |---|---|---|
@@ -346,7 +346,7 @@ The table below shows which orders are held.
 | A `plan`, or a `ladder`, `scheduled`, `good_till_time`, `time_stop`, `account_conditional`, `limit_if_touched`, `indicator_triggered`, `cross_instrument`, `gtt`, `bracket`, `cover`, `scale_out`, `oto`, `oca`, `scale_with_profit_taker`, `freeze_slicer`, `twap` or `implementation_shortfall` order run as a plan, unless it gives `hold_limits: false` | Its limit orders, entry, every OCA candidate, each ladder rung or each timed slice is held until the market reaches it, while exits and profit-takers rest at the broker; [Holding orders until the market reaches them](synthetic-orders.md#plan) lists the exceptions |
 | Any order naming another `synthetic` type | Run as that type |
 
-The setting `UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS`, on by default, turns this off for every order, and for the rungs of a `ladder` run as a plan.
+The setting `UNIFIED_BROKER_INTERFACE_API_ORDER_HOLD_LIMITS`, on by default, turns holding off when it is off: for plain limit orders, for every routed type, and for hand-written plans that do not set `hold_limits`.
 
 ### Market orders are sent as marketable limits
 
@@ -1388,7 +1388,7 @@ flowchart TD
 
 | Selector | How it ranks | Redis cost | When to use it |
 |---|---|---|---|
-| `lowest_cost` (default) | Cheapest broker for the order's category first, keeping every broker inside its per-second, per-minute, per-hour and per-day budgets, with every number read from `unified.broker_order_costs`; see [Choosing a broker by cost](../architecture/broker-selection.md) | One `EVAL`, queued on the pipeline that reads the instrument | Paying the least brokerage without running a broker out of its order budget |
+| `lowest_cost` (default) | Cheapest broker for the order's category first, keeping every broker inside its per-second, per-minute, per-hour and per-day budgets, with every number read from `unified.broker_order_costs`; see [Choosing a broker by cost](../architecture/broker-selection.md) | One `EVAL`, plus three commands when the funds check is active (`GET unified:portfolio:funds`, an `EVAL` of the legs' prices and `GET unified:portfolio:positions`), all queued on the pipeline that reads the instrument | Paying the least brokerage without running a broker out of its order budget |
 | `round_robin` | Starts at `INCR unified:orders:round_robin` modulo the rotation's length and walks the rotation from there. Every gunicorn worker shares the counter. | One `INCR`, queued on the pipeline that reads the instrument | Spreading orders evenly across accounts |
 | `fixed_priority` | Puts the brokers named in `UNIFIED_BROKER_INTERFACE_API_ORDER_BROKER_PRIORITY` first, in that order, then the rest of the rotation in turn order | None | Sending everything to one preferred broker, with the others as fallbacks |
 
@@ -1513,4 +1513,4 @@ The order routes were written so that the API's own work adds as little as possi
 | `DELETE /cancel`, a list | 1, plus one per cancel sent | The same pipeline, holding every order of the list, and one for the rate budget per cancel |
 | `POST /flatten` | 1, plus more | One read of everything; the engine lock's `EXISTS`, an `XADD` and a `BLPOP` to halt every open parent; one for the rate budget per cancel; one re-read of the order books every 0.25 s while waiting for the cancels; an `HGET` per position closed, then the engine lock's `EXISTS`, one pipeline of `XADD`s and a `BLPOP` per answer; one re-read of the position books every 0.25 s while waiting for the closed positions to show zero |
 
-When a broker is capped by `ORDER_DAILY_CAPS`, each request sent to it costs one more pipeline afterwards, to increment the count.
+When a broker has a daily cap, from `orders_per_day` in `unified.broker_order_costs` or from `ORDER_DAILY_CAPS`, each modify or cancel the API sends to it costs one more pipeline afterwards, to increment the count. The engine counts a placement with one script before sending it, at no extra cost afterwards.

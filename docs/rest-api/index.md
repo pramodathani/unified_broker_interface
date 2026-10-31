@@ -6,7 +6,7 @@ This page is the map. It lists every route, explains the conventions that all of
 
 ## All endpoints
 
-The table below lists all 29 routes in 36 rows, because the seven instrument routes that also take a list of instruments by `POST` appear once for each method. The badge shows the HTTP method, and the lock column shows which routes need the `access-token` header.
+The table below lists all 30 routes in 37 rows, because the seven instrument routes that also take a list of instruments by `POST` appear once for each method. The badge shows the HTTP method, and the lock column shows which routes need the `access-token` header.
 
 | Method | Endpoint | What it does | Token |
 |---|---|---|:---:|
@@ -183,6 +183,7 @@ Most routes never call a broker. They read a document that a background script k
 | Session | MongoDB `settings`, `last_login` | No |
 | Details | Redis `unified:details:*`, falling back to MongoDB | No |
 | Instruments | Redis instrument cache, falling back to TimescaleDB | No |
+| Breakeven | `unified.charge_rates`, `unified.broker_order_costs`, `unified.stop_slippage`, `unified.ticks` and the live quote | Only when no live quote is fresh |
 | Market quotes | Redis live quotes | Only when no live quote is fresh |
 | Historical data | Redis candle cache and TimescaleDB | No |
 | Portfolio | Redis `unified:portfolio:*` | No |

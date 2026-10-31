@@ -46,13 +46,15 @@ The table below lists every package built this way, the class its broker modules
 | `stock_brokers/instruments/ticks/` | [`TickNormalizer`][stock_brokers.instruments.ticks.base.TickNormalizer] | `feed_key` and class attributes for lots, close policy and trusted timestamps | 10 | `NorenTickNormalizer` in `noren.py` |
 | `unified_broker_interface/utilities/broker_quotes/` | `BrokerQuoteSource` | `fetch` and `is_authentication_error` | 8 | `NorenQuoteSource` in `utilities/noren.py` |
 | `unified_broker_interface/utilities/broker_orders/` | [`BrokerOrders`][unified_broker_interface.utilities.broker_orders.base.BrokerOrders] | Class attributes including `MARKETS`, `build_place_request`, `build_cancel_request`, `read_order_id`, and `MODIFIABLE_FIELDS` with `build_modify_request` when it modifies orders | 10 | `NorenOrders` in `noren.py` |
+| `unified_broker_interface/utilities/margin_calculators/` | `BrokerMarginCalculator` | The request to the broker's read-only margin calculator and reading its answer | 9 (no Stoxkart) | `NorenMarginCalculator` in `noren.py` |
+| `unified_broker_interface/utilities/quote_subscriptions/` | `BrokerQuoteSubscription` | `member`, which spells one mapping row as the broker's quote websocket subscribes it | 9 (no Groww) | none |
 
 A few details in that table are worth spelling out.
 
 - Every broker's API class overrides `_request`, even though `base.py` also defines one.
 - In `stock_brokers/websockets/`, Stoxkart is the exception: its two streams (`StoxkartQuoteStream` and `StoxkartOrderSocket`) read a synchronous connection and do not subclass `BrokerWebsocket`.
 - `historical/` has no module for Groww, Kotak or Stoxkart. Its orchestrator lists them in `UNSUPPORTED`: Groww answers `403` on the historical endpoint, Kotak publishes no candle endpoint, and Stoxkart has "no candle path".
-- `broker_quotes/` has no module for Stoxkart or Wisdom Capital. Of its eight modules, only six are in service in `SOURCES`; the Fyers and Groww modules exist but are held back, as the comment in `broker_quotes/utilities/service.py` explains.
+- `broker_quotes/` has no module for Stoxkart or Wisdom Capital. Of its eight modules, only six are in service in `SOURCES`; the Fyers and Groww modules exist but are held back. Fyers' field mapping is unverified, and the Groww module has not been checked against live quotes since the account gained live data on 2026-10-28.
 - In `broker_quotes/`, the Noren base lives in `utilities/noren.py` rather than beside the broker files.
 
 ### Two packages with the same shape but different cases
@@ -62,7 +64,7 @@ Two more packages follow the same layout, but their "cases" are not brokers. The
 | Package | Base class | One module per | A module implements |
 |---|---|---|---|
 | `unified_broker_interface/utilities/broker_selection/` | `BrokerSelector` | selection algorithm (`lowest_cost.py`, `round_robin.py`, `fixed_priority.py`) | `NAME` and `ranked_brokers`; overrides `queue_redis_commands` when it needs Redis, `record_passed_over` when it counts the brokers passed over, `record_chosen` when it tracks its own choices and `record_outcome` when it learns from answers |
-| `unified_broker_interface/utilities/order_engine/` | `SyntheticOrder` | synthetic order type (54 of them, from `simple.py` to `plan.py`) | `SYNTHETIC_TYPE` and `run`; may implement `on_leg_update`, `on_clock_tick` or `on_price_tick` |
+| `unified_broker_interface/utilities/order_engine/` | `SyntheticOrder` | engine class (`simple.py` and `plan.py`; the other 53 types are presets routed to `plan`) | `SYNTHETIC_TYPE` and `run`; may implement `on_leg_update`, `on_clock_tick` or `on_price_tick` |
 
 The selectors are registered in `BROKER_SELECTOR_CLASSES` in `broker_selection/utilities/registry.py`, and the two order classes the engine runs, `simple` and `plan`, in `SYNTHETIC_ORDER_CLASSES` in `order_engine/utilities/registry.py`, with every other order type in `ROUTED_TYPES` in `order_engine/utilities/plan_routing.py`.
 

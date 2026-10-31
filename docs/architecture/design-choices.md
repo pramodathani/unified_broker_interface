@@ -38,7 +38,7 @@ flowchart LR
 
 **Why.** Each process can crash, restart or be stopped without taking anything else down, and each broker's scripts run without any other broker's. Almost every read route answers from memory in one Redis round trip, whatever the brokers are doing.
 
-**The cost.** The API serves documents that are only as fresh as the script that last wrote them. Every read route therefore has to check the age of what it serves, and it answers `503` naming the key when the writer has stopped. Two parts of the system still talk to brokers on purpose: the REST API's order routes and its quote fallback, and the order engine, which places every order the REST API accepts.
+**The cost.** The API serves documents that are only as fresh as the script that last wrote them. Every read route therefore has to check the age of what it serves, and it answers `503` naming the key when the writer has stopped. Two parts of the system still talk to brokers on purpose: the REST API's order routes and its quote fallback, the order engine, which places every order the REST API accepts, and `bin/unified/orders/margin_calibration`, which calls only the brokers' read-only margin calculators once each weekday morning.
 
 **In the code.** `bin/unified/orders/api_order_details` and every other combiner say "Nothing here calls a broker" in their docstrings. `unified_broker_interface/utilities/unified_documents.py` decides when a document is too old to serve.
 
@@ -239,7 +239,7 @@ flowchart TD
 
 **The problem.** `POST /api/orders/place` names an instrument, not a broker, so something has to choose the broker. The API hands every order to the order engine, and the engine makes that choice. The lowest-cost selector needs every broker's message counts and the round-robin selector needs a counter, and both live in Redis so that they are shared between processes. A separate Redis call for them would add a network round trip to every order.
 
-**The choice.** A selector does not talk to Redis itself. It implements `queue_redis_commands`, which adds its commands to the pipeline the order engine is already sending to read the instrument's identity, order handles and contract size, and `ranked_brokers` receives the replies. The lowest-cost selector, the default, queues one `EVAL` of a script that returns every broker's message counts; the round-robin selector queues one `INCR unified:orders:round_robin`; the fixed-priority selector queues nothing.
+**The choice.** A selector does not talk to Redis itself. It implements `queue_redis_commands`, which adds its commands to the pipeline the order engine is already sending to read the instrument's identity, order handles and contract size, and `ranked_brokers` receives the replies. The lowest-cost selector, the default, queues one `EVAL` of a script that returns every broker's message counts, plus three commands for the funds check when it is active (the funds document, the legs' prices and the positions document); the round-robin selector queues one `INCR unified:orders:round_robin`; the fixed-priority selector queues nothing.
 
 ```mermaid
 sequenceDiagram

@@ -289,7 +289,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
 === "Plain and laddered"
 
-    These six types act at once and place everything they need when you ask.
+    These six types place their orders when you ask, except that `ladder`, `freeze_slicer` and `scale_with_profit_taker` hold their limits in the virtual order book by default and answer `202` with nothing sent yet.
 
     #### `simple`
 
@@ -516,7 +516,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
-    | `candidates` | list of objects | Yes | From 1 to 25 candidates, each naming a different `instrument_id`. |
+    | `candidates` | list of objects | Yes | From 2 to 25 candidates, each naming a different `instrument_id`. |
 
     ```json
     {"type": "oca", "candidates": [
@@ -598,7 +598,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
-    | `watch_field` | string | No | `last_price`, `average_price` (the day's volume-weighted average), `previous_close`, `best_bid`, `best_offer` or `mid`. Defaults to `last_price`. |
+    | `watch_field` | string | Yes | `last_price`, `average_price` (the day's volume-weighted average), `previous_close`, `best_bid`, `best_offer` or `mid`. There is no default, and an order without it is refused with `400`. |
     | `limit_price` | number | Yes | Above zero. |
 
     ```json
@@ -665,7 +665,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     - `place`, the default, sends nothing until then, which covers "send this once margin frees up" and "only once the book is flat". It answers `202 armed`.
     - `cancel` sends the order at once and cancels it then, such as pulling a resting bid when the day's loss reaches a limit. It answers with the broker's answer, and the parent becomes `cancelled`.
 
-    The figures are read about once a second. `trigger_direction` is required, because the side of the order says nothing about which way the account has to move, `trigger_price` is not used, and `trigger_on` is refused with `400` when `action` is `place`.
+    The figures are read about once a second. `trigger_direction` is required, because the side of the order says nothing about which way the account has to move, and `trigger_price`, `trigger_on` and `hold_seconds` are refused with `400`, whatever the `action`.
 
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
@@ -802,7 +802,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
 
 === "Book-following limits"
 
-    These seven types price a limit order from the market instead of leaving it at one price.
+    These eight types price a limit order from the market instead of leaving it at one price.
 
     #### `peg`
 
@@ -1034,7 +1034,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | Field | Type | Required | Rules |
     |---|---|:---:|---|
     | `slice_quantity` | integer | Yes | At least 1, and smaller than the order's `quantity`. |
-    | `randomise_percent` | number | No | Varies each slice by up to this much either way. At or above 0 and below 100. Defaults to 0. |
+    | `randomise_percent` | integer | No | Varies each slice by up to this much either way. A whole number from 0 to 99. Defaults to 0. |
 
     ```json
     {"type": "iceberg", "slice_quantity": 500, "randomise_percent": 20}
@@ -1374,6 +1374,7 @@ The tabs below describe each type in detail, grouped by family. Every field tabl
     | `participation` | `participation` execution with `percent` from `participation_percent`, and `marketable` pricing two ticks past the touch. Takes `participation_percent` and `most_slices`. |
     | `liquidity_seeking` | `book_depth` execution and `fixed` pricing at `limit_price`, so a strike that does not fill rests at the limit. Takes `limit_price` and `minimum_quantity`. |
     | `peg` | `peg` pricing, and a `cap` at `cap_price` when it is given. Takes `reference`, `offset_ticks` and `cap_price`. |
+    | `marketable_limit` | `peg` pricing on the `opposite_touch`, `buffer_ticks` (default 2) through it, with `on_empty_book: refuse`, plus `maximum_cost_bps` and `reaches_size` when they are given, and a lifetime of `fill_within_seconds` (default 30) that cancels with `applies_to: both`. Takes `buffer_ticks`, `fill_within_seconds`, `maximum_cost_bps` and `reaches_size`. |
     | `chaser` | `chase` pricing, and a `cap` at `cap_price` when it is given. Takes `step_ticks`, `step_seconds`, `cross_after_seconds` and `cap_price`. |
     | `post_only` | The `post_only` guard. Takes `on_crossing`. The order's price is the body's, or a `fixed` pricing of its own. |
     | `underlying_peg` | `follow_instrument` pricing on `watch_instrument_id`. Takes `watch_instrument_id`, `delta`, `lowest_price`, `highest_price` and `step_ticks`. |

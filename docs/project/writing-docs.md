@@ -16,7 +16,7 @@ The documentation toolchain is part of `requirements.txt`, so the project's virt
 .venv/bin/mkdocs build --strict   # the full build, failing on any warning
 ```
 
-`mkdocs serve` also watches `stock_brokers/`, `unified_broker_interface/` and `utilities/` (the `watch:` list in `mkdocs.yml`), so editing a docstring refreshes the code reference too.
+`mkdocs serve` also watches `examples/`, `stock_brokers/`, `unified_broker_interface/` and `utilities/` (the `watch:` list in `mkdocs.yml`), so editing a docstring refreshes the code reference too.
 
 Always finish with `mkdocs build --strict`. In strict mode, every warning is an error, so a broken link, a missing page in the nav, a missing snippet file or an unresolvable code cross-reference stops the build. Filtering its output shows only what needs fixing:
 
@@ -66,7 +66,7 @@ The theme is `mkdocs-material==9.6.9`, with deep orange as its primary and accen
 
 `utilities/gen_ref_pages.py` walks every `.py` file under the packages named in its `PACKAGES` tuple (`stock_brokers`, `unified_broker_interface`, `utilities`). The steps below are what it does for each file.
 
-1. It skips any path containing `__pycache__`, `proto` or `gen_ref_pages`.
+1. It skips any path containing `__pycache__`, `proto`, `gen_ref_pages` or `docs_examples`.
 2. It turns the file path into a page path under `reference/`. A package's `__init__.py` becomes that package's `index.md`, and an empty `__init__.py` is skipped because it has nothing to show.
 3. It writes the page in memory, not on disk, with a single line such as `::: unified_broker_interface.utilities.tokens`, which mkdocstrings expands.
 4. It records an edit link back to the source file, and adds the page to the navigation.
@@ -200,7 +200,7 @@ A chart is a Vega-Lite JSON spec in a `vegalite` fence. Use the v5 schema, `"wid
 {
   "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
   "width": "container",
-  "data": {"values": [{"suite": "order_routes", "scenarios": 618}, {"suite": "order_engine", "scenarios": 152}]},
+  "data": {"values": [{"suite": "order_routes", "scenarios": 620}, {"suite": "order_engine", "scenarios": 716}]},
   "mark": "bar",
   "encoding": {
     "x": {"field": "scenarios", "type": "quantitative"},

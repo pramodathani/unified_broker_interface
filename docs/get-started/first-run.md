@@ -103,7 +103,7 @@ systemctl --user start unified-mapping
 journalctl --user -u unified-mapping -f
 ```
 
-The job runs `bin/<broker>/instruments/daily_feed` for all ten brokers and then `bin/unified/instruments/map`. A broker whose file does not arrive does not stop the others, because the mapping skips a broker with no rows stored for the date. The unit's own comment puts the whole job at about three quarters of an hour. Only INDmoney's download needs a broker login; the other nine download public files.
+The job runs `bin/<broker>/instruments/daily_feed` for all ten brokers, then `bin/unified/instruments/map`, and then `bin/unified/instruments/allocate_subscriptions --restart-feeds`, which divides the day's instruments between the brokers' quote websockets. A broker whose file does not arrive does not stop the others, because the mapping skips a broker with no rows stored for the date. The unit's own comment puts the whole job at about three quarters of an hour. Only INDmoney's download needs a broker login; the other nine download public files.
 
 If the unit is not installed yet, the same steps can be run by hand.
 
@@ -142,7 +142,7 @@ The unified scripts read only what the broker scripts wrote to Redis and the dat
 ```bash
 systemctl --user link ~/Projects/unified_broker_interface/services/unified/*
 systemctl --user daemon-reload
-systemctl --user enable --now unified.target unified-mapping.timer unified-prices.timer unified-prices-verify.timer \
+systemctl --user enable --now unified.target unified-mapping.timer unified-prices.timer unified-prices-verify.timer unified-margin-calibration.timer unified-execution-costs.timer \
     unified-instruments@websocket_quotes.service unified-instruments@store_quotes_to_db.service \
     unified-orders@api_order_details.service unified-orders@api_trade_details.service unified-orders@websocket_order_details.service unified-orders@store_orders_to_db.service \
     unified-portfolio@positions.service unified-portfolio@holdings.service unified-portfolio@funds.service unified-portfolio@store_positions_to_db.service \

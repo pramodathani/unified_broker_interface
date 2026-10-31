@@ -198,16 +198,15 @@ Quantities are in units, as the place route takes them. A reduce that is not a w
 
 ## Which order types resolve references
 
-A reference is resolved only by the order types that ask for it. The table below lists which synthetic types do and when.
+Every order type runs through one of two engine classes, `SimpleOrder` for `simple` and `PlanOrder` for `plan` and the 53 types routed to it, so every type resolves references the same way. The table below lists when a reference is resolved.
 
-| When it is resolved | Types |
+| When it is resolved | What happens |
 |---|---|
-| When the engine takes the order | `simple`, `freeze_slicer`, `oto`, `oco`, `bracket`, `cover`, `scale_out`, `time_stop`, `good_till_time`, `peg`, `chaser`, `post_only`, `discretionary`, `participation`, `liquidity_seeking`, `iceberg`, `trailing_stop`, `trailing_entry`, `atr_trail`, `stepped_stop`, `attached_hedge`, `underlying_peg`, `volatility`, and the price-trigger types `market_if_touched`, `limit_if_touched`, `hidden_stop`, `candle_close_stop`, `cross_instrument`, `indicator_triggered`, `gtt`, `virtual_limit`, `close_on_trigger` and `stop_and_reverse` |
-| When the engine takes the order, and again for each later order | `twap`, `vwap`, `closing_price`, `implementation_shortfall`, `accumulation`, `grid`, `two_sided_quote`, `account_conditional` |
-| At the scheduled time, not before | `scheduled`, `opening_auction` |
-| Never | `ladder`, `scale_with_profit_taker`, `two_sided_breakout`, `basket`, `oca`, `legged_spread`, `strategy_stop`, `exposure_hedge`, `square_off`, `daily_stop` |
+| When the engine takes the order | Every type resolves the body's references once on arrival, so a reference that cannot be resolved refuses the whole order before anything is sent. |
+| Again each time an ordinary order of a plan is sent | The body's references are resolved afresh for that order, so a later slice, a rung or an order a trigger releases is sized and priced from the market and the position at the moment it is sent. A price the order's own pricing sets, such as a peg or a trail, replaces `price_reference`. |
+| Never, inside a part kept whole | The orders that a grid, a two-sided quote, scale-out exits, strategy stop exits and a position close build take their numbers from the part itself and drop both references; a two-sided quote refuses a `quantity_reference` with `400`. |
 
-The price-trigger types resolve the reference when the order is armed, not when it fires. The types in the last row never call the resolver, so give them real numbers. [Synthetic orders](synthetic-orders.md) describes every type.
+Until 2026-10-03 each type had its own class and some never called the resolver; that split no longer exists. [Synthetic orders](synthetic-orders.md) describes every type.
 
 ## Errors
 

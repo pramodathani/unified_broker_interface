@@ -4,7 +4,7 @@ Every broker publishes a daily file listing the instruments it can trade, and ev
 
 ## The daily job
 
-The whole pipeline runs as one systemd unit, `unified-mapping.service`, started by `unified-mapping.timer` at 07:45 IST every day, weekends included. The unit runs the ten downloads one after another and then the mapping. Each download line is prefixed with `-` in the unit file, so one broker's file failing does not stop the others or the mapping. The timeline below shows the order of the steps.
+The whole pipeline runs as one systemd unit, `unified-mapping.service`, started by `unified-mapping.timer` at 07:45 IST every day, weekends included. The unit runs the ten downloads one after another, then the mapping, and then `bin/unified/instruments/allocate_subscriptions --restart-feeds`, which divides the day's instruments between the brokers' quote websockets and restarts the feeds whose share changed (see [Market data](market-data.md)). Each download line is prefixed with `-` in the unit file, so one broker's file failing does not stop the others or the mapping. The timeline below shows the order of the steps.
 
 ```mermaid
 timeline
@@ -13,6 +13,7 @@ timeline
               : indmoney : wisdom_capital : groww : kotak : stoxkart
     bin/unified/instruments/map : 1 apply the mapping DDL : 2 map every broker in MAPPED_BROKERS order
                                 : 3 decide contract sizes and underlyings : 4 write the Redis cache : 5 warm the REST API catalogue
+    allocate_subscriptions : divide instruments between quote websockets : restart the feeds that changed
 ```
 
 The unit file says the whole job takes about three quarters of an hour for ten downloads of up to 120 MB each and a full mapping. It must finish before the 09:00 pre-open, when the live feeds resolve their ticks against the new mapping. The timer is `Persistent=true`, so a machine that was off at 07:45 runs the job as soon as it starts, because the brokers publish only today's file and a missed day can never be fetched later.
@@ -233,7 +234,7 @@ The REST API's instrument routes read a separate cache under `unified:catalogue:
 
 ## Exit codes
 
-The map script's exit code is the unit's exit code, so it is what `systemctl --user status unified-mapping` reports.
+The map and allocation steps have no `-`, so the unit fails when either of them fails, and that is what `systemctl --user status unified-mapping` reports.
 
 | Code | Meaning |
 |---|---|
