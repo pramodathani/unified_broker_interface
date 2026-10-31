@@ -63,7 +63,7 @@ Six brokers have a REST quote module in service. The table below lists every bro
 | shoonya | :material-check: | In service |
 | indmoney | :material-check: | In service |
 | fyers | :material-close: | A module exists but is held back. Its field mapping is unverified, because every probe met Fyers' request limit. |
-| groww | :material-close: | A module exists but is held back. The account is not entitled to live data, and every quote request is refused with 403. |
+| groww | :material-close: | A module exists but is held back. The account has had live data since 2026-10-28, but the module has not yet been checked against live quotes and registered. |
 | stoxkart | :material-close: | No REST quote module |
 | wisdom_capital | :material-close: | No REST quote module |
 

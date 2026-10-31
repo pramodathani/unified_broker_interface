@@ -21,26 +21,26 @@ The first table covers the scripts in `bin/<broker>/`, one column per script or 
 
 The columns map onto files like this: session connect is `session/connect`, user details is `user/details`, the three order columns are `orders/api_order_details`, `orders/api_trade_details` and `orders/websocket_order_details`, and the portfolio columns are `portfolio/{positions,holdings,funds}` and `portfolio/store_positions_to_db`. The positions stream column means the broker's order websocket also carries positions, so its script writes `<broker>:positions_updates:stream`.
 
-The second table covers the classes in the REST API's packages, which decide whether the API can fetch a quote from the broker and place orders there.
+The second table covers the classes in the REST API's packages, which decide whether the API can fetch a quote from the broker, place orders there, ask its margin calculator, and give it instruments to stream.
 
-| Broker | REST quote source | Order placement class | Modify support | Fields a modify can change |
-|---|:---:|:---:|:---:|---|
-| Dhan | :material-check: | :material-check: | :material-check: | quantity, disclosed quantity, price, trigger price, order type, validity |
-| Flattrade | :material-check: | :material-check: | :material-check: | quantity, disclosed quantity, price, trigger price, order type, validity |
-| Fyers | :material-close:[^quote-held] | :material-check: | :material-check: | quantity, disclosed quantity, price, trigger price, order type |
-| Groww | :material-close:[^quote-held] | :material-check: | :material-check: | quantity, price, trigger price, order type |
-| INDmoney | :material-check: | :material-check: | :material-check: | quantity, price |
-| Kotak | :material-check: | :material-check: | :material-check: | quantity, disclosed quantity, price, trigger price, order type, validity |
-| Shoonya | :material-check: | :material-check: | :material-check: | quantity, disclosed quantity, price, trigger price, order type, validity |
-| Stoxkart | :material-close: | :material-check: | :material-check: | quantity, disclosed quantity, price, trigger price, order type, validity |
-| Wisdom Capital | :material-close: | :material-check: | :material-check: | quantity, disclosed quantity, price, trigger price, order type, validity |
-| Zerodha | :material-check: | :material-check: | :material-check: | quantity, disclosed quantity, price, trigger price, order type, validity |
+| Broker | REST quote source | Order placement class | Margin calculator | Quote subscription class | Modify support | Fields a modify can change |
+|---|:---:|:---:|:---:|:---:|:---:|---|
+| Dhan | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | quantity, disclosed quantity, price, trigger price, order type, validity |
+| Flattrade | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | quantity, disclosed quantity, price, trigger price, order type, validity |
+| Fyers | :material-close:[^quote-held] | :material-check: | :material-check: | :material-check: | :material-check: | quantity, disclosed quantity, price, trigger price, order type |
+| Groww | :material-close:[^quote-held] | :material-check: | :material-check: | :material-close: | :material-check: | quantity, price, trigger price, order type |
+| INDmoney | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | quantity, price |
+| Kotak | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | quantity, disclosed quantity, price, trigger price, order type, validity |
+| Shoonya | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | quantity, disclosed quantity, price, trigger price, order type, validity |
+| Stoxkart | :material-close: | :material-check: | :material-close: | :material-check: | :material-check: | quantity, disclosed quantity, price, trigger price, order type, validity |
+| Wisdom Capital | :material-close: | :material-check: | :material-check: | :material-check: | :material-check: | quantity, disclosed quantity, price, trigger price, order type, validity |
+| Zerodha | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | quantity, disclosed quantity, price, trigger price, order type, validity |
 
 A REST quote source is a registered class in `SOURCES` in `unified_broker_interface/utilities/broker_quotes/utilities/service.py`, used when no fresh live quote is cached. An order placement class is a subclass of [`BrokerOrders`][unified_broker_interface.utilities.broker_orders.base.BrokerOrders] in `unified_broker_interface/utilities/broker_orders/`. The modify fields are each class's `MODIFIABLE_FIELDS`; a field outside that list is refused, and a broker with an empty list would be answered with HTTP 501.
 
 [^flattrade-ws]: Flattrade permits one websocket per session, and since 2026-10-28 the order updates socket holds it, so `services/flattrade/flattrade.target` leaves the quote feed out and Flattrade streams no quotes.
 [^kotak-profile]: Kotak has no profile endpoint. `KotakAPI` writes the profile to `kotak:user:details` itself at every login, from the login response.
-[^quote-held]: A module exists (`fyers.py`, `groww.py`), but it is not registered. The Fyers module's field mapping is unverified because every probe met Fyers' request limit, and the Groww account is not entitled to live data and is refused with HTTP 403.
+[^quote-held]: A module exists (`fyers.py`, `groww.py`), but it is not registered. The Fyers module's field mapping is unverified because every probe met Fyers' request limit, and the Groww module has not yet been checked against live quotes and registered, although the account has had live data since 2026-10-28.
 
 ## Features per broker
 
@@ -120,9 +120,9 @@ Each tab below describes one broker from its code: how it logs in (from `stock_b
     - Previous close and open interest arrive in packets of their own, so they are remembered per instrument and folded into the ticks that follow.
     - Dhan's trade times are India wall-clock seconds presented as an epoch, so 19,800 seconds are taken off.
     - Disconnect codes 807, 808 and 809 mean a refused login; other codes are only logged.
-    - Dhan allows 5 quote connections per user, with at most 5,000 instruments on each.
+    - Dhan documents 5 quote connections per user, with at most 5,000 instruments on each. A probe on 2026-10-27 ran 12 connections and 20,000 instruments on one, so the script allows up to 20,000 per socket and 12 sockets, and takes its socket size from `dhan:quotes:per_socket`; only the first 5,000 instruments on a connection update, so the allocation gives it 5,000 a socket.
 
-    **Files.** `stock_brokers/api/dhan.py`, `stock_brokers/websockets/dhan.py`, `stock_brokers/instruments/dhan.py`, `stock_brokers/instruments/mapping/dhan.py` with `mapping/utilities/rules/dhan.yaml`, `stock_brokers/instruments/historical/dhan.py`, `stock_brokers/instruments/ticks/dhan.py`, `unified_broker_interface/utilities/broker_quotes/dhan.py`, `unified_broker_interface/utilities/broker_orders/dhan.py`, `bin/dhan/`, `services/dhan/`.
+    **Files.** `stock_brokers/api/dhan.py`, `stock_brokers/websockets/dhan.py`, `stock_brokers/instruments/dhan.py`, `stock_brokers/instruments/mapping/dhan.py` with `mapping/utilities/rules/dhan.yaml`, `stock_brokers/instruments/historical/dhan.py`, `stock_brokers/instruments/ticks/dhan.py`, `unified_broker_interface/utilities/broker_quotes/dhan.py`, `unified_broker_interface/utilities/broker_orders/dhan.py`, `unified_broker_interface/utilities/margin_calculators/dhan.py`, `unified_broker_interface/utilities/quote_subscriptions/dhan.py`, `bin/dhan/`, `services/dhan/`.
 
 === "Flattrade"
 
@@ -132,13 +132,14 @@ Each tab below describes one broker from its code: how it logs in (from `stock_b
 
     **Peculiarities.**
 
+    - `trade/apitoken` can answer without a token. `FlattradeAPI` then raises `FlattradeAPIException` and leaves the stored login alone, because on 2026-10-27 an empty token written to MongoDB and Redis made every service see a dead session and restart about 2,000 times. Every login request times out after `LOGIN_TIMEOUT_SECONDS` (10).
     - Flattrade permits only one websocket per session, so in production the order updates socket runs and the quote socket does not. Two sockets on one session close each other with code 1000 within seconds; on 2026-10-28 that happened 331 times during market hours.
     - Noren also accepts a `c` connect frame but answers it `NOT_OK` for a good token, which looks like an expired session and is not one.
     - Noren's heartbeat `{"t":"h"}` is sent every three seconds, because a plain websocket ping is not enough.
     - Flattrade shares `NorenCandles` with Shoonya for candles, `NorenOrders` for orders and `NorenQuoteSource` for REST quotes. Its candle downloader runs at 10 requests a second, ten times Shoonya's.
     - Flattrade's NSE daily bars are raw across some corporate actions and already adjusted across others, which the unified price history detects and corrects.
 
-    **Files.** `stock_brokers/api/flattrade.py`, `stock_brokers/websockets/flattrade.py`, `stock_brokers/instruments/flattrade.py`, `stock_brokers/instruments/mapping/flattrade.py` with `rules/flattrade.yaml`, `stock_brokers/instruments/historical/flattrade.py` and `noren.py`, `stock_brokers/instruments/ticks/flattrade.py` and `noren.py`, `unified_broker_interface/utilities/broker_quotes/flattrade.py`, `unified_broker_interface/utilities/broker_orders/flattrade.py` and `noren.py`, `bin/flattrade/`, `services/flattrade/`.
+    **Files.** `stock_brokers/api/flattrade.py`, `stock_brokers/websockets/flattrade.py`, `stock_brokers/instruments/flattrade.py`, `stock_brokers/instruments/mapping/flattrade.py` with `rules/flattrade.yaml`, `stock_brokers/instruments/historical/flattrade.py` and `noren.py`, `stock_brokers/instruments/ticks/flattrade.py` and `noren.py`, `unified_broker_interface/utilities/broker_quotes/flattrade.py`, `unified_broker_interface/utilities/broker_orders/flattrade.py` and `noren.py`, `unified_broker_interface/utilities/margin_calculators/flattrade.py` and `noren.py`, `unified_broker_interface/utilities/quote_subscriptions/flattrade.py`, `bin/flattrade/`, `services/flattrade/`.
 
 === "Fyers"
 
@@ -157,30 +158,32 @@ Each tab below describes one broker from its code: how it logs in (from `stock_b
     - The access token is a JWT, and a token whose `exp` has passed is treated as refused without sending anything, because Fyers' edge bans addresses that keep sending refused requests.
     - A Cloudflare ban pauses the quote socket and the pollers for thirty minutes and a rate limit for five, rather than logging in again.
     - A refused session check logs in only when Fyers says the session is dead (codes -8, -15, -16 and -17, or HTTP 401). An HTTP 429, whether Cloudflare's ban page or Fyers' own rate limit, raises `FyersBlockedError` instead, at start-up and during a login alike, and the pollers wait it out rather than exit. Until 2026-09-30 any refusal started a login, and each poller's systemd restart every fifteen seconds sent another login into the ban: 12,101 refused requests on 2026-09-29, which kept the ban in place all day. The poller templates now restart after a minute.
-    - Fyers' 200 requests a minute are shared by everything on the machine, so the history download runs at 2 requests a second, 120 a minute, and the order connection warmers leave Fyers out through `UNIFIED_BROKER_INTERFACE_API_ORDER_WARM_BROKERS` in `.env`. At 3 a second, with the pollers and warmers, the total was about 240 a minute.
+    - Fyers' 200 requests a minute are shared by everything on the machine, so the history download runs at half a request a second, 30 a minute (`bin/fyers/instruments/price_history` overrides `FyersCandles`' own 2 a second), and the order connection warmers leave Fyers out through `UNIFIED_BROKER_INTERFACE_API_ORDER_WARM_BROKERS` in `.env`. At 3 a second, with the pollers and warmers, the total was about 240 a minute.
     - The history download pauses from 09:00 to 23:55 IST on weekdays, so it never competes with trading, and stops for the day after 45,000 requests on a weekday, because the pollers use about 46,000 of Fyers' documented 100,000 a day. At the weekend it runs all day with a cap of 100,000, which comes to about 146,000 requests a day with the pollers; if Fyers starts refusing at weekends, that is the first thing to revisit. The count is kept in Redis under `fyers:price_history:requests:<date>`, so a restart does not reset it.
     - Fyers allows an app 200 requests a minute and 100,000 a day across every endpoint, so its pollers run slower than other brokers': orders every 5 seconds, trades every 15, funds every 30.
     - It is one of four brokers whose order websocket also carries positions.
     - Its REST quote module exists but is not in service, because its field mapping could not be verified.
 
-    **Files.** `stock_brokers/api/fyers.py`, `stock_brokers/websockets/fyers.py`, `stock_brokers/instruments/fyers.py`, `stock_brokers/instruments/mapping/fyers.py` with `rules/fyers.yaml`, `stock_brokers/instruments/historical/fyers.py`, `stock_brokers/instruments/ticks/fyers.py`, `unified_broker_interface/utilities/broker_quotes/fyers.py` (not in service), `unified_broker_interface/utilities/broker_orders/fyers.py`, `bin/fyers/`, `services/fyers/`.
+    **Files.** `stock_brokers/api/fyers.py`, `stock_brokers/websockets/fyers.py`, `stock_brokers/instruments/fyers.py`, `stock_brokers/instruments/mapping/fyers.py` with `rules/fyers.yaml`, `stock_brokers/instruments/historical/fyers.py`, `stock_brokers/instruments/ticks/fyers.py`, `unified_broker_interface/utilities/broker_quotes/fyers.py` (not in service), `unified_broker_interface/utilities/broker_orders/fyers.py`, `unified_broker_interface/utilities/margin_calculators/fyers.py`, `unified_broker_interface/utilities/quote_subscriptions/fyers.py`, `bin/fyers/`, `services/fyers/`.
 
 === "Groww"
 
     **Login.** `GrowwAPI` probes `GET https://api.groww.in/v1/user/detail`. To log in, it posts the current TOTP to `https://api.groww.in/v1/token/api/access`, authorized with the account's stored TOTP token as a bearer token, and stores the access token it gets back.
 
-    **Websockets.** Both sockets are NATS over a websocket at `wss://socket-api.groww.in`. Before connecting, a socket generates a fresh ed25519 key pair and exchanges its public key for a short-lived socket JWT and a subscription id, authorized with the access token. It then answers the server's `INFO` nonce with a signed `CONNECT`. Quotes subscribe a price subject and a depth subject per instrument, such as `/ld/eq/nse/price_detailed.2885` and `/ld/eq/nse/book.2885`, and payloads are protobuf messages decoded from Groww's own file descriptor. The order socket subscribes the account's order and derivatives position subjects.
+    **Websockets.** Both sockets are NATS over a websocket at `wss://socket-api.groww.in`. Before connecting, a socket generates a fresh ed25519 key pair and exchanges its public key for a short-lived socket JWT and a subscription id, authorized with the access token. It then answers the server's `INFO` nonce with a signed `CONNECT`. Groww's gateway sends `INFO` twice on every connection, once on open and again after it accepts `CONNECT`, so a socket answers only the first; answering both subscribed every subject twice, and the server closed the connection with `-ERR 'maximum subscriptions exceeded'` about once a second. Quotes subscribe a price subject and a depth subject per instrument, such as `/ld/eq/nse/price_detailed.2885` and `/ld/eq/nse/book.2885`, and payloads are protobuf messages decoded from Groww's own file descriptor. The order socket subscribes the account's order and derivatives position subjects.
 
     **Peculiarities.**
 
-    - Prices arrive in paise and are divided into rupees; quantities arrive as doubles and are rounded.
+    - Prices arrive in rupees and are stored as sent; quantities arrive as doubles and are rounded. Until 2026-10-28 the socket divided prices by 100, which nobody saw until the account gained live data that day; on the live feed that put RELIANCE at 11.767 against 1176.7 from Groww's REST LTP.
+    - Every login request times out after `LOGIN_TIMEOUT_SECONDS` (10), because six Groww services froze inside the token request on 2026-10-25. Any answer of 300 or above raises `GrowwAPIException`, with Groww's own code and message when the body carries them; an expired API key is refused with `{"error": {"errorCode": "403", "errorMessage": "Access denied"}}`.
     - Groww's feed has no subjects for commodities, so commodity tokens are skipped.
+    - There is no Groww class in `unified_broker_interface/utilities/quote_subscriptions/`, so the quote allocation never gives Groww instruments, whatever its row in `unified.broker_quote_capacities` says.
     - Groww sends no token with orders, positions or holdings, so the unified scripts look a Groww cash instrument up by symbol in `unified:instrument_symbols`.
     - Groww's lot sizes are the authority on MCX when the brokers disagree.
     - It is one of four brokers whose order websocket also carries positions.
     - It has no candle downloader, and its REST quote module is not in service because the account is refused live data with HTTP 403.
 
-    **Files.** `stock_brokers/api/groww.py`, `stock_brokers/websockets/groww.py`, `stock_brokers/instruments/groww.py`, `stock_brokers/instruments/mapping/groww.py` with `rules/groww.yaml`, `stock_brokers/instruments/ticks/groww.py`, `unified_broker_interface/utilities/broker_quotes/groww.py` (not in service), `unified_broker_interface/utilities/broker_orders/groww.py`, `bin/groww/`, `services/groww/`.
+    **Files.** `stock_brokers/api/groww.py`, `stock_brokers/websockets/groww.py`, `stock_brokers/instruments/groww.py`, `stock_brokers/instruments/mapping/groww.py` with `rules/groww.yaml`, `stock_brokers/instruments/ticks/groww.py`, `unified_broker_interface/utilities/broker_quotes/groww.py` (not in service), `unified_broker_interface/utilities/broker_orders/groww.py`, `unified_broker_interface/utilities/margin_calculators/groww.py`, `bin/groww/`, `services/groww/`.
 
 === "INDmoney"
 
@@ -197,7 +200,7 @@ Each tab below describes one broker from its code: how it logs in (from `stock_b
     - INDstocks names no trading symbol on orders, so the unified orders document leaves `id` null until the instrument supplies a symbol.
     - Its REST quote source refuses every BSE cash quote, because INDstocks answers a dual-listed stock's BSE code with the NSE quote, and it does not serve MCX.
 
-    **Files.** `stock_brokers/api/indmoney.py`, `stock_brokers/websockets/indmoney.py`, `stock_brokers/instruments/indmoney.py`, `stock_brokers/instruments/mapping/indmoney.py` with `rules/indmoney.yaml`, `stock_brokers/instruments/historical/indmoney.py`, `stock_brokers/instruments/ticks/indmoney.py`, `unified_broker_interface/utilities/broker_quotes/indmoney.py`, `unified_broker_interface/utilities/broker_orders/indmoney.py`, `bin/indmoney/`, `services/indmoney/`.
+    **Files.** `stock_brokers/api/indmoney.py`, `stock_brokers/websockets/indmoney.py`, `stock_brokers/instruments/indmoney.py`, `stock_brokers/instruments/mapping/indmoney.py` with `rules/indmoney.yaml`, `stock_brokers/instruments/historical/indmoney.py`, `stock_brokers/instruments/ticks/indmoney.py`, `unified_broker_interface/utilities/broker_quotes/indmoney.py`, `unified_broker_interface/utilities/broker_orders/indmoney.py`, `unified_broker_interface/utilities/margin_calculators/indmoney.py`, `unified_broker_interface/utilities/quote_subscriptions/indmoney.py`, `bin/indmoney/`, `services/indmoney/`.
 
 === "Kotak"
 
@@ -212,13 +215,14 @@ Each tab below describes one broker from its code: how it logs in (from `stock_b
     - Kotak checks the session only after the feed has accepted the subscription and started sending data: message code 1120, which repeats the session id, means it refused the session, so its text is never logged.
     - On the SFeed feed every MCX quantity is in lots, as at Zerodha, whereas the HSM feed sent lots times Kotak's own lot size.
     - One quote socket carries at most 3,000 instruments, the most Kotak's SDK allows on one connection. On 2026-10-28, 45 connections of 3,000 streamed together with no refusal, and production ran 37 of them.
+    - The quote sockets start `SOCKET_START_GAP_SECONDS` (2) apart, so 37 sockets take about 74 seconds to open. Started together on 2026-10-28, their first market pictures put about 350,000 ticks into `kotak:quotes:stream` faster than the unified combiner reads, and every broker's unified quotes ran up to about 25 seconds late for two minutes.
     - Kotak answers each instrument past 3,000 on a connection with message code 1, "Subscription limit reached", and the socket logs that once per connection with the number refused.
     - Kotak sends about 0.6 data frames per instrument before it acknowledges a subscription, so a socket holds up to two frames per instrument, and at least 1,000, waiting for the acknowledgement's names.
     - Its instrument files sit under a URL stamped with the day's date, so a missed download can never be fetched later.
     - It is one of four brokers whose order websocket also carries positions. It has no candle downloader.
     - Kotak closes every order updates connection without a close frame several times an hour, all of them within about a minute of each other, whatever the ping interval. The socket logs this as a warning and reconnects within a second, and `kotak-orders@api_order_details` polls the order book beside it.
 
-    **Files.** `stock_brokers/api/kotak.py`, `stock_brokers/websockets/kotak.py`, `stock_brokers/instruments/kotak.py`, `stock_brokers/instruments/mapping/kotak.py` with `rules/kotak.yaml`, `stock_brokers/instruments/ticks/kotak.py`, `unified_broker_interface/utilities/broker_quotes/kotak.py`, `unified_broker_interface/utilities/broker_orders/kotak.py`, `bin/kotak/`, `services/kotak/`.
+    **Files.** `stock_brokers/api/kotak.py`, `stock_brokers/websockets/kotak.py`, `stock_brokers/instruments/kotak.py`, `stock_brokers/instruments/mapping/kotak.py` with `rules/kotak.yaml`, `stock_brokers/instruments/ticks/kotak.py`, `unified_broker_interface/utilities/broker_quotes/kotak.py`, `unified_broker_interface/utilities/broker_orders/kotak.py`, `unified_broker_interface/utilities/margin_calculators/kotak.py`, `unified_broker_interface/utilities/quote_subscriptions/kotak.py`, `bin/kotak/`, `services/kotak/`.
 
 === "Shoonya"
 
@@ -229,12 +233,12 @@ Each tab below describes one broker from its code: how it logs in (from `stock_b
     **Peculiarities.**
 
     - Because the login needs a headless browser, the quote sockets log in again one at a time, and only when nobody has already replaced the token.
-    - The login body escapes `&` as `&`, because Noren splits the body on ampersands before parsing it, which breaks trading symbols such as `M&M`.
+    - The login body escapes `&` as the JSON escape `\u0026`, because Noren splits the body on ampersands before parsing it, which breaks trading symbols such as `M&M`.
     - Shoonya allows about one REST request a second, and its candle downloader runs at 1 request a second.
     - Shoonya adjusts its price history inconsistently, so the unified price history does not use it as a source.
     - Shoonya and Wisdom Capital are the only brokers used for NCDEX quotes.
 
-    **Files.** `stock_brokers/api/shoonya.py`, `stock_brokers/websockets/shoonya.py`, `stock_brokers/instruments/shoonya.py`, `stock_brokers/instruments/mapping/shoonya.py` with `rules/shoonya.yaml`, `stock_brokers/instruments/historical/shoonya.py` and `noren.py`, `stock_brokers/instruments/ticks/shoonya.py` and `noren.py`, `unified_broker_interface/utilities/broker_quotes/shoonya.py`, `unified_broker_interface/utilities/broker_orders/shoonya.py` and `noren.py`, `bin/shoonya/`, `services/shoonya/`.
+    **Files.** `stock_brokers/api/shoonya.py`, `stock_brokers/websockets/shoonya.py`, `stock_brokers/instruments/shoonya.py`, `stock_brokers/instruments/mapping/shoonya.py` with `rules/shoonya.yaml`, `stock_brokers/instruments/historical/shoonya.py` and `noren.py`, `stock_brokers/instruments/ticks/shoonya.py` and `noren.py`, `unified_broker_interface/utilities/broker_quotes/shoonya.py`, `unified_broker_interface/utilities/broker_orders/shoonya.py` and `noren.py`, `unified_broker_interface/utilities/margin_calculators/shoonya.py` and `noren.py`, `unified_broker_interface/utilities/quote_subscriptions/shoonya.py`, `bin/shoonya/`, `services/shoonya/`.
 
 === "Stoxkart"
 
@@ -251,7 +255,7 @@ Each tab below describes one broker from its code: how it logs in (from `stock_b
     - It has no candle downloader and no REST quote source.
     - Every order request carries an exchange Algo-ID, as the `X-Algo-Id` header and as `algo_id` in the body. It is read from `algo_id` in Stoxkart's settings document, and is `99999`, the non-registered strategy code, when that is empty. Stoxkart accepted `99999` on 2026-09-15 and refused every order with `invalid algo_id` on 2026-09-27, so the id this account is registered under has to be confirmed with Stoxkart and stored in the settings before orders can be placed there.
 
-    **Files.** `stock_brokers/api/stoxkart.py`, `stock_brokers/websockets/stoxkart.py`, `stock_brokers/instruments/stoxkart.py`, `stock_brokers/instruments/mapping/stoxkart.py` with `rules/stoxkart.yaml`, `stock_brokers/instruments/ticks/stoxkart.py`, `unified_broker_interface/utilities/broker_orders/stoxkart.py`, `bin/stoxkart/`, `services/stoxkart/`.
+    **Files.** `stock_brokers/api/stoxkart.py`, `stock_brokers/websockets/stoxkart.py`, `stock_brokers/instruments/stoxkart.py`, `stock_brokers/instruments/mapping/stoxkart.py` with `rules/stoxkart.yaml`, `stock_brokers/instruments/ticks/stoxkart.py`, `unified_broker_interface/utilities/broker_orders/stoxkart.py`, `unified_broker_interface/utilities/quote_subscriptions/stoxkart.py`, `bin/stoxkart/`, `services/stoxkart/`.
 
 === "Wisdom Capital"
 
@@ -263,11 +267,12 @@ Each tab below describes one broker from its code: how it logs in (from `stock_b
 
     - The host's certificate is issued to the platform provider's domain, so the websocket client pins the exact certificate instead of checking the hostname.
     - XTS issues one market data session per application key, and a second login invalidates the first, so the market data token is replaced under a Redis lock.
+    - The whole application key may subscribe 50 instruments, measured live on 2026-10-27. XTS refuses the 51st with `e-session-0004 Exceeded Instrument Subscription Limit of 50`, and the socket logs that and carries on rather than logging in again, because the `e-session` prefix does not mean a dead session here.
     - The profile endpoint allows about one call a day, which is why the token check uses the funds endpoint and `bin/wisdom_capital/user/details` fetches the profile once a day.
     - XTS counts seconds from 1980-01-01 in India time, and it misspells the last traded quantity as `LastTradedQunatity`.
     - It is one of four brokers whose order websocket also carries positions, and the only one besides Zerodha that reports a separate `day` positions list. It has no REST quote source.
 
-    **Files.** `stock_brokers/api/wisdom_capital.py`, `stock_brokers/websockets/wisdom_capital.py`, `stock_brokers/instruments/wisdom_capital.py`, `stock_brokers/instruments/mapping/wisdom_capital.py` with `rules/wisdom_capital.yaml`, `stock_brokers/instruments/historical/wisdom_capital.py`, `stock_brokers/instruments/ticks/wisdom_capital.py`, `unified_broker_interface/utilities/broker_orders/wisdom_capital.py`, `bin/wisdom_capital/`, `services/wisdom_capital/`.
+    **Files.** `stock_brokers/api/wisdom_capital.py`, `stock_brokers/websockets/wisdom_capital.py`, `stock_brokers/instruments/wisdom_capital.py`, `stock_brokers/instruments/mapping/wisdom_capital.py` with `rules/wisdom_capital.yaml`, `stock_brokers/instruments/historical/wisdom_capital.py`, `stock_brokers/instruments/ticks/wisdom_capital.py`, `unified_broker_interface/utilities/broker_orders/wisdom_capital.py`, `unified_broker_interface/utilities/margin_calculators/wisdom_capital.py`, `unified_broker_interface/utilities/quote_subscriptions/wisdom_capital.py`, `bin/wisdom_capital/`, `services/wisdom_capital/`.
 
 === "Zerodha"
 
@@ -279,10 +284,10 @@ Each tab below describes one broker from its code: how it logs in (from `stock_b
 
     - Kite issues one token per session and every login invalidates the previous one, so two independent logins break each other. The sockets and the candle downloader log in only when no other process has already replaced the token.
     - The low byte of an instrument token names its exchange segment (738561 is NSE RELIANCE), and prices are divided by 100, or by 10,000,000 for NSE currency and 10,000 for BSE currency.
-    - The quote script subscribes to the whole instrument master over 24 sockets by default, more than Kite documents.
+    - The quote script subscribes to the members of `zerodha:quotes:subscriptions`, which the allocation fills, and falls back to the whole instrument master only when that set is empty. Without `--sockets` it opens as many sockets as its per-socket size from `zerodha:quotes:per_socket` needs; the allocation gives it 24 sockets of 4,000, more than Kite documents.
     - Zerodha is the only verified broker in the unified quote combiner, so it owns every instrument it streams, and its index history back to 2005 is the primary source for index prices.
 
-    **Files.** `stock_brokers/api/zerodha.py`, `stock_brokers/websockets/zerodha.py`, `stock_brokers/instruments/zerodha.py`, `stock_brokers/instruments/mapping/zerodha.py` with `rules/zerodha.yaml`, `stock_brokers/instruments/historical/zerodha.py`, `stock_brokers/instruments/ticks/zerodha.py`, `unified_broker_interface/utilities/broker_quotes/zerodha.py`, `unified_broker_interface/utilities/broker_orders/zerodha.py`, `bin/zerodha/`, `services/zerodha/`.
+    **Files.** `stock_brokers/api/zerodha.py`, `stock_brokers/websockets/zerodha.py`, `stock_brokers/instruments/zerodha.py`, `stock_brokers/instruments/mapping/zerodha.py` with `rules/zerodha.yaml`, `stock_brokers/instruments/historical/zerodha.py`, `stock_brokers/instruments/ticks/zerodha.py`, `unified_broker_interface/utilities/broker_quotes/zerodha.py`, `unified_broker_interface/utilities/broker_orders/zerodha.py`, `unified_broker_interface/utilities/margin_calculators/zerodha.py`, `unified_broker_interface/utilities/quote_subscriptions/zerodha.py`, `bin/zerodha/`, `services/zerodha/`.
 
 !!! danger "The broker scripts log in to live accounts"
     Everything under `bin/<broker>/` reaches a real trading account, and several brokers log in by driving a headless Chrome and consuming a TOTP. Running a script repeatedly means authenticating for real each time.
