@@ -127,6 +127,8 @@ bin/zerodha/instruments/price_history --status      # how far the queue has got
 bin/zerodha/instruments/price_history --seed-only   # register new series after a new master, then exit
 ```
 
+Every candle request times out after `BrokerCandles.REQUEST_TIMEOUT_SECONDS` (30), and a timeout counts as an ordinary failed window. Before 2026-10-27 no request passed a timeout, and the Fyers, Shoonya and Wisdom Capital downloads each sat for days on one open HTTPS connection that never answered.
+
 Most downloaders log in through the shared cross-process lock `ensure_session` in `stock_brokers/api/utilities/session.py`. Zerodha's script is the exception: it logs in straight through `ZerodhaAPI`, which tries the newest stored token first, because every Kite login invalidates the token before it.
 
 ## Part 2: unified price history

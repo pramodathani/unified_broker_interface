@@ -88,14 +88,14 @@ The same facts are listed in the table below, with the file each one comes from.
 | 06:00 | The REST API and the order engine reload the broker cost table `unified.broker_order_costs` that the lowest-cost selector, the rate budget and the daily order count read | Every day | `BrokerCostTable` in `unified_broker_interface/utilities/broker_selection/utilities/broker_cost_table.py`, which uses the same `RESET_HOUR` |
 | 07:00 | The REST API stops reusing yesterday's access token; the next `connect` issues a new one | Every day | `DAILY_RENEWAL_TIME = time(7, 0)` in `unified_broker_interface/utilities/tokens.py` |
 | 07:00 to 07:18 | Each of the ten `<broker>-login.timer` units fires once, two minutes apart in alphabetical order: Dhan at 07:00, Flattrade 07:02, Fyers 07:04, Groww 07:06, INDmoney 07:08, Kotak 07:10, Shoonya 07:12, Stoxkart 07:14, Wisdom Capital 07:16 and Zerodha 07:18 | Every day, weekends included | `OnCalendar=*-*-* 07:00 Asia/Kolkata` to `OnCalendar=*-*-* 07:18 Asia/Kolkata` |
-| 07:45 | `unified-mapping.service` downloads ten instrument masters, then maps them | Every day, weekends included | `OnCalendar=*-*-* 07:45 Asia/Kolkata`, `Persistent=true` |
+| 07:45 | `unified-mapping.service` downloads ten instrument masters, maps them, then divides the day's instruments between the brokers' quote websockets and restarts the feeds whose share changed | Every day, weekends included | `OnCalendar=*-*-* 07:45 Asia/Kolkata`, `Persistent=true` |
 | 09:00 to 09:15 | NSE and BSE equity pre-open | Trading days | `EQUITY_SESSION` in `stock_brokers/instruments/ticks/utilities/sessions.py` |
 | 09:30 | `unified-margin-calibration.service` asks every broker's margin calculator about the reference orders and writes each broker's margin surcharge to `unified.broker_order_costs` | Monday to Friday | `OnCalendar=Mon..Fri 09:30 Asia/Kolkata`, `Persistent=true` |
 | 09:15 to 15:30 | NSE and BSE cash, index and equity derivatives trade | Trading days | `EQUITY_SESSION` |
 | 09:00 to 17:00 | Currency derivatives trade | Trading days | `CURRENCY_SESSION` |
 | 09:00 to 17:00, 17:00 to 23:30 | Commodity derivatives on MCX (and the NSE and BSE commodity segments) trade a morning and an evening session; the evening runs to 23:55 while the United States is on standard time | Trading days | `COMMODITY_SESSION` |
 | 10:00 to 17:00, 17:00 to 21:00 | NCDEX morning and evening sessions | Trading days | `NCDEX_SESSION` |
-| 23:50 | `unified-execution-costs.service` works out what every filled order leg of today and yesterday cost beyond brokerage and writes `unified.order_execution_costs`, then writes each broker's latency figures to `unified.broker_order_costs` | Monday to Friday | `OnCalendar=Mon..Fri 23:50 Asia/Kolkata`, `Persistent=true` |
+| 23:50 | `unified-execution-costs.service` works out what every filled order leg of today and yesterday cost beyond brokerage and writes `unified.order_execution_costs`, then writes each broker's latency figures to `unified.broker_order_costs`, saves the day's orders to `unified.daily_orders` before Redis drops them, and measures how far protective stops filled beyond their trigger into `unified.stop_slippage` | Monday to Friday | `OnCalendar=Mon..Fri 23:50 Asia/Kolkata`, `Persistent=true` |
 | Every minute | `databases.service` starts any stopped database container | Always | `databases.timer`, `OnUnitInactiveSec=1min` |
 
 Two of these times deserve a closer look. The timers name `Asia/Kolkata` explicitly, so they keep IST even if the machine's time zone changes. The token renewal time is compared with `datetime.now()`, which is the machine's local clock, so it matches IST only when the machine runs on India time.
@@ -111,16 +111,16 @@ sequenceDiagram
     participant B as Broker login services
     participant M as unified-mapping
     participant F as Live feeds
-    T->>B: 07:00 + up to 30 min, one per broker
+    T->>B: 07:00 to 07:18, one broker every two minutes
     B-->>B: write the new token to MongoDB, then Redis
     T->>M: 07:45
-    M->>M: ten daily_feed downloads, then map
+    M->>M: ten daily_feed downloads, map, then allocate_subscriptions
     F->>F: 09:00 pre-open, and the tick windows open
 ```
 
 The reasons come from the comments in the unit files:
 
-1. The logins happen at 07:00, which is before the 07:45 instrument download and the 09:00 pre-open, and well clear of MCX's 23:30 close. The half hour of random delay keeps the ten logins apart, several of which drive a headless Chrome or wait on a TOTP, and still lands every one before 07:45.
+1. The logins happen between 07:00 and 07:18, which is before the 07:45 instrument download and the 09:00 pre-open, even after two retries, and well clear of MCX's 23:30 close. The fixed two-minute slots keep the ten logins apart, several of which drive a headless Chrome or wait on a TOTP, and put each broker's login at the same time every morning.
 2. The login timers set `Persistent=false`. A machine that was off at 07:00 does not catch up, because the first script to find its token refused logs in by itself.
 3. The mapping timer sets `Persistent=true`. The brokers publish only today's instrument file, so a missed snapshot can never be fetched later, and a machine that was off at 07:45 runs the job as soon as it starts.
 4. The unified price history is checked at 00:00 and rebuilt at 02:00, not in the morning. Until 2026-10-28 the job ran at 08:30 from Monday to Saturday with the checks as its last step, and because it takes three hours or more it ran into market hours. On 2026-10-28 the checks' comparison of whole tables, with ten parallel workers and temporary files, made the database disk queue about 400 writes and each commit wait 1 to 2.6 seconds, so the Zerodha and Kotak tick writers fell behind and lost ticks. At night every market is closed. The job says `After=unified-prices-verify.service`, so it waits for a check that runs long, because two price history runs at once deadlock. Both timers set `Persistent=false`, so a missed night is skipped rather than run at boot, which could be during market hours.

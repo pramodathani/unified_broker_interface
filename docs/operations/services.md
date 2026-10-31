@@ -29,6 +29,10 @@ services/
 │   ├── unified-prices.timer            02:00 IST every day
 │   ├── unified-prices-verify.service   nightly check of the unified price history
 │   ├── unified-prices-verify.timer     00:00 IST every day
+│   ├── unified-margin-calibration.service  morning broker margin surcharge measurement
+│   ├── unified-margin-calibration.timer    09:30 IST, Monday to Friday
+│   ├── unified-execution-costs.service     nightly execution cost, latency, order snapshot and stop slippage jobs
+│   ├── unified-execution-costs.timer       23:50 IST, Monday to Friday
 │   └── unified-rest-api.service        bin/rest-api (gunicorn)
 ├── zerodha/                            one folder per broker
 │   ├── zerodha.target
@@ -75,7 +79,7 @@ Not every script in a folder is meant to run through its template. `daily_feed` 
 
 ## Targets
 
-A **target** is a unit that does nothing by itself and exists to group other units. Each folder has one: `zerodha.target`, `unified.target`, `databases.target` and so on. Every service and timer in the folder says `PartOf=<folder>.target`, so stopping the target stops all of them. Every long-running service also says `WantedBy=<folder>.target`, so enabling it ties it to the target, and every timer says `WantedBy=timers.target`. The jobs a timer starts (`<broker>-login.service`, `unified-mapping.service`, `unified-prices.service`, `unified-prices-verify.service` and `databases.service`) have no `[Install]` section, because they are started by their timer rather than enabled. Each target itself says `WantedBy=default.target`, which is the target the user manager starts at boot. The user manager has no `multi-user.target`, so that name is never used.
+A **target** is a unit that does nothing by itself and exists to group other units. Each folder has one: `zerodha.target`, `unified.target`, `databases.target` and so on. Every service and timer in the folder says `PartOf=<folder>.target`, so stopping the target stops all of them. Every long-running service also says `WantedBy=<folder>.target`, so enabling it ties it to the target, and every timer says `WantedBy=timers.target`. The jobs a timer starts (`<broker>-login.service`, `unified-mapping.service`, `unified-prices.service`, `unified-prices-verify.service`, `unified-margin-calibration.service`, `unified-execution-costs.service` and `databases.service`) have no `[Install]` section, because they are started by their timer rather than enabled. Each target itself says `WantedBy=default.target`, which is the target the user manager starts at boot. The user manager has no `multi-user.target`, so that name is never used.
 
 The flowchart below shows how the targets relate to the services they start. It shows Zerodha as the example broker.
 
@@ -87,15 +91,19 @@ flowchart TB
     D --> U["unified.target"]
     D -.-> O["… 9 more broker targets"]
     TM["timers.target"] --> DBT["databases.timer<br/>every minute"]
-    TM --> ZLT["zerodha-login.timer<br/>07:00"]
+    TM --> ZLT["zerodha-login.timer<br/>07:18"]
     TM --> UMT["unified-mapping.timer<br/>07:45"]
     TM --> UPT["unified-prices.timer<br/>02:00 daily"]
     TM --> UVT["unified-prices-verify.timer<br/>00:00 daily"]
+    TM --> UMCT["unified-margin-calibration.timer<br/>09:30 weekdays"]
+    TM --> UECT["unified-execution-costs.timer<br/>23:50 weekdays"]
     DBT --> DBS["databases.service"]
     ZLT --> ZL["zerodha-login.service"]
     UMT --> UM["unified-mapping.service"]
     UPT --> UP["unified-prices.service"]
     UVT --> UV["unified-prices-verify.service"]
+    UMCT --> UMC["unified-margin-calibration.service"]
+    UECT --> UEC["unified-execution-costs.service"]
     Z --> ZI["zerodha-instruments@<br/>websocket_quotes, store_quotes_to_db"]
     Z --> ZO["zerodha-orders@<br/>api_order_details, api_trade_details,<br/>websocket_order_details, store_orders_to_db"]
     Z --> ZP["zerodha-portfolio@<br/>positions, holdings, funds"]
@@ -123,6 +131,8 @@ The long-running services and the daily jobs follow different restart rules, bec
 | `unified-mapping.service` | none | | `Type=oneshot`, `TimeoutStartSec=3h`, low priority |
 | `unified-prices.service` | none | | `Type=oneshot`, `TimeoutStartSec=6h`, low priority, `After=unified-mapping.service unified-prices-verify.service` |
 | `unified-prices-verify.service` | none | | `Type=oneshot`, `TimeoutStartSec=4h`, low priority |
+| `unified-margin-calibration.service` | none | | `Type=oneshot`, `TimeoutStartSec=10min`, `Nice=10`, `After=network-online.target unified-mapping.service` |
+| `unified-execution-costs.service` | none | | `Type=oneshot`, `TimeoutStartSec=10min`, `Nice=10` |
 | `databases.service` | none | | `Type=oneshot`, `TimeoutStartSec=180`, runs again from its timer |
 
 `StartLimitIntervalSec=0` on the long-running units means systemd never gives up restarting them. The unit comment gives the reason: a broker outage can outlast any start limit, and each script paces its own logins. Every one of these units except `databases.service`, which runs no Python, also sets `Environment=PYTHONUNBUFFERED=1`, because Python holds back its output when it is not writing to a terminal, and without this setting the journal would stay empty.
@@ -229,7 +239,7 @@ The unified group comes last, because it reads what the broker scripts write.
 ```bash
 systemctl --user link ~/Projects/unified_broker_interface/services/unified/*
 systemctl --user daemon-reload
-systemctl --user enable --now unified.target unified-mapping.timer unified-prices.timer unified-prices-verify.timer \
+systemctl --user enable --now unified.target unified-mapping.timer unified-prices.timer unified-prices-verify.timer unified-margin-calibration.timer unified-execution-costs.timer \
     unified-instruments@websocket_quotes.service unified-instruments@store_quotes_to_db.service \
     unified-orders@api_order_details.service unified-orders@api_trade_details.service unified-orders@websocket_order_details.service unified-orders@store_orders_to_db.service \
     unified-portfolio@positions.service unified-portfolio@holdings.service unified-portfolio@funds.service unified-portfolio@store_positions_to_db.service \
@@ -317,11 +327,11 @@ The matrix below lists every unit a broker target enables, taken from each targe
 | Unit | Dhan | Flattrade | Fyers | Groww | INDmoney | Kotak | Shoonya | Stoxkart | Wisdom Capital | Zerodha |
 |---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
 | `-login.timer` + `-login.service` | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: |
-| `-instruments@websocket_quotes` | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: |
-| `-instruments@store_quotes_to_db` | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: |
+| `-instruments@websocket_quotes` | :material-check: | :material-close: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: |
+| `-instruments@store_quotes_to_db` | :material-check: | :material-close: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: |
 | `-orders@api_order_details` | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: |
 | `-orders@api_trade_details` | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: |
-| `-orders@websocket_order_details` | :material-check: | :material-close: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: |
+| `-orders@websocket_order_details` | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: |
 | `-orders@store_orders_to_db` | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: |
 | `-portfolio@positions` | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: |
 | `-portfolio@holdings` | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: | :material-check: |
@@ -335,7 +345,9 @@ The unified and database groups have their own units, listed in the table below.
 | Unit | Kind | Runs | When |
 |---|---|---|---|
 | `databases.timer` → `databases.service` | timer + job | `docker compose up -d --wait --wait-timeout 120` | every minute |
-| `unified-mapping.timer` → `unified-mapping.service` | timer + job | ten `bin/<broker>/instruments/daily_feed`, then `bin/unified/instruments/map` | 07:45 IST daily |
+| `unified-mapping.timer` → `unified-mapping.service` | timer + job | ten `bin/<broker>/instruments/daily_feed`, then `bin/unified/instruments/map`, then `bin/unified/instruments/allocate_subscriptions --restart-feeds` | 07:45 IST daily |
+| `unified-margin-calibration.timer` → `unified-margin-calibration.service` | timer + job | `bin/unified/orders/margin_calibration` | 09:30 IST, Monday to Friday |
+| `unified-execution-costs.timer` → `unified-execution-costs.service` | timer + job | `bin/unified/orders/execution_costs`, then `latency_calibration`, `store_daily_orders` and `stop_slippage` | 23:50 IST, Monday to Friday |
 | `unified-prices.timer` → `unified-prices.service` | timer + job | `bin/unified/instruments/price_history daily` | 02:00 IST every day |
 | `unified-prices-verify.timer` → `unified-prices-verify.service` | timer + job | `bin/unified/instruments/price_history verify` | 00:00 IST every day |
 | `unified-instruments@websocket_quotes` | service | combines every broker's ticks into `unified:quotes:live` | always |
@@ -356,7 +368,7 @@ The unified and database groups have their own units, listed in the table below.
 | `unified-exchanges@unified_details` | service | caches MongoDB `exchange_details` in `unified:details:exchanges` | always |
 | `unified-rest-api` | service | `bin/rest-api` (gunicorn) | always |
 
-In `unified-mapping.service`, every `daily_feed` line starts with `-`, which tells systemd to ignore that command's failure. One broker's file not arriving therefore does not cost the other nine their mapping. The mapping step has no `-`, so its exit status is the unit's.
+In `unified-mapping.service`, every `daily_feed` line starts with `-`, which tells systemd to ignore that command's failure. One broker's file not arriving therefore does not cost the other nine their mapping. The mapping and allocation steps have no `-`, so the unit fails when either of them fails. Both new weekday timers set `Persistent=true`, so a machine that was off at 09:30 or 23:50 runs the missed job when it starts.
 
 ## Reading the logs
 

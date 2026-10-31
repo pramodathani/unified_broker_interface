@@ -2,7 +2,7 @@
 
 Every program you run in UBI is an executable file in `bin/`, written in Python and saved without a `.py` extension. There are three groups of them. The tools at the top of `bin/` are typed by hand. The scripts under `bin/<broker>/` are the only code that talks to a broker. The scripts under `bin/unified/` combine what the broker scripts write, and never talk to a broker themselves.
 
-The tree below shows how the scripts are laid out. Every broker folder has the same five subfolders, and `bin/unified/` adds two of its own.
+The tree below shows how the scripts are laid out. Every broker folder has the same five subfolders, except Kotak's, which has no `user/`, and `bin/unified/` adds two of its own.
 
 ```text
 bin/
@@ -21,7 +21,7 @@ bin/
     ├── exchanges/             unified_details
     ├── orders/                api_order_details  api_trade_details  websocket_order_details  store_orders_to_db  order_engine  virtual_book  margin_calibration  execution_costs  latency_calibration  store_daily_orders  stop_slippage  estimate_check
     ├── portfolio/             positions  holdings  funds  store_positions_to_db
-    └── instruments/           map  price_history  websocket_quotes  store_quotes_to_db
+    └── instruments/           map  allocate_subscriptions  price_history  websocket_quotes  store_quotes_to_db
 ```
 
 No script name repeats inside one broker's folder, so a script can be named without its folder. The one name that repeats inside `bin/unified/` is `unified_details`, which caches a different MongoDB collection in each of three folders.
@@ -183,7 +183,7 @@ flowchart LR
 
 ## Unified scripts
 
-The scripts under `bin/unified/` read only Redis, MongoDB and the database, and never call a broker, with one exception: the order engine places orders. The tables below list them folder by folder.
+The scripts under `bin/unified/` read only Redis, MongoDB and the database, and never call a broker, with two exceptions: the order engine places orders, and `margin_calibration` asks the brokers' read-only margin calculators. The tables below list them folder by folder.
 
 ### session
 
@@ -311,7 +311,7 @@ bin/unified/instruments/map dhan kotak                     # only these
 bin/unified/instruments/map --cache-only --date 2026-09-13 # only rewrite the Redis cache
 bin/unified/instruments/allocate_subscriptions --dry-run          # print the decision, write nothing
 bin/unified/instruments/allocate_subscriptions --restart-feeds    # write, then restart the quote feeds that changed
-bin/unified/instruments/price_history daily                # load, corrections, load, factors
+bin/unified/instruments/price_history daily                # load, corrections, load, factors, then each intraday interval
 bin/unified/instruments/price_history verify               # the checks; unified-prices-verify.service runs them at midnight
 bin/unified/instruments/price_history status               # what the last run did
 ```

@@ -58,7 +58,7 @@ The table below shows the capacities measured against the live brokers on 2026-1
 | Wisdom Capital | `1:2885` (XTS segment number, then instrument id) | 1 × 50 | 4 | 50 instruments for the whole app key |
 | Stoxkart | `NSE:760946` | 4 × 50,000 | 5 | never refuses; resets connections past about four; only NSE, NFO, BSE and MCX |
 | INDmoney | `NSE:2885` | 1 × 3,000 | 6 | only one socket of several streams reliably |
-| Groww | `NSE\|CASH\|2885` | 0 | — | left out while its login fails |
+| Groww | `NSE\|CASH\|2885` | 0 | — | left out while its login fails; there is also no Groww subscription class yet, so the allocator could not spell its members |
 
 On 2026-10-27 this covered 231,004 of the 262,671 live instruments. Of the rest, 22,976 had no broker whose feed can stream them, 2,286 had a single broker that was full, and 6,405 had only full brokers. With Kotak at 45 × 3,000, the allocation of 2026-10-28 covered 228,165 of the 254,025 live instruments, against 204,894 with Kotak at 1 × 100. Of the rest, 23,069 had no broker whose feed can stream them, 2,324 had a single small broker that was full and 467 had only full brokers, so every instrument some broker with room can stream was covered; Kotak took 109,608 on 37 sockets. Its quotes reached the unified store with a median of 0.63 seconds and a p99 of 1.10 seconds after the exchange's timestamp, against Zerodha's 0.90 and 2.12 seconds over the same minute, which is why Kotak comes straight after Zerodha. To add an instrument by hand, add a member to its broker's set and restart the script, as the Flattrade script's docstring shows; the next allocation replaces the set again.
 
