@@ -72,6 +72,7 @@ The table below lists every table in the database. "Chunk" is the size of each T
 | `unified` | `underlyings` | 1 month, by `mapping_date` | not compressed | `bin/unified/instruments/map` | `…/mapping/utilities/sql/ddl/140_unified_underlyings.sql` |
 | `unified` | `broker_order_costs` | ordinary table | | by hand, its margin columns by `bin/unified/orders/margin_calibration` and its latency columns by `bin/unified/orders/latency_calibration`; seeded by its DDL file, and read by the REST API and the order engine at start-up and at 06:00 IST (see [Choosing a broker by cost](broker-selection.md)) | `…/mapping/utilities/sql/ddl/150_unified_broker_order_costs.sql` |
 | `unified` | `broker_quote_capacities` | ordinary table | | by hand; seeded by its DDL file with the limits measured on 2026-10-27, and read by `bin/unified/instruments/allocate_subscriptions` to divide the day's instruments between the brokers' quote websockets (see [Which instruments are subscribed](../pipelines/market-data.md#which-instruments-are-subscribed)) | `…/mapping/utilities/sql/ddl/190_unified_broker_quote_capacities.sql` |
+| `unified` | `charge_rates` | ordinary table | | by hand; seeded by its DDL file, and read by the breakeven levels service on the first request of each day (see [Trade charges and the real breakeven](trade-charges.md)) | `…/mapping/utilities/sql/ddl/180_unified_charge_rates.sql` |
 | `unified` | `impact_coefficients` | ordinary table | | by hand; seeded by its DDL file with the textbook coefficient 1.0 for each asset class, and read by `bin/unified/orders/estimate_check` (see [Measuring execution costs](execution-costs.md#the-pre-trade-estimate)) | `…/mapping/utilities/sql/ddl/170_unified_impact_coefficients.sql` |
 | `unified` | `margin_rates` | ordinary table | | by hand; seeded by its DDL file with cautious rates, and read with `broker_order_costs` to estimate the margin an order needs (see [Choosing a broker by cost](broker-selection.md)) | `…/mapping/utilities/sql/ddl/160_unified_margin_rates.sql` |
 | `unified` | `price_history` | 1 month | 30 days | `bin/unified/instruments/price_history` | `…/historical/utilities/sql/ddl/200_unified_price_history.sql` |
@@ -290,12 +291,13 @@ On an empty database the directories must be applied in the order below, because
 
 ```mermaid
 flowchart TD
-    A["stock_brokers/instruments/sql/ddl<br/>000 broker schemas, 010–100 instruments"] --> B["mapping/utilities/sql/ddl<br/>100 unified schema, 110 instruments,<br/>120 broker_mappings, 130 contract_sizes,<br/>140 underlyings, 150 broker_order_costs,<br/>160 margin_rates, 170 impact_coefficients,<br/>180 charge_rates"]
+    A["stock_brokers/instruments/sql/ddl<br/>000 broker schemas, 010–100 instruments"] --> B["mapping/utilities/sql/ddl<br/>100 unified schema, 110 instruments,<br/>120 broker_mappings, 130 contract_sizes,<br/>140 underlyings, 150 broker_order_costs,<br/>160 margin_rates, 170 impact_coefficients,<br/>180 charge_rates, 190 broker_quote_capacities"]
     B --> C["historical/utilities/sql/ddl<br/>000–060 broker price history,<br/>200–250 unified price history"]
     A --> D["ticks/utilities/sql/ddl 010–100<br/>applied by each broker's persisters"]
     B --> E["ticks/utilities/sql/ddl 300, 310, 320<br/>applied by the unified persisters"]
     C --> F["ticks/utilities/sql/ddl 330<br/>applied by bin/unified/instruments/price_history"]
     B --> G["ticks/utilities/sql/ddl 340<br/>applied by the order engine"]
+    B --> H["ticks/utilities/sql/ddl 350, 360, 370<br/>applied by execution_costs, stop_slippage<br/>and store_daily_orders"]
 ```
 
 The reasons for each arrow are in the files themselves:

@@ -80,7 +80,7 @@ Each broker's scripts write the keys below, with the broker's name in place of `
 | `<broker>:quotes:instruments` | hash | `bin/<broker>/instruments/websocket_quotes` | People | Every subscribed token and its name; replaced whole at start |
 | `<broker>:quotes:subscriptions` | set | `bin/unified/instruments/allocate_subscriptions`, or you with `redis-cli SADD` | `bin/<broker>/instruments/websocket_quotes` | The instruments to subscribe to, in the broker's own spelling; replaced whole by each allocation. Zerodha's feed subscribes to its whole instrument master only when this set is empty |
 | `<broker>:quotes:per_socket` | string | `bin/unified/instruments/allocate_subscriptions` | `bin/<broker>/instruments/websocket_quotes` | How many instruments one socket carries, from `unified.broker_quote_capacities`; used when the script is given no `--per-socket` (Zerodha: no `--sockets`) |
-| `<broker>:instruments:master` | hash | `bin/<broker>/instruments/daily_feed` | Zerodha's, INDmoney's and Stoxkart's `websocket_quotes`; `bin/stoxkart/portfolio/positions` | The day's instrument master, one row per instrument as a JSON array |
+| `<broker>:instruments:master` | hash | `bin/<broker>/instruments/daily_feed` | Zerodha's, INDmoney's and Stoxkart's `websocket_quotes`; `bin/stoxkart/portfolio/positions`; `bin/unified/instruments/allocate_subscriptions`, for Stoxkart's spelling | The day's instrument master, one row per instrument as a JSON array |
 | `<broker>:instruments:master:staging` | hash | `bin/<broker>/instruments/daily_feed` | Nothing | Built first, then renamed over the master, so a reader never sees half a file |
 | `<broker>:instruments:master:previous` | hash | `bin/<broker>/instruments/daily_feed` | Nothing | The previous master, unlinked once the swap is done |
 | `<broker>:instruments:meta` | string | `bin/<broker>/instruments/daily_feed` | The same readers as the master | `download_date`, `rows`, `columns` (the order the arrays follow) and `written_at` |
@@ -154,7 +154,7 @@ The unified quote combiner, the REST API and the price history job write these k
 | Key | Type | Written by | Read by | Notes |
 |---|---|---|---|---|
 | `unified:quotes:allocation` | string | `bin/unified/instruments/allocate_subscriptions` | People | The last allocation as JSON: the mapping date, the live and expired instrument counts, how many were covered and why the rest were not, and each broker's preference, sockets, capacity and share |
-| `unified:quotes:live` | hash | `bin/unified/instruments/websocket_quotes` | The REST API's `ltp`, `ohlc` and `quote`; `bin/unified/portfolio/holdings` and `positions`; the order engine | One [unified quote](contracts.md#the-unified-quote) per `instrument_id`; quotes stale for a week are removed |
+| `unified:quotes:live` | hash | `bin/unified/instruments/websocket_quotes` | The REST API's `ltp`, `ohlc` and `quote`; `bin/unified/portfolio/holdings` and `positions`; the order engine, including the lowest-cost selector's funds check; `bin/unified/orders/margin_calibration` | One [unified quote](contracts.md#the-unified-quote) per `instrument_id`; quotes stale for a week are removed |
 | `unified:quotes:fetched` | hash | The REST API | The REST API | Quotes fetched from a broker when no fresh one was cached; each field expires after two days |
 | `unified:quotes:stats` | string | `bin/unified/instruments/websocket_quotes` | People | Counts: received, unresolved, out_of_session, not_owner, no_price, duplicate, written |
 | `unified:quotes:unresolved` | hash | `bin/unified/instruments/websocket_quotes` | People | A count per `broker:token:reason` that did not resolve |
@@ -172,7 +172,7 @@ The combiners rewrite each document every half second, except where noted.
 | `unified:orders:trades` | string | `bin/unified/orders/api_trade_details` | `GET /api/orders/trades` | Every broker's trades |
 | `unified:order-updates` | hash | `bin/unified/orders/websocket_order_details` | The order engine's square-off | Latest update per order, keyed `broker:order_id`; expires at the next 06:00 IST |
 | `unified:positions_updates` | hash | `bin/unified/orders/websocket_order_details` | People | Latest streamed position, keyed `broker:position_key`; expires at the next 06:00 IST |
-| `unified:portfolio:positions` | string | `bin/unified/portfolio/positions` | `GET /api/portfolio/positions`; the order engine | Every broker's positions |
+| `unified:portfolio:positions` | string | `bin/unified/portfolio/positions` | `GET /api/portfolio/positions`; the order engine, including the funds check, to tell exits apart | Every broker's positions |
 | `unified:portfolio:holdings` | string | `bin/unified/portfolio/holdings` | `GET /api/portfolio/holdings` | Holdings, combined and priced; rewritten every minute |
 | `unified:portfolio:funds` | string | `bin/unified/portfolio/funds` | `GET /api/portfolio/funds`; the engine's daily loss check and its `account_conditional` orders; the lowest-cost selector's funds check, on every placement | Every figure summed across brokers, plus each broker's own `available_balance` and `pools` |
 
@@ -208,7 +208,7 @@ The order engine and the REST API's order routes share the keys below. The engin
 | `unified:orders:parents:open` | set | The order engine | The engine, `virtual_book` and `GET /api/orders/parents` | The ids of parents not yet finished; expires at the next 06:00 IST |
 | `unified:orders:children` | hash | The order engine | The engine; the REST API's modify and cancel routes; `bin/unified/orders/api_order_details` and `api_trade_details` | `broker:broker_order_id` to its parent; expires at the next 06:00 IST |
 | `unified:orders:parents:intents` | hash | The order engine | The engine, before placing an intent | Intent id to the parent it started; expires at the next 06:00 IST |
-| `unified:orders:virtual_queue` | hash | `bin/unified/orders/virtual_book` | The engine's `virtual_limit` orders and plan orders on a `limit_marketable` trigger | One queue estimate per held order, by parent id, or `<parent id>/<path>` for a plan's order; removed when the parent is no longer open |
+| `unified:orders:virtual_queue` | hash | `bin/unified/orders/virtual_book` | Plan orders waiting on a `limit_marketable` trigger, which every held limit and every `virtual_limit` becomes | One queue estimate per held order, by parent id, or `<parent id>/<path>` for a plan's order; removed when the parent is no longer open |
 
 !!! danger "Do not delete the engine lock by hand while an engine runs"
     `unified:orders:engine:lock` is what stops two engines reading the same intents. Two engines would each hold pending intents and could place the same order twice, with real money behind both.

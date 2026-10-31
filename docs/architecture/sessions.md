@@ -118,7 +118,7 @@ A login therefore always writes MongoDB first and Redis second. MongoDB is the r
 
 Two problems remain when several processes might log in on their own. At Zerodha, a second login invalidates the first token, so two processes logging in together leave one of them holding a token that is already dead. And several brokers log in through a headless Chrome and a TOTP; under `Restart=always`, a broker outage could mean a full login every time a service restarts, which is how an account gets locked.
 
-[`ensure_session`][stock_brokers.api.utilities.session.ensure_session] in `stock_brokers/api/utilities/session.py` solves both. It is used by the candle downloaders through `BrokerCandles` in `stock_brokers/instruments/historical/`, and by INDmoney's instrument ingester when no usable token is stored. It keeps three Redis keys per broker.
+[`ensure_session`][stock_brokers.api.utilities.session.ensure_session] in `stock_brokers/api/utilities/session.py` solves both. It is used by every long-running script under `bin/<broker>/`, which calls it before building its broker class or socket session, by the candle downloaders through `BrokerCandles` in `stock_brokers/instruments/historical/`, and by INDmoney's instrument ingester when no usable token is stored. The long-running scripts were added on 2026-10-27: until then each one logged in on its own when the token was dead, failed, exited and was restarted by `Restart=always` 15 seconds later, which that day meant about 14,000 Flattrade logins and used up Groww's token limit for the day. It keeps three Redis keys per broker.
 
 | Key | Holds | Purpose |
 |---|---|---|
@@ -190,7 +190,7 @@ systemd runs one instance of a unit at a time, so any number of refusals in any 
 
 ## The daily login
 
-Each broker has a `<broker>-login.timer` that runs `bin/<broker>/session/connect` at 07:00 IST every day, weekends included. That is before the 07:45 instrument download and the 09:00 pre-open. The timeline below shows the morning.
+Each broker has a `<broker>-login.timer` that runs `bin/<broker>/session/connect` at its own fixed time every day, weekends included, from Dhan at 07:00 IST to Zerodha at 07:18. That is before the 07:45 instrument download and the 09:00 pre-open. The timeline below shows the morning.
 
 ```mermaid
 gantt
