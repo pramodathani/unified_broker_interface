@@ -61,7 +61,7 @@ The API registers no error handlers of its own. A path that matches no route the
 
 ## Which route returns which status
 
-The matrix below has one row for each of the 29 routes, plus a `POST` row for each of the seven instrument routes that also take a list, and one column for each status code the API returns. A :material-check: means the route can return that status.
+The matrix below has one row for each of the 30 routes, plus a `POST` row for each of the seven instrument routes that also take a list, and one column for each status code the API returns. A :material-check: means the route can return that status.
 
 | Route | 200 | 202 | 207 | 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500 | 501 | 502 | 503 | 504 |
 |---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
@@ -89,6 +89,7 @@ The matrix below has one row for each of the 29 routes, plus a `POST` row for ea
 | `POST /api/instruments/prices` | :material-check: | | | :material-check: | :material-check: | | :material-check: | | | | | | | :material-check: | |
 | `GET /api/instruments/ticks` | :material-check: | | | :material-check: | :material-check: | | :material-check: | | | | | | | :material-check: | |
 | `POST /api/instruments/ticks` | :material-check: | | | :material-check: | :material-check: | | :material-check: | | | | | | | :material-check: | |
+| `GET /api/instruments/breakeven` | :material-check: | | | :material-check: | :material-check: | | :material-check: | :material-check: | | | | | | :material-check: | |
 | `GET /api/portfolio/funds` | :material-check: | | | | :material-check: | | | | | | | | :material-check: | :material-check: | |
 | `GET /api/portfolio/holdings` | :material-check: | | | | :material-check: | | | | | | | | :material-check: | :material-check: | |
 | `GET /api/portfolio/positions` | :material-check: | | | | :material-check: | | | | | | | | :material-check: | :material-check: | |
@@ -319,6 +320,10 @@ A `409` means the request made sense when it was written but no longer matches t
 | `the order has {field} {value}, which the modify route does not handle` | `modify` | The stored order has a product or validity outside the route's words, for example `the order has product BO, which the modify route does not handle` |
 | `the order engine read this order after the caller had stopped waiting for it, so it was not placed` | `place` | The engine was behind and the intent passed its deadline; nothing was sent |
 | `a {kind} quantity_reference found no open position in this instrument, so there is nothing to close` | `place` | A `reduce_position` or `liquidate_position` reference found nothing to close |
+| `nobody is offering this instrument, so the BUY could not be priced and nothing was sent`, or the same for a SELL with nobody bidding | `place` | A market order, sent as a marketable limit by default, found the other side of the book empty |
+| `no live quote has arrived for this instrument, so the {side} could not be priced and nothing was sent`, or `the live quote for this instrument is marked stale, so ...` | `place` | A marketable limit had no fresh quote to price from |
+| `crossing the spread now would cost an estimated {cost} basis points, more than the maximum of {maximum}, so nothing was sent`, or `the visible book holds only {visible} of the {quantity} units this {side} needs, ...` | `place` | A marketable limit with `maximum_cost_bps` was estimated to cost too much, or the visible book could not hold it; see [market orders](orders.md#a-limit-on-what-crossing-the-spread-may-cost) |
+| `The taxes and fees of {segment} {category} trades are not known; add a row to unified.charge_rates.`, or `The brokerage of {broker} is not known; add a row to unified.broker_order_costs.` | `breakeven` | A table the breakeven levels need has no row for this order |
 
 Some synthetic order types also answer `409` for a state they refuse to act on. For example, a post-only order whose price would cross the book answers `a post-only {side} at {price} would take liquidity against a book of {bid} bid and {offer} offered, so nothing was sent`.
 

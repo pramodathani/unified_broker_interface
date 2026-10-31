@@ -26,7 +26,7 @@ The table below lists the enumerated values these routes take and return.
 | `source` | `cache`, `database` | Whether the candles were sliced from the Redis copy or read from TimescaleDB |
 
 !!! note "Which intervals hold data"
-    The daily timer loads only `day` candles. Intraday intervals are loaded by hand with `bin/unified/instruments/price_history`, so an intraday request can return an empty `candles` array for an instrument nobody has loaded. See [Price history](../pipelines/price-history.md).
+    The nightly job at 02:00 IST (`price_history daily`) loads `day` candles and then every intraday interval from `1minute` to `240minute`. A series no broker has downloaded yet can still return an empty `candles` array. See [Price history](../pipelines/price-history.md).
 
 ## Adjusted, unadjusted and as served
 

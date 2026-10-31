@@ -133,5 +133,6 @@ Every price is text, so that no digit is lost to floating point.
 | <span class="status s4">401</span> | `Access token is required`, `Invalid access token` or `Access token has expired`. |
 | <span class="status s4">404</span> | The instrument is not known. |
 | <span class="status s4">409</span> | `The taxes and fees of <segment> <category> trades are not known; add a row to unified.charge_rates.`, or `The brokerage of <broker> is not known; add a row to unified.broker_order_costs.` |
+| <span class="status s5">503</span> | `no instruments have been mapped yet` or `the instrument cache is unreachable`, from the instrument catalogue. |
 
 The charge rates, the broker costs and the measured stop slips are read on the first request of each day in India, in each worker, and kept for the day. The flicker is read from `unified.ticks` on every request, from the last 30 minutes of the instrument's latest session in the last five days.

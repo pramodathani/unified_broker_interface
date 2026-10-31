@@ -245,7 +245,7 @@ A dry run answers with `would_cancel` and `would_close`. A real run answers with
 | `closed[].transaction_type` | string | `SELL` to close a long position, `BUY` to close a short one. |
 | `closed[].close_quantity` | number | The size of the closing order, which is the absolute quantity. |
 | `closed[].product` | string or null | The position's product, on the shared vocabulary (such as `intraday`). |
-| `closed[].sent` | boolean | Whether the closing order was sent. |
+| `closed[].sent` | boolean | `true` once the close was handed to the order engine and it answered or timed out, even when it refused the close without calling a broker; `outcome` and `http_status` say what happened. `false` only when the close never reached the engine. |
 | `closed[].outcome` | string or null | `accepted`, `rejected` or `unknown`, from the broker's answer. |
 | `closed[].order_id` | string or null | The closing order's broker id, when sent. |
 | `closed[].http_status` | number | The status `POST /api/orders/place` would have answered with for this close, when sent. |
@@ -308,7 +308,7 @@ sequenceDiagram
         R-->>A: statuses
     end
     A->>R: HGET unified:broker_tokens for each position
-    A->>R: XADD every closing order in one pipeline
+    A->>R: EXISTS the engine lock, then XADD every closing order in one pipeline
     par each broker's lane at the same time
         E->>B: MARKET order, opposite side, same broker
         B-->>E: answer
@@ -343,7 +343,10 @@ Each closing order is an ordinary placement with these fields.
 | `quantity` | The absolute net quantity |
 | broker | The broker that holds the position, never the selector's choice |
 
-The close goes through the same checks as `POST /api/orders/place`, with the broker named: the broker must still be able to take the order, and the quantity must fit the lot size. The broker exclusion list does not stop a close, because a position can only be closed where it is held.
+The close goes through the same checks as `POST /api/orders/place`, with the broker named: the broker must still be able to take the order, and the quantity must fit the lot size. The broker exclusion list does not stop a close, because a position can only be closed where it is held, unless it excludes every broker, which refuses every close with 503 `every broker is excluded from order placement`.
+
+!!! danger "The daily loss lockout also refuses the closes"
+    The order engine checks the day's loss limit before it accepts any order, and a closing order is not exempt. Once `UNIFIED_BROKER_INTERFACE_API_ORDER_DAILY_LOSS_LIMIT` has locked the day out, flatten still halts the parents and cancels every open order, but every close is refused with 403 and the answer has `flat: false`, so the positions stay open until they are closed at the broker.
 
 ### How a close reaches the broker
 
@@ -366,7 +369,7 @@ The engine runs the close as a plain `simple` order, which sends it to the broke
 Only this route can name the broker. `POST /api/orders/place` removes a `broker` field from the caller's body before handing it to the engine, so a caller of that route never chooses where an order goes.
 
 ??? note "Under the hood"
-    - **Redis keys read:** `last_login`, `settings`, every `<broker>:orders:orders` and `<broker>:portfolio:positions`, then `unified:broker_tokens` and today's catalogue for each close.
+    - **Redis keys read:** `last_login`, `settings`, every `<broker>:orders:orders` and `<broker>:portfolio:positions`, then `unified:broker_tokens`; the engine reads today's catalogue for each close.
     - **Timing:** each of the two waits lasts up to `UNIFIED_BROKER_INTERFACE_API_ORDER_FLATTEN_WAIT_SECONDS` (default `5`), re-reading every 0.25 seconds. A Redis error during a re-read is skipped and the wait goes on. The positions pollers refresh every 0.5 to 1 second at most brokers, but Fyers's refreshes every 5 seconds, so a Fyers position can be reported as still held when it closed near the end of the wait.
     - **What counts as closed:** a position's entry showing a quantity of zero, or the entry having disappeared from `<broker>:portfolio:positions`. Only positions whose close was accepted are waited for, because every other close is already reported as a failure.
     - **Nothing is retried.** A panic button that retries takes longer to finish, so a failed cancel or close is reported and the route moves on.
