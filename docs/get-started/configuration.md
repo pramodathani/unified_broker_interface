@@ -51,7 +51,7 @@ The MongoDB and PostgreSQL connection strings are built from these values, as `m
 
 ## REST API variables
 
-Twenty-seven variables tune the REST API, the order engine and the order-book pollers. Unlike the store variables, every one of them has a default, so a script that never serves the API does not need them. When `configurations.py` is imported, twenty-six of them are read into `api_configuration`, and `UNIFIED_BROKER_INTERFACE_BOOK_POLL_SECONDS` is read into `book_configuration`.
+Thirty-five variables tune the REST API, the order engine and the order-book pollers. Unlike the store variables, every one of them has a default, so a script that never serves the API does not need them. When `configurations.py` is imported, thirty-four of them are read into `api_configuration`, and `UNIFIED_BROKER_INTERFACE_BOOK_POLL_SECONDS` is read into `book_configuration`.
 
 A list variable is written as comma-separated names, such as `zerodha,dhan`. Spaces are removed and the names are lower-cased before use.
 

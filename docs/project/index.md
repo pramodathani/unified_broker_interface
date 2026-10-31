@@ -42,9 +42,9 @@ This tab is for people who change UBI's code. It explains where everything lives
 
 A few rules apply to every change, whichever part of the code it touches. The list below collects them from the project's instructions and from the way the code is organized.
 
-- **Broker traffic has a small number of homes.** The scripts in `bin/<broker>/` do almost all of it. Outside them, only the REST API's order routes, its quote fallback (used when no live quote is fresh) the order engine in `bin/unified/orders/order_engine`, and the hand-run tools `bin/check-broker-connections` and `bin/zerodha-quote` send requests to a broker. Every other unified script reads only the stores.
+- **Broker traffic has a small number of homes.** The scripts in `bin/<broker>/` do almost all of it. Outside them, only the REST API's order routes, its quote fallback (used when no live quote is fresh) the order engine in `bin/unified/orders/order_engine`, `bin/unified/orders/margin_calibration`, which calls only the brokers' read-only margin calculators, and the hand-run tools `bin/check-broker-connections` and `bin/zerodha-quote` send requests to a broker. Every other unified script reads only the stores.
 - **Each script is self-contained.** Pollers carry their own requests and normalization, with no shared poller base class, and a script's module docstring is its full reference.
 - **Data is stored as the broker sent it.** The broker's untouched payload is kept beside the normalized one (`data` in Redis, `raw` in the database), and nothing is corrected or dropped on the way in.
 - **Schemas live only in numbered `.sql` files**, and every statement must be safe to run again.
 - **Docs change in the same commit as the code.** The code reference is generated from docstrings, so a docstring is documentation too.
-- **Run the offline suites** in [Offline tests](../operations/tests.md) before and after a change, and check that `ruff check .` reports no more than its baseline of 41 findings.
+- **Run the offline suites** in [Offline tests](../operations/tests.md) before and after a change, and check that `ruff check .` reports no more than its baseline of 19 findings.

@@ -89,10 +89,10 @@ The table below shows what each runner creates.
 | Runner | Directory | Creates |
 |---|---|---|
 | `stock_brokers.instruments.sql.apply_ddl` | `stock_brokers/instruments/sql/ddl/` | The ten broker schemas and each broker's `instruments` table |
-| `stock_brokers.instruments.mapping.utilities.sql.apply_ddl` | `stock_brokers/instruments/mapping/utilities/sql/ddl/` | The `unified` schema, `unified.instruments`, `unified.broker_mappings`, `unified.contract_sizes`, `unified.underlyings` and `unified.broker_order_costs` |
+| `stock_brokers.instruments.mapping.utilities.sql.apply_ddl` | `stock_brokers/instruments/mapping/utilities/sql/ddl/` | The `unified` schema, `unified.instruments`, `unified.broker_mappings`, `unified.contract_sizes`, `unified.underlyings`, `unified.broker_order_costs`, `unified.margin_rates`, `unified.impact_coefficients`, `unified.charge_rates` and `unified.broker_quote_capacities` |
 | `stock_brokers.instruments.historical.utilities.sql.apply_ddl` | `stock_brokers/instruments/historical/utilities/sql/ddl/` | Seven brokers' `price_history` and `price_history_progress`, the unified price history tables, its views and the function `unified.adjusted_bars()` |
 
-The live stream tables have no runner. Each `store_*_to_db` script applies its own file from `stock_brokers/instruments/ticks/utilities/sql/ddl/` when it starts, and so do two other scripts. The table below lists who applies which of those files.
+The live stream tables have no runner. Each `store_*_to_db` script applies its own file from `stock_brokers/instruments/ticks/utilities/sql/ddl/` when it starts, and so do several other scripts. The table below lists who applies which of those files.
 
 | File | Applied by |
 |---|---|
@@ -102,6 +102,9 @@ The live stream tables have no runner. Each `store_*_to_db` script applies its o
 | `320_unified_positions.sql` | `bin/unified/portfolio/store_positions_to_db` |
 | `330_unified_ticks_adjusted.sql` | `bin/unified/instruments/price_history`, after the historical DDL has created the view it reads |
 | `340_unified_synthetic_order_events.sql` | `bin/unified/orders/order_engine`, before it places anything |
+| `350_unified_order_execution_costs.sql` | `bin/unified/orders/execution_costs` |
+| `360_unified_stop_slippage.sql` | `bin/unified/orders/stop_slippage` |
+| `370_unified_daily_orders.sql` | `bin/unified/orders/store_daily_orders` |
 
 `bin/unified/instruments/map` also applies the mapping DDL before every run, so the second runner is harmless to repeat. [Database](../architecture/database.md) describes every table.
 
